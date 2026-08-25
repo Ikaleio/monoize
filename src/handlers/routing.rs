@@ -1237,6 +1237,7 @@ pub(super) fn is_same_channel_retryable_app_error(err: &AppError) -> bool {
 pub(super) enum RetryableFailureClass {
     RateLimited,
     Transient,
+    Persistent,
 }
 
 pub(super) fn classify_retryable_failure(err: &UpstreamCallError) -> RetryableFailureClass {
@@ -1251,6 +1252,83 @@ pub(super) fn classify_retryable_app_failure(err: &AppError) -> RetryableFailure
         return RetryableFailureClass::RateLimited;
     }
     RetryableFailureClass::Transient
+}
+
+fn normalized_failure_signal(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+pub(super) fn classify_channel_health_failure(
+    http_status: Option<u16>,
+    error_code: Option<&str>,
+    error_type: Option<&str>,
+) -> Option<RetryableFailureClass> {
+    let signals = [
+        normalized_failure_signal(error_code),
+        normalized_failure_signal(error_type),
+    ];
+    let has_signal = |expected: &[&str]| {
+        signals
+            .iter()
+            .flatten()
+            .any(|signal| expected.contains(&signal.as_str()))
+    };
+
+    if http_status == Some(StatusCode::TOO_MANY_REQUESTS.as_u16()) {
+        return Some(RetryableFailureClass::RateLimited);
+    }
+
+    if matches!(
+        http_status,
+        Some(401 | 402 | 403 | 404 | 405 | 407 | 410 | 415 | 426 | 451)
+    ) {
+        return Some(RetryableFailureClass::Persistent);
+    }
+
+    if has_signal(&[
+            "rate_limit_error",
+            "rate_limit_exceeded",
+            "too_many_requests",
+        ]) {
+        return Some(RetryableFailureClass::RateLimited);
+    }
+
+    if has_signal(&[
+        "account_deactivated",
+        "account_suspended",
+        "authentication_error",
+        "billing_hard_limit_reached",
+        "credit_balance_too_low",
+        "deployment_not_found",
+        "insufficient_balance",
+        "insufficient_quota",
+        "invalid_api_key",
+        "model_not_found",
+        "model_not_supported",
+        "no_available_account",
+        "permission_denied",
+        "quota_exceeded",
+        "unsupported_model",
+    ]) {
+        return Some(RetryableFailureClass::Persistent);
+    }
+
+    if http_status == Some(StatusCode::REQUEST_TIMEOUT.as_u16())
+        || http_status.is_some_and(|status| (500..600).contains(&status))
+        || has_signal(&[
+            "overloaded_error",
+            "server_error",
+            "service_unavailable",
+            "temporarily_unavailable",
+        ])
+    {
+        return Some(RetryableFailureClass::Transient);
+    }
+
+    None
 }
 
 pub(super) async fn record_upstream_attempt_failure(
@@ -1270,7 +1348,12 @@ pub(super) async fn record_upstream_attempt_failure(
         execution_state.last_attempt_duration_ms(),
         mask_sensitive_info,
     ));
-    let Some(failure_class) = passive_failure_class else {
+    let Some(failure_class) = classify_channel_health_failure(
+        app_err.upstream_status,
+        app_err.upstream_code.as_deref(),
+        app_err.upstream_type.as_deref(),
+    )
+    .or(passive_failure_class) else {
         return;
     };
     let shared_origin_blast = failure_class == RetryableFailureClass::Transient
@@ -1292,11 +1375,10 @@ pub(super) async fn record_upstream_attempt_failure(
     }
 }
 
-/// STRM-4 + STRM-4a: one passive-failure sample for a retryable terminal
-/// failure that occurs after the first downstream byte (in-stream terminal
-/// error event or upstream-side adapter failure). Mid-stream failures never
-/// blast shared-origin peers. The affinity binding is cleared only when the
-/// serving attempt is the bound target and the sample tripped the breaker.
+/// STRM-4 + STRM-4a: apply one breaker-relevant terminal failure that occurs
+/// after the first downstream byte. Mid-stream failures never blast
+/// shared-origin peers. The affinity binding is cleared only when the serving
+/// attempt is the bound target and the failure tripped the breaker.
 pub(super) async fn record_midstream_terminal_failure(
     state: &AppState,
     attempt: &MonoizeAttempt,
@@ -1308,24 +1390,20 @@ pub(super) async fn record_midstream_terminal_failure(
     }
 }
 
-/// STRM-4: an in-stream terminal error records a health sample only for
-/// retryable statuses; `429` cools down as RateLimited, everything else as
-/// Transient.
+/// STRM-4: classify an in-stream terminal error independently from whether a
+/// new attempt is possible after downstream bytes have already been emitted.
 pub(super) fn midstream_terminal_failure_class(
     http_status: u16,
+    error_code: Option<&str>,
+    error_type: Option<&str>,
 ) -> Option<RetryableFailureClass> {
-    match http_status {
-        429 => Some(RetryableFailureClass::RateLimited),
-        408 => Some(RetryableFailureClass::Transient),
-        status if (500..600).contains(&status) => Some(RetryableFailureClass::Transient),
-        _ => None,
-    }
+    classify_channel_health_failure(Some(http_status), error_code, error_type)
 }
 
 /// STRM-4: only upstream-side adapter failures (idle timeout, malformed
-/// upstream stream, connection loss, missing terminal) count as retryable
-/// terminal failures. Internal transform/encode errors do not penalize the
-/// Channel.
+/// upstream stream, connection loss, missing terminal) count as breaker-
+/// relevant terminal failures. Internal transform/encode errors do not
+/// penalize the Channel.
 pub(super) fn is_upstream_adapter_failure(err: &AppError) -> bool {
     err.code.starts_with("upstream_")
 }
@@ -1359,6 +1437,9 @@ pub(super) async fn allow_same_channel_retry(
     let Some(failure_class) = failure_class else {
         return false;
     };
+    if failure_class == RetryableFailureClass::Persistent {
+        return false;
+    }
     let base_limit = (attempt.channel_max_retries + 1).max(1) as usize;
     let limit = if attempt.affinity_hit == Some(true)
         && failure_class == RetryableFailureClass::Transient
@@ -1489,7 +1570,7 @@ async fn apply_retryable_failure_to_channel(
     }
 
     let failure_samples = entry.passive_failure_timestamps.len();
-    if failure_samples >= failure_threshold {
+    if failure_class == RetryableFailureClass::Persistent || failure_samples >= failure_threshold {
         entry.healthy = false;
         let cooldown_seconds = if failure_class == RetryableFailureClass::RateLimited {
             attempt.passive_rate_limit_cooldown_seconds
@@ -1505,7 +1586,7 @@ async fn apply_retryable_failure_to_channel(
                 failure_class = ?failure_class,
                 failed_samples = failure_samples,
                 cooldown_seconds,
-                "channel marked unhealthy after passive breaker threshold"
+                "channel marked unhealthy after passive breaker failure"
             );
         }
     }

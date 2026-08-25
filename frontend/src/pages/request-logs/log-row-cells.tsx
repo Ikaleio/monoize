@@ -334,7 +334,7 @@ export function LogRowCells({
 			<Badge
 				variant='secondary'
 				className={cn(
-					'text-[10px] h-5 px-1 font-mono rounded-full border-0 cursor-default',
+					'text-[10px] h-5 px-1 font-mono rounded-md border-0 cursor-default',
 					'bg-muted text-muted-foreground'
 				)}
 			>
@@ -345,7 +345,7 @@ export function LogRowCells({
 		ttfb ?
 			<Badge
 				variant='secondary'
-				className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
+				className='text-[10px] h-5 px-1 font-mono rounded-md border-info-border bg-info-soft text-info-foreground'
 			>
 				{ttfb}
 			</Badge>
@@ -354,7 +354,7 @@ export function LogRowCells({
 		hasTriedProviders ?
 			<Badge
 				variant='secondary'
-				className='text-[10px] h-5 px-1 font-mono rounded-full border-warning-border bg-warning-soft text-warning-foreground'
+				className='text-[10px] h-5 px-1 font-mono rounded-md border-warning-border bg-warning-soft text-warning-foreground'
 			>
 				{t('requestLogs.retryHopCount', { count: triedProviders.length })}
 			</Badge>
@@ -362,13 +362,13 @@ export function LogRowCells({
 	const streamBadge = log.is_stream ?
 		<Badge
 			variant='secondary'
-			className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
+			className='text-[10px] h-5 px-1 font-mono rounded-md border-info-border bg-info-soft text-info-foreground'
 		>
 			{t('requestLogs.streamBadge')}
 		</Badge>
 	:	<Badge
 			variant='secondary'
-			className='text-[10px] h-5 px-1 font-mono rounded-full border-warning-border bg-warning-soft text-warning-foreground'
+			className='text-[10px] h-5 px-1 font-mono rounded-md border-warning-border bg-warning-soft text-warning-foreground'
 		>
 			{t('requestLogs.nonStreamBadge')}
 		</Badge>
@@ -579,7 +579,7 @@ export function LogRowCells({
 										{affinityHit ?
 											<Badge
 												variant='secondary'
-												className='h-4 shrink-0 rounded-full border-info-border bg-info-soft px-1 text-[10px] font-normal text-info-foreground'
+												className='h-4 shrink-0 rounded-md border-info-border bg-info-soft px-1 text-[10px] font-normal text-info-foreground'
 											>
 												{t('requestLogs.stickySession')}
 											</Badge>
@@ -604,7 +604,7 @@ export function LogRowCells({
 												{log.affinity?.hit === true && (
 													<Badge
 														variant='secondary'
-														className='h-4 rounded-full px-1 text-[10px] font-normal'
+														className='h-4 rounded-md px-1 text-[10px] font-normal'
 													>
 														{t('requestLogs.affinityHit')}
 													</Badge>

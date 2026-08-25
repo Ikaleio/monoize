@@ -2762,29 +2762,97 @@ async fn shared_origin_blast_marks_peer_channels_and_skips_without_clearing_affi
 }
 
 #[test]
-fn midstream_terminal_failure_class_maps_retryable_statuses() {
+fn midstream_terminal_failure_class_maps_breaker_relevant_signals() {
     assert_eq!(
-        routing::midstream_terminal_failure_class(429),
+        routing::midstream_terminal_failure_class(429, None, None),
         Some(routing::RetryableFailureClass::RateLimited)
     );
     assert_eq!(
-        routing::midstream_terminal_failure_class(408),
+        routing::midstream_terminal_failure_class(408, None, None),
         Some(routing::RetryableFailureClass::Transient)
     );
     for status in [500, 502, 503, 529, 599] {
         assert_eq!(
-            routing::midstream_terminal_failure_class(status),
+            routing::midstream_terminal_failure_class(status, None, None),
             Some(routing::RetryableFailureClass::Transient),
             "{status}"
         );
     }
-    for status in [200, 400, 401, 403, 404, 422] {
+    for status in [401, 402, 403, 404, 405, 407, 410, 415, 426, 451] {
         assert_eq!(
-            routing::midstream_terminal_failure_class(status),
+            routing::midstream_terminal_failure_class(status, None, None),
+            Some(routing::RetryableFailureClass::Persistent),
+            "{status}"
+        );
+    }
+    for status in [200, 400, 409, 422] {
+        assert_eq!(
+            routing::midstream_terminal_failure_class(status, None, None),
             None,
             "{status}"
         );
     }
+
+    assert_eq!(
+        routing::midstream_terminal_failure_class(400, None, Some("model_not_found")),
+        Some(routing::RetryableFailureClass::Persistent)
+    );
+    assert_eq!(
+        routing::midstream_terminal_failure_class(400, Some("rate_limit_exceeded"), None),
+        Some(routing::RetryableFailureClass::RateLimited)
+    );
+    assert_eq!(
+        routing::midstream_terminal_failure_class(400, Some("overloaded_error"), None),
+        Some(routing::RetryableFailureClass::Transient)
+    );
+    assert_eq!(
+        routing::midstream_terminal_failure_class(
+            403,
+            Some("rate_limit_exceeded"),
+            None
+        ),
+        Some(routing::RetryableFailureClass::Persistent)
+    );
+    assert_eq!(
+        routing::midstream_terminal_failure_class(503, None, Some("model_not_found")),
+        Some(routing::RetryableFailureClass::Persistent)
+    );
+}
+
+#[tokio::test]
+async fn persistent_failure_trips_breaker_before_sample_threshold() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    let mut attempt = affinity_test_attempt(
+        "provider",
+        "persistent-failure-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    attempt.passive_failure_count_threshold = 3;
+    attempt.routing_config_revision = state
+        .routing_config_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+
+    routing::mark_channel_retryable_failure(
+        &state,
+        &attempt,
+        routing::RetryableFailureClass::Persistent,
+    )
+    .await;
+
+    let health = state.channel_health.lock().await;
+    let entry = health
+        .get("persistent-failure-channel")
+        .expect("health entry exists");
+    assert!(!entry.healthy);
+    assert_eq!(entry.passive_failure_timestamps.len(), 1);
 }
 
 #[test]

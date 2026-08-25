@@ -488,6 +488,33 @@ export async function updateGroupOptimistic(
   }
 }
 
+export async function reorderGroupsOptimistic(
+  groupIds: string[],
+  currentGroups: Group[],
+  onError?: (error: Error) => void
+) {
+  const groupsById = new Map(currentGroups.map((group) => [group.id, group]));
+  const updatedAt = new Date().toISOString();
+  const optimistic = groupIds.flatMap((groupId, sortOrder) => {
+    const group = groupsById.get(groupId);
+    return group
+      ? [{ ...group, sort_order: sortOrder, updated_at: updatedAt }]
+      : [];
+  });
+  mutate(SWR_KEYS.DASHBOARD_GROUPS, optimistic, false);
+
+  try {
+    await api.reorderGroups(groupIds);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
+  } catch (error) {
+    mutate(SWR_KEYS.DASHBOARD_GROUPS, currentGroups, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
 export async function deleteGroupOptimistic(
   groupId: string,
   currentGroups: Group[],

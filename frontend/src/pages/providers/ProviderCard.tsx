@@ -17,7 +17,6 @@ import {
 import { AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import { mutate } from 'swr'
-import { ModelBadge } from '@/components/ModelBadge'
 import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { StackedModelList } from '@/components/StackedModelList'
 import { Badge } from '@/components/ui/badge'
@@ -37,12 +36,20 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { SWR_KEYS, useDashboardGroups } from '@/lib/swr'
 import { Virtuoso } from 'react-virtuoso'
-import type { ChannelTestResult, ModelMetadataRecord, Provider } from '@/lib/api'
+import type {
+	ChannelTestResult,
+	ModelMetadataRecord,
+	Provider,
+	ProviderType
+} from '@/lib/api'
 import { ChannelTestDialog } from './ChannelTestDialog'
 import {
+	ChannelRuntimeStatus,
+	ProviderModelRuntimeBadge
+} from './ProviderRuntimeStatus'
+import {
 	PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
-	PROVIDER_TYPE_CONFIG,
-	statusBadge
+	PROVIDER_TYPE_CONFIG
 } from './shared'
 
 type ProviderCardProps = {
@@ -95,6 +102,7 @@ export function ProviderCard({
 		id: string
 		name: string
 		models: string[]
+		providerType: ProviderType
 	} | null>(null)
 	const [quickTestingChannelId, setQuickTestingChannelId] = useState<string | null>(
 		null
@@ -111,10 +119,29 @@ export function ProviderCard({
 		}
 		return map
 	}, [modelMetadata])
-	const unpricedCount = provider.unpriced_model_count ?? 0
 	const unpricedModelIdSet = useMemo(
 		() => new Set(provider.unpriced_model_ids ?? []),
 		[provider.unpriced_model_ids]
+	)
+	const modelRuntimeStatusById = useMemo(
+		() => new Map((provider.model_runtime_statuses ?? []).map(status => [status.model, status])),
+		[provider.model_runtime_statuses]
+	)
+	const attentionModelCount = useMemo(
+		() =>
+			(provider.model_runtime_statuses ?? []).filter(
+				status =>
+					status.availability_status !== 'healthy' ||
+					status.pricing_status !== 'complete'
+			).length || unpricedModelIdSet.size,
+		[provider.model_runtime_statuses, unpricedModelIdSet]
+	)
+	const unavailableModelCount = useMemo(
+		() =>
+			(provider.model_runtime_statuses ?? []).filter(
+				status => status.availability_status === 'unavailable'
+			).length,
+		[provider.model_runtime_statuses]
 	)
 	const { data: registryGroups = [] } = useDashboardGroups(provider.group_ids.length > 0)
 	const groupNameById = useMemo(
@@ -164,13 +191,21 @@ export function ProviderCard({
 			)
 		})
 
-		if (unpricedCount > 0) {
+		if (attentionModelCount > 0) {
 			items.push({
-				key: 'unpriced',
+				key: 'model-attention',
 				collapsed: (
-					<StatusBadge variant='warning'>
+					<StatusBadge variant={unavailableModelCount > 0 ? 'destructive' : 'warning'}>
 						<AlertTriangle className='h-3 w-3 mr-1 shrink-0' />
-						{t('providers.unpricedModels', { count: unpricedCount })}
+						{t('providers.modelsRequireAttention', { count: attentionModelCount })}
+					</StatusBadge>
+				),
+				full: (
+					<StatusBadge variant={unavailableModelCount > 0 ? 'destructive' : 'warning'}>
+						{t('providers.modelAttentionSummary', {
+							count: attentionModelCount,
+							unavailable: unavailableModelCount
+						})}
 					</StatusBadge>
 				)
 			})
@@ -194,12 +229,17 @@ export function ProviderCard({
 		}
 
 		return items
-	}, [channelTypeLabelEntries, groupNameById, provider.enabled, provider.group_ids, t, unpricedCount])
+	}, [attentionModelCount, channelTypeLabelEntries, groupNameById, provider.enabled, provider.group_ids, t, unavailableModelCount])
 
 	const handleQuickTest = async (channelId: string) => {
 		setQuickTestingChannelId(channelId)
 		try {
-			const result: ChannelTestResult = await api.testChannel(provider.id, channelId)
+			const result: ChannelTestResult = await api.testChannel(
+				provider.id,
+				channelId,
+				undefined,
+				false
+			)
 			if (result.success) {
 				toast.success(
 					`${t('providers.testPassed')} — ${t('providers.testLatency', { ms: result.latency_ms })}`,
@@ -405,9 +445,10 @@ export function ProviderCard({
 
 											return (
 												<div key={model} className='min-w-0 max-w-full shrink-0'>
-													<ModelBadge
+													<ProviderModelRuntimeBadge
 														model={model}
-														provider={meta?.models_dev_provider}
+														metadata={meta}
+														status={modelRuntimeStatusById.get(model)}
 														highlightUnpriced={highlightUnpriced}
 													/>
 												</div>
@@ -437,7 +478,10 @@ export function ProviderCard({
 											data={provider.channels}
 											itemContent={(_idx, channel) => (
 												<div className='flex min-h-10 items-center gap-3 px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors border-b last:border-b-0'>
-													{statusBadge(channel._health_status)}
+													<ChannelRuntimeStatus
+														channel={channel}
+														perModelCircuitBreak={provider.per_model_circuit_break}
+													/>
 													<span className='font-medium truncate min-w-0'>
 														{channel.name}
 													</span>
@@ -462,11 +506,12 @@ export function ProviderCard({
 																type='button'
 																className='flex items-center justify-center w-7 h-full hover:bg-muted/80 transition-colors cursor-pointer'
 																onClick={() => {
-																	setTestDialogChannel({
-																		id: channel.id,
-																		name: channel.name,
-																models: Object.keys(channel.models).sort()
-																	})
+															setTestDialogChannel({
+																id: channel.id,
+																name: channel.name,
+																models: Object.keys(channel.models).sort(),
+																providerType: channel.provider_type
+															})
 																	setTestDialogOpen(true)
 																}}
 															>
@@ -506,6 +551,7 @@ export function ProviderCard({
 					channelName={testDialogChannel.name}
 					providerName={provider.name}
 					models={testDialogChannel.models}
+					providerType={testDialogChannel.providerType}
 				/>
 			)}
 		</motion.div>

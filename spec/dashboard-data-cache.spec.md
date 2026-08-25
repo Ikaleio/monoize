@@ -28,7 +28,7 @@ DC10. A successful pricing-pattern mutation MUST publish the returned `PRICING_P
 
 DC11. A successful user create MUST revalidate `USERS` and `STATS`. A successful user update MUST revalidate those keys plus `ME`. A successful user delete MUST revalidate `USERS` and `STATS`. User mutations MUST NOT revalidate `DASHBOARD_GROUPS`.
 
-DC11a. A successful group create or update MUST revalidate `DASHBOARD_GROUPS`. A successful group delete MUST revalidate `DASHBOARD_GROUPS`, `USERS`, `API_KEYS`, `PROVIDERS`, `BILLING_PLANS`, and `ME` because the server-side deletion cascade rewrites group references in those entities (`groups-registry.spec.md` §3).
+DC11a. A successful group create, update, or reorder MUST revalidate `DASHBOARD_GROUPS`. A successful group delete MUST revalidate `DASHBOARD_GROUPS`, `USERS`, `API_KEYS`, `PROVIDERS`, `BILLING_PLANS`, and `ME` because the server-side deletion cascade rewrites group references in those entities (`groups-registry.spec.md` §3).
 
 ## 4. Global operations
 

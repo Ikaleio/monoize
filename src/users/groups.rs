@@ -3,6 +3,7 @@ use super::store::parse_group_ids_json;
 use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, QueryResult, TransactionTrait, Value as SeaValue};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// One `monoize_groups` registry row (`groups-registry.spec.md` §1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,12 +37,18 @@ pub struct UpdateGroupInput {
     pub sort_order: Option<i32>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReorderGroupsInput {
+    pub group_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupStoreError {
     NotFound,
     NameExists,
     InvalidName,
     InvalidDescription,
+    InvalidReorder(String),
     CannotDeleteDefault,
     Storage(String),
 }
@@ -295,6 +302,82 @@ impl UserStore {
             created_at: existing.created_at,
             updated_at: now,
         })
+    }
+
+    pub async fn reorder_groups(&self, input: ReorderGroupsInput) -> Result<(), GroupStoreError> {
+        if input.group_ids.len() > 199 {
+            return Err(GroupStoreError::InvalidReorder(
+                "group reorder accepts at most 199 ids".to_string(),
+            ));
+        }
+
+        let mut unique_ids = HashSet::new();
+        for id in &input.group_ids {
+            if !unique_ids.insert(id.clone()) {
+                return Err(GroupStoreError::InvalidReorder(
+                    "group_ids contains duplicates".to_string(),
+                ));
+            }
+        }
+
+        let write = self.db.write().await;
+        let tx = write.begin().await.map_err(storage)?;
+        if self.db.is_postgres() {
+            tx.execute_unprepared("LOCK TABLE monoize_groups IN SHARE ROW EXCLUSIVE MODE")
+                .await
+                .map_err(storage)?;
+        }
+
+        let rows = tx
+            .query_all(
+                self.db
+                    .stmt("SELECT id FROM monoize_groups ORDER BY id", vec![]),
+            )
+            .await
+            .map_err(storage)?;
+        if rows.len() != input.group_ids.len() {
+            return Err(GroupStoreError::InvalidReorder(
+                "group_ids must contain all groups exactly once".to_string(),
+            ));
+        }
+        let existing_ids: HashSet<String> = rows
+            .into_iter()
+            .map(|row| row.try_get("", "id").map_err(storage))
+            .collect::<Result<_, _>>()?;
+        if existing_ids != unique_ids {
+            return Err(GroupStoreError::InvalidReorder(
+                "group_ids must contain all groups exactly once".to_string(),
+            ));
+        }
+        if input.group_ids.is_empty() {
+            tx.commit().await.map_err(storage)?;
+            return Ok(());
+        }
+
+        let mut values = Vec::with_capacity(input.group_ids.len() * 2 + 1);
+        let mut cases = Vec::with_capacity(input.group_ids.len());
+        for (sort_order, id) in input.group_ids.iter().enumerate() {
+            let id_index = values.len() + 1;
+            values.push(id.clone().into());
+            let sort_order_index = values.len() + 1;
+            values.push(SeaValue::Int(Some(sort_order as i32)));
+            cases.push(format!("WHEN ${id_index} THEN ${sort_order_index}"));
+        }
+        let updated_at_index = values.len() + 1;
+        values.push(Utc::now().to_rfc3339().into());
+        tx.execute(self.db.stmt(
+            &format!(
+                "UPDATE monoize_groups \
+                 SET sort_order = CASE id {} END, updated_at = ${updated_at_index}",
+                cases.join(" ")
+            ),
+            values,
+        ))
+        .await
+        .map_err(storage)?;
+        tx.commit().await.map_err(storage)?;
+        self.api_key_cache.invalidate_all();
+        Ok(())
     }
 
     /// Delete a non-default group and apply the GR-X1..GR-X5 cascade in one

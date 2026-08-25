@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Boxes, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Boxes, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,9 +34,11 @@ import {
   useDashboardGroups,
   createGroupOptimistic,
   updateGroupOptimistic,
+  reorderGroupsOptimistic,
   deleteGroupOptimistic,
 } from "@/lib/swr";
 import type { Group } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface GroupFormState {
   name: string;
@@ -61,6 +63,22 @@ function formFromGroup(group: Group): GroupFormState {
   };
 }
 
+function useFinePointer() {
+  const [isFinePointer, setIsFinePointer] = useState(() =>
+    typeof window === "undefined" ? false : window.matchMedia("(pointer: fine)").matches
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia("(pointer: fine)");
+    const syncPointerState = () => setIsFinePointer(media.matches);
+    syncPointerState();
+    media.addEventListener("change", syncPointerState);
+    return () => media.removeEventListener("change", syncPointerState);
+  }, []);
+
+  return isFinePointer;
+}
+
 export function GroupsPage() {
   const { t } = useTranslation();
   const { data, isLoading } = useDashboardGroups();
@@ -71,6 +89,9 @@ export function GroupsPage() {
   const [editTarget, setEditTarget] = useState<Group | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Group | null>(null);
   const [saving, setSaving] = useState(false);
+  const [reordering, setReordering] = useState(false);
+  const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
+  const canDrag = useFinePointer();
 
   const openCreate = () => {
     setForm({ ...EMPTY_FORM, sort_order: String(groups.length) });
@@ -157,6 +178,49 @@ export function GroupsPage() {
       groups,
       (error) => toast.error(error.message)
     ).catch(() => undefined);
+  };
+
+  const applyReorder = async (orderedGroups: Group[]) => {
+    if (reordering) return;
+    setReordering(true);
+    try {
+      await reorderGroupsOptimistic(
+        orderedGroups.map((group) => group.id),
+        groups,
+        (error) => toast.error(error.message)
+      );
+      toast.success(t("groups.reorderSuccess"));
+    } catch {
+      // optimistic helper already rolled back and toasted
+    } finally {
+      setDraggingGroupId(null);
+      setReordering(false);
+    }
+  };
+
+  const moveGroup = async (from: number, to: number) => {
+    if (to < 0 || to >= groups.length || from === to || reordering) return;
+    const next = [...groups];
+    const [group] = next.splice(from, 1);
+    next.splice(to, 0, group);
+    await applyReorder(next);
+  };
+
+  const handleDrop = async (targetGroupId: string) => {
+    if (!draggingGroupId || draggingGroupId === targetGroupId || reordering) {
+      setDraggingGroupId(null);
+      return;
+    }
+    const next = [...groups];
+    const from = next.findIndex((group) => group.id === draggingGroupId);
+    const to = next.findIndex((group) => group.id === targetGroupId);
+    if (from < 0 || to < 0) {
+      setDraggingGroupId(null);
+      return;
+    }
+    const [group] = next.splice(from, 1);
+    next.splice(to, 0, group);
+    await applyReorder(next);
   };
 
   const renderForm = (onSubmit: () => void) => (
@@ -258,8 +322,21 @@ export function GroupsPage() {
                 </tr>
               </thead>
               <tbody>
-                {groups.map((group) => (
-                  <tr key={group.id} className="border-t transition-colors hover:bg-accent/40">
+                {groups.map((group, index) => (
+                  <tr
+                    key={group.id}
+                    className={cn(
+                      "border-t transition-colors hover:bg-accent/40",
+                      draggingGroupId === group.id && "bg-accent/50 opacity-60"
+                    )}
+                    onDragOver={(event) => {
+                      if (canDrag && !reordering) event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (canDrag) void handleDrop(group.id);
+                    }}
+                  >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <span className="font-medium">{group.name}</span>
@@ -279,7 +356,55 @@ export function GroupsPage() {
                         onCheckedChange={(checked) => toggleUserSelectable(group, checked)}
                       />
                     </td>
-                    <td className="px-4 py-3 tabular-nums">{group.sort_order}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="hidden size-8 cursor-grab touch-manipulation active:cursor-grabbing [@media(pointer:fine)]:inline-flex"
+                          draggable={canDrag && !reordering}
+                          disabled={!canDrag || reordering}
+                          aria-label={t("groups.dragToReorder")}
+                          title={t("groups.dragToReorder")}
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", group.id);
+                            setDraggingGroupId(group.id);
+                          }}
+                          onDragEnd={() => setDraggingGroupId(null)}
+                        >
+                          <GripVertical className="h-4 w-4" />
+                        </Button>
+                        <span className="min-w-6 text-center tabular-nums">
+                          {group.sort_order}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-11 touch-manipulation sm:size-8"
+                          disabled={index === 0 || reordering}
+                          aria-label={t("groups.moveUp")}
+                          title={t("groups.moveUp")}
+                          onClick={() => void moveGroup(index, index - 1)}
+                        >
+                          <ArrowUp className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-11 touch-manipulation sm:size-8"
+                          disabled={index === groups.length - 1 || reordering}
+                          aria-label={t("groups.moveDown")}
+                          title={t("groups.moveDown")}
+                          onClick={() => void moveGroup(index, index + 1)}
+                        >
+                          <ArrowDown className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <Button

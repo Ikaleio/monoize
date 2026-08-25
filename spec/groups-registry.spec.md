@@ -156,6 +156,22 @@ invalidation cost is accepted).
 GR-A7. Because the default group cannot be deleted, the registry always contains at least
 one row and GR-D2 cannot be violated by deletion.
 
+### 2.5 Reorder groups
+
+- Endpoint: `POST /api/dashboard/groups/reorder`
+- Authorization: admin.
+- Request body: `{ "group_ids": string[] }`.
+- Response: `{ "success": true }`.
+
+GR-A8. `group_ids` MUST contain every current group id exactly once. A duplicate id, an
+unknown id, a missing current id, or more than 199 ids MUST return HTTP `400` with code
+`invalid_request`. Validation MUST complete before any `sort_order` value changes.
+
+GR-A9. For a valid request, the group at zero-based array index `i` MUST receive
+`sort_order = i`. All `sort_order` and `updated_at` writes MUST execute atomically in one
+database transaction, and every row MUST receive the same `updated_at` value. A successful
+reorder MUST invalidate the process-local API-key authentication cache.
+
 ## 3. Deletion cascade
 
 Deleting a non-default group `X` MUST apply all of the following in one database

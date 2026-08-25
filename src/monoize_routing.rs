@@ -6,6 +6,8 @@ use crate::settings::{
 use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -150,6 +152,12 @@ pub struct MonoizeChannel {
     pub _last_success_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _health_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _unhealthy_models: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _probing_models: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _cooldown_until: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -876,6 +884,9 @@ fn decode_channel_row(
         _healthy: None,
         _last_success_at: None,
         _health_status: None,
+        _unhealthy_models: None,
+        _probing_models: None,
+        _cooldown_until: None,
     })
 }
 
@@ -2408,6 +2419,9 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 pub struct ChannelProbeOutcome {
     pub ok: bool,
     pub usage: Option<Value>,
+    pub http_status: Option<u16>,
+    pub error_code: Option<String>,
+    pub error_type: Option<String>,
     pub error: Option<String>,
 }
 
@@ -2439,6 +2453,226 @@ pub fn format_probe_http_error(status: reqwest::StatusCode, body: &str) -> Strin
     }
 }
 
+fn probe_error_metadata(body: &str) -> (Option<String>, Option<String>) {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return (None, None);
+    };
+    let error = value.get("error").unwrap_or(&value);
+    let code = error
+        .get("code")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    let error_type = error
+        .get("type")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    (code, error_type)
+}
+
+fn probe_stream_error(
+    value: &Value,
+    sse_event: &str,
+) -> Option<(Option<String>, Option<String>, String)> {
+    let event_type = value.get("type").and_then(Value::as_str);
+    let error = value.get("error");
+    if error.is_none()
+        && !matches!(
+            event_type,
+            Some("error" | "response.failed" | "response.incomplete")
+        )
+        && !matches!(
+            sse_event,
+            "error" | "response.failed" | "response.incomplete"
+        )
+    {
+        return None;
+    }
+    let detail = error.unwrap_or(value);
+    let code = detail
+        .get("code")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    let error_type = detail
+        .get("type")
+        .and_then(Value::as_str)
+        .or(event_type)
+        .or_else(|| (!sse_event.is_empty()).then_some(sse_event))
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    let message = detail
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| truncate_probe_body(&detail.to_string()));
+    Some((
+        code,
+        error_type,
+        format!("upstream stream error: {message}"),
+    ))
+}
+
+async fn read_probe_stream(
+    response: reqwest::Response,
+    effective_type: MonoizeProviderType,
+) -> ChannelProbeOutcome {
+    let status = response.status().as_u16();
+    let mut usage = None;
+    let mut chat_terminal_chunk_seen = false;
+    let mut stream = response.bytes_stream().eventsource();
+
+    while let Some(event) = stream.next().await {
+        let event = match event {
+            Ok(event) => event,
+            Err(error) => {
+                return ChannelProbeOutcome {
+                    ok: false,
+                    usage,
+                    http_status: Some(status),
+                    error_code: Some("upstream_stream_decode_failed".to_string()),
+                    error_type: Some("stream_error".to_string()),
+                    error: Some(format!("upstream stream decode failed: {error}")),
+                };
+            }
+        };
+        let data = event.data.trim();
+        if data.is_empty() {
+            continue;
+        }
+        if data == "[DONE]" {
+            if effective_type != MonoizeProviderType::ChatCompletion || !chat_terminal_chunk_seen {
+                return ChannelProbeOutcome {
+                    ok: false,
+                    usage,
+                    http_status: Some(status),
+                    error_code: Some("upstream_stream_missing_terminal".to_string()),
+                    error_type: Some("stream_error".to_string()),
+                    error: Some(format!(
+                        "upstream {} stream sent [DONE] before its terminal event",
+                        effective_type.as_str()
+                    )),
+                };
+            }
+            return ChannelProbeOutcome {
+                ok: true,
+                usage,
+                http_status: Some(status),
+                error_code: None,
+                error_type: None,
+                error: None,
+            };
+        }
+
+        let value = match serde_json::from_str::<Value>(data) {
+            Ok(value) => value,
+            Err(error) => {
+                return ChannelProbeOutcome {
+                    ok: false,
+                    usage,
+                    http_status: Some(status),
+                    error_code: Some("upstream_stream_decode_failed".to_string()),
+                    error_type: Some("stream_error".to_string()),
+                    error: Some(format!(
+                        "upstream stream event contains invalid JSON: {error}: {}",
+                        truncate_probe_body(data)
+                    )),
+                };
+            }
+        };
+        if let Some(stream_usage) = extract_probe_usage(&value) {
+            usage = Some(stream_usage);
+        }
+        if let Some((error_code, error_type, error)) = probe_stream_error(&value, &event.event) {
+            return ChannelProbeOutcome {
+                ok: false,
+                usage,
+                http_status: Some(status),
+                error_code,
+                error_type,
+                error: Some(error),
+            };
+        }
+
+        let event_type = value.get("type").and_then(Value::as_str);
+        match effective_type {
+            MonoizeProviderType::Responses => {
+                if event.event == "response.completed" || event_type == Some("response.completed") {
+                    return ChannelProbeOutcome {
+                        ok: true,
+                        usage,
+                        http_status: Some(status),
+                        error_code: None,
+                        error_type: None,
+                        error: None,
+                    };
+                }
+            }
+            MonoizeProviderType::ChatCompletion => {
+                chat_terminal_chunk_seen |= value
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .is_some_and(|choices| {
+                        choices.iter().any(|choice| {
+                            choice
+                                .get("finish_reason")
+                                .is_some_and(|reason| !reason.is_null())
+                        })
+                    });
+            }
+            MonoizeProviderType::Messages => {
+                if event.event == "message_stop" || event_type == Some("message_stop") {
+                    return ChannelProbeOutcome {
+                        ok: true,
+                        usage,
+                        http_status: Some(status),
+                        error_code: None,
+                        error_type: None,
+                        error: None,
+                    };
+                }
+            }
+            MonoizeProviderType::Gemini => {
+                let terminal = value
+                    .get("candidates")
+                    .and_then(Value::as_array)
+                    .is_some_and(|candidates| {
+                        candidates.iter().any(|candidate| {
+                            candidate
+                                .get("finishReason")
+                                .is_some_and(|reason| !reason.is_null())
+                        })
+                    });
+                if terminal {
+                    return ChannelProbeOutcome {
+                        ok: true,
+                        usage,
+                        http_status: Some(status),
+                        error_code: None,
+                        error_type: None,
+                        error: None,
+                    };
+                }
+            }
+            MonoizeProviderType::OpenaiImage | MonoizeProviderType::Replicate => {}
+        }
+    }
+
+    ChannelProbeOutcome {
+        ok: false,
+        usage,
+        http_status: Some(status),
+        error_code: Some("upstream_stream_missing_terminal".to_string()),
+        error_type: Some("stream_error".to_string()),
+        error: Some(format!(
+            "upstream {} stream ended without a terminal event",
+            effective_type.as_str()
+        )),
+    }
+}
+
 pub async fn probe_channel_completion(
     client: &reqwest::Client,
     channel: &MonoizeChannel,
@@ -2446,11 +2680,12 @@ pub async fn probe_channel_completion(
     model: &str,
     provider_type: MonoizeProviderType,
     api_type_overrides: &[ApiTypeOverride],
+    stream: bool,
 ) -> ChannelProbeOutcome {
     let effective_type = resolve_effective_api_type(api_type_overrides, provider_type, model);
     let base = channel.base_url.trim_end_matches('/');
     let (url, body, extra_headers, use_google_api_key_header) =
-        build_probe_request(base, model, effective_type);
+        build_probe_request(base, model, effective_type, stream);
 
     let mut request = client.post(&url).timeout(Duration::from_millis(timeout_ms));
     request = if use_google_api_key_header {
@@ -2473,11 +2708,18 @@ pub async fn probe_channel_completion(
             let status = resp.status();
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
+                let (error_code, error_type) = probe_error_metadata(&body);
                 return ChannelProbeOutcome {
                     ok: false,
                     usage: None,
+                    http_status: Some(status.as_u16()),
+                    error_code,
+                    error_type,
                     error: Some(format_probe_http_error(status, &body)),
                 };
+            }
+            if stream {
+                return read_probe_stream(resp, effective_type).await;
             }
             let usage = match resp.json::<Value>().await {
                 Ok(value) => extract_probe_usage(&value),
@@ -2486,12 +2728,18 @@ pub async fn probe_channel_completion(
             ChannelProbeOutcome {
                 ok: true,
                 usage,
+                http_status: Some(status.as_u16()),
+                error_code: None,
+                error_type: None,
                 error: None,
             }
         }
         Err(error) => ChannelProbeOutcome {
             ok: false,
             usage: None,
+            http_status: None,
+            error_code: Some("upstream_connection_failed".to_string()),
+            error_type: Some("transport_error".to_string()),
             error: Some(format!("connection failed: {error}")),
         },
     }
@@ -2501,6 +2749,7 @@ fn build_probe_request(
     base: &str,
     model: &str,
     effective_type: MonoizeProviderType,
+    stream: bool,
 ) -> (String, Value, &'static [(&'static str, &'static str)], bool) {
     match effective_type {
         MonoizeProviderType::Responses => {
@@ -2508,6 +2757,7 @@ fn build_probe_request(
             let body = serde_json::json!({
                 "model": model,
                 "max_output_tokens": 16,
+                "stream": stream,
                 "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
             });
             (url, body, &[][..], false)
@@ -2517,6 +2767,7 @@ fn build_probe_request(
             let body = serde_json::json!({
                 "model": model,
                 "max_tokens": 16,
+                "stream": stream,
                 "messages": [{"role": "user", "content": "hi"}]
             });
             (url, body, &[][..], false)
@@ -2526,12 +2777,18 @@ fn build_probe_request(
             let body = serde_json::json!({
                 "model": model,
                 "max_tokens": 16,
+                "stream": stream,
                 "messages": [{"role": "user", "content": "hi"}]
             });
             (url, body, &[("anthropic-version", "2023-06-01")][..], false)
         }
         MonoizeProviderType::Gemini => {
-            let url = format!("{base}/v1beta/models/{model}:generateContent");
+            let method = if stream {
+                "streamGenerateContent?alt=sse"
+            } else {
+                "generateContent"
+            };
+            let url = format!("{base}/v1beta/models/{model}:{method}");
             let body = serde_json::json!({
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
                 "generationConfig": {"maxOutputTokens": 16}
@@ -3013,39 +3270,46 @@ mod tests {
             "https://up.example",
             "gpt-5-mini",
             MonoizeProviderType::Responses,
+            false,
         );
         assert_eq!(resp_url, "https://up.example/v1/responses");
         assert!(!resp_google_auth);
         assert!(resp_headers.is_empty());
         assert_eq!(resp_body["max_output_tokens"].as_u64(), Some(16));
+        assert_eq!(resp_body["stream"].as_bool(), Some(false));
         assert!(resp_body.get("input").is_some());
 
         let (chat_url, chat_body, chat_headers, chat_google_auth) = build_probe_request(
             "https://up.example",
             "gpt-5-mini",
             MonoizeProviderType::ChatCompletion,
+            false,
         );
         assert_eq!(chat_url, "https://up.example/v1/chat/completions");
         assert!(!chat_google_auth);
         assert!(chat_headers.is_empty());
         assert_eq!(chat_body["max_tokens"].as_u64(), Some(16));
+        assert_eq!(chat_body["stream"].as_bool(), Some(false));
         assert!(chat_body.get("messages").is_some());
 
         let (msg_url, msg_body, msg_headers, msg_google_auth) = build_probe_request(
             "https://up.example",
             "claude-3-7-sonnet",
             MonoizeProviderType::Messages,
+            false,
         );
         assert_eq!(msg_url, "https://up.example/v1/messages");
         assert!(!msg_google_auth);
         assert_eq!(msg_headers, &[("anthropic-version", "2023-06-01")]);
         assert_eq!(msg_body["max_tokens"].as_u64(), Some(16));
+        assert_eq!(msg_body["stream"].as_bool(), Some(false));
         assert!(msg_body.get("messages").is_some());
 
         let (gem_url, gem_body, gem_headers, gem_google_auth) = build_probe_request(
             "https://up.example",
             "gemini-2.5-flash",
             MonoizeProviderType::Gemini,
+            false,
         );
         assert_eq!(
             gem_url,
@@ -3059,10 +3323,31 @@ mod tests {
         );
         assert!(gem_body.get("contents").is_some());
 
+        let (stream_url, stream_body, _, _) = build_probe_request(
+            "https://up.example",
+            "gpt-5-mini",
+            MonoizeProviderType::Responses,
+            true,
+        );
+        assert_eq!(stream_url, "https://up.example/v1/responses");
+        assert_eq!(stream_body["stream"].as_bool(), Some(true));
+
+        let (gem_stream_url, _, _, _) = build_probe_request(
+            "https://up.example",
+            "gemini-2.5-flash",
+            MonoizeProviderType::Gemini,
+            true,
+        );
+        assert_eq!(
+            gem_stream_url,
+            "https://up.example/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+        );
+
         let (img_url, img_body, img_headers, img_google_auth) = build_probe_request(
             "https://up.example",
             "gpt-image-1",
             MonoizeProviderType::OpenaiImage,
+            false,
         );
         assert_eq!(img_url, "https://up.example/v1/images/generations");
         assert!(!img_google_auth);

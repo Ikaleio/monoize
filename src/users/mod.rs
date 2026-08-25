@@ -4,7 +4,7 @@ mod request_logs;
 mod store;
 mod utils;
 
-pub use groups::{CreateGroupInput, Group, GroupStoreError, UpdateGroupInput};
+pub use groups::{CreateGroupInput, Group, GroupStoreError, ReorderGroupsInput, UpdateGroupInput};
 pub use plans::{BillingPlan, BillingPlanInput};
 
 use crate::db::DbPool;

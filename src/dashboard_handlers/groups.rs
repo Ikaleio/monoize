@@ -1,7 +1,9 @@
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
-use crate::users::{CreateGroupInput, Group, GroupStoreError, UpdateGroupInput};
+use crate::users::{
+    CreateGroupInput, Group, GroupStoreError, ReorderGroupsInput, UpdateGroupInput,
+};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -34,6 +36,9 @@ fn map_group_error(error: GroupStoreError) -> AppError {
             "invalid_group_description",
             "group description must be at most 256 characters after trimming",
         ),
+        GroupStoreError::InvalidReorder(message) => {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        }
         GroupStoreError::CannotDeleteDefault => AppError::new(
             StatusCode::BAD_REQUEST,
             "cannot_delete_default_group",
@@ -92,6 +97,22 @@ pub async fn update_group(
     Ok(Json(group))
 }
 
+pub async fn reorder_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ReorderGroupsInput>,
+) -> AppResult<Json<Value>> {
+    require_admin(&headers, &state).await?;
+
+    state
+        .user_store
+        .reorder_groups(body)
+        .await
+        .map_err(map_group_error)?;
+
+    Ok(Json(json!({ "success": true })))
+}
+
 pub async fn delete_group(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -116,7 +137,7 @@ pub async fn delete_group(
 mod tests {
     use super::{DashboardGroupsResponse, list_dashboard_groups};
     use crate::app::{AppState, RuntimeConfig, load_state_with_runtime};
-    use crate::users::{CreateGroupInput, UpdateGroupInput, UserRole};
+    use crate::users::{CreateGroupInput, ReorderGroupsInput, UpdateGroupInput, UserRole};
     use axum::Json;
     use axum::extract::{Path, State};
     use axum::http::{HeaderMap, HeaderValue};
@@ -186,6 +207,37 @@ mod tests {
         assert_eq!(created.description, "premium routing");
         assert!(!created.is_default);
 
+        let default_id = groups[0].id.clone();
+        let Json(reorder_body) = super::reorder_groups(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(ReorderGroupsInput {
+                group_ids: vec![created.id.clone(), default_id.clone()],
+            }),
+        )
+        .await
+        .expect("reorder succeeds");
+        assert_eq!(reorder_body["success"], serde_json::json!(true));
+        let Json(DashboardGroupsResponse { groups: reordered }) =
+            list_dashboard_groups(State(state.clone()), reader_headers.clone())
+                .await
+                .expect("reordered list succeeds");
+        assert_eq!(reordered[0].id, created.id);
+        assert_eq!(reordered[0].sort_order, 0);
+        assert_eq!(reordered[1].id, default_id);
+        assert_eq!(reordered[1].sort_order, 1);
+
+        let invalid_reorder = super::reorder_groups(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(ReorderGroupsInput {
+                group_ids: vec![created.id.clone()],
+            }),
+        )
+        .await
+        .expect_err("partial reorder must fail");
+        assert_eq!(invalid_reorder.status, axum::http::StatusCode::BAD_REQUEST);
+
         // Duplicate name (case-insensitive) is rejected with 409.
         let conflict = super::create_group(
             State(state.clone()),
@@ -217,7 +269,6 @@ mod tests {
         assert_eq!(forbidden.status, axum::http::StatusCode::FORBIDDEN);
 
         // The default group is renameable but stays default (GR-D3).
-        let default_id = groups[0].id.clone();
         let Json(renamed) = super::update_group(
             State(state.clone()),
             admin_headers.clone(),

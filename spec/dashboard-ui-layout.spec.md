@@ -135,7 +135,8 @@ PL12a. Provider list card header metadata badges MUST render through a collapsed
 
 - The header badge preview MUST render no more than 3 badges before a `+N` overflow badge.
 - The preview row MUST NOT wrap.
-- The complete popover list MUST include channel type, enabled state, unpriced warning, and one badge per provider `group_ids` entry showing the group name resolved from `GET /api/dashboard/groups` (raw id fallback for unknown ids).
+- The complete popover list MUST include channel type, enabled state, one model-attention badge when any model has a breaker or pricing warning, and one badge per provider `group_ids` entry showing the group name resolved from `GET /api/dashboard/groups` (raw id fallback for unknown ids).
+- The model-attention badge count MUST deduplicate logical model IDs. It MUST use destructive styling when any model has `availability_status = unavailable`, and warning styling otherwise.
 
 PL13. The selected Channel model section MUST include an explicit "Fetch upstream" action that opens a model-diff selection dialog before insertion.
 
@@ -202,6 +203,7 @@ PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge 
 - The selected Channel model editor MUST render every clickable model tag directly and MUST NOT collapse tags behind an overflow control.
 - Provider overview model badges and Channel model rows MUST preserve unpriced highlighting.
 - Model-list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
+- A detail overlay attached to an individual visible model badge does not violate this rule. The model badge itself MUST remain directly visible in the stacked list.
 
 PL19a. The expanded provider-card model list, the selected Channel model editor, and the model picker dialog result area MUST render their badge collections through one shared stacked model list container component (`StackedModelList`), so that border, inner padding, wrap behavior, and item gap are identical on all three surfaces. The bounded height of the inner scroll region MAY be overridden per surface (the model picker uses a taller viewport-relative height); border, padding, and wrap behavior MUST come from the shared component.
 
@@ -210,12 +212,15 @@ PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-v
 - Channel list MUST render through `Virtuoso`.
 - Container MUST have bounded height and provide an internal vertical scrollbar.
 
-PL21. Unpriced Channel model entries on the Providers page MUST be visually highlighted at model-badge level.
+PL21. Provider overview model entries MUST combine availability and pricing warnings at model-badge level without combining their meanings.
 
 - Unpriced check target MUST be `redirect` model when `redirect` is non-empty; otherwise the logical model key.
 - A model is treated as unpriced when pricing metadata does not provide both input and output token prices for that target model.
 - A pricing value of `0` MUST be treated as present pricing metadata, not as missing metadata.
-- Unpriced model badges MUST use a yellow warning style distinct from normal model badges.
+- An unavailable model badge MUST use destructive red styling.
+- A partially unavailable or unpriced model badge MUST use yellow warning styling.
+- When both conditions apply, availability severity MUST determine the badge color.
+- The badge detail overlay MUST render separate availability and pricing sections.
 
 PL21a. `GET /api/dashboard/providers` MAY aggregate `unpriced_model_ids` across Channels for the Provider card. The count MUST deduplicate logical model IDs, while Channel detail highlighting MUST evaluate the selected Channel entry redirect independently.
 
@@ -585,6 +590,16 @@ groups cache MUST be revalidated (badges resolve names from the groups cache, so
 cache is stale). After a successful delete the groups cache MUST be revalidated together
 with the users, tokens, providers, billing-plans, and current-user caches, because the
 server-side deletion cascade rewrites group references in those entities.
+
+GP6. Each group row MUST provide move-up and move-down buttons in the sort-order cell.
+The first row's move-up button and the last row's move-down button MUST be disabled. Native
+HTML drag-and-drop reordering MUST be available through a drag handle when the browser
+matches `(pointer: fine)`; coarse-pointer users MUST retain the move buttons. A completed
+move or drop MUST call `POST /api/dashboard/groups/reorder` with every group id in the new
+visual order. While that mutation is pending, every group reorder control MUST be disabled.
+The groups SWR cache MUST immediately show the new order with `sort_order` values equal to
+the zero-based visual indices, MUST revalidate after success, and MUST restore the prior
+cache snapshot and show the server error after failure.
 
 ### 11.2 Shared group selector (GS)
 

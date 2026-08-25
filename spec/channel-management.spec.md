@@ -58,6 +58,40 @@ Runtime projection fields MAY be returned by list/get APIs:
 - `_healthy: boolean`
 - `_last_success_at: RFC3339 | null`
 - `_health_status: enum("healthy","probing","unhealthy")`
+- `_unhealthy_models: string[]`. This list MUST be sorted ascending and MUST contain the Channel model keys whose model-specific health status is `unhealthy`. It MUST be empty when `per_model_circuit_break = false`.
+- `_probing_models: string[]`. This list MUST be sorted ascending and MUST contain the Channel model keys whose model-specific health status is `probing`. It MUST be empty when `per_model_circuit_break = false`.
+- `_cooldown_until: RFC3339 | null`. For a Channel-level breaker, this value is the base health entry cooldown. For a per-model breaker, this value is the latest cooldown among the Channel's currently unhealthy model entries.
+
+`GET /api/dashboard/providers` MAY also return `model_runtime_statuses` on each Provider. Each entry MUST have this schema:
+
+```json
+{
+  "model": "string",
+  "availability_status": "healthy | degraded | unavailable",
+  "eligible_channel_count": 0,
+  "available_channel_count": 0,
+  "breaker_channels": [
+    {
+      "channel_id": "string",
+      "channel_name": "string",
+      "cooldown_until": "RFC3339 | null"
+    }
+  ],
+  "pricing_status": "complete | partial | missing",
+  "unpriced_channels": [
+    {
+      "channel_id": "string",
+      "channel_name": "string"
+    }
+  ]
+}
+```
+
+The array MUST contain one entry for each distinct logical model key in the Provider's Channel model maps. The array and each nested Channel array MUST be sorted ascending by model or Channel name, with Channel id as the tie breaker.
+
+For availability counts, an eligible Channel MUST be enabled, have positive weight, and contain the logical model. A Channel is unavailable only while the relevant health entry status is `unhealthy`. A `probing` Channel remains available to routing. If the circuit breaker is disabled, every eligible Channel is available. `availability_status` MUST be `unavailable` when at least one eligible Channel exists and none is available, `degraded` when some but not all eligible Channels are available, and `healthy` otherwise.
+
+For pricing status, the denominator is every Channel model entry for the logical model, including disabled and zero-weight Channels. `pricing_status` MUST be `missing` when every such entry lacks a complete eligible rate matrix, `partial` when only some entries lack one, and `complete` when none lack one.
 
 Channel-level passive breaker override fields MAY be present:
 
@@ -275,18 +309,20 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
 ### 3.8 Test channel liveness
 
 - Method/Path: `POST /api/dashboard/providers/{provider_id}/channels/{channel_id}/test`
-- Body: `{ "model"?: string }`
+- Body: `{ "model"?: string, "stream"?: boolean }`
+- If `stream` is omitted, it MUST default to `true`.
 - If `model` is provided, it MUST be a key in the Channel `models` object.
 - If `model` is omitted, use the Channel active probe model override, then Provider active probe model override, then global probe model, then the first Channel model key in lexicographic order.
 - The global probe model and request timeout MUST be read from one `monoize_runtime` snapshot. This endpoint MUST NOT read the settings database.
 - The upstream probe model MUST be the selected Channel model entry `redirect` when non-empty, otherwise the logical model key.
 - The effective API type is the first matching Provider `api_type_overrides[]` entry for the logical model, otherwise the Channel `provider_type`.
 - Replicate channels MUST be rejected for active completion probes.
-- On success, define the candidate health keys as the base Channel id and, when `per_model_circuit_break = true`, one `{channel_id}::{model}` key for each current Channel model key.
-- On success, reset every existing candidate health entry to healthy. Candidate health keys that do not exist MUST NOT be inserted when at least one candidate entry exists.
-- On success, when no candidate health entry exists and capacity remains, insert and reset only the base Channel health key. When capacity is full, do not insert an entry.
-- A successful test MUST NOT inspect or mutate health-map keys outside the candidate set. Its health-map work MUST be `O(channel.models.length)` and independent of the number of global health entries.
-- Response: `{ "success": boolean, "latency_ms": integer, "model": string, "error": string | null }`
+- If `stream = true`, Responses, Chat Completions, Messages, and Gemini tests MUST send their protocol's streaming request form. A streaming test MUST read the upstream stream until a protocol terminal event is observed. HTTP success without a valid terminal event MUST return `success = false` and `error_code = "upstream_stream_missing_terminal"`.
+- If `stream = true` for an OpenAI Image or Replicate Channel, return `400 invalid_request` because the liveness test does not define a streaming form for those Channel types.
+- If `per_model_circuit_break = true`, a successful test MUST reset only the `{channel_id}::{resolved logical model}` health key. It MUST NOT reset the base Channel key or any sibling model key. If this model key does not exist and capacity remains, insert and reset this model key.
+- If `per_model_circuit_break = false`, a successful test MUST reset only the base Channel health key. If this key does not exist and capacity remains, insert and reset it.
+- A successful test MUST NOT inspect or mutate any other health-map key. Its health-map work MUST be `O(1)` and independent of Channel model count and global health entry count.
+- Response: `{ "success": boolean, "latency_ms": integer, "model": string, "stream": boolean, "http_status": integer | null, "error_code": string | null, "error_type": string | null, "error": string | null }`
 - On probe failure, `error` MUST identify the upstream outcome rather than a generic sentence:
   - HTTP non-2xx: `upstream returned {status} {reason}: {body}` where `{status}` is the
     numeric status (e.g. `500`, `503`), `{reason}` is the canonical reason phrase when
@@ -294,6 +330,7 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
     truncated to at most 512 bytes. An empty body omits the `: {body}` suffix.
   - Transport/connection failure: `connection failed: {detail}` using the underlying
     client error text.
+  - Stream decode or terminal failure: a concrete sentence that identifies the invalid event, decode failure, connection failure, idle timeout, or missing terminal condition.
   - `error` MUST NOT be the undifferentiated string
     `upstream returned non-2xx status or connection failed`.
 
@@ -318,3 +355,15 @@ CP-FE-5. Saving a provider child editor popup MUST update the parent provider dr
 CP-FE-6. Saving from the provider unsaved-changes confirmation MUST invoke the provider create or update operation at most once for the same tap or click sequence. That same sequence MUST NOT reopen the unsaved-changes confirmation.
 
 CP-FE-7. The null choice for `session_affinity_auto` MUST use a label that identifies URL-based automatic selection. It MUST NOT use the global-inheritance label used by unrelated nullable settings.
+
+CP-FE-8. The Channel liveness-test dialog MUST contain a `Stream response` checkbox. The checkbox MUST be checked whenever a stream-capable Channel test dialog opens. It MUST be disabled and unchecked for a Channel type whose liveness test does not define streaming.
+
+CP-FE-9. The Channel liveness-test dialog MUST expose adjacent `Sequential test` and `Concurrent test` buttons. Sequential test MUST await each model before starting the next model. Concurrent test MUST start one request for every Channel model without a client-side concurrency limit. Both actions MUST update each model row as its request completes.
+
+CP-FE-10. A failed model row MUST render the concrete `error` value inline. The row MUST NOT require hover to read the error. The UI MAY truncate the initial display only when it supplies an expand action and a copy action for the complete value.
+
+CP-FE-11. A Provider overview model badge MUST use the following severity order: red for `availability_status = unavailable`; yellow for `availability_status = degraded` or `pricing_status != complete`; default styling otherwise. Color MUST NOT be the only state signal. The badge detail overlay MUST separate breaker details from pricing details.
+
+CP-FE-12. A Provider overview model-status detail overlay MUST open on hover or focus for a fine pointer and on tap for a coarse pointer. It MUST list every `breaker_channels` Channel name and every `unpriced_channels` Channel name. A red badge MUST state that zero of the eligible Channels are available.
+
+CP-FE-13. A Channel `unhealthy` status detail overlay MUST identify a Channel-level breaker when `per_model_circuit_break = false`. When `per_model_circuit_break = true`, it MUST list `_unhealthy_models`. A Channel `probing` status detail overlay MUST list `_probing_models`. Each overlay MUST show `_cooldown_until` when present.

@@ -300,6 +300,25 @@ export interface MonoizeChannel {
   _healthy?: boolean;
   _last_success_at?: string;
   _health_status?: "healthy" | "probing" | "unhealthy";
+  _unhealthy_models?: string[];
+  _probing_models?: string[];
+  _cooldown_until?: string;
+}
+
+export interface ProviderModelRuntimeChannel {
+  channel_id: string;
+  channel_name: string;
+  cooldown_until?: string;
+}
+
+export interface ProviderModelRuntimeStatus {
+  model: string;
+  availability_status: "healthy" | "degraded" | "unavailable";
+  eligible_channel_count: number;
+  available_channel_count: number;
+  breaker_channels: ProviderModelRuntimeChannel[];
+  pricing_status: "complete" | "partial" | "missing";
+  unpriced_channels: ProviderModelRuntimeChannel[];
 }
 
 export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini" | "openai_image" | "replicate";
@@ -334,6 +353,7 @@ export interface Provider {
   updated_at: string;
   unpriced_model_count?: number;
   unpriced_model_ids?: string[];
+  model_runtime_statuses?: ProviderModelRuntimeStatus[];
 }
 
 export interface CreateMonoizeChannelInput {
@@ -769,6 +789,10 @@ export interface ChannelTestResult {
   success: boolean;
   latency_ms: number;
   model: string;
+  stream: boolean;
+  http_status: number | null;
+  error_code: string | null;
+  error_type: string | null;
   error: string | null;
 }
 
@@ -1011,6 +1035,13 @@ class ApiClient {
     });
   }
 
+  async reorderGroups(groupIds: string[]): Promise<{ success: boolean }> {
+    return this.request("/groups/reorder", {
+      method: "POST",
+      body: JSON.stringify({ group_ids: groupIds }),
+    });
+  }
+
   async deleteGroup(id: string): Promise<{ success: boolean }> {
     return this.request(`/groups/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -1175,10 +1206,15 @@ class ApiClient {
     return this.request("/admin/overview");
   }
 
-  async testChannel(providerId: string, channelId: string, model?: string): Promise<ChannelTestResult> {
+  async testChannel(
+    providerId: string,
+    channelId: string,
+    model?: string,
+    stream = true
+  ): Promise<ChannelTestResult> {
     return this.request(`/providers/${providerId}/channels/${channelId}/test`, {
       method: "POST",
-      body: model ? JSON.stringify({ model }) : JSON.stringify({}),
+      body: JSON.stringify({ ...(model ? { model } : {}), stream }),
     });
   }
 

@@ -208,7 +208,16 @@ RTA-5. Error policy per attempt:
 - Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, MUST NOT retry the same Channel. They MUST still advance to the next eligible Channel or Provider.
 - A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing. Monoize MUST NOT classify such an error as an upstream attempt failure.
 
-RTA-6. On an HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, or connection failure, Channel passive health state MUST be updated.
+RTA-5a. A persistent Channel failure is an upstream failure that satisfies at least one condition below:
+
+1. Its HTTP status is one of `401`, `402`, `403`, `404`, `405`, `407`, `410`, `415`, `426`, or `451`.
+2. Its structured upstream `code` or `type`, after ASCII lowercase conversion and surrounding whitespace removal, is one of `account_deactivated`, `account_suspended`, `authentication_error`, `billing_hard_limit_reached`, `credit_balance_too_low`, `deployment_not_found`, `insufficient_balance`, `insufficient_quota`, `invalid_api_key`, `model_not_found`, `model_not_supported`, `no_available_account`, `permission_denied`, `quota_exceeded`, or `unsupported_model`.
+
+A persistent Channel failure MUST NOT authorize a same-Channel retry. HTTP `400`, `409`, and `422` without a listed structured signal are request-specific and MUST NOT be persistent Channel failures.
+
+RTA-5b. A structured upstream `code` or `type` equal to `rate_limit_error`, `rate_limit_exceeded`, or `too_many_requests` MUST have the RateLimited passive-failure class. A structured upstream `code` or `type` equal to `overloaded_error`, `server_error`, `service_unavailable`, or `temporarily_unavailable` MUST have the Transient passive-failure class. Signal comparison uses the normalization in RTA-5a. HTTP `429` MUST take the RateLimited class regardless of structured signals. An RTA-5a persistent HTTP status MUST take the Persistent class regardless of structured signals. For all other statuses, a persistent structured signal takes precedence over a Transient HTTP status or structured signal.
+
+RTA-6. On an HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, connection failure, RTA-5a persistent failure, or RTA-5b structured failure, Channel passive health state MUST be updated. A persistent failure MUST mark the relevant health entry unhealthy after its first occurrence. A Transient or RateLimited failure MUST use the threshold in PHS-3.
 
 RTA-6b. Other upstream failures MUST NOT update Channel passive health state.
 
@@ -237,7 +246,7 @@ STRM-2. Provider/channel fallback is allowed only before the first downstream pr
 
 STRM-3. A streaming request MUST write or refresh affinity only after the upstream stream completes without terminal error.
 
-STRM-4. If a partial stream later fails with a retryable terminal failure — an in-stream terminal error event whose HTTP status is `408`, `429`, or `5xx`, or a stream adapter failure whose error code starts with `upstream_` (idle timeout, stream decode failure, protocol error, missing stream terminal) — Monoize MUST record exactly one passive-failure sample (PHS-1) for the serving Channel using the attempt's health key. The sample class MUST be RateLimited for HTTP `429` and Transient otherwise; a qualifying adapter failure is Transient. A mid-stream failure MUST NOT trigger a shared-origin blast and MUST NOT mark peer Channels. An in-stream terminal error event whose status is outside `408`/`429`/`5xx` MUST NOT record a sample. An adapter failure whose error code does not start with `upstream_` (internal transform or encode failure) MUST NOT record a sample and MUST NOT clear the affinity binding.
+STRM-4. If a partial stream later fails with a breaker-relevant terminal failure — an in-stream terminal error event classified by RTA-5a, RTA-5b, or RTA-6, or a stream adapter failure whose error code starts with `upstream_` (idle timeout, stream decode failure, protocol error, missing stream terminal) — Monoize MUST record exactly one passive health failure for the serving Channel using the attempt's health key. HTTP `429` and RTA-5b rate-limit signals have the RateLimited class. An RTA-5a signal has the Persistent class and MUST trip immediately. Other qualifying events and adapter failures have the Transient class. A mid-stream failure MUST NOT trigger a shared-origin blast and MUST NOT mark peer Channels. An event outside these classifications MUST NOT update health. An adapter failure whose error code does not start with `upstream_` (internal transform or encode failure) MUST NOT update health and MUST NOT clear the affinity binding.
 
 STRM-4a. After recording the STRM-4 sample, Monoize MUST clear the request's affinity binding if and only if the serving attempt is the request's affinity-hit target (`affinity_hit == true`) and the Channel health state for the attempt's health key is unhealthy after the sample (AFF-9 conditions 1 and 3). In every other case the binding MUST remain stored.
 
@@ -295,13 +304,13 @@ AFF-8. If the bound Provider+Channel is stale, affinity-disabled, disabled, zero
 
 AFF-8a. If the bound Provider+Channel is merely unhealthy or otherwise absent from this request's eligible attempt list, the binding MUST remain stored. Routing MUST NOT jump to that target for this request. Waterfall MUST continue from the first eligible attempt. When the bound target is eligible again, AFF-7 MUST apply to the retained binding.
 
-AFF-9. A same-Channel-retryable failure (HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, or connection failure) MUST clear the request's affinity binding if and only if all of the following hold:
+AFF-9. A breaker-relevant failure defined by RTA-5a, RTA-5b, RTA-6, or STRM-4 MUST clear the request's affinity binding if and only if all of the following hold:
 
 1. the failed attempt is the request's affinity-hit target (`affinity_hit == true` per AFF-7/AFF-7a),
 2. the failure is not a shared-origin blast per RTA-6c,
 3. after the RTA-6 passive-failure sample is recorded, the Channel health state for the attempt's health key (HSK-1/HSK-2) is unhealthy.
 
-In every other case the binding MUST remain stored: a failure on an attempt that is not the affinity-hit target MUST NOT clear the binding, a sub-threshold failure on the bound target MUST NOT clear the binding, and a shared-origin blast MUST NOT clear the binding. When `provider.circuit_breaker_enabled == false`, no unhealthy transition exists, so retryable failures MUST NOT clear the binding. Other upstream errors MUST NOT clear affinity by themselves. A successful fallback attempt on an affinity-enabled Channel MUST replace the binding per AFF-7c and AFF-10, so the binding always tracks the most recent successful Channel. Purpose: sub-threshold transient failures MUST NOT discard upstream prompt-cache locality.
+In every other case the binding MUST remain stored: a failure on an attempt that is not the affinity-hit target MUST NOT clear the binding, a sub-threshold Transient or RateLimited failure on the bound target MUST NOT clear the binding, and a shared-origin blast MUST NOT clear the binding. When `provider.circuit_breaker_enabled == false`, no unhealthy transition exists, so breaker-relevant failures MUST NOT clear the binding. Other upstream errors MUST NOT clear affinity by themselves. A successful fallback attempt on an affinity-enabled Channel MUST replace the binding per AFF-7c and AFF-10, so the binding always tracks the most recent successful Channel. Purpose: sub-threshold transient failures MUST NOT discard upstream prompt-cache locality.
 
 AFF-10. A successful non-stream request MUST write or refresh affinity after success only when the successful Channel's effective `affinity_enabled` is true.
 
@@ -346,13 +355,13 @@ HSK-7. A health update MUST NOT increase the map beyond HSK-6. At capacity, a ne
 - `cooldown_seconds` default `60`
 - `rate_limit_cooldown_seconds` default `15`
 
-PHS-1. On each retryable failure (transient or rate-limited), the health state entry MUST prune failure timestamps older than `window_seconds` from the front of its queue. It MUST append `now` only when the queue length is below the effective threshold from CFG-5b.
+PHS-1. On each breaker-relevant failure, the health state entry MUST prune failure timestamps older than `window_seconds` from the front of its queue. It MUST append `now` only when the queue length is below the effective threshold from CFG-5b.
 
 PHS-2. A successful attempt MUST NOT append a passive sample. If `provider.circuit_breaker_enabled == false`, success and failure handling MUST return without inserting or modifying a Channel health entry.
 
-PHS-3. The health state entry MUST become unhealthy when its failure-timestamp queue length reaches the effective threshold. Failure-count evaluation MUST read the queue length in constant time and MUST NOT scan the queue. The queue length MUST NOT exceed the effective threshold.
+PHS-3. A Persistent failure MUST make the health state entry unhealthy immediately. Otherwise the entry MUST become unhealthy when its failure-timestamp queue length reaches the effective threshold. Failure-count evaluation MUST read the queue length in constant time and MUST NOT scan the queue. The queue length MUST NOT exceed the effective threshold.
 
-PHS-4. When unhealthy is triggered by a retryable `429` failure, cooldown MUST use `rate_limit_cooldown_seconds`. Otherwise cooldown MUST use `cooldown_seconds`.
+PHS-4. When unhealthy is triggered by HTTP `429` or an RTA-5b rate-limit signal, cooldown MUST use `rate_limit_cooldown_seconds`. Otherwise cooldown MUST use `cooldown_seconds`.
 
 PHS-5. Unhealthy state entries MUST NOT receive normal traffic while `now < cooldown_until`.
 
@@ -382,7 +391,7 @@ AHS-5. Probe results MUST be logged at debug level with channel ID, provider nam
 
 AHS-6. Probe scheduler MUST enforce provider-level probe interval independently. A channel that is probe-eligible MUST be skipped until `now - last_probe_at >= effective_interval_seconds`.
 
-AHS-7. When `per_model_circuit_break == true`, a successful active probe MUST clear unhealthy state for ALL model-specific health entries associated with the probed channel. Active probing does not probe each model individually.
+AHS-7. When `per_model_circuit_break == true`, the active-probe scheduler MUST select one probe-due unhealthy logical model and send the probe with that model's Channel mapping. A successful probe MUST increment and, after the success threshold, clear only that model's health entry. A failed probe MUST update only that model's health entry. The scheduler MUST NOT clear or extend cooldown for sibling model entries.
 
 AHS-8. Active probe failure cooldown MUST use the effective `passive_cooldown_seconds` for the channel (channel override first, global fallback), consistent with passive breaker resolution.
 

@@ -279,7 +279,7 @@ BE3. `maybe_charge_response()` MUST return an error (HTTP 403 `model_pricing_req
 
 BE4. The Provider dashboard page MUST display a visible warning badge on any `ProviderCard` whose models include entries with no complete eligible rate matrix in `billing_rate_records`. The badge MUST show the count of unpriced models.
 
-- `GET /api/dashboard/providers` MUST include `unpriced_model_count` and `unpriced_model_ids` for each provider. `unpriced_model_ids` MUST contain exactly the logical model ids counted by `unpriced_model_count`, sorted ascending.
+- `GET /api/dashboard/providers` MUST include `unpriced_model_count`, `unpriced_model_ids`, and `model_runtime_statuses` for each provider. `unpriced_model_ids` MUST contain exactly the logical model ids counted by `unpriced_model_count`, sorted ascending. Each `model_runtime_statuses` entry MUST expose its `pricing_status` and the Channel id and name for every unpriced mapping as defined by `channel-management.spec.md`.
 - For a redirected entry, the card MUST treat the model as priced when either the normalized pricing key of the `redirect` model or the normalized pricing key of the logical model has complete rates. It MUST count the entry as unpriced only when both are missing/incomplete.
 
 BE5. The billing enforcement check uses a per-request cache to avoid redundant pricing lookups. Because redirect fallback and suffix normalization depend on both `upstream_model` and logical model after pricing-key normalization, the cache key MUST include both values or an equivalent composite identity.

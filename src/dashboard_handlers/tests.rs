@@ -253,6 +253,9 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         _healthy: None,
         _last_success_at: None,
         _health_status: None,
+        _unhealthy_models: None,
+        _probing_models: None,
+        _cooldown_until: None,
 
         proxy_url: None,
         extra_headers: None,
@@ -309,10 +312,7 @@ async fn dashboard_provider_group_ids_round_trip_and_empty_selection_binds_defau
 
     let default_group_id: String = db
         .read()
-        .query_one(db.stmt(
-            "SELECT id FROM monoize_groups WHERE is_default = 1",
-            vec![],
-        ))
+        .query_one(db.stmt("SELECT id FROM monoize_groups WHERE is_default = 1", vec![]))
         .await
         .expect("default group query succeeds")
         .expect("default group exists")

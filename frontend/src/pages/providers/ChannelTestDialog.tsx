@@ -1,8 +1,22 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Activity, Check, Loader2, Play, X, Zap } from 'lucide-react'
+import {
+	Activity,
+	Check,
+	Clipboard,
+	Layers3,
+	ListRestart,
+	Loader2,
+	X,
+	Zap
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { mutate } from 'swr'
+import { Virtuoso } from 'react-virtuoso'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ButtonGroup } from '@/components/ui/button-group'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
 	Dialog,
 	DialogContent,
@@ -11,22 +25,29 @@ import {
 	DialogTitle
 } from '@/components/ui/dialog'
 import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger
-} from '@/components/ui/tooltip'
+	Field,
+	FieldContent,
+	FieldDescription,
+	FieldLabel
+} from '@/components/ui/field'
 import { StatusBadge } from '@/components/ui/status'
 import { api } from '@/lib/api'
 import { SWR_KEYS } from '@/lib/swr'
-import { mutate } from 'swr'
-import { Virtuoso } from 'react-virtuoso'
-import type { ChannelTestResult } from '@/lib/api'
+import type { ChannelTestResult, ProviderType } from '@/lib/api'
 
 type ChannelTestState = Record<
 	string,
-	{ status: 'idle' | 'testing' | 'passed' | 'failed'; latency_ms?: number; error?: string }
+	{
+		status: 'idle' | 'testing' | 'passed' | 'failed'
+		latency_ms?: number
+		http_status?: number | null
+		error_code?: string | null
+		error_type?: string | null
+		error?: string
+	}
 >
+
+type TestMode = 'sequential' | 'concurrent' | null
 
 type ChannelTestDialogProps = {
 	open: boolean
@@ -35,6 +56,7 @@ type ChannelTestDialogProps = {
 	channelId: string
 	channelName: string
 	providerName: string
+	providerType: ProviderType
 	models: string[]
 }
 
@@ -45,62 +67,87 @@ export function ChannelTestDialog({
 	channelId,
 	channelName,
 	providerName,
+	providerType,
 	models
 }: ChannelTestDialogProps) {
 	const { t } = useTranslation()
+	const streamCapable = providerType !== 'openai_image' && providerType !== 'replicate'
+	const [stream, setStream] = useState(streamCapable)
 	const [testState, setTestState] = useState<ChannelTestState>({})
-	const [testingAll, setTestingAll] = useState(false)
-	const abortRef = useRef(false)
+	const [testMode, setTestMode] = useState<TestMode>(null)
+	const testingAll = testMode !== null
 
 	useEffect(() => {
-		if (open) {
-			setTestState({})
-			setTestingAll(false)
-			abortRef.current = false
-		} else {
-			abortRef.current = true
-		}
-	}, [open])
+		if (!open) return
+		setTestState({})
+		setTestMode(null)
+		setStream(streamCapable)
+	}, [open, streamCapable])
 
-	const runSingleTest = async (model: string) => {
-		setTestState(prev => ({
-			...prev,
+	const runSingleTest = async (
+		model: string,
+		streamMode = stream,
+		revalidateProvider = true
+	) => {
+		setTestState(previous => ({
+			...previous,
 			[model]: { status: 'testing' }
 		}))
 		try {
 			const result: ChannelTestResult = await api.testChannel(
 				providerId,
 				channelId,
-				model
+				model,
+				streamMode
 			)
-			setTestState(prev => ({
-				...prev,
+			setTestState(previous => ({
+				...previous,
 				[model]: {
 					status: result.success ? 'passed' : 'failed',
 					latency_ms: result.latency_ms,
+					http_status: result.http_status,
+					error_code: result.error_code,
+					error_type: result.error_type,
 					error: result.error ?? undefined
 				}
 			}))
-		} catch (err) {
-			setTestState(prev => ({
-				...prev,
+		} catch (error) {
+			setTestState(previous => ({
+				...previous,
 				[model]: {
 					status: 'failed',
-					error: err instanceof Error ? err.message : 'Unknown error'
+					error: error instanceof Error ? error.message : t('common.error')
 				}
 			}))
+		} finally {
+			if (revalidateProvider) mutate(SWR_KEYS.PROVIDERS)
 		}
 	}
 
-	const runAllTests = async () => {
-		setTestingAll(true)
-		abortRef.current = false
-		for (const model of models) {
-			if (abortRef.current) break
-			await runSingleTest(model)
+	const runSequentialTests = async () => {
+		setTestMode('sequential')
+		const streamMode = stream
+		try {
+			for (const model of models) {
+				await runSingleTest(model, streamMode, false)
+			}
+		} finally {
+			setTestMode(null)
+			mutate(SWR_KEYS.PROVIDERS)
 		}
-		setTestingAll(false)
-		mutate(SWR_KEYS.PROVIDERS)
+	}
+
+	const runConcurrentTests = async () => {
+		setTestMode('concurrent')
+		const streamMode = stream
+		try {
+			await Promise.all(
+				models.map(model => runSingleTest(model, streamMode, false))
+			)
+		} finally {
+			setTestMode(null)
+			mutate(SWR_KEYS.PROVIDERS)
+		}
 	}
 
 	const testedCount = Object.values(testState).filter(
@@ -110,12 +157,17 @@ export function ChannelTestDialog({
 		state => state.status === 'passed'
 	).length
 
+	const copyError = async (error: string) => {
+		await navigator.clipboard.writeText(error)
+		toast.success(t('providers.testErrorCopied'))
+	}
+
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className='max-h-[85vh] flex flex-col overflow-hidden max-w-2xl'>
+			<DialogContent className='flex max-h-[85vh] max-w-2xl flex-col overflow-hidden'>
 				<DialogHeader>
 					<DialogTitle className='flex items-center gap-2'>
-						<Activity className='h-5 w-5 text-muted-foreground' />
+						<Activity className='size-5 text-muted-foreground' />
 						{t('providers.testChannelTitle')}
 					</DialogTitle>
 					<DialogDescription>
@@ -126,111 +178,159 @@ export function ChannelTestDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className='flex items-center justify-between'>
-					<div className='text-sm text-muted-foreground'>
-						{testedCount > 0 && (
-							<span>
-								{passedCount}/{testedCount}{' '}
-								{t('providers.testPassed').toLowerCase()}
-							</span>
-						)}
-					</div>
-					<Button
-						size='sm'
-						variant='outline'
-						disabled={testingAll || models.length === 0}
-						onClick={runAllTests}
-					>
-						{testingAll ?
-							<>
-								<Loader2 className='h-4 w-4 mr-2 animate-spin' />
-								{t('providers.testAllRunning')}
-							</>
-						:	<>
-								<Play className='h-4 w-4 mr-2' />
-								{t('providers.testAll')} ({models.length})
-							</>
-						}
-					</Button>
+				<div className='flex flex-wrap items-center justify-between gap-3'>
+					<Field orientation='horizontal' data-disabled={!streamCapable} className='w-auto'>
+						<Checkbox
+							id='channel-test-stream'
+							checked={stream}
+							disabled={!streamCapable || testingAll}
+							onCheckedChange={checked => setStream(checked === true)}
+						/>
+						<FieldContent>
+							<FieldLabel htmlFor='channel-test-stream'>
+								{t('providers.streamTest')}
+							</FieldLabel>
+							<FieldDescription>
+								{streamCapable ?
+									t('providers.streamTestDesc')
+								: 	t('providers.streamTestUnsupported')}
+							</FieldDescription>
+						</FieldContent>
+					</Field>
+					<ButtonGroup aria-label={t('providers.testModes')}>
+						<Button
+							size='sm'
+							variant='outline'
+							disabled={testingAll || models.length === 0}
+							onClick={runSequentialTests}
+						>
+							{testMode === 'sequential' ?
+								<Loader2 data-icon='inline-start' className='animate-spin' />
+							: 	<ListRestart data-icon='inline-start' />}
+							{t('providers.testSequential')}
+						</Button>
+						<Button
+							size='sm'
+							variant='outline'
+							disabled={testingAll || models.length === 0}
+							onClick={runConcurrentTests}
+						>
+							{testMode === 'concurrent' ?
+								<Loader2 data-icon='inline-start' className='animate-spin' />
+							: 	<Layers3 data-icon='inline-start' />}
+							{t('providers.testConcurrent')}
+						</Button>
+					</ButtonGroup>
 				</div>
 
-				<div className='border rounded-lg overflow-hidden'>
+				<div className='min-h-5 text-sm text-muted-foreground'>
+					{testedCount > 0 && (
+						<span>
+							{t('providers.testProgress', {
+								passed: passedCount,
+								tested: testedCount
+							})}
+						</span>
+					)}
+				</div>
+
+				<div className='overflow-hidden rounded-lg border'>
 					{models.length === 0 ?
-						<div className='text-sm text-muted-foreground py-8 text-center'>
+						<div className='py-8 text-center text-sm text-muted-foreground'>
 							{t('providers.validationAtLeastOneModel')}
 						</div>
-					:	<Virtuoso
-							style={{ height: Math.min(models.length * 44, 352) }}
+					: 	<Virtuoso
+							style={{ height: Math.min(Math.max(models.length * 44, 88), 352) }}
 							data={models}
-							computeItemKey={(_idx, model) => model}
-							itemContent={(_idx, model) => {
+							computeItemKey={(_index, model) => model}
+							itemContent={(_index, model) => {
 								const state = testState[model]
 								const status = state?.status ?? 'idle'
 								return (
-									<div className='flex h-11 items-center gap-3 px-3 border-b last:border-b-0 hover:bg-muted/50 transition-colors'>
-										<span className='text-sm font-mono truncate min-w-0 flex-1'>
-											{model}
-										</span>
-
-										<span className='flex items-center gap-2 shrink-0'>
-											{status === 'passed' && (
-												<StatusBadge variant='success' className='gap-1'>
-													<Check className='h-3 w-3' />
-													{t('providers.testLatency', {
-														ms: state?.latency_ms ?? 0
-													})}
-												</StatusBadge>
-											)}
-											{status === 'failed' && (
-												<TooltipProvider delayDuration={0}>
-													<Tooltip>
-														<TooltipTrigger asChild>
-															<StatusBadge variant='destructive' className='gap-1'>
-																<X className='h-3 w-3' />
-																{state?.latency_ms != null ?
-																	t('providers.testLatency', { ms: state.latency_ms })
-																: 	t('providers.testFailed')
-																}
-															</StatusBadge>
-														</TooltipTrigger>
-														{state?.error && (
-															<TooltipContent side='left' className='max-w-xs'>
-																{state.error}
-															</TooltipContent>
+									<div className='flex flex-col border-b last:border-b-0'>
+										<div className='flex min-h-11 items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50'>
+											<span className='min-w-0 flex-1 truncate font-mono text-sm'>
+												{model}
+											</span>
+											<span className='flex shrink-0 items-center gap-2'>
+												{status === 'passed' && (
+													<StatusBadge variant='success' className='gap-1'>
+														<Check className='size-3' />
+														{t('providers.testLatency', {
+															ms: state?.latency_ms ?? 0
+														})}
+													</StatusBadge>
+												)}
+												{status === 'failed' && (
+													<StatusBadge variant='destructive' className='gap-1'>
+														<X className='size-3' />
+														{state?.latency_ms != null ?
+															t('providers.testLatency', { ms: state.latency_ms })
+														: 	t('providers.testFailed')}
+													</StatusBadge>
+												)}
+												{status === 'testing' && (
+													<Badge variant='secondary' className='gap-1 border-0'>
+														<Loader2 className='size-3 animate-spin' />
+														{t('providers.testing')}
+													</Badge>
+												)}
+												{status === 'idle' && (
+													<span className='text-xs text-muted-foreground'>
+														{t('providers.testIdle')}
+													</span>
+												)}
+											</span>
+											<Button
+												variant='ghost'
+												size='sm'
+												className='h-7 shrink-0 px-2'
+												aria-label={t('providers.testModelAria', { model })}
+												disabled={status === 'testing' || testingAll}
+												onClick={() => runSingleTest(model)}
+											>
+												{status === 'testing' ?
+													<Loader2 className='animate-spin' />
+												: 	<Zap />}
+											</Button>
+										</div>
+										{status === 'failed' && state?.error && (
+											<div className='flex items-start gap-2 border-t bg-destructive/5 px-3 py-2'>
+												<div className='flex min-w-0 flex-1 flex-col gap-1'>
+													<div className='flex flex-wrap items-center gap-1.5'>
+														{state.http_status != null && (
+															<Badge variant='outline'>HTTP {state.http_status}</Badge>
 														)}
-													</Tooltip>
-												</TooltipProvider>
-											)}
-											{status === 'testing' && (
-												<Badge variant='secondary' className='gap-1 border-0'>
-													<Loader2 className='h-3 w-3 animate-spin' />
-													{t('providers.testing')}
-												</Badge>
-											)}
-											{status === 'idle' && (
-												<span className='text-xs text-muted-foreground'>
-													{t('providers.testIdle')}
-												</span>
-											)}
-										</span>
-
-										<Button
-											variant='ghost'
-											size='sm'
-											className='h-7 px-2 shrink-0'
-											disabled={status === 'testing' || testingAll}
-											onClick={() => runSingleTest(model)}
-										>
-											{status === 'testing' ?
-												<Loader2 className='h-3.5 w-3.5 animate-spin' />
-											:	<Zap className='h-3.5 w-3.5' />
-											}
-										</Button>
+														{state.error_code && (
+															<Badge variant='outline' className='font-mono'>
+																{state.error_code}
+															</Badge>
+														)}
+														{state.error_type && (
+															<Badge variant='outline' className='font-mono'>
+																{state.error_type}
+															</Badge>
+														)}
+													</div>
+													<code className='break-words whitespace-pre-wrap font-mono text-sm leading-relaxed text-destructive'>
+														{state.error}
+													</code>
+												</div>
+												<Button
+													variant='ghost'
+													size='icon'
+													className='size-8 shrink-0'
+													aria-label={t('providers.copyTestError')}
+													onClick={() => copyError(state.error!)}
+												>
+													<Clipboard />
+												</Button>
+											</div>
+										)}
 									</div>
 								)
 							}}
-						/>
-					}
+						/>}
 				</div>
 			</DialogContent>
 		</Dialog>

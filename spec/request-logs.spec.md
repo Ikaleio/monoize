@@ -423,6 +423,10 @@ FL4a-5. *(Removed — the "Visible window TPS" metric and its generation-window 
 
 FL4d. When `tried_providers` is non-empty, the timing tooltip MUST list those hops in stored order after the duration/TTFB/TPS rows. Each hop row MUST show the FL9a.3 label, `duration_ms` when present (same duration format as the duration badge), `upstream_status` when present, and `error`. The list MUST use the same served-terminal rule as FL9b.
 
+FL4e. Every text badge rendered by the logs page MUST use the shared rounded-rectangle
+shape (`rounded-md`). A logs-page text badge MUST NOT override that shape with
+`rounded-full`. Circular status indicators are not text badges and MUST remain circular.
+
 FL5. The `api_key_name` column header MUST be "Token" (referring to the API key name, not the literal token value).
 
 FL6. The multiplier column from the old layout MUST be removed (multiplier is already shown inside ModelBadge on the Provider page).

@@ -12,7 +12,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -55,7 +55,7 @@ fn reset_channel_health_after_successful_test<'a>(
     health: &mut HashMap<String, ChannelHealthState>,
     channel_id: &str,
     per_model_circuit_break: bool,
-    model_ids: impl IntoIterator<Item = &'a str>,
+    model_id: &'a str,
     now: i64,
     max_entries: usize,
 ) {
@@ -67,58 +67,70 @@ fn reset_channel_health_after_successful_test<'a>(
         entry.last_probe_at = None;
     }
 
-    let base_key = health_key(channel_id, None);
-    let mut found_candidate = false;
-    if let Some(entry) = health.get_mut(&base_key) {
-        reset(entry, now);
-        found_candidate = true;
+    let key = health_key(channel_id, per_model_circuit_break.then_some(model_id));
+    if !health.contains_key(&key) && health.len() >= max_entries {
+        return;
     }
-    if per_model_circuit_break {
-        for model_id in model_ids {
-            if let Some(entry) = health.get_mut(&health_key(channel_id, Some(model_id))) {
-                reset(entry, now);
-                found_candidate = true;
-            }
-        }
-    }
-
-    if !found_candidate && health.len() < max_entries {
-        let entry = health
-            .entry(base_key)
-            .or_insert_with(ChannelHealthState::new);
-        reset(entry, now);
-    }
+    let entry = health.entry(key).or_insert_with(ChannelHealthState::new);
+    reset(entry, now);
 }
 
-fn apply_channel_runtime(channel: &mut MonoizeChannel, health: &ChannelHealthState) {
-    let now = chrono::Utc::now().timestamp();
+fn health_timestamp(ts: Option<i64>) -> Option<String> {
+    ts.and_then(|value| chrono::DateTime::<chrono::Utc>::from_timestamp(value, 0))
+        .map(|value| value.to_rfc3339())
+}
+
+fn apply_channel_runtime(
+    channel: &mut MonoizeChannel,
+    health: &ChannelHealthState,
+    unhealthy_models: Vec<String>,
+    probing_models: Vec<String>,
+    cooldown_until: Option<i64>,
+    now: i64,
+) {
     channel._healthy = Some(health.healthy);
     channel._health_status = Some(health.status(now).to_string());
-    channel._last_success_at = health
-        .last_success_at
-        .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0))
-        .map(|t| t.to_rfc3339());
+    channel._last_success_at = health_timestamp(health.last_success_at);
+    channel._unhealthy_models = Some(unhealthy_models);
+    channel._probing_models = Some(probing_models);
+    channel._cooldown_until = health_timestamp(cooldown_until);
 }
 
 async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) -> MonoizeProvider {
+    let now = chrono::Utc::now().timestamp();
     if !provider.circuit_breaker_enabled {
         for channel in &mut provider.channels {
-            apply_channel_runtime(channel, &ChannelHealthState::new());
+            apply_channel_runtime(
+                channel,
+                &ChannelHealthState::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                now,
+            );
         }
         return provider;
     }
     let health = state.channel_health.lock().await;
     for channel in &mut provider.channels {
-        let now = chrono::Utc::now().timestamp();
+        let mut unhealthy_models = Vec::new();
+        let mut probing_models = Vec::new();
         let states: Vec<ChannelHealthState> = if provider.per_model_circuit_break {
-            channel
-                .models
-                .keys()
+            let mut model_ids: Vec<&String> = channel.models.keys().collect();
+            model_ids.sort();
+            model_ids
+                .into_iter()
                 .map(|model| {
-                    health
+                    let state = health
                         .get(&health_key(&channel.id, Some(model)))
                         .cloned()
-                        .unwrap_or_else(ChannelHealthState::new)
+                        .unwrap_or_else(ChannelHealthState::new);
+                    match state.status(now) {
+                        "unhealthy" => unhealthy_models.push(model.clone()),
+                        "probing" => probing_models.push(model.clone()),
+                        _ => {}
+                    }
+                    state
                 })
                 .collect()
         } else {
@@ -136,9 +148,138 @@ async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) 
             .or_else(|| states.first())
             .cloned()
             .unwrap_or_else(ChannelHealthState::new);
-        apply_channel_runtime(channel, &state);
+        let cooldown_until = states
+            .iter()
+            .filter(|state| state.status(now) == "unhealthy")
+            .filter_map(|state| state.cooldown_until)
+            .max();
+        apply_channel_runtime(
+            channel,
+            &state,
+            unhealthy_models,
+            probing_models,
+            cooldown_until,
+            now,
+        );
     }
     provider
+}
+
+#[derive(Debug, Serialize)]
+struct ModelRuntimeChannel {
+    channel_id: String,
+    channel_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cooldown_until: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderModelRuntimeStatus {
+    model: String,
+    availability_status: &'static str,
+    eligible_channel_count: usize,
+    available_channel_count: usize,
+    breaker_channels: Vec<ModelRuntimeChannel>,
+    pricing_status: &'static str,
+    unpriced_channels: Vec<ModelRuntimeChannel>,
+}
+
+fn sort_runtime_channels(channels: &mut [ModelRuntimeChannel]) {
+    channels.sort_by(|left, right| {
+        left.channel_name
+            .cmp(&right.channel_name)
+            .then_with(|| left.channel_id.cmp(&right.channel_id))
+    });
+}
+
+fn build_provider_model_runtime_statuses(
+    provider: &MonoizeProvider,
+    unpriced_entries: &HashSet<(String, String)>,
+) -> Vec<ProviderModelRuntimeStatus> {
+    let mut models: Vec<String> = provider
+        .channels
+        .iter()
+        .flat_map(|channel| channel.models.keys().cloned())
+        .collect();
+    models.sort();
+    models.dedup();
+
+    models
+        .into_iter()
+        .map(|model| {
+            let mapped_channels: Vec<&MonoizeChannel> = provider
+                .channels
+                .iter()
+                .filter(|channel| channel.models.contains_key(&model))
+                .collect();
+            let eligible_channels: Vec<&MonoizeChannel> = mapped_channels
+                .iter()
+                .copied()
+                .filter(|channel| channel.enabled && channel.weight > 0)
+                .collect();
+            let mut breaker_channels: Vec<ModelRuntimeChannel> = eligible_channels
+                .iter()
+                .copied()
+                .filter(|channel| {
+                    provider.circuit_breaker_enabled
+                        && if provider.per_model_circuit_break {
+                            channel
+                                ._unhealthy_models
+                                .as_ref()
+                                .is_some_and(|models| models.contains(&model))
+                        } else {
+                            channel._health_status.as_deref() == Some("unhealthy")
+                        }
+                })
+                .map(|channel| ModelRuntimeChannel {
+                    channel_id: channel.id.clone(),
+                    channel_name: channel.name.clone(),
+                    cooldown_until: channel._cooldown_until.clone(),
+                })
+                .collect();
+            sort_runtime_channels(&mut breaker_channels);
+
+            let eligible_channel_count = eligible_channels.len();
+            let available_channel_count = eligible_channel_count - breaker_channels.len();
+            let availability_status = if eligible_channel_count > 0 && available_channel_count == 0
+            {
+                "unavailable"
+            } else if available_channel_count < eligible_channel_count {
+                "degraded"
+            } else {
+                "healthy"
+            };
+
+            let mut unpriced_channels: Vec<ModelRuntimeChannel> = mapped_channels
+                .iter()
+                .copied()
+                .filter(|channel| unpriced_entries.contains(&(channel.id.clone(), model.clone())))
+                .map(|channel| ModelRuntimeChannel {
+                    channel_id: channel.id.clone(),
+                    channel_name: channel.name.clone(),
+                    cooldown_until: None,
+                })
+                .collect();
+            sort_runtime_channels(&mut unpriced_channels);
+            let pricing_status = if unpriced_channels.is_empty() {
+                "complete"
+            } else if unpriced_channels.len() == mapped_channels.len() {
+                "missing"
+            } else {
+                "partial"
+            };
+
+            ProviderModelRuntimeStatus {
+                model,
+                availability_status,
+                eligible_channel_count,
+                available_channel_count,
+                breaker_channels,
+                pricing_status,
+                unpriced_channels,
+            }
+        })
+        .collect()
 }
 
 async fn prune_provider_channel_health(state: &AppState, channel_ids: &[String]) {
@@ -397,6 +538,7 @@ pub async fn list_providers(
     let mut out = Vec::with_capacity(providers.len());
     for provider in providers {
         let mut unpriced_model_ids = Vec::new();
+        let mut unpriced_entries = HashSet::new();
         for channel in &provider.channels {
             for (logical_model, model_entry) in &channel.models {
                 let has_pricing = channel_model_has_billable_rate_matrix(
@@ -409,6 +551,7 @@ pub async fn list_providers(
                 );
                 if !has_pricing {
                     unpriced_model_ids.push(logical_model.clone());
+                    unpriced_entries.insert((channel.id.clone(), logical_model.clone()));
                 }
             }
         }
@@ -416,6 +559,7 @@ pub async fn list_providers(
         unpriced_model_ids.dedup();
         let unpriced_count = unpriced_model_ids.len();
         let p = provider_with_runtime(&state, provider).await;
+        let model_runtime_statuses = build_provider_model_runtime_statuses(&p, &unpriced_entries);
         let val = serde_json::to_value(&p).unwrap_or_default();
         if let Value::Object(mut obj) = val {
             obj.insert(
@@ -425,6 +569,10 @@ pub async fn list_providers(
             obj.insert(
                 "unpriced_model_ids".to_string(),
                 Value::Array(unpriced_model_ids.into_iter().map(Value::String).collect()),
+            );
+            obj.insert(
+                "model_runtime_statuses".to_string(),
+                serde_json::to_value(model_runtime_statuses).unwrap_or_default(),
             );
             out.push(Value::Object(obj));
         } else {
@@ -798,6 +946,7 @@ pub async fn fetch_channel_models(
 #[derive(Debug, Deserialize)]
 pub struct TestChannelRequest {
     pub model: Option<String>,
+    pub stream: Option<bool>,
 }
 
 pub async fn test_channel(
@@ -822,7 +971,9 @@ pub async fn test_channel(
         .find(|c| c.id == channel_id)
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "channel not found"))?;
 
-    let requested_model = body.and_then(|b| b.model.clone());
+    let (requested_model, stream) = body
+        .map(|body| (body.model.clone(), body.stream.unwrap_or(true)))
+        .unwrap_or((None, true));
 
     if let Some(model) = requested_model.as_ref()
         && !channel.models.contains_key(model)
@@ -879,6 +1030,25 @@ pub async fn test_channel(
         .map(|entry| provider_pricing_model(&model_name, entry).to_string())
         .unwrap_or_else(|| model_name.clone());
 
+    let effective_type = crate::monoize_routing::resolve_effective_api_type(
+        &provider.api_type_overrides,
+        channel.provider_type,
+        &model_name,
+    );
+    if stream
+        && matches!(
+            effective_type,
+            crate::monoize_routing::MonoizeProviderType::OpenaiImage
+                | crate::monoize_routing::MonoizeProviderType::Replicate
+        )
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "this channel API type does not support streaming liveness tests",
+        ));
+    }
+
     let started_at = std::time::Instant::now();
     // PX6: the connectivity test uses the channel's effective proxy resolution.
     let test_http = state
@@ -898,6 +1068,7 @@ pub async fn test_channel(
         &upstream_model,
         channel.provider_type,
         &provider.api_type_overrides,
+        stream,
     )
     .await;
     let latency_ms = started_at.elapsed().as_millis() as u64;
@@ -910,7 +1081,7 @@ pub async fn test_channel(
                 &mut health,
                 &channel_id,
                 provider.per_model_circuit_break,
-                channel.models.keys().map(String::as_str),
+                &model_name,
                 now,
                 crate::monoize_routing::channel_health_max_entries(),
             );
@@ -921,6 +1092,10 @@ pub async fn test_channel(
         "success": outcome.ok,
         "latency_ms": latency_ms,
         "model": model_name,
+        "stream": stream,
+        "http_status": outcome.http_status,
+        "error_code": outcome.error_code,
+        "error_type": outcome.error_type,
         "error": outcome.error,
     })))
 }
@@ -1168,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_test_resets_only_current_channel_candidate_health_keys() {
+    fn successful_model_test_resets_only_selected_model_health_key() {
         let mut health = HashMap::from([
             ("channel-a".to_string(), unhealthy_state(1)),
             ("channel-a::alpha".to_string(), unhealthy_state(2)),
@@ -1181,19 +1356,21 @@ mod tests {
             &mut health,
             "channel-a",
             true,
-            ["alpha", "beta"],
+            "alpha",
             100,
             100,
         );
 
-        for key in ["channel-a", "channel-a::alpha", "channel-a::beta"] {
-            let state = health.get(key).expect("candidate remains present");
-            assert!(state.healthy);
-            assert_eq!(state.last_success_at, Some(100));
-            assert_eq!(state.cooldown_until, None);
-            assert_eq!(state.probe_success_count, 0);
-            assert_eq!(state.last_probe_at, None);
-        }
+        let state = health
+            .get("channel-a::alpha")
+            .expect("selected model remains present");
+        assert!(state.healthy);
+        assert_eq!(state.last_success_at, Some(100));
+        assert_eq!(state.cooldown_until, None);
+        assert_eq!(state.probe_success_count, 0);
+        assert_eq!(state.last_probe_at, None);
+        assert!(!health["channel-a"].healthy);
+        assert!(!health["channel-a::beta"].healthy);
         assert!(!health["channel-a::removed"].healthy);
         assert_eq!(health["channel-a::removed"].last_success_at, Some(4));
         assert!(!health["unrelated::alpha"].healthy);
@@ -1201,21 +1378,22 @@ mod tests {
     }
 
     #[test]
-    fn successful_test_does_not_insert_base_when_a_model_candidate_exists() {
+    fn successful_model_test_inserts_selected_model_when_missing() {
         let mut health = HashMap::from([("channel-a::alpha".to_string(), unhealthy_state(1))]);
 
         reset_channel_health_after_successful_test(
             &mut health,
             "channel-a",
             true,
-            ["alpha", "beta"],
+            "beta",
             100,
             100,
         );
 
         assert!(!health.contains_key("channel-a"));
-        assert!(health["channel-a::alpha"].healthy);
-        assert!(!health.contains_key("channel-a::beta"));
+        assert!(!health["channel-a::alpha"].healthy);
+        assert!(health["channel-a::beta"].healthy);
+        assert_eq!(health["channel-a::beta"].last_success_at, Some(100));
     }
 
     #[test]
@@ -1229,7 +1407,7 @@ mod tests {
             &mut health,
             "channel-a",
             false,
-            ["alpha"],
+            "alpha",
             100,
             100,
         );
@@ -1241,22 +1419,15 @@ mod tests {
     }
 
     #[test]
-    fn successful_test_inserts_only_base_when_no_candidate_exists_and_capacity_remains() {
+    fn successful_model_test_inserts_only_model_key_when_capacity_remains() {
         let mut health = HashMap::from([("unrelated".to_string(), unhealthy_state(1))]);
 
-        reset_channel_health_after_successful_test(
-            &mut health,
-            "channel-a",
-            true,
-            ["alpha", "beta"],
-            100,
-            2,
-        );
+        reset_channel_health_after_successful_test(&mut health, "channel-a", true, "alpha", 100, 2);
 
         assert_eq!(health.len(), 2);
-        assert!(health["channel-a"].healthy);
-        assert_eq!(health["channel-a"].last_success_at, Some(100));
-        assert!(!health.contains_key("channel-a::alpha"));
+        assert!(!health.contains_key("channel-a"));
+        assert!(health["channel-a::alpha"].healthy);
+        assert_eq!(health["channel-a::alpha"].last_success_at, Some(100));
         assert!(!health.contains_key("channel-a::beta"));
     }
 
@@ -1264,17 +1435,11 @@ mod tests {
     fn successful_test_does_not_insert_when_health_capacity_is_full() {
         let mut health = HashMap::from([("unrelated".to_string(), unhealthy_state(1))]);
 
-        reset_channel_health_after_successful_test(
-            &mut health,
-            "channel-a",
-            true,
-            ["alpha"],
-            100,
-            1,
-        );
+        reset_channel_health_after_successful_test(&mut health, "channel-a", true, "alpha", 100, 1);
 
         assert_eq!(health.len(), 1);
         assert!(!health.contains_key("channel-a"));
+        assert!(!health.contains_key("channel-a::alpha"));
         assert!(!health["unrelated"].healthy);
     }
 

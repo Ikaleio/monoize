@@ -1089,9 +1089,11 @@ pub(super) async fn forward_stream_typed(
                         };
 
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {
-                            if let Some(failure_class) =
-                                midstream_terminal_failure_class(terminal_error.http_status)
-                            {
+                            if let Some(failure_class) = midstream_terminal_failure_class(
+                                terminal_error.http_status,
+                                Some(&terminal_error.code),
+                                terminal_error.error_type.as_deref(),
+                            ) {
                                 record_midstream_terminal_failure(
                                     &state_for_log,
                                     &attempt_for_log,

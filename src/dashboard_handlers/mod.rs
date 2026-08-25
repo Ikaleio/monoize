@@ -43,7 +43,8 @@ pub use billing_rates::{
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use groups::{
-    DashboardGroupsResponse, create_group, delete_group, list_dashboard_groups, update_group,
+    DashboardGroupsResponse, create_group, delete_group, list_dashboard_groups, reorder_groups,
+    update_group,
 };
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,

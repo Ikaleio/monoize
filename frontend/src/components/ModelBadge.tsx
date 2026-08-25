@@ -2,6 +2,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { normalizeMultiplier } from '@/lib/exact-decimal'
 import { ModelIcon } from '@/components/ModelIcon'
+import { AlertTriangle, CircleX } from 'lucide-react'
 
 export interface ModelBadgeProps {
 	model: string
@@ -11,6 +12,7 @@ export interface ModelBadgeProps {
 	detailTarget?: string
 	showDetails?: boolean
 	highlightUnpriced?: boolean
+	status?: 'default' | 'warning' | 'destructive'
 	truncateModelText?: boolean
 	className?: string
 }
@@ -23,6 +25,7 @@ export function ModelBadge({
 	detailTarget,
 	showDetails = true,
 	highlightUnpriced = false,
+	status = 'default',
 	truncateModelText = true,
 	className
 }: ModelBadgeProps) {
@@ -33,13 +36,16 @@ export function ModelBadge({
 		resolvedTarget.length > 0 && resolvedTarget !== model
 	const shouldRenderDetails =
 		showDetails && (hasCustomMultiplier || hasRedirectTarget)
+	const resolvedStatus = status === 'default' && highlightUnpriced ? 'warning' : status
 
 	return (
 		<Badge
 			variant='secondary'
 			className={cn(
 				'h-7 max-w-full shrink-0 flex-nowrap gap-1.5 overflow-hidden border px-2 py-1 font-mono text-xs whitespace-nowrap transition-all',
-				highlightUnpriced ?
+				resolvedStatus === 'destructive' ?
+					'border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/15'
+				: resolvedStatus === 'warning' ?
 					'border-warning-border bg-warning-soft text-warning-foreground hover:bg-warning-soft/80'
 				:	'bg-sidebar-accent/40 hover:bg-sidebar-accent text-foreground border-transparent hover:border-sidebar-border',
 				className
@@ -50,6 +56,12 @@ export function ModelBadge({
 				provider={provider}
 				className='h-3.5 w-3.5 shrink-0'
 			/>
+			{resolvedStatus === 'destructive' && (
+				<CircleX className='size-3.5 shrink-0' aria-hidden='true' />
+			)}
+			{resolvedStatus === 'warning' && (
+				<AlertTriangle className='size-3.5 shrink-0' aria-hidden='true' />
+			)}
 			<span
 				className={cn(
 					'min-w-0',

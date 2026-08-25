@@ -102,6 +102,7 @@ Standard waterfall routing applies (§ database-provider-routing.spec.md):
 - Channel eligibility: enabled, weight > 0, healthy.
 - Weighted channel shuffle.
 - Retry on 429 / 5xx / network error; stop on 400 / 401 / 403 / 422.
+- Passive health classification follows `monoize-upstream-routing.spec.md` RTA-5a through RTA-6. In particular, an upstream 401 or 403 does not retry the same Channel but does trip its breaker immediately.
 
 ## 7. Active Probing
 

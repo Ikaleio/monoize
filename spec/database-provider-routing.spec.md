@@ -161,6 +161,8 @@ R-ERR-4. For any other upstream error, the router MUST NOT retry the same Channe
 
 R-ERR-5. A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing.
 
+R-ERR-6. Persistent Channel failure statuses and structured signals, RateLimited structured signals, and Transient structured signals MUST equal RTA-5a and RTA-5b in `monoize-upstream-routing.spec.md`. Persistent failures MUST NOT retry the same Channel and MUST make the relevant health entry unhealthy after the first occurrence. HTTP `400`, `409`, and `422` without a listed signal MUST NOT update Channel health.
+
 ## 6. Streaming Constraint
 
 R-STR-1. For streaming requests, router MAY switch channel/provider only before first downstream byte is emitted.
@@ -180,7 +182,7 @@ R-H-2. Effective passive breaker parameters MUST be resolved per channel: channe
 
 R-H-3. Health state MUST be keyed by `channel_id` when `per_model_circuit_break == false`, or by `(channel_id, logical_model)` when `per_model_circuit_break == true`.
 
-R-H-4. Health state entry MUST be marked unhealthy when the count of failed samples within the sliding window (`window_seconds`) reaches the effective threshold defined by R-H-15.
+R-H-4. A Persistent failure defined by R-ERR-6 MUST mark the health state entry unhealthy immediately. A Transient or RateLimited failure MUST mark it unhealthy when the count of failed samples within the sliding window (`window_seconds`) reaches the effective threshold defined by R-H-15.
 
 R-H-5. If unhealthy is triggered by retryable `429`, cooldown MUST use `rate_limit_cooldown_seconds`; otherwise use `cooldown_seconds`.
 
@@ -204,7 +206,7 @@ R-H-14. Active-probe evaluation of a Channel with per-model circuit breaking MUS
 
 R-H-15. `MONOIZE_CHANNEL_PASSIVE_FAILURE_SAMPLE_MAX_ENTRIES` MUST configure the positive process-local maximum passive-failure threshold per health-state entry. An unset, empty, zero, negative, invalid, or overflowing value MUST use `1024`. The effective threshold MUST equal the smaller of this limit and the resolved Channel threshold and MUST be at least `1`.
 
-R-H-16. Before a passive success update or failure-count evaluation, the runtime MUST remove retryable-failure timestamps older than the resolved window from the front of the queue. The queue length MUST NOT exceed the effective threshold. Failure-count evaluation MUST use the queue length and MUST NOT scan the queue. A successful request MUST NOT append a queue element. If the Provider circuit breaker is disabled, request success and failure handling MUST NOT insert or modify a health entry.
+R-H-16. Before a passive success update or failure-count evaluation, the runtime MUST remove breaker-relevant failure timestamps older than the resolved window from the front of the queue. The queue length MUST NOT exceed the effective threshold. Failure-count evaluation MUST use the queue length and MUST NOT scan the queue. A successful request MUST NOT append a queue element. If the Provider circuit breaker is disabled, request success and failure handling MUST NOT insert or modify a health entry.
 
 R-AFF-7. `MONOIZE_CHANNEL_AFFINITY_MAX_ENTRIES` MUST configure the positive process-local Channel affinity binding limit. An unset, empty, zero, negative, or invalid value MUST use `4096`.
 
