@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { motion, springs } from "@/components/ui/motion";
 import { cn } from "@/lib/utils";
-import type { Group, ModelMetadataRecord } from "@/lib/api";
+import type { ApiKey, Group, ModelMetadataRecord } from "@/lib/api";
 import type { PlaygroundPrefs } from "./prefs";
 import type { ComposerAttachment } from "./use-image-generation";
 import { GroupSelector } from "./group-selector";
@@ -89,12 +89,16 @@ export interface ComposerProps {
   canSend: boolean;
   /** True while a chat stream or image request is in flight (stop affordance). */
   isBusy: boolean;
+  blockedHint: string | null;
   prefs: PlaygroundPrefs;
   setPref: (name: keyof PlaygroundPrefs, value: string) => void;
   groups: Group[];
   groupsLoading: boolean;
   models: ModelMetadataRecord[];
   modelsLoading: boolean;
+  apiKeys: ApiKey[];
+  keysLoading: boolean;
+  resolvedKeyId: string | null;
   isDraggingFiles: boolean;
 }
 
@@ -110,12 +114,16 @@ export function Composer({
   onStop,
   canSend,
   isBusy,
+  blockedHint,
   prefs,
   setPref,
   groups,
   groupsLoading,
   models,
   modelsLoading,
+  apiKeys,
+  keysLoading,
+  resolvedKeyId,
   isDraggingFiles,
 }: ComposerProps) {
   const { t } = useTranslation();
@@ -277,7 +285,13 @@ export function Composer({
               <Paperclip className="h-4 w-4" />
             </Button>
             <ModeToggle mode={mode} onModeChange={onModeChange} disabled={isBusy} />
-            <SettingsPopover prefs={prefs} setPref={setPref} />
+            <SettingsPopover
+              prefs={prefs}
+              setPref={setPref}
+              apiKeys={apiKeys}
+              keysLoading={keysLoading}
+              resolvedKeyId={resolvedKeyId}
+            />
             <Button
               size="icon"
               aria-label={isBusy ? t("playground.stop") : t("playground.send")}
@@ -309,6 +323,20 @@ export function Composer({
           </div>
         </div>
       </div>
+
+      <AnimatePresence initial={false}>
+        {blockedHint && (
+          <motion.p
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={shouldReduceMotion ? { duration: 0 } : springs.smooth}
+            className="overflow-hidden px-2 pt-1.5 text-xs text-warning-foreground"
+          >
+            {blockedHint}
+          </motion.p>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

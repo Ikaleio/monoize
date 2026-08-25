@@ -4,7 +4,7 @@
 
 - Product name: Monoize.
 - Scope: ephemeral chatbot playground accessible at `/dashboard/playground`.
-- This revision replaces the previous API-key-resolving playground design entirely.
+- The Playground supports an internal session credential and explicit user API keys.
 
 ## 1. Purpose
 
@@ -12,7 +12,7 @@ The Playground is a session-only chatbot for the local Monoize instance. It supp
 streamed chat completions, multimodal user attachments, image generation, and image
 editing through the Monoize forwarding endpoints. Conversation state is a frontend-only
 feature and is never persisted to any backend store. Forwarding authentication is supplied
-by the authenticated dashboard session.
+by either the authenticated dashboard session or a user-selected API key.
 
 ## 2. Session and Persistence Model
 
@@ -28,53 +28,91 @@ PG-STATE2. Exactly these preference keys MAY be persisted in `localStorage`:
 | `playground_group` | string | Selected routing group id; empty/absent means "auto". |
 | `playground_chat_model` | string | Selected chat model id. |
 | `playground_image_model` | string | Selected image model id. |
+| `playground_api_key_id` | string | Explicitly selected API-key id; empty/absent means the built-in Playground credential. |
 | `playground_temperature` | string | Decimal string; empty/absent means "omit from request". |
 | `playground_max_tokens` | string | Integer string; empty/absent means "omit from request". |
 | `playground_system_prompt` | string | System prompt text; empty means "no system message". |
 
-PG-STATE3. On first mount the page MUST delete the legacy keys `playground_api_key`,
-`playground_api_key_id`, and `playground_model` from `localStorage`. No API-key secret or
-API-key identifier may remain as Playground state.
+PG-STATE3. On first mount the page MUST delete the legacy keys `playground_api_key` and
+`playground_model` from `localStorage`. The Playground MUST NOT persist a full API-key
+secret. Persisting the selected API-key id per PG-STATE2 is permitted.
 
-## 3. Authentication (no BYOK)
+## 3. Authentication
 
-PG-AUTH1. Dashboard groups, marketplace models, and the session user MUST be fetched with
-the authenticated dashboard session through `useDashboardGroups`,
-`useMarketplaceModels`, and `useCurrentUser`. The Playground MUST NOT list or create API
-keys.
+PG-AUTH1. Dashboard API keys, groups, marketplace models, and the session user MUST be
+fetched with the authenticated dashboard session through `useApiKeys`,
+`useDashboardGroups`, `useMarketplaceModels`, and `useCurrentUser`. The Playground MUST
+NOT create or mutate API keys.
 
-PG-AUTH2. Forwarding requests (`/api/v1/chat/completions`, `/api/v1/images/generations`,
-`/api/v1/images/edits`) MUST omit `Authorization` and `x-api-key`, include browser
-credentials, and send `x-monoize-internal-source: playground`. When a non-auto routing
-group is selected, the request MUST also send `x-monoize-playground-group: <group-id>`.
+PG-AUTH2. Credential selection has exactly two modes:
 
-PG-AUTH3. The forwarding server MUST accept `x-monoize-internal-source: playground` only
+1. If `playground_api_key_id` is empty, the effective credential is the built-in
+   Playground credential.
+2. If `playground_api_key_id = k`, the effective credential is the user's API key whose
+   id equals `k`. The frontend MUST NOT replace `k` with another API key automatically.
+3. If `k` does not identify a time-eligible API key after the API-key response loads, the
+   frontend MUST clear `playground_api_key_id` and return to the built-in credential.
+
+PG-AUTH3. A built-in forwarding request (`/api/v1/chat/completions`,
+`/api/v1/images/generations`, or `/api/v1/images/edits`) MUST omit `Authorization` and
+`x-api-key`, include browser credentials, and send
+`x-monoize-internal-source: playground`. When a non-auto routing group is selected, the
+request MUST also send `x-monoize-playground-group: <group-id>`.
+
+PG-AUTH4. The forwarding server MUST accept `x-monoize-internal-source: playground` only
 when no API-key credential is present and the `monoize_session` HttpOnly cookie identifies
 an enabled dashboard user. The resulting authentication object MUST have `api_key_id =
 null`, `api_key_name = null`, and internal source `playground`. No API-key row, token,
 secret, prefix, or identifier is created for this authentication mode.
 
-PG-AUTH4. For an auto group request, the effective routing group list MUST equal the
-session user's current group after the billing-plan group ceiling is applied. For an
-explicit group request, the effective routing group list MUST equal only that group after
-the same billing-plan ceiling is applied.
+PG-AUTH5. An explicit API-key forwarding request MUST authenticate with
+`Authorization: Bearer <full-key-value>`, where the value comes from the selected
+dashboard API-key record. It MUST omit `x-monoize-internal-source` and
+`x-monoize-playground-group`; the normal API-key authentication, billing, routing,
+transforms, redirects, allowlists, multiplier ceiling, and request-capture rules apply.
 
-PG-AUTH5. An explicit group is permitted iff the group exists and at least one condition
-is true: the session user is an administrator, the group has `user_selectable = true`, or
-the group id equals the session user's current group id. A non-permitted group MUST return
-HTTP `403` before upstream dispatch. A group removed by a non-empty enabled billing-plan
-group ceiling MUST return HTTP `403` before upstream dispatch.
+PG-AUTH6. An API key is *time-eligible* iff `enabled == true` and `expires_at` is absent,
+invalid, or in the future at evaluation time. A time-eligible key is *model-compatible*
+with selected model id `m` iff `m` is empty, `model_limits_enabled == false`,
+`model_limits == []`, or `m ∈ model_limits`. A time-eligible key *covers* an explicit
+selected group `g` iff one condition is true:
 
-PG-AUTH6. Playground internal authentication MUST bill the session user's main balance.
+1. `use_user_group == false` and `g ∈ group_ids`.
+2. (`use_user_group == true` or `group_ids == []`) and `g` equals the session user's
+   current group id.
+
+PG-AUTH7. When an explicit API key is not model-compatible or does not cover the selected
+non-auto group, sending MUST be disabled and an inline translated reason MUST identify
+the incompatible model or group. The selected key id MUST remain unchanged. The frontend
+MUST NOT silently fall back to the built-in credential or another API key.
+
+PG-AUTH8. For a built-in auto-group request, the effective routing group list MUST equal
+the session user's current group after the billing-plan group ceiling is applied. For a
+built-in explicit-group request, the effective routing group list MUST equal only that
+group after the same billing-plan ceiling is applied.
+
+PG-AUTH9. For a built-in request, an explicit group is permitted iff the group exists and
+at least one condition is true: the session user is an administrator, the group has
+`user_selectable = true`, or the group id equals the session user's current group id. A
+non-permitted group MUST return HTTP `403` before upstream dispatch. A group removed by a
+non-empty enabled billing-plan group ceiling MUST return HTTP `403` before upstream
+dispatch.
+
+PG-AUTH10. Playground internal authentication MUST bill the session user's main balance.
 It MUST NOT enable API-key sub-account billing, model allowlists, key transforms, key model
 redirects, key IP allowlists, key multiplier ceilings, or key request capture.
 
-PG-AUTH7. Playground requests MUST be admitted to the normal request-log lifecycle with
-`request_kind = "playground"`. This classification is metadata; it is not an API key and
-MUST NOT be accepted as an API-key credential.
+PG-AUTH11. Built-in Playground requests MUST be admitted to the normal request-log
+lifecycle with `request_kind = "playground"`. This classification is metadata; it is not
+an API key and MUST NOT be accepted as an API-key credential. Requests authenticated by a
+real API key MUST use the normal API-key request-log identity and MUST NOT use
+`request_kind = "playground"`.
 
-PG-AUTH8. The Playground MUST NOT render an API-key picker, missing-key state, or
-API-key-creation action.
+PG-AUTH12. The settings popover MUST render a credential picker. Its first option is the
+translated built-in Playground credential and represents `playground_api_key_id = ""`.
+It MUST then list every time-eligible API key in API response order with its name and
+masked `key_prefix`. The built-in option is selected by default. The picker MUST NOT show
+full API-key values and MUST NOT contain an automatic-key-resolution option.
 
 ## 4. Selectors
 
@@ -85,7 +123,7 @@ model. Selectors MUST NOT be free-text-only inputs.
 PG-SEL2. Group selector:
 
 - Options are "auto" plus every `Group` from `GET /api/dashboard/groups` that satisfies
-  PG-AUTH5 and the enabled billing-plan group ceiling, in response order.
+  PG-AUTH9 and the enabled billing-plan group ceiling, in response order.
 - Each option MUST use `Group.id` as its value and render `Group.name` as its label.
 - Selection persists the group id to `playground_group` (empty string for "auto").
 - If a non-empty persisted id does not match a returned `Group.id`, the page MUST clear
@@ -114,9 +152,11 @@ contains at least one of:
 The image-model selector MUST list image models in a group before all remaining models.
 The chat-model selector lists all models unsegmented.
 
-PG-SEL5. While either selector backing hook (`useDashboardGroups` or
+PG-SEL5. While either composer-selector backing hook (`useDashboardGroups` or
 `useMarketplaceModels`) is loading with no cached data, the corresponding selector trigger
-MUST render as a skeleton pill instead of an interactive control.
+MUST render as a skeleton pill instead of an interactive control. While `useApiKeys` is
+loading with no cached data, the credential picker MUST keep the built-in option available
+and render a skeleton in place of API-key rows.
 
 ## 5. Chat Execution (AI SDK)
 
@@ -126,14 +166,15 @@ default HTTP transport.
 
 PG-CHAT2. `MonoizeChatTransport.sendMessages` MUST:
 
-1. Read the current chat model id, selected group id, system prompt, temperature, and
-   max-tokens values at call time (latest selector state applies to every request,
-   including regenerations).
+1. Read the current chat model id, selected credential, selected group id, system prompt,
+   temperature, and max-tokens values at call time (latest selector state applies to every
+   request, including regenerations).
 2. Reject with an error carrying a translatable reason when the model is empty.
 3. Build an OpenAI-compatible provider via `createOpenAICompatible` from
-   `@ai-sdk/openai-compatible` with `baseURL = <origin>/api/v1`, no `apiKey`, the
-   PG-AUTH2 headers, and a fetch implementation with `credentials = "include"`, so the
-   upstream call is
+   `@ai-sdk/openai-compatible` with `baseURL = <origin>/api/v1`. Built-in mode MUST use
+   the PG-AUTH3 headers, no `apiKey`, and a fetch implementation with `credentials =
+   "include"`. Explicit API-key mode MUST use `apiKey = <full-key-value>` and omit the
+   internal headers. In both modes the upstream call is
    `POST /api/v1/chat/completions` with `stream: true` against the local Monoize
    instance.
 4. Convert UI messages with `convertToModelMessages` after applying PG-CHAT3
@@ -204,14 +245,14 @@ action executes an image request instead of a chat request.
 
 PG-IMG2. Image send with no attachment MUST call
 `POST /api/v1/images/generations` with JSON body
-`{ "model": <image model>, "prompt": <composer text>, "n": 1 }` and the PG-AUTH2
-credentials and headers.
+`{ "model": <image model>, "prompt": <composer text>, "n": 1 }` and the credentials and
+headers selected by PG-AUTH2 through PG-AUTH5.
 
 PG-IMG3. Image send with at least one attachment MUST call
 `POST /api/v1/images/edits` as `multipart/form-data` with fields `model`, `prompt`,
 `n = 1`, and `image` = the first attachment file. Additional attachments beyond the
 first are ignored for the upstream call (the endpoint accepts a single source image).
-The request MUST use the PG-AUTH2 credentials and headers.
+The request MUST use the credentials and headers selected by PG-AUTH2 through PG-AUTH5.
 
 PG-IMG4. On image send the frontend MUST synchronously append a user message (prompt
 text plus attachment file parts) to the chat state, and render a pending assistant
@@ -248,16 +289,17 @@ settings popover trigger, and the send/stop action.
 PG-CMP2. Enter submits and Shift+Enter inserts a newline on fine-pointer devices. On
 coarse-pointer devices Enter inserts a newline and only the send button submits.
 
-PG-CMP3. Send is enabled iff: a model for the active mode is selected, `status` is
-`ready`/`error`, no image request is pending, and the
-trimmed text is non-empty (chat mode also allows empty text with ≥ 1 attachment).
+PG-CMP3. Send is enabled iff: a model for the active mode is selected, the selected
+credential satisfies PG-AUTH2 and PG-AUTH7, `status` is `ready`/`error`, no image request
+is pending, and the trimmed text is non-empty (chat mode also allows empty text with ≥ 1
+attachment).
 
 PG-CMP4. The settings popover contains: system prompt (multiline), temperature (number,
-range 0–2, step 0.1, clearable), and max tokens (positive integer, clearable). Each field
-persists per PG-STATE2 on change. The popover MUST align its end edge to the trigger,
-prefer opening above the trigger, keep at least 16 CSS pixels from every viewport edge,
-and use internal vertical scrolling when its content exceeds the collision-computed
-available height.
+range 0–2, step 0.1, clearable), max tokens (positive integer, clearable), and the
+credential picker from PG-AUTH12. Each field persists per PG-STATE2 on change. The
+popover MUST align its end edge to the trigger, prefer opening above the trigger, keep at
+least 16 CSS pixels from every viewport edge, and use internal vertical scrolling when its
+content exceeds the collision-computed available height.
 
 PG-CMP5. A "new chat" action MUST be visible whenever the conversation is non-empty; it
 clears the chat state, any pending image job, and composer attachments. It MUST NOT

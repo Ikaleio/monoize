@@ -12,6 +12,7 @@ export interface ImageRequestInput {
   prompt: string;
   model: string;
   group: string;
+  apiKey: string | null;
   attachment: ComposerAttachment | null;
 }
 
@@ -37,12 +38,17 @@ async function requestImages(
   input: ImageRequestInput,
   signal: AbortSignal,
 ): Promise<ImageApiDataItem[]> {
-  const internalHeaders = {
-    "x-monoize-internal-source": "playground",
-    ...(input.group.trim()
-      ? { "x-monoize-playground-group": input.group.trim() }
-      : {}),
-  };
+  const authHeaders = input.apiKey
+    ? { Authorization: `Bearer ${input.apiKey}` }
+    : {
+        "x-monoize-internal-source": "playground",
+        ...(input.group.trim()
+          ? { "x-monoize-playground-group": input.group.trim() }
+          : {}),
+      };
+  const internalCredentials = input.apiKey
+    ? {}
+    : ({ credentials: "include" } as const);
   let response: Response;
   if (input.attachment) {
     const form = new FormData();
@@ -52,8 +58,8 @@ async function requestImages(
     form.set("image", input.attachment.file);
     response = await fetch("/api/v1/images/edits", {
       method: "POST",
-      headers: internalHeaders,
-      credentials: "include",
+      headers: authHeaders,
+      ...internalCredentials,
       body: form,
       signal,
     });
@@ -61,10 +67,10 @@ async function requestImages(
     response = await fetch("/api/v1/images/generations", {
       method: "POST",
       headers: {
-        ...internalHeaders,
+        ...authHeaders,
         "Content-Type": "application/json",
       },
-      credentials: "include",
+      ...internalCredentials,
       body: JSON.stringify({ model: input.model, prompt: input.prompt, n: 1 }),
       signal,
     });

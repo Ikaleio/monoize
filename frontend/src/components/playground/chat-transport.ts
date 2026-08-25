@@ -8,9 +8,14 @@ import {
 } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
+export type ChatRequestAuth =
+  | { mode: "internal"; group: string }
+  | { mode: "api-key"; apiKey: string }
+  | { mode: "invalid"; message: string };
+
 export interface ChatRequestConfig {
   model: string;
-  group: string;
+  auth: ChatRequestAuth;
   systemPrompt: string;
   temperature: string;
   maxTokens: string;
@@ -95,16 +100,26 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
     if (!config.model.trim()) {
       throw new Error(this.missingModelMessage);
     }
+    if (config.auth.mode === "invalid") {
+      throw new Error(config.auth.message);
+    }
+
+    const internal = config.auth.mode === "internal";
     const provider = createOpenAICompatible({
       name: "monoize",
       baseURL: `${window.location.origin}/api/v1`,
-      headers: {
-        "x-monoize-internal-source": "playground",
-        ...(config.group.trim()
-          ? { "x-monoize-playground-group": config.group.trim() }
-          : {}),
-      },
-      fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
+      ...(internal
+        ? {
+            headers: {
+              "x-monoize-internal-source": "playground",
+              ...(config.auth.group.trim()
+                ? { "x-monoize-playground-group": config.auth.group.trim() }
+                : {}),
+            },
+            fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+              fetch(input, { ...init, credentials: "include" }),
+          }
+        : { apiKey: config.auth.apiKey }),
     });
 
     const systemPrompt = config.systemPrompt.trim();

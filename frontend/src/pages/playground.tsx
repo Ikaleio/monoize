@@ -8,13 +8,21 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { LayoutGroup, motion, springs } from "@/components/ui/motion";
 import {
+  useApiKeys,
   useCurrentUser,
   useDashboardGroups,
   useMarketplaceModels,
 } from "@/lib/swr";
-import { MonoizeChatTransport } from "@/components/playground/chat-transport";
+import {
+  MonoizeChatTransport,
+  type ChatRequestAuth,
+} from "@/components/playground/chat-transport";
 import { Composer, type ComposerMode } from "@/components/playground/composer";
 import { MessageList } from "@/components/playground/message-list";
+import {
+  resolvePlaygroundKey,
+  type ResolvedPlaygroundKey,
+} from "@/components/playground/auth";
 import {
   purgeLegacyPlaygroundKeys,
   usePlaygroundPrefs,
@@ -46,11 +54,44 @@ export function PlaygroundPage() {
 
   useEffect(() => purgeLegacyPlaygroundKeys(), []);
 
+  const { data: apiKeys, isLoading: keysLoading } = useApiKeys();
   const { data: groups, isLoading: groupsLoading } = useDashboardGroups();
   const { data: models, isLoading: modelsLoading } = useMarketplaceModels();
   const { data: user } = useCurrentUser();
 
   const modelForMode = mode === "image" ? prefs.imageModel : prefs.chatModel;
+  const resolution = useMemo(
+    () =>
+      resolvePlaygroundKey(
+        apiKeys,
+        prefs.apiKeyId,
+        prefs.group,
+        user?.group_id ?? "",
+        modelForMode.trim(),
+      ),
+    [apiKeys, prefs.apiKeyId, prefs.group, user?.group_id, modelForMode],
+  );
+  const chatResolution = useMemo(
+    () =>
+      mode === "chat"
+        ? resolution
+        : resolvePlaygroundKey(
+            apiKeys,
+            prefs.apiKeyId,
+            prefs.group,
+            user?.group_id ?? "",
+            prefs.chatModel.trim(),
+          ),
+    [
+      mode,
+      resolution,
+      apiKeys,
+      prefs.apiKeyId,
+      prefs.group,
+      prefs.chatModel,
+      user?.group_id,
+    ],
+  );
   const selectableGroups = useMemo(() => {
     if (!groups || !user) return [];
     const planGroups =
@@ -74,12 +115,67 @@ export function PlaygroundPage() {
     }
   }, [groups, user, selectableGroups, prefs.group, setPref]);
 
+  useEffect(() => {
+    if (!apiKeys || !prefs.apiKeyId) return;
+    if (resolution.reason === "key-unavailable") {
+      setPref("apiKeyId", "");
+    }
+  }, [apiKeys, prefs.apiKeyId, resolution.reason, setPref]);
+
+  const selectedGroupName = useMemo(
+    () => groups?.find((group) => group.id === prefs.group)?.name,
+    [groups, prefs.group],
+  );
+  const resolutionError = (
+    current: ResolvedPlaygroundKey,
+    model: string,
+  ): string | null => {
+    if (current.reason === "key-unavailable") {
+      return t("playground.apiKeyUnavailable");
+    }
+    if (current.reason === "no-model-key") {
+      return t("playground.modelKeyBlocked", { model });
+    }
+    if (current.reason === "no-group-key") {
+      return t("playground.groupKeyBlocked", {
+        group: selectedGroupName ?? prefs.group,
+      });
+    }
+    return null;
+  };
+  const chatAuth = useMemo<ChatRequestAuth>(
+    () => {
+      if (chatResolution.reason === "internal") {
+        return { mode: "internal", group: prefs.group };
+      }
+      if (chatResolution.reason === "ok" && chatResolution.key) {
+        return { mode: "api-key", apiKey: chatResolution.key.key };
+      }
+      if (chatResolution.reason === "no-model-key") {
+        return {
+          mode: "invalid",
+          message: t("playground.modelKeyBlocked", { model: prefs.chatModel }),
+        };
+      }
+      if (chatResolution.reason === "no-group-key") {
+        return {
+          mode: "invalid",
+          message: t("playground.groupKeyBlocked", {
+            group: selectedGroupName ?? prefs.group,
+          }),
+        };
+      }
+      return { mode: "invalid", message: t("playground.apiKeyUnavailable") };
+    },
+    [chatResolution, prefs.group, prefs.chatModel, selectedGroupName, t],
+  );
+
   const [transport] = useState(
     () =>
       new MonoizeChatTransport(
         {
           model: prefs.chatModel,
-          group: prefs.group,
+          auth: chatAuth,
           systemPrompt: prefs.systemPrompt,
           temperature: prefs.temperature,
           maxTokens: prefs.maxTokens,
@@ -91,7 +187,7 @@ export function PlaygroundPage() {
     transport.updateConfig(
       {
         model: prefs.chatModel,
-        group: prefs.group,
+        auth: chatAuth,
         systemPrompt: prefs.systemPrompt,
         temperature: prefs.temperature,
         maxTokens: prefs.maxTokens,
@@ -102,7 +198,7 @@ export function PlaygroundPage() {
     transport,
     t,
     prefs.chatModel,
-    prefs.group,
+    chatAuth,
     prefs.systemPrompt,
     prefs.temperature,
     prefs.maxTokens,
@@ -132,10 +228,15 @@ export function PlaygroundPage() {
 
   const trimmedText = text.trim();
   const canSend =
+    (resolution.reason === "internal" || resolution.reason === "ok") &&
     modelForMode.trim().length > 0 &&
     (status === "ready" || status === "error") &&
     !imageBusy &&
     (trimmedText.length > 0 || (mode === "chat" && attachments.length > 0));
+  const blockedHint =
+    resolution.reason === "key-unavailable" && !apiKeys
+      ? null
+      : resolutionError(resolution, modelForMode);
 
   const handleAddFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -236,6 +337,7 @@ export function PlaygroundPage() {
         prompt: trimmedText,
         model: prefs.imageModel.trim(),
         group: prefs.group,
+        apiKey: resolution.key?.key ?? null,
         attachment: attachments[0] ?? null,
       });
     } else {
@@ -258,6 +360,7 @@ export function PlaygroundPage() {
     trimmedText,
     prefs.imageModel,
     prefs.group,
+    resolution.key,
     attachments,
     sendMessage,
   ]);
@@ -452,12 +555,16 @@ export function PlaygroundPage() {
             onStop={handleStop}
             canSend={canSend}
             isBusy={busy}
+            blockedHint={blockedHint}
             prefs={prefs}
             setPref={setPref}
             groups={selectableGroups}
             groupsLoading={(groupsLoading && !groups) || !user}
             models={models ?? []}
             modelsLoading={modelsLoading && !models}
+            apiKeys={apiKeys ?? []}
+            keysLoading={keysLoading && !apiKeys}
+            resolvedKeyId={resolution.key?.id ?? null}
             isDraggingFiles={isDraggingFiles}
           />
         </motion.div>
