@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { motion, useReducedMotion, LayoutGroup, type Variants, type Transition } from "framer-motion";
+import { motion, useReducedMotion, LayoutGroup, type Variants, type Transition, type HTMLMotionProps } from "framer-motion";
 import { forwardRef, type ReactNode, type ComponentProps } from "react";
 
 // Spring presets — Apple-style non-linear physics
@@ -269,14 +269,13 @@ export const AnimatedCard = forwardRef<HTMLDivElement, AnimatedCardProps>(
 );
 AnimatedCard.displayName = "AnimatedCard";
 
-// Animated button wrapper
-interface AnimatedButtonProps {
-  children: ReactNode;
-  className?: string;
-}
+// Animated button wrapper. Must forward unconsumed props (DS34c): Radix
+// `asChild` triggers (e.g. DialogTrigger) inject their open/close handlers
+// into this wrapper, and dropping them silently breaks dialog opening.
+type AnimatedButtonProps = HTMLMotionProps<"div">;
 
 export const AnimatedButton = forwardRef<HTMLDivElement, AnimatedButtonProps>(
-  ({ children, className = "" }, ref) => {
+  ({ children, className = "", ...rest }, ref) => {
     const shouldReduceMotion = useReducedMotion();
 
     return (
@@ -286,6 +285,7 @@ export const AnimatedButton = forwardRef<HTMLDivElement, AnimatedButtonProps>(
         whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
         transition={shouldReduceMotion ? reducedTransition : springs.snappy}
         className={className}
+        {...rest}
       >
         {children}
       </motion.div>
