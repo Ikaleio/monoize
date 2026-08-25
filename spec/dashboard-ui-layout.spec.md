@@ -23,6 +23,57 @@ is non-null, that second line MUST also include `billing_plan.name`. The collaps
 sidebar MUST expose the same summary through the account-trigger tooltip. This display
 MUST use the session user object and MUST NOT call `GET /api/dashboard/billing-plans`.
 
+DL3b. The account dropdown content MUST be a compact `18rem`-wide (`w-72`) menu with
+exactly these sections in order, separated by menu separators:
+
+1. identity header,
+2. quota/plan block,
+3. live-usage block,
+4. actions (settings, theme toggle, sign out).
+
+The dropdown MUST use the shared DropdownMenu (Radix) component so keyboard and
+dismissal contracts are unchanged, and lucide icons only (no emoji glyphs).
+
+DL3c. The identity header MUST show the Gravatar avatar (same `getGravatarUrl` source as
+the trigger, username-initial fallback), the username (truncated), the localized role
+label (`roles.{role}`), and the email truncated when present.
+
+DL3d. The quota/plan block MUST be sourced from the session user object only and MUST
+NOT call `GET /api/dashboard/billing-plans`. It MUST render:
+
+- a balance row: localized unlimited label when `balance_unlimited` is true, otherwise
+  `balance_usd` formatted as USD with 2 fractional digits via `formatUsdDecimal`;
+- when `billing_plan` is non-null: a plan row with `billing_plan.name`, a grant row with
+  `grant_amount_usd` (USD, 2 fractional digits) and the cron `schedule` as monospace
+  text, and a next-reset row with `next_grant_at` localized via `toLocaleString()` when
+  present;
+- when `billing_plan` is non-null, `balance_unlimited` is false, and
+  `grant_amount_nano_usd` parses as an integer greater than 0: a single-row progress bar
+  whose filled fraction is `clamp(balance_nano_usd / grant_amount_nano_usd, 0, 1)`
+  computed with `BigInt` arithmetic;
+- when `billing_plan` is null: a localized none/unassigned label. Grant, schedule,
+  next-reset, and progress rows MUST be absent in this case.
+
+While the session user object has not resolved, the block MUST render skeleton
+placeholders instead of empty rows.
+
+DL3e. The live-usage block MUST show the authenticated user's own rolling 60-second
+metrics fetched from `GET /api/dashboard/me/live-usage` through the `useLiveUsage` SWR
+hook (`user-live-usage.spec.md` LU-9/LU-10; 10-second refresh while the menu is open).
+It MUST render three labeled metrics: `rpm`, `tpm` (locale-grouped integers), and
+`cache_hit_rate` formatted per LU-11 (percentage with at most 1 fractional digit; em
+dash when `null`). This block never shows another user's data, including for admin
+viewers. While no data is cached, the block MUST render skeleton placeholders. When the
+fetch fails, the block MUST render a compact localized error message with a retry action
+that revalidates the SWR key; the failure MUST NOT unmount or break the rest of the menu.
+
+DL3f. The actions section MUST keep exactly: a settings item navigating to `/settings`,
+the theme toggle, and a sign-out item, with the same behavior as before the dropdown
+expansion.
+
+DL3g. The mobile sheet sidebar (DL4) MUST render the same account dropdown component,
+so DL3b through DL3f hold on both desktop and mobile.
+
 DL4. Mobile (`< lg`) MUST render sidebar via left sheet menu.
 
 DL5. Sidebar main navigation (always visible to authenticated users) MUST include exactly:

@@ -235,6 +235,7 @@ Monoize 支持一个可写主机加若干只读从机的部署形态。所有节
 | `MONOIZE_NODE_ROLE` | `primary` | `primary` 或 `replica` |
 | `MONOIZE_PRIMARY_INTERNAL_URL` | 从机必填 | 主机内部地址，用于计量上报 |
 | `MONOIZE_REPLICA_TOKEN` | 未设置 | 节点共享密钥：从机必填；主机设置后开启接收端点 |
+| `MONOIZE_REPLICA_ID` | 自动生成并持久化 | 从机固定标识（UUID v4）。未设置时首次启动自动生成，并持久化到计量外存目录下的 `replica-identity` 文件，重启后保持不变 |
 | `MONOIZE_CONFIG_POLL_INTERVAL_SECONDS` | `5` | 从机配置纪元轮询间隔 |
 | `MONOIZE_METERING_SHIP_INTERVAL_SECONDS` | `10` | 从机计量上报间隔 |
 | `MONOIZE_METERING_SHIP_BATCH_MAX_ENTRIES` | `500` | 单批次条目上限（硬上限 2000） |

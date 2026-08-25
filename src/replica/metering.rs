@@ -21,6 +21,12 @@ use crate::db_cache::{LastUsedBatcher, MeteringSink, RequestLogBatcher, SpoolReq
 pub const METERING_INGEST_PATH: &str = "/internal/replica/metering";
 /// Hard per-batch cap enforced by both sides regardless of configuration (I3).
 pub const METERING_BATCH_HARD_CAP: usize = 2000;
+/// M9: file inside the metering spool directory that persists the replica identity.
+pub const REPLICA_IDENTITY_FILE_NAME: &str = "replica-identity";
+/// M4a: ship-interval multiples after which a heartbeat is displayed as stale.
+pub const HEARTBEAT_STALE_INTERVALS: u32 = 3;
+/// M4a: ship-interval multiples after which a heartbeat entry is evicted on read.
+pub const HEARTBEAT_EVICT_INTERVALS: u32 = 360;
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -154,6 +160,83 @@ fn delta_subject(delta: &BalanceDelta) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Replica identity (M9)
+// ---------------------------------------------------------------------------
+
+fn parse_uuid_v4(raw: &str) -> Option<String> {
+    let parsed = uuid::Uuid::parse_str(raw).ok()?;
+    (parsed.get_version_num() == 4).then(|| parsed.hyphenated().to_string())
+}
+
+/// M9: resolve the stable replica identity. A non-empty `configured` value
+/// (`MONOIZE_REPLICA_ID`) wins and must be a version-4 UUID; otherwise the identity is
+/// loaded from `{spool_dir}/replica-identity`, creating it atomically when absent or
+/// corrupt. Errors are prefixed with `replica_id_invalid` or `replica_identity_unwritable`.
+pub fn resolve_replica_identity(
+    configured: Option<&str>,
+    spool_dir: &std::path::Path,
+) -> Result<String, String> {
+    if let Some(raw) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+        return parse_uuid_v4(raw).ok_or_else(|| {
+            format!("replica_id_invalid: `MONOIZE_REPLICA_ID` must be a UUID v4, got {raw:?}")
+        });
+    }
+    let path = spool_dir.join(REPLICA_IDENTITY_FILE_NAME);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            if let Some(id) = parse_uuid_v4(content.trim()) {
+                return Ok(id);
+            }
+            tracing::warn!(
+                path = %path.display(),
+                "replica identity file content is not a UUID v4; generating a new identity"
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "replica identity file unreadable; generating a new identity"
+            );
+        }
+    }
+    let id = uuid::Uuid::new_v4().hyphenated().to_string();
+    std::fs::create_dir_all(spool_dir)
+        .map_err(|error| format!("replica_identity_unwritable: create dir: {error}"))?;
+    let tmp_path = spool_dir.join(format!(".tmp-identity-{}", uuid::Uuid::new_v4().simple()));
+    let write_result = (|| {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp_path)
+            .map_err(|error| format!("replica_identity_unwritable: create temp file: {error}"))?;
+        file.write_all(format!("{id}\n").as_bytes())
+            .map_err(|error| format!("replica_identity_unwritable: write temp file: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("replica_identity_unwritable: sync temp file: {error}"))?;
+        std::fs::rename(&tmp_path, &path)
+            .map_err(|error| format!("replica_identity_unwritable: publish identity: {error}"))
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+    Ok(id)
+}
+
+/// M4a eviction: drop heartbeat entries whose last sighting is older than
+/// `HEARTBEAT_EVICT_INTERVALS` ship intervals. Called on each overview read so that
+/// entries left behind by replaced replica identities eventually disappear.
+pub fn evict_expired_heartbeats(
+    map: &DashMap<String, ReplicaHeartbeatRecord>,
+    now_unix_ms: i64,
+    ship_interval: Duration,
+) {
+    let evict_after_ms =
+        (ship_interval.as_millis() as i64).saturating_mul(HEARTBEAT_EVICT_INTERVALS as i64);
+    map.retain(|_, record| now_unix_ms.saturating_sub(record.last_seen_unix_ms) <= evict_after_ms);
+}
+
+// ---------------------------------------------------------------------------
 // Durable delta spool (M3)
 // ---------------------------------------------------------------------------
 
@@ -192,8 +275,11 @@ impl DeltaSpool {
                 if let Ok(meta) = entry.metadata() {
                     total += meta.len();
                 }
-            } else {
-                // Remove stale temporary files from an interrupted previous run.
+            } else if path.file_name().and_then(|name| name.to_str())
+                != Some(REPLICA_IDENTITY_FILE_NAME)
+            {
+                // Remove stale temporary files from an interrupted previous run; the
+                // persisted replica identity (M9b) must survive this cleanup.
                 let _ = std::fs::remove_file(&path);
             }
         }

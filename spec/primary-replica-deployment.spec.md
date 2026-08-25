@@ -132,7 +132,7 @@ M4a. The `replica` heartbeat object is not counted toward the 2000-entry cap. It
 
 ```json
 {
-  "id": "uuid v4 string, stable for the replica process lifetime",
+  "id": "uuid v4 string, resolved per M9; stable across process restarts of one replica deployment",
   "hostname": "string",
   "listen": "the replica MONOIZE_LISTEN value",
   "version": "CARGO_PKG_VERSION",
@@ -143,7 +143,7 @@ M4a. The `replica` heartbeat object is not counted toward the 2000-entry cap. It
 }
 ```
 
-A primary that authenticates an ingest request containing `replica` MUST upsert that replica into a process-local heartbeat map keyed by `id`, recording `last_seen_at = now`, before applying the batch. Heartbeat recording MUST NOT require a non-empty data array. The map is not persisted across primary restarts.
+A primary that authenticates an ingest request containing `replica` MUST upsert that replica into a process-local heartbeat map keyed by `id`, recording `last_seen_at = now`, before applying the batch. Heartbeat recording MUST NOT require a non-empty data array. The map is not persisted across primary restarts. Each time the map is read for the admin overview response, every entry with `now - last_seen_at > 360 * MONOIZE_METERING_SHIP_INTERVAL_SECONDS` MUST first be removed from the map; removed entries MUST NOT appear in that response.
 
 M5. Spool files, buffered last-used pairs, pending deltas, and their pending-deduction counters MUST only be released after an HTTP 200 response. Any non-200 response or transport error MUST retain everything unchanged for the next tick. After 3 consecutive failed ticks the replica MUST log a `warn` naming the consecutive-failure count, repeated per subsequent failure. A heartbeat-only tick that receives HTTP 200 is a successful tick.
 
@@ -154,6 +154,20 @@ M6. At graceful shutdown the replica MUST make one best-effort final ship attemp
 M7. Balance preflight on a replica MUST compute `effective_balance = persisted_balance - pending_deductions[subject]` where `persisted_balance` comes from the existing cache/read path and `subject` follows M2 keying. The insufficient-balance decision and HTTP mapping (402 `insufficient_balance`) MUST match `ensure_user_can_spend` / `ensure_sub_account_can_spend`. Unlimited balances bypass subtraction.
 
 M8. Because preflight subtracts locally unshipped charges, overspend during a primary outage is bounded by in-flight concurrency, not by shipment delay.
+
+### 6.4 Replica identity
+
+M9. A replica MUST resolve exactly one identity UUID at startup, before the first ship-loop tick, in this order:
+
+1. When `MONOIZE_REPLICA_ID` is set to a non-empty value, the value MUST parse as a UUID whose RFC 4122 version field equals 4 (hyphenated or simple hex form; case-insensitive). On parse success, the canonical lowercase hyphenated form is the identity; the identity file of step 2 is neither read nor written. On parse failure or version mismatch, startup MUST stop with error `replica_id_invalid`.
+2. Otherwise the replica MUST read the identity file `{MONOIZE_REPLICA_METERING_SPOOL_DIR}/replica-identity`. When the file exists and its whitespace-trimmed content parses as a UUID with version 4, the canonical lowercase hyphenated form is the identity and the file is left unchanged.
+3. Otherwise (file absent, unreadable, or content not a version-4 UUID) the replica MUST generate one new UUID v4, persist it to the identity file by writing a temporary file in the same directory, fsyncing it, then atomically renaming it onto `replica-identity`, and use the generated value as the identity. A directory-create, write, sync, or rename failure MUST stop startup with error `replica_identity_unwritable`.
+
+M9a. The identity file content written by M9 step 3 is exactly the 36-character lowercase hyphenated UUID followed by one `\n` (37 bytes). Readers tolerate surrounding ASCII whitespace per M9 step 2.
+
+M9b. The spool-directory startup cleanup (the M3a construction path that deletes non-`.json` leftovers) MUST NOT delete a file named `replica-identity`.
+
+M9c. The M4a heartbeat `id` MUST equal the resolved identity. Consequently the `id` is stable across process restarts for one replica data directory (or for one `MONOIZE_REPLICA_ID` value), and a restarted replica upserts its existing heartbeat map entry on the primary instead of creating an additional entry.
 
 ## 7. Metering ingest API (primary)
 
@@ -244,3 +258,7 @@ T6. Replica surface: `/api/dashboard/**` and `/` return 404 `replica_dashboard_d
 T7. Promotion drain: a data directory with leftover delta spool entries started as primary applies them before serving and then serves with empty spool.
 
 T8. PostgreSQL parity: SC1 migration and T2/T3 scenarios run against `MONOIZE_TEST_POSTGRES_DSN` when provided and skip otherwise (DB-T1 rules).
+
+T9. Replica identity (M9): first resolution in an empty spool directory creates `replica-identity` containing one version-4 UUID plus `\n`; a second resolution over the same directory returns the identical identity; `DeltaSpool` construction over the same directory preserves the file and a subsequent resolution still returns the identical identity; a corrupt identity file is replaced by a newly generated identity; a valid `MONOIZE_REPLICA_ID` yields its canonical lowercase hyphenated form without creating the file; a non-UUID or non-version-4 `MONOIZE_REPLICA_ID` yields an error whose text begins with `replica_id_invalid`.
+
+T10. Heartbeat eviction (M4a): with ship interval `s`, a map entry with `now - last_seen_at > 360 * s` is removed by the overview read path while an entry with `now - last_seen_at <= 360 * s` is retained.

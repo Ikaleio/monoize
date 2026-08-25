@@ -11,8 +11,9 @@ use http_body_util::BodyExt;
 use monoize::db_cache::{LastUsedBatcher, RequestLogBatcher};
 use monoize::node_config::NodeRole;
 use monoize::replica::metering::{
-    BalanceDelta, DeltaSpool, ReplicaMetering, ShipTick, apply_metering_batch,
-    drain_delta_spool_to_local_db,
+    BalanceDelta, DeltaSpool, HEARTBEAT_EVICT_INTERVALS, REPLICA_IDENTITY_FILE_NAME,
+    ReplicaHeartbeat, ReplicaHeartbeatRecord, ReplicaMetering, ShipTick, apply_metering_batch,
+    drain_delta_spool_to_local_db, evict_expired_heartbeats, resolve_replica_identity,
 };
 use sea_orm::ConnectionTrait;
 use tempfile::TempDir;
@@ -666,6 +667,131 @@ async fn t6_replica_surface_disables_dashboard_and_keeps_api() {
         .await
         .unwrap();
     assert_eq!(metrics.status(), axum::http::StatusCode::UNAUTHORIZED);
+}
+
+/// T9: the persisted identity survives simulated restarts and DeltaSpool cleanup.
+#[test]
+fn t9_replica_identity_created_once_and_reused_across_restarts() {
+    let temp = TempDir::new().unwrap();
+    let spool_dir = temp.path().join("metering");
+
+    let first = resolve_replica_identity(None, &spool_dir).expect("first resolution");
+    let parsed = uuid::Uuid::parse_str(&first).expect("identity is a UUID");
+    assert_eq!(parsed.get_version_num(), 4, "identity is version 4");
+
+    let identity_path = spool_dir.join(REPLICA_IDENTITY_FILE_NAME);
+    let content = std::fs::read_to_string(&identity_path).expect("identity file exists");
+    assert_eq!(content, format!("{first}\n"), "M9a file format");
+
+    // Simulated restart: resolution over the same directory returns the same identity.
+    let second = resolve_replica_identity(None, &spool_dir).expect("second resolution");
+    assert_eq!(first, second);
+
+    // M9b: DeltaSpool startup cleanup removes non-json leftovers but keeps the identity.
+    std::fs::write(spool_dir.join(".tmp-leftover"), b"junk").unwrap();
+    DeltaSpool::new(spool_dir.clone(), 1024 * 1024).expect("spool");
+    assert!(identity_path.exists(), "identity survives spool cleanup");
+    assert!(
+        !spool_dir.join(".tmp-leftover").exists(),
+        "temp leftovers are still cleaned"
+    );
+    let third = resolve_replica_identity(None, &spool_dir).expect("third resolution");
+    assert_eq!(first, third);
+}
+
+/// T9: `MONOIZE_REPLICA_ID` overrides the file and is validated as a UUID v4.
+#[test]
+fn t9_replica_identity_env_override_and_validation() {
+    let temp = TempDir::new().unwrap();
+    let spool_dir = temp.path().join("metering");
+
+    let configured = uuid::Uuid::new_v4();
+    let resolved =
+        resolve_replica_identity(Some(&configured.to_string().to_uppercase()), &spool_dir)
+            .expect("override resolves");
+    assert_eq!(
+        resolved,
+        configured.hyphenated().to_string(),
+        "override canonicalizes to lowercase hyphenated form"
+    );
+    assert!(
+        !spool_dir.join(REPLICA_IDENTITY_FILE_NAME).exists(),
+        "override neither reads nor writes the identity file"
+    );
+
+    let err = resolve_replica_identity(Some("not-a-uuid"), &spool_dir).unwrap_err();
+    assert!(err.starts_with("replica_id_invalid"), "{err}");
+    // Nil UUID parses but is not version 4.
+    let err = resolve_replica_identity(Some("00000000-0000-0000-0000-000000000000"), &spool_dir)
+        .unwrap_err();
+    assert!(err.starts_with("replica_id_invalid"), "{err}");
+}
+
+/// T9: a corrupt identity file is replaced by a freshly generated identity.
+#[test]
+fn t9_replica_identity_regenerates_corrupt_file() {
+    let temp = TempDir::new().unwrap();
+    let spool_dir = temp.path().join("metering");
+    std::fs::create_dir_all(&spool_dir).unwrap();
+    let identity_path = spool_dir.join(REPLICA_IDENTITY_FILE_NAME);
+    std::fs::write(&identity_path, b"garbage\n").unwrap();
+
+    let regenerated = resolve_replica_identity(None, &spool_dir).expect("regenerates");
+    let parsed = uuid::Uuid::parse_str(&regenerated).expect("valid UUID");
+    assert_eq!(parsed.get_version_num(), 4);
+    assert_eq!(
+        std::fs::read_to_string(&identity_path).unwrap(),
+        format!("{regenerated}\n"),
+        "corrupt file is atomically replaced"
+    );
+    assert_eq!(
+        resolve_replica_identity(None, &spool_dir).unwrap(),
+        regenerated
+    );
+}
+
+fn heartbeat_record(id: &str, last_seen_unix_ms: i64) -> ReplicaHeartbeatRecord {
+    ReplicaHeartbeatRecord {
+        heartbeat: ReplicaHeartbeat {
+            id: id.to_string(),
+            hostname: "host".to_string(),
+            listen: "0.0.0.0:9000".to_string(),
+            version: "1.0.0".to_string(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            uptime_seconds: 0,
+            spool_pending_count: 0,
+            spool_pending_bytes: 0,
+        },
+        last_seen_unix_ms,
+    }
+}
+
+/// T10: overview reads evict entries older than 360 ship intervals and keep the rest.
+#[test]
+fn t10_heartbeat_eviction_removes_only_expired_entries() {
+    let ship_interval = std::time::Duration::from_secs(10);
+    let evict_after_ms = ship_interval.as_millis() as i64 * HEARTBEAT_EVICT_INTERVALS as i64;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    let map = dashmap::DashMap::new();
+    map.insert(
+        "expired".to_string(),
+        heartbeat_record("expired", now_ms - evict_after_ms - 1),
+    );
+    map.insert(
+        "stale-but-kept".to_string(),
+        heartbeat_record("stale-but-kept", now_ms - evict_after_ms),
+    );
+    map.insert("live".to_string(), heartbeat_record("live", now_ms));
+
+    evict_expired_heartbeats(&map, now_ms, ship_interval);
+
+    assert!(!map.contains_key("expired"), "expired entry is removed");
+    assert!(
+        map.contains_key("stale-but-kept"),
+        "boundary entry is retained"
+    );
+    assert!(map.contains_key("live"), "live entry is retained");
 }
 
 #[tokio::test]

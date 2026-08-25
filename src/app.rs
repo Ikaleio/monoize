@@ -854,21 +854,32 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             runtime.node.replica_token.as_deref().unwrap_or(""),
             runtime.node.metering_ship_batch_max_entries,
         )
-        .map(|metering| {
-            metering.with_heartbeat_source(crate::replica::metering::ReplicaHeartbeatSource {
-                id: uuid::Uuid::new_v4().to_string(),
-                hostname,
-                listen: runtime.listen.clone(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                started_at: started_at.to_rfc3339(),
-            })
+        .and_then(|metering| {
+            // M9: the identity persists in the spool directory, so a restarted replica
+            // keeps its heartbeat map entry on the primary instead of adding a new one.
+            let replica_id = crate::replica::metering::resolve_replica_identity(
+                runtime.node.replica_id.as_deref(),
+                &runtime.node.metering_spool_dir,
+            )?;
+            Ok(
+                metering.with_heartbeat_source(crate::replica::metering::ReplicaHeartbeatSource {
+                    id: replica_id,
+                    hostname,
+                    listen: runtime.listen.clone(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    started_at: started_at.to_rfc3339(),
+                }),
+            )
         })
         .map_err(|err| {
-            let code = if err.starts_with("metering_spool_unwritable") {
-                "metering_spool_unwritable"
-            } else {
-                "metering_init_failed"
-            };
+            let code = [
+                "metering_spool_unwritable",
+                "replica_id_invalid",
+                "replica_identity_unwritable",
+            ]
+            .into_iter()
+            .find(|prefix| err.starts_with(prefix))
+            .unwrap_or("metering_init_failed");
             AppError::new(axum::http::StatusCode::BAD_REQUEST, code, err)
         })?;
         let metering = Arc::new(metering);
@@ -2201,6 +2212,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/analytics",
             get(crate::dashboard_handlers::get_dashboard_analytics),
+        )
+        .route(
+            "/dashboard/me/live-usage",
+            get(crate::dashboard_handlers::get_my_live_usage),
         )
         .route(
             "/dashboard/admin/overview",

@@ -38,3 +38,6 @@ mod request_capture;
 
 #[path = "api/error_sanitization.rs"]
 mod error_sanitization;
+
+#[path = "api/live_usage.rs"]
+mod live_usage;
