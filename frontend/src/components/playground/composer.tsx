@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { motion, springs } from "@/components/ui/motion";
 import { cn } from "@/lib/utils";
-import type { ApiKey, ModelMetadataRecord } from "@/lib/api";
+import type { ApiKey, Group, ModelMetadataRecord } from "@/lib/api";
 import type { PlaygroundPrefs } from "./prefs";
 import type { ComposerAttachment } from "./use-image-generation";
 import { GroupSelector } from "./group-selector";
@@ -91,8 +91,7 @@ export interface ComposerProps {
   blockedHint: string | null;
   prefs: PlaygroundPrefs;
   setPref: (name: keyof PlaygroundPrefs, value: string) => void;
-  groups: string[];
-  userAllowedGroups: string[];
+  groups: Group[];
   groupsLoading: boolean;
   models: ModelMetadataRecord[];
   modelsLoading: boolean;
@@ -117,7 +116,6 @@ export function Composer({
   prefs,
   setPref,
   groups,
-  userAllowedGroups,
   groupsLoading,
   models,
   modelsLoading,
@@ -210,7 +208,6 @@ export function Composer({
             value={prefs.group}
             onChange={(group) => setPref("group", group)}
             groups={groups}
-            userAllowedGroups={userAllowedGroups}
             isLoading={groupsLoading}
           />
           <ModelCombobox

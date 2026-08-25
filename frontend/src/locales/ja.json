@@ -647,6 +647,7 @@
 		"errorNoModel": "送信する前にモデルを選択してください。",
 		"errorNoKey": "利用可能な API キーがありません。API キーページで作成してください。",
 		"groupKeyBlocked": "グループ「{{group}}」をカバーする API キーがありません。別のグループを選ぶか、対応するキーを作成してください。",
+		"modelKeyBlocked": "モデル「{{model}}」を許可する API キーがありません。別のモデルを選ぶか、キーのモデル許可リストを更新してください。",
 		"noKeysHint": "Playground はあなたの Monoize API キーでリクエストに署名します。作成してチャットを開始しましょう。",
 		"createKey": "API キーを作成",
 		"creatingKey": "作成中…",

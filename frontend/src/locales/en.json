@@ -650,6 +650,7 @@
 		"errorNoModel": "Select a model before sending.",
 		"errorNoKey": "No usable API key. Create one on the API Keys page.",
 		"groupKeyBlocked": "No API key covers group “{{group}}”. Pick another group or create a matching key.",
+		"modelKeyBlocked": "No API key allows model “{{model}}”. Pick another model or update a key's model allowlist.",
 		"noKeysHint": "The playground signs requests with one of your Monoize API keys. Create one to start chatting.",
 		"createKey": "Create API key",
 		"creatingKey": "Creating…",

@@ -647,6 +647,7 @@
 		"errorNoModel": "傳送前請先選擇模型。",
 		"errorNoKey": "沒有可用的 API 金鑰，請前往 API 金鑰頁面建立。",
 		"groupKeyBlocked": "沒有涵蓋分組「{{group}}」的 API 金鑰。請更換分組或建立匹配的金鑰。",
+		"modelKeyBlocked": "沒有允許模型「{{model}}」的 API 金鑰。請更換模型或更新金鑰的模型白名單。",
 		"noKeysHint": "Playground 使用你的 Monoize API 金鑰簽署請求。建立一個即可開始對話。",
 		"createKey": "建立 API 金鑰",
 		"creatingKey": "建立中…",

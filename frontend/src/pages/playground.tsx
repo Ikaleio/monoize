@@ -56,15 +56,25 @@ export function PlaygroundPage() {
   const { data: models, isLoading: modelsLoading } = useMarketplaceModels();
   const { data: user } = useCurrentUser();
 
-  const userAllowedGroups = useMemo(
-    () => user?.allowed_groups ?? [],
-    [user?.allowed_groups],
-  );
+  const modelForMode = mode === "image" ? prefs.imageModel : prefs.chatModel;
   const resolution = useMemo(
     () =>
-      resolvePlaygroundKey(apiKeys, prefs.apiKeyId, prefs.group, userAllowedGroups),
-    [apiKeys, prefs.apiKeyId, prefs.group, userAllowedGroups],
+      resolvePlaygroundKey(
+        apiKeys,
+        prefs.apiKeyId,
+        prefs.group,
+        user?.group_id ?? "",
+        modelForMode.trim(),
+      ),
+    [apiKeys, prefs.apiKeyId, prefs.group, user?.group_id, modelForMode],
   );
+
+  useEffect(() => {
+    if (!groups || !prefs.group) return;
+    if (!groups.some((group) => group.id === prefs.group)) {
+      setPref("group", "");
+    }
+  }, [groups, prefs.group, setPref]);
 
   // Refs let the memoized transport observe the latest selector state at call
   // time (PG-CHAT2 step 1) without recreating the useChat instance.
@@ -120,7 +130,6 @@ export function PlaygroundPage() {
   const conversationEmpty = messages.length === 0 && !images.job;
 
   const trimmedText = text.trim();
-  const modelForMode = mode === "image" ? prefs.imageModel : prefs.chatModel;
   const canSend =
     resolution.key !== null &&
     modelForMode.trim().length > 0 &&
@@ -128,10 +137,13 @@ export function PlaygroundPage() {
     !imageBusy &&
     (trimmedText.length > 0 || (mode === "chat" && attachments.length > 0));
 
+  const selectedGroupName = groups?.find((group) => group.id === prefs.group)?.name;
   const blockedHint =
     resolution.reason === "no-group-key"
-      ? t("playground.groupKeyBlocked", { group: prefs.group })
-      : null;
+      ? t("playground.groupKeyBlocked", { group: selectedGroupName ?? prefs.group })
+      : resolution.reason === "no-model-key"
+        ? t("playground.modelKeyBlocked", { model: modelForMode })
+        : null;
 
   const handleAddFiles = useCallback(async (files: FileList) => {
     const imageFiles = Array.from(files).filter((file) =>
@@ -397,7 +409,6 @@ export function PlaygroundPage() {
             prefs={prefs}
             setPref={setPref}
             groups={groups ?? []}
-            userAllowedGroups={userAllowedGroups}
             groupsLoading={groupsLoading && !groups}
             models={models ?? []}
             modelsLoading={modelsLoading && !models}

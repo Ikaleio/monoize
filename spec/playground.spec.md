@@ -24,7 +24,7 @@ PG-STATE2. Exactly these preference keys MAY be persisted in `localStorage`:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `playground_group` | string | Selected routing group label; empty/absent means "auto". |
+| `playground_group` | string | Selected routing group id; empty/absent means "auto". |
 | `playground_chat_model` | string | Selected chat model id. |
 | `playground_image_model` | string | Selected image model id. |
 | `playground_api_key_id` | string | Id of an explicitly user-selected API key; empty/absent means automatic key resolution. |
@@ -51,38 +51,46 @@ PG-AUTH3. The page MUST NOT render any free-form secret input for API keys or up
 provider keys, and MUST NOT store API-key secret values in `localStorage` (only the key
 id per PG-STATE2).
 
-PG-AUTH4. An API key is *eligible* iff `enabled == true` and (`expires_at` is absent or
-in the future at resolution time).
+PG-AUTH4. An API key is *time-eligible* iff `enabled == true` and `expires_at` is absent,
+invalid, or in the future at resolution time. A time-eligible key is *model-compatible*
+with selected model id `m` iff `m` is empty, `model_limits_enabled == false`,
+`model_limits == []`, or `m ∈ model_limits`. These model-limit semantics MUST equal the
+forwarding endpoint's `model_not_allowed` check.
 
-PG-AUTH5. Key resolution is a pure function of (eligible keys `E` in list order,
-persisted `playground_api_key_id` = `k`, selected group `g`, session user allowed
-groups `U`):
+PG-AUTH5. Key resolution is a pure function of time-eligible keys `K` in list order,
+model-compatible subset `E`, persisted `playground_api_key_id = k`, selected group id
+`g`, and the session user's group id `u`:
 
-1. If `g` is "auto":
+1. If `K` is empty, resolve to "none" with reason `no-keys`.
+2. If `E` is empty, resolve to "none" with reason `no-model-key`.
+3. If `g` is "auto":
    - if `k` identifies a member of `E`, resolve to that key;
-   - otherwise resolve to `E[0]`, or to "none" when `E` is empty.
-2. If `g` is a group label, define:
-   - `C1` = keys in `E` with `allowed_groups == [g]`;
-   - `C2` = keys in `E` with `g ∈ allowed_groups` and `|allowed_groups| > 1`;
-   - `C3` = keys in `E` with `allowed_groups == []` and (`U == []` or `g ∈ U`);
+   - otherwise resolve to `E[0]`.
+4. If `g` is a group id, define:
+   - `C1` = keys in `E` with `use_user_group == false` and `group_ids == [g]`;
+   - `C2` = keys in `E` with `use_user_group == false`, `g ∈ group_ids`, and
+     `|group_ids| > 1`;
+   - `C3` = keys in `E` with (`use_user_group == true` or `group_ids == []`) and `u == g`;
    - if `k` identifies a member of `C1 ∪ C2 ∪ C3`, resolve to that key;
    - otherwise resolve to the first member of `C1`, else of `C2`, else of `C3`,
-     else "none".
+     else "none" with reason `no-group-key`.
 
-PG-AUTH6. When resolution yields "none" and `E` is empty, the empty-state hero MUST show
+PG-AUTH6. When resolution yields reason `no-keys`, the empty-state hero MUST show
 a single-action prompt that creates an API key via
 `POST /api/dashboard/tokens` with body `{ "name": "Playground" }`, revalidates the
 API-key SWR cache, and resolves to the created key. No other backend mutation is allowed.
 
-PG-AUTH7. When resolution yields "none" and `E` is non-empty (no key covers the selected
-group), the composer send action MUST be blocked and an inline hint MUST identify the
-selected group as the cause.
+PG-AUTH7. When resolution yields reason `no-group-key`, the composer send action MUST be
+blocked. An inline hint MUST identify the selected group name as the cause. When resolution
+yields reason `no-model-key`, the composer send action MUST be blocked. An inline hint MUST
+identify the selected model id as the cause.
 
 PG-AUTH8. Routing-scope semantics MUST be documented in the key-picker UI as follows:
 the effective routing groups of a request are derived from the API key and owning user
 (`api-key-authentication.spec.md` §4). Selecting group `g` guarantees the request is
-authorized for `g` and prefers the narrowest matching key (`C1` before `C2` before `C3`);
-only a key with `allowed_groups == [g]` restricts routing to exactly `g`.
+authorized for `g` and prefers the narrowest matching key (`C1` before `C2` before `C3`).
+Only a key with `use_user_group == false` and `group_ids == [g]` restricts routing to
+exactly `g`.
 
 PG-AUTH9. A compact key picker (inside the composer settings popover) MUST list each
 eligible key with name and `key_prefix`, plus an "auto" option. Picking a key writes
@@ -97,10 +105,12 @@ model. Selectors MUST NOT be free-text-only inputs.
 
 PG-SEL2. Group selector:
 
-- Options are "auto" plus group labels from `GET /api/dashboard/groups`.
-- If the session user's `allowed_groups` is non-empty, options MUST be restricted to
-  that set (intersection with the suggestion list, preserving sorted order).
-- Selection persists to `playground_group` (empty string for "auto").
+- Options are "auto" plus every `Group` from `GET /api/dashboard/groups`, in response
+  order.
+- Each option MUST use `Group.id` as its value and render `Group.name` as its label.
+- Selection persists the group id to `playground_group` (empty string for "auto").
+- If a non-empty persisted id does not match a returned `Group.id`, the page MUST clear
+  it to "auto" after the group response loads.
 
 PG-SEL3. Model selectors:
 
