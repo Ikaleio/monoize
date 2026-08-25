@@ -63,7 +63,7 @@ class PackageReleaseTests(unittest.TestCase):
             self.assertEqual(bundle.getmember(f"{root_name}/README.md").mode, 0o644)
 
     def test_windows_package_uses_zip_and_exe(self) -> None:
-        target = "aarch64-pc-windows-msvc"
+        target = "x86_64-pc-windows-msvc"
         self.write_binary(target)
         archive, _ = package_release.package_release(self.root, "v1.0.0", target, self.output)
         root_name = f"monoize-v1.0.0-{target}"
@@ -119,7 +119,7 @@ class PackageReleaseTests(unittest.TestCase):
             package_release.package_release(self.root, "v1.0.0", target, self.output)
 
         entries = package_release.verify_release_directory(self.root, "v1.0.0", self.output)
-        self.assertEqual(len(entries), 12)
+        self.assertEqual(len(entries), 8)
 
         archive = self.output / package_release.archive_name(
             "v1.0.0", "x86_64-unknown-linux-musl"

@@ -283,13 +283,13 @@ Request capture is opt-in and bounded. Credentials and prompt bodies are not par
 
 ## Release artifacts
 
-A GitHub Release whose tag equals `v` plus the Cargo package version triggers the [release workflow](.github/workflows/release.yml). The workflow builds native x86-64 and ARM64 binaries for Linux, macOS, and Windows.
+A GitHub Release whose tag equals `v` plus the Cargo package version triggers the [release workflow](.github/workflows/release.yml). The workflow builds native binaries for Linux x86-64, Linux ARM64, macOS ARM64, and Windows x86-64.
 
-Linux and macOS assets use `tar.gz`. Windows assets use `zip`. Every archive includes both READMEs and the license. Every archive has a separate SHA-256 file. The workflow uploads nothing until all six builds and all checksum checks succeed.
+Linux and macOS assets use `tar.gz`. Windows assets use `zip`. Every archive includes both READMEs and the license. Every archive has a separate SHA-256 file. The workflow uploads the successful subset after checksum verification.
 
-A manual workflow run executes the same six-platform preflight. It does not change a GitHub Release. The exact asset contract is defined in the [release artifact specification](spec/release-artifacts.spec.md).
+A manual workflow run executes the same four-platform preflight. It does not change a GitHub Release. The exact asset contract is defined in the [release artifact specification](spec/release-artifacts.spec.md).
 
-The workflow also builds seven npm tarballs: one TypeScript-derived launcher and six platform packages. A normal Bun, npm, or pnpm installation selects one platform package through `os` and `cpu` metadata. The npm publication job authenticates through npm Trusted Publishing and GitHub Actions OIDC; it does not use a long-lived npm token. The exact npm contract is defined in the [npm CLI distribution specification](spec/npm-cli-distribution.spec.md).
+The workflow also builds five npm tarballs: one TypeScript-derived launcher and four platform packages. A normal Bun, npm, or pnpm installation selects one platform package through `os` and `cpu` metadata. The npm publication job authenticates through npm Trusted Publishing and GitHub Actions OIDC; it does not use a long-lived npm token. The exact npm contract is defined in the [npm CLI distribution specification](spec/npm-cli-distribution.spec.md).
 
 ## Development and verification
 

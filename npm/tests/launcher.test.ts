@@ -23,6 +23,12 @@ describe("native target selection", () => {
     expect(() => currentNativeTarget("freebsd", "x64")).toThrow(
       "unsupported platform: freebsd (x64)",
     );
+    expect(() => currentNativeTarget("darwin", "x64")).toThrow(
+      "unsupported platform: darwin (x64)",
+    );
+    expect(() => currentNativeTarget("win32", "arm64")).toThrow(
+      "unsupported platform: win32 (arm64)",
+    );
   });
 });
 

@@ -13,7 +13,7 @@ RA-T2. Creating or editing a draft Release MUST NOT run the workflow.
 
 RA-T3. The workflow MUST check out `github.event.release.tag_name` rather than the default branch head.
 
-RA-T3a. The workflow MAY expose a manual preflight trigger with explicit `ref` and `tag` inputs. A manual preflight MUST execute validation, all six builds, packaging, checksum verification, and Actions-artifact staging. It MUST NOT upload files to a GitHub Release.
+RA-T3a. The workflow MAY expose a manual preflight trigger with explicit `ref` and `tag` inputs. A manual preflight MUST execute validation, all four builds, packaging, checksum verification, and Actions-artifact staging. It MUST NOT upload files to a GitHub Release.
 
 RA-T3b. The validation job MUST resolve the checked-out release ref to one commit SHA. Every build, verification, and container job in the same run MUST check out that exact commit SHA. A later movement of a branch or tag ref MUST NOT change the source revision used by any job in the run.
 
@@ -33,12 +33,10 @@ RA-M1. One workflow run MUST contain exactly these native build rows:
 | --- | --- | --- |
 | Linux x86-64 | `ubuntu-24.04` | `x86_64-unknown-linux-musl` |
 | Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` |
-| macOS x86-64 | `macos-15-intel` | `x86_64-apple-darwin` |
 | macOS ARM64 | `macos-15` | `aarch64-apple-darwin` |
 | Windows x86-64 | `windows-2025` | `x86_64-pc-windows-msvc` |
-| Windows ARM64 | `windows-11-arm` | `aarch64-pc-windows-msvc` |
 
-RA-M2. Each row MUST run on a runner whose CPU architecture and operating system match the Rust target. The workflow MUST NOT use CPU emulation or cross-architecture compilation for these six rows. A Linux row MAY compile through a musl toolchain container on its matching native Linux runner.
+RA-M2. Each row MUST run on a runner whose CPU architecture and operating system match the Rust target. The workflow MUST NOT use CPU emulation or cross-architecture compilation for these four rows. A Linux row MAY compile through a musl toolchain container on its matching native Linux runner.
 
 RA-M2a. Each Linux row MUST use the matching `rust-musl-cross` builder image. The x86-64 image reference MUST equal `ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:ce75e9174325d4fbb3de85c309e2d7ca29f7500169bc4b5d2c611ff7e86d549a`. The ARM64 image reference MUST equal `ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:ecae5dd62d1c938c14f8071d36c16fa699860aace03bfb5284fb1216474d2643`.
 
@@ -108,7 +106,7 @@ RA-S2. One verification job MUST wait for every build row. The asset-publishing 
 
 RA-S3. The verification job and asset-publishing job MUST each download and merge every available `release-<target>` Actions artifact into one directory.
 
-RA-S4. `scripts/package_release.py verify` MUST require a non-empty subset of the six targets in RA-M1. For each present target, the merged directory MUST contain exactly its archive and checksum file. The command MUST reject an unknown file, an archive without its checksum, or a checksum without its archive.
+RA-S4. `scripts/package_release.py verify` MUST require a non-empty subset of the four targets in RA-M1. For each present target, the merged directory MUST contain exactly its archive and checksum file. The command MUST reject an unknown file, an archive without its checksum, or a checksum without its archive.
 
 RA-S5. The verify command MUST recompute and compare every present archive checksum. An unknown, orphaned, malformed, or mismatched file MUST fail verification.
 

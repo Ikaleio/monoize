@@ -279,13 +279,13 @@ Monoize 支持一个可写主机加若干只读从机的部署形态。所有节
 
 ## Release 构建产物
 
-发布 GitHub Release 时，如果标签等于 `v` 加 Cargo 包版本，[Release 工作流](.github/workflows/release.yml)会自动运行。它为 Linux、macOS 和 Windows 分别构建原生 x86-64 与 ARM64 二进制文件。
+发布 GitHub Release 时，如果标签等于 `v` 加 Cargo 包版本，[Release 工作流](.github/workflows/release.yml)会自动运行。它构建 Linux x86-64、Linux ARM64、macOS ARM64 和 Windows x86-64 原生二进制文件。
 
-Linux 和 macOS 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证。每个压缩包都带有独立的 SHA-256 文件。六个平台全部构建成功且校验通过后，工作流才会上传文件。
+Linux 和 macOS 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证。每个压缩包都带有独立的 SHA-256 文件。工作流在校验通过后上传成功的子集。
 
-手动运行工作流可以执行相同的六平台预检。它不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
+手动运行工作流可以执行相同的四平台预检。它不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
 
-该工作流还会构建七个 npm 压缩包：一个由 TypeScript 构建的启动器，以及六个平台包。Bun、npm 或 pnpm 正常安装时，会根据 `os` 和 `cpu` 元数据选择一个平台包。npm 发布任务通过 npm Trusted Publishing 和 GitHub Actions OIDC 完成认证，不使用长期有效的 npm token。准确的 npm 约束见 [npm CLI 分发规范](spec/npm-cli-distribution.spec.md)。
+该工作流还会构建五个 npm 压缩包：一个由 TypeScript 构建的启动器，以及四个平台包。Bun、npm 或 pnpm 正常安装时，会根据 `os` 和 `cpu` 元数据选择一个平台包。npm 发布任务通过 npm Trusted Publishing 和 GitHub Actions OIDC 完成认证，不使用长期有效的 npm token。准确的 npm 约束见 [npm CLI 分发规范](spec/npm-cli-distribution.spec.md)。
 
 ## 开发与验证
 

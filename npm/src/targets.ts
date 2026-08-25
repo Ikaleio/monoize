@@ -28,14 +28,6 @@ export const NATIVE_TARGETS: readonly NativeTarget[] = [
     executable: "monoize",
   },
   {
-    rustTarget: "x86_64-apple-darwin",
-    packageAlias: "monoize-darwin-x64",
-    versionSuffix: "darwin-x64",
-    platform: "darwin",
-    architecture: "x64",
-    executable: "monoize",
-  },
-  {
     rustTarget: "aarch64-apple-darwin",
     packageAlias: "monoize-darwin-arm64",
     versionSuffix: "darwin-arm64",
@@ -49,14 +41,6 @@ export const NATIVE_TARGETS: readonly NativeTarget[] = [
     versionSuffix: "win32-x64",
     platform: "win32",
     architecture: "x64",
-    executable: "monoize.exe",
-  },
-  {
-    rustTarget: "aarch64-pc-windows-msvc",
-    packageAlias: "monoize-win32-arm64",
-    versionSuffix: "win32-arm64",
-    platform: "win32",
-    architecture: "arm64",
     executable: "monoize.exe",
   },
 ] as const;
