@@ -7,7 +7,7 @@
 
 ## 1. Package set
 
-NCD-P1. One release MUST publish exactly one root package version and six platform package versions under the npm package name `monoize`.
+NCD-P1. One release MUST publish exactly one root package version and one through six successful platform package versions under the npm package name `monoize`. A failed native build MUST omit only its matching platform version.
 
 NCD-P2. The root package version MUST equal `[package].version` in `Cargo.toml`.
 
@@ -62,15 +62,15 @@ NCD-R1. The npm staging command MUST reject a tag unless it equals `v` followed 
 
 NCD-R2. Each native build row in the release workflow MUST stage and pack the platform package that corresponds to that row. It MUST NOT place another target's binary in the package.
 
-NCD-R3. One packaging job MUST build and pack the root package. It MUST verify that the complete package set contains exactly the root tarball and the six platform tarballs for the release version.
+NCD-R3. One packaging job MUST build and pack the root package. It MUST verify that the package set contains the root tarball and a non-empty subset of the six platform tarballs for the release version. Every platform tarball in the set MUST match one row in NCD-P3.
 
 NCD-R4. A manual release preflight MUST build, pack, and verify the npm package set. It MUST NOT publish an npm version.
 
-NCD-R5. On a GitHub `release` publication, the npm publication job MUST publish all six platform versions before the root version.
+NCD-R5. On a GitHub `release` publication, the npm publication job MUST publish every platform version present in the verified package set before the root version. An absent platform version MUST NOT block publication of the present versions.
 
 NCD-R6. A platform package publication MUST use a non-`latest` npm dist-tag. Publishing a platform version MUST NOT change the root package's `latest` dist-tag.
 
-NCD-R7. The root package publication MUST use the `latest` npm dist-tag. It MUST occur only after all six platform publications succeed.
+NCD-R7. The root package publication MUST use the `latest` npm dist-tag. It MUST occur only after every platform publication present in the package set succeeds.
 
 NCD-R8. npm publication MUST use npm Trusted Publishing through GitHub Actions OpenID Connect (OIDC). The publication job MUST run on a GitHub-hosted runner with `contents: read` and `id-token: write`. The job MUST NOT read an `NPM_TOKEN` Actions secret or write a registry authentication token.
 
@@ -78,7 +78,7 @@ NCD-R8a. The npm publication job MUST use Node.js `24.15.0` and npm CLI `12.0.2`
 
 NCD-R9. The npm packaging job MUST run the TypeScript unit tests before it creates the root tarball. A test, build, pack, or package-set verification failure MUST prevent root-package publication.
 
-NCD-R10. The npm packaging job MUST serve the seven generated tarballs from an ephemeral local npm registry and install the root tarball with Bun, npm, and pnpm on one supported runner. Each installation MUST contain the root package, the one matching platform alias, no non-matching platform alias, and the `monoize` binary link. Each client MUST download exactly one platform tarball. This verification MUST use installation scripts disabled.
+NCD-R10. If the package set contains the packaging runner's platform tarball, the packaging job MUST serve the generated tarballs from an ephemeral local npm registry and install the root tarball with Bun, npm, and pnpm. Each installation MUST contain the root package, the matching platform alias, no non-matching platform alias, and the `monoize` binary link. Each client MUST download exactly one platform tarball. This verification MUST use installation scripts disabled. If that platform tarball is absent, the workflow MUST skip only this client-installation check; archive and manifest verification remain mandatory.
 
 NCD-R11. A publication rerun MUST compare the local SHA-512 integrity with any existing npm version. If the bytes are identical and the required dist-tag already resolves to that version, publication MUST skip that version. Different bytes, a missing required dist-tag, or a required dist-tag that resolves to another version MUST fail publication. The workflow MUST NOT overwrite an existing version or run a separate dist-tag mutation command.
 

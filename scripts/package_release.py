@@ -68,8 +68,8 @@ def archive_name(tag: str, target: str) -> str:
     return f"monoize-{tag}-{target}{suffix}"
 
 
-def expected_asset_names(tag: str) -> set[str]:
-    """Return all archive and checksum basenames required for one release."""
+def allowed_asset_names(tag: str) -> set[str]:
+    """Return every archive and checksum basename allowed for one release."""
 
     names: set[str] = set()
     for target in TARGETS:
@@ -170,7 +170,7 @@ def package_release(root: Path, tag: str, target: str, output_dir: Path) -> tupl
 
 
 def verify_release_directory(root: Path, tag: str, directory: Path) -> tuple[Path, ...]:
-    """Verify that a directory contains one complete six-target release set."""
+    """Verify a non-empty subset of the supported target assets."""
 
     validate_tag(root, tag)
     if not directory.is_dir():
@@ -181,18 +181,23 @@ def verify_release_directory(root: Path, tag: str, directory: Path) -> tuple[Pat
         raise ReleasePackagingError("release asset directory contains a non-file entry")
 
     actual = {entry.name for entry in entries}
-    expected = expected_asset_names(tag)
-    if actual != expected:
-        missing = sorted(expected - actual)
-        additional = sorted(actual - expected)
+    allowed = allowed_asset_names(tag)
+    additional = sorted(actual - allowed)
+    if additional:
         raise ReleasePackagingError(
-            f"release asset set mismatch; missing={missing!r}; additional={additional!r}"
+            f"release asset set contains unknown files; additional={additional!r}"
         )
 
+    present_targets: list[str] = []
     for target in TARGETS:
         name = archive_name(tag, target)
         archive = directory / name
         checksum = directory / f"{name}.sha256"
+        if archive.is_file() != checksum.is_file():
+            raise ReleasePackagingError(f"release asset pair is incomplete for target {target}")
+        if not archive.is_file():
+            continue
+        present_targets.append(target)
         expected_line = f"{sha256_file(archive)}  {name}\n"
         try:
             actual_line = checksum.read_text(encoding="utf-8")
@@ -200,6 +205,9 @@ def verify_release_directory(root: Path, tag: str, directory: Path) -> tuple[Pat
             raise ReleasePackagingError(f"cannot read checksum file {checksum}: {error}") from error
         if actual_line != expected_line:
             raise ReleasePackagingError(f"checksum mismatch or malformed checksum file: {checksum}")
+
+    if not present_targets:
+        raise ReleasePackagingError("release asset directory contains no supported target")
 
     return entries
 
@@ -218,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     package.add_argument("--target", required=True, choices=tuple(TARGETS))
     package.add_argument("--output-dir", type=_path, required=True)
 
-    verify = subparsers.add_parser("verify", help="verify the complete release asset directory")
+    verify = subparsers.add_parser("verify", help="verify the available release asset directory")
     verify.add_argument("--tag", required=True)
     verify.add_argument("--directory", type=_path, required=True)
 

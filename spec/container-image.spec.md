@@ -71,13 +71,13 @@ CI-P6. A manual container tag MUST match `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`.
 
 CI-P7. Concurrent workflow runs that target the same publication tag MUST execute sequentially. A newer run MUST NOT cancel an active run.
 
-CI-P8. For a GitHub Release, the container build MUST start only after the workflow uploads all twelve native Release assets successfully.
+CI-P8. For a GitHub Release, a container platform build MUST start only after the workflow uploads the available verified native Release assets successfully. A missing native archive MUST skip only the matching container platform.
 
-CI-P9. For a manual run with `publish_container = true`, the container build MUST start only after the six-platform native preflight and checksum verification succeed.
+CI-P9. For a manual run with `publish_container = true`, the container build MUST start only after the available native artifacts pass checksum verification.
 
 ## 4. Platforms and tags
 
-CI-M1. One publication MUST build exactly these platforms on native GitHub-hosted runners:
+CI-M1. One publication MUST attempt exactly these platforms on native GitHub-hosted runners:
 
 | Platform | Runner |
 | --- | --- |
@@ -86,9 +86,9 @@ CI-M1. One publication MUST build exactly these platforms on native GitHub-hoste
 
 CI-M1a. The two platform container jobs MAY run in parallel. They MUST NOT compile Monoize; each job only packages the native linux executable for its architecture.
 
-CI-M2. The platform build jobs MUST push content-addressed images. The merge job MUST create one manifest list from the two resulting digests.
+CI-M2. Each successful platform build MUST push a content-addressed image. The merge job MUST create one manifest list from the one or two available digests.
 
-CI-M3. The merge job MUST run only after both platform builds succeed.
+CI-M3. The merge job MUST wait for both platform attempts. A failed or skipped platform MUST NOT block publication when the other platform produced a digest. If neither platform produced a digest, the container publication steps MUST skip without blocking GitHub Release or npm publication.
 
 CI-M4. A Release tag `vMAJOR.MINOR.PATCH` MUST publish these tags:
 

@@ -206,10 +206,10 @@ async function packageDirectories(packagesDirectory: string, outputDirectory: st
   }
 }
 
-function expectedTarballs(version: string): string[] {
+function expectedTarballs(version: string, targets: readonly NativeTarget[]): string[] {
   return [
     `monoize-${version}.tgz`,
-    ...NATIVE_TARGETS.map((target) => `monoize-${platformVersion(version, target)}.tgz`),
+    ...targets.map((target) => `monoize-${platformVersion(version, target)}.tgz`),
   ].sort();
 }
 
@@ -287,13 +287,19 @@ async function verifyPlatformArchive(
   }
 }
 
-async function verifyPackageSet(tag: string, directory: string): Promise<void> {
+async function verifyPackageSet(tag: string, directory: string): Promise<readonly NativeTarget[]> {
   const version = await versionForTag(tag);
   const packageDirectory = path.resolve(directory);
   const actual = (await readdir(packageDirectory))
     .filter((entry) => entry.endsWith(".tgz"))
     .sort();
-  const expected = expectedTarballs(version);
+  const presentTargets = NATIVE_TARGETS.filter((target) =>
+    actual.includes(`monoize-${platformVersion(version, target)}.tgz`),
+  );
+  if (presentTargets.length === 0) {
+    throw new Error("npm package set contains no platform package");
+  }
+  const expected = expectedTarballs(version, presentTargets);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
       `npm package set mismatch; expected=${JSON.stringify(expected)}; actual=${JSON.stringify(actual)}`,
@@ -301,13 +307,14 @@ async function verifyPackageSet(tag: string, directory: string): Promise<void> {
   }
 
   await verifyRootArchive(path.join(packageDirectory, `monoize-${version}.tgz`), version);
-  for (const target of NATIVE_TARGETS) {
+  for (const target of presentTargets) {
     const archive = path.join(
       packageDirectory,
       `monoize-${platformVersion(version, target)}.tgz`,
     );
     await verifyPlatformArchive(archive, version, target);
   }
+  return presentTargets;
 }
 
 async function npmOutput(args: string[]): Promise<{ exitCode: number; stdout: string }> {
@@ -362,11 +369,11 @@ async function runNpm(args: string[]): Promise<void> {
 }
 
 async function publishPackageSet(tag: string, directory: string): Promise<void> {
-  await verifyPackageSet(tag, directory);
+  const presentTargets = await verifyPackageSet(tag, directory);
   const version = await versionForTag(tag);
   const packageDirectory = path.resolve(directory);
 
-  for (const target of NATIVE_TARGETS) {
+  for (const target of presentTargets) {
     const targetVersion = platformVersion(version, target);
     await publishArchive(
       path.join(packageDirectory, `monoize-${targetVersion}.tgz`),

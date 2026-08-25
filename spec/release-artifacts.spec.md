@@ -44,9 +44,9 @@ RA-M2a. Each Linux row MUST use the matching `rust-musl-cross` builder image. Th
 
 RA-M2b. After each Linux build, the workflow MUST inspect the executable's ELF program headers and dynamic section. An ELF interpreter or a `DT_NEEDED` entry MUST fail the build row before packaging.
 
-RA-M2c. Each Linux build MUST pass `-C link-arg=-static-libstdc++` through target Rust flags. This flag MUST make the C++ runtime requested by `jxl-sys` part of the executable instead of a `libstdc++.so.6` dependency.
+RA-M2c. Each Linux build MUST explicitly select the matching musl GCC linker: `x86_64-linux-musl-gcc` for `x86_64-unknown-linux-musl`, or `aarch64-linux-musl-gcc` for `aarch64-unknown-linux-musl`. It MUST pass `-C target-feature=+crt-static -C link-arg=-static -C link-arg=-static-libstdc++` through target Rust flags. These settings MUST prevent the executable from depending on a host GNU libc, musl libc, or `libstdc++.so.6` shared library.
 
-RA-M3. Matrix `fail-fast` MUST equal `false`. A failed row MUST NOT cancel another running row.
+RA-M3. Matrix `fail-fast` MUST equal `false`. Every matrix row MUST set job-level `continue-on-error = true`. A failed row MUST NOT cancel another row or make the aggregate matrix dependency fail.
 
 RA-M4. A Linux builder image MUST provide the stable Rust toolchain and its row's musl target. Every other row MUST install the stable Rust toolchain with its row's target. Every row MUST install Bun `1.4.0`.
 
@@ -94,15 +94,17 @@ RA-P8. Archive entries MUST use fixed timestamps and owner metadata. Repeating t
 
 RA-S1. Each matrix row MUST upload its archive and checksum as one Actions artifact named `release-<target>`.
 
-RA-S2. One verification job MUST depend on the complete build matrix. The asset-publishing job MUST depend on that verification job. The asset-publishing job MUST run only when every build row and verification succeed and the workflow event is `release`.
+RA-S2. One verification job MUST wait for every build row. The asset-publishing job MUST depend on that verification job. The verification and asset-publishing jobs MUST continue when one or more build rows fail, provided at least one row produced a valid artifact.
 
-RA-S3. The verification job and asset-publishing job MUST each download and merge all six Actions artifacts into one directory.
+RA-S3. The verification job and asset-publishing job MUST each download and merge every available `release-<target>` Actions artifact into one directory.
 
-RA-S4. `scripts/package_release.py verify` MUST reject the merged directory unless it contains exactly the six archives and six checksum files required by RA-M1 and RA-P5 through RA-P7.
+RA-S4. `scripts/package_release.py verify` MUST require a non-empty subset of the six targets in RA-M1. For each present target, the merged directory MUST contain exactly its archive and checksum file. The command MUST reject an unknown file, an archive without its checksum, or a checksum without its archive.
 
-RA-S5. The verify command MUST recompute and compare every archive checksum. A missing, additional, malformed, or mismatched file MUST fail verification.
+RA-S5. The verify command MUST recompute and compare every present archive checksum. An unknown, orphaned, malformed, or mismatched file MUST fail verification.
 
-RA-S6. After RA-S4 and RA-S5 succeed, the workflow MUST upload all twelve files to the triggering GitHub Release. A rerun MAY overwrite same-name assets on that Release.
+RA-S6. After RA-S4 and RA-S5 succeed, the workflow MUST upload every verified file to the triggering GitHub Release. A rerun MAY overwrite same-name assets on that Release.
+
+RA-S6a. A failed target MUST contribute no native archive, checksum, or npm platform package. Its failure MUST NOT block verification, GitHub Release upload, npm publication, or container publication for successful targets.
 
 RA-S7. The release workflow MUST NOT run `deploy.sh`, copy files to `/opt/monoize`, restart PM2, or mutate a Monoize database.
 
