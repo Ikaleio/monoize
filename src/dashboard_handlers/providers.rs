@@ -1129,7 +1129,7 @@ mod tests {
                 extra_headers: None,
                 session_affinity_auto: None,
             }],
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             transforms: Vec::new(),
             api_type_overrides: Vec::new(),
             active_probe_enabled_override: None,
@@ -1293,7 +1293,7 @@ mod tests {
 
         let admin = state
             .user_store
-            .create_user("admin_user", "password123", UserRole::Admin, &[])
+            .create_user("admin_user", "password123", UserRole::Admin, None)
             .await
             .expect("admin created");
         let session = state

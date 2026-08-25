@@ -85,7 +85,7 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-empty-reasoning-filter".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-empty-reasoning-filter-ch1".to_string()),
                 name: "mono-empty-reasoning-filter-ch1".to_string(),
@@ -308,7 +308,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-transform-strip".to_string(),
         api_type_overrides: Vec::new(),
-        groups: Vec::new(),
+        group_ids: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-strip-ch1".to_string()),
             name: "mono-transform-strip-ch1".to_string(),
@@ -406,7 +406,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-transform-sse-split".to_string(),
         api_type_overrides: Vec::new(),
-        groups: Vec::new(),
+        group_ids: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-sse-split-ch1".to_string()),
             name: "mono-transform-sse-split-ch1".to_string(),

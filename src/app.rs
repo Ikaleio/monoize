@@ -1015,7 +1015,7 @@ async fn ensure_active_probe_system_user(user_store: &UserStore) -> AppResult<St
             ACTIVE_PROBE_SYSTEM_USER,
             &uuid::Uuid::new_v4().to_string(),
             UserRole::User,
-            &[],
+            None,
         )
         .await
         .map_err(active_probe_user_init_error)?;
@@ -2091,6 +2091,18 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/groups",
             get(crate::dashboard_handlers::list_dashboard_groups),
+        )
+        .route(
+            "/dashboard/groups",
+            post(crate::dashboard_handlers::create_group),
+        )
+        .route(
+            "/dashboard/groups/{group_id}",
+            put(crate::dashboard_handlers::update_group),
+        )
+        .route(
+            "/dashboard/groups/{group_id}",
+            axum::routing::delete(crate::dashboard_handlers::delete_group),
         )
         .route(
             "/dashboard/providers",

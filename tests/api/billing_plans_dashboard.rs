@@ -49,7 +49,7 @@ async fn setup() -> TestContext {
     .expect("configure test Cap verifier");
     let admin = state
         .user_store
-        .create_user("admin_billing_plans", "password", UserRole::Admin, &[])
+        .create_user("admin_billing_plans", "password", UserRole::Admin, None)
         .await
         .expect("admin created");
     let session = state
@@ -92,9 +92,22 @@ async fn json_request(
     (status, value)
 }
 
+async fn create_group(ctx: &TestContext, name: &str) -> String {
+    let (status, group) = json_request(
+        ctx,
+        Method::POST,
+        "/api/dashboard/groups",
+        Some(json!({ "name": name, "user_selectable": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    group["id"].as_str().expect("group id").to_string()
+}
+
 #[tokio::test]
 async fn billing_plan_validation_and_assignment_error_codes() {
     let ctx = setup().await;
+    let team_a_group_id = create_group(&ctx, "team-a").await;
 
     let (status, body) = json_request(
         &ctx,
@@ -124,6 +137,22 @@ async fn billing_plan_validation_and_assignment_error_codes() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], json!("invalid_grant_amount"));
 
+    // GR-C3: plan ceilings must reference registered group ids.
+    let (status, body) = json_request(
+        &ctx,
+        Method::POST,
+        "/api/dashboard/billing-plans",
+        Some(json!({
+            "name": "bad-group",
+            "grant_amount_usd": "1",
+            "schedule": "* * * * *",
+            "group_ids": ["missing-group"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("invalid_request"));
+
     let (status, created) = json_request(
         &ctx,
         Method::POST,
@@ -132,7 +161,7 @@ async fn billing_plan_validation_and_assignment_error_codes() {
             "name": "zero",
             "grant_amount_usd": "0",
             "schedule": "* * * * *",
-            "allowed_groups": ["team-a"],
+            "group_ids": [team_a_group_id],
             "enabled": false
         })),
     )
@@ -140,7 +169,7 @@ async fn billing_plan_validation_and_assignment_error_codes() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(created["grant_amount_nano_usd"], json!("0"));
     assert_eq!(created["enabled"], json!(false));
-    assert_eq!(created["allowed_groups"], json!(["team-a"]));
+    assert_eq!(created["group_ids"], json!([team_a_group_id]));
     let plan_id = created["id"].as_str().expect("plan id").to_string();
 
     let (status, _) = json_request(
@@ -166,7 +195,7 @@ async fn billing_plan_validation_and_assignment_error_codes() {
         .find(|plan| plan["id"] == json!(plan_id))
         .expect("created plan listed");
     assert_eq!(kept["enabled"], json!(false));
-    assert_eq!(kept["allowed_groups"], json!(["team-a"]));
+    assert_eq!(kept["group_ids"], json!([team_a_group_id]));
 
     let (status, body) = json_request(
         &ctx,
@@ -222,6 +251,7 @@ async fn billing_plan_validation_and_assignment_error_codes() {
 #[tokio::test]
 async fn assigned_plan_is_embedded_on_user_and_me_payloads() {
     let ctx = setup().await;
+    let team_a_group_id = create_group(&ctx, "team-a").await;
 
     let (status, plan) = json_request(
         &ctx,
@@ -231,7 +261,7 @@ async fn assigned_plan_is_embedded_on_user_and_me_payloads() {
             "name": "Starter",
             "grant_amount_usd": "10",
             "schedule": "0 0 * * *",
-            "allowed_groups": ["team-a"]
+            "group_ids": [team_a_group_id]
         })),
     )
     .await;
@@ -268,8 +298,8 @@ async fn assigned_plan_is_embedded_on_user_and_me_payloads() {
     assert_eq!(assigned["billing_plan"]["grant_amount_usd"], json!("10"));
     assert_eq!(assigned["billing_plan"]["schedule"], json!("0 0 * * *"));
     assert_eq!(
-        assigned["billing_plan"]["allowed_groups"],
-        json!(["team-a"])
+        assigned["billing_plan"]["group_ids"],
+        json!([team_a_group_id])
     );
     assert_eq!(assigned["billing_plan"]["enabled"], json!(true));
     assert!(assigned.get("today_calls").is_none());

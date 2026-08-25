@@ -18,7 +18,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-summary".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-ch1".to_string()),
                 name: "mono-transform-summary-ch1".to_string(),
@@ -284,7 +284,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-streaming-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-streaming-markdown-images-ch1".to_string()),
                 name: "mono-transform-streaming-markdown-images-ch1".to_string(),

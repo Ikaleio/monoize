@@ -25,7 +25,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub email: Option<String>,
     #[sea_orm(column_type = "Text")]
-    pub allowed_groups: String,
+    pub group_id: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

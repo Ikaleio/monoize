@@ -1,5 +1,5 @@
-use super::store::{parse_allowed_groups_json, serialize_allowed_groups_json};
-use crate::users::{UserStore, canonicalize_groups, parse_nano_usd};
+use super::store::{MAX_GROUP_IDS, parse_group_ids_json, serialize_group_ids_json};
+use crate::users::{UserStore, canonicalize_group_ids, parse_nano_usd};
 use chrono::{DateTime, Utc};
 use chrono_tz::Asia::Shanghai;
 use cron::Schedule;
@@ -30,8 +30,8 @@ pub struct BillingPlan {
     pub grant_amount_nano_usd: String,
     /// Canonical 5-field Unix cron; evaluated in Asia/Shanghai.
     pub schedule: String,
-    /// Canonical group restriction layer; empty = unrestricted.
-    pub allowed_groups: Vec<String>,
+    /// Group-id restriction layer (`groups-registry.spec.md` §1.1); empty = unrestricted.
+    pub group_ids: Vec<String>,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -46,7 +46,7 @@ pub struct BillingPlanInput {
     pub grant_amount_usd: Option<String>,
     pub schedule: String,
     #[serde(default)]
-    pub allowed_groups: Option<Vec<String>>,
+    pub group_ids: Option<Vec<String>>,
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -162,9 +162,9 @@ fn is_plan_name_unique_violation(error: &str) -> bool {
 
 fn plan_lock_sql(is_postgres: bool) -> &'static str {
     if is_postgres {
-        "SELECT id, name, grant_amount_nano_usd, schedule, allowed_groups, enabled, created_at, updated_at FROM billing_plans WHERE id = $1 FOR UPDATE"
+        "SELECT id, name, grant_amount_nano_usd, schedule, group_ids, enabled, created_at, updated_at FROM billing_plans WHERE id = $1 FOR UPDATE"
     } else {
-        "SELECT id, name, grant_amount_nano_usd, schedule, allowed_groups, enabled, created_at, updated_at FROM billing_plans WHERE id = $1"
+        "SELECT id, name, grant_amount_nano_usd, schedule, group_ids, enabled, created_at, updated_at FROM billing_plans WHERE id = $1"
     }
 }
 
@@ -174,16 +174,13 @@ fn sql_err<E: std::fmt::Display>(error: E) -> String {
 
 fn row_to_plan(row: &sea_orm::QueryResult) -> Result<BillingPlan, String> {
     let enabled = super::store::decode_required_bool(row, "enabled")?;
-    let allowed_groups_raw: String = row.try_get("", "allowed_groups").map_err(sql_err)?;
+    let group_ids_raw: String = row.try_get("", "group_ids").map_err(sql_err)?;
     Ok(BillingPlan {
         id: row.try_get("", "id").map_err(sql_err)?,
         name: row.try_get("", "name").map_err(sql_err)?,
         grant_amount_nano_usd: row.try_get("", "grant_amount_nano_usd").map_err(sql_err)?,
         schedule: row.try_get("", "schedule").map_err(sql_err)?,
-        allowed_groups: parse_allowed_groups_json(
-            Some(allowed_groups_raw.as_str()),
-            "billing_plans.allowed_groups",
-        )?,
+        group_ids: parse_group_ids_json(Some(group_ids_raw.as_str()), "billing_plans.group_ids")?,
         enabled,
         created_at: DateTime::parse_from_rfc3339(
             &row.try_get::<String>("", "created_at").map_err(sql_err)?,
@@ -199,12 +196,27 @@ fn row_to_plan(row: &sea_orm::QueryResult) -> Result<BillingPlan, String> {
 }
 
 impl UserStore {
+    /// GR-C2/GR-C3 for the plan ceiling: bounded length and every id registered.
+    /// Outer `Err` = storage failure; inner `Err` = client-mappable code.
+    async fn validate_plan_group_ids(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Result<(), String>, String> {
+        if group_ids.len() > MAX_GROUP_IDS {
+            return Ok(Err("invalid_request".to_string()));
+        }
+        if self.find_unknown_group_id(group_ids).await?.is_some() {
+            return Ok(Err("invalid_request".to_string()));
+        }
+        Ok(Ok(()))
+    }
+
     pub async fn list_billing_plans(&self) -> Result<Vec<BillingPlan>, String> {
         let rows = self
             .db
             .read()
             .query_all(self.db.stmt(
-                "SELECT id, name, grant_amount_nano_usd, schedule, allowed_groups, enabled, created_at, updated_at FROM billing_plans ORDER BY created_at ASC",
+                "SELECT id, name, grant_amount_nano_usd, schedule, group_ids, enabled, created_at, updated_at FROM billing_plans ORDER BY created_at ASC",
                 vec![],
             ))
             .await
@@ -217,7 +229,7 @@ impl UserStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT id, name, grant_amount_nano_usd, schedule, allowed_groups, enabled, created_at, updated_at FROM billing_plans WHERE id = $1",
+                "SELECT id, name, grant_amount_nano_usd, schedule, group_ids, enabled, created_at, updated_at FROM billing_plans WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -236,9 +248,12 @@ impl UserStore {
             Ok(plan) => plan,
             Err(code) => return Ok(Err(code)),
         };
-        let allowed_groups = canonicalize_groups(input.allowed_groups.as_deref().unwrap_or(&[]));
+        let group_ids = canonicalize_group_ids(input.group_ids.as_deref().unwrap_or(&[]));
+        if let Err(code) = self.validate_plan_group_ids(&group_ids).await? {
+            return Ok(Err(code));
+        }
         let enabled = input.enabled.unwrap_or(true);
-        let groups_json = serialize_allowed_groups_json(&allowed_groups)?;
+        let groups_json = serialize_group_ids_json(&group_ids)?;
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -250,7 +265,7 @@ impl UserStore {
             }
             if let Err(error) = tx
                 .execute(self.db.stmt(
-                    "INSERT INTO billing_plans (id, name, grant_amount_nano_usd, schedule, allowed_groups, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
+                    "INSERT INTO billing_plans (id, name, grant_amount_nano_usd, schedule, group_ids, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
                     vec![
                         id.clone().into(),
                         plan.name.into(),
@@ -309,18 +324,23 @@ impl UserStore {
                 return Ok(Err("plan_name_exists".to_string()));
             }
 
-            let allowed_groups = input
-                .allowed_groups
-                .as_ref()
-                .map(|groups| canonicalize_groups(groups))
-                .unwrap_or(existing.allowed_groups);
+            let group_ids = match input.group_ids.as_deref() {
+                Some(raw) => {
+                    let group_ids = canonicalize_group_ids(raw);
+                    if let Err(code) = self.validate_plan_group_ids(&group_ids).await? {
+                        return Ok(Err(code));
+                    }
+                    group_ids
+                }
+                None => existing.group_ids,
+            };
             let enabled = input.enabled.unwrap_or(existing.enabled);
-            let groups_json = serialize_allowed_groups_json(&allowed_groups)?;
+            let groups_json = serialize_group_ids_json(&group_ids)?;
 
             // Plan edits affect only future evaluations; existing next_grant_at anchors stay.
             if let Err(error) = tx
                 .execute(self.db.stmt(
-                    "UPDATE billing_plans SET name = $1, grant_amount_nano_usd = $2, schedule = $3, allowed_groups = $4, enabled = $5, updated_at = $6 WHERE id = $7",
+                    "UPDATE billing_plans SET name = $1, grant_amount_nano_usd = $2, schedule = $3, group_ids = $4, enabled = $5, updated_at = $6 WHERE id = $7",
                     vec![
                         plan.name.into(),
                         plan.amount.to_string().into(),
@@ -604,9 +624,7 @@ mod tests {
     use super::{BillingPlanInput, validate_plan_input};
     use crate::db::DbPool;
     use crate::migration::Migrator;
-    use crate::users::{
-        AdminUpdateUserInput, UserRole, UserStore, compute_effective_groups_with_plan,
-    };
+    use crate::users::{AdminUpdateUserInput, UserRole, UserStore, resolve_effective_groups};
     use chrono_tz::Asia::Shanghai;
     use sea_orm::ConnectionTrait;
     use sea_orm_migration::MigratorTrait;
@@ -617,9 +635,21 @@ mod tests {
             grant_amount_nano_usd: None,
             grant_amount_usd: Some(amount_usd.to_string()),
             schedule: schedule.to_string(),
-            allowed_groups: None,
+            group_ids: None,
             enabled: None,
         }
+    }
+
+    async fn make_group(store: &UserStore, name: &str) -> crate::users::Group {
+        store
+            .create_group(crate::users::CreateGroupInput {
+                name: name.to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 0,
+            })
+            .await
+            .expect("group creates")
     }
 
     async fn make_store() -> UserStore {
@@ -690,33 +720,6 @@ mod tests {
         assert!(validate_plan_input(&plan_input("zero", "0", "* * * * *")).is_ok());
     }
 
-    #[test]
-    fn effective_groups_intersect_all_restricting_layers() {
-        let user = vec!["Team-A".to_string(), "team-b".to_string()];
-        let plan = vec!["team-b".to_string(), " team-c ".to_string()];
-        let key = vec!["TEAM-C".to_string()];
-
-        assert_eq!(
-            compute_effective_groups_with_plan(&user, Some(&plan), &key),
-            Some(vec![])
-        );
-
-        let key = vec!["team-b".to_string()];
-        assert_eq!(
-            compute_effective_groups_with_plan(&user, Some(&plan), &key),
-            Some(vec!["team-b".to_string()])
-        );
-
-        // Unrestricted user and key with no plan stays fully unrestricted.
-        assert_eq!(compute_effective_groups_with_plan(&[], None, &[]), None);
-
-        // Plan-only restriction applies when the other layers are unrestricted.
-        assert_eq!(
-            compute_effective_groups_with_plan(&[], Some(&plan), &[]),
-            Some(vec!["team-b".to_string(), "team-c".to_string()])
-        );
-    }
-
     #[tokio::test]
     async fn plan_lifecycle_and_assignment_anchor() {
         let store = make_store().await;
@@ -741,7 +744,7 @@ mod tests {
         }
 
         let user = store
-            .create_user("alice", "password", UserRole::User, &[])
+            .create_user("alice", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -847,7 +850,7 @@ mod tests {
                 grant_amount_nano_usd: None,
                 grant_amount_usd: Some("9".to_string()),
                 schedule: "* * * * *".to_string(),
-                allowed_groups: None,
+                group_ids: None,
                 enabled: Some(false),
             })
             .await
@@ -855,7 +858,7 @@ mod tests {
             .expect("unique");
 
         let eligible = store
-            .create_user("grant_now", "password", UserRole::User, &[])
+            .create_user("grant_now", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -877,7 +880,7 @@ mod tests {
         assert_eq!(eligible.balance_nano_usd, "4000000000");
 
         let unlimited = store
-            .create_user("grant_skip_unlim", "password", UserRole::User, &[])
+            .create_user("grant_skip_unlim", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -901,7 +904,7 @@ mod tests {
         assert!(unlimited.next_grant_at.is_some());
 
         let disabled = store
-            .create_user("grant_skip_off", "password", UserRole::User, &[])
+            .create_user("grant_skip_off", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -925,7 +928,7 @@ mod tests {
         assert!(disabled.next_grant_at.is_some());
 
         let paused = store
-            .create_user("grant_skip_paused", "password", UserRole::User, &[])
+            .create_user("grant_skip_paused", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -948,7 +951,7 @@ mod tests {
         assert!(paused.next_grant_at.is_some());
 
         let explicit = store
-            .create_user("grant_skip_explicit", "password", UserRole::User, &[])
+            .create_user("grant_skip_explicit", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -980,7 +983,7 @@ mod tests {
             .expect("create succeeds")
             .expect("unique");
         let user = store
-            .create_user("stale_sub", "password", UserRole::User, &[])
+            .create_user("stale_sub", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -1030,7 +1033,7 @@ mod tests {
                 grant_amount_nano_usd: Some("abc".to_string()),
                 grant_amount_usd: None,
                 schedule: "* * * * *".to_string(),
-                allowed_groups: None,
+                group_ids: None,
                 enabled: None,
             })
             .await
@@ -1068,13 +1071,14 @@ mod tests {
     #[tokio::test]
     async fn update_omits_leave_enabled_and_groups() {
         let store = make_store().await;
+        let team_a = make_group(&store, "team-a").await;
         let plan = store
             .create_billing_plan(BillingPlanInput {
                 name: "restricted".to_string(),
                 grant_amount_nano_usd: None,
                 grant_amount_usd: Some("1".to_string()),
                 schedule: "* * * * *".to_string(),
-                allowed_groups: Some(vec!["team-a".to_string()]),
+                group_ids: Some(vec![team_a.id.clone()]),
                 enabled: Some(false),
             })
             .await
@@ -1088,7 +1092,7 @@ mod tests {
                     grant_amount_nano_usd: Some(plan.grant_amount_nano_usd.clone()),
                     grant_amount_usd: None,
                     schedule: plan.schedule,
-                    allowed_groups: None,
+                    group_ids: None,
                     enabled: None,
                 },
             )
@@ -1101,7 +1105,24 @@ mod tests {
             .expect("reads")
             .expect("exists");
         assert!(!after.enabled);
-        assert_eq!(after.allowed_groups, vec!["team-a".to_string()]);
+        assert_eq!(after.group_ids, vec![team_a.id.clone()]);
+
+        // GR-C3: an unregistered id is rejected with the invalid_request code.
+        match store
+            .create_billing_plan(BillingPlanInput {
+                name: "bad-groups".to_string(),
+                grant_amount_nano_usd: None,
+                grant_amount_usd: Some("1".to_string()),
+                schedule: "* * * * *".to_string(),
+                group_ids: Some(vec!["missing-group".to_string()]),
+                enabled: None,
+            })
+            .await
+            .expect("create runs")
+        {
+            Ok(_) => panic!("unknown group id must be rejected"),
+            Err(code) => assert_eq!(code, "invalid_request"),
+        }
     }
 
     #[tokio::test]
@@ -1114,7 +1135,7 @@ mod tests {
             .expect("unique");
 
         let user = store
-            .create_user("bob", "password", UserRole::User, &[])
+            .create_user("bob", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -1185,7 +1206,7 @@ mod tests {
 
         for username in ["unlimited-user", "disabled-user", "planned"] {
             store
-                .create_user(username, "password", UserRole::User, &[])
+                .create_user(username, "password", UserRole::User, None)
                 .await
                 .expect("user creates");
         }
@@ -1273,20 +1294,21 @@ mod tests {
     #[tokio::test]
     async fn auth_candidate_applies_enabled_plan_group_layer() {
         let store = make_store().await;
+        let team_a = make_group(&store, "team-a").await;
         let plan = store
             .create_billing_plan(BillingPlanInput {
                 name: "grouped".to_string(),
                 grant_amount_nano_usd: None,
                 grant_amount_usd: Some("1".to_string()),
                 schedule: "* * * * *".to_string(),
-                allowed_groups: Some(vec!["team-a".to_string()]),
+                group_ids: Some(vec![team_a.id.clone()]),
                 enabled: None,
             })
             .await
             .expect("creates")
             .expect("unique");
         let user = store
-            .create_user("carol", "password", UserRole::User, &[])
+            .create_user("carol", "password", UserRole::User, None)
             .await
             .expect("user creates");
         store
@@ -1311,7 +1333,8 @@ mod tests {
                     model_limits_enabled: false,
                     model_limits: Vec::new(),
                     ip_whitelist: Vec::new(),
-                    allowed_groups: Vec::new(),
+                    use_user_group: true,
+                    group_ids: Vec::new(),
                     max_multiplier: None,
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
@@ -1323,19 +1346,29 @@ mod tests {
             .await
             .expect("key creates");
 
-        let (api_key, _, plan_groups) = store
+        let (api_key, owner, plan_groups) = store
             .validate_api_key(&token)
             .await
             .expect("validates")
             .expect("key valid");
-        assert_eq!(plan_groups, Some(vec!["team-a".to_string()]));
+        assert_eq!(plan_groups, Some(vec![team_a.id.clone()]));
 
-        let effective = compute_effective_groups_with_plan(
-            &api_key.allowed_groups,
+        // The owner's default group is outside the plan ceiling, so the
+        // resolved list is empty; selecting team-a explicitly passes.
+        let effective = resolve_effective_groups(
+            &owner.group_id,
+            api_key.use_user_group,
+            &api_key.group_ids,
             plan_groups.as_deref(),
-            &api_key.allowed_groups,
         );
-        assert_eq!(effective, Some(vec!["team-a".to_string()]));
+        assert_eq!(effective, Vec::<String>::new());
+        let explicit = resolve_effective_groups(
+            &owner.group_id,
+            false,
+            std::slice::from_ref(&team_a.id),
+            plan_groups.as_deref(),
+        );
+        assert_eq!(explicit, vec![team_a.id.clone()]);
     }
 
     #[tokio::test]
@@ -1357,7 +1390,7 @@ mod tests {
                 grant_amount_nano_usd: None,
                 grant_amount_usd: Some("7".to_string()),
                 schedule: "0 0 * * *".to_string(),
-                allowed_groups: None,
+                group_ids: None,
                 enabled: Some(false),
             })
             .await
@@ -1372,7 +1405,7 @@ mod tests {
             "reset-disabled-plan-user",
         ] {
             store
-                .create_user(username, "password", UserRole::User, &[])
+                .create_user(username, "password", UserRole::User, None)
                 .await
                 .expect("user creates");
         }

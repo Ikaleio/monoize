@@ -1533,7 +1533,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "alias-route-provider".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("alias-route-ch".to_string()),
                 name: "alias-route-ch".to_string(),
@@ -1685,7 +1685,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "alias-fallback-provider".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("alias-fallback-ch".to_string()),
                 name: "alias-fallback-ch".to_string(),
@@ -1837,7 +1837,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "suffix-pricing-provider".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("suffix-pricing-ch".to_string()),
                 name: "suffix-pricing-ch".to_string(),

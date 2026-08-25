@@ -37,7 +37,7 @@ GR-D1. Group identity is `id`. All references from other tables store `id` value
 names. Renaming a group MUST NOT change any reference.
 
 GR-D2. Exactly one row MUST have `is_default = 1` at all times after migration
-`m20260825_000039_groups_registry` has run. This row is called the **default group**.
+`m20260825_000042_groups_registry` has run. This row is called the **default group**.
 
 GR-D3. The default group is renameable: `name` and `description` edits are allowed like any
 other group. `is_default` is not editable through the API.
@@ -52,7 +52,7 @@ GR-D5. `sort_order` defines the system default ordering. The canonical registry 
 
 | Table               | Column           | Type    | Meaning                                                        |
 |---------------------|------------------|---------|----------------------------------------------------------------|
-| `users`             | `group_id`       | TEXT NOT NULL | The user's single group (single-select)                  |
+| `users`             | `group_id`       | TEXT NOT NULL, default `''` | The user's single group (single-select)    |
 | `api_keys`          | `use_user_group` | INTEGER NOT NULL, `0`/`1`, default `1` | Key inherits the owner's group |
 | `api_keys`          | `group_ids`      | TEXT NOT NULL, default `'[]'` | Ordered JSON array of group ids          |
 | `monoize_providers` | `group_ids`      | TEXT NOT NULL | JSON array of group ids the provider serves; length >= 1 |
@@ -63,7 +63,7 @@ by the deletion cascade (§4), not by SQL foreign keys.
 
 GR-D7. The legacy columns `users.allowed_groups`, `api_keys.allowed_groups`,
 `api_keys.token_group`, `monoize_providers.groups`, and `billing_plans.allowed_groups` are
-removed by migration `m20260825_000039_groups_registry`. No API surface, entity, or store
+removed by migration `m20260825_000042_groups_registry`. No API surface, entity, or store
 may read or write them after that migration.
 
 ### 1.2 Group-id list canonicalization
@@ -180,7 +180,7 @@ GR-X6. After commit, the process MUST invalidate the API-key authentication cach
 the routing config revision so in-flight affinity bindings re-validate against the new
 provider group sets.
 
-## 4. Migration `m20260825_000039_groups_registry`
+## 4. Migration `m20260825_000042_groups_registry`
 
 The migration MUST run identically on SQLite and PostgreSQL and MUST be a pure schema/data
 migration (no network, no settings reads).

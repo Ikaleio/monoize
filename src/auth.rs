@@ -1,6 +1,6 @@
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
-use crate::users::{RequestCaptureMode, UserStore, compute_effective_groups_with_plan};
+use crate::users::{RequestCaptureMode, UserStore, resolve_effective_groups};
 
 /// Result of authentication containing the tenant_id and optionally the user_id
 /// if authenticated via database API key.
@@ -50,12 +50,15 @@ impl AuthState {
         if token.starts_with("sk-") && token.len() >= 12 {
             if let Some(store) = user_store {
                 match store.validate_api_key(token).await {
-                    Ok(Some((api_key, user, plan_allowed_groups))) => {
-                        let effective_groups = compute_effective_groups_with_plan(
-                            &user.allowed_groups,
-                            plan_allowed_groups.as_deref(),
-                            &api_key.allowed_groups,
-                        );
+                    Ok(Some((api_key, user, plan_group_ids))) => {
+                        // GR-I4: API-key auth always yields a concrete ordered list;
+                        // `None` is reserved for internal system traffic.
+                        let effective_groups = Some(resolve_effective_groups(
+                            &user.group_id,
+                            api_key.use_user_group,
+                            &api_key.group_ids,
+                            plan_group_ids.as_deref(),
+                        ));
                         return Some(AuthResult {
                             tenant_id: user.id.clone(),
                             user_id: Some(user.id),
@@ -92,7 +95,9 @@ mod tests {
     use super::AuthState;
     use crate::db::DbPool;
     use crate::migration::Migrator;
-    use crate::users::{CreateApiKeyInput, RequestCaptureMode, UserRole, UserStore};
+    use crate::users::{
+        CreateApiKeyInput, CreateGroupInput, RequestCaptureMode, UserRole, UserStore,
+    };
     use sea_orm_migration::MigratorTrait;
 
     async fn make_user_store() -> UserStore {
@@ -108,33 +113,35 @@ mod tests {
         UserStore::new(db, log_tx).await.expect("store creates")
     }
 
+    fn key_input(name: &str, use_user_group: bool, group_ids: Vec<String>) -> CreateApiKeyInput {
+        CreateApiKeyInput {
+            name: name.to_string(),
+            expires_in_days: None,
+            sub_account_enabled: false,
+            sub_account_balance_nano_usd: None,
+            model_limits_enabled: false,
+            model_limits: Vec::new(),
+            ip_whitelist: Vec::new(),
+            use_user_group,
+            group_ids,
+            max_multiplier: None,
+            transforms: Vec::new(),
+            model_redirects: Vec::new(),
+            reasoning_envelope_enabled: true,
+            request_capture_mode: RequestCaptureMode::Off,
+        }
+    }
+
     #[tokio::test]
-    async fn authenticate_token_returns_none_for_unrestricted_effective_groups() {
+    async fn authenticate_token_resolves_owner_group_for_inheriting_key() {
         let store = make_user_store().await;
+        let default_group_id = store.default_group_id().await.expect("default exists");
         let user = store
-            .create_user("alice", "password123", UserRole::User, &[])
+            .create_user("alice", "password123", UserRole::User, None)
             .await
             .expect("user created");
         let (_, token) = store
-            .create_api_key_extended(
-                &user.id,
-                CreateApiKeyInput {
-                    name: "default key".to_string(),
-                    expires_in_days: None,
-                    sub_account_enabled: false,
-                    sub_account_balance_nano_usd: None,
-                    model_limits_enabled: false,
-                    model_limits: Vec::new(),
-                    ip_whitelist: Vec::new(),
-                    allowed_groups: Vec::new(),
-                    max_multiplier: None,
-                    transforms: Vec::new(),
-                    model_redirects: Vec::new(),
-                    reasoning_envelope_enabled: true,
-                    request_capture_mode: RequestCaptureMode::Off,
-                },
-                false,
-            )
+            .create_api_key_extended(&user.id, key_input("inheriting key", true, Vec::new()), false)
             .await
             .expect("api key created");
 
@@ -144,111 +151,86 @@ mod tests {
             .expect("auth succeeds");
 
         assert_eq!(auth.user_id.as_deref(), Some(user.id.as_str()));
-        assert_eq!(auth.effective_groups, None);
+        assert_eq!(auth.effective_groups, Some(vec![default_group_id]));
     }
 
     #[tokio::test]
-    async fn authenticate_token_returns_restricted_effective_groups_without_enforcement() {
+    async fn authenticate_token_preserves_key_group_order_and_applies_plan_filter() {
         let store = make_user_store().await;
+        let team_a = store
+            .create_group(CreateGroupInput {
+                name: "team-a".to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 1,
+            })
+            .await
+            .expect("group created");
+        let team_b = store
+            .create_group(CreateGroupInput {
+                name: "team-b".to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 2,
+            })
+            .await
+            .expect("group created");
+
         let user = store
-            .create_user(
-                "bob",
-                "password123",
-                UserRole::User,
-                &[" Team-B ".to_string(), "team-a".to_string()],
-            )
+            .create_user("bob", "password123", UserRole::User, None)
             .await
             .expect("user created");
-
-        let (_, intersecting_token) = store
+        let (_, token) = store
             .create_api_key_extended(
                 &user.id,
-                CreateApiKeyInput {
-                    name: "intersection key".to_string(),
-                    expires_in_days: None,
-                    sub_account_enabled: false,
-                    sub_account_balance_nano_usd: None,
-                    model_limits_enabled: false,
-                    model_limits: Vec::new(),
-                    ip_whitelist: Vec::new(),
-                    allowed_groups: vec![" TEAM-B ".to_string()],
-                    max_multiplier: None,
-                    transforms: Vec::new(),
-                    model_redirects: Vec::new(),
-                    reasoning_envelope_enabled: true,
-                    request_capture_mode: RequestCaptureMode::Off,
-                },
-                false,
+                key_input(
+                    "explicit key",
+                    false,
+                    vec![team_b.id.clone(), team_a.id.clone()],
+                ),
+                true,
             )
             .await
             .expect("api key created");
 
-        let intersecting_auth = AuthState::new()
-            .authenticate_token(&intersecting_token, Some(&store))
+        let auth = AuthState::new()
+            .authenticate_token(&token, Some(&store))
             .await
             .expect("auth succeeds");
         assert_eq!(
-            intersecting_auth.effective_groups,
-            Some(vec!["team-b".to_string()])
+            auth.effective_groups,
+            Some(vec![team_b.id.clone(), team_a.id.clone()])
         );
 
-        store
-            .update_user(
-                &user.id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(&["team-a".to_string()]),
-            )
+        // A plan ceiling filters the key's ordered list by membership.
+        let plan = store
+            .create_billing_plan(crate::users::BillingPlanInput {
+                name: "restricted".to_string(),
+                grant_amount_nano_usd: None,
+                grant_amount_usd: Some("1".to_string()),
+                schedule: "* * * * *".to_string(),
+                group_ids: Some(vec![team_a.id.clone()]),
+                enabled: None,
+            })
             .await
-            .expect("user groups updated");
-
-        let (_, disjoint_token) = store
-            .create_api_key_extended(
+            .expect("plan create runs")
+            .expect("plan valid");
+        store
+            .admin_update_user_atomic(
                 &user.id,
-                CreateApiKeyInput {
-                    name: "disjoint key".to_string(),
-                    expires_in_days: None,
-                    sub_account_enabled: false,
-                    sub_account_balance_nano_usd: None,
-                    model_limits_enabled: false,
-                    model_limits: Vec::new(),
-                    ip_whitelist: Vec::new(),
-                    allowed_groups: vec!["team-a".to_string()],
-                    max_multiplier: None,
-                    transforms: Vec::new(),
-                    model_redirects: Vec::new(),
-                    reasoning_envelope_enabled: true,
-                    request_capture_mode: RequestCaptureMode::Off,
+                crate::users::AdminUpdateUserInput {
+                    billing_plan_id: Some(Some(plan.id.clone())),
+                    ..Default::default()
                 },
-                false,
+                "actor",
             )
             .await
-            .expect("api key created");
+            .expect("plan assigned");
 
-        store
-            .update_user(
-                &user.id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(&["team-b".to_string()]),
-            )
-            .await
-            .expect("user groups updated");
-
-        let disjoint_auth = AuthState::new()
-            .authenticate_token(&disjoint_token, Some(&store))
+        let filtered_auth = AuthState::new()
+            .authenticate_token(&token, Some(&store))
             .await
             .expect("auth succeeds");
-        assert_eq!(disjoint_auth.effective_groups, Some(Vec::new()));
+        assert_eq!(filtered_auth.effective_groups, Some(vec![team_a.id]));
     }
 }

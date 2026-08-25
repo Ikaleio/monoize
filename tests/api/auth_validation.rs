@@ -849,7 +849,8 @@ async fn sub_account_zero_balance_returns_402() {
                 model_limits: vec![],
                 ip_whitelist: Vec::new(),
 
-                allowed_groups: Vec::new(),
+                use_user_group: true,
+                group_ids: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -901,7 +902,8 @@ async fn ip_whitelist_blocks_non_whitelisted() {
                 model_limits: vec![],
                 ip_whitelist: vec!["192.168.1.1".to_string()],
 
-                allowed_groups: Vec::new(),
+                use_user_group: true,
+                group_ids: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),

@@ -1,8 +1,10 @@
+mod groups;
 mod plans;
 mod request_logs;
 mod store;
 mod utils;
 
+pub use groups::{CreateGroupInput, Group, GroupStoreError, UpdateGroupInput};
 pub use plans::{BillingPlan, BillingPlanInput};
 
 use crate::db::DbPool;
@@ -11,7 +13,6 @@ use crate::transforms::TransformRuleConfig;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,8 +77,9 @@ pub struct User {
     /// Optional email for Gravatar display.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+    /// The user's single routing group id (`groups-registry.spec.md` §1.1).
     #[serde(default)]
-    pub allowed_groups: Vec<String>,
+    pub group_id: String,
     /// Assigned billing plan, if any. Referential integrity is enforced by write paths.
     #[serde(default)]
     pub billing_plan_id: Option<String>,
@@ -175,8 +177,12 @@ pub struct ApiKey {
     /// List of allowed IP addresses/CIDRs (empty = any IP)
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
+    /// When true the key inherits the owner's single group at authentication time.
+    #[serde(default = "default_true")]
+    pub use_user_group: bool,
+    /// Ordered group ids used when `use_user_group` is false; order is routing preference.
     #[serde(default)]
-    pub allowed_groups: Vec<String>,
+    pub group_ids: Vec<String>,
     /// Maximum accepted multiplier for routing
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_multiplier: Option<Multiplier>,
@@ -255,8 +261,10 @@ pub struct CreateApiKeyInput {
     pub model_limits: Vec<String>,
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
+    #[serde(default = "default_true")]
+    pub use_user_group: bool,
     #[serde(default)]
-    pub allowed_groups: Vec<String>,
+    pub group_ids: Vec<String>,
     #[serde(default)]
     pub max_multiplier: Option<Multiplier>,
     #[serde(default)]
@@ -291,7 +299,7 @@ pub struct AdminUpdateUserInput {
     pub balance_nano_usd: Option<String>,
     pub balance_unlimited: Option<bool>,
     pub email: Option<Option<String>>,
-    pub allowed_groups: Option<Vec<String>>,
+    pub group_id: Option<String>,
     /// Outer Option = field present in the request; inner Option = target plan (None clears).
     pub billing_plan_id: Option<Option<String>>,
 }
@@ -338,97 +346,77 @@ pub fn validate_model_redirects(rules: &[ModelRedirectRule]) -> Result<(), Strin
     compile_model_redirects(rules).map(|_| ())
 }
 
-pub fn canonicalize_groups(groups: &[String]) -> Vec<String> {
-    groups
-        .iter()
-        .map(|group| group.trim().to_lowercase())
-        .filter(|group| !group.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-pub fn parse_groups_json(raw: &str) -> Vec<String> {
-    if raw.trim().is_empty() {
-        return Vec::new();
-    }
-
-    serde_json::from_str::<Vec<String>>(raw)
-        .map(|groups| canonicalize_groups(&groups))
-        .unwrap_or_default()
-}
-
-pub fn compute_effective_groups(
-    user_groups: &[String],
-    key_groups: &[String],
-) -> Option<Vec<String>> {
-    compute_effective_groups_with_plan(user_groups, None, key_groups)
-}
-
-/// Three-layer group composition: user ∩ billing plan ∩ API key.
-/// Each layer's empty list means "unrestricted at this layer"; `None` for the
-/// plan layer means no plan is assigned. The result is `None` only when every
-/// provided layer is unrestricted.
-pub fn compute_effective_groups_with_plan(
-    user_groups: &[String],
-    plan_groups: Option<&[String]>,
-    key_groups: &[String],
-) -> Option<Vec<String>> {
-    let user_groups = canonicalize_groups(user_groups);
-    let key_groups = canonicalize_groups(key_groups);
-
-    let mut restricting: Vec<BTreeSet<String>> = Vec::new();
-    if !user_groups.is_empty() {
-        restricting.push(user_groups.into_iter().collect());
-    }
-    if let Some(plan_groups) = plan_groups.map(canonicalize_groups) {
-        if !plan_groups.is_empty() {
-            restricting.push(plan_groups.into_iter().collect());
+/// GR-C1 canonicalization for group-id lists: trim each element, drop empties,
+/// deduplicate preserving first-occurrence order. Ids are opaque — never
+/// lowercased or sorted, because order is routing preference for API keys.
+pub fn canonicalize_group_ids(group_ids: &[String]) -> Vec<String> {
+    let mut canonical: Vec<String> = Vec::with_capacity(group_ids.len());
+    for id in group_ids {
+        let id = id.trim();
+        if id.is_empty() || canonical.iter().any(|existing| existing == id) {
+            continue;
         }
+        canonical.push(id.to_string());
     }
-    if !key_groups.is_empty() {
-        restricting.push(key_groups.into_iter().collect());
-    }
-
-    if restricting.is_empty() {
-        return None;
-    }
-
-    let mut intersection = restricting.remove(0);
-    for layer in restricting {
-        intersection = intersection.intersection(&layer).cloned().collect();
-    }
-    Some(intersection.into_iter().collect())
+    canonical
 }
 
-/// Exclusive group routing: when effective_groups is non-empty, only providers
-/// with explicitly matching groups are eligible — public providers are excluded.
-pub fn is_channel_group_eligible(
-    channel_groups: &[String],
+/// AKG5/AKG6 effective-group resolution for API-key authentication.
+///
+/// `base = [user_group_id]` when the key inherits the owner's group
+/// (`use_user_group` true) or stores no explicit groups (GR-I3); otherwise the
+/// key's ordered `group_ids`. A present non-empty plan layer filters `base` by
+/// membership while preserving `base` order. The result is always a concrete
+/// ordered list; `None`-typed unrestricted access exists only for internal
+/// system traffic and is never produced here.
+pub fn resolve_effective_groups(
+    user_group_id: &str,
+    use_user_group: bool,
+    key_group_ids: &[String],
+    plan_group_ids: Option<&[String]>,
+) -> Vec<String> {
+    let base: Vec<String> = if use_user_group || key_group_ids.is_empty() {
+        vec![user_group_id.to_string()]
+    } else {
+        key_group_ids.to_vec()
+    };
+    let filtered: Vec<String> = match plan_group_ids {
+        Some(plan) if !plan.is_empty() => base
+            .into_iter()
+            .filter(|id| plan.iter().any(|allowed| allowed == id))
+            .collect(),
+        _ => base,
+    };
+    canonicalize_group_ids(&filtered)
+}
+
+/// R-GRP-1 eligibility: `None` means internal system traffic (all providers
+/// eligible); otherwise the provider's group-id set must intersect
+/// `effective_groups`.
+pub fn is_provider_group_eligible(
+    provider_group_ids: &[String],
     effective_groups: &Option<Vec<String>>,
 ) -> bool {
-    let channel_groups = canonicalize_groups(channel_groups);
-
-    let Some(effective_groups) = effective_groups else {
-        // Unrestricted caller: all providers eligible
-        return true;
-    };
-    let effective_groups = canonicalize_groups(effective_groups);
-
-    if effective_groups.is_empty() {
-        // effective_groups == []: only public providers eligible
-        return channel_groups.is_empty();
+    match effective_groups {
+        None => true,
+        Some(groups) => provider_group_ids.iter().any(|id| groups.contains(id)),
     }
+}
 
-    // effective_groups is non-empty: public providers are NOT eligible
-    if channel_groups.is_empty() {
-        return false;
+/// R-GRP-2 group-order priority: the index of the first effective group served
+/// by the provider. Callers must only rank group-eligible providers; a
+/// non-matching provider ranks last as a defensive fallback.
+pub fn provider_group_rank(
+    provider_group_ids: &[String],
+    effective_groups: &Option<Vec<String>>,
+) -> usize {
+    match effective_groups {
+        None => 0,
+        Some(groups) => groups
+            .iter()
+            .position(|id| provider_group_ids.contains(id))
+            .unwrap_or(usize::MAX),
     }
-
-    let effective_set: BTreeSet<_> = effective_groups.into_iter().collect();
-    channel_groups
-        .into_iter()
-        .any(|group| effective_set.contains(&group))
 }
 
 /// Input for updating an existing API key
@@ -441,7 +429,8 @@ pub struct UpdateApiKeyInput {
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
-    pub allowed_groups: Option<Vec<String>>,
+    pub use_user_group: Option<bool>,
+    pub group_ids: Option<Vec<String>>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
@@ -773,87 +762,84 @@ pub use utils::{format_nano_to_usd, parse_nano_usd, parse_usd_to_nano};
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, canonicalize_groups,
-        compute_effective_groups, is_channel_group_eligible, parse_groups_json,
+        MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, canonicalize_group_ids,
+        is_provider_group_eligible, provider_group_rank, resolve_effective_groups,
         validate_model_redirects,
     };
 
-    #[test]
-    fn canonicalize_groups_trims_lowercases_deduplicates_and_sorts() {
-        let groups = vec![
-            " Beta ".to_string(),
-            "alpha".to_string(),
-            "ALPHA".to_string(),
-            "   ".to_string(),
-            "gamma".to_string(),
-        ];
-
-        assert_eq!(
-            canonicalize_groups(&groups),
-            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string(),]
-        );
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
     }
 
     #[test]
-    fn compute_effective_groups_distinguishes_unrestricted_from_public_only() {
-        assert_eq!(compute_effective_groups(&[], &[]), None);
+    fn canonicalize_group_ids_trims_dedupes_and_preserves_order() {
         assert_eq!(
-            compute_effective_groups(&["Team-A".to_string()], &[]),
-            Some(vec!["team-a".to_string()])
+            canonicalize_group_ids(&ids(&[" g-2 ", "g-1", "g-2", "", "   ", "g-3"])),
+            ids(&["g-2", "g-1", "g-3"])
         );
+        // Ids are opaque: casing must survive.
+        assert_eq!(canonicalize_group_ids(&ids(&["G-1"])), ids(&["G-1"]));
+    }
+
+    #[test]
+    fn resolve_effective_groups_follows_akg5() {
+        // use_user_group => owner's single group.
         assert_eq!(
-            compute_effective_groups(&[], &["Team-B".to_string()]),
-            Some(vec!["team-b".to_string()])
+            resolve_effective_groups("g-user", true, &ids(&["g-1", "g-2"]), None),
+            ids(&["g-user"])
         );
+        // Explicit empty group_ids resolves like use_user_group (GR-I3).
         assert_eq!(
-            compute_effective_groups(
-                &["Team-A".to_string()],
-                &["team-b".to_string(), "TEAM-A".to_string()]
+            resolve_effective_groups("g-user", false, &[], None),
+            ids(&["g-user"])
+        );
+        // Explicit ordered selection preserves order.
+        assert_eq!(
+            resolve_effective_groups("g-user", false, &ids(&["g-2", "g-1"]), None),
+            ids(&["g-2", "g-1"])
+        );
+        // Non-empty plan layer filters by membership in base order.
+        assert_eq!(
+            resolve_effective_groups(
+                "g-user",
+                false,
+                &ids(&["g-2", "g-1", "g-3"]),
+                Some(&ids(&["g-3", "g-2"]))
             ),
-            Some(vec!["team-a".to_string()])
+            ids(&["g-2", "g-3"])
         );
+        // Empty plan layer is unrestricted.
         assert_eq!(
-            compute_effective_groups(&["team-a".to_string()], &["team-b".to_string()]),
-            Some(Vec::new())
+            resolve_effective_groups("g-user", true, &[], Some(&[])),
+            ids(&["g-user"])
+        );
+        // Plan ceiling can exclude every base group.
+        assert_eq!(
+            resolve_effective_groups("g-user", true, &[], Some(&ids(&["g-other"]))),
+            Vec::<String>::new()
         );
     }
 
     #[test]
-    fn parse_groups_json_is_tolerant_and_canonical() {
-        assert!(parse_groups_json("").is_empty());
-        assert!(parse_groups_json("not-json").is_empty());
-        assert_eq!(
-            parse_groups_json(r#"[" Beta ","alpha","ALPHA",""]"#),
-            vec!["alpha".to_string(), "beta".to_string()]
-        );
-    }
+    fn provider_group_eligibility_and_rank_follow_r_grp_rules() {
+        // None = internal traffic: everything eligible at rank 0.
+        assert!(is_provider_group_eligible(&ids(&["g-1"]), &None));
+        assert_eq!(provider_group_rank(&ids(&["g-1"]), &None), 0);
 
-    #[test]
-    fn channel_group_eligibility_respects_public_and_unrestricted_semantics() {
-        // Unrestricted (None): all providers eligible
-        assert!(is_channel_group_eligible(&["team-a".to_string()], &None));
-        assert!(is_channel_group_eligible(&[], &None));
-
-        // effective_groups == []: only public providers eligible
-        assert!(is_channel_group_eligible(&[], &Some(Vec::new())));
-        assert!(!is_channel_group_eligible(
-            &["team-a".to_string()],
+        // Empty effective groups: nothing eligible (R-GRP-1a).
+        assert!(!is_provider_group_eligible(
+            &ids(&["g-1"]),
             &Some(Vec::new())
         ));
 
-        // effective_groups non-empty: public providers excluded, matching groups eligible
-        assert!(!is_channel_group_eligible(
-            &[],
-            &Some(vec!["team-a".to_string()])
-        ));
-        assert!(is_channel_group_eligible(
-            &["TEAM-A".to_string()],
-            &Some(vec!["team-a".to_string()])
-        ));
-        assert!(!is_channel_group_eligible(
-            &["team-a".to_string()],
-            &Some(vec!["team-b".to_string()])
-        ));
+        let effective = Some(ids(&["g-2", "g-1"]));
+        assert!(is_provider_group_eligible(&ids(&["g-1"]), &effective));
+        assert!(!is_provider_group_eligible(&ids(&["g-9"]), &effective));
+
+        // Rank = earliest matching index in effective order (R-GRP-2).
+        assert_eq!(provider_group_rank(&ids(&["g-1"]), &effective), 1);
+        assert_eq!(provider_group_rank(&ids(&["g-1", "g-2"]), &effective), 0);
+        assert_eq!(provider_group_rank(&ids(&["g-9"]), &effective), usize::MAX);
     }
 
     #[test]

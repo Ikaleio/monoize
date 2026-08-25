@@ -588,7 +588,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-summary-messages".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-messages-ch1".to_string()),
                 name: "mono-transform-summary-messages-ch1".to_string(),
@@ -1267,7 +1267,7 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-chunked-messages".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-chunked-messages-ch1".to_string()),
                 name: "mono-transform-chunked-messages-ch1".to_string(),

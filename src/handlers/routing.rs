@@ -202,11 +202,16 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
     required_provider_type: Option<ProviderType>,
 ) -> AppResult<Vec<MonoizeAttempt>> {
     let routing_config_revision = state.routing_config_revision.load(Ordering::Acquire);
-    let providers = state
+    let mut providers = state
         .monoize_store
         .list_providers_for_model(&urp.model)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e))?;
+    // R-GRP-2: rank providers by the position of the first effective group they
+    // serve; the stable sort keeps priority order within the same rank.
+    providers.sort_by_key(|provider| {
+        crate::users::provider_group_rank(&provider.group_ids, &auth.effective_groups)
+    });
     let mut attempts = Vec::new();
     for provider in providers {
         collect_provider_attempts(
@@ -572,7 +577,7 @@ pub(super) async fn collect_provider_attempts(
     if !provider.enabled {
         return;
     }
-    if !crate::users::is_channel_group_eligible(&provider.groups, effective_groups) {
+    if !crate::users::is_provider_group_eligible(&provider.group_ids, effective_groups) {
         return;
     }
     let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> = provider
