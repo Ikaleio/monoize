@@ -9,6 +9,19 @@ pub async fn create_image_generation(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
+    // RCD-C9/RCD-C16 pre-check: the raw-input clone is skipped entirely when
+    // no sub-request session could start.
+    let capture_eligible = state
+        .request_capture
+        .would_start_session(&state.monoize_runtime, &auth)
+        .await;
+    // RCD-D4: the parsed downstream JSON body, shared by every sub-request
+    // dump (RCD-D4b).
+    let capture_raw_input = std::sync::Arc::new(if capture_eligible {
+        body.clone()
+    } else {
+        Value::Null
+    });
 
     let obj = body.as_object().ok_or_else(|| {
         AppError::new(
@@ -70,6 +83,8 @@ pub async fn create_image_generation(
         request_id,
         request_ip,
         extract_client_session_id(&headers),
+        capture_raw_input,
+        crate::request_capture::CaptureDownstreamProtocol::ImageGenerations,
     )
     .await;
 
@@ -82,6 +97,12 @@ pub async fn create_image_edit(
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
+    // RCD-C9/RCD-C16 pre-check: the RCD-D4a multipart capture parts are only
+    // recorded when a sub-request session could start.
+    let capture_eligible = state
+        .request_capture
+        .would_start_session(&state.monoize_runtime, &auth)
+        .await;
 
     let mut prompt: Option<String> = None;
     let mut model: Option<String> = None;
@@ -91,6 +112,8 @@ pub async fn create_image_edit(
     let mut mask_data: Option<(String, String)> = None;
     let mut max_multiplier_raw: Option<String> = None;
     let mut extra_text_fields: HashMap<String, Value> = HashMap::new();
+    // RCD-D4a: consumed parts in wire order, exact wire text and raw bytes.
+    let mut capture_parts: Vec<crate::request_capture::CapturedMultipartPart> = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
@@ -100,34 +123,72 @@ pub async fn create_image_edit(
         let field_name = field.name().unwrap_or("").to_string();
         match field_name.as_str() {
             "prompt" => {
-                prompt = Some(field.text().await.map_err(|e| {
+                let text = field.text().await.map_err(|e| {
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?);
+                })?;
+                if capture_eligible {
+                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
+                        name: field_name,
+                        text: text.clone(),
+                    });
+                }
+                prompt = Some(text);
             }
             "model" => {
-                model = Some(field.text().await.map_err(|e| {
+                let text = field.text().await.map_err(|e| {
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?);
+                })?;
+                if capture_eligible {
+                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
+                        name: field_name,
+                        text: text.clone(),
+                    });
+                }
+                model = Some(text);
             }
             "n" => {
-                n_raw = Some(field.text().await.map_err(|e| {
+                let text = field.text().await.map_err(|e| {
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?);
+                })?;
+                if capture_eligible {
+                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
+                        name: field_name,
+                        text: text.clone(),
+                    });
+                }
+                n_raw = Some(text);
             }
             "max_multiplier" => {
-                max_multiplier_raw = Some(field.text().await.map_err(|e| {
+                let text = field.text().await.map_err(|e| {
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?);
+                })?;
+                if capture_eligible {
+                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
+                        name: field_name,
+                        text: text.clone(),
+                    });
+                }
+                max_multiplier_raw = Some(text);
             }
             "image" | "image[]" => {
-                let media_type = field
-                    .content_type()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| infer_media_type_from_filename(field.file_name()));
+                let wire_filename = field.file_name().map(|s| s.to_string());
+                let wire_content_type = field.content_type().map(|s| s.to_string());
+                let media_type = wire_content_type
+                    .clone()
+                    .unwrap_or_else(|| infer_media_type_from_filename(wire_filename.as_deref()));
                 let bytes = field.bytes().await.map_err(|e| {
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
                 })?;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                if capture_eligible {
+                    capture_parts.push(crate::request_capture::CapturedMultipartPart::File {
+                        name: field_name,
+                        filename: wire_filename,
+                        content_type: wire_content_type,
+                        data_base64: b64.clone(),
+                        byte_length: bytes.len(),
+                    });
+                }
                 if image_data.is_none() {
                     image_data = Some((media_type, b64));
                 } else {
@@ -135,23 +196,47 @@ pub async fn create_image_edit(
                 }
             }
             "mask" => {
-                let media_type = field
-                    .content_type()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| infer_media_type_from_filename(field.file_name()));
+                let wire_filename = field.file_name().map(|s| s.to_string());
+                let wire_content_type = field.content_type().map(|s| s.to_string());
+                let media_type = wire_content_type
+                    .clone()
+                    .unwrap_or_else(|| infer_media_type_from_filename(wire_filename.as_deref()));
                 let bytes = field.bytes().await.map_err(|e| {
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
                 })?;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                if capture_eligible {
+                    capture_parts.push(crate::request_capture::CapturedMultipartPart::File {
+                        name: field_name,
+                        filename: wire_filename,
+                        content_type: wire_content_type,
+                        data_base64: b64.clone(),
+                        byte_length: bytes.len(),
+                    });
+                }
                 mask_data = Some((media_type, b64));
             }
             _ => {
+                // RCD-D4a: unknown parts appear iff the parser consumed them
+                // as text fields (IE1); ignored file parts (IE2) are absent.
                 if let Ok(text) = field.text().await {
+                    if capture_eligible {
+                        capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
+                            name: field_name.clone(),
+                            text: text.clone(),
+                        });
+                    }
                     extra_text_fields.insert(field_name, coerce_text_to_json_value(&text));
                 }
             }
         }
     }
+
+    let capture_raw_input = std::sync::Arc::new(if capture_eligible {
+        crate::request_capture::multipart_capture_object(&capture_parts)
+    } else {
+        Value::Null
+    });
 
     let prompt = prompt.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
         AppError::new(
@@ -249,6 +334,8 @@ pub async fn create_image_edit(
         request_id,
         request_ip,
         extract_client_session_id(&headers),
+        capture_raw_input,
+        crate::request_capture::CaptureDownstreamProtocol::ImageEdits,
     )
     .await;
 
@@ -365,6 +452,8 @@ async fn fan_out_subrequests(
     request_id: Option<String>,
     request_ip: Option<String>,
     client_session_id: Option<String>,
+    capture_raw_input: std::sync::Arc<Value>,
+    capture_protocol: crate::request_capture::CaptureDownstreamProtocol,
 ) -> Vec<Result<(urp::UrpResponse, String), AppError>> {
     let mut join_set = tokio::task::JoinSet::new();
     let mut task_contexts = HashMap::new();
@@ -398,6 +487,23 @@ async fn fan_out_subrequests(
         let task_state_for_task = task_state.clone();
         let task_request_id = rid.clone();
         let task_request_ip = rip.clone();
+        // RCD-C16: one independent capture session per fan-out sub-request,
+        // keyed by the sub-request id, sharing the one downstream raw input
+        // (RCD-D4b). Image API dumps record is_stream false (RCD-D2c).
+        let capture_session = state
+            .request_capture
+            .maybe_start_session(
+                &state.monoize_runtime,
+                &auth,
+                rid.clone(),
+                capture_protocol,
+                false,
+            )
+            .await;
+        let capture = super::RequestCaptureContext {
+            raw_input: capture_raw_input.clone(),
+            session: capture_session,
+        };
 
         let abort_handle = join_set.spawn(async move {
             execute_image_subrequest_typed(
@@ -408,6 +514,7 @@ async fn fan_out_subrequests(
                 rid,
                 rip,
                 task_session_id,
+                capture,
                 &task_state_for_task,
             )
             .await
@@ -477,6 +584,7 @@ async fn fan_out_subrequests(
     results
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_image_subrequest_typed(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -485,6 +593,7 @@ async fn execute_image_subrequest_typed(
     request_id: Option<String>,
     request_ip: Option<String>,
     client_session_id: Option<String>,
+    capture: super::RequestCaptureContext,
     task_state: &AdmittedRequestTaskState,
 ) -> AppResult<(urp::UrpResponse, String)> {
     let routing_stub = build_routing_stub(&req, max_multiplier);
@@ -505,6 +614,7 @@ async fn execute_image_subrequest_typed(
             request_id,
             request_ip,
             client_session_id,
+            capture,
             task_state,
         )
         .await;
@@ -519,10 +629,7 @@ async fn execute_image_subrequest_typed(
         request_id,
         request_ip,
         client_session_id,
-        super::RequestCaptureContext {
-            raw_input: std::sync::Arc::new(Value::Object(serde_json::Map::new())),
-            session: None,
-        },
+        capture,
         Some(validate_image_subrequest_response),
         Some(task_state),
     )
@@ -530,7 +637,7 @@ async fn execute_image_subrequest_typed(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn finish_image_stream_error(
+async fn finish_image_stream_error(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
@@ -540,6 +647,7 @@ fn finish_image_stream_error(
     request_ip: &Option<String>,
     reasoning_effort: Option<String>,
     tried_providers: Vec<TriedProvider>,
+    capture: &super::RequestCaptureContext,
     error: AppError,
 ) -> AppError {
     spawn_request_log_error(
@@ -555,9 +663,59 @@ fn finish_image_stream_error(
         reasoning_effort,
         tried_providers,
     );
+    if let Some(session) = capture.session.as_ref() {
+        session.persist_with_result(None, false).await;
+    }
     error
 }
 
+/// Record one RCD-D10c stream-collected attempt into the capture session:
+/// `downstream_response` and `downstream_sse_frames` stay null, and the
+/// pre-transform collected terminal event fills `reconstructed_urp_response`.
+#[allow(clippy::too_many_arguments)]
+async fn push_image_stream_attempt(
+    capture: &super::RequestCaptureContext,
+    attempt_number: u32,
+    attempt: &MonoizeAttempt,
+    logical_model: &str,
+    req_attempt: &urp::UrpRequest,
+    path: &str,
+    upstream_body: &Value,
+    reconstructed_urp_response: Option<Value>,
+    transform_chain: Value,
+    error: Option<&AppError>,
+) {
+    let Some(session) = capture.session.as_ref() else {
+        return;
+    };
+    session
+        .push_attempt(crate::request_capture::build_attempt_dump(
+            attempt_number,
+            &attempt.provider_id,
+            Some(&attempt.channel_id),
+            attempt.provider_type,
+            logical_model,
+            &req_attempt.model,
+            path,
+            capture.raw_input.as_ref().clone(),
+            req_attempt,
+            upstream_body.clone(),
+            None,
+            reconstructed_urp_response,
+            None,
+            transform_chain,
+            error.map(|err| {
+                json!({
+                    "message": err.message,
+                    "code": err.code,
+                    "status": err.status.as_u16(),
+                })
+            }),
+        ))
+        .await;
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn execute_stream_collected_image_typed(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -566,6 +724,7 @@ async fn execute_stream_collected_image_typed(
     request_id: Option<String>,
     request_ip: Option<String>,
     client_session_id: Option<String>,
+    capture: super::RequestCaptureContext,
     task_state: &AdmittedRequestTaskState,
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = task_state.started_at();
@@ -638,8 +797,10 @@ async fn execute_stream_collected_image_typed(
                     &request_ip,
                     req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                     tried_providers,
+                    &capture,
                     err,
-                ));
+                )
+                .await);
             }
             let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
             if let Err(err) = apply_transform_rules_request(
@@ -661,8 +822,10 @@ async fn execute_stream_collected_image_typed(
                     &request_ip,
                     req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                     tried_providers,
+                    &capture,
                     err,
-                ));
+                )
+                .await);
             }
             if let Err(err) = apply_transform_rules_request(
                 state,
@@ -683,10 +846,18 @@ async fn execute_stream_collected_image_typed(
                     &request_ip,
                     req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                     tried_providers,
+                    &capture,
                     err,
-                ));
+                )
+                .await);
             }
             strip_monoize_context(&mut req_attempt);
+            let capture_transform_chain = crate::request_capture::build_transform_chain(
+                &attempt.provider_transforms,
+                &global_transforms,
+                &auth.transforms,
+                &transform_match_model,
+            );
             req_attempt.stream = Some(true);
 
             let upstream_body = match encode_request_for_provider(
@@ -706,8 +877,10 @@ async fn execute_stream_collected_image_typed(
                         &request_ip,
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
+                        &capture,
                         err,
-                    ));
+                    )
+                    .await);
                 }
             };
             let provider = build_channel_provider_config(&attempt);
@@ -750,8 +923,10 @@ async fn execute_stream_collected_image_typed(
                                 &request_ip,
                                 req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                                 tried_providers,
+                                &capture,
                                 err,
-                            ));
+                            )
+                            .await);
                         }
                     };
                     let pending_request_envelope_extra =
@@ -793,6 +968,27 @@ async fn execute_stream_collected_image_typed(
                         })
                     };
 
+                    // RCD-D10c: tap the decoded stream BEFORE response-phase
+                    // transforms; the collected terminal event substitutes for
+                    // the missing provider response body in the dump.
+                    let reconstruction_slot = capture
+                        .session
+                        .as_ref()
+                        .map(|_| Arc::new(Mutex::new(None::<Value>)));
+                    let (transform_input_rx, reconstruct_handle) =
+                        match reconstruction_slot.clone() {
+                            Some(slot) => {
+                                let (tap_tx, tap_rx) =
+                                    mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                                let handle = tokio::spawn(async move {
+                                    retain_reconstructed_urp_response(decoded_rx, tap_tx, slot)
+                                        .await
+                                });
+                                (tap_rx, Some(handle))
+                            }
+                            None => (decoded_rx, None),
+                        };
+
                     let provider_rules = attempt.provider_transforms.clone();
                     let global_rules = global_transforms.clone();
                     let auth_rules = auth.transforms.clone();
@@ -802,7 +998,7 @@ async fn execute_stream_collected_image_typed(
                     let transform_handle = tokio::spawn(async move {
                         transform_urp_stream(
                             &state_for_transform,
-                            decoded_rx,
+                            transform_input_rx,
                             transformed_tx,
                             &provider_rules,
                             &global_rules,
@@ -881,8 +1077,10 @@ async fn execute_stream_collected_image_typed(
                                 &request_ip,
                                 req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                                 tried_providers,
+                                &capture,
                                 err,
-                            ));
+                            )
+                            .await);
                         }
                     };
                     let transform_result = match transform_join {
@@ -898,7 +1096,27 @@ async fn execute_stream_collected_image_typed(
                         )
                         .with_type("server_error")),
                     };
+                    if let Some(handle) = reconstruct_handle {
+                        let _ = handle.await;
+                    }
+                    let reconstructed_urp_response = match reconstruction_slot.as_ref() {
+                        Some(slot) => slot.lock().await.clone(),
+                        None => None,
+                    };
                     if let Err(err) = decode_result {
+                        push_image_stream_attempt(
+                            &capture,
+                            attempt_number,
+                            &attempt,
+                            &logical_model,
+                            &req_attempt,
+                            &path,
+                            &upstream_body,
+                            reconstructed_urp_response.clone(),
+                            capture_transform_chain.clone(),
+                            Some(&err),
+                        )
+                        .await;
                         let same_channel_retryable = is_same_channel_retryable_app_error(&err);
                         let passive_failure_class =
                             same_channel_retryable.then(|| classify_retryable_app_failure(&err));
@@ -928,6 +1146,19 @@ async fn execute_stream_collected_image_typed(
                         break 'channel_attempts;
                     }
                     if let Err(err) = transform_result {
+                        push_image_stream_attempt(
+                            &capture,
+                            attempt_number,
+                            &attempt,
+                            &logical_model,
+                            &req_attempt,
+                            &path,
+                            &upstream_body,
+                            reconstructed_urp_response.clone(),
+                            capture_transform_chain.clone(),
+                            Some(&err),
+                        )
+                        .await;
                         return Err(finish_image_stream_error(
                             state,
                             auth,
@@ -938,10 +1169,25 @@ async fn execute_stream_collected_image_typed(
                             &request_ip,
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
+                            &capture,
                             err,
-                        ));
+                        )
+                        .await);
                     }
                     if let Some(err) = stream_error {
+                        push_image_stream_attempt(
+                            &capture,
+                            attempt_number,
+                            &attempt,
+                            &logical_model,
+                            &req_attempt,
+                            &path,
+                            &upstream_body,
+                            reconstructed_urp_response.clone(),
+                            capture_transform_chain.clone(),
+                            Some(&err),
+                        )
+                        .await;
                         let same_channel_retryable = is_same_channel_retryable_app_error(&err);
                         let passive_failure_class =
                             same_channel_retryable.then(|| classify_retryable_app_failure(&err));
@@ -979,6 +1225,19 @@ async fn execute_stream_collected_image_typed(
                                 "upstream_stream_error",
                                 "stream completed without terminal response",
                             );
+                            push_image_stream_attempt(
+                                &capture,
+                                attempt_number,
+                                &attempt,
+                                &logical_model,
+                                &req_attempt,
+                                &path,
+                                &upstream_body,
+                                reconstructed_urp_response.clone(),
+                                capture_transform_chain.clone(),
+                                Some(&err),
+                            )
+                            .await;
                             let same_channel_retryable = is_same_channel_retryable_app_error(&err);
                             let passive_failure_class = same_channel_retryable
                                 .then(|| classify_retryable_app_failure(&err));
@@ -1013,6 +1272,19 @@ async fn execute_stream_collected_image_typed(
                         substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
 
                     if let Err(err) = validate_image_subrequest_response(&resp) {
+                        push_image_stream_attempt(
+                            &capture,
+                            attempt_number,
+                            &attempt,
+                            &logical_model,
+                            &req_attempt,
+                            &path,
+                            &upstream_body,
+                            reconstructed_urp_response.clone(),
+                            capture_transform_chain.clone(),
+                            Some(&err),
+                        )
+                        .await;
                         let same_channel_retryable = is_same_channel_retryable_app_error(&err);
                         let passive_failure_class =
                             same_channel_retryable.then(|| classify_retryable_app_failure(&err));
@@ -1048,6 +1320,19 @@ async fn execute_stream_collected_image_typed(
                             "upstream_usage_required",
                             "upstream response did not include billable usage",
                         );
+                        push_image_stream_attempt(
+                            &capture,
+                            attempt_number,
+                            &attempt,
+                            &logical_model,
+                            &req_attempt,
+                            &path,
+                            &upstream_body,
+                            reconstructed_urp_response.clone(),
+                            capture_transform_chain.clone(),
+                            Some(&err),
+                        )
+                        .await;
                         let same_channel_retryable = is_same_channel_retryable_app_error(&err);
                         let passive_failure_class =
                             same_channel_retryable.then(|| classify_retryable_app_failure(&err));
@@ -1077,6 +1362,19 @@ async fn execute_stream_collected_image_typed(
                         break 'channel_attempts;
                     }
 
+                    push_image_stream_attempt(
+                        &capture,
+                        attempt_number,
+                        &attempt,
+                        &logical_model,
+                        &req_attempt,
+                        &path,
+                        &upstream_body,
+                        reconstructed_urp_response.clone(),
+                        capture_transform_chain.clone(),
+                        None,
+                    )
+                    .await;
                     mark_channel_success(state, &attempt).await;
                     refresh_channel_affinity(state, &attempt).await;
                     let charge = match maybe_charge_response(
@@ -1102,8 +1400,10 @@ async fn execute_stream_collected_image_typed(
                                 &request_ip,
                                 req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                                 tried_providers,
+                                &capture,
                                 err,
-                            ));
+                            )
+                            .await);
                         }
                     };
                     spawn_request_log(
@@ -1125,6 +1425,11 @@ async fn execute_stream_collected_image_typed(
                         tried_providers,
                         task_state.client_gone(),
                     );
+                    if let Some(session) = capture.session.as_ref() {
+                        session
+                            .persist_with_result(resp.usage.as_ref(), false)
+                            .await;
+                    }
                     return Ok((resp, logical_model.clone()));
                 }
                 Err(err) => {
@@ -1134,6 +1439,19 @@ async fn execute_stream_collected_image_typed(
                     let mask_sensitive_info =
                         state.monoize_runtime.read().await.mask_sensitive_info;
                     let app_err = upstream_error_to_app(err, mask_sensitive_info);
+                    push_image_stream_attempt(
+                        &capture,
+                        attempt_number,
+                        &attempt,
+                        &logical_model,
+                        &req_attempt,
+                        &path,
+                        &upstream_body,
+                        None,
+                        capture_transform_chain.clone(),
+                        Some(&app_err),
+                    )
+                    .await;
                     record_upstream_attempt_failure(
                         state,
                         &attempt,
@@ -1191,6 +1509,9 @@ async fn execute_stream_collected_image_typed(
             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
             tried_providers,
         );
+    }
+    if let Some(session) = capture.session.as_ref() {
+        session.persist_with_result(None, true).await;
     }
     Err(final_err)
 }
