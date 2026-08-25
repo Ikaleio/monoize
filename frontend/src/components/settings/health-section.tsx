@@ -239,25 +239,26 @@ export function HealthSection({ settings, onChange }: HealthSectionProps) {
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="request_capture_retention_days">
-              {t("settings.requestCaptureRetentionDays")}
+            <FieldLabel htmlFor="request_capture_max_total_mib">
+              {t("settings.requestCaptureMaxTotalMib")}
             </FieldLabel>
             <Input
-              id="request_capture_retention_days"
+              id="request_capture_max_total_mib"
               type="number"
-              min="1"
-              value={settings.monoize_request_capture_retention_days}
+              min="0"
+              value={Math.round(
+                settings.monoize_request_capture_max_total_bytes / 1048576
+              )}
               onChange={(e) =>
                 onChange({
-                  monoize_request_capture_retention_days: Math.max(
-                    1,
-                    parseInt(e.target.value) || 1
-                  ),
+                  // SSU-2a: edited in MiB, stored in bytes; 0 disables the budget.
+                  monoize_request_capture_max_total_bytes:
+                    Math.max(0, parseInt(e.target.value) || 0) * 1048576,
                 })
               }
             />
             <FieldDescription>
-              {t("settings.requestCaptureRetentionDaysDescription")}
+              {t("settings.requestCaptureMaxTotalMibDescription")}
             </FieldDescription>
           </Field>
         </div>

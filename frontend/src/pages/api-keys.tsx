@@ -41,7 +41,7 @@ import {
   useDashboardGroups,
   useTransformRegistry,
 } from "@/lib/swr";
-import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
+import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, RequestCaptureRetention, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { api as apiClient } from "@/lib/api";
 import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
@@ -382,6 +382,7 @@ export function ApiKeysPage() {
   const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
   const [newKeyReasoningEnvelopeEnabled, setNewKeyReasoningEnvelopeEnabled] = useState(true);
   const [newKeyRequestCaptureMode, setNewKeyRequestCaptureMode] = useState<RequestCaptureMode>("off");
+  const [newKeyRequestCaptureRetention, setNewKeyRequestCaptureRetention] = useState<RequestCaptureRetention>("24h");
 
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -405,6 +406,7 @@ export function ApiKeysPage() {
     setNewKeyModelRedirects([]);
     setNewKeyReasoningEnvelopeEnabled(true);
     setNewKeyRequestCaptureMode("off");
+    setNewKeyRequestCaptureRetention("24h");
   };
 
   const handleCreate = async () => {
@@ -451,6 +453,7 @@ export function ApiKeysPage() {
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
         reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
         request_capture_mode: newKeyRequestCaptureMode,
+        request_capture_retention: newKeyRequestCaptureRetention,
       };
       const key = await createApiKeyOptimistic(
         input,
@@ -499,6 +502,7 @@ export function ApiKeysPage() {
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
         reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
         request_capture_mode: newKeyRequestCaptureMode,
+        request_capture_retention: newKeyRequestCaptureRetention,
       };
       await updateApiKeyOptimistic(
         editKey.id,
@@ -585,6 +589,7 @@ export function ApiKeysPage() {
     setNewKeyModelRedirects(key.model_redirects ?? []);
     setNewKeyReasoningEnvelopeEnabled(key.reasoning_envelope_enabled ?? true);
     setNewKeyRequestCaptureMode(key.request_capture_mode ?? "off");
+    setNewKeyRequestCaptureRetention(key.request_capture_retention ?? "24h");
   };
 
   const toggleSelectKey = (id: string) => {
@@ -730,6 +735,23 @@ export function ApiKeysPage() {
                   </Select>
                   <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureHelp")}</p>
                 </div>
+                {newKeyRequestCaptureMode !== "off" && (
+                  <div className="space-y-1">
+                    <Label htmlFor="requestCaptureRetention">{t("apiKeys.requestCaptureRetention")}</Label>
+                    <Select value={newKeyRequestCaptureRetention} onValueChange={(value) => setNewKeyRequestCaptureRetention(value as RequestCaptureRetention)}>
+                      <SelectTrigger id="requestCaptureRetention">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="5m">{t("apiKeys.requestCaptureRetention5m")}</SelectItem>
+                        <SelectItem value="1h">{t("apiKeys.requestCaptureRetention1h")}</SelectItem>
+                        <SelectItem value="24h">{t("apiKeys.requestCaptureRetention24h")}</SelectItem>
+                        <SelectItem value="7d">{t("apiKeys.requestCaptureRetention7d")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureRetentionHelp")}</p>
+                  </div>
+                )}
                 <div className="flex items-center space-x-2">
                   <Switch
                     id="modelLimitsEnabled"
@@ -1113,6 +1135,23 @@ export function ApiKeysPage() {
               </Select>
               <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureHelp")}</p>
             </div>
+            {newKeyRequestCaptureMode !== "off" && (
+              <div className="space-y-1">
+                <Label htmlFor="editRequestCaptureRetention">{t("apiKeys.requestCaptureRetention")}</Label>
+                <Select value={newKeyRequestCaptureRetention} onValueChange={(value) => setNewKeyRequestCaptureRetention(value as RequestCaptureRetention)}>
+                  <SelectTrigger id="editRequestCaptureRetention">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="5m">{t("apiKeys.requestCaptureRetention5m")}</SelectItem>
+                    <SelectItem value="1h">{t("apiKeys.requestCaptureRetention1h")}</SelectItem>
+                    <SelectItem value="24h">{t("apiKeys.requestCaptureRetention24h")}</SelectItem>
+                    <SelectItem value="7d">{t("apiKeys.requestCaptureRetention7d")}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureRetentionHelp")}</p>
+              </div>
+            )}
             <div className="flex items-center space-x-2">
               <Switch
                 id="editModelLimitsEnabled"
