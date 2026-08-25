@@ -18,6 +18,7 @@ import {
   Store,
   CalendarClock,
   Gauge,
+  Boxes,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -153,6 +154,7 @@ function Sidebar({
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
     { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
     { to: "/dashboard/users", icon: Users, label: t("nav.users") },
+    { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
     { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
   ];
 

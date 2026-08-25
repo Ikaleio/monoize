@@ -59,7 +59,8 @@
 		"models": "モデルデータベース",
 		"marketplace": "モデルマーケット",
 		"billingPlans": "プラン",
-		"adminDashboard": "システムダッシュボード"
+		"adminDashboard": "システムダッシュボード",
+		"groups": "グループ"
 	},
 	"roles": {
 		"super_admin": "スーパー管理者",
@@ -145,9 +146,6 @@
 		"noUsers": "ユーザーがいません。ユーザーを作成して始めましょう。",
 		"user": "ユーザー",
 		"role": "ロール",
-		"allowedGroups": "許可されたグループ",
-		"allowedGroupsEmptyHelp": "グループが選択されていません。空のままなら、このユーザーはすべてのグループにアクセスできます。",
-		"allowedGroupsSelectedHelp": "このユーザーがアクセスできるのは選択したグループのみです。すべてのタグを外すと全アクセスに戻ります。",
 		"lastLogin": "最終ログイン",
 		"newPassword": "新しいパスワード（空欄で変更なし）",
 		"confirmDelete": "このユーザーを削除してもよろしいですか？",
@@ -166,7 +164,9 @@
 		"todaySpend": "本日の消費",
 		"todayCalls": "本日の呼び出し",
 		"todaySummary": "本日 {{spend}} · {{calls}} 回",
-		"viewLogs": "ログを表示"
+		"viewLogs": "ログを表示",
+		"group": "グループ",
+		"groupHelp": "各ユーザーは 1 つのグループにのみ所属し、利用できる Provider が決まります。"
 	},
 	"apiKeys": {
 		"title": "トークン管理",
@@ -208,14 +208,6 @@
 		"ipWhitelist": "IP ホワイトリスト",
 		"ipWhitelistDescription": "特定の IP アドレスからのアクセスに制限",
 		"ipWhitelistPlaceholder": "例：192.168.1.1,10.0.0.0/8",
-		"group": "グループ",
-		"groupDescription": "このキーをグループに割り当て",
-		"groupPlaceholder": "グループ名を入力",
-		"allowedGroups": "許可されたグループ",
-		"allowedGroupsEmptyHelp": "グループが選択されていません。空のままにすると、このキーは所有ユーザーの許可グループを継承します。",
-		"allowedGroupsSelectedHelp": "このキーで許可されるのは選択したグループのみです。すべてのタグを外すと継承に戻ります。",
-		"allowedGroupsCurrentUserHint": "ヒント: 現在のユーザーはこれらのグループを許可しています。最終的な部分集合は保存時にサーバーが検証します。",
-		"allowedGroupsCurrentUserAllHint": "ヒント: 現在のユーザーにはグループ上限がありません。最終的な部分集合は保存時にサーバーが検証します。",
 		"expiresAt": "有効期限",
 		"expiresAtDescription": "このキーの有効期限",
 		"searchPlaceholder": "名前またはキープレフィックスで検索...",
@@ -242,7 +234,13 @@
 		"requestCaptureModeAbnormalHelp": "上流エラー、usage 欠落、または usage 合計 0 の場合のみダンプを保存します。",
 		"requestCaptureHelp": "ダンプを書き込むには、システム全体のキャプチャスイッチも有効である必要があります。",
 		"captureBadgeAll": "dump",
-		"captureBadgeAbnormal": "異常"
+		"captureBadgeAbnormal": "異常",
+		"useUserGroup": "ユーザーのデフォルトグループを使用",
+		"useUserGroupHelp": "有効にすると、このキーは所有ユーザーのグループに従います。",
+		"useUserGroupHelpNamed": "有効にすると、このキーは所有ユーザーのグループに従います（現在：{{name}}）。",
+		"groups": "カスタムグループ",
+		"groupsHelp": "選択したグループは順番に試行され、1 番目が最優先です。ドラッグで並べ替えできます。",
+		"groupsRequired": "デフォルトグループを使用しない場合は、少なくとも 1 つのグループを選択してください。"
 	},
 	"settings": {
 		"title": "設定",
@@ -396,14 +394,11 @@
 		"deleteConfirmDesc": "プロバイダー「{{id}}」を削除してもよろしいですか？この操作は取り消せません。",
 		"providerDetails": "プロバイダー設定の詳細",
 		"basicInfo": "基本情報",
-		"groupMembers": "グループメンバー",
 		"strategy": "ストラテジー",
 		"weight": "ウェイト",
 		"priority": "優先度",
 		"tag": "タグ",
 		"tagPlaceholder": "例：production, development",
-		"groups": "グループ",
-		"groupsPlaceholder": "例：team-a,team-b",
 		"balance": "残高",
 		"editNotImplemented": "編集機能は近日公開予定",
 		"fetchModels": "モデルを取得",
@@ -949,7 +944,7 @@
 		"scheduleHourly": "毎時",
 		"scheduleWeekly": "毎週月曜 00:00",
 		"invalidSchedule": "5フィールドの cron 式を入力してください",
-		"groupsHelp": "このプランで利用できるチャネルグループ（カンマ区切り）。空の場合はすべてのグループを利用できます。",
+		"groupsHelp": "プラン利用者が使用できるグループを制限します。空の場合は制限なし。",
 		"enabled": "有効",
 		"invalidAmount": "付与額が無効です",
 		"invalidPeriod": "期間は正の整数秒である必要があります",
@@ -963,7 +958,9 @@
 		"resetDescription": "{{name}} の対象サブスクライバーの残高をプラン付与額にリセットします。無効なユーザーと無制限ユーザーは対象外です。",
 		"resetSuccess": "{{count}} 人のサブスクライバーをリセットしました",
 		"none": "プランなし",
-		"nextReset": "{{name}} — 次回リセット {{time}}"
+		"nextReset": "{{name}} — 次回リセット {{time}}",
+		"groups": "グループ上限",
+		"groupsUnrestricted": "制限なし"
 	},
 	"adminDashboard": {
 		"title": "システムダッシュボード",
@@ -1016,5 +1013,38 @@
 		"unauthorized": "管理者権限が必要",
 		"unauthorizedDescription": "このページは管理者のみアクセスできます。",
 		"loadFailed": "システム概要の読み込みに失敗"
+	},
+	"groups": {
+		"title": "グループ管理",
+		"description": "ルーティンググループの名前・説明・可視性を管理します。",
+		"create": "グループを作成",
+		"createDescription": "新しいルーティンググループを作成します。",
+		"edit": "グループを編集",
+		"editDefaultDescription": "システムデフォルトグループ：名前は変更できますが、常にデフォルトのままです。",
+		"name": "名前",
+		"namePlaceholder": "例：premium",
+		"descriptionLabel": "説明",
+		"descriptionPlaceholder": "例：高優先度の上流チャネル",
+		"descriptionHelp": "グループ選択時に表示され、用途の理解に役立ちます。",
+		"sortOrder": "並び順",
+		"sortOrderHelp": "数値が小さいほど前に表示され、デフォルトのルーティング順にも影響します。",
+		"userSelectable": "ユーザーが選択可能",
+		"userSelectableHelp": "有効にすると、一般ユーザーが API キーでこのグループを選択できます。",
+		"defaultBadge": "デフォルト",
+		"deleteTitle": "グループを削除しますか？",
+		"deleteDescription": "「{{name}}」を削除すると、所属ユーザーはデフォルトグループに移動し、API キー・Provider・プランからこのグループが削除されます。",
+		"cannotDeleteDefault": "デフォルトグループは削除できません",
+		"emptyTitle": "グループがありません",
+		"emptyDescription": "デフォルトグループは初期化時に作成されます。",
+		"invalidName": "名前は 1〜64 文字で入力してください",
+		"invalidDescription": "説明は 256 文字以内で入力してください",
+		"invalidSortOrder": "並び順は整数で入力してください"
+	},
+	"groupPicker": {
+		"selectPlaceholder": "グループを選択",
+		"defaultBadge": "デフォルト",
+		"dragHint": "ドラッグで並べ替え：1 番目が最優先でルーティングされます。",
+		"noOptions": "選択できるグループがありません",
+		"unknownGroup": "不明なグループ"
 	}
 }

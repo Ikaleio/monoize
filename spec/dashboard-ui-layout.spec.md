@@ -38,8 +38,8 @@ DL6. Sidebar admin navigation group (visible only when user role is `admin` or `
 - `/dashboard/providers`
 - `/dashboard/models`
 - `/dashboard/plans`
-- `/dashboard/groups`
 - `/dashboard/users`
+- `/dashboard/groups`
 - `/dashboard/admin-settings`
 
 DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pane vertical scrolling:
@@ -580,9 +580,11 @@ MUST open a confirmation dialog that names the group and states the cascade cons
 (members move to the default group; keys/providers/plans drop the group).
 
 GP5. Every mutation MUST apply an SWR optimistic update to the groups cache and roll back
-on error with a toast showing the server message. After success the groups cache MUST be
-revalidated together with the users, tokens, providers, and billing-plans caches (their
-badges resolve group names).
+on error with a toast showing the server message. After a successful create or update the
+groups cache MUST be revalidated (badges resolve names from the groups cache, so no other
+cache is stale). After a successful delete the groups cache MUST be revalidated together
+with the users, tokens, providers, billing-plans, and current-user caches, because the
+server-side deletion cascade rewrites group references in those entities.
 
 ### 11.2 Shared group selector (GS)
 
@@ -597,11 +599,11 @@ The default group option MUST carry a default badge.
 
 GS4. Single mode MUST behave as an exclusive select and produce exactly one group id.
 
-GS5. Multi mode MUST render selected groups as removable chips and unselected options as
-toggleable rows. In ordered multi mode the chips MUST support drag-and-drop reordering
-(HTML5 drag events, consistent with the provider list reorder interaction) and the emitted
-array order MUST equal the visual chip order. In unordered multi mode the emitted order is
-the selection order and no drag affordance is shown.
+GS5. Multi mode MUST render selected groups as removable rows and unselected options as
+add buttons. In ordered multi mode each selected row MUST show its 1-based position and
+support pointer drag-and-drop reordering (framer-motion `Reorder`), and the emitted array
+order MUST equal the visual row order. In unordered multi mode the emitted order is the
+selection order and no position or drag affordance is shown.
 
 GS6. When a selected id has no matching registry row (deleted concurrently), the chip MUST
 render the raw id and remain removable.

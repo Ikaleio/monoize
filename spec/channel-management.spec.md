@@ -32,11 +32,11 @@ A provider object MUST include:
 - `request_timeout_ms_override?: integer | null`
 - `extra_fields_whitelist?: string[] | null`
 - `strip_cross_protocol_nested_extra?: boolean | null`
-
-CM-READ-1. Provider list, Provider detail, model-constrained routing, and active-probe candidate reads MUST return the persisted `strip_cross_protocol_nested_extra` value exactly. `true`, `false`, and `null` MUST remain distinct on every read path.
 - `group_ids: string[]` (provider-level group ids for routing eligibility; stored non-empty, see `groups-registry.spec.md` GR-I2)
 - `created_at: RFC3339`
 - `updated_at: RFC3339`
+
+CM-READ-1. Provider list, Provider detail, model-constrained routing, and active-probe candidate reads MUST return the persisted `strip_cross_protocol_nested_extra` value exactly. `true`, `false`, and `null` MUST remain distinct on every read path.
 
 A provider object MUST NOT include `provider_type`.
 

@@ -59,7 +59,8 @@
 		"models": "Models",
 		"marketplace": "Models",
 		"billingPlans": "Plans",
-		"adminDashboard": "System Dashboard"
+		"adminDashboard": "System Dashboard",
+		"groups": "Groups"
 	},
 	"roles": {
 		"super_admin": "Super Admin",
@@ -145,9 +146,6 @@
 		"noUsers": "No users yet. Create a user to get started.",
 		"user": "User",
 		"role": "Role",
-		"allowedGroups": "Allowed Groups",
-		"allowedGroupsEmptyHelp": "No groups selected. Empty means this user can access all groups.",
-		"allowedGroupsSelectedHelp": "Only the selected groups will be accessible. Remove every tag to restore all-access.",
 		"lastLogin": "Last Login",
 		"newPassword": "New Password (leave blank to keep)",
 		"confirmDelete": "Are you sure you want to delete this user?",
@@ -166,7 +164,9 @@
 		"todaySpend": "Today Spend",
 		"todayCalls": "Today Calls",
 		"todaySummary": "Today {{spend}} · {{calls}} calls",
-		"viewLogs": "View logs"
+		"viewLogs": "View logs",
+		"group": "Group",
+		"groupHelp": "Each user belongs to exactly one group, which determines the available providers."
 	},
 	"apiKeys": {
 		"title": "Token Management",
@@ -208,14 +208,6 @@
 		"ipWhitelist": "IP Whitelist",
 		"ipWhitelistDescription": "Restrict access to specific IP addresses",
 		"ipWhitelistPlaceholder": "e.g., 192.168.1.1,10.0.0.0/8",
-		"group": "Group",
-		"groupDescription": "Assign this key to a group",
-		"groupPlaceholder": "Enter group name",
-		"allowedGroups": "Allowed Groups",
-		"allowedGroupsEmptyHelp": "No groups selected. Empty means this key inherits the owning user's allowed groups.",
-		"allowedGroupsSelectedHelp": "Only the selected groups will be allowed for this key. Remove every tag to restore inheritance.",
-		"allowedGroupsCurrentUserHint": "Hint only: your current user currently allows these groups. The server validates the final subset on save.",
-		"allowedGroupsCurrentUserAllHint": "Hint only: your current user currently has no group ceiling. The server still validates the final subset on save.",
 		"expiresAt": "Expires At",
 		"expiresAtDescription": "When this key expires",
 		"searchPlaceholder": "Search by name or key prefix...",
@@ -245,7 +237,13 @@
 		"requestCaptureModeAbnormalHelp": "Persist dumps only for upstream errors, missing usage, or zero-usage responses.",
 		"requestCaptureHelp": "The system-wide capture switch must also be enabled before dumps are written.",
 		"captureBadgeAll": "dump",
-		"captureBadgeAbnormal": "abnormal"
+		"captureBadgeAbnormal": "abnormal",
+		"useUserGroup": "Use user's default group",
+		"useUserGroupHelp": "When enabled, this key follows its owner's group.",
+		"useUserGroupHelpNamed": "When enabled, this key follows its owner's group (currently: {{name}}).",
+		"groups": "Custom groups",
+		"groupsHelp": "Selected groups are tried in order; position 1 first. Drag to reorder.",
+		"groupsRequired": "Select at least one group when not using the user's default group."
 	},
 	"settings": {
 		"title": "Settings",
@@ -399,14 +397,11 @@
 		"deleteConfirmDesc": "Are you sure you want to delete the provider \"{{id}}\"? This action cannot be undone.",
 		"providerDetails": "Provider configuration details",
 		"basicInfo": "Basic Information",
-		"groupMembers": "Group Members",
 		"strategy": "Strategy",
 		"weight": "Weight",
 		"priority": "Priority",
 		"tag": "Tag",
 		"tagPlaceholder": "e.g., production, development",
-		"groups": "Groups",
-		"groupsPlaceholder": "e.g., team-a,team-b",
 		"balance": "Balance",
 		"editNotImplemented": "Edit functionality coming soon",
 		"fetchModels": "Fetch Models",
@@ -953,7 +948,7 @@
 		"scheduleHourly": "Hourly",
 		"scheduleWeekly": "Weekly Mon 00:00",
 		"invalidSchedule": "Schedule must be a 5-field cron expression",
-		"groupsHelp": "Comma-separated channel groups this plan grants access to. Empty means all groups.",
+		"groupsHelp": "Restricts which groups plan members can use. Empty means unrestricted.",
 		"enabled": "Enabled",
 		"invalidAmount": "Invalid grant amount",
 		"invalidPeriod": "Period must be a positive integer number of seconds",
@@ -967,7 +962,9 @@
 		"resetDescription": "Reset every eligible subscriber of {{name}} to the plan grant amount. Disabled and unlimited users are skipped.",
 		"resetSuccess": "Reset {{count}} subscriber(s)",
 		"none": "No plan",
-		"nextReset": "{{name}} — next reset {{time}}"
+		"nextReset": "{{name}} — next reset {{time}}",
+		"groups": "Group ceiling",
+		"groupsUnrestricted": "Unrestricted"
 	},
 	"adminDashboard": {
 		"title": "System Dashboard",
@@ -1020,5 +1017,38 @@
 		"unauthorized": "Administrator access required",
 		"unauthorizedDescription": "This page is only available to administrators.",
 		"loadFailed": "Failed to load system overview"
+	},
+	"groups": {
+		"title": "Groups",
+		"description": "Manage routing groups: names, descriptions, and visibility.",
+		"create": "New Group",
+		"createDescription": "Create a new routing group.",
+		"edit": "Edit Group",
+		"editDefaultDescription": "System default group: renameable, but always remains the default.",
+		"name": "Name",
+		"namePlaceholder": "e.g. premium",
+		"descriptionLabel": "Description",
+		"descriptionPlaceholder": "e.g. high-priority upstream channels",
+		"descriptionHelp": "Shown in group pickers to explain what the group is for.",
+		"sortOrder": "Sort order",
+		"sortOrderHelp": "Lower numbers sort first in pickers and in the default routing order.",
+		"userSelectable": "User selectable",
+		"userSelectableHelp": "When enabled, regular users can pick this group for their API keys.",
+		"defaultBadge": "Default",
+		"deleteTitle": "Delete group?",
+		"deleteDescription": "Deleting “{{name}}” moves its users to the default group and removes it from API keys, providers, and billing plans.",
+		"cannotDeleteDefault": "The default group cannot be deleted",
+		"emptyTitle": "No groups",
+		"emptyDescription": "The system creates the default group during initialization.",
+		"invalidName": "Name must be 1-64 characters",
+		"invalidDescription": "Description must be at most 256 characters",
+		"invalidSortOrder": "Sort order must be an integer"
+	},
+	"groupPicker": {
+		"selectPlaceholder": "Select a group",
+		"defaultBadge": "Default",
+		"dragHint": "Drag to reorder; position 1 routes first.",
+		"noOptions": "No groups available",
+		"unknownGroup": "Unknown group"
 	}
 }

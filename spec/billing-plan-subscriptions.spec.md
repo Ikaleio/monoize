@@ -3,7 +3,7 @@
 ## 0. Purpose
 
 Define recurring balance grants ("subscriptions"): admins define billing plans that periodically
-reset a user's balance to a fixed amount and optionally restrict which channel groups the
+reset a user's balance to a fixed amount and optionally restrict which routing groups the
 subscriber may use. A plan is a named record; users reference at most one plan.
 
 ## 1. Data model
