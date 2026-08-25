@@ -21,13 +21,13 @@ these stable ids, in this order:
 | # | id | title key | fields |
 |---|----|-----------|--------|
 | 01 | `site` | `settings.siteInformation` | `site_name`, `site_description`, `api_base_url` |
-| 02 | `access` | `settings.accessControl` | `registration_enabled`, `default_user_role`, `session_ttl_days`, `api_key_max_per_user` |
+| 02 | `access` | `settings.accessControl` | `registration_enabled`, `default_user_role`, `captcha_enabled`, `session_ttl_days`, `api_key_max_per_user` |
 | 03 | `codex` | `settings.codexModels` | `codex_model_ids` |
 | 04 | `suffix` | `settings.reasoningSuffixMap` | `reasoning_suffix_map` |
 | 05 | `redirects` | `settings.globalModelRedirects` | `global_model_redirects` |
 | 06 | `transforms` | `settings.globalTransforms` | `global_transforms` |
 | 07 | `affinity` | `settings.affinityRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds` |
-| 08 | `health` | `settings.healthMonitoring` | `monoize_active_probe_enabled`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_passive_min_samples`, `monoize_passive_failure_rate_threshold`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_capture_enabled`, `monoize_request_capture_retention_days`, `monoize_enable_estimated_billing`, `monoize_strip_cross_protocol_nested_extra`, `monoize_request_timeout_ms` |
+| 08 | `health` | `settings.healthMonitoring` | `monoize_active_probe_enabled`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_passive_min_samples`, `monoize_passive_failure_rate_threshold`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_capture_enabled`, `monoize_mask_sensitive_info`, `monoize_request_capture_retention_days`, `monoize_enable_estimated_billing`, `monoize_strip_cross_protocol_nested_extra`, `monoize_request_timeout_ms` |
 | 09 | `extra` | `settings.extraFieldsWhitelist` | `monoize_extra_fields_whitelist` (sub-keys `chat_completion`, `responses`, `messages`, `gemini`) |
 
 SSU-2. Every field listed in SSU-1 MUST be editable through exactly one category panel.
