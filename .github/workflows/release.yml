@@ -166,10 +166,11 @@ jobs:
             --volume "$HOME/.cargo/git:/root/.cargo/git" \
             --volume "$(command -v bun):/usr/local/bin/bun:ro" \
             --workdir /home/rust/src \
+            --env "MONOIZE_MUSL_LINKER=$LINKER" \
             --env RUSTFLAGS \
             "$BUILDER_IMAGE" \
             cargo build \
-              --config "target.${TARGET}.linker=\"${LINKER}\"" \
+              --config "target.${TARGET}.linker=\"/home/rust/src/scripts/musl-linker.sh\"" \
               --locked \
               --release \
               --target "$TARGET"
