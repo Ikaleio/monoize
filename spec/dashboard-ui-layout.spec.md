@@ -269,6 +269,11 @@ PL25. Provider editor MUST use an explicit workbench information architecture.
 
 ## 3. Playground Page
 
+ST0. The page-level layout of `/dashboard/admin-settings` (horizontal category rail,
+category panels, skeleton, and motion) is governed by `spec/system-settings-ui.spec.md`.
+ST1-ST7 below define field-level behavior; where an ST statement calls the container a
+"card", the container is the corresponding category panel/section defined there.
+
 ST1. `/dashboard/admin-settings` MUST include a "Health Monitoring" section for Monoize active probe settings.
 
 ST2. Health Monitoring section MUST expose at least these editable fields bound to `GET/PUT /api/dashboard/settings`:
@@ -289,14 +294,14 @@ ST2. Health Monitoring section MUST expose at least these editable fields bound 
 - `monoize_request_capture_retention_days` (integer >= 1, default 1)
 - `monoize_mask_sensitive_info` (boolean switch, default on; when on, client-facing and non-admin request-log error text apply `MASK` per `upstream-error-sanitization.spec.md`; when off, that masking is disabled)
 
-ST2a. `/dashboard/admin-settings` MUST include a "Routing Affinity" card bound to `GET/PUT /api/dashboard/settings`. The card MUST expose:
+ST2a. `/dashboard/admin-settings` MUST include a "Routing Affinity" section bound to `GET/PUT /api/dashboard/settings`. The section MUST expose:
 
 - `monoize_affinity_enabled` (boolean switch, default `true`)
 - `monoize_affinity_idle_ttl_seconds` (integer >= 1, default `1800`)
 - `monoize_affinity_failback_mode` (exactly `"sticky"` or `"prefer_higher_priority"`, default `"sticky"`)
 - `monoize_affinity_failback_delay_seconds` (integer >= 0, default `300`)
 
-ST2b. The Routing Affinity card MUST state that Channel overrides replace global values and that `"prefer_higher_priority"` returns to normal Provider order only after its delay and only when an earlier Provider is eligible.
+ST2b. The Routing Affinity section MUST state that Channel overrides replace global values and that `"prefer_higher_priority"` returns to normal Provider order only after its delay and only when an earlier Provider is eligible.
 
 ST3. Settings UI MUST perform optimistic update and persist via existing settings save flow; persisted values MUST be reflected after reload.
 
@@ -304,21 +309,21 @@ ST4. `/dashboard/admin-settings` MUST include a global transform editor bound to
 
 ST5. The global transform editor MUST follow the same interaction contract as PL7, PL8, PL9, and PL10, but its option list MUST be filtered to transforms whose registry metadata includes `global` in `supported_scopes`.
 
-ST6. `/dashboard/admin-settings` MUST include a "Codex Model Picker" card bound to `GET/PUT /api/dashboard/settings` field `codex_model_ids`.
+ST6. `/dashboard/admin-settings` MUST include a "Codex Model Picker" section bound to `GET/PUT /api/dashboard/settings` field `codex_model_ids`.
 
-ST6a. The card MUST load Provider data through the existing SWR Provider hook. Its available model set MUST be the sorted union of Channel model keys where the Provider is enabled, the Channel is enabled, and Channel weight is greater than zero.
+ST6a. The section MUST load Provider data through the existing SWR Provider hook. Its available model set MUST be the sorted union of Channel model keys where the Provider is enabled, the Channel is enabled, and Channel weight is greater than zero.
 
-ST6b. The card MUST provide a text search input and one controlled checkbox for each matching model. Changing a checkbox MUST update the local optimistic settings draft. The existing settings save action MUST persist the resulting ordered array. The card MUST NOT provide a bulk "select all" action.
+ST6b. The section MUST provide a text search input and one controlled checkbox for each matching model. Changing a checkbox MUST update the local optimistic settings draft. The existing settings save action MUST persist the resulting ordered array. The section MUST NOT provide a bulk "select all" action.
 
 ST6c. A configured model absent from the available model set MUST remain visible and removable with an unavailable label. Provider loading MUST render skeleton rows. Provider failure MUST render an error state with a retry action. Search with no matches MUST render an explicit empty state.
 
-ST6d. The card MUST state that standard OpenAI `data` continues to include every available model and that `codex_model_ids` controls only the extended Codex `models` catalog.
+ST6d. The section MUST state that standard OpenAI `data` continues to include every available model and that `codex_model_ids` controls only the extended Codex `models` catalog.
 
-ST6e. At viewport widths below `640px`, the settings card grid and each direct card wrapper MUST shrink to the available content width without creating horizontal page overflow.
+ST6e. At viewport widths below `640px`, the settings category rail and the active category panel MUST shrink to the available content width without creating page-level horizontal overflow; the rail scrolls inside its own container per `system-settings-ui.spec.md` SSU-5.
 
-ST7. `/dashboard/admin-settings` MUST include a "Global Model Redirects" card
+ST7. `/dashboard/admin-settings` MUST include a "Global Model Redirects" section
 bound to `GET/PUT /api/dashboard/settings` field `global_model_redirects`.
-The card MUST follow `spec/api-key-model-redirects.spec.md` FR-8 through FR-13.
+The section MUST follow `spec/api-key-model-redirects.spec.md` FR-8 through FR-13.
 
 PG-L1. `/playground` page MUST be accessible from the main navigation sidebar (below Token Management).
 
