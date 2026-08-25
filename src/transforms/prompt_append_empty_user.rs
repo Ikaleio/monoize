@@ -55,7 +55,7 @@ impl Transform for PromptAppendEmptyUserTransform {
         json!({
             "type": "object",
             "properties": {
-                "content": { "type": "string", "description": "Text content for the padding user message. Defaults to a single space." }
+                "content": { "type": "string", "format": "multiline", "description": "Text content for the padding user message. Defaults to a single space." }
             },
             "additionalProperties": false
         })

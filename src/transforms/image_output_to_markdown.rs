@@ -55,6 +55,7 @@ impl Transform for ImageOutputToMarkdownTransform {
             "properties": {
                 "template": {
                     "type": "string",
+                    "format": "multiline",
                     "minLength": 1,
                     "description": "Template appended for each image. Supports raw placeholders {{src}}, {{url}}, {{media_type}}, {{data}} and URL-safe placeholders {{src_urlencoded}}, {{url_urlencoded}}, {{media_type_urlencoded}}, {{data_urlencoded}}."
                 }

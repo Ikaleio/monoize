@@ -206,6 +206,8 @@ TF-8. Every transform registry item returned by `/api/dashboard/transforms/regis
 
 TF-8a. `name` and `description` MUST each be a JSON object mapping a lowercase language code to a non-empty human-readable string. Both objects MUST contain at least the keys `en` and `zh`. The values MUST come from the transform's `display_name()` and `display_description()` interface members; the registry endpoint MUST NOT synthesize display text from `type_id`.
 
+TF-8b. A `config_schema` string property MAY carry `"format": "multiline"` to request a multi-line text editor in the dashboard (see `transform-config-ui.spec.md` TCU-3 rule 4). Exactly these properties MUST carry `"format": "multiline"`: `prompt_inject_system` property `content`, `prompt_append_empty_user` property `content`, and `image_output_to_markdown` property `template`.
+
 TF-9. Scope semantics are exact:
 1. `provider` means the transform MAY be configured in provider transform chains;
 2. `global` means the transform MAY be configured in the system settings global transform chain;

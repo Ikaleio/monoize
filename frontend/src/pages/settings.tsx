@@ -41,7 +41,8 @@ export function SettingsPage() {
     isLoading: providersLoading,
     mutate: mutateProviders,
   } = useProviders();
-  const { data: transformRegistry = [] } = useTransformRegistry();
+  const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
+    useTransformRegistry();
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -167,6 +168,7 @@ export function SettingsPage() {
             <TransformChainEditor
               value={currentSettings.global_transforms ?? []}
               registry={globalTransformRegistry}
+              loading={transformRegistryLoading}
               onChange={(next) => handleChange({ global_transforms: next })}
             />
             <p className="text-sm text-muted-foreground">

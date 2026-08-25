@@ -36,7 +36,8 @@ export function ProvidersPage() {
 	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders()
 	const providers = providersData ?? []
 	const { data: settings } = useSettings()
-	const { data: transformRegistry = [] } = useTransformRegistry()
+	const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
+		useTransformRegistry()
 	const { data: modelMetadata = [] } = useModelMetadata()
 	const reasoningSuffixMap =
 		settings?.reasoning_suffix_map ?? DEFAULT_REASONING_SUFFIX_MAP
@@ -193,6 +194,7 @@ export function ProvidersPage() {
 				current={null}
 				providers={providers}
 				transformRegistry={transformRegistry}
+				transformRegistryLoading={transformRegistryLoading}
 				modelMetadata={modelMetadata}
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}
@@ -209,6 +211,7 @@ export function ProvidersPage() {
 				current={editProvider}
 				providers={providers}
 				transformRegistry={transformRegistry}
+				transformRegistryLoading={transformRegistryLoading}
 				modelMetadata={modelMetadata}
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}

@@ -58,7 +58,7 @@ impl Transform for PromptInjectSystemTransform {
         json!({
             "type": "object",
             "properties": {
-                "content": { "type": "string" },
+                "content": { "type": "string", "format": "multiline" },
                 "position": { "type": "string", "enum": ["prepend", "append"] }
             },
             "required": ["content", "position"],

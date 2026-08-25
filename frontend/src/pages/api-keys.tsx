@@ -459,7 +459,8 @@ export function ApiKeysPage() {
   const { user: currentUser } = useAuth();
   const { data: keys = [], isLoading } = useApiKeys();
   const { data: groupSuggestions = [], isLoading: groupsLoading } = useDashboardGroups();
-  const { data: transformRegistry = [] } = useTransformRegistry();
+  const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
+    useTransformRegistry();
   const apiKeyTransformRegistry = useMemo(
     () => transformRegistry.filter((item) => item.supported_scopes.includes("api_key")),
     [transformRegistry]
@@ -871,6 +872,7 @@ export function ApiKeysPage() {
                   <TransformChainEditor
                     value={newKeyTransforms}
                     registry={apiKeyTransformRegistry}
+                    loading={transformRegistryLoading}
                     onChange={setNewKeyTransforms}
                   />
                 </div>
@@ -1246,6 +1248,7 @@ export function ApiKeysPage() {
               <TransformChainEditor
                 value={newKeyTransforms}
                 registry={apiKeyTransformRegistry}
+                loading={transformRegistryLoading}
                 onChange={setNewKeyTransforms}
               />
             </div>

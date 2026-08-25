@@ -198,6 +198,7 @@ export function ProviderDialog({
 	current,
 	providers,
 	transformRegistry,
+	transformRegistryLoading,
 	modelMetadata,
 	reasoningSuffixMap,
 	settings
@@ -208,6 +209,7 @@ export function ProviderDialog({
 	current: Provider | null
 	providers: Provider[]
 	transformRegistry: TransformRegistryItem[]
+	transformRegistryLoading?: boolean
 	modelMetadata: ModelMetadataRecord[]
 	reasoningSuffixMap: Record<string, string>
 	settings?: SystemSettings
@@ -444,7 +446,7 @@ export function ProviderDialog({
 									) : section === 'routing' ? (
 										<RoutingSettings form={form} setForm={setForm} settings={settings} c={c} />
 									) : section === 'transforms' ? (
-										<div className='mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6'><SectionHeading title={c('请求与响应转换', 'Request and response transforms')} description={c('转换仍属于 Provider，按顺序应用到每个 Channel。', 'Transforms remain provider-scoped and run in order for every channel.')} /><TransformChainEditor value={form.transforms} registry={transformRegistry} onChange={transforms => setForm(previous => ({ ...previous, transforms }))} /></div>
+										<div className='mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6'><SectionHeading title={c('请求与响应转换', 'Request and response transforms')} description={c('转换仍属于 Provider，按顺序应用到每个 Channel。', 'Transforms remain provider-scoped and run in order for every channel.')} /><TransformChainEditor value={form.transforms} registry={transformRegistry} loading={transformRegistryLoading} onChange={transforms => setForm(previous => ({ ...previous, transforms }))} /></div>
 									) : (
 										<ProtocolSettings form={form} setForm={setForm} c={c} />
 									)}
