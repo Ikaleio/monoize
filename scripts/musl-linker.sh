@@ -7,6 +7,8 @@ rewritten_arguments=()
 for argument in "$@"; do
   if [[ "$argument" == "-Wl,-Bdynamic" ]]; then
     rewritten_arguments+=("-Wl,-Bstatic")
+  elif [[ "$argument" == "-lstdc++" ]]; then
+    rewritten_arguments+=("-Wl,--start-group" "-lstdc++" "-lc" "-Wl,--end-group")
   else
     rewritten_arguments+=("$argument")
   fi

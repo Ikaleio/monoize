@@ -31,7 +31,15 @@ class MuslLinkerTests(unittest.TestCase):
         )
         self.assertEqual(
             result.stdout.splitlines(),
-            ["first", "-Wl,-Bstatic", "-lstdc++", "last"],
+            [
+                "first",
+                "-Wl,-Bstatic",
+                "-Wl,--start-group",
+                "-lstdc++",
+                "-lc",
+                "-Wl,--end-group",
+                "last",
+            ],
         )
 
     def test_requires_the_real_linker(self) -> None:

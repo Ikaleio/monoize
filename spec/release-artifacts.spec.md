@@ -44,7 +44,13 @@ RA-M2a. Each Linux row MUST use the matching `rust-musl-cross` builder image. Th
 
 RA-M2b. After each Linux build, the workflow MUST inspect the executable's ELF program headers and dynamic section. An ELF interpreter or a `DT_NEEDED` entry MUST fail the build row before packaging.
 
-RA-M2c. Each Linux build MUST select the matching musl GCC linker: `x86_64-unknown-linux-musl-gcc` for `x86_64-unknown-linux-musl`, or `aarch64-unknown-linux-musl-gcc` for `aarch64-unknown-linux-musl`. Cargo MUST use `scripts/musl-linker.sh` as the target linker and provide the matching GCC command through `MONOIZE_MUSL_LINKER`. The wrapper MUST replace every exact `-Wl,-Bdynamic` argument with `-Wl,-Bstatic`, preserve the order and bytes of every other argument, and execute the selected GCC command. This replacement MUST prevent a dependency build script from overriding static linkage by declaring a dynamic native library.
+RA-M2c. Each Linux build MUST select the matching musl GCC linker: `x86_64-unknown-linux-musl-gcc` for `x86_64-unknown-linux-musl`, or `aarch64-unknown-linux-musl-gcc` for `aarch64-unknown-linux-musl`. Cargo MUST use `scripts/musl-linker.sh` as the target linker and provide the matching GCC command through `MONOIZE_MUSL_LINKER`. The wrapper MUST apply these ordered rewrites and execute the selected GCC command:
+
+1. Replace every exact `-Wl,-Bdynamic` argument with `-Wl,-Bstatic`.
+2. Replace every exact `-lstdc++` argument with `-Wl,--start-group -lstdc++ -lc -Wl,--end-group`.
+3. Preserve the order and bytes of every other argument.
+
+The first rewrite MUST prevent a dependency build script from overriding static linkage by declaring a dynamic native library. The second rewrite MUST let the static C++ runtime resolve its musl libc references even when rustc placed the original libc input earlier in the link command.
 
 RA-M2d. Each Linux build MUST pass `-C target-feature=+crt-static -C link-arg=-static -C link-arg=-static-libstdc++` through target Rust flags. Together with RA-M2c, these settings MUST prevent the executable from depending on a host GNU libc, musl libc, or `libstdc++.so.6` shared library.
 
