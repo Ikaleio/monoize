@@ -687,6 +687,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
                 request_capture_mode: create_body.request_capture_mode,
+                request_capture_retention: create_body.request_capture_retention,
             },
             false,
         )
@@ -719,6 +720,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_redirects: created.model_redirects.clone(),
         reasoning_envelope_enabled: created.reasoning_envelope_enabled,
         request_capture_mode: created.request_capture_mode,
+        request_capture_retention: created.request_capture_retention,
     })
     .expect("created response serializes");
     assert_eq!(created_value.get("use_user_group"), Some(&json!(false)));
@@ -751,6 +753,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
                 request_capture_mode: update_body.request_capture_mode,
+                request_capture_retention: update_body.request_capture_retention,
                 expires_at: None,
             },
             false,
@@ -800,6 +803,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
+                request_capture_retention: None,
                 expires_at: None,
             },
             false,
@@ -833,6 +837,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
         model_redirects: fetched.model_redirects,
         reasoning_envelope_enabled: fetched.reasoning_envelope_enabled,
         request_capture_mode: fetched.request_capture_mode,
+        request_capture_retention: fetched.request_capture_retention,
     })
     .expect("response serializes");
     assert_eq!(
@@ -882,6 +887,7 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
                 request_capture_mode: crate::users::RequestCaptureMode::Off,
+                request_capture_retention: crate::users::RequestCaptureRetention::default(),
             },
             true,
         )
@@ -907,6 +913,7 @@ async fn admin_sub_account_adjustment_records_initial_credit_and_refund() {
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
+                request_capture_retention: None,
                 expires_at: None,
             },
             true,
@@ -1019,6 +1026,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
             model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: crate::users::RequestCaptureMode::Off,
+            request_capture_retention: crate::users::RequestCaptureRetention::default(),
         }
     }
 
@@ -1063,6 +1071,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
+                request_capture_retention: None,
                 expires_at: None,
             },
             false,
@@ -1128,6 +1137,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
                 request_capture_mode: create_body.request_capture_mode,
+                request_capture_retention: create_body.request_capture_retention,
             },
             false,
         )
@@ -1159,6 +1169,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 }]),
                 reasoning_envelope_enabled: None,
                 request_capture_mode: None,
+                request_capture_retention: None,
                 expires_at: None,
             },
             false,
@@ -1190,6 +1201,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 }],
                 reasoning_envelope_enabled: true,
                 request_capture_mode: crate::users::RequestCaptureMode::Off,
+                request_capture_retention: crate::users::RequestCaptureRetention::default(),
             },
             false,
         )
@@ -1385,7 +1397,10 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
     assert!(settings.global_model_redirects.is_empty());
     assert!(settings.codex_model_ids.is_empty());
     assert!(!settings.monoize_request_capture_enabled);
-    assert_eq!(settings.monoize_request_capture_retention_days, 1);
+    assert_eq!(
+        settings.monoize_request_capture_max_total_bytes,
+        crate::settings::DEFAULT_REQUEST_CAPTURE_MAX_TOTAL_BYTES
+    );
     assert!(settings.monoize_affinity_enabled);
     assert_eq!(settings.monoize_affinity_idle_ttl_seconds, 1800);
     assert_eq!(
@@ -1413,7 +1428,8 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
     ];
     settings.monoize_strip_cross_protocol_nested_extra = false;
     settings.monoize_request_capture_enabled = true;
-    settings.monoize_request_capture_retention_days = 0;
+    // RCD-C4: non-zero values below 1 MiB persist as 1 MiB.
+    settings.monoize_request_capture_max_total_bytes = 1;
     settings.monoize_affinity_enabled = false;
     settings.monoize_affinity_idle_ttl_seconds = 90;
     settings.monoize_affinity_failback_mode = AffinityFailbackMode::PreferHigherPriority;
@@ -1440,7 +1456,10 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
     );
     assert!(!updated.monoize_strip_cross_protocol_nested_extra);
     assert!(updated.monoize_request_capture_enabled);
-    assert_eq!(updated.monoize_request_capture_retention_days, 1);
+    assert_eq!(
+        updated.monoize_request_capture_max_total_bytes,
+        crate::settings::MIN_REQUEST_CAPTURE_MAX_TOTAL_BYTES
+    );
     assert!(!updated.monoize_affinity_enabled);
     assert_eq!(updated.monoize_affinity_idle_ttl_seconds, 90);
     assert_eq!(

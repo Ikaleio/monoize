@@ -43,7 +43,7 @@ pub struct UpdateSettingsRequest {
     pub monoize_extra_fields_whitelist: Option<std::collections::HashMap<String, Vec<String>>>,
     pub monoize_strip_cross_protocol_nested_extra: Option<bool>,
     pub monoize_request_capture_enabled: Option<bool>,
-    pub monoize_request_capture_retention_days: Option<u64>,
+    pub monoize_request_capture_max_total_bytes: Option<u64>,
     pub monoize_mask_sensitive_info: Option<bool>,
     pub monoize_affinity_enabled: Option<bool>,
     pub monoize_affinity_idle_ttl_seconds: Option<u64>,
@@ -210,8 +210,9 @@ pub async fn update_settings(
     if let Some(v) = body.monoize_request_capture_enabled {
         settings.monoize_request_capture_enabled = v;
     }
-    if let Some(v) = body.monoize_request_capture_retention_days {
-        settings.monoize_request_capture_retention_days = v.max(1);
+    if let Some(v) = body.monoize_request_capture_max_total_bytes {
+        settings.monoize_request_capture_max_total_bytes =
+            crate::settings::clamp_request_capture_max_total_bytes(v);
     }
     if let Some(v) = body.monoize_mask_sensitive_info {
         settings.monoize_mask_sensitive_info = v;
@@ -257,7 +258,7 @@ pub async fn update_settings(
         rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
         rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
         rt.request_capture_enabled = updated.monoize_request_capture_enabled;
-        rt.request_capture_retention_days = updated.monoize_request_capture_retention_days.max(1);
+        rt.request_capture_max_total_bytes = updated.monoize_request_capture_max_total_bytes;
         rt.mask_sensitive_info = updated.monoize_mask_sensitive_info;
         rt.affinity_enabled = updated.monoize_affinity_enabled;
         rt.affinity_idle_ttl_seconds = updated.monoize_affinity_idle_ttl_seconds.max(1);

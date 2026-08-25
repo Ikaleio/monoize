@@ -47,6 +47,41 @@ async fn retain_decoded_terminal_output(
     Ok(())
 }
 
+/// RCD-D10a (`request-capture-dumps.spec.md`): between response transforms
+/// and downstream encoding, retain the terminal `response_done` event as the
+/// URP non-stream reconstruction `{finish_reason?, usage?, output, ...extra}`.
+/// This stage is only inserted when a capture session is active.
+async fn retain_reconstructed_urp_response(
+    mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
+    tx: mpsc::Sender<urp::UrpStreamEvent>,
+    reconstructed: Arc<Mutex<Option<serde_json::Value>>>,
+) -> AppResult<()> {
+    while let Some(event) = rx.recv().await {
+        if let urp::UrpStreamEvent::ResponseDone {
+            finish_reason,
+            usage,
+            output,
+            extra_body,
+        } = &event
+        {
+            let mut object = serde_json::Map::new();
+            if let Some(finish_reason) = finish_reason {
+                object.insert("finish_reason".to_string(), json!(finish_reason));
+            }
+            if let Some(usage) = usage {
+                object.insert("usage".to_string(), json!(usage));
+            }
+            object.insert("output".to_string(), json!(output));
+            for (key, value) in extra_body {
+                object.insert(key.clone(), value.clone());
+            }
+            *reconstructed.lock().await = Some(serde_json::Value::Object(object));
+        }
+        let _ = tx.send(event).await;
+    }
+    Ok(())
+}
+
 fn stream_error_code(err: &AppError) -> String {
     err.upstream_code.as_ref().unwrap_or(&err.code).to_string()
 }
@@ -402,6 +437,9 @@ pub(super) async fn forward_stream_typed(
                                     &nonstream_req,
                                     upstream_body.clone(),
                                     Some(value.clone()),
+                                    // RCD-D10b: buffered synthetic streams keep
+                                    // the provider payload in downstream_response.
+                                    None,
                                     None,
                                     capture_transform_chain.clone(),
                                     None,
@@ -734,6 +772,7 @@ pub(super) async fn forward_stream_typed(
                                     upstream_body.clone(),
                                     None,
                                     None,
+                                    None,
                                     capture_transform_chain.clone(),
                                     Some(json!({
                                         "message": err.message,
@@ -922,6 +961,12 @@ pub(super) async fn forward_stream_typed(
                     tokio::spawn(async move {
                         let _pending_request_log_guard = pending_request_log_guard_for_stream;
                         let tx_err = tx.clone();
+                        // RCD-D10a: the reconstruction slot exists only while a
+                        // capture session is active; without one the tap stage
+                        // is not inserted at all.
+                        let reconstructed_urp_response = capture_session
+                            .as_ref()
+                            .map(|_| Arc::new(Mutex::new(None::<serde_json::Value>)));
                         let stream_future = async {
                             let (decoded_tx, decoded_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
@@ -980,11 +1025,32 @@ pub(super) async fn forward_stream_typed(
                                     .await
                                 });
 
+                            let (encode_input_rx, reconstruct_handle) =
+                                match reconstructed_urp_response.clone() {
+                                    Some(slot) => {
+                                        let (tap_tx, tap_rx) =
+                                            mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                                        let handle =
+                                            crate::request_capture::spawn_with_sse_capture(
+                                                async move {
+                                                    retain_reconstructed_urp_response(
+                                                        transformed_rx,
+                                                        tap_tx,
+                                                        slot,
+                                                    )
+                                                    .await
+                                                },
+                                            );
+                                        (tap_rx, Some(handle))
+                                    }
+                                    None => (transformed_rx, None),
+                                };
+
                             let encode_handle =
                                 crate::request_capture::spawn_with_sse_capture(async move {
                                     encode_urp_stream(
                                         downstream,
-                                        transformed_rx,
+                                        encode_input_rx,
                                         tx,
                                         &model_for_encode,
                                         started_at,
@@ -1005,6 +1071,11 @@ pub(super) async fn forward_stream_typed(
                                 transform_handle,
                                 encode_handle
                             );
+                            // The tap forwards every event, so it ends before
+                            // encode does; this await never blocks the stream.
+                            if let Some(handle) = reconstruct_handle {
+                                let _ = handle.await;
+                            }
                             decode_result
                                 .unwrap_or_else(|e| {
                                     Err(AppError::new(
@@ -1043,6 +1114,13 @@ pub(super) async fn forward_stream_typed(
                         let settled_output = decoded_terminal_output.lock().await.clone();
                         let terminal_visible_output_bytes =
                             decoded_visible_output_bytes(&settled_output);
+                        // RCD-D10a/RCD-D10b: None when the stream ended without
+                        // a terminal response_done event.
+                        let reconstructed_urp_response_value =
+                            match reconstructed_urp_response.as_ref() {
+                                Some(slot) => slot.lock().await.clone(),
+                                None => None,
+                            };
 
                         let (
                             ttfb_ms,
@@ -1153,6 +1231,7 @@ pub(super) async fn forward_stream_typed(
                                         &capture_req_attempt,
                                         capture_upstream_body,
                                         None,
+                                        reconstructed_urp_response_value.clone(),
                                         frames,
                                         capture_transform_chain_for_task,
                                         error_json,
@@ -1265,6 +1344,7 @@ pub(super) async fn forward_stream_typed(
                                         &capture_req_attempt,
                                         capture_upstream_body,
                                         None,
+                                        reconstructed_urp_response_value.clone(),
                                         frames,
                                         capture_transform_chain_for_task,
                                         Some(json!({
@@ -1395,6 +1475,7 @@ pub(super) async fn forward_stream_typed(
                                     &capture_req_attempt,
                                     capture_upstream_body,
                                     None,
+                                    reconstructed_urp_response_value.clone(),
                                     frames,
                                     capture_transform_chain_for_task,
                                     None,
@@ -1421,6 +1502,7 @@ pub(super) async fn forward_stream_typed(
                                 capture.raw_input.as_ref().clone(),
                                 &req_attempt,
                                 upstream_body.clone(),
+                                None,
                                 None,
                                 None,
                                 capture_transform_chain.clone(),

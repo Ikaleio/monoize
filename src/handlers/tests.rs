@@ -113,6 +113,7 @@ fn build_test_auth_with_role(
         sub_account_balance_nano: "0".to_string(),
         reasoning_envelope_enabled: true,
         request_capture_mode: RequestCaptureMode::Off,
+        request_capture_retention: crate::users::RequestCaptureRetention::default(),
     }
 }
 

@@ -455,6 +455,7 @@ async fn responses_reasoning_envelope_can_be_disabled_per_api_key() {
                 model_redirects: None,
                 reasoning_envelope_enabled: Some(false),
                 request_capture_mode: None,
+                request_capture_retention: None,
                 expires_at: None,
             },
             false,

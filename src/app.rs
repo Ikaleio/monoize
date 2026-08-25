@@ -483,8 +483,10 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             runtime.node.config_poll_interval,
         );
     }
-    let request_capture = RequestCaptureStore::new(&runtime.database_dsn).with_db(db.clone());
-    request_capture.spawn_cleanup_task(monoize_runtime.clone());
+    let request_capture = RequestCaptureStore::new(&runtime.database_dsn)
+        .with_db(db.clone())
+        .with_runtime(monoize_runtime.clone());
+    request_capture.spawn_cleanup_task();
     let probe_runtime = monoize_runtime.clone();
     let probe_health = channel_health.clone();
     let probe_routing_config_revision = routing_config_revision.clone();
@@ -1799,9 +1801,8 @@ pub(crate) fn runtime_config_from_settings(
     runtime.strip_cross_protocol_nested_extra =
         settings_snapshot.monoize_strip_cross_protocol_nested_extra;
     runtime.request_capture_enabled = settings_snapshot.monoize_request_capture_enabled;
-    runtime.request_capture_retention_days = settings_snapshot
-        .monoize_request_capture_retention_days
-        .max(1);
+    runtime.request_capture_max_total_bytes =
+        settings_snapshot.monoize_request_capture_max_total_bytes;
     runtime.mask_sensitive_info = settings_snapshot.monoize_mask_sensitive_info;
     runtime.affinity_enabled = settings_snapshot.monoize_affinity_enabled;
     runtime.affinity_idle_ttl_seconds = settings_snapshot.monoize_affinity_idle_ttl_seconds.max(1);

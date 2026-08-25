@@ -104,12 +104,20 @@ pub async fn get_request_capture(
             continue;
         }
         // RCV-A2/RCV-A3: serve the first authorized candidate, reading the
-        // dump from disk only here.
+        // dump from disk only here. RCD-Z7/RCV-A9: a zstd-marked file that
+        // cannot decompress within bounds is a distinguishable server error.
         let bytes = match state
             .request_capture
             .read_dump_file(&record.file_name)
             .await
-            .map_err(internal_error)?
+            .map_err(|err| match err {
+                crate::request_capture::DumpReadError::Unreadable(message) => AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "capture_dump_unreadable",
+                    message,
+                ),
+                crate::request_capture::DumpReadError::Io(message) => internal_error(message),
+            })?
         {
             Some(bytes) => bytes,
             None => {
