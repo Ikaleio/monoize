@@ -195,6 +195,32 @@ function echoSuffix(body: any): string {
   return "";
 }
 
+// 256x256 solid-color PNGs so image responses are visible in UI walkthroughs:
+// orange marks /v1/images/generations output, teal marks /v1/images/edits output.
+const GENERATION_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAB/klEQVR42u3TsQkAAAzDsPy/995m7wsV6AKDsxN4SwIMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA2AAFTAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAADCABBgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAEwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAA4Cvt/F62yjg5YAAAAAElFTkSuQmCC";
+const EDIT_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAACAElEQVR42u3TQQ0AAAjEsJOEdFxgizcaaFIFS5bqgbciAQYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABMIAKGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAbAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAGUAEDgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwAFwLC1gYymvLfH8AAAAASUVORK5CYII=";
+
+function imageResponse(prompt: string, b64: string) {
+  return {
+    created: Math.floor(Date.now() / 1000),
+    data: [
+      {
+        b64_json: b64,
+        revised_prompt: `mock render of: ${prompt}`,
+      },
+    ],
+    // Monoize rejects image responses without billable usage.
+    usage: {
+      total_tokens: 30,
+      input_tokens: 10,
+      output_tokens: 20,
+      input_tokens_details: { text_tokens: 10, image_tokens: 0 },
+    },
+  };
+}
+
 function responsesObject(model: string, text: string) {
   return {
     id: `resp_mock_${Date.now()}`,
@@ -255,6 +281,25 @@ Bun.serve({
       }
 
       return jsonResponse(toolAwareChatResponse(model, messages, body));
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+      const body = await req.json();
+      const prompt = String(body.prompt ?? "");
+      return jsonResponse(imageResponse(prompt, GENERATION_PNG_B64));
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/images/edits") {
+      const form = await req.formData();
+      const prompt = String(form.get("prompt") ?? "");
+      const image = form.get("image");
+      if (!image || typeof image === "string") {
+        return jsonResponse(
+          { error: { message: "image file field required" } },
+          400,
+        );
+      }
+      return jsonResponse(imageResponse(prompt, EDIT_PNG_B64));
     }
 
     if (req.method === "POST" && url.pathname === "/v1/messages") {
