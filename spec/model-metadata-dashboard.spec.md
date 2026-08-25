@@ -112,7 +112,17 @@ SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating
 - Errors: `404 not_found` if record does not exist.
 - The metadata delete and deletion of all generated billing-rate rows whose id starts with `model_metadata:{model_id}:` MUST execute in one database transaction.
 
-### 3.5 Billing-rate CRUD
+### 3.5 Batch delete model metadata
+
+- Method/Path: `POST /api/dashboard/model-metadata/batch-delete`
+- Auth: admin required.
+- Body: `{ "model_ids": string[] }`.
+- The server MUST trim, deduplicate, and reject an empty `model_ids` array.
+- The server MUST delete all requested metadata rows and their generated billing-rate mirror rows in one database transaction.
+- A missing requested model ID MUST NOT fail deletion of other requested IDs. The response MUST report `deleted` and `not_found`.
+- The response MUST be `{ "success": true, "deleted": number, "not_found": string[] }`.
+
+### 3.6 Billing-rate CRUD
 
 - Method/Path: `GET /api/dashboard/billing-rates`
 - Auth: admin required.
@@ -129,14 +139,14 @@ SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating
 - Response: `{ "success": true }`.
 - Errors: `404 not_found` if row does not exist.
 
-### 3.6 Billing-rate catalog sync
+### 3.7 Billing-rate catalog sync
 
 - Method/Path: `POST /api/dashboard/billing-rates/sync/catalog`
 - Auth: admin required.
 - Behavior: sync the bundled catalog as defined in `metered-billing.spec.md` MB-A4.
 - Response: `{ "success": true, "upserted": number, "skipped": number, "deleted": number, "fetched_at": string }`.
 
-### 3.7 Pricing-profile patterns
+### 3.8 Pricing-profile patterns
 
 - Method/Path: `GET /api/dashboard/pricing-profile-patterns`
 - Auth: admin required.
@@ -167,6 +177,9 @@ UI4a. The page MUST contain three tabs in this order:
 1. `Model Database`
 2. `Billing Profiles`
 3. `Advanced Rates`
+
+UI4c. The Model Database page MUST NOT render an independent Models.dev settings control.
+The complete Models.dev URL MUST be edited from the system settings page.
 
 UI4b. Each tab MUST use SWR for data loading, skeleton fallback while loading, and optimistic updates for user-triggered mutations.
 
@@ -210,6 +223,14 @@ UI11. The user MAY further edit the auto-filled values. Any save always sets `so
 UI12. Page header:
 - "Sync Models.dev" button: triggers sync, shows loading, toast with upserted/skipped counts.
 - "Add Model" button: opens create dialog.
+
+UI12a. When at least one Provider model runtime status has `pricing_status != "complete"`, the Model Database toolbar MUST render a pricing-warning icon after the search input with a visible gap. When no such status exists, the icon MUST be absent.
+
+UI12b. Activating the pricing-warning icon MUST open a popup grouped by Provider and Channel. Each listed model MUST come from the corresponding `unpriced_channels` entry of a Provider model runtime status.
+
+UI12c. Selecting a model in the popup MUST close the popup and open the existing create-model dialog. The dialog MUST prefill `model_id`, `models_dev_provider` when known, and `mode` when known; otherwise `mode` MUST default to `chat`. Saving uses the existing metadata upsert contract.
+
+UI12d. The popup MUST use the existing Provider SWR resource and MUST NOT issue one request per Provider or Channel.
 
 UI13. Edit dialog MUST include a "Delete" action.
 

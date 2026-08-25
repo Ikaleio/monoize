@@ -252,6 +252,9 @@
 		"apiBaseUrl": "API ベース URL",
 		"apiBaseUrlPlaceholder": "例：https://api.example.com",
 		"apiBaseUrlDescription": "下流クライアントがこのプロキシに接続するための API ベース URL。ダッシュボードに表示されます",
+		"modelsDevBaseUrl": "Models.dev 完全 URL",
+		"modelsDevBaseUrlPlaceholder": "例：https://models.dev/api.json",
+		"modelsDevBaseUrlDescription": "Models.dev からモデルメタデータと価格を同期する完全な URL",
 		"registration": "登録設定",
 		"registrationDescription": "ユーザー登録の設定を管理",
 		"allowRegistration": "登録を許可",
@@ -749,6 +752,18 @@
 		"limits": "トークン制限",
 		"mode": "モード",
 		"providerSource": "価格ソース",
+		"selectAll": "すべてのモデルを選択",
+		"selectModel": "{{model}} を選択",
+		"batchDelete": "{{count}} 件を削除",
+		"batchDeleteTitle": "選択したモデルを削除",
+		"batchDeleteConfirm": "選択した {{count}} 件のモデルメタデータを削除しますか？",
+		"batchDeleteSuccess": "{{count}} 件のモデルメタデータを削除しました",
+		"batchDeleteFailed": "選択したモデルの削除に失敗しました",
+		"unpriced": {
+			"open": "未価格モデルを設定",
+			"title": "未価格モデル",
+			"description": "モデルを選択して価格設定フォームを開きます。"
+		},
 		"tabs": {
 			"modelDatabase": "モデルデータベース",
 			"billingRates": "課金レート",

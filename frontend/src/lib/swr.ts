@@ -947,6 +947,7 @@ export async function upsertModelMetadataOptimistic(
   try {
     const result = await api.upsertModelMetadata(modelId, input);
     mutate(SWR_KEYS.MODEL_METADATA);
+    mutate(SWR_KEYS.BILLING_RATES);
     mutate(SWR_KEYS.MARKETPLACE_MODELS);
     mutate(SWR_KEYS.PROVIDERS);
     return result;
@@ -970,8 +971,34 @@ export async function deleteModelMetadataOptimistic(
   try {
     await api.deleteModelMetadata(modelId);
     mutate(SWR_KEYS.MODEL_METADATA);
+    mutate(SWR_KEYS.BILLING_RATES);
     mutate(SWR_KEYS.MARKETPLACE_MODELS);
     mutate(SWR_KEYS.PROVIDERS);
+  } catch (error) {
+    mutate(SWR_KEYS.MODEL_METADATA, currentRecords, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function batchDeleteModelMetadataOptimistic(
+  modelIds: string[],
+  currentRecords: ModelMetadataRecord[],
+  onError?: (error: Error) => void
+) {
+  const ids = [...new Set(modelIds)];
+  const filtered = currentRecords.filter((record) => !ids.includes(record.model_id));
+  mutate(SWR_KEYS.MODEL_METADATA, filtered, false);
+
+  try {
+    const result = await api.batchDeleteModelMetadata(ids);
+    mutate(SWR_KEYS.MODEL_METADATA);
+    mutate(SWR_KEYS.BILLING_RATES);
+    mutate(SWR_KEYS.MARKETPLACE_MODELS);
+    mutate(SWR_KEYS.PROVIDERS);
+    return result;
   } catch (error) {
     mutate(SWR_KEYS.MODEL_METADATA, currentRecords, false);
     if (onError && error instanceof Error) {

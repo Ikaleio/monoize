@@ -2,14 +2,20 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
 use crate::model_registry_store::{
-    CreateModelInput, DbModelMetadataRecord, ModelMetadataSyncResult, UpdateModelInput,
-    UpsertModelMetadataInput,
+    BatchDeleteModelMetadataResult, CreateModelInput, DbModelMetadataRecord,
+    ModelMetadataSyncResult, UpdateModelInput, UpsertModelMetadataInput,
 };
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use serde::Deserialize;
 use serde_json::json;
+
+#[derive(Debug, Deserialize)]
+pub struct BatchDeleteModelMetadataInput {
+    pub model_ids: Vec<String>,
+}
 
 pub async fn list_models(
     State(state): State<AppState>,
@@ -152,12 +158,19 @@ pub async fn sync_model_metadata_models_dev(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
+    let settings = state
+        .settings_store
+        .get_all()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     let result: ModelMetadataSyncResult = state
         .model_registry_store
-        .sync_from_models_dev(&state.http)
+        .sync_from_models_dev(&state.http, &settings.models_dev_base_url)
         .await
         .map_err(|e| {
-            if e.contains("fetch_failed") || e.contains("parse_failed") {
+            if e.starts_with("invalid_request:") {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
+            } else if e.contains("fetch_failed") || e.contains("parse_failed") {
                 AppError::new(StatusCode::BAD_GATEWAY, "upstream_fetch_failed", e)
             } else {
                 AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
@@ -215,6 +228,26 @@ pub async fn delete_model_metadata(
         ));
     }
     Ok(Json(json!({ "success": true })))
+}
+
+pub async fn batch_delete_model_metadata(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<BatchDeleteModelMetadataInput>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let result: BatchDeleteModelMetadataResult = state
+        .model_registry_store
+        .batch_delete_model_metadata(&input.model_ids)
+        .await
+        .map_err(|e| {
+            if e.starts_with("invalid_request:") {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
+            } else {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
+            }
+        })?;
+    Ok(Json(result))
 }
 
 /// Returns model metadata only for models offered by at least one enabled provider.

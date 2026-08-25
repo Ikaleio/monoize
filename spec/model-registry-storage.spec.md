@@ -104,6 +104,7 @@ Connection routing constraints:
 
 1. Read-only methods (`list_models`, `list_enabled_models`, `get_model`, `get_model_by_logical_and_provider`, `find_by_logical_model`, `list_model_metadata`, `list_priced_model_ids`, `get_model_metadata`, `get_model_pricing`) MUST use `DbPool::read()`.
 2. Mutating methods (`create_model`, `update_model`, `delete_model`, `upsert_model_metadata`, `delete_model_metadata`, `sync_from_models_dev`) MUST use `DbPool::write()` or `DbPool::begin_write()`.
+2a. `batch_delete_model_metadata` MUST use one write transaction for metadata rows and generated billing-rate mirror rows.
 3. Schema creation and migration in `new(...)` MUST execute on the write connection.
 4. A partial model or model-metadata update MUST preserve fields omitted from that update at the database write boundary. Concurrent partial updates to distinct fields MUST NOT restore omitted fields from a stale pre-update snapshot on SQLite or PostgreSQL.
 5. `sync_from_models_dev` MUST read the set of protected manual model ids once per transaction. It MUST NOT issue a metadata lookup per synchronized model.
@@ -145,6 +146,23 @@ After a create, update, or delete mutation, the dashboard handler MUST NOT load 
 ## Dashboard API Endpoints
 
 All endpoints require admin authentication.
+
+### POST /api/dashboard/model-metadata/batch-delete
+
+Delete multiple model metadata rows and their generated billing-rate mirrors.
+
+**Request:**
+```json
+{ "model_ids": ["gpt-4o", "claude-sonnet-4-20250514"] }
+```
+
+**Response:**
+```json
+{ "success": true, "deleted": 2, "not_found": [] }
+```
+
+The mutation MUST be atomic with respect to database errors. Missing IDs are reported in
+`not_found` and do not roll back rows that existed.
 
 ### GET /api/dashboard/models
 

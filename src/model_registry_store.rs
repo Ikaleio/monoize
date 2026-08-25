@@ -127,6 +127,13 @@ pub struct ModelMetadataSyncResult {
     pub fetched_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchDeleteModelMetadataResult {
+    pub success: bool,
+    pub deleted: usize,
+    pub not_found: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct ModelRegistryStore {
     db: DbPool,
@@ -396,7 +403,7 @@ impl ModelRegistryStore {
                         output_cost_per_reasoning_token_nano, max_input_tokens, max_output_tokens,
                         max_tokens, raw_json, source, updated_at
                  FROM model_metadata_records
-                 ORDER BY model_id ASC",
+                 ORDER BY CASE WHEN source = 'manual' THEN 0 ELSE 1 END, model_id ASC",
                 vec![],
             ))
             .await
@@ -725,13 +732,108 @@ impl ModelRegistryStore {
         Ok(true)
     }
 
+    pub async fn batch_delete_model_metadata(
+        &self,
+        model_ids: &[String],
+    ) -> Result<BatchDeleteModelMetadataResult, String> {
+        let mut normalized = Vec::with_capacity(model_ids.len());
+        let mut seen = std::collections::HashSet::new();
+        for model_id in model_ids {
+            let model_id = model_id.trim();
+            if !model_id.is_empty() && seen.insert(model_id.to_string()) {
+                normalized.push(model_id.to_string());
+            }
+        }
+        if normalized.is_empty() {
+            return Err("invalid_request: model_ids must not be empty".to_string());
+        }
+
+        const BATCH_CHUNK_SIZE: usize = 250;
+        let write_guard = self.db.write().await;
+        let txn = write_guard.begin().await.map_err(|e| e.to_string())?;
+        let mut deleted = 0usize;
+        let mut not_found = Vec::new();
+
+        for chunk in normalized.chunks(BATCH_CHUNK_SIZE) {
+            let placeholders = (1..=chunk.len())
+                .map(|index| format!("${index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let values = chunk
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<sea_orm::Value>>();
+            let rows = txn
+                .query_all(self.db.stmt(
+                    &format!(
+                        "SELECT model_id FROM model_metadata_records WHERE model_id IN ({placeholders})"
+                    ),
+                    values,
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            let found = rows
+                .iter()
+                .map(|row| {
+                    row.try_get::<String>("", "model_id")
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<std::collections::HashSet<_>, _>>()?;
+            not_found.extend(
+                chunk
+                    .iter()
+                    .filter(|model_id| !found.contains(*model_id))
+                    .cloned(),
+            );
+            if found.is_empty() {
+                continue;
+            }
+
+            let found_values = found.iter().cloned().map(Into::into).collect::<Vec<_>>();
+            let found_placeholders = (1..=found.len())
+                .map(|index| format!("${index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let metadata_result = txn
+                .execute(self.db.stmt(
+                    &format!(
+                        "DELETE FROM model_metadata_records WHERE model_id IN ({found_placeholders})"
+                    ),
+                    found_values.clone(),
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            deleted += metadata_result.rows_affected() as usize;
+            txn.execute(self.db.stmt(
+                &format!(
+                    "DELETE FROM billing_rate_records
+                     WHERE model_pattern IN ({found_placeholders})
+                       AND id LIKE 'model_metadata:%'"
+                ),
+                found_values,
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        txn.commit().await.map_err(|e| e.to_string())?;
+        Ok(BatchDeleteModelMetadataResult {
+            success: true,
+            deleted,
+            not_found,
+        })
+    }
+
     pub async fn sync_from_models_dev(
         &self,
         http: &reqwest::Client,
+        base_url: &str,
     ) -> Result<ModelMetadataSyncResult, String> {
-        const MODELS_DEV_URL: &str = "https://models.dev/api.json";
+        let models_dev_url = models_dev_api_url(base_url)?;
         let resp = http
-            .get(MODELS_DEV_URL)
+            .get(models_dev_url)
+            .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
             .map_err(|e| format!("fetch_failed: {e}"))?;
@@ -1033,6 +1135,42 @@ impl ModelRegistryStore {
             fetched_at,
         })
     }
+}
+
+fn models_dev_api_url(base_url: &str) -> Result<String, String> {
+    let trimmed = base_url.trim();
+    let mut url = reqwest::Url::parse(trimmed)
+        .map_err(|error| format!("invalid_request: models_dev_base_url is invalid: {error}"))?;
+    validate_models_dev_url(&url)?;
+
+    let path = url.path().trim_end_matches('/').to_string();
+    if path.is_empty() {
+        url.set_path("/api.json");
+    } else if path != url.path() {
+        url.set_path(&path);
+    }
+    Ok(url.to_string())
+}
+
+pub fn validate_models_dev_base_url(base_url: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(base_url.trim())
+        .map_err(|error| format!("invalid_request: models_dev_base_url is invalid: {error}"))?;
+    validate_models_dev_url(&url)
+}
+
+fn validate_models_dev_url(url: &reqwest::Url) -> Result<(), String> {
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(
+            "invalid_request: models_dev_base_url must use http or https and contain a host"
+                .to_string(),
+        );
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(
+            "invalid_request: models_dev_base_url must not contain a query or fragment".to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn row_to_record(row: &sea_orm::QueryResult) -> Result<DbModelRecord, String> {
@@ -1489,11 +1627,13 @@ pub fn normalize_model_id(raw: &str, provider_hint: Option<&str>) -> String {
 mod tests {
     use super::{
         ModelRegistryStore, UpsertModelMetadataInput, cost_per_1m_to_nano_string,
-        deserialize_nullable_field, models_dev_variant_for_dashboard,
+        deserialize_nullable_field, models_dev_api_url, models_dev_variant_for_dashboard,
+        validate_models_dev_base_url,
     };
     use crate::db::DbPool;
     use crate::migration::Migrator;
     use crate::monoize_routing::{CreateMonoizeProviderInput, MonoizeRoutingStore};
+    use sea_orm::ConnectionTrait;
     use sea_orm_migration::MigratorTrait;
     use serde::Deserialize;
     use serde_json::json;
@@ -1536,6 +1676,114 @@ mod tests {
         assert_eq!(omitted.value, None);
         assert_eq!(cleared.value, Some(None));
         assert_eq!(assigned.value, Some(Some("1001".to_string())));
+    }
+
+    #[test]
+    fn models_dev_base_url_normalizes_api_path_and_rejects_unsafe_urls() {
+        assert_eq!(
+            models_dev_api_url(" https://mirror.example/custom-api.json/ ").unwrap(),
+            "https://mirror.example/custom-api.json"
+        );
+        assert_eq!(
+            models_dev_api_url("https://models.dev/api.json").unwrap(),
+            "https://models.dev/api.json"
+        );
+        assert!(validate_models_dev_base_url("file:///tmp/models").is_err());
+        assert!(validate_models_dev_base_url("https://models.dev?token=secret").is_err());
+    }
+
+    #[tokio::test]
+    async fn batch_delete_metadata_removes_generated_billing_mirrors() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let store = ModelRegistryStore::new(db.clone())
+            .await
+            .expect("store creates");
+        store
+            .upsert_model_metadata(
+                "batch-model",
+                serde_json::from_value(json!({
+                    "input_cost_per_token_nano": "1000",
+                    "output_cost_per_token_nano": "2000"
+                }))
+                .expect("input parses"),
+            )
+            .await
+            .expect("metadata upserts");
+
+        let result = store
+            .batch_delete_model_metadata(&[
+                " batch-model ".to_string(),
+                "missing-model".to_string(),
+                "batch-model".to_string(),
+            ])
+            .await
+            .expect("batch delete succeeds");
+        assert_eq!(result.deleted, 1);
+        assert_eq!(result.not_found, vec!["missing-model"]);
+        assert!(
+            store
+                .get_model_metadata("batch-model")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let mirror_count: i64 = db
+            .read()
+            .query_one(db.stmt(
+                "SELECT COUNT(*) AS count FROM billing_rate_records WHERE id LIKE 'model_metadata:%'",
+                vec![],
+            ))
+            .await
+            .expect("count query succeeds")
+            .expect("count row exists")
+            .try_get("", "count")
+            .expect("count decodes");
+        assert_eq!(mirror_count, 0);
+    }
+
+    #[tokio::test]
+    async fn metadata_list_places_manual_rows_before_synced_rows() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+            write
+                .execute(db.stmt(
+                    "INSERT INTO model_metadata_records
+                     (model_id, raw_json, source, updated_at)
+                     VALUES ($1, '{}', $2, $3), ($4, '{}', $5, $3), ($6, '{}', $7, $3)",
+                    vec![
+                        "zeta".into(),
+                        "models_dev".into(),
+                        "2026-01-01T00:00:00Z".into(),
+                        "alpha".into(),
+                        "manual".into(),
+                        "beta".into(),
+                        "manual".into(),
+                    ],
+                ))
+                .await
+                .expect("metadata rows insert");
+        }
+        let store = ModelRegistryStore::new(db)
+            .await
+            .expect("store creates");
+        let model_ids = store
+            .list_model_metadata()
+            .await
+            .expect("metadata list succeeds")
+            .into_iter()
+            .map(|record| record.model_id)
+            .collect::<Vec<_>>();
+        assert_eq!(model_ids, vec!["alpha", "beta", "zeta"]);
     }
 
     #[tokio::test]

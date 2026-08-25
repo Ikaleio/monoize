@@ -13,7 +13,7 @@ interface SiteSectionProps {
   onChange: (updates: Partial<SystemSettings>) => void;
 }
 
-/** Site identity fields: name, description, downstream API base URL. */
+/** Site identity fields and external metadata source URL. */
 export function SiteSection({ settings, onChange }: SiteSectionProps) {
   const { t } = useTranslation();
 
@@ -44,6 +44,17 @@ export function SiteSection({ settings, onChange }: SiteSectionProps) {
           placeholder={t("settings.apiBaseUrlPlaceholder")}
         />
         <FieldDescription>{t("settings.apiBaseUrlDescription")}</FieldDescription>
+      </Field>
+      <Field className="sm:col-span-2">
+        <FieldLabel htmlFor="models_dev_base_url">{t("settings.modelsDevBaseUrl")}</FieldLabel>
+        <Input
+          id="models_dev_base_url"
+          type="url"
+          value={settings.models_dev_base_url}
+          onChange={(e) => onChange({ models_dev_base_url: e.target.value })}
+          placeholder={t("settings.modelsDevBaseUrlPlaceholder")}
+        />
+        <FieldDescription>{t("settings.modelsDevBaseUrlDescription")}</FieldDescription>
       </Field>
     </div>
   );

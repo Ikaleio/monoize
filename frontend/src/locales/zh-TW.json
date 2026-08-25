@@ -252,6 +252,9 @@
 		"apiBaseUrl": "API 基底 URL",
 		"apiBaseUrlPlaceholder": "例如：https://api.example.com",
 		"apiBaseUrlDescription": "下游用戶端連線至此代理使用的 API 基底 URL，將顯示於儀表板首頁",
+		"modelsDevBaseUrl": "Models.dev 完整 URL",
+		"modelsDevBaseUrlPlaceholder": "例如：https://models.dev/api.json",
+		"modelsDevBaseUrlDescription": "從 Models.dev 同步模型資料與價格時使用的完整 URL",
 		"registration": "註冊設定",
 		"registrationDescription": "管理使用者註冊設定",
 		"allowRegistration": "允許註冊",
@@ -750,6 +753,18 @@
 		"limits": "Token 限制",
 		"mode": "模式",
 		"providerSource": "定價來源",
+		"selectAll": "全選模型",
+		"selectModel": "選擇 {{model}}",
+		"batchDelete": "刪除 {{count}} 個",
+		"batchDeleteTitle": "刪除所選模型",
+		"batchDeleteConfirm": "確定要刪除 {{count}} 個所選模型資料記錄嗎？",
+		"batchDeleteSuccess": "已刪除 {{count}} 個模型資料記錄",
+		"batchDeleteFailed": "刪除所選模型失敗",
+		"unpriced": {
+			"open": "設定未定價模型",
+			"title": "未定價模型",
+			"description": "選擇模型以開啟定價表單。"
+		},
 		"tabs": {
 			"modelDatabase": "模型資料庫",
 			"billingRates": "計費費率",

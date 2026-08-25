@@ -195,6 +195,7 @@ export interface SystemSettings {
   site_name: string;
   site_description: string;
   api_base_url: string;
+  models_dev_base_url: string;
   global_transforms: TransformRuleConfig[];
   global_model_redirects: ModelRedirectRule[];
   reasoning_suffix_map: Record<string, string>;
@@ -462,7 +463,14 @@ export interface ModelMetadataSyncResult {
   success: boolean;
   upserted: number;
   skipped: number;
+  deleted: number;
   fetched_at: string;
+}
+
+export interface BatchDeleteModelMetadataResult {
+  success: boolean;
+  deleted: number;
+  not_found: string[];
 }
 
 export interface BillingRateRecord {
@@ -1120,6 +1128,15 @@ class ApiClient {
   async deleteModelMetadata(modelId: string): Promise<{ success: boolean }> {
     return this.request(`/model-metadata/${encodeURIComponent(modelId)}`, {
       method: "DELETE",
+    });
+  }
+
+  async batchDeleteModelMetadata(
+    modelIds: string[]
+  ): Promise<BatchDeleteModelMetadataResult> {
+    return this.request("/model-metadata/batch-delete", {
+      method: "POST",
+      body: JSON.stringify({ model_ids: modelIds }),
     });
   }
 

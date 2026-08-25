@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::dashboard_handlers::auth::user_response_from_store;
 use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
+use crate::model_registry_store::validate_models_dev_base_url;
 use crate::monoize_routing::AffinityFailbackMode;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{ModelRedirectRule, validate_model_redirects};
@@ -23,6 +24,7 @@ pub struct UpdateSettingsRequest {
     pub site_name: Option<String>,
     pub site_description: Option<String>,
     pub api_base_url: Option<String>,
+    pub models_dev_base_url: Option<String>,
     pub global_transforms: Option<Vec<TransformRuleConfig>>,
     pub global_model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_suffix_map: Option<std::collections::HashMap<String, String>>,
@@ -137,6 +139,12 @@ pub async fn update_settings(
     }
     if let Some(v) = body.api_base_url {
         settings.api_base_url = v;
+    }
+    if let Some(v) = body.models_dev_base_url {
+        validate_models_dev_base_url(&v).map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        })?;
+        settings.models_dev_base_url = v.trim().trim_end_matches('/').to_string();
     }
     if let Some(v) = body.global_transforms {
         settings.global_transforms = v;

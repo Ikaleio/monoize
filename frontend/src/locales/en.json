@@ -255,6 +255,9 @@
 		"apiBaseUrl": "API Base URL",
 		"apiBaseUrlPlaceholder": "e.g., https://api.example.com",
 		"apiBaseUrlDescription": "The API base URL for downstream clients to connect to this proxy, displayed on the dashboard",
+		"modelsDevBaseUrl": "Models.dev URL",
+		"modelsDevBaseUrlPlaceholder": "e.g., https://models.dev/api.json",
+		"modelsDevBaseUrlDescription": "Complete URL used to synchronize model metadata and prices from Models.dev",
 		"registration": "Registration",
 		"registrationDescription": "Control user registration settings",
 		"allowRegistration": "Allow Registration",
@@ -753,6 +756,18 @@
 		"limits": "Token Limits",
 		"mode": "Mode",
 		"providerSource": "Pricing Source",
+		"selectAll": "Select all models",
+		"selectModel": "Select {{model}}",
+		"batchDelete": "Delete {{count}}",
+		"batchDeleteTitle": "Delete selected models",
+		"batchDeleteConfirm": "Delete {{count}} selected model metadata records?",
+		"batchDeleteSuccess": "Deleted {{count}} model metadata records",
+		"batchDeleteFailed": "Failed to delete selected models",
+		"unpriced": {
+			"open": "Configure unpriced models",
+			"title": "Unpriced models",
+			"description": "Select a model to open the pricing form."
+		},
 		"tabs": {
 			"modelDatabase": "Model Database",
 			"billingRates": "Billing Rates",

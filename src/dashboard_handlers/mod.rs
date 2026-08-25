@@ -47,9 +47,9 @@ pub use groups::{
     update_group,
 };
 pub use model_registry::{
-    create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,
-    list_marketplace_models, list_model_metadata, list_models, sync_model_metadata_models_dev,
-    update_model, upsert_model_metadata,
+    batch_delete_model_metadata, create_model, delete_model, delete_model_metadata, get_model,
+    get_model_metadata, list_marketplace_models, list_model_metadata, list_models,
+    sync_model_metadata_models_dev, update_model, upsert_model_metadata,
 };
 pub use request_captures::{RequestCaptureQuery, get_request_capture};
 

@@ -7,8 +7,11 @@
   `/dashboard/admin-settings` (`frontend/src/pages/settings.tsx` and
   `frontend/src/components/settings/*`).
 - Data contract: the page reads `GET /api/dashboard/settings` and writes
-  `PUT /api/dashboard/settings`. This specification changes no API field, no field type,
-  and no persistence behavior.
+  `PUT /api/dashboard/settings`. The existing settings fields retain their types and
+  persistence behavior.
+- The system settings data contract includes `models_dev_base_url`, a persisted complete
+  HTTP(S) URL used by the Model Database Models.dev synchronization control. The field is
+  edited in the Site Information category.
 - Field-level behavior requirements from `dashboard-ui-layout.spec.md` (ST1-ST7) remain in
   force. Where ST statements describe the container as a "card", this specification
   supersedes the container shape: the container is a category panel per SSU-14.
@@ -20,7 +23,7 @@ these stable ids, in this order:
 
 | # | id | title key | fields |
 |---|----|-----------|--------|
-| 01 | `site` | `settings.siteInformation` | `site_name`, `site_description`, `api_base_url` |
+| 01 | `site` | `settings.siteInformation` | `site_name`, `site_description`, `api_base_url`, `models_dev_base_url` |
 | 02 | `access` | `settings.accessControl` | `registration_enabled`, `default_user_role`, `captcha_enabled`, `session_ttl_days`, `api_key_max_per_user` |
 | 03 | `codex` | `settings.codexModels` | `codex_model_ids` |
 | 04 | `suffix` | `settings.reasoningSuffixMap` | `reasoning_suffix_map` |

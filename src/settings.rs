@@ -34,6 +34,7 @@ pub struct SystemSettings {
     pub site_name: String,
     pub site_description: String,
     pub api_base_url: String,
+    pub models_dev_base_url: String,
     #[serde(default)]
     pub global_transforms: Vec<TransformRuleConfig>,
     #[serde(default)]
@@ -182,6 +183,7 @@ impl Default for SystemSettings {
             site_name: "Monoize Dashboard".to_string(),
             site_description: "Unified Responses Proxy".to_string(),
             api_base_url: String::new(),
+            models_dev_base_url: "https://models.dev/api.json".to_string(),
             global_transforms: Vec::new(),
             global_model_redirects: Vec::new(),
             reasoning_suffix_map: default_reasoning_suffix_map(),
@@ -216,7 +218,7 @@ impl Default for SystemSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::default_pricing_profile_model_patterns;
+    use super::{SystemSettings, default_pricing_profile_model_patterns};
     use crate::billing_rate_store::select_pricing_profile;
 
     #[test]
@@ -230,6 +232,14 @@ mod tests {
         assert_eq!(
             select_pricing_profile(&patterns, "gemini-2.5-pro"),
             Some("google")
+        );
+    }
+
+    #[test]
+    fn models_dev_base_url_defaults_to_official_host() {
+        assert_eq!(
+            SystemSettings::default().models_dev_base_url,
+            "https://models.dev/api.json"
         );
     }
 }
@@ -276,6 +286,8 @@ impl SettingsStore {
         self.set_if_not_exists("site_description", &defaults.site_description)
             .await?;
         self.set_if_not_exists("api_base_url", &defaults.api_base_url)
+            .await?;
+        self.set_if_not_exists("models_dev_base_url", &defaults.models_dev_base_url)
             .await?;
         self.set_if_not_exists(
             "global_transforms",
@@ -578,6 +590,9 @@ impl SettingsStore {
                 "api_base_url" => {
                     settings.api_base_url = row.value;
                 }
+                "models_dev_base_url" => {
+                    settings.models_dev_base_url = row.value;
+                }
                 "global_transforms" => {
                     if let Ok(mut transforms) =
                         serde_json::from_str::<Vec<TransformRuleConfig>>(&row.value)
@@ -722,6 +737,7 @@ impl SettingsStore {
             ("site_name", settings.site_name.clone()),
             ("site_description", settings.site_description.clone()),
             ("api_base_url", settings.api_base_url.clone()),
+            ("models_dev_base_url", settings.models_dev_base_url.clone()),
             (
                 "global_transforms",
                 serde_json::to_string(&settings.global_transforms).map_err(|e| e.to_string())?,

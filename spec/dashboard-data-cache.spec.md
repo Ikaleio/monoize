@@ -20,7 +20,8 @@ DC6. A successful full settings mutation MUST revalidate `PUBLIC_SETTINGS`, `PRI
 
 DC7. A successful Provider create, update, or delete MUST revalidate `PROVIDERS`, `CONFIG`, and `MARKETPLACE_MODELS`. Create and delete MUST also revalidate `STATS`. Delete MUST remove the deleted Provider-detail key without revalidation. Provider mutations MUST NOT revalidate `DASHBOARD_GROUPS`: the group registry is a first-class resource and is not derived from provider rows.
 
-DC8. A successful model-metadata create, update, delete, or models.dev sync MUST revalidate `MODEL_METADATA`, `MARKETPLACE_MODELS`, and `PROVIDERS`. Models.dev sync MUST also revalidate `BILLING_RATES`.
+DC8. A successful model-metadata create, update, delete, batch delete, or models.dev sync
+MUST revalidate `MODEL_METADATA`, `MARKETPLACE_MODELS`, `PROVIDERS`, and `BILLING_RATES`.
 
 DC9. A successful billing-rate create, update, delete, or catalog sync MUST revalidate `BILLING_RATES` and `PROVIDERS`.
 

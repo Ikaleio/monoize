@@ -292,9 +292,14 @@ M4. Price fields in this table MUST use nano-dollar integer strings.
 
 ## 8. Models.dev sync
 
-S1. Admin endpoint `POST /api/dashboard/model-metadata/sync/models-dev` MUST fetch:
+S1. Admin endpoint `POST /api/dashboard/model-metadata/sync/models-dev` MUST fetch the
+complete URL stored in `models_dev_base_url`, with default value
+`https://models.dev/api.json`.
 
-- `https://models.dev/api.json`
+S1a. `models_dev_base_url` MUST be an absolute URL using `http` or `https` and MUST contain a
+host. The server MUST normalize trailing slashes. For backward compatibility, a stored URL
+whose path is empty MAY be normalized by appending `/api.json`; a non-empty custom path MUST
+be preserved.
 
 S2. The response is a JSON object keyed by provider ID, each containing a `models` object keyed by model ID.
 
@@ -337,7 +342,9 @@ S9. The metadata sync subsystem MUST expose only `POST /api/dashboard/model-meta
 
 ## 9. Metadata query API
 
-Q1. Admin endpoint `GET /api/dashboard/model-metadata` MUST list stored metadata rows ordered by `model_id ASC`.
+Q1. Admin endpoint `GET /api/dashboard/model-metadata` MUST list stored metadata rows with
+all rows whose `source = "manual"` first, followed by all other rows; each group MUST be
+ordered by `model_id ASC`.
 
 Q2. `GET /api/dashboard/model-metadata/{model_id}` MUST return single row or `404 not_found`.
 

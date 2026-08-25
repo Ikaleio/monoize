@@ -8,6 +8,8 @@ import {
   Database,
   TableProperties,
   SlidersHorizontal,
+  CircleDollarSign,
+  ChevronRight,
   ArrowUp,
   ArrowDown,
   Save,
@@ -16,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -45,13 +48,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ModelBadge } from "@/components/ModelBadge";
 import {
   useModelMetadata,
+  useProviders,
   useBillingRates,
   usePricingProfilePatterns,
   upsertModelMetadataOptimistic,
   deleteModelMetadataOptimistic,
+  batchDeleteModelMetadataOptimistic,
   syncModelMetadata,
   upsertBillingRateOptimistic,
   deleteBillingRateOptimistic,
@@ -141,6 +147,39 @@ const emptyForm: EditFormData = {
   maxOutputTokens: "",
   maxTokens: "",
 };
+
+interface UnpricedModelOption {
+  modelId: string;
+  modelsDevProvider: string;
+  mode: string;
+}
+
+interface UnpricedChannelGroup {
+  channelId: string;
+  channelName: string;
+  models: UnpricedModelOption[];
+}
+
+interface UnpricedProviderGroup {
+  providerId: string;
+  providerName: string;
+  channels: UnpricedChannelGroup[];
+}
+
+function inferModelsDevProvider(modelId: string): string {
+  const model = modelId.toLowerCase();
+  if (model.startsWith("gpt-") || /^o\d/.test(model)) return "openai";
+  if (model.startsWith("claude-")) return "anthropic";
+  if (model.startsWith("gemini-")) return "google";
+  if (model.startsWith("grok-")) return "xai";
+  if (model.startsWith("deepseek-")) return "deepseek";
+  if (/^(mistral|codestral|pixtral|ministral)-/.test(model)) return "mistral";
+  return "";
+}
+
+function inferModelMode(modelId: string): string {
+  return modelId.toLowerCase().startsWith("text-embedding-") ? "embedding" : "chat";
+}
 
 function recordToForm(r: ModelMetadataRecord): EditFormData {
   return {
@@ -232,6 +271,7 @@ function applyVariantToForm(form: EditFormData, variant: ProviderVariant): EditF
 export function ModelMetadataPage() {
   const { t } = useTranslation();
   const { data: records = [], isLoading } = useModelMetadata();
+  const { data: providers = [] } = useProviders();
   const [search, setSearch] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -239,10 +279,67 @@ export function ModelMetadataPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<EditFormData>(emptyForm);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [unpricedOpen, setUnpricedOpen] = useState(false);
 
-  const filtered = records.filter((r) =>
-    r.model_id.toLowerCase().includes(search.toLowerCase())
+  const filtered = records
+    .filter((r) => r.model_id.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      const sourceOrder = Number(a.source !== "manual") - Number(b.source !== "manual");
+      return sourceOrder || a.model_id.localeCompare(b.model_id);
+    });
+
+  const metadataById = useMemo(
+    () => new Map(records.map((record) => [record.model_id, record])),
+    [records]
   );
+
+  const unpricedGroups = useMemo<UnpricedProviderGroup[]>(() => {
+    const groups = new Map<string, UnpricedProviderGroup>();
+    for (const provider of providers) {
+      const channelGroups = new Map<string, UnpricedChannelGroup>();
+      for (const status of provider.model_runtime_statuses ?? []) {
+        if (status.pricing_status === "complete") continue;
+        for (const channel of status.unpriced_channels) {
+          const channelGroup = channelGroups.get(channel.channel_id) ?? {
+            channelId: channel.channel_id,
+            channelName: channel.channel_name,
+            models: [],
+          };
+          const metadata = metadataById.get(status.model);
+          if (!channelGroup.models.some((model) => model.modelId === status.model)) {
+            channelGroup.models.push({
+              modelId: status.model,
+              modelsDevProvider:
+                metadata?.models_dev_provider ||
+                inferModelsDevProvider(status.model) ||
+                provider.id,
+              mode: metadata?.mode ?? inferModelMode(status.model),
+            });
+          }
+          channelGroups.set(channel.channel_id, channelGroup);
+        }
+      }
+      if (channelGroups.size > 0) {
+        groups.set(provider.id, {
+          providerId: provider.id,
+          providerName: provider.name,
+          channels: [...channelGroups.values()]
+            .map((channel) => ({
+              ...channel,
+              models: [...channel.models].sort((a, b) => a.modelId.localeCompare(b.modelId)),
+            }))
+            .sort((a, b) => a.channelName.localeCompare(b.channelName)),
+        });
+      }
+    }
+    return [...groups.values()].sort((a, b) => a.providerName.localeCompare(b.providerName));
+  }, [metadataById, providers]);
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((record) => selectedModelIds.includes(record.model_id));
+  const someFilteredSelected = filtered.some((record) => selectedModelIds.includes(record.model_id));
 
   const providerVariants = useMemo(() => {
     if (!editRecord?.raw_json) return [];
@@ -265,6 +362,46 @@ export function ModelMetadataPage() {
       return
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const toggleModelSelection = (modelId: string, checked: boolean) => {
+    setSelectedModelIds((current) =>
+      checked
+        ? current.includes(modelId)
+          ? current
+          : [...current, modelId]
+        : current.filter((id) => id !== modelId)
+    );
+  };
+
+  const toggleFilteredSelection = (checked: boolean) => {
+    setSelectedModelIds((current) => {
+      if (checked) return [...new Set([...current, ...filtered.map((record) => record.model_id)])];
+      const filteredIds = new Set(filtered.map((record) => record.model_id));
+      return current.filter((id) => !filteredIds.has(id));
+    });
+  };
+
+  const confirmBatchDelete = async () => {
+    if (selectedModelIds.length === 0) return;
+    try {
+      const result = await batchDeleteModelMetadataOptimistic(
+        selectedModelIds,
+        records,
+        (error) =>
+          toast.error(t("modelMetadata.batchDeleteFailed"), {
+            description: error.message,
+          })
+      );
+      toast.success(
+        t("modelMetadata.batchDeleteSuccess", { count: result.deleted })
+      );
+      setSelectedModelIds([]);
+    } catch {
+      return;
+    } finally {
+      setBatchDeleteOpen(false);
     }
   };
 
@@ -312,6 +449,7 @@ export function ModelMetadataPage() {
       );
       toast.success(t("modelMetadata.deleteSuccess"));
       setEditRecord(null);
+      setSelectedModelIds((current) => current.filter((id) => id !== deleteTargetId));
     } catch {
       return
     } finally {
@@ -324,9 +462,9 @@ export function ModelMetadataPage() {
     setForm(recordToForm(record));
   };
 
-  const openCreate = () => {
+  const openCreate = (prefill: Partial<EditFormData> = {}) => {
     setCreateOpen(true);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, ...prefill });
   };
 
   const editDialog = (isCreate: boolean, open: boolean, onOpenChange: (v: boolean) => void) => (
@@ -549,8 +687,28 @@ export function ModelMetadataPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("modelMetadata.batchDeleteTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("modelMetadata.batchDeleteConfirm", { count: selectedModelIds.length })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmBatchDelete}
+            >
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <Tabs defaultValue="models" className="space-y-4">
-        <TabsList className="max-w-full justify-start overflow-x-auto">
+        <TabsList className="max-w-full justify-start">
           <TabsTrigger value="models">
             <Database className="mr-2 h-4 w-4" />
             {t("modelMetadata.tabs.modelDatabase", "Model Database")}
@@ -581,12 +739,90 @@ export function ModelMetadataPage() {
                       <Database className="h-5 w-5" />
                       {t("modelMetadata.title")}
                     </div>
-                    <TableToolbarSearch
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder={t("modelMetadata.searchPlaceholder")}
-                    />
+                    <div className="flex w-full items-center gap-2 sm:w-auto">
+                      <TableToolbarSearch
+                        containerClassName="flex-1 sm:w-64"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder={t("modelMetadata.searchPlaceholder")}
+                      />
+                      {unpricedGroups.length > 0 && (
+                        <Popover open={unpricedOpen} onOpenChange={setUnpricedOpen}>
+                          <PopoverTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="ml-2 shrink-0 text-warning-foreground"
+                              aria-label={t("modelMetadata.unpriced.open")}
+                            >
+                              <CircleDollarSign className="h-4 w-4" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            align="start"
+                            className="max-h-[min(28rem,calc(100dvh-2rem))] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto"
+                          >
+                            <div className="space-y-3">
+                              <div>
+                                <p className="text-sm font-semibold">{t("modelMetadata.unpriced.title")}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {t("modelMetadata.unpriced.description")}
+                                </p>
+                              </div>
+                              <div className="space-y-3">
+                                {unpricedGroups.map((provider) => (
+                                  <div key={provider.providerId} className="space-y-2">
+                                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                      {provider.providerName}
+                                    </div>
+                                    {provider.channels.map((channel) => (
+                                      <div key={channel.channelId} className="space-y-1">
+                                        <div className="flex items-center gap-1 text-xs font-medium">
+                                          <ChevronRight className="h-3.5 w-3.5" />
+                                          {channel.channelName}
+                                        </div>
+                                        <div className="ml-5 grid gap-1">
+                                          {channel.models.map((model) => (
+                                            <Button
+                                              key={`${channel.channelId}:${model.modelId}`}
+                                              type="button"
+                                              variant="ghost"
+                                              className="h-auto justify-start px-2 py-1.5 text-left font-mono text-xs"
+                                              onClick={() => {
+                                                openCreate({
+                                                  modelId: model.modelId,
+                                                  modelsDevProvider: model.modelsDevProvider,
+                                                  mode: model.mode,
+                                                });
+                                                setUnpricedOpen(false);
+                                              }}
+                                            >
+                                              {model.modelId}
+                                            </Button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                    </div>
                     <div className="ml-auto flex items-center gap-2">
+                      {selectedModelIds.length > 0 && (
+                        <Button
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setBatchDeleteOpen(true)}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          {t("modelMetadata.batchDelete", { count: selectedModelIds.length })}
+                        </Button>
+                      )}
                       <Button variant="outline" onClick={handleSync} disabled={syncing}>
                         <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
                         {syncing ? t("modelMetadata.syncing") : t("modelMetadata.syncModelsDev")}
@@ -632,6 +868,13 @@ export function ModelMetadataPage() {
                 }}
                 fixedHeaderContent={() => (
                   <tr className="border-b bg-background">
+                    <VirtualTableHeaderCell className="w-[48px]">
+                      <Checkbox
+                        checked={allFilteredSelected ? true : someFilteredSelected ? "indeterminate" : false}
+                        onCheckedChange={(checked) => toggleFilteredSelection(checked === true)}
+                        aria-label={t("modelMetadata.selectAll")}
+                      />
+                    </VirtualTableHeaderCell>
                     <VirtualTableHeaderCell className="min-w-[200px]">
                       {t("modelMetadata.modelId")}
                     </VirtualTableHeaderCell>
@@ -657,6 +900,18 @@ export function ModelMetadataPage() {
                 )}
                 itemContent={(_index, record) => (
                   <>
+                    <VirtualTableCell
+                      className="w-[48px]"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <Checkbox
+                        checked={selectedModelIds.includes(record.model_id)}
+                        onCheckedChange={(checked) =>
+                          toggleModelSelection(record.model_id, checked === true)
+                        }
+                        aria-label={t("modelMetadata.selectModel", { model: record.model_id })}
+                      />
+                    </VirtualTableCell>
                     <VirtualTableCell
                       onClick={() => openEdit(record)}
                     >

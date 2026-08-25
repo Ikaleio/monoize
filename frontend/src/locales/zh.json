@@ -255,6 +255,9 @@
 		"apiBaseUrl": "API 基址",
 		"apiBaseUrlPlaceholder": "例如：https://api.example.com",
 		"apiBaseUrlDescription": "下游客户端连接此代理使用的 API 基址，将在仪表盘首页展示",
+		"modelsDevBaseUrl": "Models.dev 完整 URL",
+		"modelsDevBaseUrlPlaceholder": "例如：https://models.dev/api.json",
+		"modelsDevBaseUrlDescription": "从 Models.dev 同步模型元数据和价格时使用的完整 URL",
 		"registration": "注册设置",
 		"registrationDescription": "控制用户注册设置",
 		"allowRegistration": "允许注册",
@@ -753,6 +756,18 @@
 		"limits": "Token 限制",
 		"mode": "模式",
 		"providerSource": "定价来源",
+		"selectAll": "全选模型",
+		"selectModel": "选择 {{model}}",
+		"batchDelete": "删除 {{count}} 个",
+		"batchDeleteTitle": "删除所选模型",
+		"batchDeleteConfirm": "确定删除 {{count}} 个所选模型元数据记录吗？",
+		"batchDeleteSuccess": "已删除 {{count}} 个模型元数据记录",
+		"batchDeleteFailed": "删除所选模型失败",
+		"unpriced": {
+			"open": "配置未定价模型",
+			"title": "未定价模型",
+			"description": "选择模型以打开定价表单。"
+		},
 		"tabs": {
 			"modelDatabase": "模型数据库",
 			"billingRates": "计费费率",
