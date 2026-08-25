@@ -237,7 +237,8 @@ placeholder and keeps the user message; no error is shown.
 
 PG-IMG8. The edit-image action on a generated (or attached) image MUST switch the
 composer to image mode and stage that image as the composer attachment, so the next send
-follows PG-IMG3.
+follows PG-IMG3. If fetching the image bytes for staging fails, an error toast is shown
+and the composer state is unchanged.
 
 PG-IMG9. Generated images participate in later chat requests only through PG-CHAT3
 (assistant file parts are stripped); the image bytes are never re-uploaded in chat mode.
@@ -271,10 +272,11 @@ retained). The playground content root MUST be a full-height flex column sized s
 page itself never scrolls: height `calc(100dvh - 5.5rem)` below `lg` and
 `calc(100dvh - 3rem)` at `lg` and above (the dashboard main pane paddings).
 
-PG-L2. Empty conversation renders a hero: centered greeting text (display font) and the
-composer centered beneath it, with no card wrapper. Non-empty conversation renders the
-scrollable message list (the only scroll container) with the composer docked at the
-bottom. Both states share one composer element.
+PG-L2. Empty conversation renders a hero: centered greeting text (display font) with a
+one-line muted hint stating that the chat is ephemeral, and the composer centered
+beneath it, with no card wrapper. Non-empty conversation renders the scrollable message
+list (the only scroll container) with the composer docked at the bottom and a "new
+chat" action above the list (PG-CMP5). Both states share one composer element.
 
 PG-L3. Message column max width MUST be `48rem` (`max-w-3xl`) centered. User messages
 render as right-aligned bubbles on the `muted` surface token with `rounded-2xl` corners;

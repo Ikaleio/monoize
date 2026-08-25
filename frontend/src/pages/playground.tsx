@@ -1,643 +1,414 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Plus,
-  Send,
-  Square,
-  Trash2,
-  MessageSquare,
-  Bot,
-  User,
-  Settings2,
-  ChevronDown,
-  ChevronUp,
-  KeyRound,
-} from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Separator } from "@/components/ui/separator";
+import { useChat } from "@ai-sdk/react";
+import type { FileUIPart, UIMessage } from "ai";
+import { AnimatePresence, useReducedMotion } from "framer-motion";
+import { KeyRound, RefreshCcw, SquarePen, X } from "lucide-react";
 import { toast } from "sonner";
-import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
-import { PageHeader } from "@/components/ui/page-header";
+import { Button } from "@/components/ui/button";
+import { LayoutGroup, motion, springs } from "@/components/ui/motion";
+import {
+  createApiKeyOptimistic,
+  useApiKeys,
+  useCurrentUser,
+  useDashboardGroups,
+  useMarketplaceModels,
+} from "@/lib/swr";
+import { resolvePlaygroundKey } from "@/components/playground/auth";
+import {
+  MonoizeChatTransport,
+  type ChatRequestConfig,
+} from "@/components/playground/chat-transport";
+import { Composer, type ComposerMode } from "@/components/playground/composer";
+import { MessageList } from "@/components/playground/message-list";
+import {
+  purgeLegacyPlaygroundKeys,
+  usePlaygroundPrefs,
+} from "@/components/playground/prefs";
+import {
+  playgroundMessageId,
+  usePlaygroundImages,
+  type ComposerAttachment,
+} from "@/components/playground/use-image-generation";
 
-// ── Types ──────────────────────────────────────────────────────────
-
-type MessageRole = "system" | "user" | "assistant";
-
-interface PlaygroundMessage {
-  id: string;
-  role: MessageRole;
-  content: string;
-}
-
-// ── Persistence helpers ────────────────────────────────────────────
-
-const LS_KEY_API_KEY = "playground_api_key";
-const LS_KEY_MODEL = "playground_model";
-const LS_KEY_TEMPERATURE = "playground_temperature";
-const LS_KEY_MAX_TOKENS = "playground_max_tokens";
-
-function loadString(key: string, fallback: string): string {
-  try {
-    return localStorage.getItem(key) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function saveString(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* quota exceeded – ignore */
-  }
-}
-
-// ── Unique ID generator ────────────────────────────────────────────
-
-let _seq = 0;
-function uid(): string {
-  return `msg-${Date.now()}-${++_seq}`;
-}
-
-// ── Role icon helper ───────────────────────────────────────────────
-
-function RoleIcon({ role }: { role: MessageRole }) {
-  if (role === "system")
-    return <Settings2 className="h-4 w-4 text-warning" />;
-  if (role === "assistant") return <Bot className="h-4 w-4 text-primary" />;
-  return <User className="h-4 w-4 text-success" />;
-}
-
-function roleBadgeClass(role: MessageRole): string {
-  if (role === "system")
-    return "border-warning-border bg-warning-soft text-warning-foreground";
-  if (role === "assistant")
-    return "bg-primary/15 text-primary border-0";
-  return "border-success-border bg-success-soft text-success-foreground";
-}
-
-// ── SSE streaming helper ───────────────────────────────────────────
-
-async function streamChatCompletion(
-  apiKey: string,
-  model: string,
-  messages: { role: string; content: string }[],
-  params: { temperature?: number; max_tokens?: number },
-  onToken: (token: string) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  const body: Record<string, unknown> = {
-    model,
-    messages,
-    stream: true,
-  };
-  if (params.temperature !== undefined) body.temperature = params.temperature;
-  if (params.max_tokens !== undefined) body.max_tokens = params.max_tokens;
-
-  const res = await fetch("/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal,
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+    reader.readAsDataURL(file);
   });
-
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try {
-      const j = await res.json();
-      msg = j.error?.message || j.error?.code || msg;
-    } catch {
-      /* ignore parse failures */
-    }
-    throw new Error(msg);
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const lines = buffer.split("\n");
-    // Keep the last partial line in the buffer
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith(":")) continue;
-      if (trimmed === "data: [DONE]") return;
-      if (trimmed.startsWith("data: ")) {
-        try {
-          const payload = JSON.parse(trimmed.slice(6));
-          const delta = payload.choices?.[0]?.delta?.content;
-          if (typeof delta === "string") {
-            onToken(delta);
-          }
-        } catch {
-          /* skip malformed JSON chunks */
-        }
-      }
-    }
-  }
 }
-
-// ── Component: MessageRow ──────────────────────────────────────────
-
-function MessageRow({
-  message,
-  index,
-  isStreaming,
-  onChange,
-  onDelete,
-}: {
-  message: PlaygroundMessage;
-  index: number;
-  isStreaming: boolean;
-  onChange: (id: string, patch: Partial<PlaygroundMessage>) => void;
-  onDelete: (id: string) => void;
-}) {
-  const { t } = useTranslation();
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.03, ...transitions.fast }}
-      className="group"
-    >
-      <div className="flex gap-3">
-        {/* Role selector */}
-        <div className="pt-1">
-          <Select
-            value={message.role}
-            onValueChange={(v) =>
-              onChange(message.id, { role: v as MessageRole })
-            }
-            disabled={isStreaming}
-          >
-            <SelectTrigger
-              className={`h-7 w-[110px] text-xs gap-1.5 border-0 px-2.5 font-medium ${roleBadgeClass(message.role)}`}
-            >
-              <RoleIcon role={message.role} />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="system">{t("playground.system")}</SelectItem>
-              <SelectItem value="user">{t("playground.user")}</SelectItem>
-              <SelectItem value="assistant">
-                {t("playground.assistant")}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Content textarea */}
-        <div className="flex-1 min-w-0">
-          <Textarea
-            value={message.content}
-            onChange={(e) =>
-              onChange(message.id, { content: e.target.value })
-            }
-            placeholder={
-              message.role === "system"
-                ? t("playground.systemPlaceholder")
-                : message.role === "user"
-                  ? t("playground.userPlaceholder")
-                  : t("playground.assistantPlaceholder")
-            }
-            className="min-h-[60px] resize-y font-mono text-sm"
-            disabled={isStreaming}
-          />
-        </div>
-
-        {/* Delete button */}
-        <div className="pt-1">
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-11 touch-manipulation transition-opacity text-muted-foreground hover:text-destructive sm:size-8 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
-                  aria-label={t("common.delete")}
-                  onClick={() => onDelete(message.id)}
-                  disabled={isStreaming}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t("common.delete")}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-// ── Component: StreamingOutput ─────────────────────────────────────
-
-function StreamingOutput({ content }: { content: string }) {
-  const { t } = useTranslation();
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [content]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={transitions.fast}
-    >
-      <Card className="border-primary/20 bg-primary/[0.02]">
-        <CardContent className="pt-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Bot className="h-4 w-4 text-primary" />
-            <span className="text-xs font-medium text-primary">
-              {t("playground.assistant")}
-            </span>
-            <div className="flex items-center gap-1 ml-auto">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {t("playground.streaming")}
-              </span>
-            </div>
-          </div>
-          <div className="font-mono text-sm whitespace-pre-wrap break-words leading-relaxed min-h-[40px]">
-            {content || (
-              <span className="text-muted-foreground italic">
-                {t("playground.waitingForResponse")}
-              </span>
-            )}
-          </div>
-          <div ref={bottomRef} />
-        </CardContent>
-      </Card>
-    </motion.div>
-  );
-}
-
-// ── Page Component ─────────────────────────────────────────────────
 
 export function PlaygroundPage() {
   const { t } = useTranslation();
+  const shouldReduceMotion = useReducedMotion();
+  const [prefs, setPref] = usePlaygroundPrefs();
+  const [mode, setMode] = useState<ComposerMode>("chat");
+  const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [creatingKey, setCreatingKey] = useState(false);
 
-  // ── State ──────────────────────────────────────────────────────
-  const [apiKey, setApiKey] = useState(() =>
-    loadString(LS_KEY_API_KEY, ""),
+  useEffect(() => purgeLegacyPlaygroundKeys(), []);
+
+  const { data: apiKeys, isLoading: keysLoading } = useApiKeys();
+  const { data: groups, isLoading: groupsLoading } = useDashboardGroups();
+  const { data: models, isLoading: modelsLoading } = useMarketplaceModels();
+  const { data: user } = useCurrentUser();
+
+  const userAllowedGroups = useMemo(
+    () => user?.allowed_groups ?? [],
+    [user?.allowed_groups],
   );
-  const [model, setModel] = useState(() =>
-    loadString(LS_KEY_MODEL, ""),
+  const resolution = useMemo(
+    () =>
+      resolvePlaygroundKey(apiKeys, prefs.apiKeyId, prefs.group, userAllowedGroups),
+    [apiKeys, prefs.apiKeyId, prefs.group, userAllowedGroups],
   );
-  const [temperature, setTemperature] = useState(() =>
-    loadString(LS_KEY_TEMPERATURE, "1"),
-  );
-  const [maxTokens, setMaxTokens] = useState(() =>
-    loadString(LS_KEY_MAX_TOKENS, ""),
-  );
-  const [showParams, setShowParams] = useState(false);
 
-  const [messages, setMessages] = useState<PlaygroundMessage[]>([
-    { id: uid(), role: "system", content: "" },
-    { id: uid(), role: "user", content: "" },
-  ]);
+  // Refs let the memoized transport observe the latest selector state at call
+  // time (PG-CHAT2 step 1) without recreating the useChat instance.
+  const configRef = useRef<ChatRequestConfig>({
+    model: "",
+    apiKey: null,
+    systemPrompt: "",
+    temperature: "",
+    maxTokens: "",
+  });
+  configRef.current = {
+    model: prefs.chatModel,
+    apiKey: resolution.key?.key ?? null,
+    systemPrompt: prefs.systemPrompt,
+    temperature: prefs.temperature,
+    maxTokens: prefs.maxTokens,
+  };
+  const tRef = useRef(t);
+  tRef.current = t;
 
-  const [streaming, setStreaming] = useState(false);
-  const [streamContent, setStreamContent] = useState("");
-  const abortRef = useRef<AbortController | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // ── Persist settings on change ─────────────────────────────────
-  useEffect(() => saveString(LS_KEY_API_KEY, apiKey), [apiKey]);
-  useEffect(() => saveString(LS_KEY_MODEL, model), [model]);
-  useEffect(() => saveString(LS_KEY_TEMPERATURE, temperature), [temperature]);
-  useEffect(() => saveString(LS_KEY_MAX_TOKENS, maxTokens), [maxTokens]);
-
-  // ── Handlers ───────────────────────────────────────────────────
-  const updateMessage = useCallback(
-    (id: string, patch: Partial<PlaygroundMessage>) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, ...patch } : m)),
-      );
-    },
+  const transport = useMemo(
+    () =>
+      new MonoizeChatTransport(
+        () => configRef.current,
+        (reason) =>
+          tRef.current(
+            reason === "model" ? "playground.errorNoModel" : "playground.errorNoKey",
+          ),
+      ),
     [],
   );
 
-  const deleteMessage = useCallback((id: string) => {
-    setMessages((prev) => prev.filter((m) => m.id !== id));
-  }, []);
+  const {
+    messages,
+    setMessages,
+    sendMessage,
+    regenerate,
+    stop,
+    status,
+    error,
+    clearError,
+  } = useChat({ transport });
 
-  const addMessage = useCallback(() => {
-    setMessages((prev) => [...prev, { id: uid(), role: "user", content: "" }]);
-    // Scroll to bottom after next render
-    setTimeout(
-      () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-      50,
+  const appendMessage = useCallback(
+    (message: UIMessage) => setMessages((prev) => [...prev, message]),
+    [setMessages],
+  );
+  const images = usePlaygroundImages(appendMessage);
+
+  const chatBusy = status === "submitted" || status === "streaming";
+  const imageBusy = images.job?.status === "pending";
+  const busy = chatBusy || imageBusy;
+  const conversationEmpty = messages.length === 0 && !images.job;
+
+  const trimmedText = text.trim();
+  const modelForMode = mode === "image" ? prefs.imageModel : prefs.chatModel;
+  const canSend =
+    resolution.key !== null &&
+    modelForMode.trim().length > 0 &&
+    (status === "ready" || status === "error") &&
+    !imageBusy &&
+    (trimmedText.length > 0 || (mode === "chat" && attachments.length > 0));
+
+  const blockedHint =
+    resolution.reason === "no-group-key"
+      ? t("playground.groupKeyBlocked", { group: prefs.group })
+      : null;
+
+  const handleAddFiles = useCallback(async (files: FileList) => {
+    const imageFiles = Array.from(files).filter((file) =>
+      file.type.startsWith("image/"),
     );
+    const staged = await Promise.all(
+      imageFiles.map(async (file) => ({
+        id: playgroundMessageId(),
+        file,
+        url: await readAsDataUrl(file),
+      })),
+    );
+    if (staged.length > 0) {
+      setAttachments((prev) => [...prev, ...staged]);
+    }
   }, []);
 
-  const handleSend = useCallback(async () => {
-    if (!apiKey.trim()) {
-      toast.error(t("playground.apiKeyRequired"));
-      return;
-    }
-    if (!model.trim()) {
-      toast.error(t("playground.modelRequired"));
-      return;
-    }
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+  }, []);
 
-    const nonEmpty = messages
-      .filter((m) => m.content.trim())
-      .map((m) => ({ role: m.role, content: m.content }));
-
-    if (nonEmpty.length === 0) {
-      toast.error(t("playground.noMessages"));
-      return;
-    }
-
-    const params: { temperature?: number; max_tokens?: number } = {};
-    const tempNum = parseFloat(temperature);
-    if (temperature.trim() && Number.isFinite(tempNum)) {
-      params.temperature = tempNum;
-    }
-    const maxNum = parseInt(maxTokens, 10);
-    if (maxTokens.trim() && Number.isFinite(maxNum) && maxNum > 0) {
-      params.max_tokens = maxNum;
-    }
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setStreaming(true);
-    setStreamContent("");
-
-    let accumulated = "";
-
-    try {
-      await streamChatCompletion(
-        apiKey.trim(),
-        model.trim(),
-        nonEmpty,
-        params,
-        (token) => {
-          accumulated += token;
-          setStreamContent(accumulated);
-        },
-        controller.signal,
-      );
-    } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        const errorMsg = (err as Error).message || t("common.error");
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: uid(),
-            role: "assistant" as MessageRole,
-            content: `[Error] ${errorMsg}`,
-          },
-          { id: uid(), role: "user" as MessageRole, content: "" },
-        ]);
-      }
-    } finally {
-      setStreaming(false);
-      abortRef.current = null;
-
-      if (accumulated.trim()) {
-        setMessages((prev) => [
-          ...prev,
-          { id: uid(), role: "assistant" as MessageRole, content: accumulated },
-          { id: uid(), role: "user" as MessageRole, content: "" },
-        ]);
-      }
-
-      setStreamContent("");
-      setTimeout(
-        () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-        50,
+  const handleSend = useCallback(() => {
+    if (!canSend || !resolution.key) return;
+    if (mode === "image") {
+      images.generate({
+        prompt: trimmedText,
+        model: prefs.imageModel.trim(),
+        apiKey: resolution.key.key,
+        attachment: attachments[0] ?? null,
+      });
+    } else {
+      const files: FileUIPart[] = attachments.map((attachment) => ({
+        type: "file",
+        mediaType: attachment.file.type || "image/png",
+        filename: attachment.file.name,
+        url: attachment.url,
+      }));
+      void sendMessage(
+        files.length > 0 ? { text: trimmedText, files } : { text: trimmedText },
       );
     }
-  }, [apiKey, model, messages, temperature, maxTokens, t]);
+    setText("");
+    setAttachments([]);
+  }, [
+    canSend,
+    resolution.key,
+    mode,
+    images,
+    trimmedText,
+    prefs.imageModel,
+    attachments,
+    sendMessage,
+  ]);
 
   const handleStop = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+    if (imageBusy) images.abort();
+    if (chatBusy) void stop();
+  }, [imageBusy, chatBusy, images, stop]);
 
-  // ── Loading state (none needed – pure frontend) ────────────────
+  const handleEditUser = useCallback(
+    (messageId: string, newText: string) => {
+      void sendMessage({ text: newText, messageId });
+    },
+    [sendMessage],
+  );
+
+  const handleEditAssistant = useCallback(
+    (messageId: string, newText: string) => {
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== messageId) return message;
+          // PG-MSG4: all text parts collapse into one edited text part while
+          // non-text parts (files, reasoning) keep their relative order.
+          const parts: UIMessage["parts"] = [];
+          let replaced = false;
+          for (const part of message.parts) {
+            if (part.type === "text") {
+              if (!replaced) {
+                parts.push({ type: "text", text: newText });
+                replaced = true;
+              }
+            } else {
+              parts.push(part);
+            }
+          }
+          if (!replaced) parts.push({ type: "text", text: newText });
+          return { ...message, parts };
+        }),
+      );
+    },
+    [setMessages],
+  );
+
+  const handleDelete = useCallback(
+    (messageId: string) => {
+      setMessages((prev) => prev.filter((message) => message.id !== messageId));
+    },
+    [setMessages],
+  );
+
+  const handleRegenerate = useCallback(
+    (messageId: string) => {
+      void regenerate({ messageId });
+    },
+    [regenerate],
+  );
+
+  const handleEditImage = useCallback(
+    async (url: string) => {
+      try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const file = new File([blob], "playground-image.png", {
+          type: blob.type || "image/png",
+        });
+        const dataUrl = url.startsWith("data:") ? url : await readAsDataUrl(file);
+        setAttachments([{ id: playgroundMessageId(), file, url: dataUrl }]);
+        setMode("image");
+      } catch {
+        toast.error(t("playground.stageImageFailed"));
+      }
+    },
+    [t],
+  );
+
+  const handleNewChat = useCallback(() => {
+    void stop();
+    images.clear();
+    setMessages([]);
+    setAttachments([]);
+    clearError();
+  }, [stop, images, setMessages, clearError]);
+
+  const handleCreateKey = useCallback(async () => {
+    setCreatingKey(true);
+    try {
+      await createApiKeyOptimistic({ name: "Playground" }, apiKeys ?? []);
+    } catch (error) {
+      toast.error((error as Error).message || t("common.error"));
+    } finally {
+      setCreatingKey(false);
+    }
+  }, [apiKeys, t]);
+
+  const layoutTransition = shouldReduceMotion ? { duration: 0 } : springs.smooth;
 
   return (
-    <PageWrapper className="space-y-6">
-      {/* Header */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={transitions.normal}
-      >
-        <PageHeader title={t("playground.title")} description={t("playground.description")} />
-      </motion.div>
-
-      {/* Controls */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.05, ...transitions.normal }}
-      >
-        <Card>
-          <CardContent className="pt-6 space-y-4">
-            {/* Row 1: Model + API Key */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>{t("playground.model")}</Label>
-                <Input
-                  placeholder={t("playground.modelPlaceholder")}
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  disabled={streaming}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="flex items-center gap-1.5">
-                  <KeyRound className="h-3.5 w-3.5" />
-                  {t("playground.apiKey")}
-                </Label>
-                <Input
-                  type="password"
-                  placeholder="sk-..."
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  disabled={streaming}
-                />
-              </div>
-            </div>
-
-            {/* Expandable params */}
-            <div>
-              <button
-                type="button"
-                className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                onClick={() => setShowParams((p) => !p)}
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-                {t("playground.parameters")}
-                {showParams ? (
-                  <ChevronUp className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                )}
-              </button>
-
-              {showParams && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  transition={transitions.fast}
-                  className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3"
-                >
-                  <div className="space-y-2">
-                    <Label>{t("playground.temperature")}</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={temperature}
-                      onChange={(e) => setTemperature(e.target.value)}
-                      disabled={streaming}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t("playground.maxTokens")}</Label>
-                    <Input
-                      type="number"
-                      min="1"
-                      placeholder={t("playground.maxTokensPlaceholder")}
-                      value={maxTokens}
-                      onChange={(e) => setMaxTokens(e.target.value)}
-                      disabled={streaming}
-                    />
-                  </div>
-                </motion.div>
+    <div className="flex h-[calc(100dvh-5.5rem)] flex-col lg:h-[calc(100dvh-3rem)]">
+      <LayoutGroup>
+        {conversationEmpty ? (
+          <>
+            <div className="flex-1" />
+            <motion.div
+              layout
+              transition={layoutTransition}
+              className="mx-auto w-full max-w-3xl px-1 pb-8 text-center"
+            >
+              <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+                {t("playground.greeting")}
+              </h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {t("playground.greetingHint")}
+              </p>
+              {resolution.reason === "no-keys" && !keysLoading && (
+                <div className="mx-auto mt-6 flex max-w-md flex-col items-center gap-3 rounded-2xl border border-dashed px-6 py-5">
+                  <KeyRound className="h-5 w-5 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">
+                    {t("playground.noKeysHint")}
+                  </p>
+                  <Button size="sm" onClick={handleCreateKey} disabled={creatingKey}>
+                    {creatingKey
+                      ? t("playground.creatingKey")
+                      : t("playground.createKey")}
+                  </Button>
+                </div>
               )}
+            </motion.div>
+          </>
+        ) : (
+          <>
+            <div className="flex shrink-0 items-center justify-end pb-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleNewChat}
+                className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+              >
+                <SquarePen className="h-3.5 w-3.5" />
+                {t("playground.newChat")}
+              </Button>
             </div>
-          </CardContent>
-        </Card>
-      </motion.div>
+            <MessageList
+              messages={messages}
+              status={status}
+              imageJob={images.job}
+              busy={busy}
+              onEditUser={handleEditUser}
+              onEditAssistant={handleEditAssistant}
+              onDelete={handleDelete}
+              onRegenerate={handleRegenerate}
+              onEditImage={(url) => void handleEditImage(url)}
+              onRetryImage={images.retry}
+              onDismissImage={images.clear}
+            />
+          </>
+        )}
 
-      {/* Messages */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1, ...transitions.normal }}
-      >
-        <Card>
-          <CardContent className="pt-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-sm font-medium">
-                  {t("playground.messages")}
-                </h3>
-                <Badge variant="secondary" className="text-xs">
-                  {messages.length}
-                </Badge>
-              </div>
+        <AnimatePresence initial={false}>
+          {error && (
+            <motion.div
+              key="chat-error"
+              initial={
+                shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }
+              }
+              animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={layoutTransition}
+              className="mx-auto mb-2 flex w-full max-w-3xl shrink-0 items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-2"
+            >
+              <span className="min-w-0 flex-1 break-words text-sm text-destructive">
+                {error.message}
+              </span>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={addMessage}
-                disabled={streaming}
+                onClick={() => void regenerate()}
+                className="h-7 shrink-0 gap-1.5"
               >
-                <Plus className="h-4 w-4 mr-2" />
-                {t("playground.addMessage")}
+                <RefreshCcw className="h-3 w-3" />
+                {t("playground.retry")}
               </Button>
-            </div>
-
-            <Separator />
-
-            <div className="space-y-3">
-              {messages.map((msg, idx) => (
-                <MessageRow
-                  key={msg.id}
-                  message={msg}
-                  index={idx}
-                  isStreaming={streaming}
-                  onChange={updateMessage}
-                  onDelete={deleteMessage}
-                />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Streaming output */}
-            {streaming && <StreamingOutput content={streamContent} />}
-
-            {/* Action buttons */}
-            <Separator />
-            <div className="flex items-center justify-between">
               <Button
-                variant="outline"
-                size="sm"
-                onClick={addMessage}
-                disabled={streaming}
+                variant="ghost"
+                size="icon"
+                onClick={clearError}
+                aria-label={t("playground.dismiss")}
+                className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
               >
-                <Plus className="h-4 w-4 mr-2" />
-                {t("playground.addMessage")}
+                <X className="h-3.5 w-3.5" />
               </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-              <div className="flex items-center gap-2">
-                {streaming ? (
-                  <motion.div
-                    initial={{ scale: 0.9 }}
-                    animate={{ scale: 1 }}
-                    transition={transitions.spring}
-                  >
-                    <Button variant="destructive" onClick={handleStop}>
-                      <Square className="h-4 w-4 mr-2" />
-                      {t("playground.stop")}
-                    </Button>
-                  </motion.div>
-                ) : (
-                  <AnimatedButton>
-                    <Button onClick={handleSend}>
-                      <Send className="h-4 w-4 mr-2" />
-                      {t("playground.send")}
-                    </Button>
-                  </AnimatedButton>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-    </PageWrapper>
+        <motion.div
+          layout
+          transition={layoutTransition}
+          className="shrink-0 pb-1"
+        >
+          <Composer
+            mode={mode}
+            onModeChange={setMode}
+            text={text}
+            onTextChange={setText}
+            attachments={attachments}
+            onAddFiles={(files) => void handleAddFiles(files)}
+            onRemoveAttachment={handleRemoveAttachment}
+            onSend={handleSend}
+            onStop={handleStop}
+            canSend={canSend}
+            isBusy={busy}
+            blockedHint={blockedHint}
+            prefs={prefs}
+            setPref={setPref}
+            groups={groups ?? []}
+            userAllowedGroups={userAllowedGroups}
+            groupsLoading={groupsLoading && !groups}
+            models={models ?? []}
+            modelsLoading={modelsLoading && !models}
+            apiKeys={apiKeys ?? []}
+            keysLoading={keysLoading && !apiKeys}
+            resolvedKeyId={resolution.key?.id ?? null}
+          />
+        </motion.div>
+
+        {conversationEmpty && <div className="flex-[1.4]" />}
+      </LayoutGroup>
+    </div>
   );
 }

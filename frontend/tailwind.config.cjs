@@ -1,7 +1,12 @@
 /** @type {import("tailwindcss").Config} */
 module.exports = {
   darkMode: ["class"],
-  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+    // Streamdown ships Tailwind utility classes in its dist bundle (README setup step).
+    "./node_modules/streamdown/dist/*.js",
+  ],
   theme: {
     extend: {
       fontFamily: {

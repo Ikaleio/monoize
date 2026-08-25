@@ -1,77 +1,7 @@
-import {
-	OpenAI,
-	Anthropic,
-	Google,
-	Meta,
-	Mistral,
-	Perplexity,
-	Groq,
-	Cohere,
-	DeepSeek,
-	Qwen,
-	Minimax,
-	Zhipu,
-	Spark,
-	Moonshot,
-	ByteDance,
-	Alibaba,
-	Tencent,
-	Baidu,
-	Stepfun,
-	Wenxin,
-	ChatGLM,
-	Yi,
-	HuggingFace,
-	Github,
-	XAI,
-	Vllm,
-	Ollama,
-	ZeroOne
-} from '@lobehub/icons'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { Box } from 'lucide-react'
 import { normalizeMultiplier } from '@/lib/exact-decimal'
-
-const PROVIDER_ICONS: Record<
-	string,
-	React.ComponentType<{ className?: string }>
-> = {
-	openai: OpenAI,
-	anthropic: Anthropic,
-	google: Google,
-	meta: Meta,
-	mistral: Mistral,
-	perplexity: Perplexity,
-	groq: Groq,
-	cohere: Cohere,
-	deepseek: DeepSeek,
-	qwen: Qwen,
-	minimax: Minimax,
-	zhipu: Zhipu,
-	spark: Spark,
-	moonshot: Moonshot,
-	bytedance: ByteDance,
-	alibaba: Alibaba,
-	tencent: Tencent,
-	baidu: Baidu,
-	stepfun: Stepfun,
-	wenxin: Wenxin,
-	yi: Yi,
-	huggingface: HuggingFace,
-	github: Github,
-	xai: XAI,
-	grok: XAI,
-	vllm: Vllm,
-	ollama: Ollama,
-	'01': ZeroOne,
-	zeroone: ZeroOne,
-	glm: ChatGLM,
-	chatglm: ChatGLM
-}
-
-const normalizeProvider = (value: string) =>
-	value.toLowerCase().replace(/[\s_-]/g, '')
+import { ModelIcon } from '@/components/ModelIcon'
 
 export interface ModelBadgeProps {
 	model: string
@@ -96,8 +26,6 @@ export function ModelBadge({
 	truncateModelText = true,
 	className
 }: ModelBadgeProps) {
-	const normalizedProvider = provider ? normalizeProvider(provider) : undefined
-	const lowerModel = model.toLowerCase()
 	const resolvedTarget = (detailTarget ?? redirect ?? model).trim()
 	const normalizedMultiplier = normalizeMultiplier(String(multiplier))
 	const hasCustomMultiplier = normalizedMultiplier == null || normalizedMultiplier !== '1'
@@ -105,33 +33,6 @@ export function ModelBadge({
 		resolvedTarget.length > 0 && resolvedTarget !== model
 	const shouldRenderDetails =
 		showDetails && (hasCustomMultiplier || hasRedirectTarget)
-
-	// Resolve Icon
-	let Icon: React.ComponentType<{ className?: string }> = Box
-
-	if (normalizedProvider && PROVIDER_ICONS[normalizedProvider]) {
-		Icon = PROVIDER_ICONS[normalizedProvider]
-	} else {
-		if (
-			lowerModel.includes('gpt') ||
-			lowerModel.includes('davinci') ||
-			lowerModel.includes('o1-') ||
-			lowerModel.includes('o3-') ||
-			lowerModel.includes('o4-')
-		)
-			Icon = OpenAI
-		else if (lowerModel.includes('claude')) Icon = Anthropic
-		else if (lowerModel.includes('gemini')) Icon = Google
-		else if (lowerModel.includes('llama')) Icon = Meta
-		else if (lowerModel.includes('mistral') || lowerModel.includes('mixtral'))
-			Icon = Mistral
-		else if (lowerModel.includes('deepseek')) Icon = DeepSeek
-		else if (lowerModel.includes('qwen')) Icon = Qwen
-		else if (lowerModel.includes('grok')) Icon = XAI
-		else if (lowerModel.includes('command')) Icon = Cohere
-		else if (lowerModel.includes('glm') || lowerModel.includes('chatglm'))
-			Icon = ChatGLM
-	}
 
 	return (
 		<Badge
@@ -144,7 +45,11 @@ export function ModelBadge({
 				className
 			)}
 		>
-			<Icon className='h-3.5 w-3.5 shrink-0' />
+			<ModelIcon
+				model={model}
+				provider={provider}
+				className='h-3.5 w-3.5 shrink-0'
+			/>
 			<span
 				className={cn(
 					'min-w-0',
