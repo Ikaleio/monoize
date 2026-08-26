@@ -17,11 +17,11 @@ The Model Marketplace page presents all registered model metadata to logged-in d
 
 - Uses a dedicated `GET /api/dashboard/marketplace/models` endpoint (via the `useMarketplaceModels()` SWR hook).
 - This endpoint requires login (any role) but NOT admin.
-- Server-side: returns metadata whose model ID is offered by at least one enabled Provider through an enabled Channel whose weight is greater than zero.
-- The endpoint MUST obtain the result through one set-based query that joins `model_metadata_records`, `monoize_channel_models`, `monoize_channels`, and `monoize_providers`.
-- The query MUST select only metadata columns, MUST use `DISTINCT`, and MUST order results by `model_id ASC`.
+- Server-side: returns metadata and public price columns for each model ID offered by at least one enabled Provider through an enabled Channel whose weight is greater than zero.
+- The endpoint MUST obtain the result through one set-based query that joins `model_metadata_records`, `monoize_channel_models`, `monoize_channels`, `monoize_providers`, and `model_prices`.
+- The query MUST select metadata columns plus `billing_mode`, `input_usd_per_1m`, and `output_usd_per_1m`. It MUST use `DISTINCT` and order results by `model_id ASC`.
 - The endpoint MUST NOT hydrate Provider or Channel objects and MUST NOT return a Provider or Channel secret.
-- The page renders the filtered `ModelMetadataRecord[]` array.
+- The page renders the filtered `MarketplaceModelRecord[]` array.
 
 ## 4. UI Structure
 
@@ -48,12 +48,10 @@ PageWrapper
 | # | Header key | Data accessor | Cell format | Min width |
 |---|-----------|--------------|-------------|-----------|
 | 1 | `modelMarketplace.modelId` | `record.model_id` | `<ModelBadge>` with provider icon | 200px |
-| 2 | `modelMarketplace.mode` | `record.mode` | Badge (`chat` / `embedding` / …) | — |
-| 3 | `modelMarketplace.inputCost` | `record.input_cost_per_token_nano` | `$X.XXXX / 1M` (formatted from nano) | — |
-| 4 | `modelMarketplace.outputCost` | `record.output_cost_per_token_nano` | `$X.XXXX / 1M` (formatted from nano) | — |
-| 5 | `modelMarketplace.context` | `record.max_tokens` | Human-readable (e.g. `128K`, `1M`) | — |
-| 6 | `modelMarketplace.maxOutput` | `record.max_output_tokens` | Human-readable (e.g. `16K`) | — |
-| 7 | `modelMarketplace.provider` | `record.models_dev_provider` | Text, lowercase | — |
+| 2 | `modelMarketplace.inputCost` | `record.input_usd_per_1m` | `$X.XXX / 1M` | — |
+| 3 | `modelMarketplace.outputCost` | `record.output_usd_per_1m`, then input fallback | `$X.XXX / 1M` | — |
+| 4 | `modelMarketplace.context` | `record.max_tokens` | Human-readable (e.g. `128K`, `1M`) | — |
+| 5 | `modelMarketplace.maxOutput` | `record.max_output_tokens` | Human-readable (e.g. `16K`) | — |
 
 ### 4.3 Virtualized Table Contract
 
@@ -89,7 +87,7 @@ When `filtered.length === 0`:
 
 1. The page MUST NOT expose any mutation controls (no create, edit, delete, sync buttons).
 2. The page MUST use `useMarketplaceModels()` from `@/lib/swr` — which calls `GET /api/dashboard/marketplace/models`.
-3. The backend endpoint MUST only return metadata for models present in at least one enabled Provider and at least one enabled Channel whose weight is greater than zero.
+3. The backend endpoint MUST only return models present in at least one enabled Provider and at least one enabled Channel whose weight is greater than zero.
 4. The page MUST use `TableVirtuoso` with the same component override pattern as `model-metadata.tsx`.
 5. All user-visible strings MUST go through `t()` (i18next). Keys live under `modelMarketplace.*`.
 6. Navigation entry MUST appear in the common `navItems` array (visible to all roles).

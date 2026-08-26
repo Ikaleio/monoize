@@ -48,27 +48,15 @@ async fn retain_decoded_terminal_output(
 }
 
 fn validate_attempt_server_tool_meters(
-    auth: &crate::auth::AuthResult,
-    attempt: &MonoizeAttempt,
-    usage: &urp::Usage,
-    output: Option<&[urp::Node]>,
-    response_service_tier: Option<&str>,
+    _auth: &crate::auth::AuthResult,
+    _attempt: &MonoizeAttempt,
+    _usage: &urp::Usage,
+    _output: Option<&[urp::Node]>,
+    _response_service_tier: Option<&str>,
 ) -> AppResult<()> {
-    if auth.user_id.is_none() {
-        return Ok(());
-    }
-    let Some(resolution) = attempt.billing_rate_resolution.as_ref() else {
-        return Ok(());
-    };
-    billing::validate_actual_server_tool_meter_requirements(
-        usage,
-        output,
-        response_service_tier,
-        resolution,
-        &attempt.server_tool_usage_classes,
-        attempt.allow_unpriced_server_tools,
-    )
-    .map_err(|message| AppError::new(StatusCode::FORBIDDEN, "model_pricing_required", message))
+    // MP-T8 makes missing or non-authoritative tool prices fail-open. The
+    // settlement breakdown records every ignored class.
+    Ok(())
 }
 
 async fn validate_terminal_server_tool_meters(
@@ -1254,7 +1242,7 @@ pub(super) async fn forward_stream_typed(
                                 .clone()
                             {
                                 Some(u) => (Some(u), false, false),
-                                None if attempt_for_log.allow_missing_usage => {
+                                None if attempt_for_log.allow_free_when_missing_usage => {
                                     (Some(urp::Usage::default()), false, true)
                                 }
                                 None => {

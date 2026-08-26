@@ -1,6 +1,6 @@
 
 #[tokio::test]
-async fn responses_nonstream_bills_the_upstream_service_tier() {
+async fn responses_nonstream_records_the_upstream_service_tier() {
     let ctx = setup().await;
     let (status, body) = json_post(
         &ctx,
@@ -44,7 +44,7 @@ async fn responses_nonstream_bills_the_upstream_service_tier() {
             .expect("list request logs");
         matched = logs.into_iter().find(|log| {
             log.model == "gpt-5-mini"
-                && log.billing.charge_nano_usd.as_deref() == Some("5000")
+                && log.billing.charge_nano_usd.as_deref() == Some("2000")
         });
         if matched.is_some() {
             break;
@@ -52,11 +52,12 @@ async fn responses_nonstream_bills_the_upstream_service_tier() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    let log = matched.expect("priority response must use priority token rates");
+    let log = matched.expect("priority response must retain the upstream service tier");
     assert_eq!(
-        log.billing.breakdown.as_ref().and_then(|breakdown| {
-            breakdown["tier"]["service_tier"].as_str()
-        }),
+        log.billing
+            .breakdown
+            .as_ref()
+            .and_then(|breakdown| breakdown["service_tier"].as_str()),
         Some("priority")
     );
 }

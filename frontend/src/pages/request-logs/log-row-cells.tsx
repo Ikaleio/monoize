@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import type { RequestLog } from '@/lib/api'
 import {
 	formatNanoPerTokenPerMillion,
+	formatUsdDecimal,
 	isZeroIntegerString,
 	normalizeMultiplier
 } from '@/lib/exact-decimal'
@@ -124,16 +125,18 @@ export function LogRowCells({
 	const billingInput = asObject(billingSnapshot?.input)
 	const billingOutput = asObject(billingSnapshot?.output)
 	const billingTier = asObject(billingSnapshot?.tier)
-	const multiplier = typeof billingSnapshot?.provider_multiplier === 'string' ?
-		normalizeMultiplier(billingSnapshot.provider_multiplier)
+	const multiplierRaw = billingSnapshot?.channel_multiplier ?? billingSnapshot?.provider_multiplier
+	const multiplier = typeof multiplierRaw === 'string' ?
+		normalizeMultiplier(multiplierRaw)
 	: null
 	const tokenLineItems = Array.isArray(billingSnapshot?.token_line_items) ?
 		billingSnapshot.token_line_items
 			.map(asObject)
 			.filter((item): item is Record<string, unknown> => item != null)
 	:	[]
-	const meterLineItems = Array.isArray(billingSnapshot?.meter_line_items) ?
-		billingSnapshot.meter_line_items
+	const toolLineItemsRaw = billingSnapshot?.tool_line_items ?? billingSnapshot?.meter_line_items
+	const toolLineItems = Array.isArray(toolLineItemsRaw) ?
+		toolLineItemsRaw
 			.map(asObject)
 			.filter((item): item is Record<string, unknown> => item != null)
 	:	[]
@@ -142,21 +145,28 @@ export function LogRowCells({
 		const quantity = readNumber(item.quantity)
 		return charge !== '0' && quantity !== 0
 	})
-	const visibleMeterLineItems = meterLineItems.filter((item) => {
+	const visibleToolLineItems = toolLineItems.filter((item) => {
 		const charge = readNanoString(item, 'charge_nano')
 		const quantity = readNumber(item.quantity)
 		return charge !== '0' && quantity !== 0
 	})
 	const hasMatrixLineItems =
-		visibleTokenLineItems.length > 0 || visibleMeterLineItems.length > 0
+		visibleTokenLineItems.length > 0 || visibleToolLineItems.length > 0
 	const contextTier =
 		typeof billingTier?.context_tier === 'string' && billingTier.context_tier ?
 			billingTier.context_tier
 		:	null
+	const serviceTierRaw = billingSnapshot?.service_tier ?? billingTier?.service_tier
 	const serviceTier =
-		typeof billingTier?.service_tier === 'string' && billingTier.service_tier ?
-			billingTier.service_tier
-		:	null
+		typeof serviceTierRaw === 'string' && serviceTierRaw ? serviceTierRaw : null
+	const billingMode = typeof billingSnapshot?.billing_mode === 'string' ? billingSnapshot.billing_mode : null
+	const pricingModelKey = typeof billingSnapshot?.pricing_model_key === 'string' ? billingSnapshot.pricing_model_key : null
+	const appliedTierIndex = readNumber(billingSnapshot?.applied_tier_index)
+	const groupBillingRatio = typeof billingSnapshot?.group_billing_ratio === 'string' ? billingSnapshot.group_billing_ratio : null
+	const freeReason = typeof billingSnapshot?.free_reason === 'string' ? billingSnapshot.free_reason : null
+	const unpricedToolClasses = Array.isArray(billingSnapshot?.unpriced_tool_classes) ?
+		billingSnapshot.unpriced_tool_classes.filter((item): item is string => typeof item === 'string')
+	:	[]
 	const isEstimatedBilling = billingSnapshot?.estimated === true
 	const billingExemptionReason =
 		typeof billingSnapshot?.exemption_reason === 'string' ?
@@ -199,12 +209,27 @@ export function LogRowCells({
 	}
 	const formatLineItemDetail = (item: Record<string, unknown>) => {
 		const quantity = readNumber(item.quantity)
+		const usdPerMillion = typeof item.usd_per_1m === 'string' ? item.usd_per_1m : null
 		const unitPrice = readNanoString(item, 'unit_price_nano')
 		const charge = readNanoString(item, 'charge_nano')
-		if (quantity == null || !unitPrice || !charge || isZeroIntegerString(charge)) {
+		if (quantity == null || !charge || isZeroIntegerString(charge)) {
 			return null
 		}
+		if (usdPerMillion) {
+			return `${formatTokenCount(quantity)} × ${formatUsdDecimal(usdPerMillion, 6)}/1M = ${formatCost(charge)}`
+		}
+		if (!unitPrice) return null
 		return `${formatTokenCount(quantity)} × ${formatUnitRate(unitPrice, item.unit)} = ${formatCost(charge)}`
+	}
+	const formatToolLineItemDetail = (item: Record<string, unknown>) => {
+		const quantity = readNumber(item.quantity)
+		const usd = typeof item.usd === 'string' ? item.usd : null
+		const per = typeof item.per === 'string' ? item.per : null
+		const charge = readNanoString(item, 'charge_nano')
+		if (quantity == null || !usd || !per || !charge || isZeroIntegerString(charge)) {
+			return formatLineItemDetail(item)
+		}
+		return `${formatTokenCount(quantity)} × ${formatUsdDecimal(usd, 6)}/${per} = ${formatCost(charge)}`
 	}
 	const lineItemLabel = (item: Record<string, unknown>) => {
 		const usageClass = localizeBillingValue('usageClass', item.usage_class)
@@ -447,6 +472,11 @@ export function LogRowCells({
 		outputReasoningCostDetail ||
 		visibleBaseCharge ||
 		multiplier != null ||
+		billingMode ||
+		pricingModelKey ||
+		groupBillingRatio ||
+		freeReason ||
+		unpricedToolClasses.length > 0 ||
 		isAdminUnpricedExemption ||
 		!billingSnapshot
 	)
@@ -785,6 +815,24 @@ export function LogRowCells({
 							</TooltipTrigger>
 							<TooltipContent className='max-w-[calc(100vw-1.5rem)] sm:max-w-xl'>
 								<div className='w-[32rem] max-w-full space-y-0.5 text-xs'>
+								{billingMode && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.billingMode')}</span>
+										<span className='font-mono'>{billingMode}</span>
+									</div>
+								)}
+								{pricingModelKey && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.pricingModel')}</span>
+										<span className='font-mono'>{pricingModelKey}</span>
+									</div>
+								)}
+								{appliedTierIndex != null && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.appliedTier')}</span>
+										<span className='font-mono'>{appliedTierIndex + 1}</span>
+									</div>
+								)}
 								{contextTier && (
 									<div className='flex items-center justify-between gap-3'>
 										<span>{t('requestLogs.contextTier')}</span>
@@ -818,12 +866,12 @@ export function LogRowCells({
 											</div>
 										)
 									})}
-									{visibleMeterLineItems.map((item, index) => {
-										const detail = formatLineItemDetail(item)
+									{visibleToolLineItems.map((item, index) => {
+										const detail = formatToolLineItemDetail(item)
 										if (!detail) return null
 										return (
 											<div
-												key={`meter-${index}`}
+												key={`tool-${index}`}
 												className='grid gap-0.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3'
 											>
 												<span className='min-w-0 break-words'>
@@ -897,6 +945,22 @@ export function LogRowCells({
 											<span className='font-mono'>
 												{multiplier}x
 											</span>
+										</div>
+									)}
+									{groupBillingRatio && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.groupBillingRatio')}</span>
+											<span className='font-mono'>{groupBillingRatio}x</span>
+										</div>
+									)}
+									{unpricedToolClasses.length > 0 && (
+										<div className='text-warning text-xs'>
+											{t('requestLogs.unpricedTools')}: {unpricedToolClasses.join(', ')}
+										</div>
+									)}
+									{freeReason && (
+										<div className='text-warning text-xs'>
+											{t('requestLogs.freeReason')}: {freeReason}
 										</div>
 									)}
 								{!billingSnapshot && (

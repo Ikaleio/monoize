@@ -24,14 +24,13 @@
 
 ### 0.1 Implementation status
 
-MP-S1. This specification is the target behavior. Delivery is split into two migration
-steps (§12). Step `m20260826_000048_model_prices` is additive and ships with the pricing
-dashboard skeleton. Step `m20260901_000049_model_prices_cutover` removes the legacy
-engine and ships with the settlement rewrite.
+MP-S1. This specification defines the implemented behavior. Migration
+`m20260826_000048_model_prices` creates the new storage. Migration
+`m20260901_000049_model_prices_cutover` removes the legacy engine and activates this
+settlement model.
 
-MP-S2. Until the cutover step ships, the legacy `billing_rate_records` engine continues
-to settle requests. The deprecated rules in `metered-billing.spec.md` govern only that
-legacy engine and only until the cutover step removes it.
+MP-S2. New settlements MUST use `model_prices`. The deprecated rules in
+`metered-billing.spec.md` do not govern new settlements.
 
 ## 1. Concepts and units
 
@@ -709,11 +708,8 @@ MP-UI6. Upstream Sync tab: one card per source (models.dev, OpenRouter, new-api)
 last-run status from MP-A5, a preview action rendering the MP-A6 diff, and an apply
 action. The new-api card exposes the base-URL and token settings.
 
-MP-UI6a. The models.dev card additionally exposes the metadata sync action
-(`POST /api/dashboard/model-metadata/sync/models-dev`,
-`model-metadata-dashboard.spec.md` §2). Until the §9 sync engine ships (MP-S1), the
-preview and apply actions surface the server error for the unimplemented MP-A6/MP-A7
-endpoints without altering client state.
+MP-UI6a. Applying the models.dev source MUST update prices and metadata from the same
+fetched snapshot. A separate metadata-sync action or endpoint MUST NOT exist.
 
 MP-UI7. Group Pricing tab: lists registry groups with an editable `billing_ratio`
 column persisting through the group update endpoint.

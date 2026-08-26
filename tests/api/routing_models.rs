@@ -215,8 +215,6 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                allow_missing_usage: false,
-                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: Some(1),
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -314,8 +312,6 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
-            allow_missing_usage: false,
-            allow_unpriced_server_tools: false,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -399,7 +395,6 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
 async fn provider_api_type_override_matches_logical_model_before_provider_redirect() {
     let ctx = setup().await;
     seed_test_model_pricing(&ctx.state, &["gpt-5.4-fast", "gpt-5.4"]).await;
-    seed_test_fast_token_rates(&ctx.state).await;
     let (upstream_addr, _, captured_bodies) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
@@ -429,8 +424,6 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
-            allow_missing_usage: false,
-            allow_unpriced_server_tools: false,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,

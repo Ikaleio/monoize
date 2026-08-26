@@ -10,16 +10,6 @@ pub struct Model {
     pub models_dev_provider: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub mode: Option<String>,
-    #[sea_orm(column_type = "Text")]
-    pub input_cost_per_token_nano: Option<String>,
-    #[sea_orm(column_type = "Text")]
-    pub output_cost_per_token_nano: Option<String>,
-    #[sea_orm(column_type = "Text")]
-    pub cache_read_input_cost_per_token_nano: Option<String>,
-    #[sea_orm(column_type = "Text")]
-    pub cache_creation_input_cost_per_token_nano: Option<String>,
-    #[sea_orm(column_type = "Text")]
-    pub output_cost_per_reasoning_token_nano: Option<String>,
     pub max_input_tokens: Option<i64>,
     pub max_output_tokens: Option<i64>,
     pub max_tokens: Option<i64>,

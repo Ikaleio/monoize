@@ -18,7 +18,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import type { FetchChannelModelsInput, ModelMetadataRecord } from '@/lib/api'
+import type { FetchChannelModelsInput, ModelMetadataRecord, ModelPriceRecord } from '@/lib/api'
 import {
 	buildPricedModelIdSet,
 	hasBillablePricingModelId
@@ -31,6 +31,7 @@ type ModelPickerDialogProps = {
 	providerName: string
 	existingModels: string[]
 	modelMetadata: ModelMetadataRecord[]
+	modelPrices: ModelPriceRecord[]
 	reasoningSuffixMap: Record<string, string>
 	onConfirm: (checkedModels: string[]) => void
 }
@@ -62,6 +63,7 @@ function ModelPickerDialogContent({
 	providerName,
 	existingModels,
 	modelMetadata,
+	modelPrices,
 	reasoningSuffixMap,
 	onConfirm
 }: Omit<ModelPickerDialogProps, 'open'>) {
@@ -133,8 +135,8 @@ function ModelPickerDialogContent({
 	}, [modelMetadata])
 
 	const pricedModelIdSet = useMemo(
-		() => buildPricedModelIdSet(modelMetadata),
-		[modelMetadata]
+		() => buildPricedModelIdSet(modelPrices),
+		[modelPrices]
 	)
 
 	const toggleModel = (model: string) => {

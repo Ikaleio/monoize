@@ -29,9 +29,6 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 3. 填写上游 Base URL 和 API 密钥。
 4. 设置权重。流量按权重比例在符合条件的 Channel 之间分配。默认 `1`。
 5. 可选：为单个 Channel 设置 `proxy_url`，覆盖进程级上游代理。
-6. 仅在 Channel 可能不返回 Usage 时启用**允许缺失 Usage**。Monoize 将记录零用量并收取零费用。
-7. 仅在缺少工具计费数据时可接受零工具费的情况下，启用**内置工具可忽略计费**。Token 费用和已定价工具费用仍正常收取。
-
 之后编辑 Channel 时，API 密钥留空则保持原有密钥不变。
 
 ## 映射模型
@@ -42,6 +39,12 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 - `multiplier`：用于计费的正数价格乘数。
 
 只有当 Provider 内至少有一个已启用的 Channel 映射了某个逻辑模型时，该模型才会路由到这个 Provider。
+
+## 设置计费覆盖项
+
+在 Provider 上设置**未定价时允许免费**和**缺少 Usage 时允许免费**。每个设置都可以继承全局值、强制开启或强制关闭。
+
+缺少工具价格时始终按开放规则处理。Monoize 记录未定价工具类别，并对该类别收取零工具费。
 
 ## Provider 变换
 

@@ -41,13 +41,6 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import {
-	Field as FormField,
-	FieldContent,
-	FieldDescription,
-	FieldGroup,
-	FieldLabel
-} from '@/components/ui/field'
-import {
 	Select,
 	SelectContent,
 	SelectGroup,
@@ -63,6 +56,7 @@ import type {
 	AffinityFailbackMode,
 	FetchChannelModelsInput,
 	ModelMetadataRecord,
+	ModelPriceRecord,
 	Provider,
 	ProviderType,
 	SystemSettings,
@@ -135,8 +129,6 @@ function channelInput(channel: ChannelRow, c: (zhText: string, enText: string) =
 		api_key: channel.api_key.trim() || undefined,
 		weight: Number(channel.weight),
 		enabled: channel.enabled,
-		allow_missing_usage: channel.allow_missing_usage,
-		allow_unpriced_server_tools: channel.allow_unpriced_server_tools,
 		models: modelMap(channel.models),
 		passive_failure_count_threshold_override: optionalPositiveInteger(channel.passive_failure_count_threshold_override),
 		passive_cooldown_seconds_override: optionalPositiveInteger(channel.passive_cooldown_seconds_override),
@@ -213,6 +205,7 @@ export function ProviderDialog({
 	transformRegistry,
 	transformRegistryLoading,
 	modelMetadata,
+	modelPrices,
 	reasoningSuffixMap,
 	settings
 }: {
@@ -224,6 +217,7 @@ export function ProviderDialog({
 	transformRegistry: TransformRegistryItem[]
 	transformRegistryLoading?: boolean
 	modelMetadata: ModelMetadataRecord[]
+	modelPrices: ModelPriceRecord[]
 	reasoningSuffixMap: Record<string, string>
 	settings?: SystemSettings
 }) {
@@ -261,7 +255,7 @@ export function ProviderDialog({
 
 	const dirty = JSON.stringify(form) !== initialSnapshot.current
 	const activeChannel = form.channels[selectedChannel]
-	const pricedModels = useMemo(() => buildPricedModelIdSet(modelMetadata), [modelMetadata])
+	const pricedModels = useMemo(() => buildPricedModelIdSet(modelPrices), [modelPrices])
 	const metadataProvider = useMemo(
 		() => new Map(modelMetadata.map(item => [item.model_id, item.models_dev_provider])),
 		[modelMetadata]
@@ -485,6 +479,7 @@ export function ProviderDialog({
 				providerName={`${form.name || c('未命名 Provider', 'Untitled provider')} / ${activeChannel?.name || c('未命名 Channel', 'Untitled channel')}`}
 				existingModels={activeChannel?.models.map(model => model.model) ?? []}
 				modelMetadata={modelMetadata}
+				modelPrices={modelPrices}
 				reasoningSuffixMap={reasoningSuffixMap}
 				onConfirm={selected => {
 					if (!activeChannel) return
@@ -591,8 +586,6 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 
 function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, duplicateChannel, removeChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
 	if (!activeChannel) return null
-	const allowMissingUsageId = `channel-${activeChannel.id || selectedChannel}-allow-missing-usage`
-	const allowUnpricedServerToolsId = `channel-${activeChannel.id || selectedChannel}-allow-unpriced-server-tools`
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
 		<div className='flex items-start justify-between gap-3'>
 			<div className='flex min-w-0 items-start gap-2'><Button size='icon' variant='ghost' className='-ml-2 size-11 touch-manipulation sm:size-9 lg:hidden' onClick={() => setMobileChannelOpen(false)} aria-label={c('返回 Channel 列表', 'Back to channels')}><ArrowLeft data-icon /></Button><div className='min-w-0'><h3 className='truncate text-lg font-semibold'>{activeChannel.name || c('未命名 Channel', 'Untitled channel')}</h3><div className='mt-1'>{activeChannel._health_status ? statusBadge(activeChannel._health_status) : <Badge variant='secondary'>{c('未保存', 'Unsaved')}</Badge>}</div></div></div>
@@ -607,22 +600,6 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 				<Field label='Base URL' className='sm:col-span-2'><Input value={activeChannel.base_url} onChange={event => updateChannel(selectedChannel, { base_url: event.target.value })} onBlur={onBaseUrlBlur} placeholder='https://api.openai.com' className='font-mono' /></Field>
 				<Field label='API Key' hint={form.id && activeChannel.id ? c('留空保留现有密钥。', 'Leave blank to preserve the stored key.') : undefined}><Input type='password' autoComplete='new-password' value={activeChannel.api_key} onChange={event => updateChannel(selectedChannel, { api_key: event.target.value })} placeholder={form.id && activeChannel.id ? '••••••••••••' : 'sk-…'} className='font-mono' /></Field>
 				<Field label={c('流量权重', 'Traffic weight')}><Input type='number' min='0' value={activeChannel.weight} onChange={event => updateChannel(selectedChannel, { weight: event.target.value })} /></Field>
-				<FieldGroup className='sm:col-span-2'>
-					<FormField orientation='horizontal' className='rounded-lg border p-4'>
-						<FieldContent>
-							<FieldLabel htmlFor={allowMissingUsageId}>{c('允许缺失 Usage', 'Allow missing usage')}</FieldLabel>
-							<FieldDescription>{c('上游未返回 Usage 时按零用量成功结算，并收取零费用。', 'When the upstream omits usage, settle successfully with zero usage and zero charge.')}</FieldDescription>
-						</FieldContent>
-						<Switch id={allowMissingUsageId} checked={activeChannel.allow_missing_usage} onCheckedChange={allow_missing_usage => updateChannel(selectedChannel, { allow_missing_usage })} />
-					</FormField>
-					<FormField orientation='horizontal' className='rounded-lg border p-4'>
-						<FieldContent>
-							<FieldLabel htmlFor={allowUnpricedServerToolsId}>{c('内置工具可忽略计费', 'Allow unpriced built-in tools')}</FieldLabel>
-							<FieldDescription>{c('仅当内置工具缺少可用费率或必需用量时，按零工具费继续结算。', 'Charge zero for a built-in tool only when its rate or required usage is unavailable.')}</FieldDescription>
-						</FieldContent>
-						<Switch id={allowUnpricedServerToolsId} checked={activeChannel.allow_unpriced_server_tools} onCheckedChange={allow_unpriced_server_tools => updateChannel(selectedChannel, { allow_unpriced_server_tools })} />
-					</FormField>
-				</FieldGroup>
 			</div>
 		</section>
 

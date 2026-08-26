@@ -5,9 +5,10 @@ use crate::settings::validate_usd_decimal;
 use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// One `model_prices` row (MP-D1).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelPriceRecord {
     pub model_id: String,
     pub billing_mode: String,
@@ -44,6 +45,7 @@ impl ModelPriceRecord {
 
 /// MP-A2 upsert body: omitted = keep stored, explicit null = clear.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertModelPriceInput {
     pub billing_mode: Option<String>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -75,7 +77,7 @@ where
 }
 
 /// One `price_sync_runs` row (MP-D7).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceSyncRun {
     pub id: String,
     pub source: String,
@@ -222,12 +224,12 @@ fn parse_time(raw: &str, column: &str) -> Result<DateTime<Utc>, String> {
         .map_err(|error| format!("invalid {column} RFC3339: {error}"))
 }
 
-const MODEL_PRICE_COLUMNS: &str = "model_id, billing_mode, input_usd_per_1m, \
+pub(crate) const MODEL_PRICE_COLUMNS: &str = "model_id, billing_mode, input_usd_per_1m, \
      output_usd_per_1m, cache_read_usd_per_1m, cache_write_usd_per_1m, \
      cache_write_1h_usd_per_1m, reasoning_usd_per_1m, per_request_usd, billing_expr, \
      source, locked_fields, raw_json, enabled, updated_at";
 
-fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
+pub(crate) fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
     let model_id: String = row.try_get("", "model_id").map_err(|e| e.to_string())?;
     let billing_expr_raw: Option<String> =
         row.try_get("", "billing_expr").map_err(|e| e.to_string())?;
@@ -285,7 +287,7 @@ fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
 
 #[derive(Clone)]
 pub struct ModelPriceStore {
-    db: DbPool,
+    pub(crate) db: DbPool,
 }
 
 impl ModelPriceStore {
@@ -321,6 +323,41 @@ impl ModelPriceStore {
             Some(row) => Ok(Some(row_to_record(&row)?)),
             None => Ok(None),
         }
+    }
+
+    /// MP-R8: load every distinct pricing candidate for one forwarding
+    /// request in one set-based query.
+    pub async fn get_many(
+        &self,
+        model_ids: &[String],
+    ) -> Result<HashMap<String, ModelPriceRecord>, String> {
+        let mut model_ids = model_ids.to_vec();
+        model_ids.sort();
+        model_ids.dedup();
+        if model_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        if model_ids.len() > 900 {
+            return Err("one request may resolve at most 900 distinct pricing keys".to_string());
+        }
+        let placeholders = (1..=model_ids.len())
+            .map(|index| format!("${index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                &format!(
+                    "SELECT {MODEL_PRICE_COLUMNS} FROM model_prices WHERE model_id IN ({placeholders})"
+                ),
+                model_ids.into_iter().map(SeaValue::from).collect(),
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.iter()
+            .map(|row| row_to_record(row).map(|record| (record.model_id.clone(), record)))
+            .collect()
     }
 
     /// MP-A2 merge-upsert with MP-Y17 lock-on-edit semantics. Returns the
@@ -395,13 +432,17 @@ impl ModelPriceStore {
             record.billing_expr = expr.clone();
         }
         if let Some(enabled) = input.enabled {
+            if enabled != record.enabled {
+                changed_price_fields.push("enabled");
+            }
             record.enabled = enabled;
         }
 
-        // A dashboard write is a manual edit: it re-sources the row (MP-M3
-        // manual precedence) and locks the edited price fields (MP-Y17),
-        // unless the caller replaces locked_fields explicitly (MP-Y18).
-        record.source = "manual".to_string();
+        // A new dashboard row is manual. An edit to a synced row preserves its
+        // source so removing its locks can re-enable source-owned updates.
+        if existing.is_none() {
+            record.source = "manual".to_string();
+        }
         match input.locked_fields {
             Some(fields) => {
                 validate_locked_fields(&fields)?;

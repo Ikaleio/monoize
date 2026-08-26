@@ -2,8 +2,7 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
 use crate::model_registry_store::{
-    CreateModelInput, DbModelMetadataRecord, ModelMetadataSyncResult, UpdateModelInput,
-    UpsertModelMetadataInput,
+    CreateModelInput, DbModelMetadataRecord, UpdateModelInput, UpsertModelMetadataInput,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -147,25 +146,6 @@ pub async fn get_model_metadata(
     Ok(Json(row))
 }
 
-pub async fn sync_model_metadata_models_dev(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> AppResult<impl IntoResponse> {
-    require_admin(&headers, &state).await?;
-    let result: ModelMetadataSyncResult = state
-        .model_registry_store
-        .sync_from_models_dev(&state.http)
-        .await
-        .map_err(|e| {
-            if e.contains("fetch_failed") || e.contains("parse_failed") {
-                AppError::new(StatusCode::BAD_GATEWAY, "upstream_fetch_failed", e)
-            } else {
-                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
-            }
-        })?;
-    Ok(Json(result))
-}
-
 pub async fn upsert_model_metadata(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -217,7 +197,7 @@ pub async fn delete_model_metadata(
     Ok(Json(json!({ "success": true })))
 }
 
-/// Returns model metadata only for models offered by at least one enabled provider.
+/// Returns metadata and public price columns for models offered by an enabled provider.
 /// Requires login (any role), NOT admin-only.
 pub async fn list_marketplace_models(
     State(state): State<AppState>,

@@ -20,6 +20,7 @@ import type {
   RequestLogsFilter,
   RequestCaptureDetail,
   ModelMetadataRecord,
+  MarketplaceModelRecord,
   UpsertModelMetadataInput,
   ModelPriceRecord,
   UpsertModelPriceInput,
@@ -208,7 +209,7 @@ export function useCustomTransforms(config?: SWRConfiguration) {
 }
 
 export function useModelMetadata(config?: SWRConfiguration) {
-  return useSWR<ModelMetadataRecord[]>(
+  return useSWR<MarketplaceModelRecord[]>(
     SWR_KEYS.MODEL_METADATA,
     fetchers.modelMetadata,
     { ...defaultConfig, ...config }
@@ -950,11 +951,6 @@ export async function upsertModelMetadataOptimistic(
     ...input,
     models_dev_provider: input.models_dev_provider ?? undefined,
     mode: input.mode ?? undefined,
-    input_cost_per_token_nano: input.input_cost_per_token_nano ?? undefined,
-    output_cost_per_token_nano: input.output_cost_per_token_nano ?? undefined,
-    cache_read_input_cost_per_token_nano: input.cache_read_input_cost_per_token_nano ?? undefined,
-    cache_creation_input_cost_per_token_nano: input.cache_creation_input_cost_per_token_nano ?? undefined,
-    output_cost_per_reasoning_token_nano: input.output_cost_per_reasoning_token_nano ?? undefined,
     max_input_tokens: input.max_input_tokens ?? undefined,
     max_output_tokens: input.max_output_tokens ?? undefined,
     max_tokens: input.max_tokens ?? undefined,
@@ -995,23 +991,6 @@ export async function deleteModelMetadataOptimistic(
     mutate(SWR_KEYS.PROVIDERS);
   } catch (error) {
     mutate(SWR_KEYS.MODEL_METADATA, currentRecords, false);
-    if (onError && error instanceof Error) {
-      onError(error);
-    }
-    throw error;
-  }
-}
-
-export async function syncModelMetadata(
-  onError?: (error: Error) => void
-) {
-  try {
-    const result = await api.syncModelMetadataFromModelsDev();
-    mutate(SWR_KEYS.MODEL_METADATA);
-    mutate(SWR_KEYS.MARKETPLACE_MODELS);
-    mutate(SWR_KEYS.PROVIDERS);
-    return result;
-  } catch (error) {
     if (onError && error instanceof Error) {
       onError(error);
     }
@@ -1126,6 +1105,8 @@ export async function applyPriceSync(
     mutate(SWR_KEYS.UNPRICED_MODELS);
     mutate(SWR_KEYS.PRICE_SYNC_RUNS);
     mutate(SWR_KEYS.MODEL_METADATA);
+    mutate(SWR_KEYS.MARKETPLACE_MODELS);
+    mutate(SWR_KEYS.PROVIDERS);
     return run;
   } catch (error) {
     if (onError && error instanceof Error) {

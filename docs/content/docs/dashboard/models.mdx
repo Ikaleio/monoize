@@ -17,16 +17,23 @@ A Channel model entry can set `redirect` to the real upstream model name.
 
 Example: clients call `my-fast-model`. Channel A redirects it to `gpt-4o-mini`. Channel B redirects it to `claude-3-5-haiku-20241022`. Billing and logs always show the logical name.
 
-## Model metadata and pricing
+## Configure model pricing
 
-The **Models** page stores model metadata: context window, capabilities, and per-token prices. Monoize imports metadata and prices from [Models.dev](https://models.dev).
+Open **Models** to manage prices, tool charges, synchronization, and group ratios.
 
-Billing uses:
+1. Use **Model Pricing** to set token, request, or tiered prices. Enter prices in USD.
+2. Use **Unpriced Models** to find routed models without an enabled price.
+3. Use **Tool Prices** to set server-native tool charges.
+4. Use **Upstream Sync** to preview or apply prices from models.dev, OpenRouter, or new-api.
+5. Use **Group Pricing** to set each group's `billing_ratio`.
 
-1. the model's base price from the metadata table;
-2. multiplied by the Channel model entry's `multiplier`.
+The models.dev apply action updates prices and metadata from one snapshot. Manual price edits lock the changed fields. Later syncs keep locked fields.
 
-Charges accumulate in nano-dollars in each user's ledger.
+Monoize resolves the redirected upstream model first. It falls back to the logical model only for a redirect without an upstream price.
+
+Monoize multiplies the base charge by the Channel model `multiplier` and the routed group's `billing_ratio`. It records the final charge in nano-USD.
+
+By default, Monoize rejects an unpriced model or a response without required Usage. Set the global free-settlement flags or a Provider override only when zero settlement is acceptable.
 
 ## Model listing
 

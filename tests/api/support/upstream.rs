@@ -5128,8 +5128,6 @@ async fn create_test_provider(
                 api_key: Some(api_key.to_string()),
                 weight: 1,
                 enabled: true,
-                allow_missing_usage: false,
-                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -5170,32 +5168,15 @@ async fn create_test_provider(
 
 async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&str]) {
     for model_id in model_ids {
-        let pricing_profile = if model_id.starts_with("gpt-") || model_id.starts_with('o') {
-            "openai"
-        } else if model_id.starts_with("claude-") {
-            "anthropic"
-        } else if model_id.starts_with("grok-") {
-            "xai"
-        } else if model_id.starts_with("gemini-") {
-            "default"
-        } else {
-            "default"
-        };
         state
-            .model_registry_store
-            .upsert_model_metadata(
+            .model_price_store
+            .upsert(
                 model_id,
-                monoize::model_registry_store::UpsertModelMetadataInput {
-                    models_dev_provider: Some(Some(pricing_profile.to_string())),
-                    mode: Some(Some("chat".to_string())),
-                    input_cost_per_token_nano: Some(Some("1000".to_string())),
-                    output_cost_per_token_nano: Some(Some("1000".to_string())),
-                    cache_read_input_cost_per_token_nano: None,
-                    cache_creation_input_cost_per_token_nano: None,
-                    output_cost_per_reasoning_token_nano: None,
-                    max_input_tokens: None,
-                    max_output_tokens: None,
-                    max_tokens: None,
+                monoize::model_price_store::UpsertModelPriceInput {
+                    billing_mode: Some("per_token".to_string()),
+                    input_usd_per_1m: Some(Some("1".to_string())),
+                    output_usd_per_1m: Some(Some("1".to_string())),
+                    ..Default::default()
                 },
             )
             .await
@@ -5204,101 +5185,7 @@ async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&s
 }
 
 async fn seed_test_server_tool_meter_rates(state: &monoize::app::AppState) {
-    for (usage_class, unit) in [
-        ("web_search", "call"),
-        ("file_search_tool_call", "call"),
-        ("code_interpreter_duration", "billed_minute"),
-    ] {
-        state
-            .billing_rate_store
-            .upsert_billing_rate(
-                &format!("test:openai:meter:{usage_class}"),
-                monoize::billing_rate_store::UpsertBillingRateInput {
-                    source: Some("test".to_string()),
-                    pricing_profile: Some("openai".to_string()),
-                    model_pattern: Some(None),
-                    provider_type: Some(None),
-                    rate_kind: Some("meter".to_string()),
-                    usage_class: Some(usage_class.to_string()),
-                    unit: Some(unit.to_string()),
-                    unit_price_nano_usd: Some("0".to_string()),
-                    context_tier: Some(None),
-                    service_tier: Some(None),
-                    modality: Some(None),
-                    cache_ttl: Some(None),
-                    match_json: Some(json!({})),
-                    priority: Some(100),
-                    enabled: Some(true),
-                    raw_json: Some(json!({ "fixture": true })),
-                },
-            )
-            .await
-            .expect("seed server-tool meter rate");
-    }
-}
-
-async fn seed_test_priority_token_rates(state: &monoize::app::AppState) {
-    for (usage_class, unit_price_nano_usd) in
-        [("input_uncached", "2000"), ("output", "3000")]
-    {
-        state
-            .billing_rate_store
-            .upsert_billing_rate(
-                &format!("test:openai:priority:{usage_class}"),
-                monoize::billing_rate_store::UpsertBillingRateInput {
-                    source: Some("test".to_string()),
-                    pricing_profile: Some("openai".to_string()),
-                    model_pattern: Some(None),
-                    provider_type: Some(None),
-                    rate_kind: Some("token".to_string()),
-                    usage_class: Some(usage_class.to_string()),
-                    unit: Some("token".to_string()),
-                    unit_price_nano_usd: Some(unit_price_nano_usd.to_string()),
-                    context_tier: Some(None),
-                    service_tier: Some(Some("priority".to_string())),
-                    modality: Some(None),
-                    cache_ttl: Some(None),
-                    match_json: Some(json!({})),
-                    priority: Some(200),
-                    enabled: Some(true),
-                    raw_json: Some(json!({ "fixture": true })),
-                },
-            )
-            .await
-            .expect("seed priority token rate");
-    }
-}
-
-async fn seed_test_fast_token_rates(state: &monoize::app::AppState) {
-    for (usage_class, unit_price_nano_usd) in
-        [("input_uncached", "2000"), ("output", "3000")]
-    {
-        state
-            .billing_rate_store
-            .upsert_billing_rate(
-                &format!("test:openai:fast:{usage_class}"),
-                monoize::billing_rate_store::UpsertBillingRateInput {
-                    source: Some("test".to_string()),
-                    pricing_profile: Some("openai".to_string()),
-                    model_pattern: Some(None),
-                    provider_type: Some(None),
-                    rate_kind: Some("token".to_string()),
-                    usage_class: Some(usage_class.to_string()),
-                    unit: Some("token".to_string()),
-                    unit_price_nano_usd: Some(unit_price_nano_usd.to_string()),
-                    context_tier: Some(None),
-                    service_tier: Some(Some("fast".to_string())),
-                    modality: Some(None),
-                    cache_ttl: Some(None),
-                    match_json: Some(json!({})),
-                    priority: Some(200),
-                    enabled: Some(true),
-                    raw_json: Some(json!({ "fixture": true })),
-                },
-            )
-            .await
-            .expect("seed fast token rate");
-    }
+    state.monoize_runtime.write().await.tool_prices = json!({});
 }
 
 async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
@@ -5435,7 +5322,6 @@ async fn setup_with_unknown_fields() -> TestContext {
     )
     .await;
     seed_test_server_tool_meter_rates(&state).await;
-    seed_test_priority_token_rates(&state).await;
 
     let router = monoize::app::build_app(state.clone());
 
@@ -5483,16 +5369,9 @@ async fn mock_nonstream_usage_can_be_explicitly_omitted_for_negative_billing_tes
     )
     .await;
 
-    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
-    assert_eq!(
-        error["error"]["code"],
-        json!("upstream_usage_required")
-    );
-    assert_eq!(
-        error["error"]["upstream_code"],
-        json!("upstream_usage_required")
-    );
+    assert_eq!(error["error"]["code"], json!("usage_required"));
 }
 
 async fn json_post(ctx: &TestContext, path: &str, body: Value) -> (StatusCode, String) {

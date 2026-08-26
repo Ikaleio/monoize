@@ -9,12 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PricingProfilePattern {
-    pub pattern: String,
-    pub pricing_profile: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicSettings {
     pub registration_enabled: bool,
     pub captcha_enabled: bool,
@@ -41,8 +35,6 @@ pub struct SystemSettings {
     pub reasoning_suffix_map: HashMap<String, String>,
     #[serde(default)]
     pub codex_model_ids: Vec<String>,
-    #[serde(default = "default_pricing_profile_model_patterns")]
-    pub pricing_profile_model_patterns: Vec<PricingProfilePattern>,
     pub monoize_active_probe_enabled: bool,
     pub monoize_active_probe_interval_seconds: u64,
     pub monoize_active_probe_success_threshold: u32,
@@ -272,43 +264,6 @@ pub fn validate_tool_prices(value: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-pub fn default_pricing_profile_model_patterns() -> Vec<PricingProfilePattern> {
-    vec![
-        PricingProfilePattern {
-            pattern: "gpt-image-*".to_string(),
-            pricing_profile: "openai".to_string(),
-        },
-        PricingProfilePattern {
-            pattern: "text-embedding-*".to_string(),
-            pricing_profile: "openai".to_string(),
-        },
-        PricingProfilePattern {
-            pattern: "gpt-*".to_string(),
-            pricing_profile: "openai".to_string(),
-        },
-        PricingProfilePattern {
-            pattern: "o*".to_string(),
-            pricing_profile: "openai".to_string(),
-        },
-        PricingProfilePattern {
-            pattern: "claude-*".to_string(),
-            pricing_profile: "anthropic".to_string(),
-        },
-        PricingProfilePattern {
-            pattern: "gemini-*".to_string(),
-            pricing_profile: "google".to_string(),
-        },
-        PricingProfilePattern {
-            pattern: "grok-*".to_string(),
-            pricing_profile: "xai".to_string(),
-        },
-        PricingProfilePattern {
-            pattern: "*".to_string(),
-            pricing_profile: "default".to_string(),
-        },
-    ]
-}
-
 impl Default for SystemSettings {
     fn default() -> Self {
         Self {
@@ -324,7 +279,6 @@ impl Default for SystemSettings {
             global_model_redirects: Vec::new(),
             reasoning_suffix_map: default_reasoning_suffix_map(),
             codex_model_ids: Vec::new(),
-            pricing_profile_model_patterns: default_pricing_profile_model_patterns(),
             monoize_active_probe_enabled: true,
             monoize_active_probe_interval_seconds: 30,
             monoize_active_probe_success_threshold: 1,
@@ -354,26 +308,6 @@ impl Default for SystemSettings {
             price_sync_new_api_token: String::new(),
             updated_at: Utc::now(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::default_pricing_profile_model_patterns;
-    use crate::billing_rate_store::select_pricing_profile;
-
-    #[test]
-    fn default_pricing_profile_patterns_cover_embeddings_and_gemini() {
-        let patterns = default_pricing_profile_model_patterns();
-
-        assert_eq!(
-            select_pricing_profile(&patterns, "text-embedding-3-small"),
-            Some("openai")
-        );
-        assert_eq!(
-            select_pricing_profile(&patterns, "gemini-2.5-pro"),
-            Some("google")
-        );
     }
 }
 
@@ -435,12 +369,6 @@ impl SettingsStore {
         self.set_if_not_exists(
             "reasoning_suffix_map",
             &serde_json::to_string(&defaults.reasoning_suffix_map).unwrap(),
-        )
-        .await?;
-        self.set_if_not_exists(
-            "pricing_profile_model_patterns",
-            &serde_json::to_string(&defaults.pricing_profile_model_patterns)
-                .unwrap_or_else(|_| "[]".to_string()),
         )
         .await?;
         self.set_if_not_exists(
@@ -769,11 +697,6 @@ impl SettingsStore {
                         settings.codex_model_ids = model_ids;
                     }
                 }
-                "pricing_profile_model_patterns" => {
-                    if let Ok(patterns) = serde_json::from_str(&row.value) {
-                        settings.pricing_profile_model_patterns = patterns;
-                    }
-                }
                 "monoize_active_probe_enabled" => {
                     settings.monoize_active_probe_enabled = row.value.parse().unwrap_or(true);
                 }
@@ -926,11 +849,6 @@ impl SettingsStore {
             (
                 "codex_model_ids",
                 serde_json::to_string(&settings.codex_model_ids).map_err(|e| e.to_string())?,
-            ),
-            (
-                "pricing_profile_model_patterns",
-                serde_json::to_string(&settings.pricing_profile_model_patterns)
-                    .map_err(|e| e.to_string())?,
             ),
             (
                 "monoize_active_probe_enabled",
@@ -1122,43 +1040,6 @@ impl SettingsStore {
         }
     }
 
-    pub async fn get_pricing_profile_model_patterns(
-        &self,
-    ) -> Result<Vec<PricingProfilePattern>, String> {
-        match self.get("pricing_profile_model_patterns").await? {
-            Some(json_str) => serde_json::from_str(&json_str)
-                .map_err(|e| format!("invalid pricing_profile_model_patterns JSON: {e}")),
-            None => Ok(default_pricing_profile_model_patterns()),
-        }
-    }
-
-    pub async fn set_pricing_profile_model_patterns(
-        &self,
-        patterns: &[PricingProfilePattern],
-    ) -> Result<(), String> {
-        // E2: the point mutation and its epoch increment commit in one transaction.
-        let transaction = self.db.begin_write().await.map_err(|e| e.to_string())?;
-        let now = Utc::now().to_rfc3339();
-        let model = system_settings::ActiveModel {
-            key: Set("pricing_profile_model_patterns".to_string()),
-            value: Set(serde_json::to_string(patterns).map_err(|e| e.to_string())?),
-            updated_at: Set(now),
-        };
-        system_settings::Entity::insert(model)
-            .on_conflict(
-                OnConflict::column(system_settings::Column::Key)
-                    .update_columns([
-                        system_settings::Column::Value,
-                        system_settings::Column::UpdatedAt,
-                    ])
-                    .to_owned(),
-            )
-            .exec(&*transaction)
-            .await
-            .map_err(|e| e.to_string())?;
-        bump_config_epoch_in_tx(&self.db, &transaction).await?;
-        transaction.commit().await.map_err(|e| e.to_string())
-    }
 }
 
 pub(crate) const CONFIG_EPOCH_TENANT: &str = "monoize";

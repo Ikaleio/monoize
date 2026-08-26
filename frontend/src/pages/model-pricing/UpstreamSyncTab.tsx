@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CloudDownload, Eye, Play, RefreshCw, Save } from "lucide-react";
+import { Eye, Play, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,6 @@ import type {
 } from "@/lib/api";
 import {
   applyPriceSync,
-  syncModelMetadata,
   updateSettingsOptimistic,
   usePriceSyncRuns,
   useSettings,
@@ -85,7 +84,6 @@ export function UpstreamSyncTab() {
   const { data: settings } = useSettings();
   const [preview, setPreview] = useState<PriceSyncPreview | null>(null);
   const [busySource, setBusySource] = useState<string | null>(null);
-  const [metadataSyncing, setMetadataSyncing] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
   const [tokenTouched, setTokenTouched] = useState(false);
@@ -139,26 +137,6 @@ export function UpstreamSyncTab() {
       return;
     } finally {
       setBusySource(null);
-    }
-  };
-
-  const handleMetadataSync = async () => {
-    setMetadataSyncing(true);
-    try {
-      const result = await syncModelMetadata((error) =>
-        toast.error(t("modelPricing.sync.metadataFailed", "Metadata sync failed"), {
-          description: error.message,
-        })
-      );
-      toast.success(
-        t("modelPricing.sync.metadataSuccess", "Metadata synced: {{upserted}} models", {
-          upserted: result.upserted,
-        })
-      );
-    } catch {
-      return;
-    } finally {
-      setMetadataSyncing(false);
     }
   };
 
@@ -286,21 +264,6 @@ export function UpstreamSyncTab() {
                   {t("modelPricing.sync.apply", "Apply")}
                 </Button>
               </div>
-              {source.id === "models_dev" ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={metadataSyncing}
-                  onClick={() => void handleMetadataSync()}
-                >
-                  <CloudDownload
-                    className={`mr-1.5 h-3.5 w-3.5 ${metadataSyncing ? "animate-pulse" : ""}`}
-                  />
-                  {metadataSyncing
-                    ? t("modelPricing.sync.metadataSyncing", "Syncing metadata...")
-                    : t("modelPricing.sync.metadataSync", "Sync metadata now")}
-                </Button>
-              ) : null}
             </Card>
           );
         })}

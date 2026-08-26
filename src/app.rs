@@ -1,5 +1,4 @@
 use crate::auth::AuthState;
-use crate::billing_rate_store::{BillingRateStore, DbBillingRateRecord};
 use crate::captcha::CapVerifier;
 use crate::client_ip::TrustedProxyConfig;
 use crate::custom_transforms::CustomTransformStore;
@@ -15,7 +14,7 @@ use crate::monoize_routing::{
 };
 use crate::node_config::{HttpClients, NodeRole, NodeSettings};
 use crate::request_capture::RequestCaptureStore;
-use crate::settings::{PricingProfilePattern, SettingsStore, normalize_pricing_model_key};
+use crate::settings::{SettingsStore, normalize_pricing_model_key};
 use crate::transforms::TransformRegistry;
 use crate::users::{InsertRequestLog, UserRole, UserStore};
 use axum::Router;
@@ -200,7 +199,6 @@ pub struct AppState {
     pub settings_update_lock: Arc<Mutex<()>>,
     pub model_registry_store: ModelRegistryStore,
     pub model_price_store: crate::model_price_store::ModelPriceStore,
-    pub billing_rate_store: BillingRateStore,
     pub transform_registry: Arc<TransformRegistry>,
     pub cap_verifier: CapVerifier,
     pub custom_transform_store: CustomTransformStore,
@@ -425,14 +423,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         )
     })?;
     let model_price_store = crate::model_price_store::ModelPriceStore::new(db.clone());
-    let billing_rate_store = BillingRateStore::new(db.clone()).await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "billing_rate_store_init_failed",
-            err,
-        )
-    })?;
-
     let metrics = init_metrics()?;
 
     let settings_snapshot = settings_store.get_all().await.map_err(|err| {
@@ -505,8 +495,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let probe_health = channel_health.clone();
     let probe_routing_config_revision = routing_config_revision.clone();
     let probe_user_store = user_store.clone();
-    let probe_model_registry_store = model_registry_store.clone();
-    let probe_billing_rate_store = billing_rate_store.clone();
+    let probe_model_price_store = model_price_store.clone();
     let probe_user_id = active_probe_user_id;
     let probe_shutdown = background_shutdown.clone();
     let probe_task_registration = RequestLogTaskRegistration::new(request_log_tasks.clone());
@@ -532,8 +521,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             let now = chrono::Utc::now().timestamp();
             let rt_snap = probe_runtime.read().await.clone();
             let pricing_snapshot = match build_active_probe_pricing_snapshot(
-                &probe_billing_rate_store,
-                &probe_model_registry_store,
+                &probe_model_price_store,
                 &providers,
                 &rt_snap,
             )
@@ -964,7 +952,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         settings_update_lock,
         model_registry_store,
         model_price_store,
-        billing_rate_store,
         transform_registry,
         cap_verifier,
         custom_transform_store,
@@ -1067,111 +1054,10 @@ fn active_probe_user_init_error(error: String) -> AppError {
     )
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ActiveProbeRateResolution {
-    pricing_profile: String,
-    pricing_model: String,
-    input_rate_nano: i128,
-    output_rate_nano: i128,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ActiveProbeCharge {
-    prompt_charge_nano: i128,
-    completion_charge_nano: i128,
-    base_charge_nano: i128,
-    final_charge_nano: i128,
-}
-
-fn is_dimensionless_probe_rate(rate: &DbBillingRateRecord, usage_class: &str) -> bool {
-    rate.rate_kind == "token"
-        && rate.usage_class == usage_class
-        && rate.unit == "token"
-        && rate.modality.is_none()
-        && rate.cache_ttl.is_none()
-        && rate
-            .context_tier
-            .as_deref()
-            .is_none_or(|tier| tier == "default")
-        && rate
-            .service_tier
-            .as_deref()
-            .is_none_or(|tier| tier == "default")
-}
-
-fn first_dimensionless_probe_rate(
-    rates: &[DbBillingRateRecord],
-    usage_class: &str,
-) -> Result<Option<i128>, String> {
-    let Some(rate) = rates
-        .iter()
-        .find(|rate| is_dimensionless_probe_rate(rate, usage_class))
-    else {
-        return Ok(None);
-    };
-    let price = rate.unit_price_nano()?;
-    if price < 0 || price.to_string() != rate.unit_price_nano_usd {
-        return Err(format!(
-            "non-canonical or negative unit_price_nano_usd for billing rate {}",
-            rate.id
-        ));
-    }
-    Ok(Some(price))
-}
-
-fn resolve_active_probe_rates_for_model(
-    patterns: &[PricingProfilePattern],
-    metadata_profiles: &HashMap<String, String>,
-    candidate_rates: &[DbBillingRateRecord],
-    pricing_model: &str,
-    provider_type: &str,
-) -> Result<Option<ActiveProbeRateResolution>, String> {
-    let mut candidate_profiles = Vec::new();
-    if let Some(profile) =
-        crate::billing_rate_store::select_pricing_profile(patterns, pricing_model)
-    {
-        candidate_profiles.push(profile.to_string());
-    }
-    if let Some(metadata_profile) = metadata_profiles.get(pricing_model)
-        && !candidate_profiles.contains(metadata_profile)
-    {
-        candidate_profiles.push(metadata_profile.clone());
-    }
-
-    for pricing_profile in candidate_profiles {
-        let rates = candidate_rates
-            .iter()
-            .filter(|rate| {
-                rate.pricing_profile == pricing_profile
-                    && rate
-                        .provider_type
-                        .as_deref()
-                        .is_none_or(|value| value == provider_type)
-                    && rate.model_pattern.as_deref().is_none_or(|pattern| {
-                        crate::billing_rate_store::glob_matches(pattern, pricing_model)
-                    })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let input_rate_nano = first_dimensionless_probe_rate(&rates, "input_uncached")?;
-        let output_rate_nano = first_dimensionless_probe_rate(&rates, "output")?;
-        if let (Some(input_rate_nano), Some(output_rate_nano)) = (input_rate_nano, output_rate_nano)
-        {
-            return Ok(Some(ActiveProbeRateResolution {
-                pricing_profile,
-                pricing_model: pricing_model.to_string(),
-                input_rate_nano,
-                output_rate_nano,
-            }));
-        }
-    }
-    Ok(None)
-}
-
 #[derive(Debug, Clone, Default)]
 struct ActiveProbePricingSnapshot {
     reasoning_suffix_map: HashMap<String, String>,
-    resolutions: HashMap<(String, String), Result<Option<ActiveProbeRateResolution>, String>>,
+    prices: HashMap<String, crate::model_price_store::ModelPriceRecord>,
 }
 
 impl ActiveProbePricingSnapshot {
@@ -1179,146 +1065,74 @@ impl ActiveProbePricingSnapshot {
         &self,
         upstream_model: &str,
         logical_model: &str,
-        provider_type: &str,
-    ) -> Result<Option<ActiveProbeRateResolution>, String> {
-        let normalized_upstream_model =
+        _provider_type: &str,
+    ) -> Result<Option<(String, crate::model_price_store::ModelPriceRecord)>, String> {
+        let upstream_key =
             normalize_pricing_model_key(upstream_model, &self.reasoning_suffix_map);
-        let upstream = self
-            .resolutions
-            .get(&(normalized_upstream_model.clone(), provider_type.to_string()))
-            .cloned()
-            .unwrap_or(Ok(None))?;
-        if upstream.is_some() {
-            return Ok(upstream);
+        if let Some(row) = self.prices.get(&upstream_key)
+            && row.enabled
+            && row.is_complete()
+        {
+            return Ok(Some((upstream_key, row.clone())));
         }
-        let normalized_logical_model =
-            normalize_pricing_model_key(logical_model, &self.reasoning_suffix_map);
-        if normalized_logical_model == normalized_upstream_model {
+        if upstream_model == logical_model {
             return Ok(None);
         }
-        self.resolutions
-            .get(&(normalized_logical_model, provider_type.to_string()))
+        let logical_key = normalize_pricing_model_key(logical_model, &self.reasoning_suffix_map);
+        Ok(self
+            .prices
+            .get(&logical_key)
+            .filter(|row| row.enabled && row.is_complete())
             .cloned()
-            .unwrap_or(Ok(None))
+            .map(|row| (logical_key, row)))
     }
 }
 
 async fn build_active_probe_pricing_snapshot(
-    billing_rate_store: &BillingRateStore,
-    model_registry_store: &ModelRegistryStore,
+    model_price_store: &crate::model_price_store::ModelPriceStore,
     providers: &[crate::monoize_routing::MonoizeProvider],
     runtime: &MonoizeRuntimeConfig,
 ) -> Result<ActiveProbePricingSnapshot, String> {
     let reasoning_suffix_map = runtime.reasoning_suffix_map.clone();
-    let patterns = runtime.pricing_profile_model_patterns.clone();
-    let mut pairs = std::collections::HashSet::new();
+    let mut models = Vec::new();
     for provider in providers {
         for channel in &provider.channels {
-            if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
-                continue;
-            }
             let configured_model = channel
                 .active_probe_model_override
                 .as_ref()
                 .or(provider.active_probe_model_override.as_ref())
                 .or(runtime.active_probe_model.as_ref())
                 .cloned();
-            let logical_model = configured_model.or_else(|| channel.models.keys().min().cloned());
-            let Some(logical_model) = logical_model else {
+            let Some(logical_model) =
+                configured_model.or_else(|| channel.models.keys().min().cloned())
+            else {
                 continue;
             };
-            if !channel.models.contains_key(&logical_model) {
+            let Some(entry) = channel.models.get(&logical_model) else {
                 continue;
-            }
-            let upstream_model = channel
-                .models
-                .get(&logical_model)
-                .and_then(|entry| entry.redirect.as_deref())
+            };
+            let upstream_model = entry
+                .redirect
+                .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(&logical_model);
-            let provider_type = channel.provider_type.as_str().to_string();
-            pairs.insert((
-                normalize_pricing_model_key(upstream_model, &reasoning_suffix_map),
-                provider_type.clone(),
+            models.push(normalize_pricing_model_key(
+                upstream_model,
+                &reasoning_suffix_map,
             ));
-            pairs.insert((
-                normalize_pricing_model_key(&logical_model, &reasoning_suffix_map),
-                provider_type,
-            ));
+            if upstream_model != logical_model {
+                models.push(normalize_pricing_model_key(
+                    &logical_model,
+                    &reasoning_suffix_map,
+                ));
+            }
         }
     }
-    let mut models = pairs
-        .iter()
-        .map(|(model, _)| model.clone())
-        .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
-    let metadata_profiles = model_registry_store
-        .list_model_metadata_pricing_profiles(&models)
-        .await?;
-    let mut profiles = Vec::new();
-    for model in &models {
-        if let Some(profile) = crate::billing_rate_store::select_pricing_profile(&patterns, model) {
-            profiles.push(profile.to_string());
-        }
-        if let Some(profile) = metadata_profiles.get(model) {
-            profiles.push(profile.clone());
-        }
-    }
-    profiles.sort();
-    profiles.dedup();
-    let mut provider_types = pairs
-        .iter()
-        .map(|(_, provider_type)| provider_type.clone())
-        .collect::<Vec<_>>();
-    provider_types.sort();
-    provider_types.dedup();
-    let candidate_rates = billing_rate_store
-        .list_candidate_rates_for_profiles_and_provider_types(&profiles, &provider_types)
-        .await?;
-    let resolutions = pairs
-        .into_iter()
-        .map(|(model, provider_type)| {
-            let resolution = resolve_active_probe_rates_for_model(
-                &patterns,
-                &metadata_profiles,
-                &candidate_rates,
-                &model,
-                &provider_type,
-            );
-            ((model, provider_type), resolution)
-        })
-        .collect();
+    let prices = model_price_store.get_many(&models).await?;
     Ok(ActiveProbePricingSnapshot {
         reasoning_suffix_map,
-        resolutions,
-    })
-}
-
-fn calculate_active_probe_charge(
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    pricing: &ActiveProbeRateResolution,
-    provider_multiplier: Multiplier,
-) -> Result<ActiveProbeCharge, String> {
-    let prompt_charge_nano = i128::from(prompt_tokens)
-        .checked_mul(pricing.input_rate_nano)
-        .ok_or_else(|| "active probe prompt charge overflow".to_string())?;
-    let completion_charge_nano = i128::from(completion_tokens)
-        .checked_mul(pricing.output_rate_nano)
-        .ok_or_else(|| "active probe completion charge overflow".to_string())?;
-    let base_charge_nano = prompt_charge_nano
-        .checked_add(completion_charge_nano)
-        .ok_or_else(|| "active probe base charge overflow".to_string())?;
-    let final_charge_nano = provider_multiplier
-        .checked_scale_i128(base_charge_nano)
-        .ok_or_else(|| "active probe multiplier charge overflow".to_string())?;
-    Ok(ActiveProbeCharge {
-        prompt_charge_nano,
-        completion_charge_nano,
-        base_charge_nano,
-        final_charge_nano,
+        prices,
     })
 }
 
@@ -1345,52 +1159,6 @@ fn build_probe_usage_breakdown(prompt_tokens: u64, completion_tokens: u64) -> Va
         "raw_usage_extra": {
             "source": "active_probe"
         }
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_probe_billing_breakdown(
-    provider_id: &str,
-    logical_model: &str,
-    upstream_model: &str,
-    provider_multiplier: Multiplier,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    pricing: &ActiveProbeRateResolution,
-    charge: ActiveProbeCharge,
-) -> Value {
-    json!({
-        "version": 2,
-        "currency": "nano_usd",
-        "logical_model": logical_model,
-        "upstream_model": upstream_model,
-        "provider_id": provider_id,
-        "pricing_profile": pricing.pricing_profile,
-        "pricing_model": pricing.pricing_model,
-        "provider_multiplier": provider_multiplier,
-        "token_line_items": [
-            {
-                "usage_class": "input_uncached",
-                "unit": "token",
-                "unit_price_nano": pricing.input_rate_nano.to_string(),
-                "quantity": prompt_tokens,
-                "charge_nano": charge.prompt_charge_nano.to_string()
-            },
-            {
-                "usage_class": "output",
-                "unit": "token",
-                "unit_price_nano": pricing.output_rate_nano.to_string(),
-                "quantity": completion_tokens,
-                "charge_nano": charge.completion_charge_nano.to_string()
-            }
-        ],
-        "meter_line_items": [],
-        "tier": {
-            "context_tier": null,
-            "service_tier": null
-        },
-        "base_charge_nano": charge.base_charge_nano.to_string(),
-        "final_charge_nano": charge.final_charge_nano.to_string()
     })
 }
 
@@ -1468,7 +1236,10 @@ async fn persist_active_probe_request_log(
     channel_name: String,
     logical_model: String,
     upstream_model: String,
-    pricing_resolution: Result<Option<ActiveProbeRateResolution>, String>,
+    pricing_resolution: Result<
+        Option<(String, crate::model_price_store::ModelPriceRecord)>,
+        String,
+    >,
     usage_snapshot: Option<Value>,
     duration_ms: u64,
     request_id: String,
@@ -1488,25 +1259,19 @@ async fn persist_active_probe_request_log(
     let (charge_nano_usd, billing_breakdown_json) =
         if let Some((prompt_tokens, completion_tokens)) = usage_tokens {
             match pricing_resolution {
-                Ok(Some(pricing)) => match calculate_active_probe_charge(
-                    prompt_tokens,
-                    completion_tokens,
-                    &pricing,
-                    provider_multiplier,
-                ) {
-                    Ok(charge) => (
-                        Some(charge.final_charge_nano),
-                        Some(build_probe_billing_breakdown(
-                            &provider_id,
-                            &logical_model,
-                            &upstream_model,
-                            provider_multiplier,
-                            prompt_tokens,
-                            completion_tokens,
-                            &pricing,
-                            charge,
-                        )),
-                    ),
+                Ok(Some((pricing_key, pricing))) => {
+                    let usage = crate::urp::Usage {
+                        input_tokens: prompt_tokens,
+                        output_tokens: completion_tokens,
+                        ..Default::default()
+                    };
+                    match crate::handlers::calculate_active_probe_charge(
+                        &pricing,
+                        &pricing_key,
+                        &usage,
+                        provider_multiplier,
+                    ) {
+                    Ok((charge, breakdown)) => (Some(charge), Some(breakdown)),
                     Err(err) => {
                         tracing::warn!(
                             logical_model,
@@ -1516,7 +1281,8 @@ async fn persist_active_probe_request_log(
                         );
                         (None, None)
                     }
-                },
+                    }
+                }
                 Ok(None) => (None, None),
                 Err(err) => {
                     tracing::warn!(
@@ -1638,105 +1404,6 @@ mod active_probe_billing_tests {
         );
     }
 
-    fn rate(
-        id: &str,
-        usage_class: &str,
-        unit_price_nano_usd: &str,
-        modality: Option<&str>,
-    ) -> DbBillingRateRecord {
-        DbBillingRateRecord {
-            id: id.to_string(),
-            source: "test".to_string(),
-            pricing_profile: "test-profile".to_string(),
-            model_pattern: Some("test-model".to_string()),
-            provider_type: None,
-            rate_kind: "token".to_string(),
-            usage_class: usage_class.to_string(),
-            unit: "token".to_string(),
-            unit_price_nano_usd: unit_price_nano_usd.to_string(),
-            context_tier: None,
-            service_tier: None,
-            modality: modality.map(str::to_string),
-            cache_ttl: None,
-            match_json: json!({}),
-            priority: 0,
-            enabled: true,
-            raw_json: json!({}),
-            updated_at: chrono::Utc::now(),
-        }
-    }
-
-    #[test]
-    fn probe_rate_selection_uses_first_dimensionless_row() {
-        let rates = vec![
-            rate("dimensioned", "input_uncached", "999", Some("image")),
-            rate("first", "input_uncached", "1001", None),
-            rate("second", "input_uncached", "2000", None),
-        ];
-        assert_eq!(
-            first_dimensionless_probe_rate(&rates, "input_uncached").unwrap(),
-            Some(1001)
-        );
-    }
-
-    #[test]
-    fn probe_bulk_snapshot_preserves_profile_and_model_fallback_order() {
-        let patterns = vec![PricingProfilePattern {
-            pattern: "upstream-*".to_string(),
-            pricing_profile: "settings-profile".to_string(),
-        }];
-        let metadata =
-            HashMap::from([("logical-model".to_string(), "metadata-profile".to_string())]);
-        let mut input = rate("input", "input_uncached", "11", None);
-        input.pricing_profile = "metadata-profile".to_string();
-        input.model_pattern = Some("logical-*".to_string());
-        input.provider_type = Some("responses".to_string());
-        let mut output = input.clone();
-        output.id = "output".to_string();
-        output.usage_class = "output".to_string();
-        let candidate_rates = vec![input, output];
-        let upstream = resolve_active_probe_rates_for_model(
-            &patterns,
-            &metadata,
-            &candidate_rates,
-            "upstream-model",
-            "responses",
-        )
-        .unwrap();
-        assert!(upstream.is_none());
-        let logical = resolve_active_probe_rates_for_model(
-            &patterns,
-            &metadata,
-            &candidate_rates,
-            "logical-model",
-            "responses",
-        )
-        .unwrap()
-        .expect("metadata profile resolves");
-        assert_eq!(logical.pricing_profile, "metadata-profile");
-        assert_eq!(logical.input_rate_nano, 11);
-    }
-
-    #[test]
-    fn probe_charge_uses_exact_multiplier_and_checked_arithmetic() {
-        let pricing = ActiveProbeRateResolution {
-            pricing_profile: "test-profile".to_string(),
-            pricing_model: "test-model".to_string(),
-            input_rate_nano: 1000,
-            output_rate_nano: 2000,
-        };
-        let charge =
-            calculate_active_probe_charge(1, 1, &pricing, Multiplier::parse("1.001").unwrap())
-                .unwrap();
-        assert_eq!(charge.base_charge_nano, 3000);
-        assert_eq!(charge.final_charge_nano, 3003);
-
-        let overflowing = ActiveProbeRateResolution {
-            input_rate_nano: i128::MAX,
-            ..pricing
-        };
-        assert!(calculate_active_probe_charge(2, 0, &overflowing, Multiplier::ONE).is_err());
-    }
 }
 
 fn resolve_database_dsn() -> String {
@@ -1807,8 +1474,9 @@ pub(crate) fn runtime_config_from_settings(
     runtime.global_transforms = settings_snapshot.global_transforms.clone();
     let _ = runtime.set_global_model_redirects(settings_snapshot.global_model_redirects.clone());
     runtime.reasoning_suffix_map = settings_snapshot.reasoning_suffix_map.clone();
-    runtime.pricing_profile_model_patterns =
-        settings_snapshot.pricing_profile_model_patterns.clone();
+    runtime.allow_free_when_unpriced = settings_snapshot.allow_free_when_unpriced;
+    runtime.allow_free_when_missing_usage = settings_snapshot.allow_free_when_missing_usage;
+    runtime.tool_prices = settings_snapshot.tool_prices.clone();
     runtime.codex_model_ids = settings_snapshot.codex_model_ids.clone();
     runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
     runtime.stream_idle_timeout_ms = settings_snapshot.monoize_stream_idle_timeout_ms.max(1);
@@ -2189,28 +1857,6 @@ fn build_dashboard_api_router() -> Router<AppState> {
             get(crate::dashboard_handlers::list_marketplace_models),
         )
         .route(
-            "/dashboard/model-metadata/sync/models-dev",
-            post(crate::dashboard_handlers::sync_model_metadata_models_dev),
-        )
-        .route(
-            "/dashboard/billing-rates",
-            get(crate::dashboard_handlers::list_billing_rates),
-        )
-        .route(
-            "/dashboard/billing-rates/sync/catalog",
-            post(crate::dashboard_handlers::sync_billing_rates_catalog),
-        )
-        .route(
-            "/dashboard/billing-rates/{*id}",
-            put(crate::dashboard_handlers::upsert_billing_rate)
-                .delete(crate::dashboard_handlers::delete_billing_rate),
-        )
-        .route(
-            "/dashboard/pricing-profile-patterns",
-            get(crate::dashboard_handlers::get_pricing_profile_patterns)
-                .put(crate::dashboard_handlers::update_pricing_profile_patterns),
-        )
-        .route(
             "/dashboard/model-metadata/{*model_id}",
             get(crate::dashboard_handlers::get_model_metadata)
                 .put(crate::dashboard_handlers::upsert_model_metadata)
@@ -2227,6 +1873,14 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/price-sync/runs",
             get(crate::dashboard_handlers::list_price_sync_runs),
+        )
+        .route(
+            "/dashboard/price-sync/{source}/preview",
+            post(crate::dashboard_handlers::preview_price_sync),
+        )
+        .route(
+            "/dashboard/price-sync/{source}/apply",
+            post(crate::dashboard_handlers::apply_price_sync),
         )
         .route(
             "/dashboard/model-prices/{*model_id}",

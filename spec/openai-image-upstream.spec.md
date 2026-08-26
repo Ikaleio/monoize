@@ -137,7 +137,7 @@ OIU-UI2. The provider type MUST use the OpenAI icon in the UI.
 
 ## 8a. Billing Integration
 
-OIU-B1. `gpt-image-2` billing MUST use `billing_rate_records` as defined in `metered-billing.spec.md`.
+OIU-B1. Image-model billing MUST use exact `model_prices` resolution and settlement as defined in `model-pricing.spec.md`.
 
 OIU-B2. By default, `gpt-image-2` MUST charge only upstream usage quantities:
 
@@ -149,9 +149,9 @@ OIU-B2a. If OpenAI image usage provides `input_tokens_details.cached_tokens`, Mo
 
 OIU-B2b. If OpenAI image usage provides `cached_tokens_details`, `cache_read_tokens_details`, or `cached_input_tokens_details` with `text_tokens` or `image_tokens`, Monoize MUST normalize it to `Usage.input_details.cache_read_modality_breakdown`.
 
-OIU-B2c. If `gpt-image-2` cached-input rates are modality-specific and upstream usage omits a cached-input modality split, Monoize MUST reject billing rather than allocate cached tokens across text/image buckets.
+OIU-B2c. Billing MUST aggregate text and image token modalities into the token classes defined by `model-pricing.spec.md` MP-C1. A modality MUST NOT select a price.
 
-OIU-B3. Monoize MUST NOT add a fixed per-output-image fee unless an enabled `billing_rate_records` meter row explicitly configures that fee.
+OIU-B3. Monoize MUST NOT add a fixed per-output-image fee.
 
 OIU-B4. Monoize MUST NOT infer image duration, render time, or output count from local runtime timing for billing.
 

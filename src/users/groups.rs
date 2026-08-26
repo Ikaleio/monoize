@@ -744,6 +744,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 1,
+                billing_ratio: Some("1".to_string()),
             })
             .await
             .expect("doomed group creates");
@@ -753,6 +754,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 2,
+                billing_ratio: Some("1".to_string()),
             })
             .await
             .expect("kept group creates");

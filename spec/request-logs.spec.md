@@ -200,29 +200,31 @@ RL15b. If normalized usage contains an authoritative cached-input modality split
 
 RL15a. `usage_breakdown_json.input.total_tokens` MUST be the aggregate/inclusive prompt token total as defined in `user-billing-and-model-metadata.spec.md` § 5 C3 — i.e. it MUST include cache-read tokens and cache-creation tokens. `usage_breakdown_json.input.uncached_tokens` MUST equal `input.total_tokens - cached_tokens - cache_creation_tokens` clamped at zero (the base-rate billable bucket). These fields MUST be computed uniformly across all upstream provider types, because upstream usage is normalized at decode time per C3-ii of the billing spec. Provider-type branching in usage-breakdown construction MUST NOT exist.
 
-RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the request-time pricing snapshot used for billing. The snapshot MUST include at least:
+RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the request-time version 3 pricing snapshot defined by `model-pricing.spec.md` §8. The snapshot MUST include at least:
 
 - unit prices used for each billed token class,
 - token quantities used in each billed class,
 - per-class subtotal charges,
-- meter quantities and subtotals for non-token billed classes,
-- selected context tier and service tier,
-- provider multiplier,
+- tool quantities and subtotals,
+- the selected tier index and service tier,
+- Channel multiplier and group billing ratio,
 - base charge and final charge.
 
-RL16a. For metered billing snapshots, `billing_breakdown_json.version` MUST equal `2` and the snapshot MUST include:
+RL16a. New billing snapshots MUST set `billing_breakdown_json.version = 3` and include:
 
 - `token_line_items: array`
-- `meter_line_items: array`
-- `ignored_server_tool_usage_classes: array`
-- `tier.context_tier: string | null`
-- `tier.service_tier: string | null`
+- `tool_line_items: array`
+- `unpriced_tool_classes: array`
+- `applied_tier_index: integer | null`
+- `service_tier: string | null`
+- `group_billing_ratio: string`
+- `channel_multiplier: string`
 - `base_charge_nano: string`
 - `final_charge_nano: string`
 
-RL16b. Each token line item MUST include `usage_class`, `unit`, `unit_price_nano`, `quantity`, `charge_nano`, and any selected dimension fields among `context_tier`, `service_tier`, `modality`, and `cache_ttl`.
+RL16b. Each token line item MUST include `usage_class`, `quantity`, `usd_per_1m`, and `charge_nano`.
 
-RL16c. Each meter line item MUST include `usage_class`, `unit`, `unit_price_nano`, `quantity`, `charge_nano`, and whether the quantity was authoritative when that can be represented.
+RL16c. Each tool line item MUST include `usage_class`, `quantity`, `per`, `usd`, and `charge_nano`.
 
 RL17. When a request triggers waterfall fail-forward, `tried_providers_json` MUST record each failed upstream attempt. This rule applies to every upstream error class. Each persisted entry MUST contain `attempt_number`, `provider_id`, `channel_id`, `provider_name`, `channel_name`, and `error`. `error` MUST equal the attempt's unmasked, truncated internal detail per `upstream-error-sanitization.spec.md` SAN-5/SAN-10; the attempt's client-facing `client_error` text MUST NOT be persisted. It MUST also persist `duration_ms`, `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` when those values exist on the failed attempt. `duration_ms` MUST equal the wall-clock milliseconds from the start of that upstream attempt to the failure. `provider_name` and `channel_name` MUST equal the Provider and Channel display names at attempt time. The array MUST be ordered chronologically. When no upstream attempt failed, the field MUST be null.
 
@@ -230,11 +232,11 @@ RL17a. `GET /api/dashboard/request-logs` MUST return `tried_providers` as that J
 
 RL18. Successful active probe connectivity tests that can incur upstream token cost MUST be persisted as request logs with `request_kind = "active_probe_connectivity"`. Failed active probe connectivity tests MUST NOT be persisted as request logs.
 
-RL18a. When a successful active probe returns both prompt and completion token counts, its charge calculation MUST read `billing_rate_records`; it MUST NOT read token prices from `model_metadata_records`. Pricing-model normalization, ordered `pricing_profile_model_patterns` selection, optional `models_dev_provider` profile fallback, and redirected-upstream-model then logical-model fallback MUST follow `user-billing-and-model-metadata.spec.md` C1.2 and `metered-billing.spec.md` MB-P1 through MB-P6.
+RL18a. When a successful active probe returns both prompt and completion token counts, its charge calculation MUST read `model_prices`; it MUST NOT read prices from `model_metadata_records`. Pricing-key normalization and redirected-upstream-model then logical-model fallback MUST follow `model-pricing.spec.md` MP-R1 through MP-R4.
 
-RL18b. Within each candidate profile, active-probe pricing MUST use the first eligible `rate_kind = "token"`, `unit = "token"` row in `priority DESC, id ASC` order for each of `usage_class = "input_uncached"` and `usage_class = "output"`. Each selected row MUST be dimensionless: `context_tier` and `service_tier` are null or `"default"`, and `modality` and `cache_ttl` are null. Both prices MUST be canonical non-negative integer strings. Token multiplication, addition, and exact provider-multiplier scaling MUST use checked integer/decimal arithmetic.
+RL18b. Active-probe billing MUST accept only a complete enabled `per_token` row. It MUST apply `output_usd_per_1m` fallback per MP-R5. Token multiplication, addition, and Channel-multiplier scaling MUST use checked exact arithmetic.
 
-RL18c. A successful active probe with missing usage, no complete RL18b pair, an invalid selected price, or arithmetic overflow MUST still persist its connectivity log with `charge_nano_usd = null` and `billing_breakdown_json = null`. It MUST NOT substitute zero for a missing or failed calculation. A successful calculated probe snapshot MUST use metered-billing version `2`, include the selected `pricing_profile` and `pricing_model`, and satisfy RL16a through RL16c.
+RL18c. A successful active probe with missing usage, no complete RL18b row, an invalid selected price, or arithmetic overflow MUST still persist its connectivity log with `charge_nano_usd = null` and `billing_breakdown_json = null`. It MUST NOT substitute zero for a missing or failed calculation. A calculated probe snapshot MUST use version 3 and satisfy RL16a through RL16c.
 
 RL18d. Monoize MUST resolve the active-probe system user ID once during process startup and reuse that ID for every probe log. The system user MUST have unlimited balance before startup completes. If the user cannot be read, created, or changed to unlimited balance, startup MUST fail with `active_probe_user_init_failed`. One scheduler tick MUST NOT execute a system-user query per Provider, Channel, or probe.
 

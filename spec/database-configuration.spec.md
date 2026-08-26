@@ -188,7 +188,7 @@ DB-T1. SQLite database-semantic tests MUST run without external services. Postgr
 
 ## 11. Settings Mutation Ordering
 
-DB22. The process MUST serialize every dashboard settings mutation, including the dedicated `pricing_profile_model_patterns` endpoint, from its initial read or validation through database writes and publication to `monoize_runtime`, using one process-local settings-update lock.
+DB22. The process MUST serialize every dashboard settings mutation from its initial read or validation through database writes and publication to `monoize_runtime`, using one process-local settings-update lock.
 
 DB23. A settings update MUST read its base state after every earlier settings update in the same process has published its runtime snapshot. An earlier update's snapshot MUST NOT overwrite a later update's snapshot.
 
@@ -196,7 +196,7 @@ DB23a. One dashboard settings update MUST write all changed `system_settings` ro
 
 DB23b. After the transaction commits, Monoize MUST construct and publish `monoize_runtime` from the committed values before returning success. The supported writer model is one `primary`-role process per deployment, defined by `unified_responses_proxy.spec.md` C6; replicas obtain equivalent snapshots via `primary-replica-deployment.spec.md` E3.
 
-DB23c. `monoize_runtime` MUST contain the committed `reasoning_suffix_map`, `pricing_profile_model_patterns`, and `codex_model_ids`. A forwarding request MUST clone the suffix and pricing values from one runtime read and MUST NOT query `system_settings` for either value. `GET /v1/models` MUST clone `codex_model_ids` from the runtime snapshot and MUST NOT load all settings. The dedicated pricing-pattern mutation MUST publish its committed pattern list before returning success.
+DB23c. `monoize_runtime` MUST contain the committed `reasoning_suffix_map` and `codex_model_ids`. A forwarding request MUST clone the suffix map from one runtime read and MUST NOT query `system_settings` for it. `GET /v1/models` MUST clone `codex_model_ids` from the runtime snapshot and MUST NOT load all settings.
 
 DB23d. Authentication code that needs only `session_ttl_days`, and API-key creation code that needs only `api_key_max_per_user`, MUST execute one point lookup for that key. It MUST NOT call `get_all()` or parse unrelated setting payloads. A missing, malformed, or non-positive point value MUST resolve to `7` and `1000`, respectively. A database error from either point lookup MUST return HTTP `500`; authentication MUST NOT create a session and API-key creation MUST NOT insert a key after that error.
 

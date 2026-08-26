@@ -1,8 +1,6 @@
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;
-use crate::settings::{
-    PricingProfilePattern, default_pricing_profile_model_patterns, default_reasoning_suffix_map,
-};
+use crate::settings::default_reasoning_suffix_map;
 use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
@@ -112,10 +110,6 @@ pub struct MonoizeChannel {
     pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default)]
-    pub allow_missing_usage: bool,
-    #[serde(default)]
-    pub allow_unpriced_server_tools: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -211,10 +205,6 @@ pub struct CreateMonoizeChannelInput {
     pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default)]
-    pub allow_missing_usage: bool,
-    #[serde(default)]
-    pub allow_unpriced_server_tools: bool,
     #[serde(default)]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(default)]
@@ -338,7 +328,9 @@ pub struct MonoizeRuntimeConfig {
     pub(crate) compiled_global_model_redirects: Vec<crate::users::CompiledModelRedirectRule>,
     pub reasoning_suffix_map: HashMap<String, String>,
     pub codex_model_ids: Vec<String>,
-    pub pricing_profile_model_patterns: Vec<PricingProfilePattern>,
+    pub allow_free_when_unpriced: bool,
+    pub allow_free_when_missing_usage: bool,
+    pub tool_prices: serde_json::Value,
     pub extra_fields_whitelist: HashMap<String, Vec<String>>,
     pub strip_cross_protocol_nested_extra: bool,
     pub request_capture_enabled: bool,
@@ -370,7 +362,9 @@ impl Default for MonoizeRuntimeConfig {
             compiled_global_model_redirects: Vec::new(),
             reasoning_suffix_map: default_reasoning_suffix_map(),
             codex_model_ids: Vec::new(),
-            pricing_profile_model_patterns: default_pricing_profile_model_patterns(),
+            allow_free_when_unpriced: false,
+            allow_free_when_missing_usage: false,
+            tool_prices: crate::settings::default_tool_prices(),
             extra_fields_whitelist: HashMap::new(),
             strip_cross_protocol_nested_extra: true,
             request_capture_enabled: false,
@@ -899,20 +893,6 @@ fn decode_channel_row(
             .map_err(|e| e.to_string())?
             .map(|value| decode_database_bool("channel", &id, "session_affinity_auto", value))
             .transpose()?,
-        allow_missing_usage: decode_database_bool(
-            "channel",
-            &id,
-            "allow_missing_usage",
-            row.try_get::<i32>("", "allow_missing_usage")
-                .map_err(|e| e.to_string())?,
-        )?,
-        allow_unpriced_server_tools: decode_database_bool(
-            "channel",
-            &id,
-            "allow_unpriced_server_tools",
-            row.try_get::<i32>("", "allow_unpriced_server_tools")
-                .map_err(|e| e.to_string())?,
-        )?,
         _healthy: None,
         _last_success_at: None,
         _health_status: None,
@@ -1244,8 +1224,7 @@ impl MonoizeRoutingStore {
                             active_probe_success_threshold_override, active_probe_model_override,
                             affinity_enabled_override, affinity_idle_ttl_seconds_override,
                             affinity_failback_mode_override, affinity_failback_delay_seconds_override,
-                            proxy_url, extra_headers, session_affinity_auto, allow_missing_usage,
-                            allow_unpriced_server_tools
+                            proxy_url, extra_headers, session_affinity_auto
                      FROM monoize_channels{provider_filter}
                      ORDER BY created_at ASC"
                 ),
@@ -1456,8 +1435,6 @@ impl MonoizeRoutingStore {
                           c.proxy_url,
                           c.extra_headers,
                           c.session_affinity_auto,
-                          c.allow_missing_usage,
-                          c.allow_unpriced_server_tools,
                           cm.redirect, cm.multiplier
                    FROM monoize_channels c
                    JOIN monoize_providers p ON p.id = c.provider_id
@@ -1535,8 +1512,6 @@ impl MonoizeRoutingStore {
                           c.affinity_enabled_override, c.affinity_idle_ttl_seconds_override,
                           c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
                           c.proxy_url, c.extra_headers, c.session_affinity_auto,
-                          c.allow_missing_usage,
-                          c.allow_unpriced_server_tools,
                           cm.model_name, cm.redirect, cm.multiplier
                    FROM monoize_channels c
                    JOIN monoize_providers p ON p.id = c.provider_id
@@ -2132,7 +2107,7 @@ impl MonoizeRoutingStore {
         const CHANNEL_INSERT_CHUNK_SIZE: usize = 18;
         let now = Utc::now().to_rfc3339();
         for chunk in prepared.chunks(CHANNEL_INSERT_CHUNK_SIZE) {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 26);
+            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 25);
             let mut rows = Vec::with_capacity(chunk.len());
             for channel in chunk {
                 let start = values.len() + 1;
@@ -2172,18 +2147,12 @@ impl MonoizeRoutingStore {
                     normalized_proxy_url(input.proxy_url.as_deref()).into(),
                     normalized_extra_headers_json(input.extra_headers.as_ref()).into(),
                     opt_bool_to_value(input.session_affinity_auto),
-                    SeaValue::Int(Some(if input.allow_missing_usage { 1 } else { 0 })),
-                    SeaValue::Int(Some(if input.allow_unpriced_server_tools {
-                        1
-                    } else {
-                        0
-                    })),
                     now.clone().into(),
                     now.clone().into(),
                 ]);
                 rows.push(format!(
                     "({})",
-                    (start..start + 27)
+                    (start..start + 25)
                         .map(|index| format!("${index}"))
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -2202,8 +2171,6 @@ impl MonoizeRoutingStore {
                       proxy_url,
                       extra_headers,
                       session_affinity_auto,
-                      allow_missing_usage,
-                      allow_unpriced_server_tools,
                       created_at, updated_at)
                      VALUES {}",
                     rows.join(", ")

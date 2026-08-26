@@ -12,8 +12,8 @@ mod routing_models;
 #[path = "api/billing_request_logs.rs"]
 mod billing_request_logs;
 
-#[path = "api/billing_rates_dashboard.rs"]
-mod billing_rates_dashboard;
+#[path = "api/model_pricing_dashboard.rs"]
+mod model_pricing_dashboard;
 
 #[path = "api/billing_plans_dashboard.rs"]
 mod billing_plans_dashboard;

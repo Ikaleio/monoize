@@ -1,5 +1,6 @@
 mod account_balance;
 mod billing;
+pub(crate) use billing::calculate_active_probe_charge;
 mod compact;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
@@ -912,7 +913,13 @@ struct MonoizeAttempt {
     extra_fields_whitelist: Option<Vec<String>>,
     strip_cross_protocol_nested_extra: bool,
     billable_pricing_available: bool,
-    billing_rate_resolution: Option<billing::BillingRateResolution>,
+    pricing_model_key: String,
+    model_price: Option<crate::model_price_store::ModelPriceRecord>,
+    allow_free_when_unpriced: bool,
+    allow_free_when_missing_usage: bool,
+    tool_prices: serde_json::Value,
+    billing_group_id: Option<String>,
+    group_billing_ratio: String,
     affinity_key: Option<String>,
     affinity_key_hash: Option<String>,
     affinity_hit: Option<bool>,
@@ -928,8 +935,6 @@ struct MonoizeAttempt {
     extra_headers: Option<std::collections::BTreeMap<String, String>>,
     /// CM-AFF-2: derive per-request session affinity for this Channel.
     session_affinity_auto: bool,
-    allow_missing_usage: bool,
-    allow_unpriced_server_tools: bool,
     /// CM-AFF-1a/1b: client header or decoded-body conversation identifier.
     client_session_id: Option<String>,
     /// CM-AFF-2 rule 2: `mono-*` digest of instructions plus the first two

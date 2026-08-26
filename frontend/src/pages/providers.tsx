@@ -17,6 +17,7 @@ import type { Provider } from '@/lib/api'
 import {
 	useProviders,
 	useModelMetadata,
+	useModelPrices,
 	useSettings,
 	useTransformRegistry,
 	deleteProviderOptimistic,
@@ -39,6 +40,7 @@ export function ProvidersPage() {
 	const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
 		useTransformRegistry()
 	const { data: modelMetadata = [] } = useModelMetadata()
+	const { data: modelPrices = [] } = useModelPrices()
 	const reasoningSuffixMap =
 		settings?.reasoning_suffix_map ?? DEFAULT_REASONING_SUFFIX_MAP
 	const [createOpen, setCreateOpen] = useState(false)
@@ -196,6 +198,7 @@ export function ProvidersPage() {
 				transformRegistry={transformRegistry}
 				transformRegistryLoading={transformRegistryLoading}
 				modelMetadata={modelMetadata}
+				modelPrices={modelPrices}
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}
 			/>
@@ -213,6 +216,7 @@ export function ProvidersPage() {
 				transformRegistry={transformRegistry}
 				transformRegistryLoading={transformRegistryLoading}
 				modelMetadata={modelMetadata}
+				modelPrices={modelPrices}
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}
 			/>

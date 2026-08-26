@@ -730,8 +730,6 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                allow_missing_usage: false,
-                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,

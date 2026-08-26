@@ -9,12 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { DataTableShell, TableToolbarSearch, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { TableVirtuoso } from "react-virtuoso";
-import { formatNanoPerTokenPerMillion } from "@/lib/exact-decimal";
-
-function nanoToPerMillion(nano?: string | null): string {
-  const formatted = formatNanoPerTokenPerMillion(nano);
-  return formatted === "—" ? "-" : formatted;
-}
+import { formatUsdDecimal } from "@/lib/exact-decimal";
 
 function formatTokens(tokens?: number | null): string {
   if (tokens == null) return "-";
@@ -107,8 +102,8 @@ export function ModelMarketplacePage() {
                   </tr>
                 )}
                 itemContent={(_index, record) => {
-                  const inputCost = nanoToPerMillion(record.input_cost_per_token_nano);
-                  const outputCost = nanoToPerMillion(record.output_cost_per_token_nano);
+                  const inputCost = record.input_usd_per_1m;
+                  const outputCost = record.output_usd_per_1m ?? inputCost;
 
                   return (
                     <>
@@ -120,10 +115,10 @@ export function ModelMarketplacePage() {
                         />
                       </VirtualTableCell>
                       <VirtualTableCell className="font-mono text-xs">
-                        {inputCost === "-" ? "-" : `${inputCost} / 1M`}
+                        {inputCost == null ? "-" : `${formatUsdDecimal(inputCost, 3)} / 1M`}
                       </VirtualTableCell>
                       <VirtualTableCell className="font-mono text-xs">
-                        {outputCost === "-" ? "-" : `${outputCost} / 1M`}
+                        {outputCost == null ? "-" : `${formatUsdDecimal(outputCost, 3)} / 1M`}
                       </VirtualTableCell>
                       <VirtualTableCell className="font-mono text-xs">
                         {formatTokens(record.max_tokens)}

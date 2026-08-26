@@ -47,7 +47,15 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 
 ### 費用看起來不對
 
-費用 = 模型基礎價格 × Channel 模型條目的 `multiplier`。在**模型**頁面確認該模型有中繼資料價格，並檢查 Channel 模型條目上的倍率。
+費用 =（模型費用 + 工具費用）× Channel 模型的 `multiplier` × 實際路由群組的 `billing_ratio`。先在**日誌**中檢查版本 3 計費明細。再在**模型**和 **Provider** 頁面檢查這三個輸入值。
+
+### `403 model_pricing_required`
+
+在**模型**頁面新增已啟用且完整的價格。也可以在全域設定或所選 Provider 上允許免費結算。
+
+### `403 usage_required`
+
+讓上游回傳 Usage。也可以在全域設定或所選 Provider 上允許缺少 Usage 時免費結算。
 
 ## 串流問題
 

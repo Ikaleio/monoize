@@ -29,9 +29,6 @@ A request first selects a Provider, then selects a Channel inside it. See [Routi
 3. Enter the upstream base URL and API key.
 4. Set a weight. Traffic splits between eligible Channels in proportion to weight. Default `1`.
 5. Optional: set a per-Channel `proxy_url` to override the process-level upstream proxy.
-6. Enable **Allow missing usage** only when a Channel can omit usage. Monoize then records zero usage and charges zero.
-7. Enable **Allow unpriced built-in tools** only when missing tool meter data can receive zero tool charge. Token charges and priced tool charges still apply.
-
 When you edit a Channel later, leave the API key field empty to keep the stored key.
 
 ## Map models
@@ -42,6 +39,12 @@ Each Channel lists the logical models it serves. A model entry has:
 - `multiplier`: a positive decimal price multiplier for billing.
 
 A logical model routes to a Provider only when at least one enabled Channel inside it maps that model.
+
+## Set billing overrides
+
+Set **Allow free when unpriced** and **Allow free when usage is missing** on the Provider. Each setting can inherit the global value, force on, or force off.
+
+Missing tool prices always fail open. Monoize records the unpriced tool class and applies a zero tool charge for that class.
 
 ## Provider transforms
 

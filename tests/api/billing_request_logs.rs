@@ -1544,8 +1544,6 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                allow_missing_usage: false,
-                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1584,20 +1582,13 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
         .expect("create alias provider");
 
     ctx.state
-        .model_registry_store
-        .upsert_model_metadata(
+        .model_price_store
+        .upsert(
             "alias-route-model",
-            monoize::model_registry_store::UpsertModelMetadataInput {
-                models_dev_provider: Some(Some("default".to_string())),
-                mode: Some(Some("chat".to_string())),
-                input_cost_per_token_nano: Some(Some("999999".to_string())),
-                output_cost_per_token_nano: Some(Some("999999".to_string())),
-                cache_read_input_cost_per_token_nano: None,
-                cache_creation_input_cost_per_token_nano: None,
-                output_cost_per_reasoning_token_nano: None,
-                max_input_tokens: None,
-                max_output_tokens: None,
-                max_tokens: None,
+            monoize::model_price_store::UpsertModelPriceInput {
+                input_usd_per_1m: Some(Some("999.999".to_string())),
+                output_usd_per_1m: Some(Some("999.999".to_string())),
+                ..Default::default()
             },
         )
         .await
@@ -1700,8 +1691,6 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                allow_missing_usage: false,
-                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1740,20 +1729,13 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         .expect("create alias fallback provider");
 
     ctx.state
-        .model_registry_store
-        .upsert_model_metadata(
+        .model_price_store
+        .upsert(
             "alias-fallback-model",
-            monoize::model_registry_store::UpsertModelMetadataInput {
-                models_dev_provider: Some(Some("default".to_string())),
-                mode: Some(Some("chat".to_string())),
-                input_cost_per_token_nano: Some(Some("2000".to_string())),
-                output_cost_per_token_nano: Some(Some("3000".to_string())),
-                cache_read_input_cost_per_token_nano: None,
-                cache_creation_input_cost_per_token_nano: None,
-                output_cost_per_reasoning_token_nano: None,
-                max_input_tokens: None,
-                max_output_tokens: None,
-                max_tokens: None,
+            monoize::model_price_store::UpsertModelPriceInput {
+                input_usd_per_1m: Some(Some("2".to_string())),
+                output_usd_per_1m: Some(Some("3".to_string())),
+                ..Default::default()
             },
         )
         .await
@@ -1856,8 +1838,6 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                allow_missing_usage: false,
-                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,

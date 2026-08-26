@@ -231,79 +231,70 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
         return Ok(attempts);
     }
 
-    let pricing_inputs = attempts
-        .iter()
-        .map(|attempt| (attempt.upstream_model.clone(), attempt.provider_type))
-        .collect::<Vec<_>>();
-    let pricing_snapshot =
-        build_billing_rate_resolution_snapshot(state, &pricing_inputs, &urp.model).await?;
+    let reasoning_suffix_map = state
+        .monoize_runtime
+        .read()
+        .await
+        .reasoning_suffix_map
+        .clone();
+    let normalized_logical = normalize_pricing_model_key(&urp.model, &reasoning_suffix_map);
+    let mut pricing_keys = vec![normalized_logical.clone()];
+    pricing_keys.extend(attempts.iter().map(|attempt| {
+        normalize_pricing_model_key(&attempt.upstream_model, &reasoning_suffix_map)
+    }));
+    let pricing_snapshot = state
+        .model_price_store
+        .get_many(&pricing_keys)
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+    let group_ratios = state
+        .user_store
+        .list_groups()
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?
+        .into_iter()
+        .map(|group| (group.id, group.billing_ratio))
+        .collect::<std::collections::HashMap<_, _>>();
 
-    let mut pricing_cache: std::collections::HashMap<
-        (String, String, String),
-        Result<Option<BillingRateResolution>, String>,
-    > = std::collections::HashMap::new();
     let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut blocked_meter_errors: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
     let mut allowed_attempts = Vec::with_capacity(attempts.len());
 
     for mut attempt in attempts {
-        let tools_key = urp.server_tool_usage_classes.join(",");
-        let cache_key = (
-            attempt.upstream_model.clone(),
-            urp.model.clone(),
-            format!(
-                "{}:{tools_key}",
-                reasoning_envelope_provider_type(attempt.provider_type)
-            ),
-        );
-        let pricing = if let Some(cached) = pricing_cache.get(&cache_key) {
-            cached.clone()
-        } else {
-            let priced = match pricing_snapshot.resolve(
-                &attempt.upstream_model,
-                &urp.model,
-                attempt.provider_type,
-            ) {
-                Some(resolution) => {
-                    let allowed = billing_rate_matrix_allows_request(&resolution);
-                    match allowed {
-                        Ok(true) => Ok(Some(resolution)),
-                        Ok(false) => Ok(None),
-                        Err(error) => Err(error),
-                    }
-                }
-                None => Ok(None),
-            };
-            pricing_cache.insert(cache_key, priced.clone());
-            priced
+        let normalized_upstream =
+            normalize_pricing_model_key(&attempt.upstream_model, &reasoning_suffix_map);
+        let upstream_price = pricing_snapshot
+            .get(&normalized_upstream)
+            .filter(|row| row.enabled && row.is_complete());
+        let fallback_price = (attempt.upstream_model != attempt.logical_model)
+            .then(|| pricing_snapshot.get(&normalized_logical))
+            .flatten()
+            .filter(|row| row.enabled && row.is_complete());
+        let resolved = upstream_price.or(fallback_price).cloned();
+        attempt.pricing_model_key = resolved
+            .as_ref()
+            .map(|row| row.model_id.clone())
+            .unwrap_or(normalized_upstream);
+        attempt.model_price = resolved;
+        attempt.group_billing_ratio = match attempt.billing_group_id.as_deref() {
+            Some(group_id) => group_ratios.get(group_id).cloned().ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("routing group {group_id} has no registry row"),
+                )
+            })?,
+            None => "1".to_string(),
         };
-
-        match pricing {
-            Err(err) => {
-                blocked_meter_errors.insert(err);
-            }
-            Ok(Some(resolution)) => {
-                attempt.billable_pricing_available = true;
-                attempt.billing_rate_resolution = Some(resolution);
-                allowed_attempts.push(attempt);
-            }
-            Ok(None) => {
-                blocked_models.insert(attempt.upstream_model);
-            }
+        if attempt.model_price.is_some() || attempt.allow_free_when_unpriced {
+            attempt.billable_pricing_available = true;
+            allowed_attempts.push(attempt);
+        } else {
+            blocked_models.insert(attempt.upstream_model);
         }
-    }
-
-    if !blocked_meter_errors.is_empty() {
-        let blocked_list = blocked_meter_errors
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "model_pricing_required",
-            blocked_list,
-        ));
     }
 
     if allowed_attempts.is_empty() && !blocked_models.is_empty() {
@@ -683,7 +674,22 @@ pub(super) async fn collect_provider_attempts(
                 .strip_cross_protocol_nested_extra
                 .unwrap_or(runtime.strip_cross_protocol_nested_extra),
             billable_pricing_available: false,
-            billing_rate_resolution: None,
+            pricing_model_key: String::new(),
+            model_price: None,
+            allow_free_when_unpriced: provider
+                .allow_free_when_unpriced_override
+                .unwrap_or(runtime.allow_free_when_unpriced),
+            allow_free_when_missing_usage: provider
+                .allow_free_when_missing_usage_override
+                .unwrap_or(runtime.allow_free_when_missing_usage),
+            tool_prices: runtime.tool_prices.clone(),
+            billing_group_id: effective_groups.as_ref().and_then(|groups| {
+                groups
+                    .iter()
+                    .find(|group_id| provider.group_ids.contains(*group_id))
+                    .cloned()
+            }),
+            group_billing_ratio: "1".to_string(),
             affinity_key: None,
             affinity_key_hash: None,
             affinity_hit: None,
@@ -699,8 +705,6 @@ pub(super) async fn collect_provider_attempts(
                 &channel.base_url,
                 channel.session_affinity_auto,
             ),
-            allow_missing_usage: channel.allow_missing_usage,
-            allow_unpriced_server_tools: channel.allow_unpriced_server_tools,
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,

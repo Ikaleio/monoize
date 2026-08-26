@@ -1,7 +1,6 @@
 pub mod api_keys;
 pub mod billing_ledger;
 pub mod billing_plans;
-pub mod billing_rate_records;
 pub mod file_bytes;
 pub mod model_metadata_records;
 pub mod model_prices;
@@ -21,7 +20,6 @@ pub mod prelude {
     pub use super::api_keys::Entity as ApiKeys;
     pub use super::billing_ledger::Entity as BillingLedger;
     pub use super::billing_plans::Entity as BillingPlans;
-    pub use super::billing_rate_records::Entity as BillingRateRecords;
     pub use super::file_bytes::Entity as FileBytes;
     pub use super::model_metadata_records::Entity as ModelMetadataRecords;
     pub use super::model_prices::Entity as ModelPrices;

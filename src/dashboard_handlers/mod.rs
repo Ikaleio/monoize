@@ -3,7 +3,6 @@ mod analytics_request_logs;
 mod api_keys;
 mod auth;
 mod billing_plans;
-mod billing_rates;
 mod captcha;
 mod custom_transforms;
 mod groups;
@@ -38,11 +37,6 @@ pub use billing_plans::{
     BillingPlanResponse, CreateBillingPlanRequest, UpdateBillingPlanRequest, create_billing_plan,
     delete_billing_plan, list_billing_plans, reset_billing_plan, update_billing_plan,
 };
-pub use billing_rates::{
-    PricingProfilePatternsResponse, UpdatePricingProfilePatternsRequest, delete_billing_rate,
-    get_pricing_profile_patterns, list_billing_rates, sync_billing_rates_catalog,
-    update_pricing_profile_patterns, upsert_billing_rate,
-};
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use custom_transforms::{
     CreateCustomTransformRequest, UpdateCustomTransformRequest, create_custom_transform,
@@ -53,13 +47,12 @@ pub use groups::{
     update_group,
 };
 pub use model_prices::{
-    delete_model_price, list_model_prices, list_price_sync_runs, list_unpriced_models,
-    upsert_model_price,
+    apply_price_sync, delete_model_price, list_model_prices, list_price_sync_runs,
+    list_unpriced_models, preview_price_sync, upsert_model_price,
 };
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,
-    list_marketplace_models, list_model_metadata, list_models, sync_model_metadata_models_dev,
-    update_model, upsert_model_metadata,
+    list_marketplace_models, list_model_metadata, list_models, update_model, upsert_model_metadata,
 };
 pub use request_captures::{RequestCaptureQuery, get_request_capture};
 
