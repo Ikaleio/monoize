@@ -701,41 +701,24 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             }
                         },
                     };
-                    let missing_usage_substituted =
-                        substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
-                    if resp.usage.is_none() {
-                        let err = AppError::new(
-                            StatusCode::BAD_GATEWAY,
-                            "upstream_usage_required",
-                            "upstream response did not include billable usage",
-                        );
-                        let same_channel_retryable = is_same_channel_retryable_app_error(&err);
-                        let passive_failure_class =
-                            same_channel_retryable.then(|| classify_retryable_app_failure(&err));
-                        record_upstream_attempt_failure(
+                    // MP-F3: a fail-closed missing-usage billable success
+                    // rejects with 403 before response delivery.
+                    if resp.usage.is_none() && missing_usage_rejects(auth, &attempt) {
+                        return Err(finish_nonstream_error(
                             state,
+                            auth,
                             &attempt,
-                            attempt_number,
-                            &err,
-                            passive_failure_class,
-                            &mut tried_providers,
-                            &mut execution_state,
+                            &logical_model,
+                            started_at,
+                            &request_id,
+                            &request_ip,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                            &capture,
+                            false,
+                            missing_usage_error(),
                         )
-                        .await;
-                        last_failed_attempt = Some(attempt.clone());
-                        if allow_same_channel_retry(
-                            state,
-                            &attempt,
-                            &execution_state,
-                            channel_attempt + 1,
-                            passive_failure_class,
-                        )
-                        .await
-                        {
-                            maybe_sleep_before_channel_retry(&attempt).await;
-                            continue 'channel_attempts;
-                        }
-                        break 'channel_attempts;
+                        .await);
                     }
                     mark_channel_success(state, &attempt).await;
                     refresh_channel_affinity(state, &attempt).await;
@@ -868,7 +851,6 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         &attempt,
                         &logical_model,
                         &resp,
-                        missing_usage_substituted,
                         request_id.as_deref(),
                     )
                     .await

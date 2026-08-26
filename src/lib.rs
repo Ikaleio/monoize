@@ -27,6 +27,7 @@ pub mod presets;
 pub mod replica;
 pub mod request_capture;
 pub mod settings;
+pub mod settlement;
 pub mod transforms;
 pub mod upstream;
 pub mod urp;

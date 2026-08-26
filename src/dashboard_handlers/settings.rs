@@ -295,10 +295,10 @@ pub async fn update_settings(
         rt.set_global_model_redirects(updated.global_model_redirects.clone())
             .expect("validated global model redirects compile");
         rt.reasoning_suffix_map = updated.reasoning_suffix_map.clone();
+        rt.codex_model_ids = updated.codex_model_ids.clone();
         rt.allow_free_when_unpriced = updated.allow_free_when_unpriced;
         rt.allow_free_when_missing_usage = updated.allow_free_when_missing_usage;
         rt.tool_prices = updated.tool_prices.clone();
-        rt.codex_model_ids = updated.codex_model_ids.clone();
         rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
         rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
         rt.request_capture_enabled = updated.monoize_request_capture_enabled;

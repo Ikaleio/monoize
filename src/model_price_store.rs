@@ -307,6 +307,41 @@ impl ModelPriceStore {
         rows.iter().map(row_to_record).collect()
     }
 
+    /// MP-R8: load candidate rows for all distinct pricing keys of one
+    /// forwarding request in set-based queries (chunked below the portable
+    /// SQLite bound-parameter limit).
+    pub async fn list_by_model_ids(
+        &self,
+        model_ids: &[String],
+    ) -> Result<Vec<ModelPriceRecord>, String> {
+        let mut records = Vec::new();
+        for chunk in model_ids.chunks(100) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let placeholders = (1..=chunk.len())
+                .map(|index| format!("${index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rows = self
+                .db
+                .read()
+                .query_all(self.db.stmt(
+                    &format!(
+                        "SELECT {MODEL_PRICE_COLUMNS} FROM model_prices \
+                         WHERE model_id IN ({placeholders})"
+                    ),
+                    chunk.iter().map(|id| id.clone().into()).collect(),
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            for row in &rows {
+                records.push(row_to_record(row)?);
+            }
+        }
+        Ok(records)
+    }
+
     pub async fn get(&self, model_id: &str) -> Result<Option<ModelPriceRecord>, String> {
         let row = self
             .db

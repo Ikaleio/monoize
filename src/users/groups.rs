@@ -218,6 +218,41 @@ impl UserStore {
             .collect()
     }
 
+    /// MP-G2 (`model-pricing.spec.md`): billing ratios of the given registry
+    /// rows in one set-based query. Missing ids are absent from the result.
+    pub async fn list_group_billing_ratios(
+        &self,
+        ids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        let mut ratios = std::collections::HashMap::new();
+        for chunk in ids.chunks(100) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let placeholders = (1..=chunk.len())
+                .map(|index| format!("${index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rows = self
+                .db
+                .read()
+                .query_all(self.db.stmt(
+                    &format!(
+                        "SELECT id, billing_ratio FROM monoize_groups WHERE id IN ({placeholders})"
+                    ),
+                    chunk.iter().map(|id| id.clone().into()).collect(),
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+                let ratio: String = row.try_get("", "billing_ratio").map_err(|e| e.to_string())?;
+                ratios.insert(id, ratio);
+            }
+        }
+        Ok(ratios)
+    }
+
     pub async fn get_group_by_id(&self, id: &str) -> Result<Option<Group>, String> {
         let row = self
             .db

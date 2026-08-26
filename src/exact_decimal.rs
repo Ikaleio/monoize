@@ -8,7 +8,11 @@ pub struct Multiplier(Decimal);
 
 impl Multiplier {
     pub const ONE: Self = Self(Decimal::ONE);
+    pub const ZERO: Self = Self(Decimal::ZERO);
 
+    /// MP-C11/MP-C12 (`model-pricing.spec.md`): multipliers and billing
+    /// ratios are non-negative base-10 decimal strings; `0` is a valid
+    /// explicit zero-charge configuration.
     pub fn parse(raw: &str) -> Result<Self, String> {
         if raw.is_empty()
             || raw.starts_with('+')
@@ -23,6 +27,9 @@ impl Multiplier {
         }
         let value = Decimal::from_str(raw)
             .map_err(|_| "multiplier must be a non-negative base-10 decimal string".to_string())?;
+        if value < Decimal::ZERO {
+            return Err("multiplier must be >= 0".to_string());
+        }
         if value.scale() > 9 {
             return Err("multiplier must have at most 9 fractional digits".to_string());
         }
@@ -31,6 +38,16 @@ impl Multiplier {
 
     pub fn is_positive(self) -> bool {
         self.0 > Decimal::ZERO
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.0.is_zero()
+    }
+
+    /// Exact product of two multipliers (MP-C11: `channel_multiplier ×
+    /// group_billing_ratio` composes without intermediate rounding).
+    pub fn compose(self, other: Self) -> Option<Self> {
+        self.0.checked_mul(other.0).map(|value| Self(value.normalize()))
     }
 
     pub fn checked_scale_i128(self, base: i128) -> Option<i128> {
@@ -100,9 +117,28 @@ mod tests {
     }
 
     #[test]
-    fn invalid_multiplier_is_rejected() {
+    fn invalid_or_negative_multiplier_is_rejected() {
         for raw in ["", "-1", "+1", "1e2", "NaN", "1.0000000001"] {
             assert!(Multiplier::parse(raw).is_err(), "accepted {raw}");
         }
+    }
+
+    #[test]
+    fn zero_multiplier_is_accepted_and_scales_to_zero() {
+        let zero = Multiplier::parse("0").unwrap();
+        assert!(zero.is_zero());
+        assert_eq!(zero.checked_scale_i128(123_456), Some(0));
+        assert_eq!(zero.canonical(), "0");
+    }
+
+    #[test]
+    fn compose_multiplies_exactly() {
+        let a = Multiplier::parse("1.5").unwrap();
+        let b = Multiplier::parse("0.3").unwrap();
+        let product = a.compose(b).unwrap();
+        assert_eq!(product.canonical(), "0.45");
+        assert_eq!(product.checked_scale_i128(1000), Some(450));
+        // trunc(999 * 0.45) = trunc(449.55) = 449
+        assert_eq!(product.checked_scale_i128(999), Some(449));
     }
 }

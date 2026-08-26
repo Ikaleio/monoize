@@ -1,6 +1,8 @@
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;
-use crate::settings::default_reasoning_suffix_map;
+use crate::settings::{
+    default_reasoning_suffix_map,
+};
 use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
@@ -328,8 +330,11 @@ pub struct MonoizeRuntimeConfig {
     pub(crate) compiled_global_model_redirects: Vec<crate::users::CompiledModelRedirectRule>,
     pub reasoning_suffix_map: HashMap<String, String>,
     pub codex_model_ids: Vec<String>,
+    /// MP-F1 (`model-pricing.spec.md`): global free-settlement flags. Provider
+    /// overrides take precedence at attempt preflight.
     pub allow_free_when_unpriced: bool,
     pub allow_free_when_missing_usage: bool,
+    /// MP-T1: the `tool_prices` system setting object.
     pub tool_prices: serde_json::Value,
     pub extra_fields_whitelist: HashMap<String, Vec<String>>,
     pub strip_cross_protocol_nested_extra: bool,
