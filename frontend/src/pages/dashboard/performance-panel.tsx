@@ -70,7 +70,7 @@ function UptimeBricks({
             <TooltipTrigger asChild>
               <span
                 className={cn(
-                  "h-3 min-w-[6px] flex-1 rounded-[2px]",
+                  "h-3 min-w-1.5 flex-1 rounded-sm",
                   brickClass(brick.status)
                 )}
               />
@@ -142,11 +142,11 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
       <Card>
         <CardHeader className="p-4 pb-2">
           <div className="flex flex-wrap items-end justify-between gap-2">
-            <div>
-              <CardTitle className="text-base font-semibold leading-none tracking-tight">
+            <div className="flex flex-col gap-1">
+              <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
                 {t("dashboard.performance.title", "Performance")}
               </CardTitle>
-              <p className="pt-1 text-xs text-muted-foreground">
+              <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
                 {t(
                   "dashboard.performance.subtitle",
                   "Last 24 hours · uptime bricks, avgTTFT, and avgTPS"
@@ -163,9 +163,9 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-2 p-4 pt-2">
+        <CardContent className="flex flex-col gap-2 p-4 pt-2">
           {loading ? (
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               {Array.from({ length: 3 }).map((_, i) => (
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
@@ -183,7 +183,7 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
               className="py-8"
             />
           ) : (
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               {groups.map((group, index) => (
                 <PerfRow
                   key={`group-${group.id}`}

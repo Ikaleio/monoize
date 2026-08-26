@@ -35,14 +35,14 @@ export function RecentUsagePanel({ logs, loading }: RecentUsagePanelProps) {
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.18, ...transitions.normal }}
-      className="min-h-0 h-full"
+      className="h-full min-h-0"
     >
       <Card className="flex h-full min-h-0 flex-col">
-        <CardHeader className="p-4 pb-2">
-          <CardTitle className="text-base font-semibold leading-none tracking-tight">
+        <CardHeader className="flex flex-col gap-1 p-4 pb-2">
+          <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
             {t("dashboard.recentUsage.title", "Recent Usage")}
           </CardTitle>
-          <p className="pt-1 text-xs text-muted-foreground">
+          <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
             {t(
               "dashboard.recentUsage.subtitle",
               "Token usage, cache hit rate, and charges by model"
@@ -51,7 +51,7 @@ export function RecentUsagePanel({ logs, loading }: RecentUsagePanelProps) {
         </CardHeader>
         <CardContent className="min-h-0 flex-1 p-4 pt-2">
           {loading ? (
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-8 w-full" />
               ))}
@@ -66,7 +66,7 @@ export function RecentUsagePanel({ logs, loading }: RecentUsagePanelProps) {
               className="py-8"
             />
           ) : (
-            <div className="max-h-[320px] overflow-auto rounded-md border">
+            <div className="max-h-80 overflow-auto rounded-md border">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -88,7 +88,7 @@ export function RecentUsagePanel({ logs, loading }: RecentUsagePanelProps) {
                       <TableCell>
                         <div className="flex min-w-0 items-center gap-2">
                           <span
-                            className="h-2 w-2 shrink-0 rounded-[2px]"
+                            className="h-2 w-2 shrink-0 rounded-sm"
                             style={{ backgroundColor: modelToColor(row.model) }}
                           />
                           <span className="truncate font-mono text-xs">{row.model}</span>

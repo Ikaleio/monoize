@@ -54,19 +54,18 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
     return cfg;
   }, [series.models]);
 
-  const todayLabel = series.rows.length > 0
-    ? String(series.rows[series.rows.length - 1]?.label ?? "")
-    : "";
+  const todayLabel =
+    series.rows.length > 0 ? String(series.rows[series.rows.length - 1]?.label ?? "") : "";
 
   if (loading) {
     return (
       <Card>
-        <CardHeader className="space-y-2 p-4 pb-2">
+        <CardHeader className="flex flex-col gap-2 p-4 pb-2">
           <Skeleton className="h-5 w-36" />
           <Skeleton className="h-4 w-64" />
         </CardHeader>
         <CardContent className="p-4 pt-2">
-          <Skeleton className="h-[280px] w-full rounded-lg" />
+          <Skeleton className="h-72 w-full rounded-lg" />
         </CardContent>
       </Card>
     );
@@ -79,12 +78,12 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
       transition={{ delay: 0.12, ...transitions.normal }}
     >
       <Card>
-        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0 p-4 pb-2">
-          <div className="min-w-0 space-y-1">
-            <CardTitle className="font-display text-2xl font-semibold tracking-tight">
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 p-4 pb-2">
+          <div className="flex min-w-0 flex-col gap-1">
+            <CardTitle className="text-balance font-display text-2xl font-semibold tracking-tight">
               {t("dashboard.usage.title", "Your Usage")}
             </CardTitle>
-            <CardDescription>
+            <CardDescription className="text-pretty leading-relaxed">
               {t(
                 "dashboard.usage.subtitle",
                 "Your usage per day across this billing period"
@@ -92,10 +91,8 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
             </CardDescription>
           </div>
           <Select value={groupBy} onValueChange={(v) => setGroupBy(v as "model")}>
-            <SelectTrigger className="h-8 w-[160px] text-xs">
-              <SelectValue
-                placeholder={t("dashboard.usage.groupBy", "Group By")}
-              />
+            <SelectTrigger className="h-8 w-40 text-xs" aria-label={t("dashboard.usage.groupBy", "Group By")}>
+              <SelectValue placeholder={t("dashboard.usage.groupBy", "Group By")} />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="model">
@@ -105,7 +102,7 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
           </Select>
         </CardHeader>
 
-        <CardContent className="space-y-3 p-4 pt-2">
+        <CardContent className="flex flex-col gap-3 p-4 pt-2">
           {series.rows.length === 0 || series.models.length === 0 ? (
             <EmptyState
               title={t("dashboard.noAnalysisData", "No request log data available")}
@@ -113,13 +110,13 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                 "dashboard.noAnalysisDataDescription",
                 "Statistics will appear automatically after requests are made."
               )}
-              className="min-h-[240px] py-8"
+              className="min-h-60 py-8"
             />
           ) : (
             <>
               <ChartContainer
                 config={chartConfig}
-                className="h-[280px] w-full !aspect-auto sm:h-[320px]"
+                className="h-72 w-full !aspect-auto sm:h-80"
               >
                 <AreaChart
                   data={series.rows}
@@ -143,7 +140,11 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                       angle: -90,
                       position: "insideLeft",
                       offset: 8,
-                      style: { textAnchor: "middle", fill: "hsl(var(--muted-foreground))", fontSize: 11 },
+                      style: {
+                        textAnchor: "middle",
+                        fill: "hsl(var(--muted-foreground))",
+                        fontSize: 11,
+                      },
                     }}
                   />
                   <ChartTooltip
@@ -164,14 +165,14 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                         .sort((a, b) => b.daily - a.daily);
 
                       return (
-                        <div className="min-w-[220px] rounded-lg border bg-background px-3 py-2.5 text-xs shadow-md">
-                          <div className="mb-2 flex items-baseline justify-between gap-3 border-b pb-2">
+                        <div className="flex min-w-56 flex-col gap-2 rounded-lg border bg-background px-3 py-2.5 text-xs shadow-md">
+                          <div className="flex items-baseline justify-between gap-3 border-b pb-2">
                             <span className="font-medium">{String(label)}</span>
                             <span className="text-muted-foreground">
                               {t("dashboard.usage.dailyBreakdown", "Daily breakdown")}
                             </span>
                           </div>
-                          <ul className="space-y-1.5">
+                          <ul className="flex flex-col gap-1.5">
                             {entries.map((entry) => {
                               const pct =
                                 dailyTotal > 0
@@ -184,7 +185,7 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                                 >
                                   <div className="flex min-w-0 items-center gap-2">
                                     <span
-                                      className="h-2 w-2 shrink-0 rounded-[2px]"
+                                      className="h-2 w-2 shrink-0 rounded-sm"
                                       style={{ backgroundColor: entry.color }}
                                     />
                                     <span className="truncate font-mono text-[11px]">
@@ -199,7 +200,7 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                               );
                             })}
                           </ul>
-                          <div className="mt-2 space-y-1 border-t pt-2 text-muted-foreground">
+                          <div className="flex flex-col gap-1 border-t pt-2 text-muted-foreground">
                             <div className="flex justify-between gap-3">
                               <span>{t("dashboard.usage.dailyTotal", "Daily total")}</span>
                               <span className="font-medium tabular-nums text-foreground">
@@ -219,7 +220,7 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                       );
                     }}
                   />
-                  {todayLabel && (
+                  {todayLabel ? (
                     <ReferenceLine
                       x={todayLabel}
                       stroke="hsl(var(--muted-foreground))"
@@ -231,7 +232,7 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                         fontSize: 11,
                       }}
                     />
-                  )}
+                  ) : null}
                   {series.models.map((model) => (
                     <Area
                       key={model}
@@ -250,21 +251,26 @@ export function UsageChartPanel({ analytics, loading }: UsageChartPanelProps) {
                 </AreaChart>
               </ChartContainer>
 
-              <ScrollArea className="h-[132px] rounded-md border bg-muted/20 px-3 py-2">
-                <ul className="space-y-1.5 pr-3">
-                  {series.models.map((model) => (
-                    <li key={model} className="flex items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
-                        style={{ backgroundColor: modelToColor(model) }}
-                      />
-                      <span className="truncate font-mono text-xs text-muted-foreground">
-                        {model}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </ScrollArea>
+              <div className="flex flex-col gap-2">
+                <p className="sr-only">
+                  {t("dashboard.usage.legend", "Model legend")}
+                </p>
+                <ScrollArea className="h-32 rounded-md border bg-muted/20">
+                  <ul className="flex flex-col gap-1.5 p-3 pr-4">
+                    {series.models.map((model) => (
+                      <li key={model} className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                          style={{ backgroundColor: modelToColor(model) }}
+                        />
+                        <span className="truncate font-mono text-xs text-muted-foreground">
+                          {model}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </ScrollArea>
+              </div>
             </>
           )}
         </CardContent>

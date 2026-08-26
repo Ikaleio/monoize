@@ -126,7 +126,8 @@
 			"dailyBreakdown": "每日明细",
 			"dailyTotal": "每日合计",
 			"cumulativeTotal": "累计合计",
-			"today": "今日"
+			"today": "今日",
+			"legend": "模型图例"
 		},
 		"recentUsage": {
 			"title": "最近用量",

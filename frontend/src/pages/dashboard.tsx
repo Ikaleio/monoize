@@ -18,7 +18,7 @@ import { PerformancePanel } from "./dashboard/performance-panel";
 
 function GreetingSkeleton() {
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2">
       <Skeleton className="h-9 w-64" />
       <Skeleton className="h-4 w-80" />
     </div>
@@ -69,7 +69,6 @@ export function DashboardPage() {
       </motion.header>
 
       <AccountStrip user={user} loading={userLoading} />
-
       <UsageChartPanel analytics={usageAnalytics} loading={usageLoading} />
 
       <section className="grid min-h-0 items-stretch gap-4 lg:grid-cols-3">

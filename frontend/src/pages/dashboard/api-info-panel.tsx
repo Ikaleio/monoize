@@ -36,17 +36,17 @@ export function ApiInfoPanel({ settings, loading }: ApiInfoPanelProps) {
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.22, ...transitions.normal }}
-      className="min-h-0 h-full"
+      className="h-full min-h-0"
     >
       <Card className="flex h-full min-h-0 flex-col">
         <CardHeader className="p-4 pb-2">
-          <CardTitle className="text-base font-semibold leading-none tracking-tight">
+          <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
             {t("dashboard.apiInformation", "API Information")}
           </CardTitle>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-4 pt-2">
           {loading ? (
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Skeleton key={i} className="h-14 w-full" />
               ))}
@@ -61,7 +61,7 @@ export function ApiInfoPanel({ settings, loading }: ApiInfoPanelProps) {
               className="flex-1 py-6"
             />
           ) : (
-            <div className="min-h-0 space-y-2 overflow-auto">
+            <div className="flex min-h-0 flex-col gap-2 overflow-auto">
               <button
                 type="button"
                 className="w-full rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 active:bg-muted/70"

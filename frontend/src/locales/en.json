@@ -126,7 +126,8 @@
 			"dailyBreakdown": "Daily breakdown",
 			"dailyTotal": "Daily total",
 			"cumulativeTotal": "Cumulative total",
-			"today": "Today"
+			"today": "Today",
+			"legend": "Model legend"
 		},
 		"recentUsage": {
 			"title": "Recent Usage",

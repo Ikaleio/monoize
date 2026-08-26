@@ -18,7 +18,7 @@ function MetricCardSkeleton() {
       <CardHeader className="p-4 pb-2">
         <Skeleton className="h-4 w-24" />
       </CardHeader>
-      <CardContent className="space-y-2 p-4 pt-0">
+      <CardContent className="flex flex-col gap-2 p-4 pt-0">
         <Skeleton className="h-8 w-32" />
         <Skeleton className="h-3 w-40" />
       </CardContent>
@@ -69,15 +69,15 @@ export function AccountStrip({ user, loading }: AccountStripProps) {
       >
         <Card className="h-full">
           <CardHeader className="p-4 pb-2">
-            <CardTitle className="text-base font-semibold leading-none tracking-tight">
+            <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
               {t("dashboard.account.balanceTitle", "Account Balance")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="p-4 pt-0">
+          <CardContent className="flex flex-col gap-1 p-4 pt-0">
             <p className="font-display text-3xl font-semibold tracking-tight tabular-nums">
               {balanceValue}
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="text-xs leading-relaxed text-muted-foreground">
               {t("dashboard.cards.currentBalance", "Current Balance")}
             </p>
           </CardContent>
@@ -93,11 +93,11 @@ export function AccountStrip({ user, loading }: AccountStripProps) {
       >
         <Card className="h-full">
           <CardHeader className="p-4 pb-2">
-            <CardTitle className="text-base font-semibold leading-none tracking-tight">
+            <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
               {t("dashboard.account.subscriptionTitle", "Subscription")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3 p-4 pt-0">
+          <CardContent className="flex flex-col gap-3 p-4 pt-0">
             {!plan ? (
               <p className="text-xl font-semibold">
                 {t("dashboard.cards.noPlan", "No plan")}
@@ -105,12 +105,12 @@ export function AccountStrip({ user, loading }: AccountStripProps) {
             ) : (
               <>
                 <div className="flex items-baseline justify-between gap-3">
-                  <p className="truncate text-xl font-semibold">{plan.name}</p>
+                  <p className="truncate text-balance text-xl font-semibold">{plan.name}</p>
                   <p className="shrink-0 font-mono text-xs text-muted-foreground">
                     {plan.schedule}
                   </p>
                 </div>
-                <div className="space-y-1.5">
+                <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-muted-foreground">
                       {t("dashboard.subscription.remaining", "Remaining quota")}
