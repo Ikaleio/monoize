@@ -16,7 +16,7 @@ import { SettingsPage } from "@/pages/settings";
 import { UserSettingsPage } from "@/pages/user-settings";
 import { PlaygroundPage } from "@/pages/playground";
 import { RequestLogsPage } from "@/pages/request-logs";
-import { ModelMetadataPage } from "@/pages/model-metadata";
+import { ModelPricingPage } from "@/pages/model-pricing";
 import { ModelMarketplacePage } from "@/pages/model-marketplace";
 import { CustomTransformsPage } from "@/pages/custom-transforms";
 import "@/i18n";
@@ -43,7 +43,7 @@ function App() {
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
             <Route path="marketplace" element={<ModelMarketplacePage />} />
-            <Route path="models" element={<ModelMetadataPage />} />
+            <Route path="models" element={<ModelPricingPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="plans" element={<BillingPlansPage />} />

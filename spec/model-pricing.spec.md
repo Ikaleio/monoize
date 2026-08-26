@@ -709,6 +709,12 @@ MP-UI6. Upstream Sync tab: one card per source (models.dev, OpenRouter, new-api)
 last-run status from MP-A5, a preview action rendering the MP-A6 diff, and an apply
 action. The new-api card exposes the base-URL and token settings.
 
+MP-UI6a. The models.dev card additionally exposes the metadata sync action
+(`POST /api/dashboard/model-metadata/sync/models-dev`,
+`model-metadata-dashboard.spec.md` §2). Until the §9 sync engine ships (MP-S1), the
+preview and apply actions surface the server error for the unimplemented MP-A6/MP-A7
+endpoints without altering client state.
+
 MP-UI7. Group Pricing tab: lists registry groups with an editable `billing_ratio`
 column persisting through the group update endpoint.
 
