@@ -43,9 +43,9 @@ async fn responses_nonstream_records_the_upstream_service_tier() {
             .await
             .expect("list request logs");
         // MP-R6: service tier does not select prices; the standard row at
-        // 1 USD/1M charges 20000 nano for the 10+10 mock usage.
+        // 1 USD/1M charges 2000 nano for the default 1+1 mock usage.
         matched = logs.into_iter().find(|log| {
-            log.model == "gpt-5-mini" && log.billing.charge_nano_usd.as_deref() == Some("20000")
+            log.model == "gpt-5-mini" && log.billing.charge_nano_usd.as_deref() == Some("2000")
         });
         if matched.is_some() {
             break;
