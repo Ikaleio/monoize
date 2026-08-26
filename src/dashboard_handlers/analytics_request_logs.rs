@@ -328,6 +328,8 @@ pub async fn get_dashboard_analytics(
         (0..buckets).map(|_| BTreeMap::new()).collect();
     let mut calls_by_model_buckets: Vec<BTreeMap<String, i64>> =
         (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut tokens_by_model_buckets: Vec<BTreeMap<String, i64>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
     let mut calls_by_provider_buckets: Vec<BTreeMap<String, i64>> =
         (0..buckets).map(|_| BTreeMap::new()).collect();
 
@@ -353,6 +355,18 @@ pub async fn get_dashboard_analytics(
                 "analytics call count overflow",
             )
         })?;
+        if row.token_count != 0 {
+            let tokens = tokens_by_model_buckets[idx]
+                .entry(row.model.clone())
+                .or_insert(0);
+            *tokens = tokens.checked_add(row.token_count).ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "analytics token count overflow",
+                )
+            })?;
+        }
     }
 
     for row in &raw.provider_buckets {
@@ -378,6 +392,7 @@ pub async fn get_dashboard_analytics(
                     .map(|(model, cost)| (model.clone(), Value::String(cost.to_string())))
                     .collect::<serde_json::Map<String, Value>>(),
                 "calls_by_model": calls_by_model_buckets[i],
+                "tokens_by_model": tokens_by_model_buckets[i],
                 "calls_by_provider": calls_by_provider_buckets[i],
             })
         })

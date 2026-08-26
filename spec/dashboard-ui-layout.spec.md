@@ -436,70 +436,33 @@ AK11. In the `/dashboard/tokens` list table, the API key name and its group badg
 
 ## 5. Dashboard Home Page
 
-DH1. `/dashboard` MUST render a dark themed overview shell containing exactly 3 visual rows:
+The normative home-overview contract lives in `spec/dashboard-home-overview.spec.md`.
+This section restates the layout binding for `/dashboard` and MUST stay aligned with that
+file.
 
-- row A: greeting/title block only (no action controls);
-- row B: 4 overview cards in desktop (`xl` and above), 2 columns in tablet (`md` to `< xl`), and 1 column in mobile (`< md`);
-- row C: analysis area where the left panel takes 2 columns and the right panel takes 1 column on desktop; both stack vertically on mobile.
+DH1. `/dashboard` MUST render these sections in order: greeting header; account strip
+(balance + subscription); full-width usage chart; recent-usage table + API information;
+performance panel. Details: `dashboard-home-overview.spec.md` DH-1 through DH-9c.
 
-DH2. Each overview card in row B MUST contain:
+DH2. Account strip balance and subscription cards MUST follow
+`dashboard-home-overview.spec.md` DH-5 through DH-5c.
 
-- two metric rows (`label + value`);
-- compact metric rows with no embedded chart and no decorative metric icons.
-- card section title MUST be one typographic step smaller than row C section title.
-- card header/content vertical padding MUST be compact to avoid excessive top whitespace.
+DH3. The usage chart MUST be a stacked cumulative token `AreaChart` driven by
+`GET /api/dashboard/analytics` with `buckets=7` and `range_hours=168`, including
+`tokens_by_model`, a Today marker, and a vertically scrolling legend
+(`dashboard-home-overview.spec.md` DH-6 through DH-6h).
 
-DH2a. The account overview card MUST follow `spec/dashboard-home-overview.spec.md` DH-3a
-(balance and assigned subscription; not API-key count).
+DH4. Recent usage and API information panels MUST follow
+`dashboard-home-overview.spec.md` DH-7 and DH-8 through DH-8d.
 
-DH3. The left analysis panel in row C MUST contain:
+DH5. The performance panel and admin-configurable targets MUST follow
+`dashboard-home-overview.spec.md` DH-9 through DH-9c.
 
-- a title row with section name;
-- a tab strip with exactly 4 tab labels (`消耗分布`, `消耗趋势`, `调用次数分布`, `调用次数排行`);
-- an analysis chart rendered through `@/components/ui/chart` using Recharts `BarChart`;
-- analysis data MUST be computed from real request logs (`GET /api/dashboard/request-logs`) and MUST NOT use synthetic placeholder values.
-- title and tab strip MUST be on the same row, with tab strip right-aligned.
-- tab separators (`/`) MUST be visually separate from clickable tab label and MUST NOT be included in active underline.
-- chart heading MUST be rendered as an `h2` element and MUST update with active tab label.
-- chart heading and total summary text MUST share one horizontal row.
-- in `调用次数排行` tab, category key MUST be provider-level key (provider name or provider id), not channel-level key.
+DH6. Loading and motion contracts MUST follow
+`dashboard-home-overview.spec.md` DH-11 through DH-13.
 
-DH3a. Dashboard home analysis queries MUST cover the complete latest 24-hour window:
-
-- frontend MUST send `buckets=8` and `range_hours=24` to `GET /api/dashboard/analytics`;
-- backend MUST compute `time_to = NOW()` and `time_from = time_to - 24h` for that analytics response;
-- chart buckets MUST be generated from that same `[time_from, time_to)` window.
-
-DH4. The right panel in row C MUST be an API information panel:
-
-- when no provider data exists, it MUST show an explicit empty state (`暂无API信息`) and muted helper text;
-- when provider data exists, it MUST show at least 1 provider summary row and 1 server/runtime summary row.
-
-DH5. `/dashboard` loading state MUST show skeleton placeholders for row A, row B (4 cards), and row C (left and right panels) before stats/config data is ready.
-
-DH6. `/dashboard` motion contract MUST use `framer-motion` and include:
-
-- page entry fade/slide for row A and row C panels;
-- staggered card entry for row B;
-- hover lift effect for overview cards.
-
-DH7. `/dashboard` MUST be resilient to config schema variance from `GET /api/dashboard/config`:
-
-- UI MUST NOT throw runtime errors when optional keys (including `providers` and `model_registry`) are absent.
-- Provider summary data for row B/row C MUST be sourced from `GET /api/dashboard/providers` when available.
-- If `config.routing.providers_count` exists, it MAY be used as a fallback aggregate count.
-
-DH8. `/dashboard` row C analysis panel MUST be responsive without horizontal overflow:
-
-- analysis chart container MUST adapt to available width instead of enforcing a fixed minimum width.
-- chart area MUST resize with card size.
-
-DH9. In desktop layout, row C left analysis card and right API info card MUST have equal stretched row height.
-
-DH10. In desktop layout, `/dashboard` MUST avoid page-level vertical overflow for normal data volumes:
-
-- row C cards MUST consume remaining page space and keep equal height;
-- overflowing content in row C panels MUST scroll within panel containers.
+DH7. `/dashboard` MUST NOT throw runtime errors when optional config fields are absent
+from settings or analytics payloads.
 
 ## 6. Users Page
 

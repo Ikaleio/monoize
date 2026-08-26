@@ -762,6 +762,7 @@ pub struct AnalyticsModelBucketRow {
     pub model: String,
     pub cost_nano: i128,
     pub call_count: i64,
+    pub token_count: i64,
 }
 
 pub struct AnalyticsProviderBucketRow {
@@ -777,6 +778,18 @@ pub struct DashboardAnalyticsRaw {
     pub total_calls: i64,
     pub today_cost_nano_usd: i128,
     pub today_calls: i64,
+}
+
+pub struct PerformanceHourBucketRow {
+    pub hour_idx: i64,
+    pub finished_count: i64,
+    pub success_count: i64,
+}
+
+pub struct PerformanceTargetRaw {
+    pub hour_buckets: Vec<PerformanceHourBucketRow>,
+    pub avg_ttft_ms: Option<f64>,
+    pub avg_tps: Option<f64>,
 }
 
 #[derive(Debug, Clone)]

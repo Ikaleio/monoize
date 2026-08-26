@@ -179,7 +179,16 @@ export function SettingsPage() {
       case "affinity":
         return <AffinitySection settings={currentSettings} onChange={handleChange} />;
       case "health":
-        return <HealthSection settings={currentSettings} onChange={handleChange} />;
+        return (
+          <HealthSection
+            settings={currentSettings}
+            onChange={handleChange}
+            availableModelIds={availableCodexModelIds}
+            modelsLoading={providersLoading}
+            modelsError={providersError}
+            onRetryModels={() => void mutateProviders()}
+          />
+        );
       case "extra":
         return <ExtraFieldsSection settings={currentSettings} onChange={handleChange} />;
     }

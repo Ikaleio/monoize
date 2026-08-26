@@ -35,6 +35,10 @@ pub struct SystemSettings {
     pub reasoning_suffix_map: HashMap<String, String>,
     #[serde(default)]
     pub codex_model_ids: Vec<String>,
+    #[serde(default)]
+    pub dashboard_performance_group_ids: Vec<String>,
+    #[serde(default)]
+    pub dashboard_performance_model_ids: Vec<String>,
     pub monoize_active_probe_enabled: bool,
     pub monoize_active_probe_interval_seconds: u64,
     pub monoize_active_probe_success_threshold: u32,
@@ -86,16 +90,20 @@ pub const BUILTIN_REASONING_EFFORT_SUFFIXES: &[(&str, &str)] = &[
     ("-max", "max"),
 ];
 
-pub fn canonicalize_codex_model_ids(model_ids: &mut Vec<String>) {
+pub fn canonicalize_ordered_string_ids(ids: &mut Vec<String>) {
     let mut seen = HashSet::new();
-    model_ids.retain_mut(|model_id| {
-        let trimmed = model_id.trim().to_string();
+    ids.retain_mut(|id| {
+        let trimmed = id.trim().to_string();
         if trimmed.is_empty() || !seen.insert(trimmed.clone()) {
             return false;
         }
-        *model_id = trimmed;
+        *id = trimmed;
         true
     });
+}
+
+pub fn canonicalize_codex_model_ids(model_ids: &mut Vec<String>) {
+    canonicalize_ordered_string_ids(model_ids);
 }
 
 pub fn normalize_pricing_model_key(
@@ -279,6 +287,8 @@ impl Default for SystemSettings {
             global_model_redirects: Vec::new(),
             reasoning_suffix_map: default_reasoning_suffix_map(),
             codex_model_ids: Vec::new(),
+            dashboard_performance_group_ids: Vec::new(),
+            dashboard_performance_model_ids: Vec::new(),
             monoize_active_probe_enabled: true,
             monoize_active_probe_interval_seconds: 30,
             monoize_active_probe_success_threshold: 1,
@@ -511,6 +521,18 @@ impl SettingsStore {
         .await?;
         self.set_if_not_exists("price_sync_new_api_token", &defaults.price_sync_new_api_token)
             .await?;
+        self.set_if_not_exists(
+            "dashboard_performance_group_ids",
+            &serde_json::to_string(&defaults.dashboard_performance_group_ids)
+                .unwrap_or_else(|_| "[]".to_string()),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "dashboard_performance_model_ids",
+            &serde_json::to_string(&defaults.dashboard_performance_model_ids)
+                .unwrap_or_else(|_| "[]".to_string()),
+        )
+        .await?;
         Ok(())
     }
 
@@ -697,6 +719,18 @@ impl SettingsStore {
                         settings.codex_model_ids = model_ids;
                     }
                 }
+                "dashboard_performance_group_ids" => {
+                    if let Ok(mut group_ids) = serde_json::from_str::<Vec<String>>(&row.value) {
+                        canonicalize_ordered_string_ids(&mut group_ids);
+                        settings.dashboard_performance_group_ids = group_ids;
+                    }
+                }
+                "dashboard_performance_model_ids" => {
+                    if let Ok(mut model_ids) = serde_json::from_str::<Vec<String>>(&row.value) {
+                        canonicalize_ordered_string_ids(&mut model_ids);
+                        settings.dashboard_performance_model_ids = model_ids;
+                    }
+                }
                 "monoize_active_probe_enabled" => {
                     settings.monoize_active_probe_enabled = row.value.parse().unwrap_or(true);
                 }
@@ -814,6 +848,8 @@ impl SettingsStore {
         let mut settings = settings.clone();
         canonicalize_transform_rules(&mut settings.global_transforms);
         canonicalize_codex_model_ids(&mut settings.codex_model_ids);
+        canonicalize_ordered_string_ids(&mut settings.dashboard_performance_group_ids);
+        canonicalize_ordered_string_ids(&mut settings.dashboard_performance_model_ids);
         settings.monoize_request_capture_max_total_bytes =
             clamp_request_capture_max_total_bytes(settings.monoize_request_capture_max_total_bytes);
         settings.monoize_affinity_idle_ttl_seconds =
@@ -849,6 +885,16 @@ impl SettingsStore {
             (
                 "codex_model_ids",
                 serde_json::to_string(&settings.codex_model_ids).map_err(|e| e.to_string())?,
+            ),
+            (
+                "dashboard_performance_group_ids",
+                serde_json::to_string(&settings.dashboard_performance_group_ids)
+                    .map_err(|e| e.to_string())?,
+            ),
+            (
+                "dashboard_performance_model_ids",
+                serde_json::to_string(&settings.dashboard_performance_model_ids)
+                    .map_err(|e| e.to_string())?,
             ),
             (
                 "monoize_active_probe_enabled",
