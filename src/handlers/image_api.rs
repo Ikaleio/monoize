@@ -1217,7 +1217,7 @@ async fn execute_stream_collected_image_typed(
                         break 'channel_attempts;
                     }
 
-                    let mut resp = match final_response {
+                    let resp = match final_response {
                         Some(resp) => resp,
                         None => {
                             let err = AppError::new(

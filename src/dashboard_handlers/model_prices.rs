@@ -116,6 +116,92 @@ pub struct PriceSyncRunsQuery {
     pub limit: Option<u64>,
 }
 
+fn parse_sync_source(raw: &str) -> AppResult<crate::price_sync::SyncSource> {
+    crate::price_sync::SyncSource::parse(raw).ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "source must be one of models_dev, openrouter, new_api",
+        )
+    })
+}
+
+async fn new_api_config(state: &AppState) -> AppResult<(String, String)> {
+    let settings = state
+        .settings_store
+        .get_all()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    Ok((
+        settings.price_sync_new_api_base_url,
+        settings.price_sync_new_api_token,
+    ))
+}
+
+fn map_sync_error(error: String) -> AppError {
+    if let Some(message) = error.strip_prefix("source_disabled: ") {
+        AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+    } else if error.starts_with("fetch_failed") || error.starts_with("parse_failed") {
+        // MP-Y3: fetch and parse failures map to 502 upstream_fetch_failed.
+        AppError::new(StatusCode::BAD_GATEWAY, "upstream_fetch_failed", error)
+    } else {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+    }
+}
+
+/// MP-A6: fetch the source and return the computed diff without writes.
+pub async fn preview_price_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let source = parse_sync_source(&source)?;
+    let (base_url, token) = new_api_config(&state).await?;
+    let snapshot =
+        crate::price_sync::fetch_source_snapshot(&state.http, source, (&base_url, &token))
+            .await
+            .map_err(map_sync_error)?;
+    let existing = state
+        .model_price_store
+        .list()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let plan = crate::price_sync::compute_sync_plan(source, &existing, snapshot.candidates);
+    Ok(Json(crate::price_sync::preview_response(source, &plan)))
+}
+
+/// MP-A7: perform the apply run and return the finalized run row.
+pub async fn apply_price_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(source): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let source = parse_sync_source(&source)?;
+    let (base_url, token) = new_api_config(&state).await?;
+    // MP-Y2: reject a disabled new_api source before creating a run row.
+    if source == crate::price_sync::SyncSource::NewApi && base_url.trim().is_empty() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "price_sync_new_api_base_url is not set",
+        ));
+    }
+    match crate::price_sync::apply_sync_run(
+        &state.http,
+        &state.model_price_store,
+        &state.model_registry_store,
+        source,
+        (&base_url, &token),
+    )
+    .await
+    {
+        Ok(run) => Ok(Json(run)),
+        Err((_, error)) => Err(map_sync_error(error)),
+    }
+}
+
 /// MP-A5: most recent sync runs, default limit 20, maximum 100.
 pub async fn list_price_sync_runs(
     State(state): State<AppState>,

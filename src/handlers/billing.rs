@@ -410,29 +410,6 @@ pub(super) async fn maybe_charge_settled(
     }
 }
 
-/// Settle a reported (non-stream) usage snapshot without decoded output.
-pub(super) async fn maybe_charge_usage(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    attempt: &MonoizeAttempt,
-    logical_model: &str,
-    usage: &urp::Usage,
-    response_service_tier: Option<&str>,
-    request_id: Option<&str>,
-) -> AppResult<ChargeComputation> {
-    maybe_charge_settled(
-        state,
-        auth,
-        attempt,
-        logical_model,
-        SettledUsage::Reported(usage),
-        None,
-        response_service_tier,
-        request_id,
-    )
-    .await
-}
-
 /// Settle a terminal pass-through stream.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn maybe_charge_stream_usage(

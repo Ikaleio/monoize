@@ -1,6 +1,7 @@
 use crate::db::DbPool;
 use crate::model_registry::{ModelCapabilities, ModelRecord};
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use sea_orm::{ConnectionTrait, TransactionTrait};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -56,6 +57,8 @@ pub struct UpdateModelInput {
     pub priority: Option<i32>,
 }
 
+/// Metadata rows no longer carry prices (`model-pricing.spec.md` MP-Y10);
+/// prices live only in `model_prices`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbModelMetadataRecord {
     pub model_id: String,
@@ -67,15 +70,6 @@ pub struct DbModelMetadataRecord {
     pub raw_json: Value,
     pub source: String,
     pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MarketplaceModelRecord {
-    #[serde(flatten)]
-    pub metadata: DbModelMetadataRecord,
-    pub billing_mode: Option<String>,
-    pub input_usd_per_1m: Option<String>,
-    pub output_usd_per_1m: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -365,8 +359,8 @@ impl ModelRegistryStore {
             .db
             .read()
             .query_all(self.db.stmt(
-                "SELECT model_id, models_dev_provider, mode, max_input_tokens, max_output_tokens,
-                        max_tokens, raw_json, source, updated_at
+                "SELECT model_id, models_dev_provider, mode, max_input_tokens,
+                        max_output_tokens, max_tokens, raw_json, source, updated_at
                  FROM model_metadata_records
                  ORDER BY model_id ASC",
                 vec![],
@@ -386,8 +380,7 @@ impl ModelRegistryStore {
             .query_all(self.db.stmt(
                 "SELECT DISTINCT
                         m.model_id, m.models_dev_provider, m.mode, m.max_input_tokens,
-                        m.max_output_tokens, m.max_tokens, m.raw_json, m.source, m.updated_at,
-                        mp.billing_mode, mp.input_usd_per_1m, mp.output_usd_per_1m
+                        m.max_output_tokens, m.max_tokens, m.raw_json, m.source, m.updated_at
                  FROM model_metadata_records AS m
                  INNER JOIN monoize_channel_models AS cm ON cm.model_name = m.model_id
                  INNER JOIN monoize_channels AS c ON c.id = cm.channel_id
@@ -420,28 +413,6 @@ impl ModelRegistryStore {
             .collect()
     }
 
-    pub async fn list_priced_model_ids(&self) -> Result<std::collections::HashSet<String>, String> {
-        let rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                "SELECT model_id FROM model_prices WHERE enabled = 1 AND (\
-                 (billing_mode = 'per_token' AND input_usd_per_1m IS NOT NULL) OR \
-                 (billing_mode = 'per_request' AND per_request_usd IS NOT NULL) OR \
-                 (billing_mode = 'tiered_expr' AND billing_expr IS NOT NULL))",
-                vec![],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let mut set = std::collections::HashSet::new();
-        for row in &rows {
-            let id: String = row.try_get("", "model_id").map_err(|e| e.to_string())?;
-            set.insert(id);
-        }
-        Ok(set)
-    }
-
     pub async fn get_model_metadata(
         &self,
         model_id: &str,
@@ -450,8 +421,8 @@ impl ModelRegistryStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT model_id, models_dev_provider, mode, max_input_tokens, max_output_tokens,
-                        max_tokens, raw_json, source, updated_at
+                "SELECT model_id, models_dev_provider, mode, max_input_tokens,
+                        max_output_tokens, max_tokens, raw_json, source, updated_at
                  FROM model_metadata_records
                  WHERE model_id = $1",
                 vec![model_id.into()],
@@ -463,54 +434,6 @@ impl ModelRegistryStore {
             Some(r) => Ok(Some(row_to_model_metadata(&r)?)),
             None => Ok(None),
         }
-    }
-
-    pub async fn list_model_metadata_pricing_profiles(
-        &self,
-        model_ids: &[String],
-    ) -> Result<std::collections::HashMap<String, String>, String> {
-        if model_ids.is_empty() {
-            return Ok(std::collections::HashMap::new());
-        }
-        let model_ids = model_ids
-            .iter()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let mut profiles = std::collections::HashMap::new();
-        const LOOKUP_CHUNK_SIZE: usize = 400;
-        for chunk in model_ids.chunks(LOOKUP_CHUNK_SIZE) {
-            let placeholders = (0..chunk.len())
-                .map(|index| format!("${}", index + 1))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let rows = self
-                .db
-                .read()
-                .query_all(self.db.stmt(
-                    &format!(
-                        "SELECT model_id, models_dev_provider
-                         FROM model_metadata_records
-                         WHERE model_id IN ({placeholders})
-                           AND models_dev_provider IS NOT NULL"
-                    ),
-                    chunk.iter().cloned().map(Into::into).collect(),
-                ))
-                .await
-                .map_err(|e| e.to_string())?;
-            for row in rows {
-                let model_id: String = row.try_get("", "model_id").map_err(|e| e.to_string())?;
-                let profile: String = row
-                    .try_get("", "models_dev_provider")
-                    .map_err(|e| e.to_string())?;
-                let profile = profile.trim();
-                if !profile.is_empty() {
-                    profiles.insert(model_id, profile.to_string());
-                }
-            }
-        }
-        Ok(profiles)
     }
 
     pub async fn upsert_model_metadata(
@@ -559,9 +482,9 @@ impl ModelRegistryStore {
 
         txn.execute(self.db.stmt(
                 "INSERT INTO model_metadata_records
-                 (model_id, models_dev_provider, mode, max_input_tokens, max_output_tokens,
-                  max_tokens, raw_json, source, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, '{}', $7, $8)
+                 (model_id, models_dev_provider, mode,
+                  max_input_tokens, max_output_tokens, max_tokens, raw_json, source, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, '{}', 'manual', $7)
                  ON CONFLICT(model_id) DO UPDATE SET
                    models_dev_provider = excluded.models_dev_provider,
                    mode = excluded.mode,
@@ -593,20 +516,157 @@ impl ModelRegistryStore {
 
     pub async fn delete_model_metadata(&self, model_id: &str) -> Result<bool, String> {
         let write_guard = self.db.write().await;
-        let txn = write_guard.begin().await.map_err(|e| e.to_string())?;
-        let result = txn
+        let result = write_guard
             .execute(self.db.stmt(
                 "DELETE FROM model_metadata_records WHERE model_id = $1",
                 vec![model_id.into()],
             ))
             .await
             .map_err(|e| e.to_string())?;
-        if result.rows_affected() == 0 {
-            txn.rollback().await.map_err(|e| e.to_string())?;
-            return Ok(false);
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Fetch models.dev and upsert metadata rows (MP-Y10). Metadata rows no
+    /// longer carry prices; `model_prices` is written only by the price sync
+    /// engine (`price_sync`).
+    pub async fn sync_from_models_dev(
+        &self,
+        http: &reqwest::Client,
+    ) -> Result<ModelMetadataSyncResult, String> {
+        let root = crate::price_sync::fetch_models_dev_root(http).await?;
+        self.apply_models_dev_metadata(&root).await
+    }
+
+    /// Apply one parsed models.dev snapshot to `model_metadata_records`:
+    /// delete non-manual rows, then insert one row per canonical model that
+    /// has a strictly positive input cost variant. Manual rows are kept and
+    /// counted as skipped.
+    pub async fn apply_models_dev_metadata(
+        &self,
+        root: &Value,
+    ) -> Result<ModelMetadataSyncResult, String> {
+        let grouped = group_models_dev_variants(root)?;
+
+        let fetched_at = Utc::now().to_rfc3339();
+        let _write_guard = self.db.write().await;
+        let txn = _write_guard.begin().await.map_err(|e| e.to_string())?;
+
+        let del_result = txn
+            .execute(self.db.stmt(
+                "DELETE FROM model_metadata_records WHERE source != 'manual'",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        let deleted = del_result.rows_affected();
+
+        let manual_rows = txn
+            .query_all(self.db.stmt(
+                "SELECT model_id FROM model_metadata_records WHERE source = 'manual'",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        let manual_ids = manual_rows
+            .into_iter()
+            .map(|row| {
+                row.try_get::<String>("", "model_id")
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+
+        let mut metadata_writes = Vec::new();
+        let mut skipped = 0usize;
+        for (model_name, variants) in &grouped {
+            if !has_positive_input_variant(variants) {
+                continue;
+            }
+            if manual_ids.contains(model_name) {
+                skipped += 1;
+                continue;
+            }
+
+            let winner = pick_best_variant(model_name, variants);
+            let mode = if variants
+                .iter()
+                .any(|v| is_embedding_family(v.family.as_deref()))
+            {
+                "embedding"
+            } else {
+                "chat"
+            };
+
+            let mut providers_map = serde_json::Map::new();
+            for v in variants {
+                providers_map.insert(v.provider_id.clone(), v.raw.clone());
+            }
+            metadata_writes.push(ModelsDevMetadataWrite {
+                model_name: model_name.clone(),
+                provider_id: winner.provider_id.clone(),
+                mode,
+                max_input_tokens: winner.max_input_tokens,
+                max_output_tokens: winner.max_output_tokens,
+                max_tokens: winner.max_tokens,
+                raw_json: serde_json::json!({ "providers": providers_map }).to_string(),
+            });
         }
+
+        const METADATA_SYNC_CHUNK_SIZE: usize = 100;
+        for chunk in metadata_writes.chunks(METADATA_SYNC_CHUNK_SIZE) {
+            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 8);
+            let mut rows = Vec::with_capacity(chunk.len());
+            for row in chunk {
+                let start = values.len() + 1;
+                values.extend([
+                    row.model_name.clone().into(),
+                    row.provider_id.clone().into(),
+                    row.mode.into(),
+                    row.max_input_tokens.into(),
+                    row.max_output_tokens.into(),
+                    row.max_tokens.into(),
+                    row.raw_json.clone().into(),
+                    fetched_at.clone().into(),
+                ]);
+                let mut placeholders = (start..start + 7)
+                    .map(|index| format!("${index}"))
+                    .collect::<Vec<_>>();
+                placeholders.push("'models_dev'".to_string());
+                placeholders.push(format!("${}", start + 7));
+                // Placeholder order: 7 data columns, literal source, updated_at.
+                rows.push(format!("({})", placeholders.join(", ")));
+            }
+            txn.execute(self.db.stmt(
+                &format!(
+                    "INSERT INTO model_metadata_records
+                     (model_id, models_dev_provider, mode, max_input_tokens,
+                      max_output_tokens, max_tokens, raw_json, source, updated_at)
+                     VALUES {}
+                     ON CONFLICT(model_id) DO UPDATE SET
+                       models_dev_provider=excluded.models_dev_provider,
+                       mode=excluded.mode,
+                       max_input_tokens=excluded.max_input_tokens,
+                       max_output_tokens=excluded.max_output_tokens,
+                       max_tokens=excluded.max_tokens,
+                       raw_json=excluded.raw_json,
+                       source=excluded.source,
+                       updated_at=excluded.updated_at",
+                    rows.join(", ")
+                ),
+                values,
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
         txn.commit().await.map_err(|e| e.to_string())?;
-        Ok(true)
+        let upserted = metadata_writes.len();
+        Ok(ModelMetadataSyncResult {
+            success: true,
+            upserted,
+            skipped,
+            deleted,
+            fetched_at,
+        })
     }
 
 }
@@ -683,8 +743,8 @@ async fn get_model_metadata_with<C: ConnectionTrait>(
     let row = conn
         .query_one(db.stmt(
             &format!(
-                "SELECT model_id, models_dev_provider, mode, max_input_tokens, max_output_tokens,
-                    max_tokens, raw_json, source, updated_at
+                "SELECT model_id, models_dev_provider, mode, max_input_tokens,
+                    max_output_tokens, max_tokens, raw_json, source, updated_at
              FROM model_metadata_records
              WHERE model_id = $1{lock_suffix}"
             ),
@@ -697,6 +757,243 @@ async fn get_model_metadata_with<C: ConnectionTrait>(
 
 fn merge_nullable<T>(update: Option<Option<T>>, existing: Option<T>) -> Option<T> {
     update.unwrap_or(existing)
+}
+
+/// One models.dev provider variant of a canonical model, with cost values
+/// kept as exact USD-per-1M decimal strings (MP-Y5).
+pub(crate) struct SyncProviderVariant {
+    pub(crate) provider_id: String,
+    pub(crate) family: Option<String>,
+    pub(crate) cost_input: Option<String>,
+    pub(crate) cost_output: Option<String>,
+    pub(crate) cost_cache_read: Option<String>,
+    pub(crate) cost_cache_write: Option<String>,
+    pub(crate) cost_reasoning: Option<String>,
+    pub(crate) max_input_tokens: Option<i64>,
+    pub(crate) max_output_tokens: Option<i64>,
+    pub(crate) max_tokens: Option<i64>,
+    pub(crate) raw: Value,
+}
+
+struct ModelsDevMetadataWrite {
+    model_name: String,
+    provider_id: String,
+    mode: &'static str,
+    max_input_tokens: Option<i64>,
+    max_output_tokens: Option<i64>,
+    max_tokens: Option<i64>,
+    raw_json: String,
+}
+
+/// MP-Y4: group models.dev variants by canonical model id (NID1), applying
+/// the MP-Y9 skip rules. The result is sorted by canonical id for
+/// deterministic write order.
+pub(crate) fn group_models_dev_variants(
+    root: &Value,
+) -> Result<Vec<(String, Vec<SyncProviderVariant>)>, String> {
+    let providers = root
+        .as_object()
+        .ok_or_else(|| "parse_failed: root must be object".to_string())?;
+    let mut grouped: std::collections::BTreeMap<String, Vec<SyncProviderVariant>> =
+        std::collections::BTreeMap::new();
+    for (provider_id, provider_val) in providers {
+        let provider_obj = match provider_val.as_object() {
+            Some(v) => v,
+            None => continue,
+        };
+        let models = match provider_obj.get("models").and_then(|m| m.as_object()) {
+            Some(v) => v,
+            None => continue,
+        };
+        for (model_name, model_val) in models {
+            let model_obj = match model_val.as_object() {
+                Some(v) => v,
+                None => continue,
+            };
+            let cost = model_obj.get("cost").and_then(|c| c.as_object());
+            let limit = model_obj.get("limit").and_then(|l| l.as_object());
+            let canonical = normalize_model_id(model_name, Some(provider_id));
+            if should_ignore_sync_model(&canonical) {
+                continue;
+            }
+            grouped
+                .entry(canonical)
+                .or_default()
+                .push(SyncProviderVariant {
+                    provider_id: provider_id.clone(),
+                    family: model_obj
+                        .get("family")
+                        .and_then(|f| f.as_str())
+                        .map(|s| s.to_string()),
+                    cost_input: cost.and_then(|c| c.get("input")).and_then(usd_cost_string),
+                    cost_output: cost.and_then(|c| c.get("output")).and_then(usd_cost_string),
+                    cost_cache_read: cost
+                        .and_then(|c| c.get("cache_read"))
+                        .and_then(usd_cost_string),
+                    cost_cache_write: cost
+                        .and_then(|c| c.get("cache_write"))
+                        .and_then(usd_cost_string),
+                    cost_reasoning: cost
+                        .and_then(|c| c.get("reasoning"))
+                        .and_then(usd_cost_string),
+                    max_input_tokens: limit.and_then(|l| l.get("input")).and_then(value_to_i64),
+                    max_output_tokens: limit.and_then(|l| l.get("output")).and_then(value_to_i64),
+                    max_tokens: limit.and_then(|l| l.get("context")).and_then(value_to_i64),
+                    raw: models_dev_variant_for_dashboard(model_val),
+                });
+        }
+    }
+    Ok(grouped.into_iter().collect())
+}
+
+/// MP-Y8 official family→provider table: a case-insensitive prefix test on
+/// the canonical model id, first matching row wins. `o<digit>` is the letter
+/// `o` followed by an ASCII digit.
+const OFFICIAL_FAMILY_PROVIDERS: &[(&str, &str)] = &[
+    ("gpt-", "openai"),
+    ("chatgpt-", "openai"),
+    ("claude-", "anthropic"),
+    ("gemini-", "google"),
+    ("gemma-", "google"),
+    ("grok-", "xai"),
+    ("deepseek-", "deepseek"),
+    ("mistral-", "mistral"),
+    ("codestral-", "mistral"),
+    ("pixtral-", "mistral"),
+    ("ministral-", "mistral"),
+    ("magistral-", "mistral"),
+    ("devstral-", "mistral"),
+    ("qwen", "alibaba"),
+    ("qwq-", "alibaba"),
+    ("qvq-", "alibaba"),
+    ("llama-", "llama"),
+    ("command-", "cohere"),
+    ("kimi-", "moonshotai"),
+    ("moonshot-", "moonshotai"),
+    ("glm-", "zhipuai"),
+    ("minimax-", "minimax"),
+    ("step-", "stepfun"),
+    ("sonar", "perplexity"),
+    ("solar-", "upstage"),
+    ("phi-", "azure"),
+    ("mimo-", "xiaomi"),
+    ("mercury", "inception"),
+];
+
+/// Maps a canonical (bare, lowercase) model ID to its official provider ID on
+/// models.dev per MP-Y8. Returns `None` for unrecognized families.
+pub(crate) fn official_provider_for_model(model_id: &str) -> Option<&'static str> {
+    let lower = model_id.to_ascii_lowercase();
+    // OpenAI o-series: "o" followed by a digit (o1, o3-pro, o4-mini, etc.)
+    if lower.starts_with('o')
+        && lower
+            .as_bytes()
+            .get(1)
+            .is_some_and(|b| b.is_ascii_digit())
+    {
+        return Some("openai");
+    }
+    OFFICIAL_FAMILY_PROVIDERS
+        .iter()
+        .find(|(prefix, _)| lower.starts_with(prefix))
+        .map(|(_, provider)| *provider)
+}
+
+fn positive_cost_input(variant: &SyncProviderVariant) -> Option<Decimal> {
+    variant
+        .cost_input
+        .as_ref()
+        .and_then(|raw| Decimal::from_str(raw).ok())
+        .filter(|value| value.is_sign_positive() && !value.is_zero())
+}
+
+/// MP-Y7 variant selection: official provider with positive input cost,
+/// otherwise the highest positive input cost.
+pub(crate) fn pick_best_variant<'a>(
+    model_id: &str,
+    variants: &'a [SyncProviderVariant],
+) -> &'a SyncProviderVariant {
+    if let Some(official) = official_provider_for_model(model_id) {
+        if let Some(v) = variants
+            .iter()
+            .find(|v| v.provider_id == official && positive_cost_input(v).is_some())
+        {
+            return v;
+        }
+    }
+
+    variants
+        .iter()
+        .max_by(|a, b| {
+            let cost_a = positive_cost_input(a).unwrap_or(Decimal::ZERO);
+            let cost_b = positive_cost_input(b).unwrap_or(Decimal::ZERO);
+            cost_a.cmp(&cost_b)
+        })
+        .expect("pick_best_variant called with at least one sync variant")
+}
+
+pub(crate) fn has_positive_input_variant(variants: &[SyncProviderVariant]) -> bool {
+    variants.iter().any(|v| positive_cost_input(v).is_some())
+}
+
+pub(crate) fn should_ignore_sync_model(model_id: &str) -> bool {
+    model_id == "auto"
+        || model_id.ends_with("-thinking")
+        || model_id.ends_with(":thinking")
+        || model_id.ends_with("-think")
+}
+
+fn is_embedding_family(family: Option<&str>) -> bool {
+    family
+        .map(|s| s.to_ascii_lowercase().contains("embed"))
+        .unwrap_or(false)
+}
+
+/// Reads one models.dev cost value as an exact USD-per-1M decimal string
+/// (MP-Y5): the JSON token is parsed as `Decimal`, never through binary
+/// floating point, and canonicalized to at most 9 fractional digits.
+pub(crate) fn usd_cost_string(value: &Value) -> Option<String> {
+    let raw = match value {
+        Value::Number(number) => number.to_string(),
+        Value::String(value) => value.clone(),
+        _ => return None,
+    };
+    if raw.contains(['e', 'E']) || raw.starts_with('+') {
+        return None;
+    }
+    let decimal = Decimal::from_str_exact(&raw).ok()?;
+    if decimal.is_sign_negative() {
+        return None;
+    }
+    Some(
+        decimal
+            .round_dp_with_strategy(9, rust_decimal::RoundingStrategy::ToZero)
+            .normalize()
+            .to_string(),
+    )
+}
+
+fn models_dev_variant_for_dashboard(value: &Value) -> Value {
+    let mut value = value.clone();
+    let Some(cost) = value
+        .as_object_mut()
+        .and_then(|model| model.get_mut("cost"))
+        .and_then(Value::as_object_mut)
+    else {
+        return value;
+    };
+    for price in cost.values_mut() {
+        if let Value::Number(number) = price {
+            *price = Value::String(number.to_string());
+        }
+    }
+    value
+}
+
+fn value_to_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|v| i64::try_from(v).ok()))
 }
 
 const KNOWN_PROVIDER_PREFIXES: &[&str] = &[
@@ -749,6 +1046,7 @@ pub fn normalize_model_id(raw: &str, provider_hint: Option<&str>) -> String {
 mod tests {
     use super::{
         ModelRegistryStore, UpsertModelMetadataInput, deserialize_nullable_field,
+        models_dev_variant_for_dashboard, usd_cost_string,
     };
     use crate::db::DbPool;
     use crate::migration::Migrator;
@@ -756,6 +1054,25 @@ mod tests {
     use sea_orm_migration::MigratorTrait;
     use serde::Deserialize;
     use serde_json::json;
+
+    #[test]
+    fn models_dev_decimal_price_conversion_is_exact() {
+        assert_eq!(usd_cost_string(&json!(1.001)), Some("1.001".to_string()));
+        assert_eq!(usd_cost_string(&json!("0.0009")), Some("0.0009".to_string()));
+        assert_eq!(usd_cost_string(&json!(2.50)), Some("2.5".to_string()));
+        assert_eq!(usd_cost_string(&json!(-1)), None);
+    }
+
+    #[test]
+    fn dashboard_raw_variant_keeps_costs_as_decimal_strings() {
+        let variant = models_dev_variant_for_dashboard(&json!({
+            "cost": { "input": 1.001, "output": 2 },
+            "limit": { "context": 128000 }
+        }));
+        assert_eq!(variant["cost"]["input"], json!("1.001"));
+        assert_eq!(variant["cost"]["output"], json!("2"));
+        assert_eq!(variant["limit"]["context"], json!(128000));
+    }
 
     #[derive(Deserialize)]
     struct NullableProbe {

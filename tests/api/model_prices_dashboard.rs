@@ -58,7 +58,7 @@ async fn model_price_crud_lifecycle() {
     let ctx = setup().await;
     let admin = admin_header(&ctx, "admin_mp_crud").await;
 
-    // MP-A1: empty list initially.
+    // MP-A1: the fixture-seeded baseline holds no rows for this test's ids.
     let (status, body) = json_call(
         &ctx,
         MpMethod::GET,
@@ -68,7 +68,15 @@ async fn model_price_crud_lifecycle() {
     )
     .await;
     assert_eq!(status, MpStatusCode::OK);
-    assert_eq!(body, json!([]));
+    let baseline = body.as_array().unwrap().len();
+    assert!(
+        !body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["model_id"] == json!("gpt-4o")),
+        "unexpected fixture row"
+    );
 
     // MP-A2: upsert creates a manual per-token row and locks edited fields
     // (MP-Y17).
@@ -151,9 +159,16 @@ async fn model_price_crud_lifecycle() {
     )
     .await;
     let rows = listed.as_array().unwrap();
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["model_id"], json!("gpt-4o"));
-    assert_eq!(rows[1]["model_id"], json!("org/model-x"));
+    assert_eq!(rows.len(), baseline + 2);
+    let ids: Vec<&str> = rows
+        .iter()
+        .map(|row| row["model_id"].as_str().unwrap())
+        .collect();
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(ids, sorted, "rows must be ordered by model_id ASC");
+    assert!(ids.contains(&"gpt-4o"));
+    assert!(ids.contains(&"org/model-x"));
 
     // MP-A3: delete, then 404 on repeat.
     let (status, _) = json_call(
@@ -339,6 +354,238 @@ async fn price_sync_rejects_unknown_source() {
     )
     .await;
     assert_eq!(status, MpStatusCode::BAD_REQUEST, "expected 400: {err}");
+}
+
+/// Starts a mock new-api pricing server and returns its base URL.
+async fn start_mock_new_api(pricing: Value) -> String {
+    let router = axum::Router::new().route(
+        "/api/pricing",
+        axum::routing::get(move || {
+            let pricing = pricing.clone();
+            async move { axum::Json(pricing) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn new_api_sync_preview_and_apply_end_to_end() {
+    let ctx = setup().await;
+    let admin = admin_header(&ctx, "admin_mp_newapi").await;
+
+    // MP-Y12/MP-Y12a fixture: one ratio model, one fixed-price model, one
+    // untrusted placeholder (75 USD/1M + completion ratio 1).
+    let base_url = start_mock_new_api(json!({ "data": [
+        { "model_name": "ratio-model", "quota_type": 0,
+          "model_ratio": 1.25, "completion_ratio": 4 },
+        { "model_name": "fixed-model", "quota_type": 1, "model_price": 0.05 },
+        { "model_name": "placeholder-model", "quota_type": 0,
+          "model_ratio": 37.5, "completion_ratio": 1 },
+        { "model_name": "manual-owned-model", "quota_type": 0,
+          "model_ratio": 5, "completion_ratio": 2 }
+    ], "success": true }))
+    .await;
+    ctx.state
+        .settings_store
+        .set("price_sync_new_api_base_url", &base_url)
+        .await
+        .expect("set base url");
+
+    // A pre-existing manual row is never modified by sync (MP-Y13).
+    let (status, _) = json_call(
+        &ctx,
+        MpMethod::PUT,
+        "/api/dashboard/model-prices/manual-owned-model",
+        Some(&admin),
+        Some(json!({ "input_usd_per_1m": "123", "output_usd_per_1m": "456" })),
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::OK);
+
+    // MP-A6 preview: no writes yet.
+    let (status, preview) = json_call(
+        &ctx,
+        MpMethod::POST,
+        "/api/dashboard/price-sync/new_api/preview",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::OK, "preview failed: {preview}");
+    assert_eq!(preview["source"], json!("new_api"));
+    assert_eq!(preview["insert"], json!(2));
+    assert_eq!(preview["update"], json!(0));
+    assert_eq!(preview["skip"], json!(1));
+    assert_eq!(preview["delete"], json!(0));
+    let (_, rows) = json_call(
+        &ctx,
+        MpMethod::GET,
+        "/api/dashboard/model-prices",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert!(
+        !rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["source"] == json!("new_api")),
+        "preview must not write"
+    );
+
+    // MP-A7 apply: returns the finalized run row.
+    let (status, run) = json_call(
+        &ctx,
+        MpMethod::POST,
+        "/api/dashboard/price-sync/new_api/apply",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::OK, "apply failed: {run}");
+    assert_eq!(run["source"], json!("new_api"));
+    assert_eq!(run["status"], json!("success"));
+    assert_eq!(run["inserted"], json!(2));
+    assert_eq!(run["skipped"], json!(1));
+
+    let (_, rows) = json_call(
+        &ctx,
+        MpMethod::GET,
+        "/api/dashboard/model-prices",
+        Some(&admin),
+        None,
+    )
+    .await;
+    let rows = rows.as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["source"] == json!("new_api"))
+            .count(),
+        2
+    );
+    let ratio = rows
+        .iter()
+        .find(|row| row["model_id"] == json!("ratio-model"))
+        .unwrap();
+    // ratio 1 = USD 2 per 1M: 1.25 * 2 = 2.5; output 2.5 * 4 = 10 (MP-Y12).
+    assert_eq!(ratio["billing_mode"], json!("per_token"));
+    assert_eq!(ratio["input_usd_per_1m"], json!("2.5"));
+    assert_eq!(ratio["output_usd_per_1m"], json!("10"));
+    assert_eq!(ratio["source"], json!("new_api"));
+    let fixed = rows
+        .iter()
+        .find(|row| row["model_id"] == json!("fixed-model"))
+        .unwrap();
+    assert_eq!(fixed["billing_mode"], json!("per_request"));
+    assert_eq!(fixed["per_request_usd"], json!("0.05"));
+    let manual = rows
+        .iter()
+        .find(|row| row["model_id"] == json!("manual-owned-model"))
+        .unwrap();
+    assert_eq!(manual["source"], json!("manual"));
+    assert_eq!(manual["input_usd_per_1m"], json!("123"));
+
+    // MP-A5: the run is auditable.
+    let (_, runs) = json_call(
+        &ctx,
+        MpMethod::GET,
+        "/api/dashboard/price-sync/runs",
+        Some(&admin),
+        None,
+    )
+    .await;
+    let runs = runs.as_array().unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["status"], json!("success"));
+
+    // MP-Y14: a locked field survives a re-sync while unlocked fields and
+    // raw_json refresh.
+    let (status, locked) = json_call(
+        &ctx,
+        MpMethod::PUT,
+        "/api/dashboard/model-prices/ratio-model",
+        Some(&admin),
+        Some(json!({ "input_usd_per_1m": "7" })),
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::OK);
+    // MP-Y17: a dashboard edit of an existing synced row keeps its source,
+    // gaining only the lock entry.
+    assert_eq!(locked["source"], json!("new_api"));
+    assert!(
+        locked["locked_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("input_usd_per_1m"))
+    );
+    let (status, run) = json_call(
+        &ctx,
+        MpMethod::POST,
+        "/api/dashboard/price-sync/new_api/apply",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::OK, "re-apply failed: {run}");
+    let (_, rows) = json_call(
+        &ctx,
+        MpMethod::GET,
+        "/api/dashboard/model-prices",
+        Some(&admin),
+        None,
+    )
+    .await;
+    let ratio = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["model_id"] == json!("ratio-model"))
+        .cloned()
+        .unwrap();
+    assert_eq!(ratio["input_usd_per_1m"], json!("7"));
+}
+
+#[tokio::test]
+async fn new_api_sync_fetch_failure_returns_502_and_audits_failed_run() {
+    let ctx = setup().await;
+    let admin = admin_header(&ctx, "admin_mp_newapi_fail").await;
+
+    // A closed port: connection refused maps to upstream_fetch_failed (MP-Y3).
+    ctx.state
+        .settings_store
+        .set("price_sync_new_api_base_url", "http://127.0.0.1:9")
+        .await
+        .expect("set base url");
+
+    let (status, err) = json_call(
+        &ctx,
+        MpMethod::POST,
+        "/api/dashboard/price-sync/new_api/apply",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::BAD_GATEWAY, "expected 502: {err}");
+    assert_eq!(err["error"]["code"], json!("upstream_fetch_failed"));
+
+    let (_, runs) = json_call(
+        &ctx,
+        MpMethod::GET,
+        "/api/dashboard/price-sync/runs",
+        Some(&admin),
+        None,
+    )
+    .await;
+    let runs = runs.as_array().unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["status"], json!("failed"));
+    assert!(runs[0]["error"].as_str().unwrap().contains("fetch_failed"));
 }
 
 #[tokio::test]
