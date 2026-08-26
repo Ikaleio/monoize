@@ -31,6 +31,16 @@ description: 阅读日志列表，开启请求捕获，在捕获查看器中检�
    - `capture-all`：捕获每个到达上游的请求。
    - `capture-only-abnormal`：只捕获失败或异常的请求。
 
+捕获适用于以下端点：`POST /v1/responses`、`POST /v1/chat/completions`、`POST /v1/messages`、`POST /v1/images/generations` 和 `POST /v1/images/edits`。
+
+### Image API 与多模态报文
+
+Image API 的每个子请求写入一份捕获。当 `n` 大于 1 时，捕获的请求 ID 带有后缀 `:img:{i}`，其中 `i` 是从 0 开始的子请求序号。
+
+Monoize 把 `multipart/form-data` 请求体保存为结构化 JSON 对象。对象按传输顺序列出每个部分。文本部分记录字段名和文本。文件部分记录字段名、文件名、内容类型、字节长度和 base64 数据。此规则同时适用于接收到的 `POST /v1/images/edits` 请求体和发送给 `openai_image` 上游的 multipart 表单。
+
+捕获按源报文原样保留图像等多模态内容。Monoize 不做脱敏，也不重新编码。
+
 ### 保留与轮转
 
 每个 API 密钥设置 `request_capture_retention`：`5m`、`1h`、`24h` 或 `7d`。默认为 `24h`。捕获在该期限后过期。清理任务在进程启动时运行一次，之后每小时运行一次，删除已过期的捕获。
@@ -49,6 +59,8 @@ Monoize 在后台任务中用 zstd 压缩新的捕获文件，同时仍能读取
 - **响应**：非流式的最终结果。对于流式请求，Monoize 显示重建后的完整响应；
 - **输出流**：流式请求的原始 SSE 帧，带语法高亮。仅当该次尝试记录了流式帧时才显示此标签页；
 - 实际执行的变换链，包括范围和顺序。
+
+当字符串包含图像 data URL 或 base64 图像数据时，查看器在其下方显示内联预览。无法解码的图像数据会收起预览，仅保留文本。
 
 `user` 角色只能查看自己的捕获，且只能看到 API 密钥范围的变换条目。管理员可以查看 `user` 角色账户的捕获。
 

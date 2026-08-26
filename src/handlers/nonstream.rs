@@ -404,6 +404,10 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             let provider = build_channel_provider_config(&attempt);
             let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
                 && urp::encode::openai_image::has_user_image_input(&req_attempt);
+            // RCD-D6/RCD-D6a: `upstream_request` defaults to the JSON body;
+            // the multipart edits branch replaces it with the RCD-D16 capture
+            // object because `upstream_body` is not what goes on the wire.
+            let mut capture_upstream_request: Option<Value> = None;
             let path = if openai_image_edit {
                 "/v1/images/edits".to_string()
             } else {
@@ -499,10 +503,22 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     Err(err) => Err(err),
                 }
             } else if openai_image_edit {
-                let form = match urp::encode::openai_image::multipart_form(
+                let form = match urp::encode::openai_image::multipart_fields(
                     &req_attempt,
                     &req_attempt.model,
-                ) {
+                )
+                .and_then(|fields| {
+                    // RCD-D6a: capture the multipart body from the same field
+                    // list the sent form is built from.
+                    if capture.session.is_some() {
+                        capture_upstream_request = Some(
+                            crate::request_capture::multipart_capture_object_from_upstream_fields(
+                                &fields,
+                            ),
+                        );
+                    }
+                    urp::encode::openai_image::form_from_fields(fields)
+                }) {
                     Ok(form) => form,
                     Err(message) => {
                         let err =
@@ -580,6 +596,12 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             match call_value {
                 Ok((value, collected_resp)) => {
                     if let Some(session) = capture.session.as_ref() {
+                        // RCD-D10c: a stream-collected attempt has no provider
+                        // JSON body, so the pre-response-transform collected
+                        // terminal event substitutes for it.
+                        let reconstructed_urp_response = collected_resp
+                            .as_ref()
+                            .map(crate::request_capture::reconstructed_response_json);
                         session
                             .push_attempt(crate::request_capture::build_attempt_dump(
                                 attempt_number,
@@ -591,9 +613,11 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 &path,
                                 capture.raw_input.as_ref().clone(),
                                 &req_attempt,
-                                upstream_body.clone(),
+                                capture_upstream_request
+                                    .clone()
+                                    .unwrap_or_else(|| upstream_body.clone()),
                                 value.clone(),
-                                None,
+                                reconstructed_urp_response,
                                 None,
                                 capture_transform_chain.clone(),
                                 None,
@@ -907,7 +931,9 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 &path,
                                 capture.raw_input.as_ref().clone(),
                                 &req_attempt,
-                                upstream_body.clone(),
+                                capture_upstream_request
+                                    .clone()
+                                    .unwrap_or_else(|| upstream_body.clone()),
                                 None,
                                 None,
                                 None,

@@ -1005,6 +1005,7 @@
 			"copy": "Copy",
 			"copied": "Copied",
 			"empty": "No content",
+			"imagePreview": "Captured image preview",
 			"responseEmptyStream": "No reconstructed response for this stream; see the Output Stream tab.",
 			"expandChars": "Expand ({{count}} chars)",
 			"collapse": "Collapse",
