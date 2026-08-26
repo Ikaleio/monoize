@@ -45,21 +45,50 @@ pub fn has_user_image_input(req: &UrpRequest) -> bool {
     })
 }
 
-pub fn multipart_form(req: &UrpRequest, model: &str) -> Result<reqwest::multipart::Form, String> {
-    let prompt = user_prompt(req);
-    let mut form = reqwest::multipart::Form::new()
-        .text("model", model.to_string())
-        .text("prompt", prompt);
+/// One part of the upstream edit multipart body (OIU-E5a..OIU-E5f), in send
+/// order. The intermediate representation exists so the same parts feed both
+/// the sent `reqwest` form and the RCD-D6a/RCD-D16 capture object (OIU-E5g)
+/// without the two ever diverging.
+pub enum MultipartField {
+    Text {
+        name: String,
+        value: String,
+    },
+    File {
+        name: String,
+        filename: String,
+        content_type: String,
+        bytes: Vec<u8>,
+    },
+}
+
+pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartField>, String> {
+    let mut fields = vec![
+        MultipartField::Text {
+            name: "model".to_string(),
+            value: model.to_string(),
+        },
+        MultipartField::Text {
+            name: "prompt".to_string(),
+            value: user_prompt(req),
+        },
+    ];
 
     if req.stream == Some(true) {
-        form = form.text("stream", "true");
+        fields.push(MultipartField::Text {
+            name: "stream".to_string(),
+            value: "true".to_string(),
+        });
     }
 
     for (k, v) in &req.extra_body {
         if k.starts_with("_monoize_") || k == "model" || k == "prompt" || k == "stream" {
             continue;
         }
-        form = form.text(k.clone(), extra_value_to_text(v));
+        fields.push(MultipartField::Text {
+            name: k.clone(),
+            value: extra_value_to_text(v),
+        });
     }
 
     for (idx, item) in req.input.iter().enumerate() {
@@ -89,14 +118,41 @@ pub fn multipart_form(req: &UrpRequest, model: &str) -> Result<reqwest::multipar
         } else {
             "image"
         };
-        let part = reqwest::multipart::Part::bytes(bytes)
-            .file_name(format!("image-{idx}"))
-            .mime_str(&media_type)
-            .map_err(|e| format!("invalid image media type: {e}"))?;
-        form = form.part(field_name.to_string(), part);
+        fields.push(MultipartField::File {
+            name: field_name.to_string(),
+            filename: format!("image-{idx}"),
+            content_type: media_type,
+            bytes,
+        });
     }
 
+    Ok(fields)
+}
+
+pub fn form_from_fields(fields: Vec<MultipartField>) -> Result<reqwest::multipart::Form, String> {
+    let mut form = reqwest::multipart::Form::new();
+    for field in fields {
+        form = match field {
+            MultipartField::Text { name, value } => form.text(name, value),
+            MultipartField::File {
+                name,
+                filename,
+                content_type,
+                bytes,
+            } => {
+                let part = reqwest::multipart::Part::bytes(bytes)
+                    .file_name(filename)
+                    .mime_str(&content_type)
+                    .map_err(|e| format!("invalid image media type: {e}"))?;
+                form.part(name, part)
+            }
+        };
+    }
     Ok(form)
+}
+
+pub fn multipart_form(req: &UrpRequest, model: &str) -> Result<reqwest::multipart::Form, String> {
+    form_from_fields(multipart_fields(req, model)?)
 }
 
 fn user_prompt(req: &UrpRequest) -> String {

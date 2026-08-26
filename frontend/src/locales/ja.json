@@ -1001,6 +1001,7 @@
 			"copy": "コピー",
 			"copied": "コピーしました",
 			"empty": "コンテンツなし",
+			"imagePreview": "キャプチャ画像プレビュー",
 			"responseEmptyStream": "このストリームには再構成されたレスポンスがありません。「出力ストリーム」タブを確認してください。",
 			"expandChars": "展開（{{count}} 文字）",
 			"collapse": "折りたたむ",

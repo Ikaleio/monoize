@@ -51,6 +51,8 @@ OIU-E5e. All key-value pairs from `UrpRequest.extra_body` that pass whitelist fi
 
 OIU-E5f. If `UrpRequest.stream == Some(true)`, Monoize MUST include text field `stream` with value `true` in the upstream edit multipart body. If `UrpRequest.stream != Some(true)`, Monoize MUST NOT include a `stream` field in the upstream edit multipart body.
 
+OIU-E5g. When a request capture session is active for the attempt, the sent multipart body MUST be recorded as the attempt's `upstream_request` in the multipart capture representation of `request-capture-dumps.spec.md` RCD-D6a/RCD-D16, with part order, field names, file names, part content types, and part bytes equal to the sent form.
+
 ### 3.3 Extra Body Whitelist
 
 OIU-E6. The default extra body whitelist for `openai_image` MUST be: `size`, `quality`, `style`, `response_format`, `n`, `background`, `output_format`, `output_compression`, `moderation`, `user`.

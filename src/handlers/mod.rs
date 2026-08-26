@@ -263,7 +263,7 @@ pub async fn create_response(
             &state.monoize_runtime,
             &auth,
             request_id.clone(),
-            DownstreamProtocol::Responses,
+            DownstreamProtocol::Responses.into(),
             body.get("stream").and_then(Value::as_bool).unwrap_or(false),
         )
         .await;
@@ -354,7 +354,7 @@ pub async fn create_chat_completions(
             &state.monoize_runtime,
             &auth,
             request_id.clone(),
-            DownstreamProtocol::ChatCompletions,
+            DownstreamProtocol::ChatCompletions.into(),
             body.get("stream").and_then(Value::as_bool).unwrap_or(false),
         )
         .await;
@@ -443,7 +443,7 @@ async fn create_messages_inner(
             &state.monoize_runtime,
             &auth,
             request_id.clone(),
-            DownstreamProtocol::AnthropicMessages,
+            DownstreamProtocol::AnthropicMessages.into(),
             body.get("stream").and_then(Value::as_bool).unwrap_or(false),
         )
         .await;

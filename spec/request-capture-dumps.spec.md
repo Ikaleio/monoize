@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Purpose:** Persist opt-in per-request diagnostic dumps for API-key-authenticated forwarding requests.
-- **Scope:** Applies to API-key-authenticated URP forwarding endpoints `POST /v1/responses`, `POST /v1/chat/completions`, and `POST /v1/messages` (including their `/api` aliases).
+- **Scope:** Applies to API-key-authenticated URP forwarding endpoints `POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/images/generations`, and `POST /v1/images/edits` (including their `/api` aliases).
 - **Storage:** Dumps are filesystem files, not database rows.
 
 ## 1. Configuration
@@ -59,6 +59,8 @@ Each positive integer environment value replaces its default, except `MONOIZE_RE
 
 RCD-C15. The captured top-level `request_id` and every identifying string retained in an oversized-attempt placeholder MUST contain at most `256` UTF-8 bytes. Truncation MUST occur on a valid UTF-8 boundary and MUST increase `capture_truncation.omitted_bytes` for the top-level request id.
 
+RCD-C16. For the Image API endpoints (`image-api-proxy.spec.md`), the capture unit is one fan-out sub-request (IM14), not the downstream HTTP request. For each capture-eligible sub-request (RCD-C9 evaluated once per downstream request), Monoize MUST start one independent capture session whose captured `request_id` is the sub-request id: the downstream request id when `n == 1`, or `{request_id}:img:{i}` with the 0-based sub-request index `i` when `n > 1`, matching the sub-request's request-log row. Each sub-request session applies its RCD-C11/RCD-C12 persistence decision to its own attempts and writes at most one dump file. The assembled downstream Image API response envelope (`image-api-proxy.spec.md` §5.2) is not captured.
+
 ## 2. Directory and filename
 
 RCD-S1. Dumps MUST be written under a directory named `dumps` inside the Monoize data directory.
@@ -74,9 +76,13 @@ RCD-S5. The dump directory MUST be created before the first dump write if it doe
 RCD-S6. Each dump filename MUST have one of these shapes:
 
 ```text
-{request_id_prefix}_{utc_timestamp_ms}.json.zst   (zstd-compressed dump, RCD-Z1)
-{request_id_prefix}_{utc_timestamp_ms}.json       (uncompressed dump, RCD-Z4 fallback only)
+{request_id_prefix}_{utc_timestamp_ms}.json.zst       (zstd-compressed dump, RCD-Z1)
+{request_id_prefix}_{utc_timestamp_ms}_{k}.json.zst   (RCD-S6a collision disambiguation, k >= 1)
+{request_id_prefix}_{utc_timestamp_ms}.json           (uncompressed dump, RCD-Z4 fallback only)
+{request_id_prefix}_{utc_timestamp_ms}_{k}.json       (RCD-S6a fallback disambiguation, k >= 1)
 ```
+
+RCD-S6a. When the undisambiguated RCD-S6 filename already exists in the dump directory, the write MUST select the smallest integer `k >= 1` for which `{request_id_prefix}_{utc_timestamp_ms}_{k}` with the same extension does not exist. Final filename selection MUST be atomic against concurrent dump writes: two concurrent writes MUST NOT resolve to the same final filename, and a final-name file MUST never be observable in a partially written state. Precondition making this rule reachable: RCD-C16 fan-out sub-request sessions share one request-id prefix and can persist within the same millisecond.
 
 RCD-S7. `request_id_prefix` MUST be derived from the first eight Unicode scalar values of the Monoize request id when a request id is present.
 
@@ -86,7 +92,7 @@ RCD-S9. If a request id is absent or shorter than eight scalar values, `request_
 
 RCD-S10. `utc_timestamp_ms` MUST be a UTC timestamp with millisecond precision formatted as `YYYYMMDDTHHMMSSmmmZ`.
 
-RCD-S11. A dump write MUST use a temporary file followed by an atomic rename into the final filename when the operating system supports rename within the dump directory.
+RCD-S11. A dump write MUST fully write a temporary file first and then publish it under the final filename with one atomic filesystem operation that fails (rather than overwrites) when the final filename already exists, when the operating system supports such an operation within the dump directory; an `already exists` publication failure re-enters RCD-S6a name selection with the next `k`.
 
 RCD-S12. Dump write failure MUST be logged and MUST NOT change the HTTP response returned to the downstream client.
 
@@ -130,6 +136,10 @@ RCD-D2. A dump file MUST contain at least these top-level fields:
 
 RCD-D2a. Dump schema version 2 replaces version 1. Monoize MUST write only version-2 dumps. Version-1 files that already exist on disk are not migrated, are not registered in the capture metadata table (section 5), and are therefore unreachable through the capture detail API; orphan cleanup deletes them per RCD-R5a.
 
+RCD-D2b. `downstream_protocol` MUST be exactly one of: `responses`, `chat_completions`, `anthropic_messages`, `image_generations` (`POST /v1/images/generations` ingress), or `image_edits` (`POST /v1/images/edits` ingress).
+
+RCD-D2c. Dumps for Image API sub-requests MUST record `is_stream: false`, because the downstream Image API contract is non-streaming (`image-api-proxy.spec.md` CO1) regardless of the internal upstream transport.
+
 RCD-D3. Each `attempts[]` entry MUST contain:
 
 - `attempt_number: integer`
@@ -162,9 +172,15 @@ RCD-D3c. An oversized-attempt placeholder (RCD-D13) MUST store `transform_chain:
 
 RCD-D4. `raw_input` MUST be the parsed downstream JSON request body as received by the forwarding handler, before conversion to URP and before request transforms.
 
+RCD-D4a. For `POST /v1/images/edits`, whose downstream body is `multipart/form-data`, `raw_input` MUST instead be the RCD-D16 multipart capture object built from the fields the ingress parser consumed (`image-api-proxy.spec.md` §3.2), in wire order: every text field with its exact wire text (before JSON-type coercion), and every accepted file field (`image`, `image[]`, `mask`) with its raw part bytes. File fields the parser ignores (IE2) MUST NOT appear.
+
+RCD-D4b. When `n > 1` produces multiple Image API sub-request sessions (RCD-C16), every sub-request dump records the same `raw_input`: the one downstream body.
+
 RCD-D5. `transformed_urp_request` MUST be the URP request after provider request transforms, global request transforms, API-key request transforms, Monoize context removal, and reasoning-envelope upstream filtering.
 
 RCD-D6. `upstream_request` MUST be the provider-native JSON object sent as the upstream HTTP request body.
+
+RCD-D6a. When the upstream HTTP request body is `multipart/form-data` (an `openai_image` attempt with user-role image input, `openai-image-upstream.spec.md` OIU-E5a), `upstream_request` MUST instead be the RCD-D16 multipart capture object built from exactly the parts of the sent form, in part order, with the same field names, file names, part content types, and part bytes.
 
 RCD-D7. For a non-streaming upstream response, `downstream_response` MUST be the provider raw response JSON object returned by the upstream HTTP response body before Monoize decodes it to URP.
 
@@ -184,7 +200,9 @@ RCD-D10a. For a pass-through streaming response whose transformed URP stream (po
 
 This is the URP parser's non-stream reconstruction of the streamed result. It reflects the stream after response transforms, so it matches what the downstream client semantically received.
 
-RCD-D10b. `reconstructed_urp_response` MUST be null or absent when: the attempt is non-streaming (RCD-D7), the attempt is a buffered synthetic stream (RCD-D8, where `downstream_response` already holds the provider payload), the stream terminated without a `response_done` event, or the attempt is an oversized placeholder (RCD-D13).
+RCD-D10b. `reconstructed_urp_response` MUST be null or absent when: the attempt recorded a non-null `downstream_response` (RCD-D7 non-streaming and RCD-D8 buffered synthetic-stream attempts, where `downstream_response` already holds the provider payload), the stream terminated without a `response_done` event, or the attempt is an oversized placeholder (RCD-D13).
+
+RCD-D10c. A stream-collected attempt is an attempt whose downstream result is non-streaming but whose upstream transport was SSE collected inside Monoize: the non-stream collection path for `responses` and `openai_image` upstream attempts whose transformed request has `stream == true`, and the Image API sub-request path whose attempts all target `responses` providers (`image-api-proxy.spec.md` IM15). For a stream-collected attempt whose decoded URP stream (before response-phase transforms) emitted a terminal `response_done` event, `reconstructed_urp_response` MUST be that event serialized in the RCD-D10a shape. It therefore reflects the upstream artifact before response transforms, unlike RCD-D10a, because a stream-collected attempt has no `downstream_response` to fill that role. For a stream-collected attempt, `downstream_response` and `downstream_sse_frames` MUST be null or absent: upstream SSE frames are not downstream emissions and are not captured.
 
 RCD-D11. If an upstream call fails before a response body is available, the attempt entry MUST include `error` with at least `message` and `code` when available.
 
@@ -195,6 +213,37 @@ RCD-D13. One session MUST retain no more than the configured attempt count and n
 RCD-D14. One captured downstream SSE frame MUST retain no more than the configured frame byte count. One session MUST retain no more than the configured frame count and total session byte count. Truncation MUST occur on a valid UTF-8 boundary.
 
 RCD-D15. The top-level `capture_truncation` object MUST include `truncated`, `omitted_attempts`, `omitted_frames`, `omitted_bytes`, and `retained_bytes`. Each attempt whose frame list was truncated MUST include `downstream_sse_frames_truncation` with the corresponding omitted counts. An oversized-attempt placeholder that removes retained frames MUST preserve prior frame-omission counts, add the removed retained-frame count and byte count, and report zero retained frames and bytes. A non-truncated dump MUST include zero counts.
+
+RCD-D16. A multipart capture object is the JSON representation of one `multipart/form-data` body. It MUST have exactly this shape:
+
+```json
+{
+  "content_type": "multipart/form-data",
+  "parts": [ MultipartTextPart | MultipartFilePart, ... ]
+}
+```
+
+`parts[]` holds one entry per form part, in part order (wire order for RCD-D4a, sent order for RCD-D6a). A text part MUST be:
+
+```json
+{ "name": string, "text": string }
+```
+
+where `text` is the exact part text. A file part MUST be:
+
+```json
+{
+  "name": string,
+  "filename": string | null,
+  "part_content_type": string | null,
+  "byte_length": integer,
+  "data_base64": string
+}
+```
+
+where `filename` is the part's filename parameter (`null` when the part carried none), `part_content_type` is the part's `Content-Type` value (`null` when the part carried none), `data_base64` is the RFC 4648 standard (padded, non-URL-safe) base64 encoding of the exact part bytes, and `byte_length` is the decoded byte count. A part is a file part iff it contains `data_base64`.
+
+RCD-D17. Multimodal payload retention. Image, audio, and document payloads (base64 strings, `data:` URLs, remote URLs, and RCD-D16 file parts) contained in `raw_input`, `transformed_urp_request`, `upstream_request`, `downstream_response`, or `reconstructed_urp_response` MUST be retained exactly as they appear in the source body: capture MUST NOT truncate, recompress, resample, or replace a multimodal payload with a reference (this restates RCD-D12 for multimodal content). Within those JSON fields, the only mechanism that removes multimodal content is the RCD-D13 whole-attempt bound: an attempt either retains its bodies verbatim or is replaced by the oversized-attempt placeholder. Within captured SSE frames, the RCD-D14 per-frame byte bound applies to the frame string as an opaque whole and MAY cut through an embedded payload; the omission is accounted in `downstream_sse_frames_truncation`.
 
 ## 4. Retention cleanup and size rotation
 

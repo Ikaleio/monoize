@@ -471,6 +471,46 @@ function JsonLeaf({ value, t }: { value: unknown; t: Translate }) {
 	return <span className='italic text-muted-foreground'>null</span>
 }
 
+// RCV-F14a case 2: base64 image signatures with their preview media types.
+const IMAGE_BASE64_SIGNATURES: ReadonlyArray<readonly [string, string]> = [
+	['iVBORw0KGgo', 'image/png'],
+	['/9j/', 'image/jpeg'],
+	['R0lGOD', 'image/gif'],
+	['UklGR', 'image/webp']
+]
+const MIN_BASE64_IMAGE_LENGTH = 64
+const IMAGE_DATA_URL_PREFIX = /^data:image\/[a-zA-Z0-9.+-]+;base64,/
+
+// RCV-F14a: image-bearing detection inspects only the string prefix; no
+// full-string decode happens before render.
+function imagePreviewSource(value: string): string | null {
+	if (IMAGE_DATA_URL_PREFIX.test(value)) return value
+	if (value.length >= MIN_BASE64_IMAGE_LENGTH) {
+		for (const [signature, mediaType] of IMAGE_BASE64_SIGNATURES) {
+			if (value.startsWith(signature)) {
+				return `data:${mediaType};base64,${value}`
+			}
+		}
+	}
+	return null
+}
+
+// RCV-F14a: an undecodable payload collapses the preview without breaking
+// the surrounding tree.
+function ImagePreview({ src, t }: { src: string; t: Translate }) {
+	const [failed, setFailed] = useState(false)
+	if (failed) return null
+	return (
+		<img
+			src={src}
+			alt={t('requestLogs.capture.imagePreview')}
+			loading='lazy'
+			onError={() => setFailed(true)}
+			className='mt-1 block max-h-40 max-w-full rounded-md border border-border/60 bg-background/60 object-contain'
+		/>
+	)
+}
+
 // RCV-F14: long strings render truncated; expanding is a pure view state
 // change and never mutates the underlying dump data.
 function StringLeaf({ value, t }: { value: string; t: Translate }) {
@@ -478,6 +518,7 @@ function StringLeaf({ value, t }: { value: string; t: Translate }) {
 	const needsTruncation = value.length > STRING_TRUNCATE_LENGTH
 	const shown =
 		!needsTruncation || expanded ? value : value.slice(0, STRING_TRUNCATE_LENGTH)
+	const previewSrc = imagePreviewSource(value)
 
 	return (
 		<span className='whitespace-pre-wrap break-all text-success'>
@@ -495,6 +536,7 @@ function StringLeaf({ value, t }: { value: string; t: Translate }) {
 					:	t('requestLogs.capture.expandChars', { count: value.length })}
 				</button>
 			)}
+			{previewSrc && <ImagePreview src={previewSrc} t={t} />}
 		</span>
 	)
 }

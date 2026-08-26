@@ -1002,6 +1002,7 @@
 			"copy": "複製",
 			"copied": "已複製",
 			"empty": "無內容",
+			"imagePreview": "擷取圖片預覽",
 			"responseEmptyStream": "該串流請求沒有可重建的回應，請查看「輸出流」分頁。",
 			"expandChars": "展開（{{count}} 字元）",
 			"collapse": "收合",

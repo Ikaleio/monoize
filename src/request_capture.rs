@@ -204,6 +204,28 @@ impl std::fmt::Display for DumpReadError {
     }
 }
 
+/// RCD-D2b: the `downstream_protocol` value recorded in a dump. Image API
+/// ingress is not a `DownstreamProtocol` (its handlers reuse the Responses
+/// forwarding pipeline internally), so capture keeps its own protocol tag.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CaptureDownstreamProtocol {
+    Responses,
+    ChatCompletions,
+    AnthropicMessages,
+    ImageGenerations,
+    ImageEdits,
+}
+
+impl From<DownstreamProtocol> for CaptureDownstreamProtocol {
+    fn from(protocol: DownstreamProtocol) -> Self {
+        match protocol {
+            DownstreamProtocol::Responses => Self::Responses,
+            DownstreamProtocol::ChatCompletions => Self::ChatCompletions,
+            DownstreamProtocol::AnthropicMessages => Self::AnthropicMessages,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RequestCaptureSession {
     store: RequestCaptureStore,
@@ -211,7 +233,7 @@ pub(crate) struct RequestCaptureSession {
     created_at: chrono::DateTime<Utc>,
     api_key_id: String,
     user_id: String,
-    downstream_protocol: DownstreamProtocol,
+    downstream_protocol: CaptureDownstreamProtocol,
     is_stream: bool,
     mode: RequestCaptureMode,
     retention: RequestCaptureRetention,
@@ -286,6 +308,105 @@ pub(crate) fn build_transform_chain(
     Value::Array(chain)
 }
 
+/// One part of a captured `multipart/form-data` body (RCD-D16). Ingress
+/// captures (RCD-D4a) may lack a filename or a wire `Content-Type`; upstream
+/// captures (RCD-D6a) always carry both because the encoder sets them.
+pub(crate) enum CapturedMultipartPart {
+    Text {
+        name: String,
+        text: String,
+    },
+    File {
+        name: String,
+        filename: Option<String>,
+        content_type: Option<String>,
+        data_base64: String,
+        byte_length: usize,
+    },
+}
+
+/// RCD-D16: serialize captured multipart parts into the multipart capture
+/// object recorded in `raw_input` (RCD-D4a) or `upstream_request` (RCD-D6a).
+pub(crate) fn multipart_capture_object(parts: &[CapturedMultipartPart]) -> Value {
+    let parts: Vec<Value> = parts
+        .iter()
+        .map(|part| match part {
+            CapturedMultipartPart::Text { name, text } => json!({
+                "name": name,
+                "text": text,
+            }),
+            CapturedMultipartPart::File {
+                name,
+                filename,
+                content_type,
+                data_base64,
+                byte_length,
+            } => json!({
+                "name": name,
+                "filename": filename,
+                "part_content_type": content_type,
+                "byte_length": byte_length,
+                "data_base64": data_base64,
+            }),
+        })
+        .collect();
+    json!({
+        "content_type": "multipart/form-data",
+        "parts": parts,
+    })
+}
+
+/// RCD-D6a/OIU-E5g: build the multipart capture object for a sent
+/// `openai_image` edit form from the exact fields the form was built from,
+/// so the capture can never diverge from the wire body.
+pub(crate) fn multipart_capture_object_from_upstream_fields(
+    fields: &[crate::urp::encode::openai_image::MultipartField],
+) -> Value {
+    use base64::Engine as _;
+    use crate::urp::encode::openai_image::MultipartField;
+    let parts: Vec<CapturedMultipartPart> = fields
+        .iter()
+        .map(|field| match field {
+            MultipartField::Text { name, value } => CapturedMultipartPart::Text {
+                name: name.clone(),
+                text: value.clone(),
+            },
+            MultipartField::File {
+                name,
+                filename,
+                content_type,
+                bytes,
+            } => CapturedMultipartPart::File {
+                name: name.clone(),
+                filename: Some(filename.clone()),
+                content_type: Some(content_type.clone()),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                byte_length: bytes.len(),
+            },
+        })
+        .collect();
+    multipart_capture_object(&parts)
+}
+
+/// RCD-D10c: serialize a stream-collected URP response in the RCD-D10a shape
+/// `{finish_reason?, usage?, output, ...extra_body}`. The collected
+/// `UrpResponse` keeps the terminal event's `extra_body` unchanged, so this
+/// reproduces the reconstruction a pass-through stream tap would have stored.
+pub(crate) fn reconstructed_response_json(resp: &crate::urp::UrpResponse) -> Value {
+    let mut object = serde_json::Map::new();
+    if let Some(finish_reason) = &resp.finish_reason {
+        object.insert("finish_reason".to_string(), json!(finish_reason));
+    }
+    if let Some(usage) = &resp.usage {
+        object.insert("usage".to_string(), json!(usage));
+    }
+    object.insert("output".to_string(), json!(resp.output));
+    for (key, value) in &resp.extra_body {
+        object.insert(key.clone(), value.clone());
+    }
+    Value::Object(object)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_attempt_dump(
     attempt_number: u32,
@@ -356,12 +477,28 @@ impl RequestCaptureStore {
         &self.dump_dir
     }
 
+    /// RCD-C9 pre-check without starting a session. Handlers that must build
+    /// a capture-only `raw_input` representation before sessions exist (the
+    /// Image API multipart ingress, RCD-D4a) use this to skip that work
+    /// entirely when no session could start.
+    pub(crate) async fn would_start_session(
+        &self,
+        runtime: &RwLock<MonoizeRuntimeConfig>,
+        auth: &AuthResult,
+    ) -> bool {
+        let rt = runtime.read().await;
+        rt.request_capture_enabled
+            && auth.request_capture_mode.should_start_capture()
+            && auth.api_key_id.is_some()
+            && auth.user_id.is_some()
+    }
+
     pub(crate) async fn maybe_start_session(
         &self,
         runtime: &RwLock<MonoizeRuntimeConfig>,
         auth: &AuthResult,
         request_id: Option<String>,
-        downstream_protocol: DownstreamProtocol,
+        downstream_protocol: CaptureDownstreamProtocol,
         is_stream: bool,
     ) -> Option<RequestCaptureSession> {
         let rt = runtime.read().await;
@@ -1002,24 +1139,47 @@ impl RequestCaptureStore {
         let timestamp = created_at.format("%Y%m%dT%H%M%S%3fZ").to_string();
         let base_name = format!("{prefix}_{timestamp}");
         tokio::task::spawn_blocking(move || {
-            let (filename, payload) = match zstd::encode_all(&bytes[..], ZSTD_COMPRESSION_LEVEL) {
-                Ok(compressed) => (format!("{base_name}.json.zst"), compressed),
+            let (extension, payload) = match zstd::encode_all(&bytes[..], ZSTD_COMPRESSION_LEVEL) {
+                Ok(compressed) => (".json.zst", compressed),
                 Err(err) => {
                     tracing::warn!("zstd compression failed; storing raw capture dump: {err}");
-                    (format!("{base_name}.json"), bytes)
+                    (".json", bytes)
                 }
             };
             let size_bytes = payload.len() as i64;
             std::fs::create_dir_all(&*dump_dir).map_err(|err| err.to_string())?;
-            let final_path = dump_dir.join(&filename);
             // Appended (not `with_extension`) so multi-dot names survive; an
             // abandoned tmp file is bounded by RCD-R5a orphan cleanup.
             let tmp_path = dump_dir.join(format!(
-                "{filename}.tmp.{}",
+                "{base_name}{extension}.tmp.{}",
                 uuid::Uuid::new_v4().to_string().replace('-', "")
             ));
             std::fs::write(&tmp_path, payload).map_err(|err| err.to_string())?;
-            std::fs::rename(&tmp_path, &final_path).map_err(|err| err.to_string())?;
+            // RCD-S6a/RCD-S11: publish via hard_link, which atomically fails
+            // with AlreadyExists instead of overwriting. This is what keeps
+            // same-millisecond RCD-C16 fan-out sessions (same prefix, same
+            // timestamp) from silently destroying each other's dump.
+            let mut k: u32 = 0;
+            let filename = loop {
+                let candidate = if k == 0 {
+                    format!("{base_name}{extension}")
+                } else {
+                    format!("{base_name}_{k}{extension}")
+                };
+                match std::fs::hard_link(&tmp_path, dump_dir.join(&candidate)) {
+                    Ok(()) => break candidate,
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => k += 1,
+                    Err(_) => {
+                        // RCD-S11 fallback for filesystems without hard
+                        // links: plain rename, which can overwrite on a
+                        // same-name race but never exposes a partial file.
+                        std::fs::rename(&tmp_path, dump_dir.join(&candidate))
+                            .map_err(|err| err.to_string())?;
+                        return Ok((candidate, size_bytes));
+                    }
+                }
+            };
+            let _ = std::fs::remove_file(&tmp_path);
             Ok::<(String, i64), String>((filename, size_bytes))
         })
         .await
@@ -1049,11 +1209,13 @@ fn request_id_prefix(request_id: Option<&str>) -> String {
     }
 }
 
-fn downstream_protocol_name(protocol: DownstreamProtocol) -> &'static str {
+fn downstream_protocol_name(protocol: CaptureDownstreamProtocol) -> &'static str {
     match protocol {
-        DownstreamProtocol::Responses => "responses",
-        DownstreamProtocol::ChatCompletions => "chat_completions",
-        DownstreamProtocol::AnthropicMessages => "anthropic_messages",
+        CaptureDownstreamProtocol::Responses => "responses",
+        CaptureDownstreamProtocol::ChatCompletions => "chat_completions",
+        CaptureDownstreamProtocol::AnthropicMessages => "anthropic_messages",
+        CaptureDownstreamProtocol::ImageGenerations => "image_generations",
+        CaptureDownstreamProtocol::ImageEdits => "image_edits",
     }
 }
 
@@ -1368,7 +1530,7 @@ mod tests {
                     &runtime,
                     &test_auth(RequestCaptureMode::CaptureAll),
                     Some("req_12345678".to_string()),
-                    DownstreamProtocol::Responses,
+                    CaptureDownstreamProtocol::Responses,
                     false,
                 )
                 .await
@@ -1385,7 +1547,7 @@ mod tests {
                     &runtime,
                     &test_auth(RequestCaptureMode::Off),
                     Some("req_12345678".to_string()),
-                    DownstreamProtocol::Responses,
+                    CaptureDownstreamProtocol::Responses,
                     false,
                 )
                 .await
@@ -1398,7 +1560,7 @@ mod tests {
                     &runtime,
                     &test_auth(RequestCaptureMode::CaptureAll),
                     Some("req_12345678".to_string()),
-                    DownstreamProtocol::Responses,
+                    CaptureDownstreamProtocol::Responses,
                     false,
                 )
                 .await
@@ -1481,7 +1643,7 @@ mod tests {
                 &runtime,
                 &test_auth(RequestCaptureMode::CaptureAll),
                 Some("req_meta_1".to_string()),
-                DownstreamProtocol::Responses,
+                CaptureDownstreamProtocol::Responses,
                 false,
             )
             .await
@@ -1750,7 +1912,7 @@ mod tests {
                 &runtime,
                 &auth,
                 Some("req_ttl_5m".to_string()),
-                DownstreamProtocol::Responses,
+                CaptureDownstreamProtocol::Responses,
                 false,
             )
             .await
@@ -1847,7 +2009,7 @@ mod tests {
                 &runtime,
                 &test_auth(RequestCaptureMode::CaptureAll),
                 Some("request-id".repeat(100)),
-                DownstreamProtocol::Responses,
+                CaptureDownstreamProtocol::Responses,
                 true,
             )
             .await

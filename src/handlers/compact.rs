@@ -16,7 +16,7 @@ pub async fn compact_response(
             &state.monoize_runtime,
             &auth,
             request_id.clone(),
-            DownstreamProtocol::Responses,
+            DownstreamProtocol::Responses.into(),
             false,
         )
         .await;

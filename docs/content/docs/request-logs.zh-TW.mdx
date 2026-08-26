@@ -31,6 +31,16 @@ description: 閱讀日誌列表，開啟請求擷取，在擷取檢視器中檢�
    - `capture-all`：擷取每個到達上游的請求。
    - `capture-only-abnormal`：只擷取失敗或異常的請求。
 
+擷取適用於以下端點：`POST /v1/responses`、`POST /v1/chat/completions`、`POST /v1/messages`、`POST /v1/images/generations` 和 `POST /v1/images/edits`。
+
+### Image API 與多模態封包
+
+Image API 的每個子請求寫入一份擷取。當 `n` 大於 1 時，擷取的請求 ID 帶有後綴 `:img:{i}`，其中 `i` 是從 0 開始的子請求序號。
+
+Monoize 把 `multipart/form-data` 請求主體儲存為結構化 JSON 物件。物件按傳輸順序列出每個部分。文字部分記錄欄位名稱和文字。檔案部分記錄欄位名稱、檔案名稱、內容類型、位元組長度和 base64 資料。此規則同時適用於接收到的 `POST /v1/images/edits` 請求主體和傳送給 `openai_image` 上游的 multipart 表單。
+
+擷取按來源封包原樣保留圖像等多模態內容。Monoize 不做遮罩，也不重新編碼。
+
 ### 保留與輪替
 
 每個 API 金鑰設定 `request_capture_retention`：`5m`、`1h`、`24h` 或 `7d`。預設為 `24h`。擷取在該期限後過期。清理任務在程序啟動時執行一次，之後每小時執行一次，刪除已過期的擷取。
@@ -49,6 +59,8 @@ Monoize 在背景任務中用 zstd 壓縮新的擷取檔案，同時仍能讀取
 - **回應**：非串流的最終結果。對於串流請求，Monoize 顯示重建後的完整回應；
 - **輸出串流**：串流請求的原始 SSE 幀，帶語法突顯。僅當該次嘗試記錄了串流幀時才顯示此分頁；
 - 實際執行的變換鏈，包括範圍和順序。
+
+當字串包含圖像 data URL 或 base64 圖像資料時，檢視器在其下方顯示內嵌預覽。無法解碼的圖像資料會收合預覽，僅保留文字。
 
 `user` 角色只能檢視自己的擷取，且只能看到 API 金鑰範圍的變換條目。管理員可以檢視 `user` 角色帳戶的擷取。
 

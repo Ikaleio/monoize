@@ -106,8 +106,10 @@ async fn validate_terminal_server_tool_meters(
 /// RCD-D10a (`request-capture-dumps.spec.md`): between response transforms
 /// and downstream encoding, retain the terminal `response_done` event as the
 /// URP non-stream reconstruction `{finish_reason?, usage?, output, ...extra}`.
-/// This stage is only inserted when a capture session is active.
-async fn retain_reconstructed_urp_response(
+/// This stage is only inserted when a capture session is active. The Image
+/// API stream-collected path (RCD-D10c) reuses it between decode and response
+/// transforms instead.
+pub(super) async fn retain_reconstructed_urp_response(
     mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
     tx: mpsc::Sender<urp::UrpStreamEvent>,
     reconstructed: Arc<Mutex<Option<serde_json::Value>>>,
