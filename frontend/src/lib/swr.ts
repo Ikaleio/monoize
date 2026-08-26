@@ -240,7 +240,7 @@ export function usePriceSyncRuns(config?: SWRConfiguration) {
 }
 
 export function useMarketplaceModels(config?: SWRConfiguration) {
-  return useSWR<ModelMetadataRecord[]>(
+  return useSWR<MarketplaceModelRecord[]>(
     SWR_KEYS.MARKETPLACE_MODELS,
     fetchers.marketplaceModels,
     { ...defaultConfig, ...config }

@@ -570,6 +570,13 @@ export interface ModelMetadataRecord {
   updated_at: string;
 }
 
+// Marketplace rows join the enabled `model_prices` row on `model_id`
+// (model-marketplace.spec.md); prices are decimal USD-per-1M strings.
+export interface MarketplaceModelRecord extends ModelMetadataRecord {
+  input_usd_per_1m: string | null;
+  output_usd_per_1m: string | null;
+}
+
 export interface UpsertModelMetadataInput {
   source?: "manual" | "models_dev";
   models_dev_provider?: string | null;
@@ -579,10 +586,11 @@ export interface UpsertModelMetadataInput {
   max_tokens?: number | null;
 }
 
-export interface MarketplaceModelRecord extends ModelMetadataRecord {
-  billing_mode?: BillingMode;
-  input_usd_per_1m?: string;
-  output_usd_per_1m?: string;
+export interface ModelMetadataSyncResult {
+  success: boolean;
+  upserted: number;
+  skipped: number;
+  fetched_at: string;
 }
 
 export interface RequestLogProvider {

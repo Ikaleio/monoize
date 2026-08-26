@@ -197,8 +197,10 @@ pub async fn delete_model_metadata(
     Ok(Json(json!({ "success": true })))
 }
 
-/// Returns metadata and public price columns for models offered by an enabled provider.
-/// Requires login (any role), NOT admin-only.
+/// Returns model metadata only for models offered by at least one enabled provider.
+/// Requires login (any role), NOT admin-only. Each row carries
+/// `input_usd_per_1m` / `output_usd_per_1m` from the enabled `model_prices`
+/// row with the same `model_id`, or `null` when no such row exists.
 pub async fn list_marketplace_models(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -210,6 +212,30 @@ pub async fn list_marketplace_models(
         .list_marketplace_model_metadata()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let prices = state
+        .model_price_store
+        .list()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let price_by_id: std::collections::HashMap<&str, &crate::model_price_store::ModelPriceRecord> =
+        prices
+            .iter()
+            .filter(|price| price.enabled)
+            .map(|price| (price.model_id.as_str(), price))
+            .collect();
 
-    Ok(Json(metadata))
+    let rows: Vec<serde_json::Value> = metadata
+        .into_iter()
+        .map(|record| {
+            let price = price_by_id.get(record.model_id.as_str());
+            let mut value = serde_json::to_value(&record).unwrap_or_else(|_| json!({}));
+            value["input_usd_per_1m"] =
+                json!(price.and_then(|price| price.input_usd_per_1m.clone()));
+            value["output_usd_per_1m"] =
+                json!(price.and_then(|price| price.output_usd_per_1m.clone()));
+            value
+        })
+        .collect();
+
+    Ok(Json(rows))
 }

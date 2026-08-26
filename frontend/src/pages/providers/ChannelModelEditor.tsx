@@ -104,7 +104,7 @@ export function ChannelModelEditor({
 
 		const normalizedMultiplier = normalizeMultiplier(multiplier)
 		if (normalizedMultiplier == null) {
-			errors.multiplier = c('倍率必须是大于 0 的数字。', 'Multiplier must be a number greater than zero.')
+			errors.multiplier = c('倍率必须是不小于 0 的十进制数。0 表示免费。', 'Multiplier must be a decimal greater than or equal to zero. Zero means free.')
 		}
 
 		if (errors.model || errors.multiplier) {

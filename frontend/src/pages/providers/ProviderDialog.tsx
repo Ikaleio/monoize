@@ -288,7 +288,7 @@ export function ProviderDialog({
 				return c(`Channel ${index + 1} 存在空白或重复模型`, `Channel ${index + 1} has blank or duplicate models`)
 			}
 			if (channel.models.some(model => normalizeMultiplier(model.multiplier) == null)) {
-				return c(`Channel ${index + 1} 的倍率必须大于 0`, `Channel ${index + 1} multipliers must be greater than zero`)
+				return c(`Channel ${index + 1} 的倍率必须是不小于 0 的十进制数`, `Channel ${index + 1} multipliers must be decimals greater than or equal to zero`)
 			}
 		}
 		const invalidTransform = findFirstInvalidTransformRule(form.transforms, transformRegistry)

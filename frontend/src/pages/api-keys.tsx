@@ -58,7 +58,7 @@ function parseOptionalMultiplier(value: string): string | undefined {
   if (!value.trim()) return undefined;
   const normalized = normalizeMultiplier(value);
   if (normalized == null) {
-    throw new Error("Multiplier must be a positive decimal with at most 9 fractional digits");
+    throw new Error("Multiplier must be a non-negative decimal with at most 9 fractional digits");
   }
   return normalized;
 }

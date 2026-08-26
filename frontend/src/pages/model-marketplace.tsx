@@ -9,7 +9,11 @@ import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { DataTableShell, TableToolbarSearch, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { TableVirtuoso } from "react-virtuoso";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
+
+// MP-D2: `model_prices` values are exact decimal USD-per-1M strings.
+function usdPerMillion(value?: string | null): string {
+  return value == null || value === "" ? "-" : `$${value}`;
+}
 
 function formatTokens(tokens?: number | null): string {
   if (tokens == null) return "-";
@@ -102,8 +106,8 @@ export function ModelMarketplacePage() {
                   </tr>
                 )}
                 itemContent={(_index, record) => {
-                  const inputCost = record.input_usd_per_1m;
-                  const outputCost = record.output_usd_per_1m ?? inputCost;
+                  const inputCost = usdPerMillion(record.input_usd_per_1m);
+                  const outputCost = usdPerMillion(record.output_usd_per_1m);
 
                   return (
                     <>

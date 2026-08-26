@@ -12,6 +12,7 @@ export type TpsBasis = {
 export type BillingValueDimension =
 	| 'usageClass'
 	| 'unit'
+	| 'toolUnit'
 	| 'modality'
 	| 'cacheTtl'
 	| 'contextTier'
@@ -25,10 +26,12 @@ const BILLING_VALUE_TRANSLATION_KEYS: Record<
 		input_uncached: 'requestLogs.billingUsageInputUncached',
 		input_cached: 'requestLogs.billingUsageInputCached',
 		cache_read: 'requestLogs.billingUsageCacheRead',
+		cache_write: 'requestLogs.billingUsageCacheWrite',
 		cache_write_5m: 'requestLogs.billingUsageCacheWrite5m',
 		cache_write_1h: 'requestLogs.billingUsageCacheWrite1h',
 		output: 'requestLogs.billingUsageOutput',
 		reasoning_output: 'requestLogs.billingUsageReasoningOutput',
+		per_request: 'requestLogs.billingUsagePerRequest',
 		web_search: 'requestLogs.billingUsageWebSearch',
 		file_search_tool_call: 'requestLogs.billingUsageFileSearch',
 		x_search: 'requestLogs.billingUsageXSearch',
@@ -41,6 +44,12 @@ const BILLING_VALUE_TRANSLATION_KEYS: Record<
 		call: 'requestLogs.billingUnitCall',
 		request: 'requestLogs.billingUnitRequest',
 		billed_minute: 'requestLogs.billingUnitBilledMinute'
+	},
+	// model-pricing.spec.md MP-T2 tool price unit kinds.
+	toolUnit: {
+		'1k_calls': 'requestLogs.billingUnitPer1kCalls',
+		minute: 'requestLogs.billingUnitPerMinute',
+		session: 'requestLogs.billingUnitPerSession'
 	},
 	modality: {
 		text: 'requestLogs.billingModalityText',
