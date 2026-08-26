@@ -199,6 +199,7 @@ pub struct AppState {
     pub routing_config_revision: Arc<AtomicU64>,
     pub settings_update_lock: Arc<Mutex<()>>,
     pub model_registry_store: ModelRegistryStore,
+    pub model_price_store: crate::model_price_store::ModelPriceStore,
     pub billing_rate_store: BillingRateStore,
     pub transform_registry: Arc<TransformRegistry>,
     pub cap_verifier: CapVerifier,
@@ -423,6 +424,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             err,
         )
     })?;
+    let model_price_store = crate::model_price_store::ModelPriceStore::new(db.clone());
     let billing_rate_store = BillingRateStore::new(db.clone()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
@@ -961,6 +963,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         routing_config_revision,
         settings_update_lock,
         model_registry_store,
+        model_price_store,
         billing_rate_store,
         transform_registry,
         cap_verifier,
@@ -2212,6 +2215,23 @@ fn build_dashboard_api_router() -> Router<AppState> {
             get(crate::dashboard_handlers::get_model_metadata)
                 .put(crate::dashboard_handlers::upsert_model_metadata)
                 .delete(crate::dashboard_handlers::delete_model_metadata),
+        )
+        .route(
+            "/dashboard/model-prices",
+            get(crate::dashboard_handlers::list_model_prices),
+        )
+        .route(
+            "/dashboard/model-prices/unpriced",
+            get(crate::dashboard_handlers::list_unpriced_models),
+        )
+        .route(
+            "/dashboard/price-sync/runs",
+            get(crate::dashboard_handlers::list_price_sync_runs),
+        )
+        .route(
+            "/dashboard/model-prices/{*model_id}",
+            put(crate::dashboard_handlers::upsert_model_price)
+                .delete(crate::dashboard_handlers::delete_model_price),
         )
         .route(
             "/dashboard/providers/{provider_id}/channels/{channel_id}/test",

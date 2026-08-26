@@ -529,6 +529,8 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "fisx-style-image-test".to_string(),
             api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
                 pattern: "gpt-image-test".to_string(),

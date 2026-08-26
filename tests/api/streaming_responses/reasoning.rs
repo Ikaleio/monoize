@@ -83,6 +83,8 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "mono-empty-reasoning-filter".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
@@ -308,6 +310,8 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         },
     );
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        allow_free_when_unpriced_override: None,
+        allow_free_when_missing_usage_override: None,
         name: "mono-transform-strip".to_string(),
         api_type_overrides: Vec::new(),
         group_ids: Vec::new(),
@@ -408,6 +412,8 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         },
     );
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        allow_free_when_unpriced_override: None,
+        allow_free_when_missing_usage_override: None,
         name: "mono-transform-sse-split".to_string(),
         api_type_overrides: Vec::new(),
         group_ids: Vec::new(),
@@ -581,6 +587,8 @@ async fn responses_streaming_chat_reasoning_content_emits_single_reasoning_lifec
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "mono-raw-cot-dedup".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),

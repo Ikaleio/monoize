@@ -276,6 +276,8 @@ async fn channel_extra_headers_are_sent_to_upstream() {
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "up-cf-affinity".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
@@ -365,6 +367,8 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "up-cf-auto-affinity".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),

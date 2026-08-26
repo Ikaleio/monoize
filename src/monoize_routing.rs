@@ -189,6 +189,9 @@ pub struct MonoizeProvider {
     pub strip_cross_protocol_nested_extra: Option<bool>,
     #[serde(default)]
     pub group_ids: Vec<String>,
+    /// MP-D11/MP-D12 (`model-pricing.spec.md`): NULL inherits the global setting.
+    pub allow_free_when_unpriced_override: Option<bool>,
+    pub allow_free_when_missing_usage_override: Option<bool>,
     pub enabled: bool,
     pub priority: i32,
     pub created_at: DateTime<Utc>,
@@ -275,6 +278,10 @@ pub struct CreateMonoizeProviderInput {
     pub strip_cross_protocol_nested_extra: Option<bool>,
     #[serde(default)]
     pub group_ids: Vec<String>,
+    #[serde(default)]
+    pub allow_free_when_unpriced_override: Option<bool>,
+    #[serde(default)]
+    pub allow_free_when_missing_usage_override: Option<bool>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub priority: Option<i32>,
@@ -300,6 +307,8 @@ pub struct UpdateMonoizeProviderInput {
     pub extra_fields_whitelist: Option<Option<Vec<String>>>,
     pub strip_cross_protocol_nested_extra: Option<Option<bool>>,
     pub group_ids: Option<Vec<String>>,
+    pub allow_free_when_unpriced_override: Option<Option<bool>>,
+    pub allow_free_when_missing_usage_override: Option<Option<bool>>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
 }
@@ -1027,6 +1036,29 @@ fn decode_provider_row(
             row.try_get::<Option<String>>("", "group_ids")
                 .map_err(|e| format!("provider {id} invalid group_ids column: {e}"))?,
         )?,
+        allow_free_when_unpriced_override: row
+            .try_get::<Option<i32>>("", "allow_free_when_unpriced_override")
+            .map_err(|e| {
+                format!("provider {id} invalid allow_free_when_unpriced_override column: {e}")
+            })?
+            .map(|value| {
+                decode_database_bool("provider", &id, "allow_free_when_unpriced_override", value)
+            })
+            .transpose()?,
+        allow_free_when_missing_usage_override: row
+            .try_get::<Option<i32>>("", "allow_free_when_missing_usage_override")
+            .map_err(|e| {
+                format!("provider {id} invalid allow_free_when_missing_usage_override column: {e}")
+            })?
+            .map(|value| {
+                decode_database_bool(
+                    "provider",
+                    &id,
+                    "allow_free_when_missing_usage_override",
+                    value,
+                )
+            })
+            .transpose()?,
         enabled: decode_database_bool(
             "provider",
             &id,
@@ -1291,6 +1323,8 @@ impl MonoizeRoutingStore {
                           active_probe_success_threshold_override, active_probe_model_override,
                           request_timeout_ms_override, extra_fields_whitelist,
                           strip_cross_protocol_nested_extra, group_ids,
+                          allow_free_when_unpriced_override,
+                          allow_free_when_missing_usage_override,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    ORDER BY priority ASC, created_at ASC"#,
@@ -1388,6 +1422,8 @@ impl MonoizeRoutingStore {
                           p.active_probe_success_threshold_override, p.active_probe_model_override,
                           p.request_timeout_ms_override, p.extra_fields_whitelist,
                           p.strip_cross_protocol_nested_extra, p.group_ids,
+                          p.allow_free_when_unpriced_override,
+                          p.allow_free_when_missing_usage_override,
                           p.enabled, p.priority, p.created_at, p.updated_at
                    FROM monoize_providers p
                    JOIN monoize_channels c ON c.provider_id = p.id
@@ -1465,6 +1501,8 @@ impl MonoizeRoutingStore {
                           active_probe_success_threshold_override, active_probe_model_override,
                           request_timeout_ms_override, extra_fields_whitelist,
                           strip_cross_protocol_nested_extra, group_ids,
+                          allow_free_when_unpriced_override,
+                          allow_free_when_missing_usage_override,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    WHERE circuit_breaker_enabled = 1
@@ -1595,6 +1633,8 @@ impl MonoizeRoutingStore {
                           active_probe_success_threshold_override, active_probe_model_override,
                           request_timeout_ms_override, extra_fields_whitelist,
                           strip_cross_protocol_nested_extra, group_ids,
+                          allow_free_when_unpriced_override,
+                          allow_free_when_missing_usage_override,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    WHERE id = $1"#,
@@ -1708,8 +1748,10 @@ impl MonoizeRoutingStore {
                         active_probe_success_threshold_override, active_probe_model_override,
                         request_timeout_ms_override, extra_fields_whitelist,
                         strip_cross_protocol_nested_extra, group_ids,
+                        allow_free_when_unpriced_override,
+                        allow_free_when_missing_usage_override,
                         enabled, priority, created_at, updated_at
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)"#,
                 vec![
                         id.clone().into(),
                         input.name.clone().into(),
@@ -1732,6 +1774,8 @@ impl MonoizeRoutingStore {
                         extra_fields_whitelist_json.into(),
                         opt_bool_to_value(strip_cross_proto),
                         group_ids_json.into(),
+                        opt_bool_to_value(input.allow_free_when_unpriced_override),
+                        opt_bool_to_value(input.allow_free_when_missing_usage_override),
                         SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
                         SeaValue::Int(Some(priority)),
                         now.to_rfc3339().into(),
@@ -1879,6 +1923,15 @@ impl MonoizeRoutingStore {
             push_value(
                 "group_ids",
                 serialize_provider_group_ids_json(&resolved)?.into(),
+            );
+        }
+        if let Some(value) = input.allow_free_when_unpriced_override {
+            push_value("allow_free_when_unpriced_override", opt_bool_to_value(value));
+        }
+        if let Some(value) = input.allow_free_when_missing_usage_override {
+            push_value(
+                "allow_free_when_missing_usage_override",
+                opt_bool_to_value(value),
             );
         }
         if let Some(value) = input.enabled {

@@ -1285,6 +1285,8 @@ mod tests {
 
     fn test_provider_input(base_url: String) -> CreateMonoizeProviderInput {
         CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "provider".to_string(),
             enabled: true,
             priority: Some(0),

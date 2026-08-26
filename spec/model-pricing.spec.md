@@ -501,6 +501,10 @@ MP-Y2. The `new_api` source is configured through system settings
 settings read APIs once set; reads return `""` for an unset token and `"__set__"`
 otherwise.
 
+MP-Y2a. Settings writes handle the token field as: value `"__set__"` keeps the stored
+token unchanged; value `""` clears the stored token; any other string replaces the
+stored token. This makes a read-modify-write settings round trip lossless.
+
 MP-Y3. Fetch timeout is 30 seconds. A fetch or parse failure finalizes the
 `price_sync_runs` row with `status = "failed"` and returns HTTP `502` with code
 `upstream_fetch_failed`.

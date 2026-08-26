@@ -49,6 +49,18 @@ pub struct UpdateSettingsRequest {
     pub monoize_affinity_idle_ttl_seconds: Option<u64>,
     pub monoize_affinity_failback_mode: Option<AffinityFailbackMode>,
     pub monoize_affinity_failback_delay_seconds: Option<u64>,
+    pub allow_free_when_unpriced: Option<bool>,
+    pub allow_free_when_missing_usage: Option<bool>,
+    pub tool_prices: Option<serde_json::Value>,
+    pub price_sync_new_api_base_url: Option<String>,
+    pub price_sync_new_api_token: Option<String>,
+}
+
+/// MP-Y2: read APIs never return a stored token; `""` = unset, `"__set__"` = set.
+fn mask_price_sync_token(settings: &mut crate::settings::SystemSettings) {
+    if !settings.price_sync_new_api_token.is_empty() {
+        settings.price_sync_new_api_token = "__set__".to_string();
+    }
 }
 
 pub async fn get_settings(
@@ -59,10 +71,11 @@ pub async fn get_settings(
 
     let settings_store = &state.settings_store;
 
-    let settings = settings_store
+    let mut settings = settings_store
         .get_all()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    mask_price_sync_token(&mut settings);
 
     Ok(Json(settings))
 }
@@ -229,6 +242,27 @@ pub async fn update_settings(
     if let Some(v) = body.monoize_affinity_failback_delay_seconds {
         settings.monoize_affinity_failback_delay_seconds = v;
     }
+    if let Some(v) = body.allow_free_when_unpriced {
+        settings.allow_free_when_unpriced = v;
+    }
+    if let Some(v) = body.allow_free_when_missing_usage {
+        settings.allow_free_when_missing_usage = v;
+    }
+    if let Some(v) = body.tool_prices {
+        crate::settings::validate_tool_prices(&v).map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        })?;
+        settings.tool_prices = v;
+    }
+    if let Some(v) = body.price_sync_new_api_base_url {
+        settings.price_sync_new_api_base_url = v.trim().to_string();
+    }
+    // MP-Y2a: "__set__" keeps the stored token, "" clears it, else replace.
+    if let Some(v) = body.price_sync_new_api_token
+        && v != "__set__"
+    {
+        settings.price_sync_new_api_token = v;
+    }
 
     let updated = settings_store
         .update_all(&settings)
@@ -296,6 +330,8 @@ pub async fn update_settings(
         state.channel_health.lock().await.clear();
     }
 
+    let mut updated = updated;
+    mask_price_sync_token(&mut updated);
     Ok(Json(updated))
 }
 
