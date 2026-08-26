@@ -26,7 +26,8 @@
 		"creating": "Creating...",
 		"deleting": "Deleting...",
 		"add": "Add",
-		"refresh": "Refresh"
+		"refresh": "Refresh",
+		"unavailable": "Unavailable"
 	},
 	"auth": {
 		"signIn": "Sign In",
@@ -431,7 +432,12 @@
 		"dashboardPerformanceTitle": "Home performance targets",
 		"dashboardPerformanceDescription": "Choose groups and models shown on the user dashboard performance panel. Metrics are global aggregates for the last 24 hours.",
 		"dashboardPerformanceGroups": "Groups",
-		"dashboardPerformanceModels": "Models"
+		"dashboardPerformanceModels": "Models",
+		"dashboardPerformanceModelsSelected": "{{count}} selected",
+		"dashboardPerformanceModelsSearch": "Search models",
+		"dashboardPerformanceModelsLoadFailed": "Failed to load models",
+		"dashboardPerformanceModelsEmpty": "No models",
+		"dashboardPerformanceModelsEmptyDescription": "Enable a Channel with models, or clear the search."
 	},
 	"providers": {
 		"title": "Providers",

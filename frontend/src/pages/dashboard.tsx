@@ -1,223 +1,38 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { AlertTriangle, ChevronUp, ChevronDown } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-  type ChartConfig,
-} from "@/components/ui/chart";
 import { useAuth } from "@/hooks/use-auth";
-import { type DashboardAnalyticsBucket } from "@/lib/api";
-import { useDashboardAnalytics, useProviders, usePublicSettings, useRequestLogs } from "@/lib/swr";
-import { cn } from "@/lib/utils";
-import { PageWrapper, motion, transitions, springs, SharedTabIndicator } from "@/components/ui/motion";
-import { EmptyState } from "@/components/ui/empty-state";
-import { PageHeader } from "@/components/ui/page-header";
-import { CardsPageSkeleton } from "@/components/ui/page-skeleton";
-import { toast } from "sonner";
 import {
-  formatNanoUsd,
-  formatUsdDecimal,
-  nanoUsdToChartNumber,
-} from "@/lib/exact-decimal";
+  useDashboardAnalytics,
+  useDashboardPerformance,
+  usePublicSettings,
+  useRequestLogs,
+} from "@/lib/swr";
+import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AccountStrip } from "./dashboard/account-strip";
+import { UsageChartPanel } from "./dashboard/usage-chart";
+import { RecentUsagePanel } from "./dashboard/recent-usage";
+import { ApiInfoPanel } from "./dashboard/api-info-panel";
+import { PerformancePanel } from "./dashboard/performance-panel";
 
-type AnalysisTabId = "spendDistribution" | "callDistribution" | "callRank";
-
-interface MetricRow {
-  key: string;
-  label: string;
-  value: string;
-}
-
-interface OverviewCardData {
-  key: string;
-  title: string;
-  metrics: MetricRow[];
-}
-
-interface StackedBucketRow {
-  label: string;
-  [modelKey: string]: number | string;
-}
-
-interface AnalysisData {
-  rows: StackedBucketRow[];
-  models: string[];
-  total: bigint;
-  valueType: "money" | "count";
-  metricTitle: string;
-}
-
-const ANALYSIS_TABS: Array<{ id: AnalysisTabId; i18nKey: string; fallback: string }> = [
-  { id: "spendDistribution", i18nKey: "dashboard.analysisTabs.spendDistribution", fallback: "Spend Distribution" },
-  { id: "callDistribution", i18nKey: "dashboard.analysisTabs.callDistribution", fallback: "Call Distribution" },
-  { id: "callRank", i18nKey: "dashboard.analysisTabs.callRank", fallback: "Call Ranking" },
-];
-
-function formatNumber(value: number): string {
-  return value.toLocaleString("en-US");
-}
-
-function formatChartMoney(value: number): string {
-  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-const CHART_COLORS = Array.from(
-  { length: 16 },
-  (_, index) => `hsl(var(--chart-${index + 1}))`
-);
-
-/** Stable hash → palette index so the same model always gets the same color. */
-function modelToColor(modelId: string): string {
-  let hash = 0;
-  for (let i = 0; i < modelId.length; i++) {
-    hash = ((hash << 5) - hash + modelId.charCodeAt(i)) | 0;
-  }
-  return CHART_COLORS[((hash % CHART_COLORS.length) + CHART_COLORS.length) % CHART_COLORS.length];
-}
-
-function OverviewCard({
-  card,
-  index,
-}: {
-  card: OverviewCardData;
-  index: number;
-}) {
+function GreetingSkeleton() {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 22, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ delay: 0.08 * index, ...transitions.normal }}
-      whileHover={{ y: -1, transition: springs.snappy }}
-      className="h-full"
-    >
-      <Card className="h-full">
-        <CardHeader className="p-4 pb-2">
-          <CardTitle className="text-lg">{card.title}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2.5 p-4 pt-0">
-          {card.metrics.map((metric) => {
-            return (
-              <div
-                key={metric.key}
-                className="rounded-lg border bg-muted/25 px-3 py-2"
-              >
-                <p className="truncate text-xs text-muted-foreground">{metric.label}</p>
-                <p className="truncate text-xl font-semibold leading-tight">{metric.value}</p>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-    </motion.div>
-  );
-}
-
-const LEGEND_PAGE_SIZE = 4;
-
-function PaginatedChartLegend({
-  items,
-}: {
-  items: Array<{ key: string; label: string; color: string }>;
-}) {
-  const [page, setPage] = useState(0);
-  const totalPages = Math.ceil(items.length / LEGEND_PAGE_SIZE);
-  const visible = items.slice(page * LEGEND_PAGE_SIZE, (page + 1) * LEGEND_PAGE_SIZE);
-
-  return (
-    <div className="flex items-center justify-center gap-3 pt-3">
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
-        {visible.map((item) => (
-          <div key={item.key} className="flex items-center gap-1.5">
-            <div
-              className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
-              style={{ backgroundColor: item.color }}
-            />
-            <span className="text-xs text-muted-foreground">{item.label}</span>
-          </div>
-        ))}
-      </div>
-      {totalPages > 1 && (
-        <div className="flex flex-col items-center gap-0.5 text-muted-foreground">
-          <button
-            disabled={page === 0}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            className="disabled:opacity-30"
-          >
-            <ChevronUp className="h-3.5 w-3.5" />
-          </button>
-          <span className="text-xs tabular-nums leading-none">
-            {page + 1}/{totalPages}
-          </span>
-          <button
-            disabled={page >= totalPages - 1}
-            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-            className="disabled:opacity-30"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
+    <div className="space-y-2">
+      <Skeleton className="h-9 w-64" />
+      <Skeleton className="h-4 w-80" />
     </div>
-  );
-}
-
-function DashboardSkeleton() {
-  return (
-    <CardsPageSkeleton />
   );
 }
 
 export function DashboardPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<AnalysisTabId>("spendDistribution");
 
-  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
-  const { error: providersError, isLoading: providersLoading } = useProviders({
-    isPaused: () => !isAdmin,
-    revalidateOnMount: isAdmin,
-  });
-  const { data: requestLogsResponse, isLoading: logsLoading } = useRequestLogs(400, 0);
-  const { data: summaryAnalytics, isLoading: summaryAnalyticsLoading } = useDashboardAnalytics(8, 720);
-  const { data: analysisAnalytics, isLoading: analysisAnalyticsLoading } = useDashboardAnalytics(8, 24);
+  const { data: usageAnalytics, isLoading: usageLoading } = useDashboardAnalytics(7, 168);
+  const { data: requestLogsResponse, isLoading: logsLoading } = useRequestLogs(200, 0);
   const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
-
-  const rawLogs = useMemo(() => requestLogsResponse?.data ?? [], [requestLogsResponse?.data]);
-  const totalRequests = requestLogsResponse?.total ?? 0;
-
-  const perfStats = useMemo(() => {
-    let successCount = 0;
-    let ttfbSum = 0;
-    let ttfbCount = 0;
-
-    for (const log of rawLogs) {
-      if (log.status === "success" || log.status === "client_gone") successCount++;
-      const ttfbMs = Number(log.timing?.ttfb_ms);
-      if (Number.isFinite(ttfbMs) && ttfbMs > 0) {
-        ttfbSum += ttfbMs;
-        ttfbCount++;
-      }
-    }
-
-    const successRate = rawLogs.length > 0
-      ? Math.round((successCount / rawLogs.length) * 100)
-      : 0;
-    const avgTtfb = ttfbCount > 0
-      ? Math.round(ttfbSum / ttfbCount)
-      : 0;
-
-    return { successRate, avgTtfb };
-  }, [rawLogs]);
-
-  const loading = logsLoading
-    || summaryAnalyticsLoading
-    || analysisAnalyticsLoading
-    || publicSettingsLoading
-    || (isAdmin && providersLoading);
+  const { data: performance, isLoading: performanceLoading } = useDashboardPerformance();
 
   const tt = useCallback(
     (key: string, fallback: string, options?: Record<string, unknown>): string => {
@@ -227,393 +42,46 @@ export function DashboardPage() {
     [t]
   );
 
-  const overviewCards = useMemo<OverviewCardData[]>(
-    () => [
-      {
-        key: "account",
-        title: tt("dashboard.cards.accountData", "Account Data"),
-        metrics: [
-          {
-            key: "balance",
-            label: tt("dashboard.cards.currentBalance", "Current Balance"),
-            value: user?.balance_unlimited
-              ? tt("users.unlimited", "Unlimited")
-              : formatUsdDecimal(user?.balance_usd, 2),
-          },
-          {
-            key: "subscription",
-            label: tt("dashboard.cards.subscription", "Subscription"),
-            value: (() => {
-              const plan = user?.billing_plan;
-              if (!plan) return tt("dashboard.cards.noPlan", "No plan");
-              const amount = formatUsdDecimal(plan.grant_amount_usd, 2);
-              const label = `${plan.name} · ${amount}/${plan.schedule}`;
-              return plan.enabled
-                ? label
-                : `${label} (${tt("common.disabled", "Disabled")})`;
-            })(),
-          },
-        ],
-      },
-      {
-        key: "requests",
-        title: tt("dashboard.cards.requestOverview", "Request Overview"),
-        metrics: [
-          {
-            key: "totalRequests",
-            label: tt("dashboard.cards.totalRequests", "30d Requests"),
-            value: formatNumber(summaryAnalytics?.total_calls ?? totalRequests),
-          },
-          {
-            key: "todayRequests",
-            label: tt("dashboard.cards.todayRequests", "Today's Requests"),
-            value: formatNumber(summaryAnalytics?.today_calls ?? 0),
-          },
-        ],
-      },
-      {
-        key: "cost",
-        title: tt("dashboard.cards.costOverview", "Cost Overview"),
-        metrics: [
-          {
-            key: "totalSpend",
-            label: tt("dashboard.cards.totalSpend", "30d Spend"),
-            value: formatNanoUsd(summaryAnalytics?.total_cost_nano_usd, 2),
-          },
-          {
-            key: "todaySpend",
-            label: tt("dashboard.cards.todaySpend", "Today's Spend"),
-            value: formatNanoUsd(summaryAnalytics?.today_cost_nano_usd, 2),
-          },
-        ],
-      },
-      {
-        key: "perf",
-        title: tt("dashboard.cards.performance", "Performance Metrics"),
-        metrics: [
-          {
-            key: "avgTtfb",
-            label: tt("dashboard.cards.avgTtfb", "Average TTFB"),
-            value: `${formatNumber(perfStats.avgTtfb)} ms`,
-          },
-          {
-            key: "successRate",
-            label: tt("dashboard.cards.successRate", "Success Rate"),
-            value: `${perfStats.successRate}%`,
-          },
-        ],
-      },
-    ],
-    [
-      summaryAnalytics,
-      perfStats,
-      totalRequests,
-      user?.balance_usd,
-      user?.balance_unlimited,
-      user?.billing_plan,
-      tt,
-    ]
-  );
-
-  const analysisData = useMemo<AnalysisData>(() => {
-    const base: AnalysisData = {
-      rows: [],
-      models: [],
-      total: 0n,
-      valueType: (activeTab === "spendDistribution" ? "money" : "count"),
-      metricTitle:
-        activeTab === "callRank"
-          ? tt("dashboard.calls", "Calls")
-          : tt("dashboard.value", "Value"),
-    };
-
-    if (!analysisAnalytics?.buckets?.length) return base;
-
-    const getBucketMap = (bucket: DashboardAnalyticsBucket): Record<string, string | number> => {
-      if (activeTab === "spendDistribution") return bucket.cost_by_model;
-      if (activeTab === "callDistribution") return bucket.calls_by_model;
-      return bucket.calls_by_provider;
-    };
-
-    const modelTotals = new Map<string, bigint>();
-    for (const bucket of analysisAnalytics.buckets) {
-      const map = getBucketMap(bucket);
-      for (const [key, val] of Object.entries(map)) {
-        const exact = BigInt(val);
-        modelTotals.set(key, (modelTotals.get(key) ?? 0n) + exact);
-      }
-    }
-
-    const models = [...modelTotals.entries()]
-      .filter(([, v]) => v > 0n)
-      .sort((a, b) => a[1] === b[1] ? 0 : a[1] > b[1] ? -1 : 1)
-      .map(([k]) => k);
-
-    const rows: StackedBucketRow[] = analysisAnalytics.buckets.map((bucket) => {
-      const row: StackedBucketRow = { label: bucket.label };
-      const map = getBucketMap(bucket);
-      for (const model of models) {
-        const raw = map[model] ?? (base.valueType === "money" ? "0" : 0);
-        row[model] = base.valueType === "money" ? nanoUsdToChartNumber(String(raw)) : Number(raw);
-      }
-      return row;
-    });
-
-    const total = [...modelTotals.values()].reduce((sum, value) => sum + value, 0n);
-    return { ...base, rows, models, total };
-  }, [activeTab, analysisAnalytics, tt]);
-
-  const analysisTotalDisplay =
-    analysisData.valueType === "money"
-      ? formatNanoUsd(analysisData.total, 2)
-      : analysisData.total.toLocaleString("en-US");
-
-  const activeTabMeta = ANALYSIS_TABS.find((tab) => tab.id === activeTab) ?? ANALYSIS_TABS[0];
-  const analysisHeading = tt(activeTabMeta.i18nKey, activeTabMeta.fallback);
-
-  const analysisChartConfig = useMemo<ChartConfig>(() => {
-    const cfg: ChartConfig = {};
-    for (const model of analysisData.models) {
-      cfg[model] = {
-        label: model,
-        color: modelToColor(model),
-      };
-    }
-    return cfg;
-  }, [analysisData.models]);
-
-  const legendItems = useMemo(
-    () =>
-      analysisData.models.map((model) => ({
-        key: model,
-        label: model,
-        color: modelToColor(model),
-      })),
-    [analysisData.models]
-  );
-
-  const formatAnalysisValue = (value: number): string =>
-    analysisData.valueType === "money" ? formatChartMoney(value) : formatNumber(Math.round(value));
-
-  if (loading) {
-    return (
-      <PageWrapper className="h-full min-h-0 overflow-hidden space-y-4">
-        <DashboardSkeleton />
-      </PageWrapper>
-    );
-  }
+  const logs = requestLogsResponse?.data ?? [];
+  const userLoading = !user;
 
   return (
-    <PageWrapper className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+    <PageWrapper className="flex min-h-0 flex-col gap-4 pb-6">
       <motion.header
         initial={{ opacity: 0, y: -12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
         className="shrink-0"
       >
-        <PageHeader
-          title={tt("dashboard.greeting", "Good afternoon, {{username}}", { username: user?.username ?? "User" })}
-          description={tt("dashboard.subtitle", "Realtime overview of account status, usage and routing data")}
-        />
+        {userLoading ? (
+          <GreetingSkeleton />
+        ) : (
+          <PageHeader
+            title={tt("dashboard.greeting", "Good afternoon, {{username}}", {
+              username: user?.username ?? "User",
+            })}
+            description={tt(
+              "dashboard.subtitle",
+              "Account, usage, API, and platform performance at a glance"
+            )}
+          />
+        )}
       </motion.header>
 
-      {isAdmin && providersError ? (
-        <EmptyState
-          variant="card"
-          icon={<AlertTriangle className="h-8 w-8 text-destructive" />}
-          title={tt("dashboard.providersLoadFailed", "Failed to load providers")}
-          description={
-            <span className="font-mono text-xs break-all">
-              {providersError instanceof Error ? providersError.message : tt("common.error", "Error")}
-            </span>
-          }
-          className="shrink-0 py-4"
-        />
-      ) : null}
+      <AccountStrip user={user} loading={userLoading} />
 
-      <section className="shrink-0 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {overviewCards.map((card, index) => (
-          <OverviewCard key={card.key} card={card} index={index} />
-        ))}
+      <UsageChartPanel analytics={usageAnalytics} loading={usageLoading} />
+
+      <section className="grid min-h-0 items-stretch gap-4 lg:grid-cols-3">
+        <div className="min-h-0 lg:col-span-2">
+          <RecentUsagePanel logs={logs} loading={logsLoading} />
+        </div>
+        <div className="min-h-0">
+          <ApiInfoPanel settings={publicSettings} loading={publicSettingsLoading} />
+        </div>
       </section>
 
-      <section className="grid min-h-0 flex-1 items-stretch gap-4 lg:grid-cols-3">
-        <motion.div
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15, ...transitions.normal }}
-          className="min-h-0 h-full lg:col-span-2"
-        >
-          <Card className="flex h-full min-h-0 flex-col">
-            <CardHeader className="border-b">
-              <div className="flex items-center gap-3">
-                <CardTitle className="shrink-0 text-xl">{tt("dashboard.analysisTitle", "Model Data")}</CardTitle>
-                <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5 whitespace-nowrap">
-                {ANALYSIS_TABS.map((tab, index) => {
-                  const active = activeTab === tab.id;
-                  return (
-                    <div key={tab.id} className="flex items-center gap-2">
-                      {index > 0 && <span className="text-muted-foreground/40">/</span>}
-                      <button
-                        onClick={() => setActiveTab(tab.id)}
-                        className={cn(
-                          "relative shrink-0 px-1 py-1 text-xs sm:text-sm transition-colors",
-                          active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        <span>{tt(tab.i18nKey, tab.fallback)}</span>
-                        {active && (
-                          <SharedTabIndicator
-                            layoutId="dashboard-analysis-tab"
-                            className="absolute inset-x-0 -bottom-1 h-0.5 rounded-full bg-primary"
-                          />
-                        )}
-                      </button>
-                    </div>
-                  );
-                })}
-                </div>
-              </div>
-            </CardHeader>
-
-            <CardContent className="flex min-h-0 flex-1 flex-col space-y-3 pt-4">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="min-w-0 truncate text-lg font-semibold tracking-tight">
-                  {analysisHeading}
-                </h2>
-                <p className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">
-                  {tt("dashboard.chartTotal", "Total: {{total}}", { total: analysisTotalDisplay })}
-                </p>
-              </div>
-
-              {analysisData.rows.length > 0 ? (
-                <div className="flex-1 min-h-0 flex flex-col rounded-lg border bg-muted/20 p-2 sm:p-3">
-                  <div className="flex-1 min-h-0 overflow-hidden">
-                    <ChartContainer config={analysisChartConfig} className="h-full min-h-[170px] w-full !aspect-auto">
-                      <BarChart data={analysisData.rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                        <CartesianGrid vertical={false} />
-                        <XAxis
-                          dataKey="label"
-                          tickLine={false}
-                          axisLine={false}
-                          tickMargin={8}
-                          minTickGap={16}
-                        />
-                        <YAxis tickLine={false} axisLine={false} width={48} />
-                        <ChartTooltip
-                          content={
-                            <ChartTooltipContent
-                              labelFormatter={(label) => String(label)}
-                              formatter={(value, name) => (
-                                <>
-                                  <div
-                                    className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
-                                    style={{ backgroundColor: modelToColor(String(name)) }}
-                                  />
-                                  <div className="flex flex-1 items-center justify-between gap-2 leading-none">
-                                    <span className="text-muted-foreground">{String(name)}</span>
-                                    <span className="font-mono font-medium tabular-nums text-foreground">
-                                      {formatAnalysisValue(Number(value))}
-                                    </span>
-                                  </div>
-                                </>
-                              )}
-                            />
-                          }
-                        />
-                        {analysisData.models.map((model) => (
-                          <Bar
-                            key={model}
-                            dataKey={model}
-                            stackId="a"
-                            fill={modelToColor(model)}
-                            radius={0}
-                            isAnimationActive
-                            animationDuration={450}
-                          />
-                        ))}
-                      </BarChart>
-                    </ChartContainer>
-                  </div>
-                  <PaginatedChartLegend items={legendItems} />
-                </div>
-              ) : (
-                <div className="flex-1 min-h-0 rounded-lg border bg-muted/20 p-6 sm:p-8">
-                  <EmptyState
-                    title={tt("dashboard.noAnalysisData", "No request log data available")}
-                    description={tt("dashboard.noAnalysisDataDescription", "Statistics will appear automatically after requests are made.")}
-                    className="h-full min-h-[170px] py-0"
-                  />
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.24, ...transitions.normal }}
-          className="min-h-0 h-full"
-        >
-          <Card className="flex h-full min-h-0 flex-col">
-            <CardHeader className="border-b">
-              <CardTitle className="text-xl">{tt("dashboard.apiInformation", "API Information")}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-1 min-h-0 flex-col pt-4">
-              {!publicSettings?.api_base_url ? (
-                <EmptyState
-                  title={tt("dashboard.noApiInfo", "No API Information")}
-                  description={tt("dashboard.noApiInfoDescription", "Please configure the API base URL in system settings.")}
-                  className="flex-1 py-0"
-                />
-              ) : (
-                <div className="flex-1 min-h-0 space-y-2 overflow-auto">
-                  <motion.button
-                    type="button"
-                    initial={{ opacity: 0, x: 12 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={transitions.normal}
-                    className="w-full rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 active:bg-muted/70"
-                    onClick={() => {
-                      navigator.clipboard.writeText(publicSettings.api_base_url);
-                      toast.success(tt("common.copied", "Copied"));
-                    }}
-                  >
-                    <p className="text-xs text-muted-foreground">{tt("dashboard.apiBaseUrl", "API Base URL")}</p>
-                    <p className="mt-0.5 truncate font-mono text-xs font-semibold">{publicSettings.api_base_url}</p>
-                  </motion.button>
-
-                  {[
-                    { label: "Chat Completions", path: "/v1/chat/completions" },
-                    { label: "Responses", path: "/v1/responses" },
-                    { label: "Models", path: "/v1/models" },
-                  ].map((endpoint, index) => {
-                    const fullUrl = `${publicSettings.api_base_url.replace(/\/+$/, "")}${endpoint.path}`;
-                    return (
-                      <motion.button
-                        key={endpoint.path}
-                        type="button"
-                        initial={{ opacity: 0, x: 12 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.06 * (index + 1), ...transitions.normal }}
-                        className="w-full rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 active:bg-muted/70"
-                        onClick={() => {
-                          navigator.clipboard.writeText(fullUrl);
-                          toast.success(tt("common.copied", "Copied"));
-                        }}
-                      >
-                        <p className="text-xs text-muted-foreground">{endpoint.label}</p>
-                        <p className="mt-0.5 font-mono text-xs text-muted-foreground">{endpoint.path}</p>
-                      </motion.button>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
-      </section>
+      <PerformancePanel data={performance} loading={performanceLoading} />
     </PageWrapper>
   );
 }

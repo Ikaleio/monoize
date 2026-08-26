@@ -26,7 +26,8 @@
 		"creating": "创建中...",
 		"deleting": "删除中...",
 		"add": "添加",
-		"refresh": "刷新"
+		"refresh": "刷新",
+		"unavailable": "不可用"
 	},
 	"auth": {
 		"signIn": "登录",
@@ -431,7 +432,12 @@
 		"dashboardPerformanceTitle": "首页性能目标",
 		"dashboardPerformanceDescription": "选择在用户仪表盘性能面板中展示的分组与 Model。指标为近 24 小时的全局聚合。",
 		"dashboardPerformanceGroups": "分组",
-		"dashboardPerformanceModels": "Models"
+		"dashboardPerformanceModels": "Models",
+		"dashboardPerformanceModelsSelected": "已选 {{count}} 个",
+		"dashboardPerformanceModelsSearch": "搜索模型",
+		"dashboardPerformanceModelsLoadFailed": "加载模型失败",
+		"dashboardPerformanceModelsEmpty": "暂无模型",
+		"dashboardPerformanceModelsEmptyDescription": "请启用带有模型的 Channel，或清空搜索。"
 	},
 	"providers": {
 		"title": "服务提供者",

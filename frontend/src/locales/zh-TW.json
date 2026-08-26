@@ -26,7 +26,8 @@
 		"creating": "建立中...",
 		"deleting": "刪除中...",
 		"add": "新增",
-		"refresh": "重新整理"
+		"refresh": "重新整理",
+		"unavailable": "無法使用"
 	},
 	"auth": {
 		"signIn": "登入",
@@ -428,7 +429,12 @@
 		"dashboardPerformanceTitle": "首頁效能目標",
 		"dashboardPerformanceDescription": "選擇在使用者儀表板效能面板中顯示的群組與 Model。指標為近 24 小時的全域彙總。",
 		"dashboardPerformanceGroups": "群組",
-		"dashboardPerformanceModels": "Models"
+		"dashboardPerformanceModels": "Models",
+		"dashboardPerformanceModelsSelected": "已選 {{count}} 個",
+		"dashboardPerformanceModelsSearch": "搜尋模型",
+		"dashboardPerformanceModelsLoadFailed": "載入模型失敗",
+		"dashboardPerformanceModelsEmpty": "暫無模型",
+		"dashboardPerformanceModelsEmptyDescription": "請啟用帶有模型的 Channel，或清空搜尋。"
 	},
 	"providers": {
 		"title": "服務供應商",

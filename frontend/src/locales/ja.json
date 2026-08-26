@@ -26,7 +26,8 @@
 		"creating": "作成中...",
 		"deleting": "削除中...",
 		"add": "追加",
-		"refresh": "更新"
+		"refresh": "更新",
+		"unavailable": "利用不可"
 	},
 	"auth": {
 		"signIn": "ログイン",
@@ -428,7 +429,12 @@
 		"dashboardPerformanceTitle": "ホームのパフォーマンス対象",
 		"dashboardPerformanceDescription": "ユーザーダッシュボードのパフォーマンスパネルに表示するグループと Model を選択します。指標は直近 24 時間のグローバル集計です。",
 		"dashboardPerformanceGroups": "グループ",
-		"dashboardPerformanceModels": "Models"
+		"dashboardPerformanceModels": "Models",
+		"dashboardPerformanceModelsSelected": "{{count}} 件選択中",
+		"dashboardPerformanceModelsSearch": "モデルを検索",
+		"dashboardPerformanceModelsLoadFailed": "モデルの読み込みに失敗しました",
+		"dashboardPerformanceModelsEmpty": "モデルがありません",
+		"dashboardPerformanceModelsEmptyDescription": "モデル付きの Channel を有効にするか、検索をクリアしてください。"
 	},
 	"providers": {
 		"title": "プロバイダー",

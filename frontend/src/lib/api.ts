@@ -1339,6 +1339,10 @@ class ApiClient {
     return this.request(`/analytics?${params.toString()}`);
   }
 
+  async getDashboardPerformance(): Promise<DashboardPerformance> {
+    return this.request("/performance");
+  }
+
   async getMyLiveUsage(): Promise<UserLiveUsage> {
     return this.request("/me/live-usage");
   }

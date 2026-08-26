@@ -11,10 +11,15 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import type { SystemSettings } from "@/lib/api";
 import { SettingsGroup } from "./settings-category-panel";
+import { DashboardPerformanceTargets } from "./dashboard-performance-targets";
 
 interface HealthSectionProps {
   settings: SystemSettings;
   onChange: (updates: Partial<SystemSettings>) => void;
+  availableModelIds?: string[];
+  modelsLoading?: boolean;
+  modelsError?: unknown;
+  onRetryModels?: () => void;
 }
 
 interface NumberFieldSpec {
@@ -34,7 +39,14 @@ interface NumberFieldSpec {
  * and billing/runtime toggles grouped into kicker-labeled clusters with dense
  * numeric grids.
  */
-export function HealthSection({ settings, onChange }: HealthSectionProps) {
+export function HealthSection({
+  settings,
+  onChange,
+  availableModelIds = [],
+  modelsLoading = false,
+  modelsError,
+  onRetryModels,
+}: HealthSectionProps) {
   const { t } = useTranslation();
 
   const passiveFields: NumberFieldSpec[] = [
@@ -357,6 +369,17 @@ export function HealthSection({ settings, onChange }: HealthSectionProps) {
             <FieldDescription>{t("settings.requestTimeoutMsDescription")}</FieldDescription>
           </Field>
         </div>
+      </SettingsGroup>
+
+      <SettingsGroup label={t("settings.dashboardPerformanceKicker", "Dashboard")}>
+        <DashboardPerformanceTargets
+          settings={settings}
+          availableModelIds={availableModelIds}
+          modelsLoading={modelsLoading}
+          modelsError={modelsError}
+          onRetryModels={onRetryModels ?? (() => undefined)}
+          onChange={onChange}
+        />
       </SettingsGroup>
     </div>
   );
