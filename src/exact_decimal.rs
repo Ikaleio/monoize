@@ -19,13 +19,10 @@ impl Multiplier {
                 .all(|byte| byte.is_ascii_digit() || byte == b'.')
             || raw.bytes().filter(|byte| *byte == b'.').count() > 1
         {
-            return Err("multiplier must be a positive base-10 decimal string".to_string());
+            return Err("multiplier must be a non-negative base-10 decimal string".to_string());
         }
         let value = Decimal::from_str(raw)
-            .map_err(|_| "multiplier must be a positive base-10 decimal string".to_string())?;
-        if value <= Decimal::ZERO {
-            return Err("multiplier must be > 0".to_string());
-        }
+            .map_err(|_| "multiplier must be a non-negative base-10 decimal string".to_string())?;
         if value.scale() > 9 {
             return Err("multiplier must have at most 9 fractional digits".to_string());
         }
@@ -99,8 +96,8 @@ mod tests {
     }
 
     #[test]
-    fn invalid_or_non_positive_multiplier_is_rejected() {
-        for raw in ["", "0", "-1", "+1", "1e2", "NaN", "1.0000000001"] {
+    fn invalid_multiplier_is_rejected() {
+        for raw in ["", "-1", "+1", "1e2", "NaN", "1.0000000001"] {
             assert!(Multiplier::parse(raw).is_err(), "accepted {raw}");
         }
     }

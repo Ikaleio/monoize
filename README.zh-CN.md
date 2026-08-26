@@ -263,7 +263,8 @@ Monoize 支持一个可写主机加若干只读从机的部署形态。所有节
 - API Key、配额、模型限制、IP 白名单、Transform 和子账户；
 - 用户、余额、nano-dollar 精度计费和只追加账本；
 - 包含 TTFB、总耗时、Token、费用、错误和已尝试路由的请求日志；
-- 从 [Models.dev](https://models.dev) 导入的模型元数据和价格；
+- 五个标签页的定价控制台，管理模型价格、工具价格和分组计费倍率；
+- 来自 [models.dev](https://models.dev)、[OpenRouter](https://openrouter.ai) 和 new-api 的价格同步；
 - Prometheus 指标和实时运维视图。
 
 请求捕获需要显式启用，并且有资源上限。正常可观测日志不会记录凭据和提示词正文。

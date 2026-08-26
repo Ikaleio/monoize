@@ -267,7 +267,8 @@ The embedded dashboard manages:
 - API keys, quotas, model restrictions, IP allowlists, transforms, and sub-accounts.
 - Users, balances, nano-dollar billing, and an append-only ledger.
 - Request logs with TTFB, duration, token usage, cost, errors, and tried routes.
-- Model metadata and pricing imported from [Models.dev](https://models.dev).
+- Model prices, tool prices, and group billing ratios in a five-tab pricing console.
+- Price sync from [models.dev](https://models.dev), [OpenRouter](https://openrouter.ai), and new-api.
 - Prometheus metrics and live operational views.
 
 Request capture is opt-in and bounded. Credentials and prompt bodies are not part of normal observability logs.

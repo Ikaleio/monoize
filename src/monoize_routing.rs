@@ -2947,6 +2947,18 @@ mod tests {
     }
 
     #[test]
+    fn channel_model_zero_multiplier_is_accepted_and_scales_to_zero() {
+        let entry: MonoizeModelEntry = serde_json::from_value(serde_json::json!({
+            "redirect": null,
+            "multiplier": "0"
+        }))
+        .expect("zero multiplier parses");
+
+        assert_eq!(entry.multiplier.canonical(), "0");
+        assert_eq!(entry.multiplier.checked_scale_i128(123_456), Some(0));
+    }
+
+    #[test]
     fn passive_failure_threshold_is_positive_and_capped() {
         assert_eq!(effective_passive_failure_threshold_with_limit(0, 1024), 1);
         assert_eq!(effective_passive_failure_threshold_with_limit(3, 1024), 3);

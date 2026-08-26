@@ -850,4 +850,9 @@ mod tests {
     fn final_scaling_truncates_once_after_both_ratios() {
         assert_eq!(checked_scale_with_two_decimals(5, "0.5", "0.5").unwrap(), 1);
     }
+
+    #[test]
+    fn zero_group_billing_ratio_settles_charge_at_zero() {
+        assert_eq!(checked_scale_with_two_decimals(123_456, "1.25", "0").unwrap(), 0);
+    }
 }
