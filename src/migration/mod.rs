@@ -55,6 +55,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260826_000046_channel_allow_unpriced_server_tools::Migration),
             Box::new(m20260826_000047_model_prices::Migration),
             Box::new(m20260826_000047_request_logs_pending_status_index::Migration),
+            Box::new(m20260901_000048_model_prices_cutover::Migration),
         ]
     }
 }
@@ -239,6 +240,7 @@ mod m20260825_000045_custom_transforms;
 mod m20260826_000046_channel_allow_unpriced_server_tools;
 mod m20260826_000047_model_prices;
 mod m20260826_000047_request_logs_pending_status_index;
+mod m20260901_000048_model_prices_cutover;
 
 #[cfg(test)]
 mod tests {
