@@ -211,7 +211,24 @@ async function bootstrapMonoizeRouting() {
     throw new Error(`Failed to create provider: ${await providerResp.text()}`);
   }
 
-  const pricingResp = await fetch(`${monoizeBase}/api/dashboard/model-prices/gpt-4o-mini`, {
+  const metadataResp = await fetch(`${monoizeBase}/api/dashboard/model-metadata/gpt-4o-mini`, {
+    method: "PUT",
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      max_input_tokens: 8192,
+      max_output_tokens: 4096,
+    }),
+  });
+  if (!metadataResp.ok) {
+    throw new Error(`Failed to seed model metadata: ${await metadataResp.text()}`);
+  }
+
+  // model-pricing.spec.md MP-D1: one model_prices row prices the model;
+  // 0.001 USD per 1M tokens equals the former 1 nano-USD per token.
+  const priceResp = await fetch(`${monoizeBase}/api/dashboard/model-prices/gpt-4o-mini`, {
     method: "PUT",
     headers: {
       authorization: `Bearer ${sessionToken}`,
@@ -221,11 +238,10 @@ async function bootstrapMonoizeRouting() {
       billing_mode: "per_token",
       input_usd_per_1m: "0.001",
       output_usd_per_1m: "0.001",
-      enabled: true,
     }),
   });
-  if (!pricingResp.ok) {
-    throw new Error(`Failed to seed model price: ${await pricingResp.text()}`);
+  if (!priceResp.ok) {
+    throw new Error(`Failed to seed model price: ${await priceResp.text()}`);
   }
 
   return forwardApiKey;
