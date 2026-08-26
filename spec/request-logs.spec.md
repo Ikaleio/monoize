@@ -333,6 +333,8 @@ RL-S2a. The table MUST have indexes on the persisted sortable time column:
 - an index on `(created_at_unix_ms DESC)` for global pagination, analytics range scans, and retention cleanup.
 - a partial compatibility index on `(created_at)` where `created_at_unix_ms IS NULL`, so the explicit legacy-null range branch does not force a full-table scan.
 
+RL-S2a-1. The table MUST also have a partial index `idx_request_logs_status_pending` on `(status)` where `status = 'pending'`, so the RL1f/RL3b legacy pending sweeps do not force a full-table scan. Because terminal-only inserts (RL1a) never write `status = 'pending'`, this index contains at most legacy rows.
+
 RL-S2b. Request-log reads MUST use `created_at_unix_ms` as the primary ordering and range-filter column on both SQLite and PostgreSQL. A range predicate MUST compare `created_at_unix_ms` directly, without wrapping that indexed column in `COALESCE`, a cast, or a date function. A separate `created_at_unix_ms IS NULL AND created_at ...` branch MUST retain compatibility for legacy null rows. The legacy branch compares normalized UTC RFC 3339 text and MUST NOT change the direct indexed predicate for non-null rows.
 
 RL-S2c. `created_at_unix_ms` MUST be backfilled for pre-existing rows during migration using the canonical `created_at` value when that value is parseable. Rows whose legacy `created_at` cannot be parsed may retain `created_at_unix_ms = NULL`.
@@ -384,11 +386,15 @@ RL-S8. While SQLite and PostgreSQL both remain supported, request-log writes MUS
 
 RL-S9. Request-log retention MUST delete rows whose `created_at_unix_ms` is older than 90 days relative to cleanup execution time.
 
+RL-S9a. Retention cleanup MUST delete expired rows in bounded batches. One batch is one autocommitted DELETE statement that targets at most 5000 expired rows selected by `id` through a subquery on the RL-S2a time index. Cleanup MUST repeat batches until one batch deletes fewer rows than the bound, then report the total number of deleted rows. Because each batch commits independently, a failure between batches keeps earlier batches deleted, and the writer (the SQLite write lock, PostgreSQL row locks) is released between batches so concurrent request-log flushes can interleave.
+
 RL-S10. Expired-row cleanup defined in RL-S9 SHOULD execute once during startup before the HTTP listener begins accepting traffic. If that cleanup attempt fails, startup MAY continue and the failure MUST be logged.
 
 RL-S11. Expired-row cleanup defined in RL-S9 MUST also execute periodically in a background task while the process is running. The default cleanup interval MUST be 1 hour.
 
 RL-S12. Migration `m20260824_000040_drop_request_log_visible_tps` MUST drop columns `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, and `tps_mode` from `request_logs` on SQLite and PostgreSQL. Each drop MUST be a no-op when that column is already absent, so running the up migration twice succeeds and leaves the same schema. The migration MUST NOT modify any other column, row, or index. The down migration MUST be a no-op because dropped visible-TPS values cannot be reconstructed.
+
+RL-S13. Migration `m20260826_000047_request_logs_pending_status_index` MUST create the RL-S2a-1 partial index `idx_request_logs_status_pending` on `request_logs (status)` with predicate `status = 'pending'` on SQLite and PostgreSQL, using `IF NOT EXISTS` so running the up migration twice succeeds. The down migration MUST drop the index with `IF EXISTS`.
 
 ## 5. Frontend display
 
