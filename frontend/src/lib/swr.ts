@@ -21,9 +21,10 @@ import type {
   RequestCaptureDetail,
   ModelMetadataRecord,
   UpsertModelMetadataInput,
-  BillingRateRecord,
-  UpsertBillingRateInput,
-  PricingProfilePattern,
+  ModelPriceRecord,
+  UpsertModelPriceInput,
+  PriceSyncRun,
+  PriceSyncSource,
   BillingPlan,
   BillingPlanInput,
   Group,
@@ -46,9 +47,10 @@ const fetchers = {
   dashboardGroups: async () => (await api.listDashboardGroups()).groups,
   transformRegistry: () => api.getTransformRegistry(),
   modelMetadata: () => api.listModelMetadata(),
-  billingRates: () => api.listBillingRates(),
+  modelPrices: () => api.listModelPrices(),
+  unpricedModels: async () => (await api.listUnpricedModels()).models,
+  priceSyncRuns: () => api.listPriceSyncRuns(),
   billingPlans: () => api.listBillingPlans(),
-  pricingProfilePatterns: async () => (await api.getPricingProfilePatterns()).patterns,
   marketplaceModels: () => api.listMarketplaceModels(),
   customTransforms: () => api.listCustomTransforms(),
 };
@@ -66,8 +68,9 @@ export const SWR_KEYS = {
   DASHBOARD_GROUPS: "/dashboard/groups",
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
   MODEL_METADATA: "/dashboard/model-metadata",
-  BILLING_RATES: "/dashboard/billing-rates",
-  PRICING_PROFILE_PATTERNS: "/dashboard/pricing-profile-patterns",
+  MODEL_PRICES: "/dashboard/model-prices",
+  UNPRICED_MODELS: "/dashboard/model-prices/unpriced",
+  PRICE_SYNC_RUNS: "/dashboard/price-sync/runs",
   MARKETPLACE_MODELS: "/dashboard/marketplace/models",
   BILLING_PLANS: "/dashboard/billing-plans",
   REQUEST_LOGS: "/dashboard/request-logs",
@@ -212,20 +215,25 @@ export function useModelMetadata(config?: SWRConfiguration) {
   );
 }
 
-export function useBillingRates(config?: SWRConfiguration) {
-  return useSWR<BillingRateRecord[]>(
-    SWR_KEYS.BILLING_RATES,
-    fetchers.billingRates,
-    { ...defaultConfig, ...config }
-  );
+export function useModelPrices(config?: SWRConfiguration) {
+  return useSWR<ModelPriceRecord[]>(SWR_KEYS.MODEL_PRICES, fetchers.modelPrices, {
+    ...defaultConfig,
+    ...config,
+  });
 }
 
-export function usePricingProfilePatterns(config?: SWRConfiguration) {
-  return useSWR<PricingProfilePattern[]>(
-    SWR_KEYS.PRICING_PROFILE_PATTERNS,
-    fetchers.pricingProfilePatterns,
-    { ...defaultConfig, ...config }
-  );
+export function useUnpricedModels(config?: SWRConfiguration) {
+  return useSWR<string[]>(SWR_KEYS.UNPRICED_MODELS, fetchers.unpricedModels, {
+    ...defaultConfig,
+    ...config,
+  });
+}
+
+export function usePriceSyncRuns(config?: SWRConfiguration) {
+  return useSWR<PriceSyncRun[]>(SWR_KEYS.PRICE_SYNC_RUNS, fetchers.priceSyncRuns, {
+    ...defaultConfig,
+    ...config,
+  });
 }
 
 export function useMarketplaceModels(config?: SWRConfiguration) {
@@ -327,7 +335,6 @@ export async function updateSettingsOptimistic(
     // Revalidate with server data
     mutate(SWR_KEYS.SETTINGS, updated, false);
     mutate(SWR_KEYS.PUBLIC_SETTINGS);
-    mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS);
     mutate(SWR_KEYS.PROVIDERS);
     return updated;
   } catch (error) {
@@ -460,6 +467,7 @@ export async function createGroupOptimistic(
     is_default: false,
     user_selectable: input.user_selectable ?? false,
     sort_order: input.sort_order ?? 0,
+    billing_ratio: input.billing_ratio ?? "1",
     created_at: now,
     updated_at: now,
   };
@@ -493,6 +501,7 @@ export async function updateGroupOptimistic(
             description: input.description ?? g.description,
             user_selectable: input.user_selectable ?? g.user_selectable,
             sort_order: input.sort_order ?? g.sort_order,
+            billing_ratio: input.billing_ratio ?? g.billing_ratio,
             updated_at: new Date().toISOString(),
           }
         : g
@@ -999,7 +1008,6 @@ export async function syncModelMetadata(
   try {
     const result = await api.syncModelMetadataFromModelsDev();
     mutate(SWR_KEYS.MODEL_METADATA);
-    mutate(SWR_KEYS.BILLING_RATES);
     mutate(SWR_KEYS.MARKETPLACE_MODELS);
     mutate(SWR_KEYS.PROVIDERS);
     return result;
@@ -1011,45 +1019,72 @@ export async function syncModelMetadata(
   }
 }
 
-export async function upsertBillingRateOptimistic(
-  id: string,
-  input: UpsertBillingRateInput,
-  currentRecords: BillingRateRecord[],
+// Model price mutation helpers (model-pricing.spec.md MP-UI2): optimistic
+// list update, then revalidation of the price list and the unpriced set,
+// which both depend on the mutated row.
+
+export async function upsertModelPriceOptimistic(
+  modelId: string,
+  input: UpsertModelPriceInput,
+  currentRecords: ModelPriceRecord[],
   onError?: (error: Error) => void
 ) {
-  const tempRecord: BillingRateRecord = {
-    id,
-    source: input.source ?? "manual",
-    pricing_profile: input.pricing_profile ?? "",
-    model_pattern: input.model_pattern ?? null,
-    provider_type: input.provider_type ?? null,
-    rate_kind: input.rate_kind ?? "token",
-    usage_class: input.usage_class ?? "",
-    unit: input.unit ?? "token",
-    unit_price_nano_usd: input.unit_price_nano_usd ?? "0",
-    context_tier: input.context_tier ?? null,
-    service_tier: input.service_tier ?? null,
-    modality: input.modality ?? null,
-    cache_ttl: input.cache_ttl ?? null,
-    match_json: input.match_json ?? {},
-    priority: input.priority ?? 0,
-    enabled: input.enabled ?? true,
-    raw_json: input.raw_json ?? {},
+  const existing = currentRecords.find((r) => r.model_id === modelId);
+  const tempRecord: ModelPriceRecord = {
+    model_id: modelId,
+    billing_mode: input.billing_mode ?? existing?.billing_mode ?? "per_token",
+    input_usd_per_1m:
+      input.input_usd_per_1m !== undefined
+        ? input.input_usd_per_1m
+        : existing?.input_usd_per_1m ?? null,
+    output_usd_per_1m:
+      input.output_usd_per_1m !== undefined
+        ? input.output_usd_per_1m
+        : existing?.output_usd_per_1m ?? null,
+    cache_read_usd_per_1m:
+      input.cache_read_usd_per_1m !== undefined
+        ? input.cache_read_usd_per_1m
+        : existing?.cache_read_usd_per_1m ?? null,
+    cache_write_usd_per_1m:
+      input.cache_write_usd_per_1m !== undefined
+        ? input.cache_write_usd_per_1m
+        : existing?.cache_write_usd_per_1m ?? null,
+    cache_write_1h_usd_per_1m:
+      input.cache_write_1h_usd_per_1m !== undefined
+        ? input.cache_write_1h_usd_per_1m
+        : existing?.cache_write_1h_usd_per_1m ?? null,
+    reasoning_usd_per_1m:
+      input.reasoning_usd_per_1m !== undefined
+        ? input.reasoning_usd_per_1m
+        : existing?.reasoning_usd_per_1m ?? null,
+    per_request_usd:
+      input.per_request_usd !== undefined
+        ? input.per_request_usd
+        : existing?.per_request_usd ?? null,
+    billing_expr:
+      input.billing_expr !== undefined
+        ? input.billing_expr
+        : existing?.billing_expr ?? null,
+    source: existing?.source ?? "manual",
+    locked_fields: input.locked_fields ?? existing?.locked_fields ?? [],
+    raw_json: existing?.raw_json ?? {},
+    enabled: input.enabled ?? existing?.enabled ?? true,
     updated_at: new Date().toISOString(),
   };
-  const exists = currentRecords.some((r) => r.id === id);
-  const optimistic = exists
-    ? currentRecords.map((r) => (r.id === id ? { ...r, ...tempRecord } : r))
-    : [...currentRecords, tempRecord];
-  mutate(SWR_KEYS.BILLING_RATES, optimistic, false);
+  const optimistic = existing
+    ? currentRecords.map((r) => (r.model_id === modelId ? tempRecord : r))
+    : [...currentRecords, tempRecord].sort((a, b) =>
+        a.model_id.localeCompare(b.model_id)
+      );
+  mutate(SWR_KEYS.MODEL_PRICES, optimistic, false);
 
   try {
-    const result = await api.upsertBillingRate(id, input);
-    mutate(SWR_KEYS.BILLING_RATES);
-    mutate(SWR_KEYS.PROVIDERS);
+    const result = await api.upsertModelPrice(modelId, input);
+    mutate(SWR_KEYS.MODEL_PRICES);
+    mutate(SWR_KEYS.UNPRICED_MODELS);
     return result;
   } catch (error) {
-    mutate(SWR_KEYS.BILLING_RATES, currentRecords, false);
+    mutate(SWR_KEYS.MODEL_PRICES, currentRecords, false);
     if (onError && error instanceof Error) {
       onError(error);
     }
@@ -1057,23 +1092,23 @@ export async function upsertBillingRateOptimistic(
   }
 }
 
-export async function deleteBillingRateOptimistic(
-  id: string,
-  currentRecords: BillingRateRecord[],
+export async function deleteModelPriceOptimistic(
+  modelId: string,
+  currentRecords: ModelPriceRecord[],
   onError?: (error: Error) => void
 ) {
   mutate(
-    SWR_KEYS.BILLING_RATES,
-    currentRecords.filter((r) => r.id !== id),
+    SWR_KEYS.MODEL_PRICES,
+    currentRecords.filter((r) => r.model_id !== modelId),
     false
   );
 
   try {
-    await api.deleteBillingRate(id);
-    mutate(SWR_KEYS.BILLING_RATES);
-    mutate(SWR_KEYS.PROVIDERS);
+    await api.deleteModelPrice(modelId);
+    mutate(SWR_KEYS.MODEL_PRICES);
+    mutate(SWR_KEYS.UNPRICED_MODELS);
   } catch (error) {
-    mutate(SWR_KEYS.BILLING_RATES, currentRecords, false);
+    mutate(SWR_KEYS.MODEL_PRICES, currentRecords, false);
     if (onError && error instanceof Error) {
       onError(error);
     }
@@ -1081,37 +1116,18 @@ export async function deleteBillingRateOptimistic(
   }
 }
 
-export async function syncBillingRatesCatalog(
+export async function applyPriceSync(
+  source: PriceSyncSource,
   onError?: (error: Error) => void
 ) {
   try {
-    const result = await api.syncBillingRatesCatalog();
-    mutate(SWR_KEYS.BILLING_RATES);
-    mutate(SWR_KEYS.PROVIDERS);
-    return result;
+    const run = await api.applyPriceSync(source);
+    mutate(SWR_KEYS.MODEL_PRICES);
+    mutate(SWR_KEYS.UNPRICED_MODELS);
+    mutate(SWR_KEYS.PRICE_SYNC_RUNS);
+    mutate(SWR_KEYS.MODEL_METADATA);
+    return run;
   } catch (error) {
-    if (onError && error instanceof Error) {
-      onError(error);
-    }
-    throw error;
-  }
-}
-
-export async function updatePricingProfilePatternsOptimistic(
-  patterns: PricingProfilePattern[],
-  currentPatterns: PricingProfilePattern[],
-  onError?: (error: Error) => void
-) {
-  mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, patterns, false);
-
-  try {
-    const result = await api.updatePricingProfilePatterns(patterns);
-    mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, result.patterns, false);
-    mutate(SWR_KEYS.SETTINGS);
-    mutate(SWR_KEYS.PROVIDERS);
-    return result.patterns;
-  } catch (error) {
-    mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, currentPatterns, false);
     if (onError && error instanceof Error) {
       onError(error);
     }

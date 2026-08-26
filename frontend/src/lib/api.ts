@@ -24,6 +24,7 @@ export interface Group {
   is_default: boolean;
   user_selectable: boolean;
   sort_order: number;
+  billing_ratio: string;
   created_at: string;
   updated_at: string;
 }
@@ -33,6 +34,7 @@ export interface CreateGroupInput {
   description?: string;
   user_selectable?: boolean;
   sort_order?: number;
+  billing_ratio?: string;
 }
 
 export interface UpdateGroupInput {
@@ -40,6 +42,7 @@ export interface UpdateGroupInput {
   description?: string;
   user_selectable?: boolean;
   sort_order?: number;
+  billing_ratio?: string;
 }
 
 export interface UserBillingPlan {
@@ -247,7 +250,103 @@ export interface SystemSettings {
   monoize_request_capture_max_total_bytes: number;
   monoize_mask_sensitive_info: boolean;
   pricing_profile_model_patterns: PricingProfilePattern[];
+  allow_free_when_unpriced: boolean;
+  allow_free_when_missing_usage: boolean;
+  tool_prices: Record<string, ToolPriceEntry>;
+  price_sync_new_api_base_url: string;
+  price_sync_new_api_token: string;
   updated_at: string;
+}
+
+export type ToolPriceUnit = "1k_calls" | "minute" | "session";
+
+export interface ToolPriceObject {
+  usd: string | number;
+  per: ToolPriceUnit;
+  minimum_units?: number;
+}
+
+export type ToolPriceEntry = number | string | ToolPriceObject;
+
+export type BillingMode = "per_token" | "per_request" | "tiered_expr";
+
+export interface BillingExprTier {
+  when_input_tokens_lte?: number | null;
+  input_usd_per_1m: string;
+  output_usd_per_1m?: string | null;
+  cache_read_usd_per_1m?: string | null;
+  cache_write_usd_per_1m?: string | null;
+  cache_write_1h_usd_per_1m?: string | null;
+  reasoning_usd_per_1m?: string | null;
+}
+
+export interface BillingExpr {
+  tiers: BillingExprTier[];
+}
+
+export interface ModelPriceRecord {
+  model_id: string;
+  billing_mode: BillingMode;
+  input_usd_per_1m: string | null;
+  output_usd_per_1m: string | null;
+  cache_read_usd_per_1m: string | null;
+  cache_write_usd_per_1m: string | null;
+  cache_write_1h_usd_per_1m: string | null;
+  reasoning_usd_per_1m: string | null;
+  per_request_usd: string | null;
+  billing_expr: BillingExpr | null;
+  source: string;
+  locked_fields: string[];
+  raw_json: Record<string, unknown>;
+  enabled: boolean;
+  updated_at: string;
+}
+
+export interface UpsertModelPriceInput {
+  billing_mode?: BillingMode;
+  input_usd_per_1m?: string | null;
+  output_usd_per_1m?: string | null;
+  cache_read_usd_per_1m?: string | null;
+  cache_write_usd_per_1m?: string | null;
+  cache_write_1h_usd_per_1m?: string | null;
+  reasoning_usd_per_1m?: string | null;
+  per_request_usd?: string | null;
+  billing_expr?: BillingExpr | null;
+  locked_fields?: string[];
+  enabled?: boolean;
+}
+
+export interface PriceSyncRun {
+  id: string;
+  source: string;
+  status: "running" | "success" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  deleted: number;
+  error: string | null;
+  detail_json: Record<string, unknown>;
+}
+
+export type PriceSyncSource = "models_dev" | "openrouter" | "new_api";
+
+export interface PriceSyncChange {
+  model_id: string;
+  kind: "insert" | "update" | "delete";
+  fields?: string[];
+}
+
+// model-pricing.spec.md MP-A6 preview payload.
+export interface PriceSyncPreview {
+  source: PriceSyncSource;
+  insert: number;
+  update: number;
+  skip: number;
+  delete: number;
+  changes: PriceSyncChange[];
+  truncated?: boolean;
 }
 
 export interface PublicSystemSettings {
@@ -375,6 +474,8 @@ export interface Provider {
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
   group_ids: string[];
+  allow_free_when_unpriced_override?: boolean | null;
+  allow_free_when_missing_usage_override?: boolean | null;
   enabled: boolean;
   priority: number;
   created_at: string;
@@ -430,6 +531,8 @@ export interface CreateProviderInput {
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
   group_ids?: string[];
+  allow_free_when_unpriced_override?: boolean | null;
+  allow_free_when_missing_usage_override?: boolean | null;
   enabled?: boolean;
   priority?: number;
 }
@@ -452,6 +555,8 @@ export interface UpdateProviderInput {
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
   group_ids?: string[];
+  allow_free_when_unpriced_override?: boolean | null;
+  allow_free_when_missing_usage_override?: boolean | null;
   enabled?: boolean;
   priority?: number;
 }
@@ -493,61 +598,11 @@ export interface ModelMetadataSyncResult {
   fetched_at: string;
 }
 
-export interface BillingRateRecord {
-  id: string;
-  source: string;
-  pricing_profile: string;
-  model_pattern?: string | null;
-  provider_type?: string | null;
-  rate_kind: string;
-  usage_class: string;
-  unit: string;
-  unit_price_nano_usd: string;
-  context_tier?: string | null;
-  service_tier?: string | null;
-  modality?: string | null;
-  cache_ttl?: string | null;
-  match_json: Record<string, unknown>;
-  priority: number;
-  enabled: boolean;
-  raw_json: Record<string, unknown>;
-  updated_at: string;
-}
-
-export interface UpsertBillingRateInput {
-  source?: string;
-  pricing_profile?: string;
-  model_pattern?: string | null;
-  provider_type?: string | null;
-  rate_kind?: string;
-  usage_class?: string;
-  unit?: string;
-  unit_price_nano_usd?: string;
-  context_tier?: string | null;
-  service_tier?: string | null;
-  modality?: string | null;
-  cache_ttl?: string | null;
-  match_json?: Record<string, unknown>;
-  priority?: number;
-  enabled?: boolean;
-  raw_json?: Record<string, unknown>;
-}
-
-export interface BillingRateSyncResult {
-  success: boolean;
-  upserted: number;
-  skipped: number;
-  deleted: number;
-  fetched_at: string;
-}
-
+// Transitional: `pricing_profile_model_patterns` remains in settings payloads
+// until migration step m20260901_000048 removes it (model-pricing.spec.md MP-M5).
 export interface PricingProfilePattern {
   pattern: string;
   pricing_profile: string;
-}
-
-export interface PricingProfilePatternsResponse {
-  patterns: PricingProfilePattern[];
 }
 
 export interface RequestLogProvider {
@@ -1189,42 +1244,43 @@ class ApiClient {
     });
   }
 
-  async listBillingRates(): Promise<BillingRateRecord[]> {
-    return this.request("/billing-rates");
+  async listModelPrices(): Promise<ModelPriceRecord[]> {
+    return this.request("/model-prices");
   }
 
-  async upsertBillingRate(
-    id: string,
-    input: UpsertBillingRateInput
-  ): Promise<BillingRateRecord> {
-    return this.request(`/billing-rates/${encodeURIComponent(id)}`, {
+  async upsertModelPrice(
+    modelId: string,
+    input: UpsertModelPriceInput
+  ): Promise<ModelPriceRecord> {
+    return this.request(`/model-prices/${encodeURIComponent(modelId)}`, {
       method: "PUT",
       body: JSON.stringify(input),
     });
   }
 
-  async deleteBillingRate(id: string): Promise<{ success: boolean }> {
-    return this.request(`/billing-rates/${encodeURIComponent(id)}`, {
+  async deleteModelPrice(modelId: string): Promise<{ success: boolean }> {
+    return this.request(`/model-prices/${encodeURIComponent(modelId)}`, {
       method: "DELETE",
     });
   }
 
-  async syncBillingRatesCatalog(): Promise<BillingRateSyncResult> {
-    return this.request("/billing-rates/sync/catalog", {
+  async listUnpricedModels(): Promise<{ models: string[] }> {
+    return this.request("/model-prices/unpriced");
+  }
+
+  async listPriceSyncRuns(limit = 20): Promise<PriceSyncRun[]> {
+    return this.request(`/price-sync/runs?limit=${limit}`);
+  }
+
+  async previewPriceSync(source: PriceSyncSource): Promise<PriceSyncPreview> {
+    return this.request(`/price-sync/${encodeURIComponent(source)}/preview`, {
       method: "POST",
     });
   }
 
-  async getPricingProfilePatterns(): Promise<PricingProfilePatternsResponse> {
-    return this.request("/pricing-profile-patterns");
-  }
-
-  async updatePricingProfilePatterns(
-    patterns: PricingProfilePattern[]
-  ): Promise<PricingProfilePatternsResponse> {
-    return this.request("/pricing-profile-patterns", {
-      method: "PUT",
-      body: JSON.stringify({ patterns }),
+  async applyPriceSync(source: PriceSyncSource): Promise<PriceSyncRun> {
+    return this.request(`/price-sync/${encodeURIComponent(source)}/apply`, {
+      method: "POST",
     });
   }
 

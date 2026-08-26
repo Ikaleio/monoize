@@ -302,6 +302,40 @@ export function HealthSection({ settings, onChange }: HealthSectionProps) {
               }
             />
           </Field>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="allow_free_when_unpriced">
+                {t("settings.allowFreeWhenUnpriced")}
+              </FieldLabel>
+              <FieldDescription>
+                {t("settings.allowFreeWhenUnpricedDescription")}
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="allow_free_when_unpriced"
+              checked={settings.allow_free_when_unpriced}
+              onCheckedChange={(checked) =>
+                onChange({ allow_free_when_unpriced: checked })
+              }
+            />
+          </Field>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="allow_free_when_missing_usage">
+                {t("settings.allowFreeWhenMissingUsage")}
+              </FieldLabel>
+              <FieldDescription>
+                {t("settings.allowFreeWhenMissingUsageDescription")}
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="allow_free_when_missing_usage"
+              checked={settings.allow_free_when_missing_usage}
+              onCheckedChange={(checked) =>
+                onChange({ allow_free_when_missing_usage: checked })
+              }
+            />
+          </Field>
           <Field>
             <FieldLabel htmlFor="request_timeout_ms">
               {t("settings.requestTimeoutMs")}

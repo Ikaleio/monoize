@@ -198,6 +198,8 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 			.map(value => value.trim())
 			.filter(Boolean),
 		strip_cross_protocol_nested_extra: form.strip_cross_protocol_nested_extra,
+		allow_free_when_unpriced_override: form.allow_free_when_unpriced_override,
+		allow_free_when_missing_usage_override: form.allow_free_when_missing_usage_override,
 		group_ids: form.group_ids
 	}
 }
@@ -525,6 +527,24 @@ function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: Rea
 				/>
 			</Field>
 			<Field label={c('额外字段白名单', 'Extra fields allowlist')} hint={c('逗号分隔，应用到全部 Channel。', 'Comma-separated and shared by all channels.')}><Input value={form.extra_fields_whitelist} onChange={event => setForm(previous => ({ ...previous, extra_fields_whitelist: event.target.value }))} placeholder='service_tier, metadata' /></Field>
+		</div>
+		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
+			<div className='sm:col-span-2'>
+				<h4 className='font-medium'>{c('免费结算覆盖', 'Free-settlement overrides')}</h4>
+				<p className='mt-1 text-xs text-muted-foreground'>{c('三态覆盖全局免费结算开关；“继承全局”跟随系统设置。', 'Three-state overrides for the global free-settlement flags. “Inherit global” follows the system setting.')}</p>
+			</div>
+			<NullableBoolean
+				label={c('未定价模型免费结算', 'Free settlement when unpriced')}
+				value={form.allow_free_when_unpriced_override}
+				onChange={value => setForm(previous => ({ ...previous, allow_free_when_unpriced_override: value }))}
+				c={c}
+			/>
+			<NullableBoolean
+				label={c('缺失 Usage 免费结算', 'Free settlement when usage missing')}
+				value={form.allow_free_when_missing_usage_override}
+				onChange={value => setForm(previous => ({ ...previous, allow_free_when_missing_usage_override: value }))}
+				c={c}
+			/>
 		</div>
 	</div>
 }
