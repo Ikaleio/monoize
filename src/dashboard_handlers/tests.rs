@@ -1310,6 +1310,8 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
     assert!(settings.global_transforms.is_empty());
     assert!(settings.global_model_redirects.is_empty());
     assert!(settings.codex_model_ids.is_empty());
+    assert!(settings.dashboard_performance_group_ids.is_empty());
+    assert!(settings.dashboard_performance_model_ids.is_empty());
     assert!(!settings.monoize_request_capture_enabled);
     assert_eq!(
         settings.monoize_request_capture_max_total_bytes,
@@ -1340,6 +1342,17 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
         "gpt-5.6-sol".to_string(),
         String::new(),
     ];
+    settings.dashboard_performance_group_ids = vec![
+        " g-default ".to_string(),
+        "g-vip".to_string(),
+        "g-default".to_string(),
+        String::new(),
+    ];
+    settings.dashboard_performance_model_ids = vec![
+        " gpt-5.6-sol ".to_string(),
+        "claude-opus-4.8".to_string(),
+        "gpt-5.6-sol".to_string(),
+    ];
     settings.monoize_strip_cross_protocol_nested_extra = false;
     settings.monoize_request_capture_enabled = true;
     // RCD-C4: non-zero values below 1 MiB persist as 1 MiB.
@@ -1366,6 +1379,14 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
     );
     assert_eq!(
         updated.codex_model_ids,
+        vec!["gpt-5.6-sol", "claude-opus-4.8"]
+    );
+    assert_eq!(
+        updated.dashboard_performance_group_ids,
+        vec!["g-default", "g-vip"]
+    );
+    assert_eq!(
+        updated.dashboard_performance_model_ids,
         vec!["gpt-5.6-sol", "claude-opus-4.8"]
     );
     assert!(!updated.monoize_strip_cross_protocol_nested_extra);

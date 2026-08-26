@@ -27,6 +27,8 @@ pub struct UpdateSettingsRequest {
     pub global_model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_suffix_map: Option<std::collections::HashMap<String, String>>,
     pub codex_model_ids: Option<Vec<String>>,
+    pub dashboard_performance_group_ids: Option<Vec<String>>,
+    pub dashboard_performance_model_ids: Option<Vec<String>>,
     pub monoize_active_probe_enabled: Option<bool>,
     pub monoize_active_probe_interval_seconds: Option<u64>,
     pub monoize_active_probe_success_threshold: Option<u32>,
@@ -165,6 +167,12 @@ pub async fn update_settings(
     }
     if let Some(v) = body.codex_model_ids {
         settings.codex_model_ids = v;
+    }
+    if let Some(v) = body.dashboard_performance_group_ids {
+        settings.dashboard_performance_group_ids = v;
+    }
+    if let Some(v) = body.dashboard_performance_model_ids {
+        settings.dashboard_performance_model_ids = v;
     }
     if let Some(v) = body.monoize_active_probe_enabled {
         settings.monoize_active_probe_enabled = v;
