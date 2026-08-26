@@ -39,8 +39,7 @@ denominated in MiB: the displayed value is `round(bytes / 1048576)`, and an inpu
 `request-capture-dumps.spec.md` RCD-C4). The field description MUST state that `0`
 disables the budget.
 
-SSU-3. `pricing_profile_model_patterns` (legacy, until the model-pricing cutover),
-`tool_prices`, `price_sync_new_api_base_url`, `price_sync_new_api_token`, and
+SSU-3. `tool_prices`, `price_sync_new_api_base_url`, `price_sync_new_api_token`, and
 `updated_at` are not edited on this page. Save MUST pass them through unchanged from
 the current draft object. `tool_prices` and the price-sync settings are edited on the
 `/dashboard/models` page (`model-pricing.spec.md` §11).

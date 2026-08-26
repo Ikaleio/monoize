@@ -16,15 +16,15 @@ DC5. When current-user refresh rejects the stored authentication state, the clie
 
 ## 3. Mutation dependencies
 
-DC6. A successful full settings mutation MUST revalidate `PUBLIC_SETTINGS`, `PRICING_PROFILE_PATTERNS`, and `PROVIDERS` after publishing the returned `SETTINGS` value.
+DC6. A successful full settings mutation MUST revalidate `PUBLIC_SETTINGS` and `PROVIDERS` after publishing the returned `SETTINGS` value.
 
 DC7. A successful Provider create, update, or delete MUST revalidate `PROVIDERS`, `CONFIG`, and `MARKETPLACE_MODELS`. Create and delete MUST also revalidate `STATS`. Delete MUST remove the deleted Provider-detail key without revalidation. Provider mutations MUST NOT revalidate `DASHBOARD_GROUPS`: the group registry is a first-class resource and is not derived from provider rows.
 
-DC8. A successful model-metadata create, update, delete, or models.dev sync MUST revalidate `MODEL_METADATA`, `MARKETPLACE_MODELS`, and `PROVIDERS`. Models.dev sync MUST also revalidate `BILLING_RATES`.
+DC8. A successful model-metadata create, update, delete, or models.dev metadata sync MUST revalidate `MODEL_METADATA`, `MARKETPLACE_MODELS`, and `PROVIDERS`.
 
-DC9. A successful billing-rate create, update, delete, or catalog sync MUST revalidate `BILLING_RATES` and `PROVIDERS`.
+DC9. A successful model-price upsert or delete MUST revalidate `MODEL_PRICES`, `UNPRICED_MODELS`, `MARKETPLACE_MODELS`, and `PROVIDERS`.
 
-DC10. A successful pricing-pattern mutation MUST publish the returned `PRICING_PROFILE_PATTERNS` value and revalidate `SETTINGS` and `PROVIDERS`.
+DC10. A successful price-sync apply MUST revalidate `MODEL_PRICES`, `UNPRICED_MODELS`, `PRICE_SYNC_RUNS`, `MODEL_METADATA`, `MARKETPLACE_MODELS`, and `PROVIDERS`.
 
 DC11. A successful user create MUST revalidate `USERS` and `STATS`. A successful user update MUST revalidate those keys plus `ME`. A successful user delete MUST revalidate `USERS` and `STATS`. User mutations MUST NOT revalidate `DASHBOARD_GROUPS`.
 

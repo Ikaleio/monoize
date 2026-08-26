@@ -24,14 +24,16 @@
 
 ### 0.1 Implementation status
 
-MP-S1. This specification is the target behavior. Delivery is split into two migration
-steps (§12). Step `m20260826_000047_model_prices` is additive and ships with the pricing
-dashboard skeleton. Step `m20260901_000048_model_prices_cutover` removes the legacy
-engine and ships with the settlement rewrite.
+MP-S1. This specification is implemented. Delivery was split into two migration
+steps (§12). Step `m20260826_000047_model_prices` is additive and shipped with the
+pricing dashboard skeleton. Step `m20260901_000048_model_prices_cutover` removes the
+legacy engine and ships together with the settlement rewrite, the §9 sync engine, and
+the §10 dashboard endpoints in the same release.
 
-MP-S2. Until the cutover step ships, the legacy `billing_rate_records` engine continues
-to settle requests. The deprecated rules in `metered-billing.spec.md` govern only that
-legacy engine and only until the cutover step removes it.
+MP-S2. The cutover step removed the legacy `billing_rate_records` engine. No runtime
+code path reads `billing_rate_records` or `pricing_profile_model_patterns`. The
+deprecated rules in `metered-billing.spec.md` describe only historical stored data
+(version-2 breakdowns, `request-logs.spec.md` RL16a).
 
 ## 1. Concepts and units
 
@@ -711,9 +713,10 @@ action. The new-api card exposes the base-URL and token settings.
 
 MP-UI6a. The models.dev card additionally exposes the metadata sync action
 (`POST /api/dashboard/model-metadata/sync/models-dev`,
-`model-metadata-dashboard.spec.md` §2). Until the §9 sync engine ships (MP-S1), the
-preview and apply actions surface the server error for the unimplemented MP-A6/MP-A7
-endpoints without altering client state.
+`model-metadata-dashboard.spec.md` §2). The preview action calls MP-A6 and renders the
+returned diff in a dialog without mutating client caches. The apply action calls MP-A7
+and, on success, revalidates the model-prices, unpriced-models, sync-runs, and
+model-metadata caches.
 
 MP-UI7. Group Pricing tab: lists registry groups with an editable `billing_ratio`
 column persisting through the group update endpoint.
