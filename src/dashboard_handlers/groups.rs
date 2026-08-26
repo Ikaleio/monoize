@@ -36,6 +36,11 @@ fn map_group_error(error: GroupStoreError) -> AppError {
             "invalid_group_description",
             "group description must be at most 256 characters after trimming",
         ),
+        GroupStoreError::InvalidBillingRatio => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "billing_ratio must be a non-negative base-10 decimal string with at most 9 fractional digits",
+        ),
         GroupStoreError::InvalidReorder(message) => {
             AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
         }
@@ -197,6 +202,7 @@ mod tests {
                 description: " premium routing ".to_string(),
                 user_selectable: true,
                 sort_order: 5,
+                billing_ratio: Some("1.5".to_string()),
             }),
         )
         .await
@@ -205,6 +211,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::CREATED);
         assert_eq!(created.name, "Team-A");
         assert_eq!(created.description, "premium routing");
+        assert_eq!(created.billing_ratio, "1.5");
         assert!(!created.is_default);
 
         let default_id = groups[0].id.clone();
@@ -247,6 +254,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                billing_ratio: None,
             }),
         )
         .await
@@ -262,6 +270,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                billing_ratio: None,
             }),
         )
         .await

@@ -2205,6 +2205,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             description: String::new(),
             user_selectable: true,
             sort_order: 1,
+            billing_ratio: None,
         })
         .await
         .expect("team-a group created");
@@ -2215,6 +2216,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             description: String::new(),
             user_selectable: true,
             sort_order: 2,
+            billing_ratio: None,
         })
         .await
         .expect("team-b group created");
@@ -2390,6 +2392,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             description: String::new(),
             user_selectable: true,
             sort_order: 1,
+            billing_ratio: None,
         })
         .await
         .expect("team-a group created");
@@ -2400,6 +2403,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             description: String::new(),
             user_selectable: true,
             sort_order: 2,
+            billing_ratio: None,
         })
         .await
         .expect("team-b group created");

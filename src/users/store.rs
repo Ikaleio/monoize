@@ -4477,6 +4477,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 5,
+                billing_ratio: None,
             })
             .await
             .expect("hidden group created");
@@ -4486,6 +4487,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: true,
                 sort_order: 6,
+                billing_ratio: None,
             })
             .await
             .expect("open group created");
