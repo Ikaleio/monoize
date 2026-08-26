@@ -4,7 +4,6 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::model_price_store::UpsertModelPriceInput;
-use crate::model_price_sync::{PriceSyncError, PriceSyncSource};
 use crate::settings::normalize_pricing_model_key;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -130,64 +129,4 @@ pub async fn list_price_sync_runs(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     Ok(Json(runs))
-}
-
-fn map_sync_error(error: PriceSyncError) -> AppError {
-    match error {
-        PriceSyncError::InvalidRequest(message) => {
-            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-        }
-        PriceSyncError::Upstream(message) => {
-            AppError::new(StatusCode::BAD_GATEWAY, "upstream_fetch_failed", message)
-        }
-        PriceSyncError::Storage(message) => {
-            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
-        }
-    }
-}
-
-/// MP-A6: fetch and compare one source without changing price rows.
-pub async fn preview_price_sync(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(source): Path<String>,
-) -> AppResult<impl IntoResponse> {
-    require_admin(&headers, &state).await?;
-    let source = PriceSyncSource::parse(&source).map_err(map_sync_error)?;
-    let settings = state
-        .settings_store
-        .get_all()
-        .await
-        .map_err(|error| {
-            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-        })?;
-    let preview = state
-        .model_price_store
-        .preview_sync(&state.http, source, &settings)
-        .await
-        .map_err(map_sync_error)?;
-    Ok(Json(preview))
-}
-
-/// MP-A7: fetch and atomically apply one source.
-pub async fn apply_price_sync(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(source): Path<String>,
-) -> AppResult<impl IntoResponse> {
-    require_admin(&headers, &state).await?;
-    let source = PriceSyncSource::parse(&source).map_err(map_sync_error)?;
-    let settings = state
-        .settings_store
-        .get_all()
-        .await
-        .map_err(|error| {
-            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-        })?;
-    let run = state
-        .model_price_store
-        .apply_sync(&state.http, source, &settings)
-        .await
-        .map_err(map_sync_error)?;
-    Ok(Json(run))
 }
