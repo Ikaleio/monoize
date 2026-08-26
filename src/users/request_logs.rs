@@ -2614,4 +2614,148 @@ mod retention_tests {
             .collect();
         assert_eq!(remaining, vec!["legacy-null", "recent"]);
     }
+
+    #[tokio::test]
+    async fn performance_target_stats_aggregate_hours_and_averages() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_tx, _) = tokio::sync::broadcast::channel(1);
+        let store = UserStore::new(db.clone(), log_tx)
+            .await
+            .expect("store creates");
+
+        let now_ms = Utc::now().timestamp_millis();
+        let window_start = now_ms - 24 * 3_600_000;
+        let hour0 = window_start + 60_000;
+        let hour23 = now_ms - 60_000;
+
+        for (id, model, provider_id, status, created_ms, is_stream, duration_ms, ttfb_ms, output) in [
+            (
+                "p1",
+                "m-a",
+                "prov-1",
+                "success",
+                hour0,
+                1_i64,
+                2000_i64,
+                500_i64,
+                150_i64,
+            ),
+            (
+                "p2",
+                "m-a",
+                "prov-1",
+                "error",
+                hour0,
+                0,
+                1000,
+                0,
+                0,
+            ),
+            (
+                "p3",
+                "m-a",
+                "prov-2",
+                "client_gone",
+                hour23,
+                0,
+                1000,
+                200,
+                50,
+            ),
+            (
+                "p4",
+                "m-b",
+                "prov-1",
+                "success",
+                hour23,
+                0,
+                1000,
+                100,
+                10,
+            ),
+            (
+                "p5",
+                "m-a",
+                "prov-1",
+                "pending",
+                hour23,
+                0,
+                1000,
+                100,
+                10,
+            ),
+        ] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (\
+                        id, user_id, model, provider_id, is_stream, status, \
+                        created_at, created_at_unix_ms, duration_ms, ttfb_ms, output_tokens\
+                     ) VALUES ($1, 'u1', $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    vec![
+                        id.into(),
+                        model.into(),
+                        provider_id.into(),
+                        is_stream.into(),
+                        status.into(),
+                        Utc::now().to_rfc3339().into(),
+                        created_ms.into(),
+                        duration_ms.into(),
+                        ttfb_ms.into(),
+                        output.into(),
+                    ],
+                ))
+                .await
+                .expect("log inserted");
+        }
+
+        let by_model = store
+            .get_performance_target_stats(window_start, now_ms, 24, None, Some("m-a"))
+            .await
+            .expect("model stats");
+        let mut finished = [0i64; 24];
+        let mut success = [0i64; 24];
+        for row in &by_model.hour_buckets {
+            finished[row.hour_idx as usize] += row.finished_count;
+            success[row.hour_idx as usize] += row.success_count;
+        }
+        assert_eq!(finished[0], 2);
+        assert_eq!(success[0], 1);
+        assert_eq!(finished[23], 1);
+        assert_eq!(success[23], 1);
+        // ttfb samples for m-a: 500 and 200 -> mean 350
+        assert!((by_model.avg_ttft_ms.unwrap() - 350.0).abs() < 1e-6);
+        // TPS samples: stream (150/(1.5s))=100, non-stream (50/1s)=50 -> mean 75
+        assert!((by_model.avg_tps.unwrap() - 75.0).abs() < 1e-6);
+
+        let by_providers = store
+            .get_performance_target_stats(
+                window_start,
+                now_ms,
+                24,
+                Some(&["prov-1".to_string()]),
+                None,
+            )
+            .await
+            .expect("provider stats");
+        let finished_p1: i64 = by_providers
+            .hour_buckets
+            .iter()
+            .map(|r| r.finished_count)
+            .sum();
+        assert_eq!(finished_p1, 3);
+
+        let empty = store
+            .get_performance_target_stats(window_start, now_ms, 24, Some(&[]), None)
+            .await
+            .expect("empty provider filter");
+        assert!(empty.hour_buckets.is_empty());
+        assert!(empty.avg_ttft_ms.is_none());
+    }
 }
