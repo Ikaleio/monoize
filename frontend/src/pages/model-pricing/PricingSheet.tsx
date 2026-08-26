@@ -73,7 +73,6 @@ interface PriceForm {
 }
 
 interface MetadataForm {
-  modelsDevProvider: string;
   mode: string;
   maxTokens: string;
   maxInputTokens: string;
@@ -119,7 +118,6 @@ function formFromRecord(record: ModelPriceRecord | null): PriceForm {
 
 function metadataFormFromRecord(record: ModelMetadataRecord | undefined): MetadataForm {
   return {
-    modelsDevProvider: record?.models_dev_provider ?? "",
     mode: record?.mode ?? "",
     maxTokens: record?.max_tokens?.toString() ?? "",
     maxInputTokens: record?.max_input_tokens?.toString() ?? "",
@@ -134,10 +132,6 @@ interface ProviderVariant {
   cacheRead: string;
   cacheWrite: string;
   reasoning: string;
-  mode: string;
-  maxTokens: string;
-  maxInputTokens: string;
-  maxOutputTokens: string;
 }
 
 // models.dev variant prices are USD-per-1M strings inside metadata raw_json
@@ -147,22 +141,12 @@ function extractVariants(rawJson: Record<string, unknown> | undefined): Provider
   if (!providers || typeof providers !== "object") return [];
   const priceStr = (value: unknown): string =>
     typeof value === "string" && isValidUsdDecimal(value) ? value : "";
-  const integerStr = (value: unknown): string => {
-    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-      return String(value);
-    }
-    return typeof value === "string" && /^\d+$/.test(value) ? value : "";
-  };
   return Object.entries(providers as Record<string, unknown>)
     .flatMap(([provider, value]) => {
       if (!value || typeof value !== "object") return [];
       const cost = (value as Record<string, unknown>).cost as
         | Record<string, unknown>
         | undefined;
-      const limit = (value as Record<string, unknown>).limit as
-        | Record<string, unknown>
-        | undefined;
-      const family = (value as Record<string, unknown>).family;
       return [
         {
           provider,
@@ -171,13 +155,6 @@ function extractVariants(rawJson: Record<string, unknown> | undefined): Provider
           cacheRead: priceStr(cost?.cache_read),
           cacheWrite: priceStr(cost?.cache_write),
           reasoning: priceStr(cost?.reasoning),
-          mode:
-            typeof family === "string" && family.toLowerCase().includes("embed")
-              ? "embedding"
-              : "chat",
-          maxTokens: integerStr(limit?.context),
-          maxInputTokens: integerStr(limit?.input),
-          maxOutputTokens: integerStr(limit?.output),
         },
       ];
     })
@@ -243,7 +220,7 @@ export function PricingSheet({
       prices: { ...previous.prices, [field]: value },
     }));
 
-  const applyVariant = (variant: ProviderVariant) => {
+  const applyVariant = (variant: ProviderVariant) =>
     setForm((previous) => ({
       ...previous,
       prices: {
@@ -255,15 +232,6 @@ export function PricingSheet({
         reasoning_usd_per_1m: variant.reasoning,
       },
     }));
-    setMetaForm({
-      modelsDevProvider: variant.provider,
-      mode: variant.mode,
-      maxTokens: variant.maxTokens,
-      maxInputTokens: variant.maxInputTokens,
-      maxOutputTokens: variant.maxOutputTokens,
-    });
-    setMetaDirty(true);
-  };
 
   const removeLock = (field: string) => {
     setForm((previous) => ({
@@ -364,7 +332,6 @@ export function PricingSheet({
         await upsertModelMetadataOptimistic(
           id,
           {
-            models_dev_provider: metaForm.modelsDevProvider.trim() || null,
             mode: metaForm.mode.trim() || null,
             max_tokens: metaForm.maxTokens.trim() ? Number(metaForm.maxTokens) : null,
             max_input_tokens: metaForm.maxInputTokens.trim()
@@ -725,22 +692,6 @@ export function PricingSheet({
                   <ChevronRight className="h-4 w-4 transition-transform group-open:rotate-90" />
                 </summary>
                 <div className="grid grid-cols-2 gap-3 border-t p-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs">
-                      {t("modelPricing.metaProvider", "models.dev provider")}
-                    </Label>
-                    <Input
-                      value={metaForm.modelsDevProvider}
-                      placeholder="openai"
-                      onChange={(event) => {
-                        setMetaForm((previous) => ({
-                          ...previous,
-                          modelsDevProvider: event.target.value,
-                        }));
-                        setMetaDirty(true);
-                      }}
-                    />
-                  </div>
                   <div className="space-y-1">
                     <Label className="text-xs">{t("modelPricing.metaMode", "Mode")}</Label>
                     <Input
