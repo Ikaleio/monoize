@@ -47,15 +47,7 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 
 ### 费用看起来不对
 
-费用 =（模型费用 + 工具费用）× Channel 模型的 `multiplier` × 实际路由分组的 `billing_ratio`。先在**日志**中检查版本 3 计费明细。再在**模型**和 **Provider** 页面检查这三个输入值。
-
-### `403 model_pricing_required`
-
-在**模型**页面添加启用且完整的价格。也可以在全局设置或所选 Provider 上允许免费结算。
-
-### `403 usage_required`
-
-让上游返回 Usage。也可以在全局设置或所选 Provider 上允许缺少 Usage 时免费结算。
+费用 = 基础价格 × 分组 `billing_ratio` × Channel 模型条目的 `multiplier`。在**模型**页面确认该模型有已启用的价格记录。在**模型 → 分组定价**中检查分组的计费倍率。检查 Channel 模型条目上的倍率。倍率为 `0` 时该 Channel 免费。
 
 ## 流式问题
 
