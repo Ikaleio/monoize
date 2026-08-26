@@ -4,17 +4,24 @@
 
 - Product name: Monoize.
 - Scope:
-  - dashboard UI page `/dashboard/models` for viewing/editing model metadata;
-  - dashboard UI tabs for billing-rate records and pricing-profile patterns;
+  - `model_metadata_records` as a **metadata-only** store (capabilities, limits,
+    mode, raw models.dev variants);
   - CRUD REST endpoints for `model_metadata_records`;
-  - CRUD REST endpoints for `billing_rate_records`;
-  - sync-vs-manual priority semantics.
+  - model-id normalization and suffix-based reasoning-effort resolution.
+- Price storage, price editing, price sync selection, and billing enforcement are
+  governed by `model-pricing.spec.md`. The former Billing Profiles and Advanced Rates
+  tabs, the `billing_rate_records` CRUD endpoints, and the pricing-profile pattern
+  endpoints do not exist in this model; migration step
+  `m20260901_000048_model_prices_cutover` removes their storage
+  (`model-pricing.spec.md` §12.2).
 
 ## 1. Data Model
 
-MD1. This spec operates on `model_metadata_records` (defined in `user-billing-and-model-metadata.spec.md` § 7) and `billing_rate_records` (defined in `metered-billing.spec.md` § 1).
+MD1. This spec operates on `model_metadata_records`
+(`user-billing-and-model-metadata.spec.md` § 7).
 
-MD2. `model_id` (PK) is the **bare model API name** (e.g. `gpt-4o`, `claude-sonnet-4-20250514`), not prefixed with provider.
+MD2. `model_id` (PK) is the **bare model API name** (e.g. `gpt-4o`,
+`claude-sonnet-4-20250514`), not prefixed with provider.
 
 MD3. `source` column distinguishes record origin:
 
@@ -23,60 +30,67 @@ MD3. `source` column distinguishes record origin:
 | `models_dev` | Populated or last updated by Models.dev sync |
 | `manual` | Created or last updated by admin manual edit |
 
-MD4. All pricing fields are nano-dollar integer strings (same precision as billing spec).
+MD4. After the cutover migration, `model_metadata_records` carries no price columns.
+Metadata rows store `models_dev_provider`, `mode`, token limits, `raw_json`, `source`,
+and `updated_at`. Billing computation reads `model_prices`
+(`model-pricing.spec.md` §3) and MUST NOT read `model_metadata_records`.
 
-MD5. `raw_json` stores all provider variants from models.dev as `{ "providers": { "openai": {...}, "azure": {...}, ... } }`. Every value inside a variant's `cost` object MUST be stored and returned as its exact decimal string rather than a JSON number. This enables the edit UI to switch pricing source without JavaScript binary-floating-point conversion.
+MD5. `raw_json` stores all provider variants from models.dev as
+`{ "providers": { "openai": {...}, "azure": {...}, ... } }`. Every value inside a
+variant's `cost` object MUST be stored and returned as its exact decimal string rather
+than a JSON number. This lets the pricing UI switch price sources without JavaScript
+binary-floating-point conversion.
 
-MD6. `models_dev_provider` indicates which models.dev provider's pricing is currently applied.
+MD6. `models_dev_provider` indicates which models.dev provider variant is currently
+applied for metadata (and, through `model-pricing.spec.md` MP-Y7, for the synced
+price).
 
-MD7. Billing computation MUST NOT read model pricing directly from `model_metadata_records`. Billing computation MUST read `billing_rate_records`.
+## 2. Models.dev sync (metadata part)
 
-MD8. When a model metadata row is created, updated, or synced with token prices, the server MUST mirror the present token prices into `billing_rate_records` rows whose `source` identifies the metadata origin.
+SP1. The models.dev sync run is defined by `model-pricing.spec.md` §9.2. One run
+updates `model_prices` (prices) and `model_metadata_records` (metadata) from one
+fetched snapshot.
 
-MD9. Every non-null metadata price and every billing-rate `unit_price_nano_usd` MUST be a canonical non-negative integer string. A negative, signed-plus, fractional, exponent, or out-of-range value MUST be rejected with `400 invalid_request`.
+SP2. Metadata upsert skips rows whose current `source = 'manual'`. Rows with
+`source = 'models_dev'` (or no prior row) are upserted normally.
 
-MD10. Models.dev decimal USD-per-million prices MUST be parsed directly from their JSON decimal token. The conversion to nano-USD per token is `trunc(price_usd_per_million * 1000)`. This conversion MUST NOT pass through `f32` or `f64`. For example, `1.001` MUST become `"1001"`.
+SP3. Variant grouping, official-provider preference, and the highest-price fallback
+are defined by `model-pricing.spec.md` MP-Y7 and the MP-Y8 official family→provider
+table. The metadata row's `models_dev_provider` MUST equal the provider of the variant
+selected there. All variants are stored in `raw_json.providers`.
 
-## 2. Sync Priority & Merge
+SP4. Metadata sync MUST first delete all records with `source != 'manual'`, then
+insert new data, so models removed upstream are cleaned up.
 
-SP1. `POST /api/dashboard/model-metadata/sync/models-dev` MUST skip upsert for any row whose current `source = 'manual'`.
+SP5. Skip rules follow `model-pricing.spec.md` MP-Y9 (`auto`, thinking-suffix ids).
 
-SP2. Rows with `source = 'models_dev'` (or no prior row) MUST be upserted normally.
+SP6. Limit and mode mapping from the selected models.dev variant:
 
-SP3. When models.dev contains the same bare model name under multiple providers:
-  - Group all variants by bare model name.
-  - Select the default variant using the following priority:
-    1. **Official provider preference**: If the canonical `model_id` belongs to a known model family, prefer the variant from that family's official provider — but only when that variant has strictly positive `input_cost_per_token_nano`. The known family→provider mappings are:
-       - Model IDs starting with `gpt-` or `o` followed by a digit (e.g. `o1`, `o3-pro`) → provider `openai`
-       - Model IDs starting with `claude-` → provider `anthropic`
-       - Model IDs starting with `gemini-` → provider `google`
-       - Model IDs starting with `grok-` → provider `xai`
-       - Model IDs starting with `deepseek-` → provider `deepseek`
-       - Model IDs starting with `mistral-` or `codestral-` or `pixtral-` or `ministral-` → provider `mistral`
-    2. **Highest-cost fallback**: If no official provider variant exists or it lacks positive pricing, fall back to the variant with the highest non-zero `input_cost_per_token_nano`. This prevents resale losses when the platform charges users based on the stored price.
-  - Store all variants in `raw_json.providers` so the user can switch sources in the edit UI.
+| models.dev field | DB column |
+|------------------|-----------|
+| (provider key) | `models_dev_provider` |
+| `limit.context` | `max_tokens` |
+| `limit.input` | `max_input_tokens` |
+| `limit.output` | `max_output_tokens` |
+| `family` contains `"embed"` (case-insensitive) in any grouped variant | `mode` = `"embedding"` |
+| otherwise | `mode` = `"chat"` |
+| (entire model JSON per variant) | `raw_json.providers` |
 
-SP4. Sync MUST first delete all records with `source != 'manual'`, then insert new data. This ensures models removed upstream are also cleaned up. Sync response MUST return `upserted`, `skipped`, and `deleted` counts.
-
-SP5. During sync, canonical `model_id = "auto"` MUST be ignored (not inserted/updated).
-
-SP6. During sync, a grouped model MUST be ignored when **all** variants have missing or non-positive (`<= 0`) `input_cost_per_token_nano`. In other words, at least one variant must have strictly positive input pricing to be eligible.
-
-SP7. During sync, canonical model IDs that end with `-thinking`, `:thinking`, or `-think` MUST be ignored (not inserted/updated).
-
-SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating it with `source = 'models_dev'` via the PUT endpoint, after which subsequent syncs will overwrite it.
+SP7. Admin MAY reset a manual record back to sync-managed by updating it with
+`source = 'models_dev'` via the PUT endpoint, after which later syncs overwrite it.
 
 ## 3. CRUD Endpoints
 
 ### 3.1 List model metadata
 
 - Method/Path: `GET /api/dashboard/model-metadata`
-- No changes from original spec.
+- Auth: admin required.
+- Response: rows ordered by `model_id ASC`.
 
 ### 3.2 Get single model metadata
 
 - Method/Path: `GET /api/dashboard/model-metadata/{model_id}`
-- No changes from original spec.
+- Response: single row or `404 not_found`.
 
 ### 3.3 Upsert model metadata
 
@@ -88,201 +102,66 @@ SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating
 {
   "models_dev_provider": "openai",
   "mode": "chat",
-  "input_cost_per_token_nano": "30000",
-  "output_cost_per_token_nano": "60000",
-  "cache_read_input_cost_per_token_nano": "15000",
-  "output_cost_per_reasoning_token_nano": null,
   "max_input_tokens": 128000,
   "max_output_tokens": 16384,
   "max_tokens": 128000
 }
 ```
 
-- If row exists: update only fields present in the JSON object, set `source = 'manual'`, set `updated_at = now()`. An omitted field preserves its stored value. An explicitly null nullable field clears its stored value.
-- If row does not exist: insert with provided fields, `source = 'manual'`, `raw_json = '{}'`, `updated_at = now()`.
-- The metadata write and deletion/replacement of its generated `billing_rate_records` mirror rows MUST execute in one database transaction. Any mirror failure MUST roll back the metadata write.
-- Response: `200 OK` with the full updated `ModelMetadataRecord`.
-- Errors: `400 invalid_request` if `model_id` path param is empty.
+- If row exists: update only fields present in the JSON object, set
+  `source = 'manual'`, set `updated_at = now()`. An omitted field preserves its stored
+  value. An explicitly null nullable field clears its stored value.
+- If row does not exist: insert with provided fields, `source = 'manual'`,
+  `raw_json = '{}'`, `updated_at = now()`.
+- Response: `200 OK` with the full updated record.
+- Errors: `400 invalid_request` if the `model_id` path param is empty. Price fields
+  are unknown fields on this endpoint and MUST be rejected with `400 invalid_request`;
+  prices are edited through `PUT /api/dashboard/model-prices/{model_id}`
+  (`model-pricing.spec.md` MP-A2).
 
 ### 3.4 Delete model metadata
 
 - Method/Path: `DELETE /api/dashboard/model-metadata/{model_id}`
 - Auth: admin required.
 - Response: `200 OK` with `{ "success": true }`.
-- Errors: `404 not_found` if record does not exist.
-- The metadata delete and deletion of all generated billing-rate rows whose id starts with `model_metadata:{model_id}:` MUST execute in one database transaction.
-
-### 3.5 Billing-rate CRUD
-
-- Method/Path: `GET /api/dashboard/billing-rates`
-- Auth: admin required.
-- Response: `BillingRateRecord[]`.
-
-- Method/Path: `PUT /api/dashboard/billing-rates/{id}`
-- Auth: admin required.
-- Body: any mutable fields from `billing_rate_records` except `id` and `updated_at`.
-- Response: full updated `BillingRateRecord`.
-- Errors: `400 invalid_request` if required fields are absent for a new row or `unit_price_nano_usd` is not a non-negative integer string.
-
-- Method/Path: `DELETE /api/dashboard/billing-rates/{id}`
-- Auth: admin required.
-- Response: `{ "success": true }`.
-- Errors: `404 not_found` if row does not exist.
-
-### 3.6 Billing-rate catalog sync
-
-- Method/Path: `POST /api/dashboard/billing-rates/sync/catalog`
-- Auth: admin required.
-- Behavior: sync the bundled catalog as defined in `metered-billing.spec.md` MB-A4.
-- Response: `{ "success": true, "upserted": number, "skipped": number, "deleted": number, "fetched_at": string }`.
-
-### 3.7 Pricing-profile patterns
-
-- Method/Path: `GET /api/dashboard/pricing-profile-patterns`
-- Auth: admin required.
-- Response: `{ "patterns": [{ "pattern": string, "pricing_profile": string }] }`.
-
-- Method/Path: `PUT /api/dashboard/pricing-profile-patterns`
-- Auth: admin required.
-- Body: `{ "patterns": [{ "pattern": string, "pricing_profile": string }] }`.
-- Behavior: replace the ordered pattern list.
-- Errors: `400 invalid_request` if any `pattern` or `pricing_profile` is empty after trim.
+- Errors: `404 not_found` if the record does not exist.
+- Deleting metadata MUST NOT delete the model's `model_prices` row.
 
 ## 4. Dashboard UI
 
-### 4.1 Page location
+UI1. The `/dashboard/models` page is defined by `model-pricing.spec.md` §11. There is
+no standalone metadata table page.
 
-UI1. Page MUST be accessible at `/dashboard/models`.
+UI2. Metadata fields (`mode`, `max_tokens`, `max_input_tokens`, `max_output_tokens`,
+`models_dev_provider`) are shown and edited inside the model pricing sheet
+(`model-pricing.spec.md` MP-UI3) in a section separated from the price fields.
+Metadata edits persist through §3.3; price edits persist through
+`model-pricing.spec.md` MP-A2.
 
-UI2. Sidebar navigation MUST include a "Models" entry between "Playground" and "Users" in the admin section.
+UI3. When `raw_json.providers` contains multiple variants, the pricing sheet MUST show
+a provider-variant selector. Selecting a variant auto-fills price fields (exact
+decimal strings from `raw_json`) and limit fields from that variant. The user MAY edit
+the auto-filled values before saving.
 
-### 4.2 Layout
-
-UI3. Page MUST follow standard dashboard layout: `PageWrapper`, `text-3xl` heading, motion animations.
-
-UI4. Page heading: "Model Database" (en) / "模型数据库" (zh).
-
-UI4a. The page MUST contain three tabs in this order:
-
-1. `Model Database`
-2. `Billing Profiles`
-3. `Advanced Rates`
-
-UI4b. Each tab MUST use SWR for data loading, skeleton fallback while loading, and optimistic updates for user-triggered mutations.
-
-### 4.3 Model Database tab: compact virtualized list
-
-UI5. Default display MUST be a compact virtualized table (`TableVirtuoso`) with columns:
-
-| Column | Content |
-|--------|---------|
-| Model | Provider icon (from `models_dev_provider`) + `model_id` (bare name) |
-| Input | `input_cost_per_token_nano` formatted as `$X.XX / 1M tokens` |
-| Output | `output_cost_per_token_nano` formatted as `$X.XX / 1M tokens` |
-| Context | `max_tokens` formatted with `K` suffix |
-| Source | Badge showing `models_dev` or `manual` |
-| Updated | Relative timestamp |
-
-UI5.1. In the Model column badge, GLM-series icon compatibility MUST follow `dashboard-ui-layout.spec.md` PL14.1.
-
-UI6. Each row MUST be clickable to open an edit dialog.
-
-UI7. Price display: `nano_per_token / 1000` = dollars per 1M tokens. Display up to 4 decimal places.
-
-UI7a. Model Database and Billing Profiles MUST keep nano-USD prices and USD-per-million form values as decimal strings. Conversion, provider switching, form editing, validation, and API serialization MUST NOT pass a price through JavaScript `Number`, `parseFloat`, `toFixed`, or binary floating-point arithmetic.
-
-UI7b. Converting a USD-per-million input to nano-USD per token MUST compute `trunc(input * 1000)` with decimal-string arithmetic. A negative or syntactically invalid input MUST be blocked before the mutation request. For example, `1.001` MUST serialize as `"1001"` and round-trip back to `1.001`.
-
-### 4.4 Search and filter
-
-UI8. Page MUST include a search input that filters by `model_id` substring (client-side).
-
-### 4.5 Edit dialog — provider source switcher
-
-UI9. When `raw_json.providers` contains multiple entries, the edit dialog MUST show a provider selector listing available providers with their pricing.
-
-UI10. Selecting a provider MUST auto-fill all pricing and limit fields from that provider's data in `raw_json.providers[provider]`.
-
-UI11. The user MAY further edit the auto-filled values. Any save always sets `source = 'manual'`.
-
-### 4.6 Actions
-
-UI12. Page header:
-- "Sync Models.dev" button: triggers sync, shows loading, toast with upserted/skipped counts.
-- "Add Model" button: opens create dialog.
-
-UI13. Edit dialog MUST include a "Delete" action.
-
-UI14. After any mutation, the model list MUST revalidate via SWR.
-
-### 4.7 Loading state
-
-UI15. Skeleton placeholders while loading.
-
-### 4.8 Billing Profiles tab
-
-UI17. The Billing Profiles tab MUST group models.dev rate records by `pricing_profile` and present a master-detail workbench.
-
-UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as USD per one million tokens.
-
-UI17b. Mobile (`< lg`) MUST render a horizontally scrollable profile selector and stacked model-price rows. No pricing table may require horizontal page scrolling.
-
-UI18. Billing Profiles MUST provide model search and source/status filters without exposing nano-USD units or raw JSON in the primary flow.
-
-UI19. Billing Profiles MUST provide:
-
-- a `Sync models.dev` action that calls `POST /api/dashboard/model-metadata/sync/models-dev`;
-- a visible last-sync/source status derived from synchronized records;
-- an ordered match-rule editor backed by `GET/PUT /api/dashboard/pricing-profile-patterns`;
-- a manual-override action that creates or updates manual `billing_rate_records` using human-readable USD-per-million inputs.
-
-UI19a. When metadata and billing rates have finished loading and no `models_dev` records exist, the UI MUST trigger at most one automatic models.dev sync for that mounted page instance. A failed automatic sync MUST show a retry action and MUST NOT loop.
-
-UI19b. A successful models.dev sync MUST revalidate both model metadata and billing-rate SWR resources in the same interaction.
-
-UI20. Manual overrides MUST be visually separated from synchronized rates. Manual rows take precedence through the existing rate priority and source semantics; deleting a manual override MUST reveal the synchronized value after SWR revalidation.
-
-### 4.9 Advanced Rates tab
-
-UI21. The Advanced Rates tab MUST list `billing_rate_records` with every low-level mutable field, including nano-USD and JSON match fields.
-
-UI22. Advanced Rates MUST provide catalog sync, search, add, edit, and delete actions.
-
-UI23. The low-level rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
-
-UI24. Empty pricing-profile match-rule `pattern` or `pricing_profile` values MUST be blocked before submitting.
-
-### 4.8 Billing integration note
-
-UI16. Billing resolves a normalized pricing key for `upstream_model` first. Pricing-key normalization MUST strip at most one recognized reasoning-tier suffix using the suffix rules in § 8. If a redirected normalized `upstream_model` key has no complete rates, billing MUST retry the lookup with the normalized logical-model key. Both lookups query `billing_rate_records` through the selected pricing profile.
+UI4. All variant price handling in the UI keeps decimal strings end to end; values
+MUST NOT pass through JavaScript `Number`, `parseFloat`, `toFixed`, or binary
+floating-point arithmetic.
 
 ## 5. Invariants
 
-INV1. `source = 'manual'` whenever created or updated via PUT endpoint.
+INV1. `source = 'manual'` whenever the metadata row was created or updated via the PUT
+endpoint.
 
-INV2. Sync MUST NOT modify records where `source = 'manual'`.
+INV2. Sync MUST NOT modify metadata records where `source = 'manual'`.
 
-INV3. `model_id` is the primary key, bare model API name, MUST be unique.
-
-INV4. Price fields are nullable. Billing **blocks** a request only when neither the normalized `upstream_model` pricing key nor the normalized redirected source logical-model pricing key resolves to complete input/output pricing.
+INV3. `model_id` is the primary key, bare model API name, unique.
 
 ## 6. Billing Enforcement
 
-BE1. `build_monoize_attempts()` MUST filter out an attempt when both of the following are true:
-
-- the normalized pricing key of `upstream_model` has no complete eligible rate matrix in `billing_rate_records`, and
-- the normalized pricing key of the request logical model also has no complete eligible rate matrix in `billing_rate_records`.
-
-BE2. If ALL attempts for a request are filtered out due to missing pricing, the system MUST return HTTP 403 with error code `model_pricing_required` and a message listing the blocked model name(s).
-
-BE3. `maybe_charge_response()` MUST return an error (HTTP 403 `model_pricing_required`) only if both the normalized `upstream_model` pricing-key lookup and the normalized logical-model fallback lookup fail. This is a defense-in-depth check — BE1 should already prevent this path from being reached.
-
-BE4. The Provider dashboard page MUST display a visible warning badge on any `ProviderCard` whose models include entries with no complete eligible rate matrix in `billing_rate_records`. The badge MUST show the count of unpriced models.
-
-- `GET /api/dashboard/providers` MUST include `unpriced_model_count`, `unpriced_model_ids`, and `model_runtime_statuses` for each provider. `unpriced_model_ids` MUST contain exactly the logical model ids counted by `unpriced_model_count`, sorted ascending. Each `model_runtime_statuses` entry MUST expose its `pricing_status` and the Channel id and name for every unpriced mapping as defined by `channel-management.spec.md`.
-- For a redirected entry, the card MUST treat the model as priced when either the normalized pricing key of the `redirect` model or the normalized pricing key of the logical model has complete rates. It MUST count the entry as unpriced only when both are missing/incomplete.
-
-BE5. The billing enforcement check uses a per-request cache to avoid redundant pricing lookups. Because redirect fallback and suffix normalization depend on both `upstream_model` and logical model after pricing-key normalization, the cache key MUST include both values or an equivalent composite identity.
+BE1. Attempt filtering, `model_pricing_required` rejection, the free-settlement flags,
+and the Provider dashboard pricing badges are defined by `model-pricing.spec.md`
+(MP-F2, MP-A4) and `channel-management.spec.md` (`model_runtime_statuses.pricing_status`).
+`model_metadata_records` plays no role in billing enforcement.
 
 ## 7. Model ID Normalization
 
@@ -299,12 +178,12 @@ NID1. **Canonical form**: `model_id` MUST be normalized in this order:
   - `claude-sonnet-4-20250514` → `claude-sonnet-4-20250514` (no `/`, unchanged except lowercase)
 
 NID2. Normalization MUST be applied:
-  - During `sync_from_models_dev`, when grouping variants by model name.
+  - During models.dev sync, when grouping variants by model name.
   - During migration on startup (existing records with `/` in `model_id`).
 
 NID3. When normalization produces duplicate `model_id` values, the most recently updated record wins.
 
-NID4. Dashboard CRUD routes for model metadata MUST use Axum wildcard `{*model_id}` to support model IDs that may contain `/` (e.g. user-created records). The handler MUST strip a leading `/` from the captured path if present.
+NID4. Dashboard CRUD routes for model metadata and model prices MUST use Axum wildcard `{*model_id}` to support model IDs that may contain `/` (e.g. user-created records). The handler MUST strip a leading `/` from the captured path if present.
 
 ## 8. Suffix-Based Reasoning Effort Resolution
 
@@ -349,13 +228,12 @@ RE7. When `collect_provider_attempts` looks up `urp.model` in each `channel.mode
 
 RE8. When a suffix match resolves to a base model, the resolved `reasoning_effort` value MUST be injected into the URP request's `reasoning.effort` field (typed flow) before the request is encoded for the upstream provider. If the user already specified `reasoning_effort` explicitly in the request body, the explicit value takes precedence over the suffix-derived value.
 
-RE9. Billing and any other model-pricing identification path use the **base model**'s pricing from `model_metadata_records`. When a model ID ends with a recognized reasoning-tier suffix, Monoize MUST strip that suffix (longest suffix first, at most one suffix removed) before metadata lookup. The suffix model itself does not need a separate pricing entry.
+RE9. Billing and any other model-pricing identification path use the **base model**'s pricing key. When a model ID ends with a recognized reasoning-tier suffix, Monoize MUST strip that suffix (longest suffix first, at most one suffix removed) before the `model_prices` lookup (`model-pricing.spec.md` MP-R1). The suffix model itself does not need a separate pricing entry.
 
-### 8.4 Billing: reasoning token fallback
+### 8.4 Billing: reasoning token pricing
 
-RE10. In `calculate_charge_nano`, when `reasoning_tokens > 0` and `output_cost_per_reasoning_token_nano` is `None`, the system MUST fall back to `output_cost_per_token_nano` for reasoning tokens (i.e. charge all completion tokens at the output rate).
-
-This is already the existing behavior (the `else` branch charges `completion_tokens * output_cost_per_token_nano` which includes reasoning tokens). No change needed.
+RE10. Reasoning-token pricing follows `model-pricing.spec.md` MP-R5: a null
+`reasoning_usd_per_1m` bills reasoning tokens at the resolved output rate.
 
 ## 9. Migration
 

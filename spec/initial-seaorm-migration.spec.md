@@ -305,6 +305,8 @@ ISM4.12j. Migration `m20260825_000043_channel_allow_missing_usage` MUST add INTE
 
 ISM4.12k. Migration `m20260826_000046_channel_allow_unpriced_server_tools` MUST add INTEGER column `allow_unpriced_server_tools` with `NOT NULL DEFAULT 0` to `monoize_channels` on SQLite and PostgreSQL. Existing rows MUST read as `false`. The down migration MUST drop the column.
 
+ISM4.12l. Migration `m20260826_000047_model_prices` MUST, on SQLite and PostgreSQL: create `model_prices` and `price_sync_runs` per `model-pricing.spec.md` §2; add TEXT column `billing_ratio` with `NOT NULL DEFAULT '1'` to `monoize_groups`; add nullable INTEGER columns `allow_free_when_unpriced_override` and `allow_free_when_missing_usage_override` to `monoize_providers`. Existing rows MUST read as ratio `'1'` and override NULL. It MUST NOT drop or alter any existing column. The down migration MUST drop the two tables and the three added columns.
+
 ISM4.12j. Migration `m20260823_000037_billing_plan_cron_schedule` MUST replace `billing_plans.period_seconds` with `billing_plans.schedule` (`billing-plan-subscriptions.spec.md` BP-D5). Existing `users.next_grant_at` values MUST be left unchanged. The down migration MUST restore `period_seconds`.
 
 ISM4.12k. Migration `m20260825_000042_groups_registry` MUST create `monoize_groups`, seed exactly one default group, backfill `users.group_id`, `api_keys.use_user_group`, `api_keys.group_ids`, `monoize_providers.group_ids`, and `billing_plans.group_ids` from the legacy label columns, and drop `users.allowed_groups`, `api_keys.allowed_groups`, `api_keys.token_group`, `monoize_providers.groups`, and `billing_plans.allowed_groups` (`groups-registry.spec.md` §4).

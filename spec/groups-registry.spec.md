@@ -30,6 +30,7 @@ Table `monoize_groups`:
 | `is_default`      | INTEGER | NOT NULL, `0` or `1`, default `0`                                       |
 | `user_selectable` | INTEGER | NOT NULL, `0` or `1`, default `0`                                       |
 | `sort_order`      | INTEGER | NOT NULL, default `0`                                                   |
+| `billing_ratio`   | TEXT    | NOT NULL, default `'1'`; decimal string `>= 0` per `model-pricing.spec.md` MP-U1 |
 | `created_at`      | TEXT    | NOT NULL, RFC 3339 UTC                                                  |
 | `updated_at`      | TEXT    | NOT NULL, RFC 3339 UTC                                                  |
 
@@ -47,6 +48,15 @@ keys (see `api-token-management.spec.md` TM-GRP-5). It has no other runtime mean
 
 GR-D5. `sort_order` defines the system default ordering. The canonical registry order is
 `sort_order ASC, created_at ASC, id ASC`. Every list read MUST return this order.
+
+GR-D8. `billing_ratio` multiplies the final charge of every request whose billing group
+is this group (`model-pricing.spec.md` §5). The value MUST be a decimal string that
+satisfies `model-pricing.spec.md` MP-U1 and `>= 0`. `0` makes requests billed through
+this group free. A write path MUST parse, compare, persist, and return the value
+without converting it through `f32` or `f64`. Read responses return the canonical
+decimal form without exponent notation or trailing fractional zeroes. The column is
+added by migration `m20260826_000047_model_prices` with default `'1'` for every
+existing row.
 
 ### 1.1 Reference columns
 
@@ -100,6 +110,7 @@ or non-string element MUST fail the read with a storage error; it MUST NOT decod
   "is_default": true,
   "user_selectable": true,
   "sort_order": 0,
+  "billing_ratio": "1",
   "created_at": "2026-08-25T00:00:00Z",
   "updated_at": "2026-08-25T00:00:00Z"
 }
@@ -115,10 +126,13 @@ GR-A2. The endpoint is read-only and MUST NOT create or modify rows.
 
 - Endpoint: `POST /api/dashboard/groups`
 - Authorization: admin (`role` is `admin` or `super_admin`).
-- Request body: `{ "name": string, "description"?: string, "user_selectable"?: boolean, "sort_order"?: integer }`
-  with defaults `description = ""`, `user_selectable = false`, `sort_order = 0`.
+- Request body: `{ "name": string, "description"?: string, "user_selectable"?: boolean, "sort_order"?: integer, "billing_ratio"?: string }`
+  with defaults `description = ""`, `user_selectable = false`, `sort_order = 0`,
+  `billing_ratio = "1"`.
 - Response: `201` + created `Group` object with server-generated UUID v4 `id` and
   `is_default = false`.
+- A `billing_ratio` that violates GR-D8 MUST be rejected with HTTP `400` code
+  `invalid_request`.
 
 GR-A3. `name` MUST be trimmed; the trimmed value MUST be 1..64 characters, else HTTP `400`
 code `invalid_group_name`. `description` MUST be trimmed; the trimmed value MUST be at most
@@ -131,11 +145,13 @@ GR-A4. If another row exists whose `lower(trim(name))` equals the new name's
 
 - Endpoint: `PUT /api/dashboard/groups/{group_id}`
 - Authorization: admin.
-- Request body: partial; each of `name`, `description`, `user_selectable`, `sort_order` is
-  optional and, when present, replaces the stored value. Omitted fields are unchanged.
+- Request body: partial; each of `name`, `description`, `user_selectable`, `sort_order`,
+  `billing_ratio` is optional and, when present, replaces the stored value. Omitted
+  fields are unchanged.
 - Response: `200` + updated `Group` object.
 - Errors: `404 not_found` for an unknown id; GR-A3/GR-A4 apply to present fields (name
-  uniqueness compares against every other row).
+  uniqueness compares against every other row); a `billing_ratio` violating GR-D8 is
+  rejected with HTTP `400` code `invalid_request`.
 
 GR-A5. `is_default` MUST NOT be changeable through this endpoint; a request body containing
 `is_default` MUST be treated as if the field were absent.
