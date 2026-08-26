@@ -22,6 +22,63 @@ export interface ChatRequestConfig {
   maxTokens: string;
 }
 
+const INTERNAL_PLAYGROUND_SDK_API_KEY =
+  "monoize-playground-session-placeholder";
+
+type ValidChatRequestAuth = Exclude<
+  ChatRequestAuth,
+  { mode: "invalid" }
+>;
+
+function withInternalPlaygroundAuth(
+  baseFetch: typeof fetch,
+  group: string,
+): typeof fetch {
+  return (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+
+    // @ai-sdk/openai requires an apiKey before it builds any request. Remove
+    // that local placeholder at the final fetch boundary so session mode can
+    // never be interpreted as API-key authentication by Monoize.
+    headers.delete("authorization");
+    headers.delete("x-api-key");
+    headers.set("x-monoize-internal-source", "playground");
+    if (group.trim()) {
+      headers.set("x-monoize-playground-group", group.trim());
+    } else {
+      headers.delete("x-monoize-playground-group");
+    }
+
+    return baseFetch(input, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+  };
+}
+
+export function createPlaygroundOpenAIProvider(
+  auth: ValidChatRequestAuth,
+  origin: string,
+  baseFetch: typeof fetch,
+) {
+  const rewriteFetch = withRawReasoningRewrite(baseFetch);
+  return createOpenAI({
+    name: "monoize",
+    baseURL: `${origin}/api/v1`,
+    ...(auth.mode === "internal"
+      ? {
+          apiKey: INTERNAL_PLAYGROUND_SDK_API_KEY,
+          fetch: withInternalPlaygroundAuth(rewriteFetch, auth.group),
+        }
+      : {
+          apiKey: auth.apiKey,
+          fetch: rewriteFetch,
+        }),
+  });
+}
+
 /**
  * Strips assistant `file` and `reasoning` parts before model conversion
  * (PG-CHAT3): generated images cannot be replayed as assistant content, and
@@ -124,27 +181,11 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
       throw new Error(config.auth.message);
     }
 
-    const internal = config.auth.mode === "internal";
-    const rewriteFetch = withRawReasoningRewrite(globalThis.fetch.bind(globalThis));
-    const provider = createOpenAI({
-      name: "monoize",
-      baseURL: `${window.location.origin}/api/v1`,
-      ...(internal
-        ? {
-            headers: {
-              "x-monoize-internal-source": "playground",
-              ...(config.auth.group.trim()
-                ? { "x-monoize-playground-group": config.auth.group.trim() }
-                : {}),
-            },
-            fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-              rewriteFetch(input, { ...init, credentials: "include" }),
-          }
-        : {
-            apiKey: config.auth.apiKey,
-            fetch: rewriteFetch,
-          }),
-    });
+    const provider = createPlaygroundOpenAIProvider(
+      config.auth,
+      window.location.origin,
+      globalThis.fetch.bind(globalThis),
+    );
 
     const systemPrompt = config.systemPrompt.trim();
     const result = streamText({

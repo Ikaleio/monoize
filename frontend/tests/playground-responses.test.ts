@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import type { UIMessage } from 'ai'
+import { streamText, type UIMessage } from 'ai'
 import {
 	RAW_REASONING_SUMMARY_INDEX_BASE,
 	createRawReasoningRewriteTransform,
 	reasoningPartKind,
 	rewriteRawReasoningFrame
 } from '../src/components/playground/responses-sse'
-import { sanitizeForModel } from '../src/components/playground/chat-transport'
+import {
+	createPlaygroundOpenAIProvider,
+	sanitizeForModel
+} from '../src/components/playground/chat-transport'
 
 function frame(data: Record<string, unknown>): string {
 	return `event: ${String(data.type)}\ndata: ${JSON.stringify(data)}`
@@ -224,5 +227,35 @@ describe('sanitizeForModel (PG-CHAT3)', () => {
 			{ id: 'u1', role: 'user', parts: [filePart, { type: 'text', text: 'look' }] }
 		]
 		expect(sanitizeForModel(messages)[0]?.parts).toHaveLength(2)
+	})
+})
+
+describe('createPlaygroundOpenAIProvider (PG-CHAT2)', () => {
+	test('uses session authentication without sending the SDK API-key placeholder', async () => {
+		let capturedInit: RequestInit | undefined
+		const provider = createPlaygroundOpenAIProvider(
+			{ mode: 'internal', group: 'group-1' },
+			'https://monoize.test',
+			async (_input, init) => {
+				capturedInit = init
+				return new Response('data: [DONE]\n\n', {
+					headers: { 'content-type': 'text/event-stream' }
+				})
+			}
+		)
+
+		const result = streamText({
+			model: provider.responses('gpt-5'),
+			messages: [{ role: 'user', content: 'hello' }]
+		})
+		await result.consumeStream()
+
+		expect(capturedInit).toBeDefined()
+		const headers = new Headers(capturedInit?.headers)
+		expect(headers.get('authorization')).toBeNull()
+		expect(headers.get('x-api-key')).toBeNull()
+		expect(headers.get('x-monoize-internal-source')).toBe('playground')
+		expect(headers.get('x-monoize-playground-group')).toBe('group-1')
+		expect(capturedInit?.credentials).toBe('include')
 	})
 })

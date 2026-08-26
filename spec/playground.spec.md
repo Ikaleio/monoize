@@ -176,12 +176,15 @@ PG-CHAT2. `MonoizeChatTransport.sendMessages` MUST:
    request, including regenerations).
 2. Reject with an error carrying a translatable reason when the model is empty.
 3. Build an OpenAI provider via `createOpenAI` from `@ai-sdk/openai` with
-   `name = "monoize"` and `baseURL = <origin>/api/v1`. Built-in mode MUST use the
-   PG-AUTH3 headers, no `apiKey`, and a fetch implementation with `credentials =
-   "include"`. Explicit API-key mode MUST use `apiKey = <full-key-value>` and omit the
+   `name = "monoize"` and `baseURL = <origin>/api/v1`. Built-in mode MUST pass the
+   constant non-secret placeholder `monoize-playground-session-placeholder` as the SDK
+   `apiKey`. The built-in fetch implementation MUST remove `Authorization` and
+   `x-api-key` after the provider constructs the request. It MUST then add the PG-AUTH3
+   headers and set `credentials = "include"`. The placeholder MUST NOT reach the HTTP
+   request. Explicit API-key mode MUST use `apiKey = <full-key-value>` and omit the
    internal headers. In both modes the transport MUST select the Responses model
-   `provider.responses(<model id>)`, so the upstream call is
-   `POST /api/v1/responses` with `stream: true` against the local Monoize instance.
+   `provider.responses(<model id>)`, so the upstream call is `POST /api/v1/responses`
+   with `stream: true` against the local Monoize instance.
 4. Convert UI messages with `convertToModelMessages` after applying PG-CHAT3
    sanitation.
 5. Call `streamText` with: the converted messages; `system` set iff the stored system
