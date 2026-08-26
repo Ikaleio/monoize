@@ -1487,11 +1487,18 @@ fn split_body(value: Value, known_keys: &[&str]) -> AppResult<(Value, Map<String
     Ok((Value::Object(known_obj), extra))
 }
 
+fn parse_positive_multiplier(value: &str) -> Option<Multiplier> {
+    value
+        .parse()
+        .ok()
+        .filter(|multiplier: &Multiplier| multiplier.is_positive())
+}
+
 fn parse_max_multiplier_header(headers: &HeaderMap) -> Option<Multiplier> {
     headers
         .get("x-max-multiplier")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
+        .and_then(parse_positive_multiplier)
 }
 
 #[allow(clippy::result_large_err)]
@@ -1512,7 +1519,7 @@ fn parse_urp_request(known: &Value, extra: Map<String, Value>) -> AppResult<UrpR
     let max_multiplier = obj
         .get("max_multiplier")
         .and_then(Value::as_str)
-        .and_then(|value| value.parse().ok());
+        .and_then(parse_positive_multiplier);
 
     Ok(UrpRequest {
         affinity_explicit: None,

@@ -6,6 +6,7 @@ use super::{
     User, UserBalance, UserRole, UserStore, canonicalize_group_ids, compile_model_redirects,
     validate_model_redirects,
 };
+use crate::exact_decimal::Multiplier;
 use crate::transforms::{
     TransformRuleConfig, canonical_transform_id, canonicalize_transform_rule,
     canonicalize_transform_rules,
@@ -26,6 +27,13 @@ use std::sync::{Arc, OnceLock};
 const MAX_FORWARDING_API_KEY_BYTES: usize = 512;
 const DEFAULT_API_KEY_BATCH_DELETE_MAX_IDS: usize = 400;
 const DEFAULT_SESSION_CLEANUP_INTERVAL_SECS: u64 = 3_600;
+
+fn validate_positive_max_multiplier(value: Option<Multiplier>) -> Result<(), String> {
+    if value.is_some_and(|multiplier| !multiplier.is_positive()) {
+        return Err("max_multiplier must be greater than zero".to_string());
+    }
+    Ok(())
+}
 
 fn parse_positive_limit(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())
@@ -1368,6 +1376,7 @@ impl UserStore {
         mut input: CreateApiKeyInput,
         is_admin: bool,
     ) -> Result<(ApiKey, String), String> {
+        validate_positive_max_multiplier(input.max_multiplier)?;
         canonicalize_transform_rules(&mut input.transforms);
         validate_api_key_transforms(&input.transforms, is_admin, &self.custom_transforms.get())?;
         let compiled_model_redirects = compile_model_redirects(&input.model_redirects)?;
@@ -2327,6 +2336,8 @@ impl UserStore {
             .map(|value| value.parse())
             .transpose()
             .map_err(|e: String| format!("invalid persisted max_multiplier: {e}"))?;
+        validate_positive_max_multiplier(max_multiplier)
+            .map_err(|error| format!("invalid persisted max_multiplier: {error}"))?;
         let transforms_str: String = row
             .try_get("", "transforms")
             .map_err(|error| format!("invalid persisted transforms: {error}"))?;
@@ -2390,6 +2401,7 @@ impl UserStore {
         input: UpdateApiKeyInput,
         is_admin: bool,
     ) -> Result<ApiKey, String> {
+        validate_positive_max_multiplier(input.max_multiplier)?;
         if let Some(expires_at) = input.expires_at.as_deref() {
             DateTime::parse_from_rfc3339(expires_at)
                 .map_err(|_| "expires_at must be a valid RFC3339 timestamp".to_string())?;

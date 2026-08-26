@@ -112,7 +112,7 @@ pub(super) fn read_max_multiplier_from_extra(req: &urp::UrpRequest) -> Option<Mu
     req.extra_body
         .get("max_multiplier")
         .and_then(Value::as_str)
-        .and_then(|value| value.parse().ok())
+        .and_then(parse_positive_multiplier)
 }
 
 pub(super) fn inject_monoize_context(auth: &crate::auth::AuthResult, req: &mut urp::UrpRequest) {
@@ -905,7 +905,7 @@ pub(super) fn read_max_multiplier_from_embeddings_body(body: &Value) -> Option<M
     body.as_object()
         .and_then(|obj| obj.get("max_multiplier"))
         .and_then(Value::as_str)
-        .and_then(|value| value.parse().ok())
+        .and_then(parse_positive_multiplier)
 }
 
 pub(super) fn resolve_max_multiplier_for_embeddings(

@@ -270,7 +270,7 @@ pub async fn create_image_edit(
     let max_multiplier_val = {
         let ceiling = auth.max_multiplier;
         let requested = max_multiplier_raw
-            .and_then(|s| s.parse::<Multiplier>().ok())
+            .and_then(|value| parse_positive_multiplier(&value))
             .or_else(|| parse_max_multiplier_header(&headers));
         match (ceiling, requested) {
             (Some(c), Some(r)) => Some(r.min(c)),
@@ -395,7 +395,7 @@ fn resolve_image_max_multiplier(
     let ceiling = auth.max_multiplier;
     let requested = body_value
         .and_then(Value::as_str)
-        .and_then(|value| value.parse().ok())
+        .and_then(parse_positive_multiplier)
         .or_else(|| parse_max_multiplier_header(headers));
 
     match (ceiling, requested) {

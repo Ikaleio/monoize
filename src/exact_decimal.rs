@@ -29,6 +29,10 @@ impl Multiplier {
         Ok(Self(value.normalize()))
     }
 
+    pub fn is_positive(self) -> bool {
+        self.0 > Decimal::ZERO
+    }
+
     pub fn checked_scale_i128(self, base: i128) -> Option<i128> {
         let coefficient = self.0.mantissa();
         let divisor = 10_i128.checked_pow(self.0.scale())?;
