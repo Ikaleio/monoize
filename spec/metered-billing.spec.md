@@ -6,9 +6,11 @@
 - Status: **DEPRECATED.** The pricing-profile and `billing_rate_records` rate-matrix
   model defined by earlier revisions of this file is superseded by
   `spec/model-pricing.spec.md`.
-- Migration `m20260901_000049_model_prices_cutover` removes the legacy engine
-  (`model-pricing.spec.md` §12). No legacy rate storage, API, or compatibility alias
-  remains after that migration.
+- The legacy engine remains in the code only until migration step
+  `m20260901_000048_model_prices_cutover` ships (`model-pricing.spec.md` §12). Until
+  that step ships, the legacy engine settles requests with the behavior of the last
+  pre-deprecation revision of this file (git history). New behavior MUST NOT be added
+  to the legacy engine.
 
 ## 1. Rule mapping
 

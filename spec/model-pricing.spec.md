@@ -24,13 +24,14 @@
 
 ### 0.1 Implementation status
 
-MP-S1. This specification defines the implemented behavior. Migration
-`m20260826_000048_model_prices` creates the new storage. Migration
-`m20260901_000049_model_prices_cutover` removes the legacy engine and activates this
-settlement model.
+MP-S1. This specification is the target behavior. Delivery is split into two migration
+steps (§12). Step `m20260826_000047_model_prices` is additive and ships with the pricing
+dashboard skeleton. Step `m20260901_000048_model_prices_cutover` removes the legacy
+engine and ships with the settlement rewrite.
 
-MP-S2. New settlements MUST use `model_prices`. The deprecated rules in
-`metered-billing.spec.md` do not govern new settlements.
+MP-S2. Until the cutover step ships, the legacy `billing_rate_records` engine continues
+to settle requests. The deprecated rules in `metered-billing.spec.md` govern only that
+legacy engine and only until the cutover step removes it.
 
 ## 1. Concepts and units
 
@@ -500,10 +501,6 @@ MP-Y2. The `new_api` source is configured through system settings
 settings read APIs once set; reads return `""` for an unset token and `"__set__"`
 otherwise.
 
-MP-Y2a. Settings writes handle the token field as: value `"__set__"` keeps the stored
-token unchanged; value `""` clears the stored token; any other string replaces the
-stored token. This makes a read-modify-write settings round trip lossless.
-
 MP-Y3. Fetch timeout is 30 seconds. A fetch or parse failure finalizes the
 `price_sync_runs` row with `status = "failed"` and returns HTTP `502` with code
 `upstream_fetch_failed`.
@@ -708,9 +705,6 @@ MP-UI6. Upstream Sync tab: one card per source (models.dev, OpenRouter, new-api)
 last-run status from MP-A5, a preview action rendering the MP-A6 diff, and an apply
 action. The new-api card exposes the base-URL and token settings.
 
-MP-UI6a. Applying the models.dev source MUST update prices and metadata from the same
-fetched snapshot. A separate metadata-sync action or endpoint MUST NOT exist.
-
 MP-UI7. Group Pricing tab: lists registry groups with an editable `billing_ratio`
 column persisting through the group update endpoint.
 
@@ -723,7 +717,7 @@ selectors (`Inherit global`, `On`, `Off`) mapping to `null`, `true`, `false`.
 
 ## 12. Migration
 
-### 12.1 Step 1 (additive): `m20260826_000048_model_prices`
+### 12.1 Step 1 (additive): `m20260826_000047_model_prices`
 
 MP-M1. Step 1 creates `model_prices` and `price_sync_runs` per §2, adds
 `monoize_groups.billing_ratio TEXT NOT NULL DEFAULT '1'`, and adds the two nullable
@@ -733,7 +727,7 @@ Provider override columns per MP-D11. It MUST NOT drop or alter any existing col
 MP-M2. After step 1, SQLite and PostgreSQL schemas are identical in column names,
 nullability, and defaults.
 
-### 12.2 Step 2 (cutover): `m20260901_000049_model_prices_cutover`
+### 12.2 Step 2 (cutover): `m20260901_000048_model_prices_cutover`
 
 MP-M3. Step 2 converts legacy manual rules: every `billing_rate_records` row with
 `source = "manual"`, `enabled = 1`, `rate_kind = "token"`, a non-null `model_pattern`

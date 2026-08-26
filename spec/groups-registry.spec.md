@@ -55,7 +55,7 @@ satisfies `model-pricing.spec.md` MP-U1 and `>= 0`. `0` makes requests billed th
 this group free. A write path MUST parse, compare, persist, and return the value
 without converting it through `f32` or `f64`. Read responses return the canonical
 decimal form without exponent notation or trailing fractional zeroes. The column is
-added by migration `m20260826_000048_model_prices` with default `'1'` for every
+added by migration `m20260826_000047_model_prices` with default `'1'` for every
 existing row.
 
 ### 1.1 Reference columns
@@ -211,13 +211,6 @@ with a storage error; the cascade MUST NOT silently repair or skip corrupt rows.
 GR-X6. After commit, the process MUST invalidate the API-key authentication cache and bump
 the routing config revision so in-flight affinity bindings re-validate against the new
 provider group sets.
-
-GR-X7. The GR-X2, GR-X3, and GR-X4 rewrites MUST NOT issue one UPDATE statement per
-affected row. Affected rows are collected per table, split into chunks of at most 250 rows,
-and each chunk is rewritten by one bulk
-`UPDATE ... SET group_ids = CASE id ... END WHERE id IN (...)` statement; for `api_keys`
-the same statement also rewrites `use_user_group`. Rows not affected by GR-X2..GR-X4 MUST
-NOT be modified.
 
 ## 4. Migration `m20260825_000042_groups_registry`
 
