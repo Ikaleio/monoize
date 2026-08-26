@@ -118,16 +118,20 @@ BE3.2. The finite user-balance admission read MUST query the database. It MUST N
 
 BE4. The legacy `ensure_quota_before_forward` per-call quota check MUST NOT exist. Sub-account billing replaces it entirely (see `api-key-sub-account-billing.spec.md`).
 
-BE5. Monoize MUST determine whether selected candidate attempts have billable pricing before enforcing the pre-forward balance gate. If no candidate attempt has billable pricing under C1.2, Monoize MUST reject the request with HTTP `403` and code `model_pricing_required` before the balance gate. This rule applies to all roles, including `admin` and `super_admin`.
+BE5. Monoize MUST determine whether selected candidate attempts have billable pricing before enforcing the pre-forward balance gate. If no candidate attempt has an applicable price under C1.2 and the attempt's effective `allow_free_when_unpriced` is `false` (`model-pricing.spec.md` §7), Monoize MUST reject the request with HTTP `403` and code `model_pricing_required` before the balance gate. This rule applies to all roles, including `admin` and `super_admin`.
 
 ## 5. Charge calculation
 
-C1. Charge requires both:
+C1. Charge computation is defined by `model-pricing.spec.md` §4. It requires:
 
-- normalized upstream response usage, and
-- a complete applicable `billing_rate_records` matrix resolved under C1.2.
+- normalized upstream response usage (subject to the free-settlement rules of
+  `model-pricing.spec.md` §7), and
+- an applicable `model_prices` row resolved under C1.2 and
+  `model-pricing.spec.md` MP-R2.
 
-C1a. `model_metadata_records` MAY store legacy token prices and model limits. Metadata writes and Models.dev sync MUST mirror present token prices into `billing_rate_records`, but billing computation MUST read `billing_rate_records`.
+C1a. `model_metadata_records` stores metadata only (`model-metadata-dashboard.spec.md`
+MD4). Billing computation MUST read `model_prices` and MUST NOT read
+`model_metadata_records`.
 
 C1.1. Served upstream model resolution for request execution and billing metadata:
 
@@ -138,19 +142,19 @@ C1.2. Pricing model resolution for billing:
 
 - Before each pricing lookup candidate in this section, Monoize MUST normalize that candidate to a `pricing_model_key` by removing at most one recognized reasoning-tier suffix from the end of the model ID. If no recognized suffix matches, `pricing_model_key` MUST equal the original candidate.
 - Recognized reasoning-tier suffixes MUST use the same suffix set and longest-suffix-first matching rule as `reasoning_suffix_map` plus the built-in effort suffixes defined in `model-metadata-dashboard.spec.md` § 8.
-- For each candidate key, Monoize MUST select the pricing profile via ordered `pricing_profile_model_patterns` from `metered-billing.spec.md` § 2.
-- Monoize MUST first look up eligible rate rows for the normalized `upstream_model` key derived from C1.1.
-- If `upstream_model` came from a non-empty `redirect` and that normalized lookup does not yield complete rates, Monoize MUST retry rate lookup with the normalized requested logical model key.
+- Monoize MUST first look up the `model_prices` row for the normalized `upstream_model` key derived from C1.1 (exact `model_id` match, `model-pricing.spec.md` MP-R2).
+- If `upstream_model` came from a non-empty `redirect` and that normalized lookup does not yield an applicable price, Monoize MUST retry the lookup with the normalized requested logical model key.
 - If the normalized requested logical model key equals the normalized `upstream_model` key, Monoize MUST NOT perform a second lookup.
-- If neither lookup yields complete rates, the request has no billable pricing.
+- If neither lookup yields an applicable price, the request has no billable pricing and `model-pricing.spec.md` MP-F2 applies.
 
 C2. Base charge formula (nano-dollar):
 
 ```
-base_charge = sum(token_line_items.charge_nano) + sum(meter_line_items.charge_nano)
+base_charge = token_charge_nano + tool_charge_nano
 ```
 
-Token line items and meter line items are defined by `metered-billing.spec.md`.
+Token charges are defined by `model-pricing.spec.md` §4; tool charges by
+`model-pricing.spec.md` §6.
 
 C3. `usage.input_tokens` on the internal `Usage` model MUST be interpreted as an aggregate/inclusive prompt total. That is, `input_tokens` MUST be the sum of base-rate prompt tokens, cache-read prompt tokens, and cache-creation prompt tokens. Cache-class counters (`cache_read_tokens`, `cache_creation_tokens`) are refinements of that total, not disjoint additive buckets.
 
@@ -162,56 +166,31 @@ C3-iii. With C3-i and C3-ii in effect, all billing and logging code paths MUST t
 
 C3-iii-a. If a provider reports tool-result prompt tokens as a disjoint counter, decode MUST add that counter to `Usage.input_tokens` and MUST also preserve it in `usage.input_details.tool_prompt_tokens`. Billing MUST NOT add the detail counter a second time.
 
-C3-iv. If `usage.input_details.cache_read_tokens` is present and a matching `cache_read` rate exists, input charge MUST be:
+C3-iv. Cache-read, cache-write, and uncached input buckets are derived and charged per
+`model-pricing.spec.md` MP-C1 through MP-C3. Each billable bucket MUST clamp at zero
+after subtraction. Monoize MUST NOT charge the same input token once at the base input
+rate and again at a cache rate.
+
+C4. `Usage.output_tokens` MUST be an aggregate/inclusive output total. If a provider reports visible candidate tokens and reasoning/thinking tokens as disjoint counters, decode MUST set `Usage.output_tokens` to their checked sum and MUST preserve the reasoning counter in `usage.output_details.reasoning_tokens`. If a provider already reports an inclusive output total, decode MUST use it directly. Billing MUST subtract the reasoning detail once before applying the base output rate (`model-pricing.spec.md` MP-C3) and MUST NOT bill the same output token twice.
+
+C5. Final charge multiplies by the selected Channel model multiplier and the resolved
+group billing ratio, then truncates toward zero (`model-pricing.spec.md` MP-C11):
 
 ```
-input_charge =
-  (input_tokens - cache_read_tokens) * input_uncached_rate
-  + cache_read_tokens * cache_read_rate
+final_charge_nano = trunc(base_charge * channel_model_multiplier * group_billing_ratio)
 ```
 
-C3a. If `usage.input_details.cache_creation_tokens` is present, billing MUST handle cache-write tokens according to `metered-billing.spec.md` § 4:
-
-```
-cache_creation_tokens = cache_creation_5m_tokens + cache_creation_1h_tokens
-```
-
-When cache-write billing applies, the input charge computed in C2/C3 MUST first exclude `cache_creation_tokens` from the base-rate input bucket before adding cache-write line items. Formally:
-
-``` 
-base_rate_input_tokens = input_tokens - cache_read_tokens - cache_creation_tokens
-input_charge =
-  base_rate_input_tokens * input_cost_per_token_nano
-  + cache_read_tokens * cache_read_input_cost_per_token_nano
-  + cache_creation_5m_tokens * cache_write_5m_rate
-  + cache_creation_1h_tokens * cache_write_1h_rate
-```
-
-The implementation MUST clamp each billable bucket at zero after subtraction. Monoize MUST NOT charge the same input token once at the base input rate and again at a cache-write rate. If a rate matrix requires both 5-minute and 1-hour cache-write classes and upstream usage provides only aggregate cache creation, Monoize MUST reject billing with HTTP `403` and code `model_pricing_required`.
-
-C4. If `usage.output_details.reasoning_tokens` is present and a matching `reasoning_output` rate exists, output charge MUST be:
-
-```
-output_charge =
-  (output_tokens - reasoning_tokens) * output_rate
-  + reasoning_tokens * reasoning_output_rate
-```
-
-`Usage.output_tokens` MUST be an aggregate/inclusive output total. If a provider reports visible candidate tokens and reasoning/thinking tokens as disjoint counters, decode MUST set `Usage.output_tokens` to their checked sum and MUST preserve the reasoning counter in `usage.output_details.reasoning_tokens`. If a provider already reports an inclusive output total, decode MUST use it directly. Billing MUST subtract the reasoning detail once before applying the base output rate and MUST NOT bill the same output token twice.
-
-C5. Final charge MUST multiply by the selected Channel model multiplier and truncate toward zero:
-
-```
-final_charge_nano = trunc(base_charge * channel_model_multiplier)
-```
-
-C6. If C1.2 yields no billable rates, Monoize MUST reject the request with HTTP `403` and code `model_pricing_required`.
+C6. If C1.2 yields no applicable price and the attempt's effective
+`allow_free_when_unpriced` is `false`, Monoize MUST reject the request with HTTP `403`
+and code `model_pricing_required`. When the effective flag is `true`, the request
+settles free per `model-pricing.spec.md` MP-F2.
 
 C6.1. `build_monoize_attempts()` SHOULD prevent C6 from being reached by filtering unbillable attempts before upstream forwarding.
 
 C6.2. If C6 is reached during post-response billing, Monoize MUST NOT write any charge ledger row for that request.
 
-C6.3. Missing pricing or missing meter rates MUST NOT be bypassed by `admin` or `super_admin`.
+C6.3. Missing pricing MUST NOT be bypassed by `admin` or `super_admin`. Only the
+free-settlement flags of `model-pricing.spec.md` §7 permit a free settlement.
 
 C7. For embeddings responses, billing MUST treat usage as:
 
@@ -271,16 +250,12 @@ M1. Server MUST persist model metadata in table `model_metadata_records`.
 
 M2. Primary key MUST be `model_id`.
 
-M3. Table MUST contain at least:
+M3. After migration step `m20260901_000048_model_prices_cutover`
+(`model-pricing.spec.md` §12.2), the table contains exactly:
 
 - `model_id: TEXT`
 - `models_dev_provider: TEXT`
 - `mode: TEXT`
-- `input_cost_per_token_nano: TEXT NULL`
-- `output_cost_per_token_nano: TEXT NULL`
-- `cache_read_input_cost_per_token_nano: TEXT NULL`
-- `cache_creation_input_cost_per_token_nano: TEXT NULL`
-- `output_cost_per_reasoning_token_nano: TEXT NULL`
 - `max_input_tokens: INTEGER NULL`
 - `max_output_tokens: INTEGER NULL`
 - `max_tokens: INTEGER NULL`
@@ -288,52 +263,19 @@ M3. Table MUST contain at least:
 - `source: TEXT`
 - `updated_at: TEXT`
 
-M4. Price fields in this table MUST use nano-dollar integer strings.
+M4. The table carries no price columns. Prices live in `model_prices`
+(`model-pricing.spec.md` §2.1).
 
 ## 8. Models.dev sync
 
-S1. Admin endpoint `POST /api/dashboard/model-metadata/sync/models-dev` MUST fetch:
+S1. The models.dev sync is defined by `model-pricing.spec.md` §9 (fetch, variant
+selection, price mapping, run recording) and `model-metadata-dashboard.spec.md` §2
+(metadata mapping). One apply run through
+`POST /api/dashboard/price-sync/models_dev/apply` updates both tables from one fetched
+snapshot.
 
-- `https://models.dev/api.json`
-
-S2. The response is a JSON object keyed by provider ID, each containing a `models` object keyed by model ID.
-
-S3. For each `provider/model` pair, sync MUST normalize the upstream model name to the canonical bare `model_id` used by billing lookups (for example `"openai/gpt-4o"` stores as `"gpt-4o"`). The source provider identity for the chosen sync variant MUST be stored separately in `models_dev_provider`.
-
-S4. Cost fields in models.dev are denominated in USD per 1M tokens. Conversion to nano-dollar per token:
-
-```
-nano_per_token = trunc(cost_per_1m * 1_000_000_000 / 1_000_000) = trunc(cost_per_1m * 1000)
-```
-
-S5. Field mapping from models.dev model object to `model_metadata_records`:
-
-| models.dev field | DB column |
-|------------------|-----------|
-| (provider key) | `models_dev_provider` |
-| `cost.input` | `input_cost_per_token_nano` (after S4 conversion) |
-| `cost.output` | `output_cost_per_token_nano` (after S4 conversion) |
-| `cost.cache_read` | `cache_read_input_cost_per_token_nano` (after S4 conversion) |
-| `cost.cache_write` | `cache_creation_input_cost_per_token_nano` (after S4 conversion) |
-| `cost.reasoning` | `output_cost_per_reasoning_token_nano` (after S4 conversion) |
-| `limit.context` | `max_tokens` |
-| `limit.input` | `max_input_tokens` |
-| `limit.output` | `max_output_tokens` |
-| `family` contains `"embed"` (case-insensitive) in any grouped provider variant for the canonical model | `mode` = `"embedding"` |
-| otherwise | `mode` = `"chat"` |
-| (entire model JSON) | `raw_json` |
-
-S6. Sync MUST upsert records by `model_id`.
-
-S7. Sync response MUST return at least:
-
-- `success: true`
-- `upserted: number`
-- `fetched_at: RFC3339 string`
-
-S8. On fetch/parse failure, endpoint MUST return `502` with `upstream_fetch_failed`.
-
-S9. The metadata sync subsystem MUST expose only `POST /api/dashboard/model-metadata/sync/models-dev`.
+S2. The legacy endpoint `POST /api/dashboard/model-metadata/sync/models-dev` is
+removed by the cutover step and MUST return `404` afterward.
 
 ## 9. Metadata query API
 

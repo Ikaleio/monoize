@@ -6,6 +6,11 @@
 - Internal protocol name: `URP-Proto`.
 - Scope: `/api/dashboard/providers*` APIs used by provider/channel management UI.
 - Compatibility rule: this migration has no legacy API compatibility. Removed fields MUST NOT be accepted.
+- Billing transition: the former Channel flags `allow_missing_usage` and
+  `allow_unpriced_server_tools` are removed by migration step
+  `m20260901_000048_model_prices_cutover` (`model-pricing.spec.md` §12.2). This file
+  describes the post-cutover contract. Until that step ships, the stored columns and
+  the pre-deprecation behavior remain in the legacy engine only.
 
 ## 1. Data Model
 
@@ -32,6 +37,8 @@ A provider object MUST include:
 - `request_timeout_ms_override?: integer | null`
 - `extra_fields_whitelist?: string[] | null`
 - `strip_cross_protocol_nested_extra?: boolean | null`
+- `allow_free_when_unpriced_override?: boolean | null` (free-settlement override, `model-pricing.spec.md` §7; `null` inherits the global setting)
+- `allow_free_when_missing_usage_override?: boolean | null` (free-settlement override, `model-pricing.spec.md` §7; `null` inherits the global setting)
 - `group_ids: string[]` (provider-level group ids for routing eligibility; stored non-empty, see `groups-registry.spec.md` GR-I2)
 - `created_at: RFC3339`
 - `updated_at: RFC3339`
@@ -51,9 +58,12 @@ A channel object MUST include:
 - `api_key: string` (write-only: MUST NOT be returned by list/get APIs)
 - `weight: integer >= 0`
 - `enabled: boolean`
-- `allow_missing_usage: boolean` (default `false`)
-- `allow_unpriced_server_tools: boolean` (default `false`)
 - `models: Record<string, { redirect: string | null, multiplier: string }>`
+
+A channel object MUST NOT include `allow_missing_usage` or
+`allow_unpriced_server_tools`. Free-settlement behavior is configured globally and per
+Provider (`model-pricing.spec.md` §7). A request body containing either removed field
+MUST be rejected with HTTP 400 code `invalid_request`.
 
 Runtime projection fields MAY be returned by list/get APIs:
 
@@ -93,7 +103,7 @@ The array MUST contain one entry for each distinct logical model key in the Prov
 
 For availability counts, an eligible Channel MUST be enabled, have positive weight, and contain the logical model. A Channel is unavailable only while the relevant health entry status is `unhealthy`. A `probing` Channel remains available to routing. If the circuit breaker is disabled, every eligible Channel is available. `availability_status` MUST be `unavailable` when at least one eligible Channel exists and none is available, `degraded` when some but not all eligible Channels are available, and `healthy` otherwise.
 
-For pricing status, the denominator is every Channel model entry for the logical model, including disabled and zero-weight Channels. `pricing_status` MUST be `missing` when every such entry lacks a complete eligible rate matrix, `partial` when only some entries lack one, and `complete` when none lack one.
+For pricing status, the denominator is every Channel model entry for the logical model, including disabled and zero-weight Channels. An entry is priced when its pricing key resolves to an applicable price under `model-pricing.spec.md` MP-R1..MP-R4. `pricing_status` MUST be `missing` when every such entry is unpriced, `partial` when only some entries are unpriced, and `complete` when none is unpriced.
 
 Channel-level passive breaker override fields MAY be present:
 
@@ -128,23 +138,17 @@ Channel automatic session affinity flag MAY be present:
 
 - `session_affinity_auto: boolean | null`. `true` enables automatic session affinity. `false` disables it. `null` or absent selects the URL-based default in CM-AFF-0. When effective automatic session affinity is enabled, every proxied upstream request issued for this Channel MUST carry an `x-session-affinity` header per CM-AFF-1 through CM-AFF-2.
 
-Channel missing-usage billing flag MUST be present:
-
-- `allow_missing_usage: boolean`. `false` preserves the normal requirement for normalized upstream usage. `true` permits this Channel to settle a response without normalized upstream usage as zero usage.
-
-Channel unpriced-server-tool flag MUST be present:
-
-- `allow_unpriced_server_tools: boolean`. `false` rejects an actually used server-native tool when its meter rate or required authoritative quantity is absent. `true` permits that usage class with zero tool charge. An eligible meter rate and quantity MUST still produce the normal tool charge.
-
 ## 2. Invariants
 
 CP-INV-1. `channels.length >= 1`.
 
 CP-INV-2. At least one Channel MUST have a non-empty `models` object.
 
-CP-INV-3. Every Channel model entry `multiplier` MUST be a base-10 decimal string with at most 9 fractional digits, MUST be representable by the server decimal type, and MUST satisfy `multiplier > 0`. Exponent notation, a leading `+`, `NaN`, and infinity are invalid. The server MUST parse, compare, persist, and return the multiplier without converting it through `f32` or `f64`.
+CP-INV-3. Every Channel model entry `multiplier` MUST be a base-10 decimal string with at most 9 fractional digits, MUST be representable by the server decimal type, and MUST satisfy `multiplier >= 0`. Exponent notation, a leading `+`, `NaN`, and infinity are invalid. The server MUST parse, compare, persist, and return the multiplier without converting it through `f32` or `f64`.
 
-CP-INV-3a. Read responses MUST return each multiplier as a canonical decimal string without exponent notation or trailing fractional zeroes. The canonical representation of one is `"1"`.
+CP-INV-3a. Read responses MUST return each multiplier as a canonical decimal string without exponent notation or trailing fractional zeroes. The canonical representation of one is `"1"`. The canonical representation of zero is `"0"`.
+
+CP-INV-3b. `multiplier = 0` is a valid explicit free configuration for that Channel model entry. It settles a normal billing breakdown with `final_charge_nano = 0` (`model-pricing.spec.md` MP-C12). It is not a free-settlement flag and does not bypass pricing-row requirements.
 
 CP-INV-4. Every channel weight MUST satisfy `weight >= 0`.
 
@@ -191,17 +195,17 @@ The Channel's effective automatic session affinity MUST use this order:
 
 CM-HDR-1. Every upstream request issued for a Channel (proxy traffic and the liveness probe of §3.8) MUST send the Channel's persisted `extra_headers` entries in addition to the authentication and protocol-specific headers. When an entry name collides with an authentication or protocol-specific header, the request MUST be rejected at configuration time by CP-INV-15 rather than silently overridden at runtime.
 
-CM-USAGE-1. If a selected Channel returns a response without normalized upstream usage and `allow_missing_usage = true`, Monoize MUST substitute `Usage { input_tokens: 0, output_tokens: 0, input_details: null, output_details: null, extra_body: {} }` for settlement and request-log finalization.
+CM-USAGE-1. Missing-usage settlement and unpriced-model settlement are governed by
+`model-pricing.spec.md` §7 through the global settings `allow_free_when_missing_usage`
+and `allow_free_when_unpriced` plus the Provider-level overrides. Channels carry no
+usage or tool-pricing billing flags.
 
-CM-USAGE-2. If `allow_missing_usage = false`, missing normalized upstream usage MUST follow the existing endpoint-specific rejection or stream-estimation rule in `metered-billing.spec.md` MB-C5.
+CM-USAGE-2. When normalized upstream usage is present, no free-settlement flag changes
+that usage or the resulting charge (`model-pricing.spec.md` MP-F4).
 
-CM-USAGE-3. If normalized upstream usage is present, `allow_missing_usage` MUST NOT change that usage or the resulting charge.
-
-CM-USAGE-4. `allow_unpriced_server_tools` MUST default to `false`. When it is `false`, metered-billing.spec.md MB-M3 and MB-M5b MUST remain fail-closed.
-
-CM-USAGE-5. When `allow_unpriced_server_tools = true`, an actually used server-native usage class with no eligible meter rate MUST be omitted from meter charges. An actually used duration, session, or billed-minute class with no authoritative quantity MUST also be omitted from meter charges. Other token and meter classes MUST settle normally.
-
-CM-USAGE-6. A version 2 billing breakdown that applies CM-USAGE-5 MUST include the omitted class in `ignored_server_tool_usage_classes`. This field MUST be an array of unique usage-class strings in request descriptor order.
+CM-USAGE-3. Server-native tool billing is fail-open per `model-pricing.spec.md` MP-T8:
+an actually used usage class without a usable `tool_prices` entry settles with zero
+tool charge and is recorded in breakdown `unpriced_tool_classes`.
 
 CM-AFF-1. If the Channel `extra_headers` contains an explicit `x-session-affinity` entry, that value MUST be sent verbatim and client passthrough (CM-AFF-1a), request-body identifiers (CM-AFF-1b), and automatic derivation (CM-AFF-2) MUST NOT run.
 
@@ -263,10 +267,12 @@ All endpoints require an authenticated dashboard admin session.
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, allow_missing_usage?: boolean, allow_unpriced_server_tools?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
   - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
+  - `allow_free_when_unpriced_override?: boolean | null`
+  - `allow_free_when_missing_usage_override?: boolean | null`
 - Response: `201` + created provider
 - Errors: `400 invalid_request` when invariants fail
 
@@ -390,6 +396,4 @@ CP-FE-12. A Provider overview model-status detail overlay MUST open on hover or 
 
 CP-FE-13. A Channel `unhealthy` status detail overlay MUST identify a Channel-level breaker when `per_model_circuit_break = false`. When `per_model_circuit_break = true`, it MUST list `_unhealthy_models`. A Channel `probing` status detail overlay MUST list `_probing_models`. Each overlay MUST show `_cooldown_until` when present.
 
-CP-FE-14. The Channel editor MUST expose `allow_missing_usage` as a boolean switch. Its label or adjacent description MUST state that enabling it records zero usage and charges zero when the upstream omits usage.
-
-CP-FE-15. The Channel editor MUST expose `allow_unpriced_server_tools` as a boolean switch directly below `allow_missing_usage`. Its label MUST identify unpriced built-in tool billing. Its description MUST state that only tool usage without a usable rate or required quantity receives zero tool charge.
+CP-FE-14. The Provider editor MUST expose `allow_free_when_unpriced_override` and `allow_free_when_missing_usage_override` as three-state selectors with options `Inherit global`, `On`, and `Off`, mapping to `null`, `true`, and `false`. Each description MUST state which global setting the `Inherit global` option follows.
