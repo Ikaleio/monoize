@@ -4210,3 +4210,73 @@ fn session_affinity_prefers_prompt_cache_key_and_sanitizes() {
     let keyed = serde_json::json!({ "prompt_cache_key": "  sess-42  " });
     assert_eq!(routing::derive_session_affinity(&keyed).unwrap(), "sess-42");
 }
+
+// AFF-5a: nodes decoded from the same wire bytes carry multi-entry
+// `extra_body` HashMaps whose iteration order differs per instance, so a
+// naive serde serialization would hash the same request to different keys.
+#[test]
+fn affinity_prefix_hash_is_deterministic_across_decodes() {
+    let body = serde_json::json!({
+        "model": "gpt-5.6-terra",
+        "stream": true,
+        "store": false,
+        "instructions": "You are Codex, a coding agent.",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "<environment_context>cwd=/repo</environment_context>" }]
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "fix the failing test" }]
+            },
+            {
+                "type": "reasoning",
+                "id": "rs_0001",
+                "summary": [{ "type": "summary_text", "text": "plan the fix" }],
+                "encrypted_content": "gAAAAABencrypted0001",
+                "status": "completed"
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "id": "msg_0001",
+                "status": "completed",
+                "content": [{ "type": "output_text", "text": "done", "annotations": [], "logprobs": [] }]
+            },
+            {
+                "type": "function_call",
+                "id": "fc_0001",
+                "call_id": "call_0001",
+                "name": "shell",
+                "arguments": "{\"cmd\":\"ls\"}",
+                "status": "completed"
+            },
+            {
+                "type": "function_call_output",
+                "id": "fco_0001",
+                "call_id": "call_0001",
+                "output": "src tests",
+                "status": "completed"
+            }
+        ]
+    });
+    let reference = build_routing_stub(
+        &urp::decode::openai_responses::decode_request(&body).expect("decode"),
+        None,
+    );
+    // A single re-decode can coincidentally produce the same HashMap
+    // iteration order; 32 independent decodes make a false pass negligible.
+    for _ in 0..32 {
+        let redecoded = build_routing_stub(
+            &urp::decode::openai_responses::decode_request(&body).expect("decode"),
+            None,
+        );
+        assert_eq!(
+            reference.affinity_prefix_hash, redecoded.affinity_prefix_hash,
+            "affinity prefix hash must be identical for identical wire requests"
+        );
+    }
+}

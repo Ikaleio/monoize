@@ -1,6 +1,8 @@
 use super::*;
 use crate::transforms::stream_split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
 use crate::urp::ImageSource;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::io::Write;
 use xxhash_rust::xxh3::Xxh3;
 
@@ -516,6 +518,299 @@ impl Write for BoundedHashWriter {
     }
 }
 
+/// AFF-5a mirror of `urp::Node` that borrows every field and replaces the
+/// flattened `HashMap` extras with a sorted `BTreeMap`. `HashMap` iteration
+/// order is randomized per instance, so serializing `Node` directly would
+/// hash identical requests to different affinity keys.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum CanonicalAffinityNode<'a> {
+    Text {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        role: urp::OrdinaryRole,
+        content: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: &'a Option<String>,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    Image {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        role: urp::OrdinaryRole,
+        source: &'a ImageSource,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    Audio {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        role: urp::OrdinaryRole,
+        source: &'a urp::AudioSource,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    File {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        role: urp::OrdinaryRole,
+        source: &'a urp::FileSource,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    Refusal {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        content: &'a str,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    Reasoning {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: &'a Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encrypted: &'a Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: &'a Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: &'a Option<String>,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    ToolCall {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        tool_type: urp::ToolCallType,
+        call_id: &'a str,
+        name: &'a str,
+        arguments: &'a str,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    ProviderItem {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        origin_protocol: urp::ProviderProtocol,
+        role: urp::OrdinaryRole,
+        item_type: &'a str,
+        body: &'a Value,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    ToolResult {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: &'a Option<String>,
+        tool_type: urp::ToolCallType,
+        call_id: &'a str,
+        is_error: bool,
+        content: Vec<CanonicalAffinityToolResultContent<'a>>,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    NextDownstreamEnvelopeExtra {
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum CanonicalAffinityToolResultContent<'a> {
+    Text {
+        text: &'a str,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    Image {
+        source: &'a ImageSource,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    File {
+        source: &'a urp::FileSource,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+    ProviderItem {
+        origin_protocol: urp::ProviderProtocol,
+        item_type: &'a str,
+        body: &'a Value,
+        #[serde(flatten)]
+        extra_body: BTreeMap<&'a String, &'a Value>,
+    },
+}
+
+fn sorted_extra(extra_body: &HashMap<String, Value>) -> BTreeMap<&String, &Value> {
+    extra_body.iter().collect()
+}
+
+fn canonical_affinity_tool_result_content(
+    content: &urp::ToolResultContent,
+) -> CanonicalAffinityToolResultContent<'_> {
+    match content {
+        urp::ToolResultContent::Text { text, extra_body } => {
+            CanonicalAffinityToolResultContent::Text {
+                text,
+                extra_body: sorted_extra(extra_body),
+            }
+        }
+        urp::ToolResultContent::Image { source, extra_body } => {
+            CanonicalAffinityToolResultContent::Image {
+                source,
+                extra_body: sorted_extra(extra_body),
+            }
+        }
+        urp::ToolResultContent::File { source, extra_body } => {
+            CanonicalAffinityToolResultContent::File {
+                source,
+                extra_body: sorted_extra(extra_body),
+            }
+        }
+        urp::ToolResultContent::ProviderItem {
+            origin_protocol,
+            item_type,
+            body,
+            extra_body,
+        } => CanonicalAffinityToolResultContent::ProviderItem {
+            origin_protocol: *origin_protocol,
+            item_type,
+            body,
+            extra_body: sorted_extra(extra_body),
+        },
+    }
+}
+
+fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
+    match node {
+        urp::Node::Text {
+            id,
+            role,
+            content,
+            phase,
+            extra_body,
+        } => CanonicalAffinityNode::Text {
+            id,
+            role: *role,
+            content,
+            phase,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::Image {
+            id,
+            role,
+            source,
+            extra_body,
+        } => CanonicalAffinityNode::Image {
+            id,
+            role: *role,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::Audio {
+            id,
+            role,
+            source,
+            extra_body,
+        } => CanonicalAffinityNode::Audio {
+            id,
+            role: *role,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::File {
+            id,
+            role,
+            source,
+            extra_body,
+        } => CanonicalAffinityNode::File {
+            id,
+            role: *role,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::Refusal {
+            id,
+            content,
+            extra_body,
+        } => CanonicalAffinityNode::Refusal {
+            id,
+            content,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::Reasoning {
+            id,
+            content,
+            encrypted,
+            summary,
+            source,
+            extra_body,
+        } => CanonicalAffinityNode::Reasoning {
+            id,
+            content,
+            encrypted,
+            summary,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::ToolCall {
+            id,
+            tool_type,
+            call_id,
+            name,
+            arguments,
+            extra_body,
+        } => CanonicalAffinityNode::ToolCall {
+            id,
+            tool_type: *tool_type,
+            call_id,
+            name,
+            arguments,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::ProviderItem {
+            id,
+            origin_protocol,
+            role,
+            item_type,
+            body,
+            extra_body,
+        } => CanonicalAffinityNode::ProviderItem {
+            id,
+            origin_protocol: *origin_protocol,
+            role: *role,
+            item_type,
+            body,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::ToolResult {
+            id,
+            tool_type,
+            call_id,
+            is_error,
+            content,
+            extra_body,
+        } => CanonicalAffinityNode::ToolResult {
+            id,
+            tool_type: *tool_type,
+            call_id,
+            is_error: *is_error,
+            content: content
+                .iter()
+                .map(canonical_affinity_tool_result_content)
+                .collect(),
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::Node::NextDownstreamEnvelopeExtra { extra_body } => {
+            CanonicalAffinityNode::NextDownstreamEnvelopeExtra {
+                extra_body: sorted_extra(extra_body),
+            }
+        }
+    }
+}
+
 fn affinity_prefix_hash(req: &urp::UrpRequest) -> String {
     let mut writer = BoundedHashWriter::new(AFFINITY_PREFIX_BYTE_LIMIT);
     let result = (|| -> std::io::Result<()> {
@@ -529,7 +824,7 @@ fn affinity_prefix_hash(req: &urp::UrpRequest) -> String {
             if index > 0 {
                 writer.write_all(b",")?;
             }
-            if let Err(error) = serde_json::to_writer(&mut writer, node) {
+            if let Err(error) = serde_json::to_writer(&mut writer, &canonical_affinity_node(node)) {
                 if writer.limit_reached {
                     return Ok(());
                 }

@@ -283,6 +283,8 @@ AFF-4. Explicit stable metadata fields are Responses `previous_response_id`, ses
 
 AFF-5. The fallback input-prefix hash MUST hash normalized request input only. It MUST consider at most the first 8 input nodes and at most the first 16384 bytes of their normalized JSON/text material. The implementation MUST stop serialization when it reaches the byte limit. It MUST NOT serialize or allocate material after that limit. Raw affinity material MUST NOT be persisted.
 
+AFF-5a. The input-prefix hash MUST be deterministic: two requests whose decoded input nodes are equal MUST produce byte-identical hash material within one process lifetime and across process restarts. Node serialization for this hash MUST emit passthrough extra fields of a node, and of its nested tool-result content parts, in ascending lexicographic byte order of their keys. Container iteration order that is not defined by the data itself MUST NOT influence the hash.
+
 AFF-6. The affinity value MUST contain `(provider_id, channel_id, bound_at, last_used_at, expires_at)`.
 
 AFF-7. If an affinity hit points to a Provider+Channel that is still eligible for the request, routing MAY jump directly to that attempt before normal provider-order attempts. This jump consumes the normal provider/channel attempt budget.
