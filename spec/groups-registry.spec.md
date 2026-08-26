@@ -55,7 +55,7 @@ satisfies `model-pricing.spec.md` MP-U1 and `>= 0`. `0` makes requests billed th
 this group free. A write path MUST parse, compare, persist, and return the value
 without converting it through `f32` or `f64`. Read responses return the canonical
 decimal form without exponent notation or trailing fractional zeroes. The column is
-added by migration `m20260826_000047_model_prices` with default `'1'` for every
+added by migration `m20260826_000048_model_prices` with default `'1'` for every
 existing row.
 
 ### 1.1 Reference columns

@@ -525,6 +525,7 @@ async fn dashboard_user_group_id_round_trip_through_store_and_response() {
             description: "team routing".to_string(),
             user_selectable: true,
             sort_order: 1,
+            billing_ratio: None,
         })
         .await
         .expect("team group created");
@@ -645,6 +646,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
             description: String::new(),
             user_selectable: true,
             sort_order: 1,
+            billing_ratio: None,
         })
         .await
         .expect("alpha group created");
@@ -654,6 +656,7 @@ async fn dashboard_api_key_group_selection_round_trip_through_store_and_response
             description: String::new(),
             user_selectable: true,
             sort_order: 2,
+            billing_ratio: None,
         })
         .await
         .expect("beta group created");
@@ -1002,6 +1005,7 @@ async fn dashboard_api_key_group_selection_enforces_registry_and_selectability()
             description: String::new(),
             user_selectable: false,
             sort_order: 1,
+            billing_ratio: None,
         })
         .await
         .expect("hidden group created");

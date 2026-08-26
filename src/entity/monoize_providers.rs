@@ -28,6 +28,8 @@ pub struct Model {
     pub strip_cross_protocol_nested_extra: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub group_ids: String,
+    pub allow_free_when_unpriced_override: Option<i32>,
+    pub allow_free_when_missing_usage_override: Option<i32>,
     pub enabled: i32,
     pub priority: i32,
     #[sea_orm(column_type = "Text")]

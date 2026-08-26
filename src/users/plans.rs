@@ -647,6 +647,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 0,
+                billing_ratio: None,
             })
             .await
             .expect("group creates")

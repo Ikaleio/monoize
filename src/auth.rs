@@ -180,6 +180,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 1,
+                billing_ratio: None,
             })
             .await
             .expect("group created");
@@ -189,6 +190,7 @@ mod tests {
                 description: String::new(),
                 user_selectable: false,
                 sort_order: 2,
+                billing_ratio: None,
             })
             .await
             .expect("group created");

@@ -14,11 +14,12 @@ pub struct Group {
     pub is_default: bool,
     pub user_selectable: bool,
     pub sort_order: i32,
+    pub billing_ratio: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CreateGroupInput {
     pub name: String,
     #[serde(default)]
@@ -27,6 +28,8 @@ pub struct CreateGroupInput {
     pub user_selectable: bool,
     #[serde(default)]
     pub sort_order: i32,
+    #[serde(default)]
+    pub billing_ratio: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -35,6 +38,7 @@ pub struct UpdateGroupInput {
     pub description: Option<String>,
     pub user_selectable: Option<bool>,
     pub sort_order: Option<i32>,
+    pub billing_ratio: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,13 +52,14 @@ pub enum GroupStoreError {
     NameExists,
     InvalidName,
     InvalidDescription,
+    InvalidBillingRatio,
     InvalidReorder(String),
     CannotDeleteDefault,
     Storage(String),
 }
 
-const GROUP_COLUMNS: &str =
-    "id, name, description, is_default, user_selectable, sort_order, created_at, updated_at";
+const GROUP_COLUMNS: &str = "id, name, description, is_default, user_selectable, sort_order, \
+     billing_ratio, created_at, updated_at";
 
 fn storage(error: impl std::fmt::Display) -> GroupStoreError {
     GroupStoreError::Storage(error.to_string())
@@ -76,6 +81,34 @@ fn validate_description(raw: &str) -> Result<String, GroupStoreError> {
     Ok(description)
 }
 
+/// GR-D8: `billing_ratio` is a base-10 decimal string `>= 0` with at most 12
+/// integer digits and at most 9 fractional digits, canonicalized without
+/// exponent notation or trailing fractional zeroes. Never parsed through
+/// binary floating point.
+fn validate_billing_ratio(raw: &str) -> Result<String, GroupStoreError> {
+    let raw = raw.trim();
+    if raw.is_empty()
+        || raw.starts_with('+')
+        || raw.starts_with('-')
+        || !raw
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        || raw.bytes().filter(|byte| *byte == b'.').count() > 1
+    {
+        return Err(GroupStoreError::InvalidBillingRatio);
+    }
+    let value = rust_decimal::Decimal::from_str_exact(raw)
+        .map_err(|_| GroupStoreError::InvalidBillingRatio)?;
+    if value.is_sign_negative() || value.scale() > 9 {
+        return Err(GroupStoreError::InvalidBillingRatio);
+    }
+    let canonical = value.normalize();
+    if canonical.trunc().to_string().trim_start_matches('-').len() > 12 {
+        return Err(GroupStoreError::InvalidBillingRatio);
+    }
+    Ok(canonical.to_string())
+}
+
 fn parse_time(row: &QueryResult, column: &str) -> Result<DateTime<Utc>, GroupStoreError> {
     let raw: String = row.try_get("", column).map_err(storage)?;
     DateTime::parse_from_rfc3339(&raw)
@@ -91,6 +124,7 @@ fn row_to_group(row: &QueryResult) -> Result<Group, GroupStoreError> {
         is_default: row.try_get::<i32>("", "is_default").map_err(storage)? != 0,
         user_selectable: row.try_get::<i32>("", "user_selectable").map_err(storage)? != 0,
         sort_order: row.try_get("", "sort_order").map_err(storage)?,
+        billing_ratio: row.try_get("", "billing_ratio").map_err(storage)?,
         created_at: parse_time(row, "created_at")?,
         updated_at: parse_time(row, "updated_at")?,
     })
@@ -232,6 +266,10 @@ impl UserStore {
     pub async fn create_group(&self, input: CreateGroupInput) -> Result<Group, GroupStoreError> {
         let name = validate_name(&input.name)?;
         let description = validate_description(&input.description)?;
+        let billing_ratio = match input.billing_ratio.as_deref() {
+            Some(raw) => validate_billing_ratio(raw)?,
+            None => "1".to_string(),
+        };
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
 
@@ -243,14 +281,15 @@ impl UserStore {
             .write()
             .await
             .execute(self.db.stmt(
-                "INSERT INTO monoize_groups (id, name, description, is_default, user_selectable, sort_order, created_at, updated_at) \
-                 VALUES ($1, $2, $3, 0, $4, $5, $6, $6)",
+                "INSERT INTO monoize_groups (id, name, description, is_default, user_selectable, sort_order, billing_ratio, created_at, updated_at) \
+                 VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $7)",
                 vec![
                     id.clone().into(),
                     name.clone().into(),
                     description.clone().into(),
                     SeaValue::Int(Some(if input.user_selectable { 1 } else { 0 })),
                     SeaValue::Int(Some(input.sort_order)),
+                    billing_ratio.clone().into(),
                     now.to_rfc3339().into(),
                 ],
             ))
@@ -270,6 +309,7 @@ impl UserStore {
             is_default: false,
             user_selectable: input.user_selectable,
             sort_order: input.sort_order,
+            billing_ratio,
             created_at: now,
             updated_at: now,
         })
@@ -285,6 +325,11 @@ impl UserStore {
             .description
             .as_deref()
             .map(validate_description)
+            .transpose()?;
+        let billing_ratio = input
+            .billing_ratio
+            .as_deref()
+            .map(validate_billing_ratio)
             .transpose()?;
 
         let existing = self
@@ -320,6 +365,11 @@ impl UserStore {
         if let Some(sort_order) = input.sort_order {
             set_clauses.push(format!("sort_order = ${idx}"));
             values.push(SeaValue::Int(Some(sort_order)));
+            idx += 1;
+        }
+        if let Some(billing_ratio) = &billing_ratio {
+            set_clauses.push(format!("billing_ratio = ${idx}"));
+            values.push(billing_ratio.clone().into());
             idx += 1;
         }
         if set_clauses.is_empty() {
@@ -361,6 +411,7 @@ impl UserStore {
             is_default: existing.is_default,
             user_selectable: input.user_selectable.unwrap_or(existing.user_selectable),
             sort_order: input.sort_order.unwrap_or(existing.sort_order),
+            billing_ratio: billing_ratio.unwrap_or(existing.billing_ratio),
             created_at: existing.created_at,
             updated_at: now,
         })
