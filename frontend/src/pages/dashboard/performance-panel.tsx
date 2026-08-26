@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import {
   Tooltip,
   TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { motion, transitions } from "@/components/ui/motion";
@@ -56,30 +57,32 @@ function UptimeBricks({
   const ordered = [...bricks].sort((a, b) => a.index - b.index);
 
   return (
-    <div
-      className="flex min-w-0 flex-1 items-center gap-0.5"
-      role="img"
-      aria-label={t("dashboard.performance.uptimeAria", "Uptime for {{name}}", {
-        name: label,
-      })}
-    >
-      {ordered.map((brick) => (
-        <Tooltip key={brick.index}>
-          <TooltipTrigger asChild>
-            <span
-              className={cn(
-                "h-3 min-w-[6px] flex-1 rounded-[2px]",
-                brickClass(brick.status)
-              )}
-            />
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            {t(`dashboard.performance.status.${brick.status}`, brick.status)} · h
-            {brick.index + 1}
-          </TooltipContent>
-        </Tooltip>
-      ))}
-    </div>
+    <TooltipProvider delayDuration={200}>
+      <div
+        className="flex min-w-0 flex-1 items-center gap-0.5"
+        role="img"
+        aria-label={t("dashboard.performance.uptimeAria", "Uptime for {{name}}", {
+          name: label,
+        })}
+      >
+        {ordered.map((brick) => (
+          <Tooltip key={brick.index}>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  "h-3 min-w-[6px] flex-1 rounded-[2px]",
+                  brickClass(brick.status)
+                )}
+              />
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              {t(`dashboard.performance.status.${brick.status}`, brick.status)} · h
+              {brick.index + 1}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+    </TooltipProvider>
   );
 }
 
