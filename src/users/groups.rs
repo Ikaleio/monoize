@@ -102,6 +102,68 @@ fn is_name_unique_violation(error: &str) -> bool {
         && (lower.contains("name") || lower.contains("uq_monoize_groups_name_lower"))
 }
 
+/// GR-X7: upper bound on rows per bulk cascade UPDATE. At most 3 binds per
+/// row keeps every chunk below the portable placeholder ceiling shared by
+/// SQLite and PostgreSQL.
+const GROUP_CASCADE_UPDATE_CHUNK_ROWS: usize = 250;
+
+/// One bulk `UPDATE {table} SET group_ids = CASE id ... END WHERE id IN (...)`
+/// statement for `(id, group_ids_json)` pairs. Each id placeholder is numbered
+/// once and reused by both its CASE arm and the IN list.
+fn group_ids_bulk_update(table: &str, entries: &[(String, String)]) -> (String, Vec<SeaValue>) {
+    let mut values: Vec<SeaValue> = Vec::with_capacity(entries.len() * 2);
+    let mut cases = Vec::with_capacity(entries.len());
+    let mut ids = Vec::with_capacity(entries.len());
+    for (id, group_ids_json) in entries {
+        let id_index = values.len() + 1;
+        values.push(id.clone().into());
+        ids.push(format!("${id_index}"));
+        let group_ids_index = values.len() + 1;
+        values.push(group_ids_json.clone().into());
+        cases.push(format!("WHEN ${id_index} THEN ${group_ids_index}"));
+    }
+    (
+        format!(
+            "UPDATE {table} SET group_ids = CASE id {} ELSE group_ids END WHERE id IN ({})",
+            cases.join(" "),
+            ids.join(", ")
+        ),
+        values,
+    )
+}
+
+/// GR-X2 bulk rewrite for `api_keys`: `group_ids` and `use_user_group` are
+/// rewritten together from `(id, group_ids_json, use_user_group)` triples.
+fn api_key_group_cascade_bulk_update(
+    entries: &[(String, String, i32)],
+) -> (String, Vec<SeaValue>) {
+    let mut values: Vec<SeaValue> = Vec::with_capacity(entries.len() * 3);
+    let mut group_cases = Vec::with_capacity(entries.len());
+    let mut flag_cases = Vec::with_capacity(entries.len());
+    let mut ids = Vec::with_capacity(entries.len());
+    for (id, group_ids_json, use_user_group) in entries {
+        let id_index = values.len() + 1;
+        values.push(id.clone().into());
+        ids.push(format!("${id_index}"));
+        let group_ids_index = values.len() + 1;
+        values.push(group_ids_json.clone().into());
+        group_cases.push(format!("WHEN ${id_index} THEN ${group_ids_index}"));
+        let flag_index = values.len() + 1;
+        values.push(SeaValue::Int(Some(*use_user_group)));
+        flag_cases.push(format!("WHEN ${id_index} THEN ${flag_index}"));
+    }
+    (
+        format!(
+            "UPDATE api_keys SET group_ids = CASE id {} ELSE group_ids END, \
+             use_user_group = CASE id {} ELSE use_user_group END WHERE id IN ({})",
+            group_cases.join(" "),
+            flag_cases.join(" "),
+            ids.join(", ")
+        ),
+        values,
+    )
+}
+
 impl UserStore {
     /// List every registry row in canonical order (GR-D5).
     pub async fn list_groups(&self) -> Result<Vec<Group>, String> {
@@ -409,7 +471,8 @@ impl UserStore {
         .map_err(storage)?;
 
         // GR-X2: drop the id from key selections; empty selections fall back
-        // to inheriting the owner's group.
+        // to inheriting the owner's group. Affected rows are rewritten with
+        // chunked bulk statements (GR-X7) instead of one UPDATE per row.
         let rows = tx
             .query_all(self.db.stmt(
                 "SELECT id, use_user_group, group_ids FROM api_keys",
@@ -417,6 +480,7 @@ impl UserStore {
             ))
             .await
             .map_err(storage)?;
+        let mut key_updates: Vec<(String, String, i32)> = Vec::new();
         for row in rows {
             let row_id: String = row.try_get("", "id").map_err(storage)?;
             let use_user_group: i32 = row.try_get("", "use_user_group").map_err(storage)?;
@@ -432,16 +496,17 @@ impl UserStore {
             } else {
                 use_user_group
             };
-            tx.execute(self.db.stmt(
-                "UPDATE api_keys SET group_ids = $1, use_user_group = $2 WHERE id = $3",
-                vec![
-                    serde_json::to_string(&remaining).map_err(storage)?.into(),
-                    SeaValue::Int(Some(next_use_user_group)),
-                    row_id.into(),
-                ],
-            ))
-            .await
-            .map_err(storage)?;
+            key_updates.push((
+                row_id,
+                serde_json::to_string(&remaining).map_err(storage)?,
+                next_use_user_group,
+            ));
+        }
+        for chunk in key_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
+            let (sql, values) = api_key_group_cascade_bulk_update(chunk);
+            tx.execute(self.db.stmt(&sql, values))
+                .await
+                .map_err(storage)?;
         }
 
         // GR-X3: providers keep a non-empty group set (GR-I2).
@@ -452,6 +517,7 @@ impl UserStore {
             )
             .await
             .map_err(storage)?;
+        let mut provider_updates: Vec<(String, String)> = Vec::new();
         for row in rows {
             let row_id: String = row.try_get("", "id").map_err(storage)?;
             let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
@@ -465,15 +531,13 @@ impl UserStore {
             if remaining.is_empty() {
                 remaining.push(default_group_id.clone());
             }
-            tx.execute(self.db.stmt(
-                "UPDATE monoize_providers SET group_ids = $1 WHERE id = $2",
-                vec![
-                    serde_json::to_string(&remaining).map_err(storage)?.into(),
-                    row_id.into(),
-                ],
-            ))
-            .await
-            .map_err(storage)?;
+            provider_updates.push((row_id, serde_json::to_string(&remaining).map_err(storage)?));
+        }
+        for chunk in provider_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
+            let (sql, values) = group_ids_bulk_update("monoize_providers", chunk);
+            tx.execute(self.db.stmt(&sql, values))
+                .await
+                .map_err(storage)?;
         }
 
         // GR-X4: an emptied plan ceiling stays [] (unrestricted).
@@ -484,6 +548,7 @@ impl UserStore {
             )
             .await
             .map_err(storage)?;
+        let mut plan_updates: Vec<(String, String)> = Vec::new();
         for row in rows {
             let row_id: String = row.try_get("", "id").map_err(storage)?;
             let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
@@ -493,15 +558,13 @@ impl UserStore {
                 continue;
             }
             let remaining: Vec<String> = group_ids.into_iter().filter(|gid| gid != id).collect();
-            tx.execute(self.db.stmt(
-                "UPDATE billing_plans SET group_ids = $1 WHERE id = $2",
-                vec![
-                    serde_json::to_string(&remaining).map_err(storage)?.into(),
-                    row_id.into(),
-                ],
-            ))
-            .await
-            .map_err(storage)?;
+            plan_updates.push((row_id, serde_json::to_string(&remaining).map_err(storage)?));
+        }
+        for chunk in plan_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
+            let (sql, values) = group_ids_bulk_update("billing_plans", chunk);
+            tx.execute(self.db.stmt(&sql, values))
+                .await
+                .map_err(storage)?;
         }
 
         let result = tx
@@ -544,5 +607,203 @@ impl UserStore {
             .ok_or_else(|| GroupStoreError::Storage("count query returned no row".to_string()))?;
         let count: i64 = row.try_get("", "cnt").map_err(storage)?;
         Ok(count > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::DbPool;
+    use crate::migration::Migrator;
+    use crate::users::{UserRole, UserStore};
+    use sea_orm_migration::MigratorTrait;
+
+    #[test]
+    fn group_ids_bulk_update_reuses_id_placeholders() {
+        let entries = vec![
+            ("prov-1".to_string(), r#"["g2"]"#.to_string()),
+            ("prov-2".to_string(), "[]".to_string()),
+        ];
+        let (sql, values) = group_ids_bulk_update("monoize_providers", &entries);
+        assert_eq!(
+            sql,
+            "UPDATE monoize_providers SET group_ids = CASE id \
+             WHEN $1 THEN $2 WHEN $3 THEN $4 ELSE group_ids END \
+             WHERE id IN ($1, $3)"
+        );
+        assert_eq!(values.len(), 4);
+    }
+
+    #[test]
+    fn api_key_group_cascade_bulk_update_covers_both_columns() {
+        let entries = vec![
+            ("key-1".to_string(), "[]".to_string(), 1),
+            ("key-2".to_string(), r#"["g2"]"#.to_string(), 0),
+        ];
+        let (sql, values) = api_key_group_cascade_bulk_update(&entries);
+        assert!(
+            sql.contains("group_ids = CASE id WHEN $1 THEN $2 WHEN $4 THEN $5 ELSE group_ids END")
+        );
+        assert!(sql.contains(
+            "use_user_group = CASE id WHEN $1 THEN $3 WHEN $4 THEN $6 ELSE use_user_group END"
+        ));
+        assert!(sql.ends_with("WHERE id IN ($1, $4)"));
+        assert_eq!(values.len(), 6);
+    }
+
+    async fn exec(db: &DbPool, sql: &str) {
+        db.write()
+            .await
+            .execute(db.stmt(sql, vec![]))
+            .await
+            .expect("statement executes");
+    }
+
+    async fn scalar(db: &DbPool, sql: &str) -> String {
+        db.read()
+            .query_one(db.stmt(sql, vec![]))
+            .await
+            .expect("query succeeds")
+            .expect("row exists")
+            .try_get("", "value")
+            .expect("value decodes")
+    }
+
+    /// GR-X2/GR-X3/GR-X4 end state after the GR-X7 bulk rewrite: emptied key
+    /// selections fall back to inheritance, providers rebind to the default
+    /// group, plan ceilings keep their remaining ids.
+    #[tokio::test]
+    async fn delete_group_cascade_rewrites_keys_providers_and_plans() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_tx, _) = tokio::sync::broadcast::channel(1);
+        let store = UserStore::new(db.clone(), log_tx)
+            .await
+            .expect("store creates");
+
+        let default_id = store.default_group_id().await.expect("default exists");
+        let doomed = store
+            .create_group(CreateGroupInput {
+                name: "doomed".to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 1,
+            })
+            .await
+            .expect("doomed group creates");
+        let kept = store
+            .create_group(CreateGroupInput {
+                name: "kept".to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 2,
+            })
+            .await
+            .expect("kept group creates");
+
+        let user = store
+            .create_user("cascade-user", "password123", UserRole::User, None)
+            .await
+            .expect("user creates");
+        let (only_key, _) = store
+            .create_api_key(&user.id, "only-doomed", None)
+            .await
+            .expect("only key creates");
+        let (mixed_key, _) = store
+            .create_api_key(&user.id, "doomed-and-kept", None)
+            .await
+            .expect("mixed key creates");
+        exec(
+            &db,
+            &format!(
+                r#"UPDATE api_keys SET use_user_group = 0, group_ids = '["{}"]' WHERE id = '{}'"#,
+                doomed.id, only_key.id
+            ),
+        )
+        .await;
+        exec(
+            &db,
+            &format!(
+                r#"UPDATE api_keys SET use_user_group = 0, group_ids = '["{}","{}"]' WHERE id = '{}'"#,
+                doomed.id, kept.id, mixed_key.id
+            ),
+        )
+        .await;
+
+        exec(
+            &db,
+            &format!(
+                r#"INSERT INTO monoize_providers (id, name, group_ids, created_at, updated_at) VALUES ('prov-cascade', 'cascade', '["{}"]', '2026-08-26T00:00:00Z', '2026-08-26T00:00:00Z')"#,
+                doomed.id
+            ),
+        )
+        .await;
+        exec(
+            &db,
+            &format!(
+                r#"INSERT INTO billing_plans (id, name, grant_amount_nano_usd, schedule, group_ids, created_at, updated_at) VALUES ('plan-cascade', 'cascade', '0', '0 0 * * *', '["{}","{}"]', '2026-08-26T00:00:00Z', '2026-08-26T00:00:00Z')"#,
+                doomed.id, kept.id
+            ),
+        )
+        .await;
+
+        store.delete_group(&doomed.id).await.expect("delete runs");
+
+        assert_eq!(
+            scalar(
+                &db,
+                &format!(
+                    "SELECT CAST(use_user_group AS TEXT) || '|' || group_ids AS value \
+                     FROM api_keys WHERE id = '{}'",
+                    only_key.id
+                )
+            )
+            .await,
+            "1|[]"
+        );
+        assert_eq!(
+            scalar(
+                &db,
+                &format!(
+                    "SELECT CAST(use_user_group AS TEXT) || '|' || group_ids AS value \
+                     FROM api_keys WHERE id = '{}'",
+                    mixed_key.id
+                )
+            )
+            .await,
+            format!("0|[\"{}\"]", kept.id)
+        );
+        assert_eq!(
+            scalar(
+                &db,
+                "SELECT group_ids AS value FROM monoize_providers WHERE id = 'prov-cascade'"
+            )
+            .await,
+            format!("[\"{default_id}\"]")
+        );
+        assert_eq!(
+            scalar(
+                &db,
+                "SELECT group_ids AS value FROM billing_plans WHERE id = 'plan-cascade'"
+            )
+            .await,
+            format!("[\"{}\"]", kept.id)
+        );
+        assert_eq!(
+            scalar(
+                &db,
+                &format!(
+                    "SELECT CAST(COUNT(*) AS TEXT) AS value FROM monoize_groups WHERE id = '{}'",
+                    doomed.id
+                )
+            )
+            .await,
+            "0"
+        );
     }
 }
