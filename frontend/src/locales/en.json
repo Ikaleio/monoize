@@ -75,7 +75,7 @@
 	"dashboard": {
 		"title": "Dashboard",
 		"greeting": "Good afternoon, {{username}}",
-		"subtitle": "Realtime overview of account status, usage and routing data",
+		"subtitle": "Account, usage, API, and platform performance at a glance",
 		"searchAction": "Search",
 		"refreshAction": "Refresh data",
 		"welcomeBack": "Welcome back, {{username}}!",
@@ -107,6 +107,57 @@
 		"apiBaseUrl": "API Base URL",
 		"syncMetadata": "Sync Models.dev metadata",
 		"syncing": "Syncing...",
+		"account": {
+			"balanceTitle": "Account Balance",
+			"subscriptionTitle": "Subscription"
+		},
+		"subscription": {
+			"remaining": "Remaining quota",
+			"reset": "Resets",
+			"resetUnavailable": "Not scheduled"
+		},
+		"usage": {
+			"title": "Your Usage",
+			"subtitle": "Your usage per day across this billing period",
+			"groupBy": "Group By",
+			"groupByModel": "Group By: Model",
+			"cumulativeTokens": "Cumulative Tokens",
+			"dailyBreakdown": "Daily breakdown",
+			"dailyTotal": "Daily total",
+			"cumulativeTotal": "Cumulative total",
+			"today": "Today"
+		},
+		"recentUsage": {
+			"title": "Recent Usage",
+			"subtitle": "Token usage, cache hit rate, and charges by model",
+			"model": "Model",
+			"tokens": "Tokens",
+			"cacheHit": "Cache hit",
+			"charge": "Charge",
+			"empty": "No recent usage",
+			"emptyDescription": "Model usage appears here after you make API requests."
+		},
+		"api": {
+			"chatCompletions": "Chat Completions",
+			"responses": "Responses",
+			"models": "Models",
+			"messages": "Messages"
+		},
+		"performance": {
+			"title": "Performance",
+			"subtitle": "Last 24 hours · uptime bricks, avgTTFT, and avgTPS",
+			"avgTtft": "avgTTFT",
+			"avgTps": "avgTPS",
+			"uptimeAria": "Uptime for {{name}}",
+			"empty": "Performance targets are not configured",
+			"emptyDescription": "An administrator can select groups and models in system settings.",
+			"status": {
+				"up": "Up",
+				"degraded": "Degraded",
+				"down": "Down",
+				"empty": "No data"
+			}
+		},
 		"cards": {
 			"accountData": "Account Data",
 			"currentBalance": "Current Balance",
@@ -375,7 +426,12 @@
 		"allowFreeWhenUnpriced": "Allow free settlement when unpriced",
 		"allowFreeWhenUnpricedDescription": "When no model price row exists, settle at zero charge instead of rejecting the request. Default off (fail closed).",
 		"allowFreeWhenMissingUsage": "Allow free settlement when usage is missing",
-		"allowFreeWhenMissingUsageDescription": "When the upstream omits usage on a billable response, settle at zero charge instead of rejecting. Default off (fail closed)."
+		"allowFreeWhenMissingUsageDescription": "When the upstream omits usage on a billable response, settle at zero charge instead of rejecting. Default off (fail closed).",
+		"dashboardPerformanceKicker": "Dashboard",
+		"dashboardPerformanceTitle": "Home performance targets",
+		"dashboardPerformanceDescription": "Choose groups and models shown on the user dashboard performance panel. Metrics are global aggregates for the last 24 hours.",
+		"dashboardPerformanceGroups": "Groups",
+		"dashboardPerformanceModels": "Models"
 	},
 	"providers": {
 		"title": "Providers",

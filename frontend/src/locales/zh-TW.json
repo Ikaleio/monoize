@@ -75,7 +75,7 @@
 	"dashboard": {
 		"title": "儀表板",
 		"greeting": "午安，{{username}}",
-		"subtitle": "帳戶狀態、資源消耗與路由資料的即時總覽",
+		"subtitle": "帳戶、用量、API 與平台效能一覽",
 		"searchAction": "搜尋",
 		"refreshAction": "重新整理資料",
 		"welcomeBack": "歡迎回來，{{username}}！",
@@ -107,6 +107,57 @@
 		"apiBaseUrl": "API 基底 URL",
 		"syncMetadata": "同步 Models.dev 中繼資料",
 		"syncing": "同步中...",
+		"account": {
+			"balanceTitle": "帳戶餘額",
+			"subscriptionTitle": "訂閱"
+		},
+		"subscription": {
+			"remaining": "剩餘配額",
+			"reset": "重置時間",
+			"resetUnavailable": "未排程"
+		},
+		"usage": {
+			"title": "你的用量",
+			"subtitle": "本計費週期內每日用量",
+			"groupBy": "分組依據",
+			"groupByModel": "分組依據：Model",
+			"cumulativeTokens": "累計 Tokens",
+			"dailyBreakdown": "每日明細",
+			"dailyTotal": "每日合計",
+			"cumulativeTotal": "累計合計",
+			"today": "今日"
+		},
+		"recentUsage": {
+			"title": "最近用量",
+			"subtitle": "依 Model 彙總的 Token 用量、快取命中率與費用",
+			"model": "Model",
+			"tokens": "Tokens",
+			"cacheHit": "快取命中",
+			"charge": "費用",
+			"empty": "尚無最近用量",
+			"emptyDescription": "發起 API 請求後，此處將顯示 Model 用量。"
+		},
+		"api": {
+			"chatCompletions": "Chat Completions",
+			"responses": "Responses",
+			"models": "Models",
+			"messages": "Messages"
+		},
+		"performance": {
+			"title": "效能",
+			"subtitle": "近 24 小時 · 可用性磚塊、avgTTFT 與 avgTPS",
+			"avgTtft": "avgTTFT",
+			"avgTps": "avgTPS",
+			"uptimeAria": "{{name}} 的可用性",
+			"empty": "未設定效能監控目標",
+			"emptyDescription": "管理員可在系統設定中選擇群組與 Model。",
+			"status": {
+				"up": "正常",
+				"degraded": "降級",
+				"down": "不可用",
+				"empty": "無資料"
+			}
+		},
 		"cards": {
 			"accountData": "帳戶資料",
 			"currentBalance": "目前餘額",
@@ -372,7 +423,12 @@
 		"allowFreeWhenUnpriced": "未定價模型允許免費結算",
 		"allowFreeWhenUnpricedDescription": "模型沒有價格記錄時以零費用結算，而不是拒絕請求。預設關閉（失敗即拒絕）。",
 		"allowFreeWhenMissingUsage": "缺少 Usage 允許免費結算",
-		"allowFreeWhenMissingUsageDescription": "上游在計費回應中未回傳 Usage 時以零費用結算，而不是拒絕。預設關閉（失敗即拒絕）。"
+		"allowFreeWhenMissingUsageDescription": "上游在計費回應中未回傳 Usage 時以零費用結算，而不是拒絕。預設關閉（失敗即拒絕）。",
+		"dashboardPerformanceKicker": "儀表板",
+		"dashboardPerformanceTitle": "首頁效能目標",
+		"dashboardPerformanceDescription": "選擇在使用者儀表板效能面板中顯示的群組與 Model。指標為近 24 小時的全域彙總。",
+		"dashboardPerformanceGroups": "群組",
+		"dashboardPerformanceModels": "Models"
 	},
 	"providers": {
 		"title": "服務供應商",
