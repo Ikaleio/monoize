@@ -42,9 +42,10 @@ async fn responses_nonstream_records_the_upstream_service_tier() {
             )
             .await
             .expect("list request logs");
+        // MP-R6: service tier does not select prices; the standard row at
+        // 1 USD/1M charges 20000 nano for the 10+10 mock usage.
         matched = logs.into_iter().find(|log| {
-            log.model == "gpt-5-mini"
-                && log.billing.charge_nano_usd.as_deref() == Some("2000")
+            log.model == "gpt-5-mini" && log.billing.charge_nano_usd.as_deref() == Some("20000")
         });
         if matched.is_some() {
             break;
@@ -52,14 +53,11 @@ async fn responses_nonstream_records_the_upstream_service_tier() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    let log = matched.expect("priority response must retain the upstream service tier");
-    assert_eq!(
-        log.billing
-            .breakdown
-            .as_ref()
-            .and_then(|breakdown| breakdown["service_tier"].as_str()),
-        Some("priority")
-    );
+    let log = matched.expect("priority response must bill the standard price row");
+    let breakdown = log.billing.breakdown.as_ref().expect("breakdown exists");
+    // MP-B1: version 3 breakdowns record the response service tier.
+    assert_eq!(breakdown["version"].as_i64(), Some(3));
+    assert_eq!(breakdown["service_tier"].as_str(), Some("priority"));
 }
 
 #[tokio::test]
