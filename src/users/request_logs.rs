@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 const REQUEST_LOG_RETENTION_DAYS: i64 = 90;
+const REQUEST_LOG_RETENTION_DELETE_BATCH_ROWS: u64 = 5000;
 pub(super) const REQUEST_LOG_RETENTION_INTERVAL_SECS: u64 = 3600;
 const REQUEST_LOG_MODEL_FILTER_DEFAULT_MAX_TERMS: usize = 32;
 const REQUEST_LOG_MODEL_FILTER_HARD_MAX_TERMS: usize = 32;
@@ -1238,14 +1239,43 @@ impl UserStore {
     pub async fn cleanup_expired_request_logs(&self) -> Result<u64, String> {
         let cutoff_unix_ms =
             (Utc::now() - Duration::days(REQUEST_LOG_RETENTION_DAYS)).timestamp_millis();
-        let result = self.db.write().await
-            .execute(self.db.stmt(
-                "DELETE FROM request_logs WHERE created_at_unix_ms IS NOT NULL AND created_at_unix_ms < $1",
-                vec![cutoff_unix_ms.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(result.rows_affected())
+        self.cleanup_expired_request_logs_batched(
+            cutoff_unix_ms,
+            REQUEST_LOG_RETENTION_DELETE_BATCH_ROWS,
+        )
+        .await
+    }
+
+    /// RL-S9a: delete expired rows in bounded batches. Each batch is one
+    /// autocommitted DELETE, so the writer (the SQLite write lock, Postgres
+    /// row locks and WAL volume) is held for at most `batch_rows` rows at a
+    /// time and request-log flushes can interleave between batches.
+    async fn cleanup_expired_request_logs_batched(
+        &self,
+        cutoff_unix_ms: i64,
+        batch_rows: u64,
+    ) -> Result<u64, String> {
+        let sql = format!(
+            "DELETE FROM request_logs WHERE id IN (\
+             SELECT id FROM request_logs \
+             WHERE created_at_unix_ms IS NOT NULL AND created_at_unix_ms < $1 \
+             LIMIT {batch_rows})"
+        );
+        let mut total_deleted = 0u64;
+        loop {
+            let result = self
+                .db
+                .write()
+                .await
+                .execute(self.db.stmt(&sql, vec![cutoff_unix_ms.into()]))
+                .await
+                .map_err(|e| e.to_string())?;
+            let deleted = result.rows_affected();
+            total_deleted += deleted;
+            if deleted < batch_rows {
+                return Ok(total_deleted);
+            }
+        }
     }
 
     pub async fn cleanup_pending_request_logs(&self) -> Result<u64, String> {
@@ -2289,5 +2319,86 @@ mod today_usage_tests {
         assert_eq!(rows[1].user_id, alice.id);
         assert_eq!(rows[1].call_count, 2);
         assert_eq!(rows[1].cost_nano_usd, 3500);
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use crate::db::DbPool;
+    use crate::migration::Migrator;
+    use crate::users::UserStore;
+    use chrono::Utc;
+    use sea_orm::ConnectionTrait;
+    use sea_orm_migration::MigratorTrait;
+
+    /// RL-S9/RL-S9a: batches repeat until one deletes fewer rows than the
+    /// bound; expired rows are gone, recent rows and legacy-null rows stay.
+    #[tokio::test]
+    async fn retention_cleanup_deletes_expired_rows_across_batches() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_tx, _) = tokio::sync::broadcast::channel(1);
+        let store = UserStore::new(db.clone(), log_tx)
+            .await
+            .expect("store creates");
+
+        let now_ms = Utc::now().timestamp_millis();
+        let cutoff_ms = now_ms - 1_000;
+        let created_at = Utc::now().to_rfc3339();
+        for index in 0..7_i64 {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (id, user_id, model, is_stream, status, created_at, created_at_unix_ms) VALUES ($1, 'u1', 'm', 0, 'success', $2, $3)",
+                    vec![
+                        format!("expired-{index}").into(),
+                        created_at.clone().into(),
+                        (cutoff_ms - 1 - index).into(),
+                    ],
+                ))
+                .await
+                .expect("expired log inserted");
+        }
+        db.write()
+            .await
+            .execute(db.stmt(
+                "INSERT INTO request_logs (id, user_id, model, is_stream, status, created_at, created_at_unix_ms) VALUES ('recent', 'u1', 'm', 0, 'success', $1, $2)",
+                vec![created_at.clone().into(), now_ms.into()],
+            ))
+            .await
+            .expect("recent log inserted");
+        db.write()
+            .await
+            .execute(db.stmt(
+                "INSERT INTO request_logs (id, user_id, model, is_stream, status, created_at, created_at_unix_ms) VALUES ('legacy-null', 'u1', 'm', 0, 'success', $1, NULL)",
+                vec![created_at.into()],
+            ))
+            .await
+            .expect("legacy log inserted");
+
+        let deleted = store
+            .cleanup_expired_request_logs_batched(cutoff_ms, 3)
+            .await
+            .expect("cleanup runs");
+        assert_eq!(deleted, 7);
+
+        let rows = db
+            .read()
+            .query_all(db.stmt(
+                "SELECT id FROM request_logs ORDER BY id",
+                vec![],
+            ))
+            .await
+            .expect("remaining rows query");
+        let remaining: Vec<String> = rows
+            .into_iter()
+            .map(|row| row.try_get("", "id").expect("id decodes"))
+            .collect();
+        assert_eq!(remaining, vec!["legacy-null", "recent"]);
     }
 }
