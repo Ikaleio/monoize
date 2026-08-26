@@ -202,6 +202,8 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         .state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "override-threshold-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
@@ -299,6 +301,8 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
     );
 
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        allow_free_when_unpriced_override: None,
+        allow_free_when_missing_usage_override: None,
         name: "mono-transform-original-model-match".to_string(),
         api_type_overrides: Vec::new(),
         group_ids: Vec::new(),
@@ -409,6 +413,8 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
     );
 
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        allow_free_when_unpriced_override: None,
+        allow_free_when_missing_usage_override: None,
         name: "mono-provider-redirect-api-type-override".to_string(),
         api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
             pattern: "gpt-5.4-fast".to_string(),

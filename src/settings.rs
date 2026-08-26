@@ -68,6 +68,19 @@ pub struct SystemSettings {
     pub monoize_affinity_idle_ttl_seconds: u64,
     pub monoize_affinity_failback_mode: AffinityFailbackMode,
     pub monoize_affinity_failback_delay_seconds: u64,
+    /// MP-D13/MP-D14 (`model-pricing.spec.md`): fail-closed free-settlement flags.
+    #[serde(default)]
+    pub allow_free_when_unpriced: bool,
+    #[serde(default)]
+    pub allow_free_when_missing_usage: bool,
+    /// MP-T1..MP-T3: server-native tool pricing object.
+    #[serde(default = "default_tool_prices")]
+    pub tool_prices: serde_json::Value,
+    /// MP-Y2: `new_api` price-sync source configuration.
+    #[serde(default)]
+    pub price_sync_new_api_base_url: String,
+    #[serde(default)]
+    pub price_sync_new_api_token: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -148,6 +161,117 @@ pub(crate) fn default_reasoning_suffix_map() -> HashMap<String, String> {
     m
 }
 
+/// MP-T10 seed table: USD-denominated defaults mirroring new-api semantics.
+pub fn default_tool_prices() -> serde_json::Value {
+    serde_json::json!({
+        "web_search": "10",
+        "x_search": "5",
+        "file_search_tool_call": "2.5",
+        "code_execution": "5",
+        "code_interpreter_duration": { "usd": "0.0015", "per": "minute", "minimum_units": 5 },
+        "code_execution_duration": { "usd": "0.000833333", "per": "minute", "minimum_units": 5 },
+        "code_interpreter_session": { "usd": "0.03", "per": "session" }
+    })
+}
+
+/// MP-U1: base-10 decimal string, `>= 0`, at most 12 integer digits and at most
+/// 9 fractional digits; exponent notation, leading `+`/`-`, NaN, infinity invalid.
+pub fn validate_usd_decimal(raw: &str) -> Result<(), String> {
+    let error = || "price must be a non-negative base-10 decimal string".to_string();
+    if raw.is_empty()
+        || raw.starts_with('+')
+        || raw.starts_with('-')
+        || !raw
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        || raw.bytes().filter(|byte| *byte == b'.').count() > 1
+    {
+        return Err(error());
+    }
+    let value = rust_decimal::Decimal::from_str_exact(raw).map_err(|_| error())?;
+    if value.is_sign_negative() {
+        return Err(error());
+    }
+    if value.scale() > 9 {
+        return Err("price must have at most 9 fractional digits".to_string());
+    }
+    if value.trunc().to_string().trim_start_matches('-').len() > 12 {
+        return Err("price must have at most 12 integer digits".to_string());
+    }
+    Ok(())
+}
+
+const TOOL_PRICE_UNITS: &[&str] = &["1k_calls", "minute", "session"];
+
+/// MP-T1..MP-T3 write-time validation for the `tool_prices` settings object.
+///
+/// Accepted per class: a JSON number, a decimal string, or an object
+/// `{ "usd": <number|string>, "per": <unit>, "minimum_units": <int >= 1> }` where
+/// `minimum_units` is valid only for `minute` and `session` units.
+pub fn validate_tool_prices(value: &serde_json::Value) -> Result<(), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "tool_prices must be a JSON object".to_string())?;
+    for (class, entry) in object {
+        if class.trim().is_empty() {
+            return Err("tool_prices keys must be non-empty usage classes".to_string());
+        }
+        let context = |message: String| format!("tool_prices[{class}]: {message}");
+        match entry {
+            serde_json::Value::Number(number) => {
+                validate_usd_decimal(&number.to_string()).map_err(context)?;
+            }
+            serde_json::Value::String(raw) => {
+                validate_usd_decimal(raw).map_err(context)?;
+            }
+            serde_json::Value::Object(fields) => {
+                for key in fields.keys() {
+                    if !matches!(key.as_str(), "usd" | "per" | "minimum_units") {
+                        return Err(context(format!("unknown field `{key}`")));
+                    }
+                }
+                match fields.get("usd") {
+                    Some(serde_json::Value::Number(number)) => {
+                        validate_usd_decimal(&number.to_string()).map_err(context)?;
+                    }
+                    Some(serde_json::Value::String(raw)) => {
+                        validate_usd_decimal(raw).map_err(context)?;
+                    }
+                    _ => return Err(context("`usd` must be a decimal number or string".into())),
+                }
+                let per = match fields.get("per") {
+                    Some(serde_json::Value::String(per))
+                        if TOOL_PRICE_UNITS.contains(&per.as_str()) =>
+                    {
+                        per.as_str()
+                    }
+                    _ => {
+                        return Err(context(
+                            "`per` must be one of 1k_calls, minute, session".into(),
+                        ));
+                    }
+                };
+                if let Some(minimum) = fields.get("minimum_units") {
+                    if per == "1k_calls" {
+                        return Err(context(
+                            "`minimum_units` is valid only for minute and session units".into(),
+                        ));
+                    }
+                    if !minimum.as_u64().is_some_and(|value| value >= 1) {
+                        return Err(context("`minimum_units` must be an integer >= 1".into()));
+                    }
+                }
+            }
+            _ => {
+                return Err(context(
+                    "value must be a decimal, a decimal string, or a price object".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn default_pricing_profile_model_patterns() -> Vec<PricingProfilePattern> {
     vec![
         PricingProfilePattern {
@@ -223,6 +347,11 @@ impl Default for SystemSettings {
             monoize_affinity_idle_ttl_seconds: 30 * 60,
             monoize_affinity_failback_mode: AffinityFailbackMode::Sticky,
             monoize_affinity_failback_delay_seconds: 5 * 60,
+            allow_free_when_unpriced: false,
+            allow_free_when_missing_usage: false,
+            tool_prices: default_tool_prices(),
+            price_sync_new_api_base_url: String::new(),
+            price_sync_new_api_token: String::new(),
             updated_at: Utc::now(),
         }
     }
@@ -432,6 +561,28 @@ impl SettingsStore {
             &defaults.monoize_affinity_failback_delay_seconds.to_string(),
         )
         .await?;
+        self.set_if_not_exists(
+            "allow_free_when_unpriced",
+            &defaults.allow_free_when_unpriced.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "allow_free_when_missing_usage",
+            &defaults.allow_free_when_missing_usage.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "tool_prices",
+            &serde_json::to_string(&defaults.tool_prices).unwrap_or_else(|_| "{}".to_string()),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "price_sync_new_api_base_url",
+            &defaults.price_sync_new_api_base_url,
+        )
+        .await?;
+        self.set_if_not_exists("price_sync_new_api_token", &defaults.price_sync_new_api_token)
+            .await?;
         Ok(())
     }
 
@@ -709,6 +860,25 @@ impl SettingsStore {
                     settings.monoize_affinity_failback_delay_seconds =
                         row.value.parse().unwrap_or(5 * 60);
                 }
+                "allow_free_when_unpriced" => {
+                    settings.allow_free_when_unpriced = row.value.parse().unwrap_or(false);
+                }
+                "allow_free_when_missing_usage" => {
+                    settings.allow_free_when_missing_usage = row.value.parse().unwrap_or(false);
+                }
+                "tool_prices" => {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&row.value)
+                        && validate_tool_prices(&value).is_ok()
+                    {
+                        settings.tool_prices = value;
+                    }
+                }
+                "price_sync_new_api_base_url" => {
+                    settings.price_sync_new_api_base_url = row.value;
+                }
+                "price_sync_new_api_token" => {
+                    settings.price_sync_new_api_token = row.value;
+                }
                 _ => {}
             }
         }
@@ -860,6 +1030,26 @@ impl SettingsStore {
             (
                 "monoize_affinity_failback_delay_seconds",
                 settings.monoize_affinity_failback_delay_seconds.to_string(),
+            ),
+            (
+                "allow_free_when_unpriced",
+                settings.allow_free_when_unpriced.to_string(),
+            ),
+            (
+                "allow_free_when_missing_usage",
+                settings.allow_free_when_missing_usage.to_string(),
+            ),
+            (
+                "tool_prices",
+                serde_json::to_string(&settings.tool_prices).map_err(|e| e.to_string())?,
+            ),
+            (
+                "price_sync_new_api_base_url",
+                settings.price_sync_new_api_base_url.clone(),
+            ),
+            (
+                "price_sync_new_api_token",
+                settings.price_sync_new_api_token.clone(),
             ),
         ];
 

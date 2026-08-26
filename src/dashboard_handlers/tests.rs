@@ -265,6 +265,8 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
     };
 
     let provider = MonoizeProvider {
+        allow_free_when_unpriced_override: None,
+        allow_free_when_missing_usage_override: None,
         id: "mono_provider_123".to_string(),
         name: "provider".to_string(),
         channels: vec![channel],

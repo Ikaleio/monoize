@@ -7,6 +7,7 @@ mod billing_rates;
 mod captcha;
 mod custom_transforms;
 mod groups;
+mod model_prices;
 mod model_registry;
 mod providers;
 mod request_captures;
@@ -50,6 +51,10 @@ pub use custom_transforms::{
 pub use groups::{
     DashboardGroupsResponse, create_group, delete_group, list_dashboard_groups, reorder_groups,
     update_group,
+};
+pub use model_prices::{
+    delete_model_price, list_model_prices, list_price_sync_runs, list_unpriced_models,
+    upsert_model_price,
 };
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,

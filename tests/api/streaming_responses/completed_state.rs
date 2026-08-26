@@ -16,6 +16,8 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "mono-transform-summary".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
@@ -284,6 +286,8 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "mono-transform-streaming-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),

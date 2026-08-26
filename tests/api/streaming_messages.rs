@@ -586,6 +586,8 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "mono-transform-summary-messages".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
@@ -1267,6 +1269,8 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "mono-transform-chunked-messages".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),

@@ -1531,6 +1531,8 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "alias-route-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
@@ -1685,6 +1687,8 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "alias-fallback-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
@@ -1839,6 +1843,8 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "suffix-pricing-provider".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),

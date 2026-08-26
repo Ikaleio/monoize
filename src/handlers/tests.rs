@@ -383,6 +383,8 @@ async fn seed_group_routing_provider(
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: name.to_string(),
             max_retries: -1,
             channel_max_retries: 0,
@@ -480,6 +482,8 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "channel-owned-models".to_string(),
             channels: vec![
                 channel("cheap", "1", "cheap-upstream"),
@@ -1591,6 +1595,8 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "OpenAI".to_string(),
             max_retries: 0,
             channel_max_retries: 0,
@@ -1718,6 +1724,8 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "OpenAI".to_string(),
             max_retries: 0,
             channel_max_retries: 0,
@@ -1800,6 +1808,8 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "OpenAI".to_string(),
             max_retries: 0,
             channel_max_retries: 0,
@@ -1881,6 +1891,8 @@ async fn build_monoize_attempts_allows_declared_server_tool_without_meter_rate()
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "OpenAI".to_string(),
             max_retries: 0,
             channel_max_retries: 0,
@@ -1964,6 +1976,8 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "OpenAI".to_string(),
             max_retries: 0,
             channel_max_retries: 0,
@@ -2096,6 +2110,8 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "Gateway".to_string(),
             max_retries: 0,
             channel_max_retries: 0,

@@ -717,6 +717,8 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
     ctx.state
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
             name: "mono-transform-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
             group_ids: Vec::new(),
