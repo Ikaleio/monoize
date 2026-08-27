@@ -55,7 +55,7 @@ OIU-E5g. When a request capture session is active for the attempt, the sent mult
 
 ### 3.3 Extra Body Whitelist
 
-OIU-E6. The default extra body whitelist for `openai_image` MUST be: `size`, `quality`, `style`, `response_format`, `n`, `background`, `output_format`, `output_compression`, `moderation`, `user`.
+OIU-E6. The default extra body whitelist for `openai_image` MUST be: `size`, `quality`, `style`, `response_format`, `n`, `background`, `output_format`, `output_compression`, `moderation`, `user`, `partial_images`, `input_fidelity`.
 
 ## 4. Response Decoding
 
@@ -109,15 +109,27 @@ OIU-R4. This automatic conversion MUST occur after response-phase transforms hav
 
 OIU-S1. The `openai_image` upstream type supports upstream SSE streaming when `UrpRequest.stream == Some(true)`.
 
-OIU-S2. When decoding upstream image SSE, Monoize MUST accept event `image_generation.partial_image`. The decoder MAY ignore the event for canonical URP node emission. Ignoring that event MUST NOT be treated as a stream error.
+OIU-S1a. Event name resolution: for each upstream SSE frame, the decoder MUST use the SSE `event` field name. When the SSE `event` field is absent, empty, or the default value `message`, the decoder MUST fall back to the JSON `type` field of the frame data.
 
-OIU-S3. When decoding upstream image SSE, Monoize MUST accept event `image_generation.completed`. If the payload contains non-empty `b64_json` or `result`, the decoder MUST emit one assistant `Image` node with `Image.source = Base64`. The media type MUST be derived from `output_format`, defaulting to `image/png`.
+OIU-S2. When decoding upstream image SSE, Monoize MUST accept the partial-image events `image_generation.partial_image`, `image_edit.partial_image`, and `response.image_generation.partial_image`. For each partial-image event whose payload contains non-empty `b64_json` or `result`, the decoder MUST emit one canonical `NodeDelta` stream event with `delta = Image` whose source is `Base64` (media type derived from payload `output_format`, defaulting to `image/png`). The `NodeDelta` event `extra_body` MUST contain `provider_event_type` set to the resolved upstream event name, `partial_image_index` copied from the payload when present, and all remaining non-internal payload fields. A partial-image event whose payload contains no image data MUST be ignored. Neither case is a stream error.
+
+OIU-S2a. Partial-image events MUST NOT contribute nodes to the terminal `ResponseDone.output`.
+
+OIU-S2b. All partial-image `NodeDelta` events and the completed image node of the same generation MUST share one node index, allocated when the first event of that generation is decoded.
+
+OIU-S3. When decoding upstream image SSE, Monoize MUST accept the completed events `image_generation.completed`, `image_edit.completed`, and `response.image_generation.completed`. If the payload contains non-empty `b64_json` or `result`, the decoder MUST emit one assistant `Image` node with `Image.source = Base64`. The media type MUST be derived from `output_format`, defaulting to `image/png`.
+
+OIU-S3a. If a completed event payload contains a `usage` object, the decoder MUST parse it into URP `Usage` using the same field mapping as OIU-D6 and attach it to the terminal `ResponseDone`. When multiple completed events carry `usage`, the last parsed `usage` wins.
 
 OIU-S4. When upstream image SSE reaches a terminal successful event, Monoize MUST emit one canonical `ResponseDone` whose `output` contains all completed image nodes collected from the stream.
 
 OIU-S5. When the downstream request is streaming, Monoize MAY pass upstream image SSE through the canonical URP streaming pipeline and encode downstream SSE from canonical URP events.
 
+OIU-S5a. When the downstream protocol is Responses streaming, partial-image `NodeDelta` events decoded per OIU-S2 MUST be rendered as `response.image_generation_call.partial_image` frames whose payload carries the base64 data as `partial_image_b64`, following the existing Responses image-tool encoding conventions.
+
 OIU-S6. When the downstream request is non-streaming but the selected attempt has `UrpRequest.stream == Some(true)` after request-phase transforms, Monoize MUST call the upstream image endpoint with streaming enabled, collect canonical URP stream events into one `UrpResponse`, apply response transforms, and return a normal non-streaming downstream response.
+
+OIU-S7. Whenever an `openai_image` attempt whose URP request contains at least one user-role `Node::Image` executes with `UrpRequest.stream == Some(true)` — from the downstream streaming pipeline, from the OIU-S6 internal collection path, or from the Image API streaming path (`image-api-proxy.spec.md` §5.5) — the upstream call MUST be sent as `multipart/form-data` to `POST /v1/images/edits` per OIU-E5a..OIU-E5g, including text field `stream` with value `true` (OIU-E5f), and the upstream response MUST be decoded as SSE. Monoize MUST NOT send a JSON body to `/v1/images/edits`.
 
 ## 7. Routing Integration
 

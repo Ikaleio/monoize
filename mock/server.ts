@@ -205,6 +205,14 @@ const GENERATION_PNG_B64 =
 const EDIT_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAACAElEQVR42u3TQQ0AAAjEsJOEdFxgizcaaFIFS5bqgbciAQYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABMIAKGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAbAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAGUAEDgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwAFwLC1gYymvLfH8AAAAASUVORK5CYII=";
 
+// Monoize rejects image responses without billable usage.
+const IMAGE_USAGE = {
+  total_tokens: 30,
+  input_tokens: 10,
+  output_tokens: 20,
+  input_tokens_details: { text_tokens: 10, image_tokens: 0 },
+};
+
 function imageResponse(prompt: string, b64: string) {
   return {
     created: Math.floor(Date.now() / 1000),
@@ -214,14 +222,38 @@ function imageResponse(prompt: string, b64: string) {
         revised_prompt: `mock render of: ${prompt}`,
       },
     ],
-    // Monoize rejects image responses without billable usage.
-    usage: {
-      total_tokens: 30,
-      input_tokens: 10,
-      output_tokens: 20,
-      input_tokens_details: { text_tokens: 10, image_tokens: 0 },
-    },
+    usage: IMAGE_USAGE,
   };
+}
+
+// MU14a/MU15a: partial frames per requested partial_images (capped at 3),
+// then one completed frame carrying the PNG and the MU14 usage object.
+function imageStreamChunks(family: "image_generation" | "image_edit", b64: string, partialImages: number): string[] {
+  const createdAt = Math.floor(Date.now() / 1000);
+  const partials = Math.max(0, Math.min(3, Math.trunc(partialImages)));
+  const chunks: string[] = [];
+  for (let index = 0; index < partials; index += 1) {
+    chunks.push(
+      responsesEventFrame(`${family}.partial_image`, {
+        b64_json: b64,
+        partial_image_index: index,
+        created_at: createdAt,
+        output_format: "png",
+        size: "256x256",
+      }),
+    );
+  }
+  chunks.push(
+    responsesEventFrame(`${family}.completed`, {
+      b64_json: b64,
+      created_at: createdAt,
+      output_format: "png",
+      size: "256x256",
+      usage: IMAGE_USAGE,
+    }),
+  );
+  chunks.push(`data: [DONE]\n\n`);
+  return chunks;
 }
 
 // MU5: model ids containing "reasoning" activate reasoning output on the
@@ -447,17 +479,31 @@ Bun.serve({
     if (req.method === "POST" && url.pathname === "/v1/images/generations") {
       const body = await req.json();
       const prompt = String(body.prompt ?? "");
+      if (body.stream === true) {
+        const partialImages = Number(body.partial_images ?? 0);
+        return sseResponse(
+          imageStreamChunks("image_generation", GENERATION_PNG_B64, Number.isFinite(partialImages) ? partialImages : 0),
+          45,
+        );
+      }
       return jsonResponse(imageResponse(prompt, GENERATION_PNG_B64));
     }
 
     if (req.method === "POST" && url.pathname === "/v1/images/edits") {
       const form = await req.formData();
       const prompt = String(form.get("prompt") ?? "");
-      const image = form.get("image");
+      const image = form.get("image") ?? form.get("image[]");
       if (!image || typeof image === "string") {
         return jsonResponse(
           { error: { message: "image file field required" } },
           400,
+        );
+      }
+      if (String(form.get("stream") ?? "") === "true") {
+        const partialImages = Number(form.get("partial_images") ?? 0);
+        return sseResponse(
+          imageStreamChunks("image_edit", EDIT_PNG_B64, Number.isFinite(partialImages) ? partialImages : 0),
+          45,
         );
       }
       return jsonResponse(imageResponse(prompt, EDIT_PNG_B64));

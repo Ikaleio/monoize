@@ -4860,6 +4860,40 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         }
     }
 
+    const IMAGE_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
+
+    fn image_stream_events(family: &str, partial_images: u64) -> Vec<Result<Event, Infallible>> {
+        let mut events = Vec::new();
+        for index in 0..partial_images.min(3) {
+            let event_name = format!("{family}.partial_image");
+            events.push(Ok(Event::default().event(event_name.clone()).data(
+                json!({
+                    "type": event_name,
+                    "b64_json": IMAGE_PNG_B64,
+                    "partial_image_index": index,
+                    "created_at": 1_700_000_000,
+                    "output_format": "png",
+                    "size": "256x256",
+                })
+                .to_string(),
+            )));
+        }
+        let completed_name = format!("{family}.completed");
+        events.push(Ok(Event::default().event(completed_name.clone()).data(
+            json!({
+                "type": completed_name,
+                "b64_json": IMAGE_PNG_B64,
+                "created_at": 1_700_000_000,
+                "output_format": "png",
+                "size": "256x256",
+                "usage": { "input_tokens": 1, "output_tokens": 1 }
+            })
+            .to_string(),
+        )));
+        events.push(Ok(Event::default().data("[DONE]")));
+        events
+    }
+
     async fn image_generations(
         axum::extract::State((captured_headers, captured_bodies)): axum::extract::State<(
             CapturedHeaders,
@@ -4876,10 +4910,19 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 lock.push(("image_generations-content-type".to_string(), v.to_string()));
             }
         }
+        if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
+            let partial_images = body
+                .get("partial_images")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let stream =
+                futures_util::stream::iter(image_stream_events("image_generation", partial_images));
+            return Sse::new(stream).into_response();
+        }
         Json(json!({
             "created": 0,
             "data": [{
-                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=",
+                "b64_json": IMAGE_PNG_B64,
                 "revised_prompt": body.get("prompt").and_then(|v| v.as_str()).unwrap_or("")
             }],
             "usage": {
@@ -4887,6 +4930,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 "output_tokens": 1
             }
         }))
+        .into_response()
     }
 
     async fn image_edits(
@@ -4902,7 +4946,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         let mut mask_parts = Vec::new();
         while let Ok(Some(field)) = multipart.next_field().await {
             let name = field.name().unwrap_or("").to_string();
-            if name == "image" || name == "mask" {
+            if name == "image" || name == "image[]" || name == "mask" {
                 let content_type = field
                     .content_type()
                     .map(|s| s.to_string())
@@ -4924,6 +4968,13 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         }
         fields.insert("images".to_string(), Value::Array(image_parts));
         fields.insert("masks".to_string(), Value::Array(mask_parts));
+        let stream_requested =
+            fields.get("stream").and_then(|v| v.as_str()) == Some("true");
+        let partial_images = fields
+            .get("partial_images")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
         let captured = Value::Object(fields);
         if let Ok(mut lock) = captured_bodies.lock() {
             lock.push(("image_edits".to_string(), captured));
@@ -4933,16 +4984,21 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 lock.push(("image_edits-content-type".to_string(), v.to_string()));
             }
         }
+        if stream_requested {
+            let stream = futures_util::stream::iter(image_stream_events("image_edit", partial_images));
+            return Sse::new(stream).into_response();
+        }
         Json(json!({
             "created": 0,
             "data": [{
-                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII="
+                "b64_json": IMAGE_PNG_B64
             }],
             "usage": {
                 "input_tokens": 1,
                 "output_tokens": 1
             }
         }))
+        .into_response()
     }
 
     let router = Router::new()
