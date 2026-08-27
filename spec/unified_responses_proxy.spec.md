@@ -785,6 +785,13 @@ PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Respons
 - tool-call items are nested under `item` for `response.output_item.added` and `response.output_item.done`;
 - argument deltas identify the call via `output_index`, not necessarily `call_id`, for `response.function_call_arguments.delta`.
 
+PR5e. Responses SSE event-name recovery:
+
+- If the SSE parser reports an empty event name or the default event name `message`, and the JSON data object has a top-level string field `type`, Monoize MUST use that `type` as the effective event name only when it equals `error`, starts with `response.`, or starts with `image_generation.`.
+- Monoize MUST use the effective event name for start, output, error, and terminal event dispatch.
+- If the SSE parser reports any other event name, Monoize MUST use that event name without replacement.
+- A nested `response.status` value MUST NOT establish terminal state. A recovered terminal event requires a top-level `type` value equal to `response.completed`, `response.incomplete`, `response.failed`, or `response.cancelled`.
+
 PR5d. For a streamed Responses reasoning item, `response.reasoning_text.delta` and `response.reasoning_text.done` MUST update the same canonical `Reasoning.content` represented by terminal item `content[]` entries with `type = "reasoning_text"`. A terminal `response.output_item.done.item` or `response.completed.response.output[]` snapshot that carries reasoning text only in official `content[]` form MUST preserve that text in `NodeDone.node` and `ResponseDone.output`.
 
 PR5c. When parsing upstream Responses SSE, Monoize MAY receive official image-generation tool events outside the `response.*` namespace.
