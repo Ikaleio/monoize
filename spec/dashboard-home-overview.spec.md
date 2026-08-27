@@ -71,17 +71,28 @@ DH-5c. The account strip MUST NOT display `my_api_keys_count`.
 DH-6. The usage panel MUST occupy the full content width and MUST render:
 
 - title from `dashboard.usage.title` (default English: "Your Usage");
-- subtitle from `dashboard.usage.subtitle` (default English: "Your usage per day across
-  this billing period");
-- a "Group By" control with at least the `model` option (default selected). Additional
-  group-by dimensions MAY be added later without breaking this contract;
+- subtitle from `dashboard.usage.subtitle` (default English: "Cumulative token usage
+  for the selected time range");
+- a time-window control at the top-right of the card header (DH-6i);
 - a horizontal stacked cumulative area chart;
 - a vertically scrolling legend below the chart (NOT a multi-column wrapping legend and
   NOT a paginated page-flip legend).
 
-DH-6a. Chart data MUST come from `GET /api/dashboard/analytics` with
-`buckets = 7` and `range_hours = 168` (seven day-width buckets covering the latest 7 × 24
-hours). The frontend MUST NOT invent synthetic fallback matrix values.
+The panel MUST NOT render a "Group By" control.
+
+DH-6a. Chart data MUST come from `GET /api/dashboard/analytics` with query parameters
+derived from the selected window `W`:
+
+| `W`   | `range_hours` | `buckets` | bucket width |
+| ----- | ------------- | --------- | ------------ |
+| `1h`  | 1             | 12        | 5 minutes    |
+| `24h` | 24            | 24        | 1 hour       |
+| `7d`  | 168           | 7         | 1 day        |
+| `30d` | 720           | 30        | 1 day        |
+
+This mapping MUST be defined in exactly one shared frontend module consumed by both the
+usage chart and the recent usage panel. The frontend MUST NOT invent synthetic fallback
+matrix values.
 
 DH-6b. Each analytics bucket MUST include `tokens_by_model: Record<string, number>` where
 each value is the exact integer sum of
@@ -95,22 +106,40 @@ be omitted.
 
 DH-6c. The chart Y-axis MUST represent cumulative tokens: for each model series at bucket
 index `i`, the plotted value equals the sum of that model's `tokens_by_model` over
-buckets `0..i` inclusive. The X-axis MUST show bucket labels derived from the analytics
-response (frontend MAY reformat to a short date label).
+buckets `0..i` inclusive. The X-axis MUST show one label per bucket. Bucket start
+instants MUST be computed on the frontend as
+`start_i = time_from + i * (time_to - time_from) / bucket_count` from the analytics
+response `time_from` / `time_to` fields. The label format depends on the selected window
+and uses the browser's local time zone:
 
-DH-6d. The chart MUST mark the current local calendar day with a vertical reference line
-and a localized "Today" label when the final bucket overlaps today.
+- `1h` and `24h`: 24-hour clock time `HH:mm`, both fields zero-padded;
+- `7d` and `30d`: English short month name plus day of month (e.g. `Jan 27`).
+
+When `time_from` or `time_to` does not parse as a timestamp, the frontend MUST fall back
+to reformatting the backend bucket `label` (`MM-DD HH:00`) as short month plus day.
+
+DH-6d. The chart MUST mark the final bucket (the bucket whose interval contains the
+request instant) with a vertical dashed reference line at that bucket's X label. The
+line label MUST be:
+
+- localized "Today" (`dashboard.usage.today`) when the selected window is `7d` or `30d`
+  (the final day-width bucket overlaps the current local calendar day);
+- localized "Now" (`dashboard.usage.now`) when the selected window is `1h` or `24h`.
 
 DH-6e. Hover/focus tooltip MUST show:
 
-- bucket date label;
-- per-model daily (non-cumulative) token counts for models with nonzero daily tokens,
-  sorted descending by daily tokens, each with percentage of that day's total;
-- daily total tokens;
+- the bucket label per DH-6c, with a header labeled by `dashboard.usage.periodBreakdown`
+  (default English: "Period breakdown");
+- per-model per-bucket (non-cumulative) token counts for models with nonzero tokens in
+  that bucket, sorted descending by bucket tokens, each with percentage of that bucket's
+  total;
+- bucket total tokens labeled by `dashboard.usage.periodTotal` (default English:
+  "Period total");
 - cumulative total tokens through that bucket.
 
-Token display MUST use compact SI-style formatting (e.g. `10M`, `1.2B`) with at most one
-fractional digit when abbreviated.
+Tooltip copy MUST NOT hardcode a "daily" period because bucket width varies with the
+selected window. Token display MUST use compact SI-style formatting (e.g. `10M`, `1.2B`)
+with at most one fractional digit when abbreviated.
 
 DH-6f. The legend MUST list every model present in the chart series as a vertical list
 inside a bounded-height `ScrollArea` (max height approximately 5–6 rows). Each row shows
@@ -124,12 +153,35 @@ DH-6h. The chart MUST be rendered with `@/components/ui/chart` and Recharts `Are
 stacked `Area` elements. Empty analytics MUST show an `EmptyState` instead of an empty
 axes frame with fake data.
 
+DH-6i. Time-window control contract (shared by DH-6 and DH-7):
+
+- the control MUST be a segmented button group of exactly four options with the literal
+  ASCII labels `1h`, `24h`, `7d`, `30d`, in that order. These labels are canonical
+  product tokens and MUST NOT be translated in any locale;
+- the group MUST carry a localized `aria-label` from `dashboard.usage.timeRange`
+  (default English: "Time range"). Each option MUST be a real `<button>` element with
+  `aria-pressed` reflecting its selection state, and MUST be keyboard operable;
+- the default selected window MUST be `1h` on every mount of `/dashboard`;
+- the selection MUST be held only in React component state. It MUST NOT be written to
+  `localStorage`, `sessionStorage`, cookies, or the URL.
+
 ## Recent Usage Panel
 
-DH-7. The recent usage panel MUST show a table of per-model aggregates computed from the
-authenticated user's own request logs (`GET /api/dashboard/request-logs` with the same
-user scoping the API already applies), limited to the most recent page of logs used by
-the page (limit ≥ 100). Columns MUST be:
+DH-7. The recent usage panel header MUST render its own time-window control that follows
+DH-6i. Its selection state is independent of the usage chart's selection; each panel
+holds its own React state, both defaulting to `1h`.
+
+DH-7a. Table rows MUST be per-model aggregates computed from the authenticated user's
+own request logs (`GET /api/dashboard/request-logs` with the same user scoping the API
+already applies), fetched with these query parameters for the selected window `W`:
+
+- `time_from = now − range_hours(W)` and `time_to = now`, both ISO-8601, where
+  `range_hours(W)` uses the DH-6a mapping and `now` is evaluated at fetch time (so each
+  SWR revalidation observes logs created after the window was selected);
+- `limit = 200`, `offset = 0`. The aggregate is page-limited: when more than 200 log
+  rows exist inside the window, only the 200 most recent rows are aggregated.
+
+Columns MUST be:
 
 - Model (monospace model id);
 - Tokens (sum of input + output + cache_read + cache_creation + reasoning when present);
@@ -138,7 +190,9 @@ the page (limit ≥ 100). Columns MUST be:
 - Charge (sum of `billing.charge_nano_usd` as USD via `formatNanoUsd` / `BigInt`).
 
 Rows MUST sort by Tokens descending. Models with zero tokens and zero charge MUST be
-omitted. While logs are loading, the panel MUST show a skeleton table.
+omitted. While logs are first loading with no data for the panel, the panel MUST show a
+skeleton table (DH-12a). When zero rows match the selected window, the panel MUST show
+the localized empty state.
 
 ## API Information Panel
 
@@ -273,6 +327,26 @@ All motion MUST respect reduced-motion rules (DS32–DS34).
 DH-12. Before required dashboard data resolves, the page MUST render skeleton
 placeholders that mirror the ready layout: greeting, account strip, usage chart,
 recent/API row, and performance panel.
+
+DH-12a. A panel MUST show its skeleton only during the first load of that panel: while
+its SWR hook reports `isLoading` AND the hook exposes no data (neither current nor
+kept-previous data). A rendered chart or table MUST NOT be swapped back to a skeleton
+because SWR is revalidating an already-populated key (`isValidating` MUST NOT unmount
+panel content).
+
+DH-12b. The usage-chart analytics hook and the recent-usage request-logs hook MUST use
+SWR `keepPreviousData: true`. When the user switches windows and data for a previously
+viewed window exists in the SWR cache, the panel MUST keep rendering the previous
+window's data until the new payload resolves, and MAY indicate the pending fetch with a
+non-layout-shifting treatment (reduced content opacity). The panel MUST NOT show a
+skeleton during this transition. A window switch before any data has ever resolved
+still shows the skeleton.
+
+DH-12c. The usage chart's Card and its `framer-motion` entry wrapper MUST remain mounted
+across revalidations and window switches; page-entry motion plays at most once per page
+mount. Recharts `Area` elements MUST set `isAnimationActive={false}` so a background
+data refresh cannot replay the grow-from-zero enter animation. The recent-usage panel
+follows the same mount and motion rules.
 
 DH-13. Individual panels MAY resolve independently via SWR. A panel with data MUST render
 even if a sibling panel is still loading, provided the page-level critical session user

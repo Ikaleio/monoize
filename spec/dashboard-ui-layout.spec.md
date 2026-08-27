@@ -453,18 +453,21 @@ DH2. Account strip balance and subscription cards MUST follow
 `dashboard-home-overview.spec.md` DH-5 through DH-5c.
 
 DH3. The usage chart MUST be a stacked cumulative token `AreaChart` driven by
-`GET /api/dashboard/analytics` with `buckets=7` and `range_hours=168`, including
-`tokens_by_model`, a Today marker, and a vertically scrolling legend
-(`dashboard-home-overview.spec.md` DH-6 through DH-6h).
+`GET /api/dashboard/analytics` with `buckets` and `range_hours` derived from the
+selected time window (`1h`, `24h`, `7d`, `30d`; default `1h`) per the
+`dashboard-home-overview.spec.md` DH-6a mapping, including `tokens_by_model`, a
+Today/Now marker, and a vertically scrolling legend
+(`dashboard-home-overview.spec.md` DH-6 through DH-6i).
 
 DH4. Recent usage and API information panels MUST follow
-`dashboard-home-overview.spec.md` DH-7 and DH-8 through DH-8d.
+`dashboard-home-overview.spec.md` DH-7, DH-7a, and DH-8 through DH-8d.
 
 DH5. The performance panel and admin-configurable targets MUST follow
 `dashboard-home-overview.spec.md` DH-9 through DH-9c.
 
 DH6. Loading and motion contracts MUST follow
-`dashboard-home-overview.spec.md` DH-11 through DH-13.
+`dashboard-home-overview.spec.md` DH-11 through DH-13, including the
+no-skeleton-on-revalidate and no-animation-replay rules (DH-12a through DH-12c).
 
 DH7. `/dashboard` MUST NOT throw runtime errors when optional config fields are absent
 from settings or analytics payloads.
