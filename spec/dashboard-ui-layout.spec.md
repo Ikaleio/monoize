@@ -536,6 +536,8 @@ AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized renderi
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 - Select-all checkbox MUST remain in the fixed header; per-row checkboxes MUST remain in `itemContent`.
 
+AK-UI-BATCH-1. When one or more API keys are selected, the page header MUST show a destructive batch-delete action with a localized label equivalent to "Delete selected". The frontend MUST render the translated label and MUST NOT render an untranslated locale-key identifier.
+
 AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include a group section
 containing exactly:
 

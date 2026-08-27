@@ -634,7 +634,7 @@ export function ApiKeysPage() {
           {selectedKeys.length > 0 && (
             <Button variant="destructive" onClick={handleBatchDelete}>
               <Trash2 className="mr-2 h-4 w-4" />
-              {t("apiKeys.deleteSelected", { count: selectedKeys.length })}
+              {t("apiKeys.batchDelete")}
             </Button>
           )}
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>

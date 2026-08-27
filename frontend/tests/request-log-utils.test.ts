@@ -232,6 +232,19 @@ describe('billing breakdown translations', () => {
 	})
 })
 
+describe('request log controls translations', () => {
+	const locales = [en, zh, zhTw, ja]
+
+	test('ships automatic-update and batch-delete labels in every locale', () => {
+		for (const locale of locales) {
+			expect(locale.requestLogs.automaticUpdates).toBeTruthy()
+			expect(locale.requestLogs.enableAutomaticUpdates).toBeTruthy()
+			expect(locale.requestLogs.disableAutomaticUpdates).toBeTruthy()
+			expect(locale.apiKeys.batchDelete).toBeTruthy()
+		}
+	})
+})
+
 describe('retry chain', () => {
 	test('prefers channel name, then provider name, then ids', () => {
 		expect(
