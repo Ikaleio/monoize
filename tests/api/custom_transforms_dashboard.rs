@@ -286,7 +286,10 @@ async fn registry_visibility_filters_custom_transforms_by_caller() {
     )
     .await;
     assert_eq!(status, CtStatusCode::OK);
-    assert_eq!(custom_ids(&items), vec!["js:admin-secret", "js:echo-marker"]);
+    assert_eq!(
+        custom_ids(&items),
+        vec!["js:admin-secret", "js:echo-marker"]
+    );
     let echo = items
         .as_array()
         .unwrap()
@@ -446,17 +449,16 @@ async fn custom_transform_rewrites_proxied_request_end_to_end() {
         .iter()
         .find(|provider| provider.name == "up-chat")
         .expect("chat provider");
-    let update: monoize::monoize_routing::UpdateMonoizeProviderInput = serde_json::from_value(
-        json!({
+    let update: monoize::monoize_routing::UpdateMonoizeProviderInput =
+        serde_json::from_value(json!({
             "transforms": [{
                 "transform": "js:echo-marker",
                 "enabled": true,
                 "phase": "request",
                 "config": { "marker": "custom-js-applied" }
             }]
-        }),
-    )
-    .expect("update input");
+        }))
+        .expect("update input");
     ctx.state
         .monoize_store
         .update_provider(&chat_provider.id, update)

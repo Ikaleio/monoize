@@ -141,25 +141,21 @@ pub fn validate_billing_expr(expr: &serde_json::Value) -> Result<(), String> {
         let is_last = index == tiers.len() - 1;
         match tier.get("when_input_tokens_lte") {
             Some(bound) if !is_last => {
-                let bound = bound
-                    .as_u64()
-                    .filter(|value| *value >= 1)
-                    .ok_or_else(|| {
-                        format!(
-                            "billing_expr.tiers[{index}].when_input_tokens_lte must be an integer >= 1"
-                        )
-                    })?;
+                let bound = bound.as_u64().filter(|value| *value >= 1).ok_or_else(|| {
+                    format!(
+                        "billing_expr.tiers[{index}].when_input_tokens_lte must be an integer >= 1"
+                    )
+                })?;
                 if previous_bound.is_some_and(|previous| bound <= previous) {
-                    return Err(
-                        "billing_expr tier bounds must be strictly increasing".to_string()
-                    );
+                    return Err("billing_expr tier bounds must be strictly increasing".to_string());
                 }
                 previous_bound = Some(bound);
             }
             Some(serde_json::Value::Null) | None if is_last => {}
             Some(_) => {
-                return Err("the last billing_expr tier must omit when_input_tokens_lte"
-                    .to_string());
+                return Err(
+                    "the last billing_expr tier must omit when_input_tokens_lte".to_string()
+                );
             }
             None => {
                 return Err(format!(
@@ -173,13 +169,16 @@ pub fn validate_billing_expr(expr: &serde_json::Value) -> Result<(), String> {
                 continue;
             }
             if !TIER_PRICE_FIELDS.contains(&key.as_str()) {
-                return Err(format!("billing_expr.tiers[{index}]: unknown field `{key}`"));
+                return Err(format!(
+                    "billing_expr.tiers[{index}]: unknown field `{key}`"
+                ));
             }
             match value {
                 serde_json::Value::Null => {}
                 serde_json::Value::String(raw) => {
-                    validate_usd_decimal(raw)
-                        .map_err(|message| format!("billing_expr.tiers[{index}].{key}: {message}"))?;
+                    validate_usd_decimal(raw).map_err(|message| {
+                        format!("billing_expr.tiers[{index}].{key}: {message}")
+                    })?;
                     if key == "input_usd_per_1m" {
                         has_input_price = true;
                     }
@@ -247,7 +246,9 @@ fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
     let raw_json: serde_json::Value = serde_json::from_str(&raw_json_raw)
         .map_err(|error| format!("model_prices[{model_id}] invalid raw_json: {error}"))?;
     if !raw_json.is_object() {
-        return Err(format!("model_prices[{model_id}] raw_json is not an object"));
+        return Err(format!(
+            "model_prices[{model_id}] raw_json is not an object"
+        ));
     }
     let updated_at_raw: String = row.try_get("", "updated_at").map_err(|e| e.to_string())?;
     Ok(ModelPriceRecord {
@@ -277,7 +278,10 @@ fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
         source: row.try_get("", "source").map_err(|e| e.to_string())?,
         locked_fields,
         raw_json,
-        enabled: row.try_get::<i32>("", "enabled").map_err(|e| e.to_string())? != 0,
+        enabled: row
+            .try_get::<i32>("", "enabled")
+            .map_err(|e| e.to_string())?
+            != 0,
         updated_at: parse_time(&updated_at_raw, "updated_at")?,
         model_id,
     })

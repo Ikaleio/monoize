@@ -168,9 +168,7 @@ fn group_ids_bulk_update(table: &str, entries: &[(String, String)]) -> (String, 
 
 /// GR-X2 bulk rewrite for `api_keys`: `group_ids` and `use_user_group` are
 /// rewritten together from `(id, group_ids_json, use_user_group)` triples.
-fn api_key_group_cascade_bulk_update(
-    entries: &[(String, String, i32)],
-) -> (String, Vec<SeaValue>) {
+fn api_key_group_cascade_bulk_update(entries: &[(String, String, i32)]) -> (String, Vec<SeaValue>) {
     let mut values: Vec<SeaValue> = Vec::with_capacity(entries.len() * 3);
     let mut group_cases = Vec::with_capacity(entries.len());
     let mut flag_cases = Vec::with_capacity(entries.len());
@@ -246,7 +244,9 @@ impl UserStore {
                 .map_err(|e| e.to_string())?;
             for row in rows {
                 let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-                let ratio: String = row.try_get("", "billing_ratio").map_err(|e| e.to_string())?;
+                let ratio: String = row
+                    .try_get("", "billing_ratio")
+                    .map_err(|e| e.to_string())?;
                 ratios.insert(id, ratio);
             }
         }
@@ -560,10 +560,10 @@ impl UserStore {
         // to inheriting the owner's group. Affected rows are rewritten with
         // chunked bulk statements (GR-X7) instead of one UPDATE per row.
         let rows = tx
-            .query_all(self.db.stmt(
-                "SELECT id, use_user_group, group_ids FROM api_keys",
-                vec![],
-            ))
+            .query_all(
+                self.db
+                    .stmt("SELECT id, use_user_group, group_ids FROM api_keys", vec![]),
+            )
             .await
             .map_err(storage)?;
         let mut key_updates: Vec<(String, String, i32)> = Vec::new();

@@ -291,9 +291,7 @@ fn parse_outcome(kind: &'static str, raw: &str) -> Result<SandboxOutcome, String
                 .cloned()
                 .ok_or_else(|| "sandbox outcome is missing 'items'".to_string())?;
             if items.iter().any(|item| !item.is_object()) {
-                return Err(
-                    "every element of a stream fan-out array must be an object".to_string()
-                );
+                return Err("every element of a stream fan-out array must be an object".to_string());
             }
             SandboxData::Fanout(items)
         }
@@ -430,17 +428,13 @@ fn install_host_bridges(
             if call_index > fetch_max_calls {
                 return Err(Exception::throw_message(
                     &fctx,
-                    &format!("Monoize.fetch call limit exceeded ({fetch_max_calls} per invocation)"),
+                    &format!(
+                        "Monoize.fetch call limit exceeded ({fetch_max_calls} per invocation)"
+                    ),
                 ));
             }
             calls.set(call_index);
-            match host_fetch(
-                client,
-                &handle,
-                &request_json,
-                deadline,
-                fetch_max_bytes,
-            ) {
+            match host_fetch(client, &handle, &request_json, deadline, fetch_max_bytes) {
                 Ok(response_json) => Ok(response_json),
                 Err(message) => Err(Exception::throw_message(&fctx, &message)),
             }

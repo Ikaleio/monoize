@@ -1046,7 +1046,12 @@ pub(super) async fn forward_stream_typed(
                                     .await
                                 });
 
-                            let (decode_result, retain_output_result, transform_result, encode_result) = tokio::join!(
+                            let (
+                                decode_result,
+                                retain_output_result,
+                                transform_result,
+                                encode_result,
+                            ) = tokio::join!(
                                 decode_handle,
                                 retain_output_handle,
                                 transform_handle,

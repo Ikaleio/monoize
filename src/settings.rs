@@ -519,8 +519,11 @@ impl SettingsStore {
             &defaults.price_sync_new_api_base_url,
         )
         .await?;
-        self.set_if_not_exists("price_sync_new_api_token", &defaults.price_sync_new_api_token)
-            .await?;
+        self.set_if_not_exists(
+            "price_sync_new_api_token",
+            &defaults.price_sync_new_api_token,
+        )
+        .await?;
         self.set_if_not_exists(
             "dashboard_performance_group_ids",
             &serde_json::to_string(&defaults.dashboard_performance_group_ids)
@@ -1085,7 +1088,6 @@ impl SettingsStore {
             None => Ok(default_reasoning_suffix_map()),
         }
     }
-
 }
 
 pub(crate) const CONFIG_EPOCH_TENANT: &str = "monoize";

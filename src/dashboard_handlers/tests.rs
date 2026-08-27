@@ -22,7 +22,7 @@ use crate::users::{
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[test]
 fn build_models_list_url_adds_v1_when_missing() {

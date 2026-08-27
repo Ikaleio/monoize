@@ -594,7 +594,14 @@ mod tests {
             .await
             .unwrap();
         for (created_at_unix_ms, model, charge, user_id, input_tokens, output_tokens) in [
-            (100_i64, "exact", "9223372036854775807", "u1", Some(10_i64), Some(5_i64)),
+            (
+                100_i64,
+                "exact",
+                "9223372036854775807",
+                "u1",
+                Some(10_i64),
+                Some(5_i64),
+            ),
             (200_i64, "exact", "1", "u1", Some(1), Some(2)),
             (300_i64, "exact", "+9", "u1", None, None),
             (
@@ -2020,7 +2027,9 @@ impl UserStore {
                 let hour_idx: i64 = row.try_get("", "hour_idx").map_err(|e| e.to_string())?;
                 Ok(super::PerformanceHourBucketRow {
                     hour_idx: hour_idx.clamp(0, brick_count - 1),
-                    finished_count: row.try_get("", "finished_count").map_err(|e| e.to_string())?,
+                    finished_count: row
+                        .try_get("", "finished_count")
+                        .map_err(|e| e.to_string())?,
                     success_count: row
                         .try_get::<Option<i64>>("", "success_count")
                         .map_err(|e| e.to_string())?
@@ -2064,8 +2073,7 @@ impl UserStore {
              WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
                AND rl.status <> 'pending'"
         );
-        let mut avg_values: Vec<SeaValue> =
-            vec![time_from_unix_ms.into(), time_to_unix_ms.into()];
+        let mut avg_values: Vec<SeaValue> = vec![time_from_unix_ms.into(), time_to_unix_ms.into()];
         let mut avg_idx = 3usize;
         append_performance_target_filters(
             &mut avg_sql,
@@ -2260,10 +2268,7 @@ impl UserStore {
     /// scoped to `user_id`. Token SUMs are cast to BIGINT so SQLite (INTEGER)
     /// and PostgreSQL (NUMERIC from SUM(bigint)) decode identically into i64;
     /// the cast wraps the aggregate, not the indexed range column (RL-S2b).
-    pub async fn get_user_live_usage(
-        &self,
-        user_id: &str,
-    ) -> Result<super::UserLiveUsage, String> {
+    pub async fn get_user_live_usage(&self, user_id: &str) -> Result<super::UserLiveUsage, String> {
         let now_ms = Utc::now().timestamp_millis();
         let from_ms = now_ms - super::LIVE_USAGE_WINDOW_SECONDS * 1000;
         let sql = "SELECT COUNT(*) AS rpm, \
@@ -2278,17 +2283,19 @@ impl UserStore {
         let row = self
             .db
             .read()
-            .query_one(self.db.stmt(
-                sql,
-                vec![user_id.into(), from_ms.into(), now_ms.into()],
-            ))
+            .query_one(
+                self.db
+                    .stmt(sql, vec![user_id.into(), from_ms.into(), now_ms.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "no live usage aggregate row".to_string())?;
         Ok(super::UserLiveUsage {
             rpm: row.try_get("", "rpm").map_err(|e| e.to_string())?,
             input_tokens: row.try_get("", "input_tokens").map_err(|e| e.to_string())?,
-            output_tokens: row.try_get("", "output_tokens").map_err(|e| e.to_string())?,
+            output_tokens: row
+                .try_get("", "output_tokens")
+                .map_err(|e| e.to_string())?,
             cache_read_tokens: row
                 .try_get("", "cache_read_tokens")
                 .map_err(|e| e.to_string())?,
@@ -2602,10 +2609,7 @@ mod retention_tests {
 
         let rows = db
             .read()
-            .query_all(db.stmt(
-                "SELECT id FROM request_logs ORDER BY id",
-                vec![],
-            ))
+            .query_all(db.stmt("SELECT id FROM request_logs ORDER BY id", vec![]))
             .await
             .expect("remaining rows query");
         let remaining: Vec<String> = rows
@@ -2636,27 +2640,9 @@ mod retention_tests {
 
         for (id, model, provider_id, status, created_ms, is_stream, duration_ms, ttfb_ms, output) in [
             (
-                "p1",
-                "m-a",
-                "prov-1",
-                "success",
-                hour0,
-                1_i64,
-                2000_i64,
-                500_i64,
-                150_i64,
+                "p1", "m-a", "prov-1", "success", hour0, 1_i64, 2000_i64, 500_i64, 150_i64,
             ),
-            (
-                "p2",
-                "m-a",
-                "prov-1",
-                "error",
-                hour0,
-                0,
-                1000,
-                0,
-                0,
-            ),
+            ("p2", "m-a", "prov-1", "error", hour0, 0, 1000, 0, 0),
             (
                 "p3",
                 "m-a",
@@ -2668,28 +2654,8 @@ mod retention_tests {
                 200,
                 50,
             ),
-            (
-                "p4",
-                "m-b",
-                "prov-1",
-                "success",
-                hour23,
-                0,
-                1000,
-                100,
-                10,
-            ),
-            (
-                "p5",
-                "m-a",
-                "prov-1",
-                "pending",
-                hour23,
-                0,
-                1000,
-                100,
-                10,
-            ),
+            ("p4", "m-b", "prov-1", "success", hour23, 0, 1000, 100, 10),
+            ("p5", "m-a", "prov-1", "pending", hour23, 0, 1000, 100, 10),
         ] {
             db.write()
                 .await

@@ -96,11 +96,10 @@ const defaultConfig: SWRConfiguration = {
 
 // Current user hook
 export function useCurrentUser(config?: SWRConfiguration) {
-  return useSWR<User>(
-    SWR_KEYS.ME,
-    fetchers.me,
-    { ...defaultConfig, ...config }
-  );
+  return useSWR<User>(SWR_KEYS.ME, fetchers.me, {
+    ...defaultConfig,
+    ...config,
+  });
 }
 
 // Users list hook (admin only)
@@ -156,26 +155,30 @@ export function usePublicSettings(config?: SWRConfiguration) {
   return useSWR<PublicSystemSettings>(
     SWR_KEYS.PUBLIC_SETTINGS,
     fetchers.publicSettings,
-    { ...defaultConfig, ...config }
+    { ...defaultConfig, ...config },
   );
 }
 
 // Providers hook (admin only)
 export function useProviders(config?: SWRConfiguration, enabled = true) {
-  return useSWR<Provider[]>(enabled ? SWR_KEYS.PROVIDERS : null, fetchers.providers, {
-    ...defaultConfig,
-    ...config,
-  });
+  return useSWR<Provider[]>(
+    enabled ? SWR_KEYS.PROVIDERS : null,
+    fetchers.providers,
+    {
+      ...defaultConfig,
+      ...config,
+    },
+  );
 }
 
 export function useProviderDetail(
   providerId: string | null | undefined,
-  config?: SWRConfiguration
+  config?: SWRConfiguration,
 ) {
   return useSWR<Provider>(
     providerId ? providerDetailSWRKey(providerId) : null,
     () => api.getProvider(providerId!),
-    { ...defaultConfig, ...config }
+    { ...defaultConfig, ...config },
   );
 }
 
@@ -186,7 +189,7 @@ export function useDashboardGroups(enabled = true, config?: SWRConfiguration) {
     {
       ...defaultConfig,
       ...config,
-    }
+    },
   );
 }
 
@@ -197,7 +200,7 @@ export function useTransformRegistry(config?: SWRConfiguration) {
     {
       ...defaultConfig,
       ...config,
-    }
+    },
   );
 }
 
@@ -206,7 +209,7 @@ export function useCustomTransforms(config?: SWRConfiguration) {
   return useSWR<CustomTransform[]>(
     SWR_KEYS.CUSTOM_TRANSFORMS,
     fetchers.customTransforms,
-    { ...defaultConfig, ...config }
+    { ...defaultConfig, ...config },
   );
 }
 
@@ -214,15 +217,19 @@ export function useModelMetadata(config?: SWRConfiguration) {
   return useSWR<MarketplaceModelRecord[]>(
     SWR_KEYS.MODEL_METADATA,
     fetchers.modelMetadata,
-    { ...defaultConfig, ...config }
+    { ...defaultConfig, ...config },
   );
 }
 
 export function useModelPrices(config?: SWRConfiguration) {
-  return useSWR<ModelPriceRecord[]>(SWR_KEYS.MODEL_PRICES, fetchers.modelPrices, {
-    ...defaultConfig,
-    ...config,
-  });
+  return useSWR<ModelPriceRecord[]>(
+    SWR_KEYS.MODEL_PRICES,
+    fetchers.modelPrices,
+    {
+      ...defaultConfig,
+      ...config,
+    },
+  );
 }
 
 export function useUnpricedModels(config?: SWRConfiguration) {
@@ -233,26 +240,35 @@ export function useUnpricedModels(config?: SWRConfiguration) {
 }
 
 export function usePriceSyncRuns(config?: SWRConfiguration) {
-  return useSWR<PriceSyncRun[]>(SWR_KEYS.PRICE_SYNC_RUNS, fetchers.priceSyncRuns, {
-    ...defaultConfig,
-    ...config,
-  });
+  return useSWR<PriceSyncRun[]>(
+    SWR_KEYS.PRICE_SYNC_RUNS,
+    fetchers.priceSyncRuns,
+    {
+      ...defaultConfig,
+      ...config,
+    },
+  );
 }
 
 export function useMarketplaceModels(config?: SWRConfiguration) {
   return useSWR<MarketplaceModelRecord[]>(
     SWR_KEYS.MARKETPLACE_MODELS,
     fetchers.marketplaceModels,
-    { ...defaultConfig, ...config }
+    { ...defaultConfig, ...config },
   );
 }
 
-export function useRequestLogs(limit = 50, offset = 0, filters?: RequestLogsFilter, config?: SWRConfiguration) {
+export function useRequestLogs(
+  limit = 50,
+  offset = 0,
+  filters?: RequestLogsFilter,
+  config?: SWRConfiguration,
+) {
   const filterKey = filters ? JSON.stringify(filters) : "";
   return useSWR<RequestLogsResponse>(
     `${SWR_KEYS.REQUEST_LOGS}?limit=${limit}&offset=${offset}&f=${filterKey}`,
     () => api.listRequestLogs(limit, offset, filters),
-    { ...defaultConfig, ...config }
+    { ...defaultConfig, ...config },
   );
 }
 
@@ -263,22 +279,26 @@ export function useRequestCapture(
   requestId: string | null | undefined,
   userId: string | null | undefined,
   enabled: boolean,
-  config?: SWRConfiguration
+  config?: SWRConfiguration,
 ) {
   return useSWR<RequestCaptureDetail>(
     enabled && requestId
       ? `${SWR_KEYS.REQUEST_LOGS}/capture?rid=${encodeURIComponent(requestId)}&uid=${encodeURIComponent(userId ?? "")}`
       : null,
     () => api.getRequestCapture(requestId as string, userId ?? undefined),
-    { ...defaultConfig, revalidateOnFocus: false, ...config }
+    { ...defaultConfig, revalidateOnFocus: false, ...config },
   );
 }
 
-export function useDashboardAnalytics(buckets = 8, rangeHours = 24, config?: SWRConfiguration) {
+export function useDashboardAnalytics(
+  buckets = 8,
+  rangeHours = 24,
+  config?: SWRConfiguration,
+) {
   return useSWR<DashboardAnalytics>(
     `${SWR_KEYS.ANALYTICS}?buckets=${buckets}&range_hours=${rangeHours}`,
     () => api.getDashboardAnalytics(buckets, rangeHours),
-    { ...defaultConfig, ...config }
+    { ...defaultConfig, ...config },
   );
 }
 
@@ -286,7 +306,7 @@ export function useDashboardPerformance(config?: SWRConfiguration) {
   return useSWR<DashboardPerformance>(
     SWR_KEYS.PERFORMANCE,
     () => api.getDashboardPerformance(),
-    { ...defaultConfig, refreshInterval: 60000, ...config }
+    { ...defaultConfig, refreshInterval: 60000, ...config },
   );
 }
 
@@ -294,20 +314,28 @@ export function useDashboardPerformance(config?: SWRConfiguration) {
 // Mounted only while the user-center dropdown is open, so the 10s poll
 // runs only while the menu is visible.
 export function useLiveUsage(config?: SWRConfiguration) {
-  return useSWR<UserLiveUsage>(SWR_KEYS.LIVE_USAGE, () => api.getMyLiveUsage(), {
-    ...defaultConfig,
-    refreshInterval: 10000,
-    ...config,
-  });
+  return useSWR<UserLiveUsage>(
+    SWR_KEYS.LIVE_USAGE,
+    () => api.getMyLiveUsage(),
+    {
+      ...defaultConfig,
+      refreshInterval: 10000,
+      ...config,
+    },
+  );
 }
 
 // Admin overview hook (admin dashboard; AD-ADF-7: 10s refresh, skeleton, retry)
 export function useAdminOverview(config?: SWRConfiguration) {
-  return useSWR<AdminOverview>(SWR_KEYS.ADMIN_OVERVIEW, () => api.getAdminOverview(), {
-    ...defaultConfig,
-    refreshInterval: 10000,
-    ...config
-  });
+  return useSWR<AdminOverview>(
+    SWR_KEYS.ADMIN_OVERVIEW,
+    () => api.getAdminOverview(),
+    {
+      ...defaultConfig,
+      refreshInterval: 10000,
+      ...config,
+    },
+  );
 }
 
 // Mutation helpers with optimistic updates
@@ -315,7 +343,7 @@ export function useAdminOverview(config?: SWRConfiguration) {
 export async function updateMeOptimistic(
   updates: { email?: string | null },
   currentUser: User | undefined,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   if (currentUser) {
     mutate(SWR_KEYS.ME, { ...currentUser, ...updates }, false);
@@ -336,7 +364,7 @@ export async function updateMeOptimistic(
 
 export async function updateSettingsOptimistic(
   newSettings: SystemSettings,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update
   mutate(SWR_KEYS.SETTINGS, newSettings, false);
@@ -364,7 +392,7 @@ export async function createUserOptimistic(
   role: string,
   groupId: string | undefined,
   currentUsers: User[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update with placeholder
   const tempUser: User = {
@@ -406,11 +434,11 @@ export async function updateUserOptimistic(
   userId: string,
   updates: Partial<User> & { password?: string },
   currentUsers: User[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update
   const updatedUsers = currentUsers.map((u) =>
-    u.id === userId ? { ...u, ...updates } : u
+    u.id === userId ? { ...u, ...updates } : u,
   );
   mutate(SWR_KEYS.USERS, updatedUsers, false);
 
@@ -433,7 +461,7 @@ export async function updateUserOptimistic(
 export async function deleteUserOptimistic(
   userId: string,
   currentUsers: User[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update
   const filteredUsers = currentUsers.filter((u) => u.id !== userId);
@@ -461,14 +489,14 @@ function sortGroups(groups: Group[]): Group[] {
     (a, b) =>
       a.sort_order - b.sort_order ||
       a.created_at.localeCompare(b.created_at) ||
-      a.id.localeCompare(b.id)
+      a.id.localeCompare(b.id),
   );
 }
 
 export async function createGroupOptimistic(
   input: CreateGroupInput,
   currentGroups: Group[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const now = new Date().toISOString();
   const tempGroup: Group = {
@@ -482,7 +510,11 @@ export async function createGroupOptimistic(
     created_at: now,
     updated_at: now,
   };
-  mutate(SWR_KEYS.DASHBOARD_GROUPS, sortGroups([...currentGroups, tempGroup]), false);
+  mutate(
+    SWR_KEYS.DASHBOARD_GROUPS,
+    sortGroups([...currentGroups, tempGroup]),
+    false,
+  );
 
   try {
     const created = await api.createGroup(input);
@@ -501,7 +533,7 @@ export async function updateGroupOptimistic(
   groupId: string,
   input: UpdateGroupInput,
   currentGroups: Group[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const optimistic = sortGroups(
     currentGroups.map((g) =>
@@ -515,8 +547,8 @@ export async function updateGroupOptimistic(
             billing_ratio: input.billing_ratio ?? g.billing_ratio,
             updated_at: new Date().toISOString(),
           }
-        : g
-    )
+        : g,
+    ),
   );
   mutate(SWR_KEYS.DASHBOARD_GROUPS, optimistic, false);
 
@@ -536,7 +568,7 @@ export async function updateGroupOptimistic(
 export async function reorderGroupsOptimistic(
   groupIds: string[],
   currentGroups: Group[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const groupsById = new Map(currentGroups.map((group) => [group.id, group]));
   const updatedAt = new Date().toISOString();
@@ -563,12 +595,12 @@ export async function reorderGroupsOptimistic(
 export async function deleteGroupOptimistic(
   groupId: string,
   currentGroups: Group[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   mutate(
     SWR_KEYS.DASHBOARD_GROUPS,
     currentGroups.filter((g) => g.id !== groupId),
-    false
+    false,
   );
 
   try {
@@ -633,7 +665,7 @@ function optimisticGrantFields(input: BillingPlanInput): {
 export async function createBillingPlanOptimistic(
   input: BillingPlanInput,
   currentPlans: BillingPlan[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const amounts = optimisticGrantFields(input);
   const tempPlan: BillingPlan = {
@@ -666,7 +698,7 @@ export async function updateBillingPlanOptimistic(
   planId: string,
   input: BillingPlanInput,
   currentPlans: BillingPlan[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const amounts = optimisticGrantFields(input);
   const hasAmount =
@@ -681,7 +713,7 @@ export async function updateBillingPlanOptimistic(
           group_ids: input.group_ids ?? p.group_ids,
           enabled: input.enabled ?? p.enabled,
         }
-      : p
+      : p,
   );
   mutate(SWR_KEYS.BILLING_PLANS, updatedPlans, false);
 
@@ -701,7 +733,7 @@ export async function updateBillingPlanOptimistic(
 export async function deleteBillingPlanOptimistic(
   planId: string,
   currentPlans: BillingPlan[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const filteredPlans = currentPlans.filter((p) => p.id !== planId);
   mutate(SWR_KEYS.BILLING_PLANS, filteredPlans, false);
@@ -720,7 +752,7 @@ export async function deleteBillingPlanOptimistic(
 
 export async function resetBillingPlanOptimistic(
   plan: BillingPlan,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ): Promise<{ success: boolean; reset_count: number }> {
   let snapshot: User[] | undefined;
   await mutate(
@@ -743,7 +775,7 @@ export async function resetBillingPlanOptimistic(
         };
       });
     },
-    false
+    false,
   );
 
   try {
@@ -764,7 +796,7 @@ export async function resetBillingPlanOptimistic(
 export async function createApiKeyOptimistic(
   input: CreateApiKeyInput,
   _currentKeys: ApiKey[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   try {
     const result = await api.createApiKey(input);
@@ -784,11 +816,11 @@ export async function updateApiKeyOptimistic(
   keyId: string,
   input: UpdateApiKeyInput,
   currentKeys: ApiKey[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update
   const updatedKeys = currentKeys.map((k) =>
-    k.id === keyId ? { ...k, ...input } : k
+    k.id === keyId ? { ...k, ...input } : k,
   );
   mutate(SWR_KEYS.API_KEYS, updatedKeys, false);
 
@@ -810,7 +842,7 @@ export async function updateApiKeyOptimistic(
 export async function deleteApiKeyOptimistic(
   keyId: string,
   currentKeys: ApiKey[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update
   const filteredKeys = currentKeys.filter((k) => k.id !== keyId);
@@ -834,7 +866,7 @@ export async function deleteApiKeyOptimistic(
 export async function batchDeleteApiKeysOptimistic(
   keyIds: string[],
   currentKeys: ApiKey[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update
   const filteredKeys = currentKeys.filter((k) => !keyIds.includes(k.id));
@@ -859,7 +891,7 @@ export async function batchDeleteApiKeysOptimistic(
 export async function createProviderOptimistic(
   input: CreateProviderInput,
   _currentProviders: Provider[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   try {
     const result = await api.createProvider(input);
@@ -881,10 +913,10 @@ export async function updateProviderOptimistic(
   id: string,
   input: UpdateProviderInput,
   currentProviders: Provider[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const updatedProviders = currentProviders.map((p) =>
-    p.id === id ? { ...p, ...input } : p
+    p.id === id ? { ...p, ...input } : p,
   );
   mutate(SWR_KEYS.PROVIDERS, updatedProviders, false);
 
@@ -908,7 +940,7 @@ export async function updateProviderOptimistic(
 export async function deleteProviderOptimistic(
   id: string,
   currentProviders: Provider[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   // Optimistic update
   const filteredProviders = currentProviders.filter((p) => p.id !== id);
@@ -934,7 +966,7 @@ export async function deleteProviderOptimistic(
 
 export async function reorderProviders(
   providerIds: string[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   try {
     await api.reorderProviders(providerIds);
@@ -951,7 +983,7 @@ export async function upsertModelMetadataOptimistic(
   modelId: string,
   input: UpsertModelMetadataInput,
   currentRecords: ModelMetadataRecord[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const tempRecord: ModelMetadataRecord = {
     model_id: modelId,
@@ -967,7 +999,9 @@ export async function upsertModelMetadataOptimistic(
   };
   const exists = currentRecords.some((r) => r.model_id === modelId);
   const optimistic = exists
-    ? currentRecords.map((r) => (r.model_id === modelId ? { ...r, ...tempRecord } : r))
+    ? currentRecords.map((r) =>
+        r.model_id === modelId ? { ...r, ...tempRecord } : r,
+      )
     : [...currentRecords, tempRecord];
   mutate(SWR_KEYS.MODEL_METADATA, optimistic, false);
 
@@ -989,7 +1023,7 @@ export async function upsertModelMetadataOptimistic(
 export async function deleteModelMetadataOptimistic(
   modelId: string,
   currentRecords: ModelMetadataRecord[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const filtered = currentRecords.filter((r) => r.model_id !== modelId);
   mutate(SWR_KEYS.MODEL_METADATA, filtered, false);
@@ -1008,6 +1042,21 @@ export async function deleteModelMetadataOptimistic(
   }
 }
 
+export async function syncModelMetadata(onError?: (error: Error) => void) {
+  try {
+    const result = await api.syncModelMetadataFromModelsDev();
+    mutate(SWR_KEYS.MODEL_METADATA);
+    mutate(SWR_KEYS.MARKETPLACE_MODELS);
+    mutate(SWR_KEYS.PROVIDERS);
+    return result;
+  } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
 // Model price mutation helpers (model-pricing.spec.md MP-UI2): optimistic
 // list update, then revalidation of the price list and the unpriced set,
 // which both depend on the mutated row.
@@ -1016,7 +1065,7 @@ export async function upsertModelPriceOptimistic(
   modelId: string,
   input: UpsertModelPriceInput,
   currentRecords: ModelPriceRecord[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   const existing = currentRecords.find((r) => r.model_id === modelId);
   const tempRecord: ModelPriceRecord = {
@@ -1025,35 +1074,35 @@ export async function upsertModelPriceOptimistic(
     input_usd_per_1m:
       input.input_usd_per_1m !== undefined
         ? input.input_usd_per_1m
-        : existing?.input_usd_per_1m ?? null,
+        : (existing?.input_usd_per_1m ?? null),
     output_usd_per_1m:
       input.output_usd_per_1m !== undefined
         ? input.output_usd_per_1m
-        : existing?.output_usd_per_1m ?? null,
+        : (existing?.output_usd_per_1m ?? null),
     cache_read_usd_per_1m:
       input.cache_read_usd_per_1m !== undefined
         ? input.cache_read_usd_per_1m
-        : existing?.cache_read_usd_per_1m ?? null,
+        : (existing?.cache_read_usd_per_1m ?? null),
     cache_write_usd_per_1m:
       input.cache_write_usd_per_1m !== undefined
         ? input.cache_write_usd_per_1m
-        : existing?.cache_write_usd_per_1m ?? null,
+        : (existing?.cache_write_usd_per_1m ?? null),
     cache_write_1h_usd_per_1m:
       input.cache_write_1h_usd_per_1m !== undefined
         ? input.cache_write_1h_usd_per_1m
-        : existing?.cache_write_1h_usd_per_1m ?? null,
+        : (existing?.cache_write_1h_usd_per_1m ?? null),
     reasoning_usd_per_1m:
       input.reasoning_usd_per_1m !== undefined
         ? input.reasoning_usd_per_1m
-        : existing?.reasoning_usd_per_1m ?? null,
+        : (existing?.reasoning_usd_per_1m ?? null),
     per_request_usd:
       input.per_request_usd !== undefined
         ? input.per_request_usd
-        : existing?.per_request_usd ?? null,
+        : (existing?.per_request_usd ?? null),
     billing_expr:
       input.billing_expr !== undefined
         ? input.billing_expr
-        : existing?.billing_expr ?? null,
+        : (existing?.billing_expr ?? null),
     source: existing?.source ?? "manual",
     locked_fields: input.locked_fields ?? existing?.locked_fields ?? [],
     raw_json: existing?.raw_json ?? {},
@@ -1063,7 +1112,7 @@ export async function upsertModelPriceOptimistic(
   const optimistic = existing
     ? currentRecords.map((r) => (r.model_id === modelId ? tempRecord : r))
     : [...currentRecords, tempRecord].sort((a, b) =>
-        a.model_id.localeCompare(b.model_id)
+        a.model_id.localeCompare(b.model_id),
       );
   mutate(SWR_KEYS.MODEL_PRICES, optimistic, false);
 
@@ -1086,12 +1135,12 @@ export async function upsertModelPriceOptimistic(
 export async function deleteModelPriceOptimistic(
   modelId: string,
   currentRecords: ModelPriceRecord[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   mutate(
     SWR_KEYS.MODEL_PRICES,
     currentRecords.filter((r) => r.model_id !== modelId),
-    false
+    false,
   );
 
   try {
@@ -1111,7 +1160,7 @@ export async function deleteModelPriceOptimistic(
 
 export async function applyPriceSync(
   source: PriceSyncSource,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   try {
     const run = await api.applyPriceSync(source);
@@ -1136,7 +1185,7 @@ export async function applyPriceSync(
 
 export async function createCustomTransformOptimistic(
   source: string,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   try {
     const created = await api.createCustomTransform(source);
@@ -1155,11 +1204,11 @@ export async function updateCustomTransformOptimistic(
   id: string,
   input: { source?: string; enabled?: boolean },
   currentTransforms: CustomTransform[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   if (input.enabled !== undefined) {
     const optimistic = currentTransforms.map((item) =>
-      item.id === id ? { ...item, enabled: input.enabled! } : item
+      item.id === id ? { ...item, enabled: input.enabled! } : item,
     );
     mutate(SWR_KEYS.CUSTOM_TRANSFORMS, optimistic, false);
   }
@@ -1181,12 +1230,12 @@ export async function updateCustomTransformOptimistic(
 export async function deleteCustomTransformOptimistic(
   id: string,
   currentTransforms: CustomTransform[],
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
 ) {
   mutate(
     SWR_KEYS.CUSTOM_TRANSFORMS,
     currentTransforms.filter((item) => item.id !== id),
-    false
+    false,
   );
 
   try {

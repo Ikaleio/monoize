@@ -25,13 +25,22 @@ impl Transform for ReasoningStripInputTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Reasoning: strip from request input"), ("zh", "推理：移除请求输入中的推理")]
+        &[
+            ("en", "Reasoning: strip from request input"),
+            ("zh", "推理：移除请求输入中的推理"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Removes reasoning nodes from the request input before upstream encoding. Counterpart of reasoning_strip_output."),
-            ("zh", "在上游编码前移除请求输入中的推理节点。与 reasoning_strip_output 对应。"),
+            (
+                "en",
+                "Removes reasoning nodes from the request input before upstream encoding. Counterpart of reasoning_strip_output.",
+            ),
+            (
+                "zh",
+                "在上游编码前移除请求输入中的推理节点。与 reasoning_strip_output 对应。",
+            ),
         ]
     }
 

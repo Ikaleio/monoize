@@ -217,7 +217,9 @@ pub(super) fn missing_usage_rejects(
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
 ) -> bool {
-    auth.user_id.is_some() && attempt.model_price.is_some() && !attempt.allow_free_when_missing_usage
+    auth.user_id.is_some()
+        && attempt.model_price.is_some()
+        && !attempt.allow_free_when_missing_usage
 }
 
 pub(super) fn missing_usage_error() -> AppError {

@@ -35,13 +35,22 @@ impl Transform for ReasoningInjectContentFieldTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Reasoning: inject reasoning_content field"), ("zh", "推理：注入 reasoning_content 字段")]
+        &[
+            ("en", "Reasoning: inject reasoning_content field"),
+            ("zh", "推理：注入 reasoning_content 字段"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Marks reasoning nodes and deltas so Chat Completions encoders emit OpenRouter/DeepSeek-compatible reasoning_content fields."),
-            ("zh", "标记推理节点与增量，使 Chat Completions 编码器输出 OpenRouter/DeepSeek 兼容的 reasoning_content 字段。"),
+            (
+                "en",
+                "Marks reasoning nodes and deltas so Chat Completions encoders emit OpenRouter/DeepSeek-compatible reasoning_content fields.",
+            ),
+            (
+                "zh",
+                "标记推理节点与增量，使 Chat Completions 编码器输出 OpenRouter/DeepSeek 兼容的 reasoning_content 字段。",
+            ),
         ]
     }
 

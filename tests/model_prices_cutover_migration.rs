@@ -13,10 +13,22 @@ async fn connect() -> DatabaseConnection {
 
 /// Applies every migration except the cutover step.
 async fn migrate_to_pre_cutover(db: &DatabaseConnection) {
-    let total = Migrator::migrations().len() as u32;
-    Migrator::up(db, Some(total - 1))
+    let cutover_index = Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name() == "m20260901_000048_model_prices_cutover")
+        .expect("cutover migration is registered") as u32;
+    Migrator::up(db, Some(cutover_index))
         .await
         .expect("pre-cutover migrations apply");
+}
+
+fn cutover_and_later_migration_count() -> u32 {
+    let migrations = Migrator::migrations();
+    let cutover_index = migrations
+        .iter()
+        .position(|migration| migration.name() == "m20260901_000048_model_prices_cutover")
+        .expect("cutover migration is registered");
+    (migrations.len() - cutover_index) as u32
 }
 
 async fn insert_legacy_rule(
@@ -89,42 +101,112 @@ async fn cutover_converts_eligible_manual_token_rules_and_drops_legacy_schema() 
 
     // Eligible: manual, enabled, token, exact pattern, dimensionless tiers.
     insert_legacy_rule(
-        &db, "m1", "manual", Some("gpt-4o"), "token", "input_uncached", "2500", 0, 1, None, None,
+        &db,
+        "m1",
+        "manual",
+        Some("gpt-4o"),
+        "token",
+        "input_uncached",
+        "2500",
+        0,
+        1,
+        None,
+        None,
         None,
     )
     .await;
     insert_legacy_rule(
-        &db, "m2", "manual", Some("gpt-4o"), "token", "output", "10000", 0, 1,
-        Some("default"), Some("default"), None,
+        &db,
+        "m2",
+        "manual",
+        Some("gpt-4o"),
+        "token",
+        "output",
+        "10000",
+        0,
+        1,
+        Some("default"),
+        Some("default"),
+        None,
     )
     .await;
     insert_legacy_rule(
-        &db, "m3", "manual", Some("gpt-4o"), "token", "input_cached", "1250", 0, 1, None, None,
+        &db,
+        "m3",
+        "manual",
+        Some("gpt-4o"),
+        "token",
+        "input_cached",
+        "1250",
+        0,
+        1,
+        None,
+        None,
         None,
     )
     .await;
     // Conflicting input rules: higher priority wins (MP-M3).
     insert_legacy_rule(
-        &db, "m4", "manual", Some("gpt-4o"), "token", "input_uncached", "9999", 5, 1, None, None,
+        &db,
+        "m4",
+        "manual",
+        Some("gpt-4o"),
+        "token",
+        "input_uncached",
+        "9999",
+        5,
+        1,
+        None,
+        None,
         None,
     )
     .await;
     // Discarded: glob pattern (MP-M4).
     insert_legacy_rule(
-        &db, "g1", "manual", Some("claude-*"), "token", "input_uncached", "3000", 0, 1, None,
-        None, None,
+        &db,
+        "g1",
+        "manual",
+        Some("claude-*"),
+        "token",
+        "input_uncached",
+        "3000",
+        0,
+        1,
+        None,
+        None,
+        None,
     )
     .await;
     // Discarded: meter rate kind.
     insert_legacy_rule(
-        &db, "t1", "manual", Some("tool-model"), "meter", "web_search", "10000000", 0, 1, None,
-        None, None,
+        &db,
+        "t1",
+        "manual",
+        Some("tool-model"),
+        "meter",
+        "web_search",
+        "10000000",
+        0,
+        1,
+        None,
+        None,
+        None,
     )
     .await;
     // Discarded: models_dev source (operators re-sync via §9).
     insert_legacy_rule(
-        &db, "s1", "models_dev", Some("gemini-2.5-pro"), "token", "input_uncached", "1250", 0, 1,
-        None, None, None,
+        &db,
+        "s1",
+        "models_dev",
+        Some("gemini-2.5-pro"),
+        "token",
+        "input_uncached",
+        "1250",
+        0,
+        1,
+        None,
+        None,
+        None,
     )
     .await;
     db.execute(Statement::from_string(
@@ -141,20 +223,50 @@ async fn cutover_converts_eligible_manual_token_rules_and_drops_legacy_schema() 
     .expect("insert provider-scoped legacy rule");
     // Discarded: disabled rule.
     insert_legacy_rule(
-        &db, "d1", "manual", Some("disabled-model"), "token", "input_uncached", "1000", 0, 0,
-        None, None, None,
+        &db,
+        "d1",
+        "manual",
+        Some("disabled-model"),
+        "token",
+        "input_uncached",
+        "1000",
+        0,
+        0,
+        None,
+        None,
+        None,
     )
     .await;
     // Discarded: modality-scoped rule.
     insert_legacy_rule(
-        &db, "mod1", "manual", Some("audio-model"), "token", "input_uncached", "1000", 0, 1, None,
-        None, Some("audio"),
+        &db,
+        "mod1",
+        "manual",
+        Some("audio-model"),
+        "token",
+        "input_uncached",
+        "1000",
+        0,
+        1,
+        None,
+        None,
+        Some("audio"),
     )
     .await;
     // Suffixed pattern normalizes to the base pricing key.
     insert_legacy_rule(
-        &db, "sfx1", "manual", Some("gpt-5-mini-high"), "token", "output", "3000", 0, 1, None,
-        None, None,
+        &db,
+        "sfx1",
+        "manual",
+        Some("gpt-5-mini-high"),
+        "token",
+        "output",
+        "3000",
+        0,
+        1,
+        None,
+        None,
+        None,
     )
     .await;
     // A pre-existing model_prices row keeps its values (MP-M3).
@@ -169,8 +281,18 @@ async fn cutover_converts_eligible_manual_token_rules_and_drops_legacy_schema() 
     .await
     .expect("insert existing model price");
     insert_legacy_rule(
-        &db, "k1", "manual", Some("kept-model"), "token", "input_uncached", "1000", 0, 1, None,
-        None, None,
+        &db,
+        "k1",
+        "manual",
+        Some("kept-model"),
+        "token",
+        "input_uncached",
+        "1000",
+        0,
+        1,
+        None,
+        None,
+        None,
     )
     .await;
 
@@ -216,16 +338,12 @@ async fn cutover_converts_eligible_manual_token_rules_and_drops_legacy_schema() 
     let row = db
         .query_one(Statement::from_string(
             DbBackend::Sqlite,
-            "SELECT output_usd_per_1m FROM model_prices WHERE model_id = 'gpt-5-mini'"
-                .to_string(),
+            "SELECT output_usd_per_1m FROM model_prices WHERE model_id = 'gpt-5-mini'".to_string(),
         ))
         .await
         .expect("query suffixed row")
         .expect("suffixed row converts to base key");
-    assert_eq!(
-        row.try_get::<String>("", "output_usd_per_1m").unwrap(),
-        "3"
-    );
+    assert_eq!(row.try_get::<String>("", "output_usd_per_1m").unwrap(), "3");
 
     // The existing row keeps its stored values.
     let row = db
@@ -292,7 +410,9 @@ async fn cutover_down_recreates_dropped_schema_empty() {
     let db = connect().await;
     Migrator::up(&db, None).await.expect("full migration");
 
-    Migrator::down(&db, Some(1)).await.expect("cutover down");
+    Migrator::down(&db, Some(cutover_and_later_migration_count()))
+        .await
+        .expect("cutover and later migrations down");
 
     assert!(table_exists(&db, "billing_rate_records").await);
     let count = db

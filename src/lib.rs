@@ -18,7 +18,6 @@ pub mod handlers;
 pub mod image_transform_cache;
 pub mod migration;
 pub mod model_price_store;
-pub mod model_price_sync;
 pub mod model_registry;
 pub mod model_registry_store;
 pub mod monoize_routing;

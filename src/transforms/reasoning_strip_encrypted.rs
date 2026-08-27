@@ -50,13 +50,22 @@ impl Transform for ReasoningStripEncryptedTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Reasoning: strip encrypted payloads"), ("zh", "推理：移除加密载荷")]
+        &[
+            ("en", "Reasoning: strip encrypted payloads"),
+            ("zh", "推理：移除加密载荷"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Removes encrypted reasoning payloads from response nodes, stream events, and passthrough state while preserving plaintext reasoning."),
-            ("zh", "从响应节点、流事件与透传状态中移除加密推理载荷，保留明文推理内容。"),
+            (
+                "en",
+                "Removes encrypted reasoning payloads from response nodes, stream events, and passthrough state while preserving plaintext reasoning.",
+            ),
+            (
+                "zh",
+                "从响应节点、流事件与透传状态中移除加密推理载荷，保留明文推理内容。",
+            ),
         ]
     }
 

@@ -47,7 +47,9 @@ impl Multiplier {
     /// Exact product of two multipliers (MP-C11: `channel_multiplier ×
     /// group_billing_ratio` composes without intermediate rounding).
     pub fn compose(self, other: Self) -> Option<Self> {
-        self.0.checked_mul(other.0).map(|value| Self(value.normalize()))
+        self.0
+            .checked_mul(other.0)
+            .map(|value| Self(value.normalize()))
     }
 
     pub fn checked_scale_i128(self, base: i128) -> Option<i128> {

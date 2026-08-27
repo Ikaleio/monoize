@@ -1,8 +1,6 @@
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;
-use crate::settings::{
-    default_reasoning_suffix_map,
-};
+use crate::settings::default_reasoning_suffix_map;
 use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
@@ -1906,7 +1904,10 @@ impl MonoizeRoutingStore {
             );
         }
         if let Some(value) = input.allow_free_when_unpriced_override {
-            push_value("allow_free_when_unpriced_override", opt_bool_to_value(value));
+            push_value(
+                "allow_free_when_unpriced_override",
+                opt_bool_to_value(value),
+            );
         }
         if let Some(value) = input.allow_free_when_missing_usage_override {
             push_value(

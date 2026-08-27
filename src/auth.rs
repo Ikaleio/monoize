@@ -1,6 +1,8 @@
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
-use crate::users::{RequestCaptureMode, RequestCaptureRetention, UserStore, resolve_effective_groups};
+use crate::users::{
+    RequestCaptureMode, RequestCaptureRetention, UserStore, resolve_effective_groups,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InternalRequestSource {
@@ -158,7 +160,11 @@ mod tests {
             .await
             .expect("user created");
         let (_, token) = store
-            .create_api_key_extended(&user.id, key_input("inheriting key", true, Vec::new()), false)
+            .create_api_key_extended(
+                &user.id,
+                key_input("inheriting key", true, Vec::new()),
+                false,
+            )
             .await
             .expect("api key created");
 

@@ -75,12 +75,13 @@ fn target_json(
     if let Some(name) = name {
         obj.insert("name".to_string(), Value::String(name.to_string()));
     }
-    obj.insert("bricks".to_string(), Value::Array(build_bricks(raw, brick_count)));
+    obj.insert(
+        "bricks".to_string(),
+        Value::Array(build_bricks(raw, brick_count)),
+    );
     obj.insert(
         "avg_ttft_ms".to_string(),
-        raw.avg_ttft_ms
-            .map(Value::from)
-            .unwrap_or(Value::Null),
+        raw.avg_ttft_ms.map(Value::from).unwrap_or(Value::Null),
     );
     obj.insert(
         "avg_tps".to_string(),
@@ -167,7 +168,12 @@ pub async fn get_dashboard_performance(
             )
             .await
             .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-        groups_json.push(target_json(group_id, Some(name.as_str()), &raw, BRICK_COUNT));
+        groups_json.push(target_json(
+            group_id,
+            Some(name.as_str()),
+            &raw,
+            BRICK_COUNT,
+        ));
     }
 
     let mut models_json = Vec::new();

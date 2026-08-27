@@ -459,7 +459,9 @@ fn decoded_provider_item_count(output: Option<&[urp::Node]>, usage_class: &str) 
                 "web_search" => item_type.contains("web_search"),
                 "file_search_tool_call" => item_type.contains("file_search"),
                 "x_search" => item_type.contains("x_search"),
-                "code_execution" | "code_execution_duration" | "code_interpreter_duration"
+                "code_execution"
+                | "code_execution_duration"
+                | "code_interpreter_duration"
                 | "code_interpreter_session" => item_type.contains("code"),
                 _ => false,
             },
@@ -505,8 +507,7 @@ fn settle_tools(
     for usage_class in requested_tool_classes {
         let authoritative = usage.and_then(|usage| authoritative_tool_quantity(usage, usage_class));
         let decoded_count = decoded_provider_item_count(output, usage_class);
-        let actually_used =
-            authoritative.is_some_and(|quantity| quantity > 0) || decoded_count > 0;
+        let actually_used = authoritative.is_some_and(|quantity| quantity > 0) || decoded_count > 0;
         if !actually_used {
             continue;
         }
@@ -900,10 +901,7 @@ mod tests {
         .unwrap();
         assert_eq!(outcome.final_charge_nano, 0);
         assert_eq!(outcome.breakdown["free_reason"], json!("missing_usage"));
-        assert_eq!(
-            outcome.breakdown["price_row_model_id"],
-            json!("test-model")
-        );
+        assert_eq!(outcome.breakdown["price_row_model_id"], json!("test-model"));
     }
 
     #[test]
@@ -939,8 +937,10 @@ mod tests {
         let tool_prices = json!({});
         let price = price_row("per_token");
         let mut u = usage(0, 0);
-        u.extra_body
-            .insert("server_tool_use".to_string(), json!({ "web_search_requests": 3 }));
+        u.extra_body.insert(
+            "server_tool_use".to_string(),
+            json!({ "web_search_requests": 3 }),
+        );
         let classes = vec!["web_search".to_string()];
         let mut inputs = base_inputs(SettledUsage::Reported(&u), Some(&price), &tool_prices);
         inputs.requested_tool_classes = &classes;

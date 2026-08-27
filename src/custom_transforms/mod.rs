@@ -90,15 +90,17 @@ impl DynTransform for CustomTransformEntry {
                 ))
             })?;
 
-        let apply_error =
-            |detail: String| TransformError::Apply(format!("custom transform '{}': {detail}", self.id));
+        let apply_error = |detail: String| {
+            TransformError::Apply(format!("custom transform '{}': {detail}", self.id))
+        };
 
         let (kind, payload) = match &data {
             UrpData::Request(request) => ("request", serde_json::to_value(&**request)),
             UrpData::Response(response) => ("response", serde_json::to_value(&**response)),
             UrpData::Stream(event) => ("stream", serde_json::to_value(&**event)),
         };
-        let payload = payload.map_err(|error| apply_error(format!("serialize payload: {error}")))?;
+        let payload =
+            payload.map_err(|error| apply_error(format!("serialize payload: {error}")))?;
 
         let invocation = sandbox::SandboxInvocation {
             transform_id: self.id.clone(),
@@ -126,8 +128,9 @@ impl DynTransform for CustomTransformEntry {
 
         match (data, outcome.data) {
             (UrpData::Request(request), sandbox::SandboxData::Single(value)) => {
-                *request = serde_json::from_value(value)
-                    .map_err(|error| apply_error(format!("result is not a valid UrpRequest: {error}")))?;
+                *request = serde_json::from_value(value).map_err(|error| {
+                    apply_error(format!("result is not a valid UrpRequest: {error}"))
+                })?;
             }
             (UrpData::Response(response), sandbox::SandboxData::Single(value)) => {
                 *response = serde_json::from_value(value).map_err(|error| {

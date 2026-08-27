@@ -309,6 +309,8 @@ ISM4.12l. Migration `m20260826_000047_model_prices` MUST, on SQLite and PostgreS
 
 ISM4.12m. Migration `m20260901_000048_model_prices_cutover` MUST, on SQLite and PostgreSQL, perform the destructive cutover defined by `model-pricing.spec.md` §12.2 (MP-M3 through MP-M7): convert eligible manual token rules from `billing_rate_records` into `model_prices` rows, drop table `billing_rate_records`, drop `monoize_channels` columns `allow_missing_usage` and `allow_unpriced_server_tools`, delete the `pricing_profile_model_patterns` `system_settings` row, and drop the `model_metadata_records` price columns listed in MP-M5. The down migration MUST recreate the dropped table and columns empty; it MUST NOT restore data.
 
+ISM4.12n. Migration `m20260901_000049_request_logs_pending_status_index` MUST create the request-log partial index defined by `request-logs.spec.md` RL-S13. It MUST run after the model-pricing cutover.
+
 ISM4.12j. Migration `m20260823_000037_billing_plan_cron_schedule` MUST replace `billing_plans.period_seconds` with `billing_plans.schedule` (`billing-plan-subscriptions.spec.md` BP-D5). Existing `users.next_grant_at` values MUST be left unchanged. The down migration MUST restore `period_seconds`.
 
 ISM4.12k. Migration `m20260825_000042_groups_registry` MUST create `monoize_groups`, seed exactly one default group, backfill `users.group_id`, `api_keys.use_user_group`, `api_keys.group_ids`, `monoize_providers.group_ids`, and `billing_plans.group_ids` from the legacy label columns, and drop `users.allowed_groups`, `api_keys.allowed_groups`, `api_keys.token_group`, `monoize_providers.groups`, and `billing_plans.allowed_groups` (`groups-registry.spec.md` §4).

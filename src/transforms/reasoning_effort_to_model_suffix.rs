@@ -40,13 +40,22 @@ impl Transform for ReasoningEffortToModelSuffixTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Reasoning: effort to model suffix"), ("zh", "推理：effort 转模型后缀")]
+        &[
+            ("en", "Reasoning: effort to model suffix"),
+            ("zh", "推理：effort 转模型后缀"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Appends a pattern-matched suffix containing the resolved reasoning effort to the upstream model name."),
-            ("zh", "按规则匹配将解析出的推理力度以后缀形式追加到上游模型名。"),
+            (
+                "en",
+                "Appends a pattern-matched suffix containing the resolved reasoning effort to the upstream model name.",
+            ),
+            (
+                "zh",
+                "按规则匹配将解析出的推理力度以后缀形式追加到上游模型名。",
+            ),
         ]
     }
 

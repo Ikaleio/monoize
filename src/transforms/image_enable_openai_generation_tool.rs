@@ -44,13 +44,22 @@ impl Transform for ImageEnableOpenAiGenerationToolTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Image: enable OpenAI generation tool"), ("zh", "图像：启用 OpenAI 生成工具")]
+        &[
+            ("en", "Image: enable OpenAI generation tool"),
+            ("zh", "图像：启用 OpenAI 生成工具"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Ensures the OpenAI Responses image_generation tool descriptor exists on the request, optionally forcing streaming and tool choice."),
-            ("zh", "确保请求携带 OpenAI Responses image_generation 工具描述，可选强制流式与 tool_choice。"),
+            (
+                "en",
+                "Ensures the OpenAI Responses image_generation tool descriptor exists on the request, optionally forcing streaming and tool choice.",
+            ),
+            (
+                "zh",
+                "确保请求携带 OpenAI Responses image_generation 工具描述，可选强制流式与 tool_choice。",
+            ),
         ]
     }
 

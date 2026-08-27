@@ -45,13 +45,22 @@ impl Transform for ImageResolveUrlsTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Image: resolve URLs to base64"), ("zh", "图像：URL 解析为 base64")]
+        &[
+            ("en", "Image: resolve URLs to base64"),
+            ("zh", "图像：URL 解析为 base64"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Downloads request image URLs concurrently and replaces them with inline base64 sources; failed fetches leave nodes unchanged."),
-            ("zh", "并发下载请求中的图片 URL 并替换为内联 base64；下载失败的节点保持不变。"),
+            (
+                "en",
+                "Downloads request image URLs concurrently and replaces them with inline base64 sources; failed fetches leave nodes unchanged.",
+            ),
+            (
+                "zh",
+                "并发下载请求中的图片 URL 并替换为内联 base64；下载失败的节点保持不变。",
+            ),
         ]
     }
 

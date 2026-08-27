@@ -61,13 +61,22 @@ impl Transform for CacheOpenAiPromptTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Auto-cache: OpenAI prompt key"), ("zh", "自动缓存：OpenAI prompt 缓存键")]
+        &[
+            ("en", "Auto-cache: OpenAI prompt key"),
+            ("zh", "自动缓存：OpenAI prompt 缓存键"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Derives a deterministic prompt_cache_key and retention for OpenAI Responses/Chat upstreams so repeated prompts hit the provider prompt cache."),
-            ("zh", "为 OpenAI Responses/Chat 上游生成确定性的 prompt_cache_key 与保留策略，使重复请求命中官方提示词缓存。"),
+            (
+                "en",
+                "Derives a deterministic prompt_cache_key and retention for OpenAI Responses/Chat upstreams so repeated prompts hit the provider prompt cache.",
+            ),
+            (
+                "zh",
+                "为 OpenAI Responses/Chat 上游生成确定性的 prompt_cache_key 与保留策略，使重复请求命中官方提示词缓存。",
+            ),
         ]
     }
 

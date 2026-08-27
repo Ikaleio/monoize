@@ -251,7 +251,8 @@ async fn streaming_request_capture_records_downstream_error_sse_frames() {
     );
 }
 
-const TEST_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
+const TEST_PNG_B64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
 
 /// RCD-D17: an `input_image` data URL in a Responses request survives into
 /// `raw_input`, `transformed_urp_request`, and `upstream_request` byte-exact.
@@ -360,7 +361,10 @@ async fn image_generations_capture_writes_dump_for_openai_image_upstream() {
     assert_eq!(dump["is_stream"].as_bool(), Some(false));
     let attempt = &dump["attempts"][0];
     assert_eq!(attempt["raw_input"], body);
-    assert_eq!(attempt["upstream_path"].as_str(), Some("/v1/images/generations"));
+    assert_eq!(
+        attempt["upstream_path"].as_str(),
+        Some("/v1/images/generations")
+    );
     assert_eq!(
         attempt["upstream_request"]["model"].as_str(),
         Some("gpt-image-capture-gen")
@@ -406,7 +410,12 @@ async fn image_edits_capture_records_multipart_raw_input_and_upstream_request() 
     let mut req_body = Vec::new();
     req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-capture-edit\r\n").as_bytes());
     req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nedit this image\r\n").as_bytes());
-    req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"size\"\r\n\r\n1024x1024\r\n").as_bytes());
+    req_body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"size\"\r\n\r\n1024x1024\r\n"
+        )
+        .as_bytes(),
+    );
     req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"one.png\"\r\nContent-Type: image/png\r\n\r\n").as_bytes());
     req_body.extend_from_slice(&png);
     req_body.extend_from_slice(b"\r\n");
@@ -490,7 +499,10 @@ async fn image_edits_capture_records_multipart_raw_input_and_upstream_request() 
         text_part("model")["text"].as_str(),
         Some("gpt-image-capture-edit")
     );
-    assert_eq!(text_part("prompt")["text"].as_str(), Some("edit this image"));
+    assert_eq!(
+        text_part("prompt")["text"].as_str(),
+        Some("edit this image")
+    );
     assert_eq!(text_part("size")["text"].as_str(), Some("1024x1024"));
     let file_part = |name: &str| {
         upstream_parts

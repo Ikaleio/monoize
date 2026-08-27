@@ -36,13 +36,22 @@ impl Transform for CacheOpenAiToolUseTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Auto-cache: OpenAI tool results"), ("zh", "自动缓存：OpenAI 工具结果")]
+        &[
+            ("en", "Auto-cache: OpenAI tool results"),
+            ("zh", "自动缓存：OpenAI 工具结果"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Inserts explicit OpenAI prompt-cache breakpoints on eligible tool-result content blocks for explicit-breakpoint GPT models."),
-            ("zh", "为支持显式缓存断点的 GPT 模型，在符合条件的工具结果内容块上插入显式 prompt-cache 断点。"),
+            (
+                "en",
+                "Inserts explicit OpenAI prompt-cache breakpoints on eligible tool-result content blocks for explicit-breakpoint GPT models.",
+            ),
+            (
+                "zh",
+                "为支持显式缓存断点的 GPT 模型，在符合条件的工具结果内容块上插入显式 prompt-cache 断点。",
+            ),
         ]
     }
 

@@ -975,19 +975,17 @@ async fn execute_stream_collected_image_typed(
                         .session
                         .as_ref()
                         .map(|_| Arc::new(Mutex::new(None::<Value>)));
-                    let (transform_input_rx, reconstruct_handle) =
-                        match reconstruction_slot.clone() {
-                            Some(slot) => {
-                                let (tap_tx, tap_rx) =
-                                    mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-                                let handle = tokio::spawn(async move {
-                                    retain_reconstructed_urp_response(decoded_rx, tap_tx, slot)
-                                        .await
-                                });
-                                (tap_rx, Some(handle))
-                            }
-                            None => (decoded_rx, None),
-                        };
+                    let (transform_input_rx, reconstruct_handle) = match reconstruction_slot.clone()
+                    {
+                        Some(slot) => {
+                            let (tap_tx, tap_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                            let handle = tokio::spawn(async move {
+                                retain_reconstructed_urp_response(decoded_rx, tap_tx, slot).await
+                            });
+                            (tap_rx, Some(handle))
+                        }
+                        None => (decoded_rx, None),
+                    };
 
                     let provider_rules = attempt.provider_transforms.clone();
                     let global_rules = global_transforms.clone();

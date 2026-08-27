@@ -5,6 +5,7 @@ use rust_decimal::Decimal;
 use sea_orm::{ConnectionTrait, TransactionTrait};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbModelRecord {
@@ -94,6 +95,15 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelMetadataSyncResult {
+    pub success: bool,
+    pub upserted: usize,
+    pub skipped: usize,
+    pub deleted: u64,
+    pub fetched_at: String,
 }
 
 #[derive(Clone)]
@@ -373,7 +383,7 @@ impl ModelRegistryStore {
 
     pub async fn list_marketplace_model_metadata(
         &self,
-    ) -> Result<Vec<MarketplaceModelRecord>, String> {
+    ) -> Result<Vec<DbModelMetadataRecord>, String> {
         let rows = self
             .db
             .read()
@@ -385,7 +395,6 @@ impl ModelRegistryStore {
                  INNER JOIN monoize_channel_models AS cm ON cm.model_name = m.model_id
                  INNER JOIN monoize_channels AS c ON c.id = cm.channel_id
                  INNER JOIN monoize_providers AS p ON p.id = c.provider_id
-                 LEFT JOIN model_prices AS mp ON mp.model_id = m.model_id AND mp.enabled = 1
                  WHERE p.enabled = 1
                    AND c.enabled = 1
                    AND c.weight > 0
@@ -395,22 +404,7 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter()
-            .map(|row| {
-                Ok(MarketplaceModelRecord {
-                    metadata: row_to_model_metadata(row)?,
-                    billing_mode: row
-                        .try_get("", "billing_mode")
-                        .map_err(|e| e.to_string())?,
-                    input_usd_per_1m: row
-                        .try_get("", "input_usd_per_1m")
-                        .map_err(|e| e.to_string())?,
-                    output_usd_per_1m: row
-                        .try_get("", "output_usd_per_1m")
-                        .map_err(|e| e.to_string())?,
-                })
-            })
-            .collect()
+        rows.iter().map(row_to_model_metadata).collect()
     }
 
     pub async fn get_model_metadata(
@@ -481,10 +475,10 @@ impl ModelRegistryStore {
         );
 
         txn.execute(self.db.stmt(
-                "INSERT INTO model_metadata_records
+            "INSERT INTO model_metadata_records
                  (model_id, models_dev_provider, mode,
                   max_input_tokens, max_output_tokens, max_tokens, raw_json, source, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, '{}', 'manual', $7)
+                 VALUES ($1, $2, $3, $4, $5, $6, '{}', $7, $8)
                  ON CONFLICT(model_id) DO UPDATE SET
                    models_dev_provider = excluded.models_dev_provider,
                    mode = excluded.mode,
@@ -493,19 +487,19 @@ impl ModelRegistryStore {
                    max_tokens = excluded.max_tokens,
                    source = excluded.source,
                    updated_at = excluded.updated_at",
-                vec![
-                    model_id.into(),
-                    models_dev_provider.into(),
-                    mode.into(),
-                    max_input_tokens.into(),
-                    max_output_tokens.into(),
-                    max_tokens.into(),
-                    source.into(),
-                    now.into(),
-                ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
+            vec![
+                model_id.into(),
+                models_dev_provider.into(),
+                mode.into(),
+                max_input_tokens.into(),
+                max_output_tokens.into(),
+                max_tokens.into(),
+                source.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
 
         let record = get_model_metadata_with(&self.db, &txn, model_id)
             .await?
@@ -668,7 +662,6 @@ impl ModelRegistryStore {
             fetched_at,
         })
     }
-
 }
 
 fn row_to_record(row: &sea_orm::QueryResult) -> Result<DbModelRecord, String> {
@@ -885,12 +878,7 @@ const OFFICIAL_FAMILY_PROVIDERS: &[(&str, &str)] = &[
 pub(crate) fn official_provider_for_model(model_id: &str) -> Option<&'static str> {
     let lower = model_id.to_ascii_lowercase();
     // OpenAI o-series: "o" followed by a digit (o1, o3-pro, o4-mini, etc.)
-    if lower.starts_with('o')
-        && lower
-            .as_bytes()
-            .get(1)
-            .is_some_and(|b| b.is_ascii_digit())
-    {
+    if lower.starts_with('o') && lower.as_bytes().get(1).is_some_and(|b| b.is_ascii_digit()) {
         return Some("openai");
     }
     OFFICIAL_FAMILY_PROVIDERS
@@ -997,10 +985,30 @@ fn value_to_i64(value: &Value) -> Option<i64> {
 }
 
 const KNOWN_PROVIDER_PREFIXES: &[&str] = &[
-    "openai", "anthropic", "google", "xai", "mistral", "deepseek", "cohere", "meta",
-    "minimax", "perplexity", "stepfun", "zhipuai", "nvidia", "moonshotai", "alibaba",
-    "amazon-bedrock", "vercel", "openrouter", "azure", "groq", "fireworks", "together",
-    "cloudflare", "replicate",
+    "openai",
+    "anthropic",
+    "google",
+    "xai",
+    "mistral",
+    "deepseek",
+    "cohere",
+    "meta",
+    "minimax",
+    "perplexity",
+    "stepfun",
+    "zhipuai",
+    "nvidia",
+    "moonshotai",
+    "alibaba",
+    "amazon-bedrock",
+    "vercel",
+    "openrouter",
+    "azure",
+    "groq",
+    "fireworks",
+    "together",
+    "cloudflare",
+    "replicate",
 ];
 
 fn strip_provider_prefix_once<'a>(segment: &'a str, provider: &str) -> Option<&'a str> {
@@ -1058,7 +1066,10 @@ mod tests {
     #[test]
     fn models_dev_decimal_price_conversion_is_exact() {
         assert_eq!(usd_cost_string(&json!(1.001)), Some("1.001".to_string()));
-        assert_eq!(usd_cost_string(&json!("0.0009")), Some("0.0009".to_string()));
+        assert_eq!(
+            usd_cost_string(&json!("0.0009")),
+            Some("0.0009".to_string())
+        );
         assert_eq!(usd_cost_string(&json!(2.50)), Some("2.5".to_string()));
         assert_eq!(usd_cost_string(&json!(-1)), None);
     }
@@ -1200,7 +1211,7 @@ mod tests {
         assert_eq!(
             listed
                 .iter()
-                .map(|record| record.metadata.model_id.as_str())
+                .map(|record| record.model_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["eligible-a", "eligible-z", "shared"]
         );

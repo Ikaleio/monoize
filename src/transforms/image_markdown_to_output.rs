@@ -63,13 +63,22 @@ impl Transform for ImageMarkdownToOutputTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Image: Markdown to image nodes"), ("zh", "图像：Markdown 转图像节点")]
+        &[
+            ("en", "Image: Markdown to image nodes"),
+            ("zh", "图像：Markdown 转图像节点"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Extracts Markdown image blocks from assistant text and converts them into ordinary assistant image nodes. Inverse of image_output_to_markdown."),
-            ("zh", "从 assistant 文本中提取 Markdown 图片语法并转换为标准的 assistant 图像节点。与 image_output_to_markdown 互逆。"),
+            (
+                "en",
+                "Extracts Markdown image blocks from assistant text and converts them into ordinary assistant image nodes. Inverse of image_output_to_markdown.",
+            ),
+            (
+                "zh",
+                "从 assistant 文本中提取 Markdown 图片语法并转换为标准的 assistant 图像节点。与 image_output_to_markdown 互逆。",
+            ),
         ]
     }
 
