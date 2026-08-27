@@ -19,6 +19,7 @@ import {
 } from "@/components/playground/chat-transport";
 import { Composer, type ComposerMode } from "@/components/playground/composer";
 import { MessageList } from "@/components/playground/message-list";
+import { filePartsForEditedUserMessage } from "@/components/playground/message-operations";
 import {
   resolvePlaygroundKey,
   type ResolvedPlaygroundKey,
@@ -336,6 +337,7 @@ export function PlaygroundPage() {
       images.generate({
         prompt: trimmedText,
         model: prefs.imageModel.trim(),
+        size: prefs.imageSize,
         group: prefs.group,
         apiKey: resolution.key?.key ?? null,
         attachment: attachments[0] ?? null,
@@ -359,6 +361,7 @@ export function PlaygroundPage() {
     images,
     trimmedText,
     prefs.imageModel,
+    prefs.imageSize,
     prefs.group,
     resolution.key,
     attachments,
@@ -372,9 +375,10 @@ export function PlaygroundPage() {
 
   const handleEditUser = useCallback(
     (messageId: string, newText: string) => {
-      void sendMessage({ text: newText, messageId });
+      const files = filePartsForEditedUserMessage(messages, messageId);
+      void sendMessage({ text: newText, files, messageId });
     },
-    [sendMessage],
+    [messages, sendMessage],
   );
 
   const handleEditAssistant = useCallback(
@@ -413,9 +417,16 @@ export function PlaygroundPage() {
 
   const handleRegenerate = useCallback(
     (messageId: string) => {
+      if (images.regenerate(messageId)) {
+        setMessages((prev) => {
+          const messageIndex = prev.findIndex((message) => message.id === messageId);
+          return messageIndex < 0 ? prev : prev.slice(0, messageIndex);
+        });
+        return;
+      }
       void regenerate({ messageId });
     },
-    [regenerate],
+    [images, regenerate, setMessages],
   );
 
   const handleEditImage = useCallback(
@@ -438,7 +449,7 @@ export function PlaygroundPage() {
 
   const handleNewChat = useCallback(() => {
     void stop();
-    images.clear();
+    images.reset();
     setMessages([]);
     setAttachments([]);
     clearError();

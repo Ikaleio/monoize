@@ -732,6 +732,8 @@
 		"noGroups": "找不到分組",
 		"chatModel": "聊天模型",
 		"imageModel": "圖像模型",
+		"imageSize": "圖像尺寸",
+		"imageSizeAuto": "自動",
 		"selectModel": "選擇模型",
 		"searchModels": "搜尋模型…",
 		"noModels": "找不到模型",

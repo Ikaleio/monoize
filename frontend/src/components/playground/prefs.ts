@@ -5,6 +5,7 @@ export const PLAYGROUND_PREF_KEYS = {
   group: "playground_group",
   chatModel: "playground_chat_model",
   imageModel: "playground_image_model",
+  imageSize: "playground_image_size",
   apiKeyId: "playground_api_key_id",
   temperature: "playground_temperature",
   maxTokens: "playground_max_tokens",
@@ -21,6 +22,7 @@ export interface PlaygroundPrefs {
   group: string;
   chatModel: string;
   imageModel: string;
+  imageSize: string;
   apiKeyId: string;
   temperature: string;
   maxTokens: string;
@@ -67,6 +69,7 @@ export function usePlaygroundPrefs(): [
     group: readPref("group"),
     chatModel: readPref("chatModel"),
     imageModel: readPref("imageModel"),
+    imageSize: readPref("imageSize"),
     apiKeyId: readPref("apiKeyId"),
     temperature: readPref("temperature"),
     maxTokens: readPref("maxTokens"),

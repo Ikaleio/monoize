@@ -29,6 +29,7 @@ PG-STATE2. Exactly these preference keys MAY be persisted in `localStorage`:
 | `playground_group` | string | Selected routing group id; empty/absent means "auto". |
 | `playground_chat_model` | string | Selected chat model id. |
 | `playground_image_model` | string | Selected image model id. |
+| `playground_image_size` | string | Selected image size. Empty/absent means "auto". |
 | `playground_api_key_id` | string | Explicitly selected API-key id; empty/absent means the built-in Playground credential. |
 | `playground_temperature` | string | Decimal string; empty/absent means "omit from request". |
 | `playground_max_tokens` | string | Integer string; empty/absent means "omit from request". |
@@ -164,6 +165,12 @@ MUST render as a skeleton pill instead of an interactive control. While `useApiK
 loading with no cached data, the credential picker MUST keep the built-in option available
 and render a skeleton in place of API-key rows.
 
+PG-SEL6. Image mode MUST render one compact shadcn `Select` for the output image size.
+The selector MUST be hidden in chat mode. The options MUST appear in this order:
+`auto`, `1024x1024`, `1024x1536`, and `1536x1024`. The `auto` option MUST store an empty
+`playground_image_size` value. Each explicit option MUST store its literal value. An
+unsupported persisted value MUST resolve to `auto` and MUST NOT reach an image request.
+
 ## 5. Chat Execution (AI SDK)
 
 PG-CHAT1. Chat state MUST be managed by `useChat` from `@ai-sdk/react` with a custom
@@ -283,6 +290,8 @@ its edit endpoint requires an image source.
 PG-MSG1. Every message exposes hover/focus actions. Minimum set: copy (all roles with
 text), edit (user and assistant), delete (all roles). Assistant messages additionally
 expose regenerate, and each assistant image exposes download and edit-image actions.
+For an assistant message with an image, all actions MUST render in one non-wrapping
+toolbar below the image. The UI MUST NOT render a separate second message-action row.
 On coarse-pointer devices the actions MUST be reachable without hover (always visible)
 with touch targets per `frontend-design-system.spec.md` DS49.
 
@@ -292,8 +301,9 @@ concatenated text parts, with confirm and cancel actions. Preconditions: `status
 
 PG-MSG3. Confirming a **user** message edit MUST call
 `sendMessage({ text: <edited>, messageId })`, which replaces that message, removes all
-later messages, and requests a new assistant response. Attachments of the edited message
-are not preserved (the edited message consists of the edited text only).
+later messages, and requests a new assistant response. If the original message contains
+`file` parts, the call MUST also pass those parts through `files`. Each file MUST preserve
+its original media type, file name, URL, provider reference, and provider metadata.
 
 PG-MSG4. Confirming an **assistant** message edit MUST replace the message's text parts
 with a single text part containing the edited text via `setMessages`, in place, without
@@ -303,9 +313,9 @@ PG-MSG5. Delete MUST remove exactly the targeted message via `setMessages` filte
 without issuing any request. The optimistic update is the operation itself (client-only
 state); no rollback path exists.
 
-PG-MSG6. Regenerate on an assistant message MUST call `regenerate({ messageId })`,
-which removes that assistant message and everything after it, then requests a new
-response using the current selector state.
+PG-MSG6. Regenerate on an assistant message that was not created by PG-IMG5 MUST call
+`regenerate({ messageId })`. This removes that assistant message and everything after it,
+then requests a new text response with the current selector state.
 
 ## 7. Image Generation and Editing
 
@@ -317,13 +327,17 @@ a chat request.
 PG-IMG2. Image send with no attachment MUST call
 `POST /api/v1/images/generations` with JSON body
 `{ "model": <image model>, "prompt": <composer text>, "n": 1 }` and the credentials and
-headers selected by PG-AUTH2 through PG-AUTH5.
+headers selected by PG-AUTH2 through PG-AUTH5. If the selected image size is explicit,
+the body MUST also contain `"size": <selected image size>`. If the selected image size is
+`auto`, the body MUST omit `size`.
 
 PG-IMG3. Image send with at least one attachment MUST call
 `POST /api/v1/images/edits` as `multipart/form-data` with fields `model`, `prompt`,
 `n = 1`, and `image` = the first attachment file. Additional attachments beyond the
 first are ignored for the upstream call (the endpoint accepts a single source image).
-The request MUST use the credentials and headers selected by PG-AUTH2 through PG-AUTH5.
+If the selected image size is explicit, the form MUST also contain `size` with its literal
+value. If the selected image size is `auto`, the form MUST omit `size`. The request MUST
+use the credentials and headers selected by PG-AUTH2 through PG-AUTH5.
 
 PG-IMG4. On image send the frontend MUST synchronously append a user message (prompt
 text plus attachment file parts) to the chat state, and render a pending assistant
@@ -332,11 +346,18 @@ placeholder with an animated loading treatment until the request settles.
 PG-IMG5. On success, the placeholder MUST be replaced by an assistant message whose
 parts are, in order: one text part with `revised_prompt` when present, then one `file`
 part per `data[]` entry — `url` used verbatim when present, otherwise
-`data:image/png;base64,<b64_json>`.
+`data:image/png;base64,<b64_json>`. The frontend MUST retain the request input in memory,
+keyed by the generated assistant message id, until the conversation is cleared.
 
 PG-IMG6. On failure, the placeholder MUST be replaced by an inline error state with a
 retry action that re-issues the same request. The user message remains in the
 conversation.
+
+PG-IMG6a. Regenerate on an assistant message created by PG-IMG5 MUST remove that
+assistant message and all later messages. It MUST then re-issue the retained image request
+through `/api/v1/images/generations` or `/api/v1/images/edits`, according to whether the
+retained request has an attachment. It MUST NOT call the text-generation transport or
+append a second user message.
 
 PG-IMG7. Image requests MUST be abortable through the same stop control (an
 `AbortController` scoped to the in-flight image request). Aborting removes the pending

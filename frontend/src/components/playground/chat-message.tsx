@@ -65,10 +65,12 @@ function MessageImage({
   url,
   alt,
   onEditImage,
+  messageActions,
 }: {
   url: string;
   alt: string;
   onEditImage: (url: string) => void;
+  messageActions?: React.ReactNode;
 }) {
   const { t } = useTranslation();
 
@@ -86,7 +88,7 @@ function MessageImage({
         alt={alt}
         className="max-h-96 max-w-full rounded-xl border object-contain"
       />
-      <div className="mt-1 flex items-center gap-0.5">
+      <div className="mt-1 flex w-max max-w-full flex-nowrap items-center gap-0.5">
         <ActionButton label={t("playground.download")} onClick={download}>
           <Download className="h-3.5 w-3.5" />
         </ActionButton>
@@ -96,6 +98,7 @@ function MessageImage({
         >
           <Brush className="h-3.5 w-3.5" />
         </ActionButton>
+        {messageActions}
       </div>
     </div>
   );
@@ -403,9 +406,12 @@ export function ChatMessage({
           url={part.url}
           alt={part.filename ?? t("playground.generatedImageAlt")}
           onEditImage={onEditImage}
+          messageActions={
+            !isStreaming && index === imageParts.length - 1 ? actions : undefined
+          }
         />
       ))}
-      {!isStreaming && actions}
+      {!isStreaming && imageParts.length === 0 && actions}
     </div>
   );
 }

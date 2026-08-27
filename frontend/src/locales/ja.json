@@ -732,6 +732,8 @@
 		"noGroups": "グループが見つかりません",
 		"chatModel": "チャットモデル",
 		"imageModel": "画像モデル",
+		"imageSize": "画像サイズ",
+		"imageSizeAuto": "自動",
 		"selectModel": "モデルを選択",
 		"searchModels": "モデルを検索…",
 		"noModels": "モデルが見つかりません",

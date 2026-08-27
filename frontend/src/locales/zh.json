@@ -735,6 +735,8 @@
 		"noGroups": "未找到分组",
 		"chatModel": "聊天模型",
 		"imageModel": "图像模型",
+		"imageSize": "图像尺寸",
+		"imageSizeAuto": "自动",
 		"selectModel": "选择模型",
 		"searchModels": "搜索模型…",
 		"noModels": "未找到模型",
