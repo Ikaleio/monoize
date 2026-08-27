@@ -4,7 +4,8 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
-    FinishReason, ImageSource, Node, NodeHeader, OrdinaryRole, ProviderProtocol, UrpStreamEvent,
+    FinishReason, ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol,
+    UrpStreamEvent, Usage,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -26,6 +27,11 @@ pub(crate) async fn stream_image_to_urp_events(
     let mut started_response = false;
     let mut output = Vec::new();
     let mut next_node_index = 0u32;
+    // OIU-S2b: partial frames and the completed node of one generation share
+    // one node index; the completed event consumes the pending index so the
+    // next generation allocates a fresh one.
+    let mut pending_node_index: Option<u32> = None;
+    let mut usage: Option<Usage> = None;
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
 
@@ -52,9 +58,11 @@ pub(crate) async fn stream_image_to_urp_events(
             break;
         }
 
-        match ev.event.as_str() {
-            "image_generation.partial_image" | "response.image_generation.partial_image" => {}
-            "image_generation.completed" | "response.image_generation.completed" => {
+        let event_name = resolve_event_name(&ev.event, &ev.data);
+        match event_name.as_str() {
+            "image_generation.partial_image"
+            | "image_edit.partial_image"
+            | "response.image_generation.partial_image" => {
                 let data_val: Value = serde_json::from_str(&ev.data).map_err(|err| {
                     AppError::new(
                         StatusCode::BAD_GATEWAY,
@@ -62,6 +70,49 @@ pub(crate) async fn stream_image_to_urp_events(
                         err.to_string(),
                     )
                 })?;
+                let Some(source) = image_source_from_payload(&data_val) else {
+                    continue;
+                };
+                if !started_response {
+                    tx.send(UrpStreamEvent::ResponseStart {
+                        id: response_id.clone(),
+                        model: urp.model.clone(),
+                        extra_body: HashMap::new(),
+                    })
+                    .await
+                    .map_err(send_failed)?;
+                    started_response = true;
+                }
+                let node_index = *pending_node_index.get_or_insert_with(|| {
+                    let index = next_node_index;
+                    next_node_index = next_node_index.saturating_add(1);
+                    index
+                });
+                tx.send(UrpStreamEvent::NodeDelta {
+                    node_index,
+                    delta: NodeDelta::Image { source },
+                    usage: None,
+                    extra_body: partial_image_extra_body(&event_name, &data_val),
+                })
+                .await
+                .map_err(send_failed)?;
+            }
+            "image_generation.completed"
+            | "image_edit.completed"
+            | "response.image_generation.completed" => {
+                let data_val: Value = serde_json::from_str(&ev.data).map_err(|err| {
+                    AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_stream_decode_failed",
+                        err.to_string(),
+                    )
+                })?;
+                if let Some(parsed) = data_val
+                    .get("usage")
+                    .and_then(crate::urp::decode::openai_image::parse_image_usage)
+                {
+                    usage = Some(parsed);
+                }
                 if let Some(node) = image_node_from_payload(&data_val) {
                     if !started_response {
                         tx.send(UrpStreamEvent::ResponseStart {
@@ -73,8 +124,11 @@ pub(crate) async fn stream_image_to_urp_events(
                         .map_err(send_failed)?;
                         started_response = true;
                     }
-                    let node_index = next_node_index;
-                    next_node_index = next_node_index.saturating_add(1);
+                    let node_index = pending_node_index.take().unwrap_or_else(|| {
+                        let index = next_node_index;
+                        next_node_index = next_node_index.saturating_add(1);
+                        index
+                    });
                     let extra_body = image_extra_body(&data_val);
                     tx.send(UrpStreamEvent::NodeStart {
                         node_index,
@@ -120,7 +174,7 @@ pub(crate) async fn stream_image_to_urp_events(
     if started_response {
         tx.send(UrpStreamEvent::ResponseDone {
             finish_reason: Some(FinishReason::Stop),
-            usage: None,
+            usage,
             output,
             extra_body: HashMap::from([("id".to_string(), Value::String(response_id))]),
         })
@@ -139,6 +193,23 @@ fn send_failed(err: mpsc::error::SendError<UrpStreamEvent>) -> AppError {
     )
 }
 
+/// OIU-S1a: the SSE `event` field wins; frames without an explicit event name
+/// (eventsource default `message`) fall back to the JSON `type` field.
+fn resolve_event_name(sse_event: &str, data: &str) -> String {
+    if !sse_event.is_empty() && sse_event != "message" {
+        return sse_event.to_string();
+    }
+    serde_json::from_str::<Value>(data)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| sse_event.to_string())
+}
+
 fn image_media_type(output_format: Option<&str>) -> &'static str {
     match output_format.unwrap_or("png") {
         "webp" => "image/webp",
@@ -147,7 +218,7 @@ fn image_media_type(output_format: Option<&str>) -> &'static str {
     }
 }
 
-fn image_node_from_payload(payload: &Value) -> Option<Node> {
+fn image_source_from_payload(payload: &Value) -> Option<ImageSource> {
     let data = payload
         .get("b64_json")
         .or_else(|| payload.get("result"))
@@ -156,6 +227,15 @@ fn image_node_from_payload(payload: &Value) -> Option<Node> {
     if data.is_empty() {
         return None;
     }
+    Some(ImageSource::Base64 {
+        media_type: image_media_type(payload.get("output_format").and_then(Value::as_str))
+            .to_string(),
+        data: data.to_string(),
+    })
+}
+
+fn image_node_from_payload(payload: &Value) -> Option<Node> {
+    let source = image_source_from_payload(payload)?;
     Some(Node::Image {
         id: payload
             .get("id")
@@ -163,11 +243,7 @@ fn image_node_from_payload(payload: &Value) -> Option<Node> {
             .map(str::to_string)
             .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
         role: OrdinaryRole::Assistant,
-        source: ImageSource::Base64 {
-            media_type: image_media_type(payload.get("output_format").and_then(Value::as_str))
-                .to_string(),
-            data: data.to_string(),
-        },
+        source,
         extra_body: image_extra_body(payload),
     })
 }
@@ -180,6 +256,7 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
         "result",
         "output_format",
         "partial_image_index",
+        "usage",
     ];
     payload
         .as_object()
@@ -193,6 +270,30 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// OIU-S2: partial-image `NodeDelta` extra fields keep `partial_image_index`
+/// and `output_format` (unlike terminal image nodes, where they are header
+/// data) so downstream encoders can rebuild the wire event.
+fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String, Value> {
+    let excluded = ["type", "b64_json", "result"];
+    let mut extra_body: HashMap<String, Value> = payload
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter(|(key, _)| {
+                    !crate::urp::decode::is_internal_extra_key(key)
+                        && !excluded.contains(&key.as_str())
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    extra_body.insert(
+        "provider_event_type".to_string(),
+        Value::String(event_name.to_string()),
+    );
+    extra_body
 }
 
 fn node_header(node: &Node) -> NodeHeader {
@@ -243,14 +344,71 @@ mod tests {
     }
 
     #[test]
-    fn partial_image_event_can_be_ignored() {
+    fn partial_image_payload_without_data_is_ignored() {
         assert!(
-            image_node_from_payload(&json!({
+            image_source_from_payload(&json!({
                 "type": "image_generation.partial_image",
                 "partial_image_index": 0,
                 "b64_json": ""
             }))
             .is_none()
+        );
+    }
+
+    #[test]
+    fn partial_image_payload_decodes_base64_source() {
+        let source = image_source_from_payload(&json!({
+            "type": "image_edit.partial_image",
+            "partial_image_index": 1,
+            "b64_json": "QUJD",
+            "output_format": "jpeg"
+        }))
+        .expect("image source");
+        assert!(matches!(
+            source,
+            ImageSource::Base64 { media_type, data }
+                if media_type == "image/jpeg" && data == "QUJD"
+        ));
+    }
+
+    #[test]
+    fn partial_image_extra_body_keeps_index_and_provider_event_type() {
+        let extra = partial_image_extra_body(
+            "image_edit.partial_image",
+            &json!({
+                "type": "image_edit.partial_image",
+                "partial_image_index": 2,
+                "b64_json": "QUJD",
+                "output_format": "png",
+                "size": "1024x1024",
+                "_monoize_internal": true
+            }),
+        );
+        assert_eq!(
+            extra.get("provider_event_type"),
+            Some(&json!("image_edit.partial_image"))
+        );
+        assert_eq!(extra.get("partial_image_index"), Some(&json!(2)));
+        assert_eq!(extra.get("output_format"), Some(&json!("png")));
+        assert_eq!(extra.get("size"), Some(&json!("1024x1024")));
+        assert!(!extra.contains_key("b64_json"));
+        assert!(!extra.contains_key("type"));
+        assert!(!extra.contains_key("_monoize_internal"));
+    }
+
+    #[test]
+    fn event_name_falls_back_to_json_type_field() {
+        assert_eq!(
+            resolve_event_name("message", "{\"type\":\"image_edit.completed\"}"),
+            "image_edit.completed"
+        );
+        assert_eq!(
+            resolve_event_name("", "{\"type\":\"image_generation.partial_image\"}"),
+            "image_generation.partial_image"
+        );
+        assert_eq!(
+            resolve_event_name("image_generation.completed", "{\"type\":\"other\"}"),
+            "image_generation.completed"
         );
     }
 }

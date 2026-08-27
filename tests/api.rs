@@ -36,6 +36,9 @@ mod streaming_messages;
 #[path = "api/request_capture.rs"]
 mod request_capture;
 
+#[path = "api/image_api_streaming.rs"]
+mod image_api_streaming;
+
 #[path = "api/error_sanitization.rs"]
 mod error_sanitization;
 

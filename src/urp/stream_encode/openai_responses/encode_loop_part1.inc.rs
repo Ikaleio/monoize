@@ -1626,7 +1626,9 @@ fn image_generation_call_downstream_event(extra_body: &HashMap<String, Value>) -
         .or_else(|| extra_body.get("type"))
         .and_then(Value::as_str)?;
     match event_type {
-        "image_generation.partial_image" | "response.image_generation.partial_image" => {
+        "image_generation.partial_image"
+        | "image_edit.partial_image"
+        | "response.image_generation.partial_image" => {
             Some("response.image_generation_call.partial_image".to_string())
         }
         _ if event_type.starts_with("response.image_generation_call.") => {

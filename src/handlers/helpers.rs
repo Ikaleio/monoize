@@ -1166,6 +1166,8 @@ const EXTRA_WHITELIST_OPENAI_IMAGE: &[&str] = &[
     "output_compression",
     "moderation",
     "user",
+    "partial_images",
+    "input_fidelity",
 ];
 
 fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static str] {
@@ -1180,6 +1182,82 @@ fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static st
         // handled inside the encoder by routing fields into `input`.
         ProviderType::Replicate => &["*"],
     }
+}
+
+/// Outcome of one streaming upstream dispatch for an image-capable attempt.
+pub(super) struct ImageCapableStreamCall {
+    /// Upstream path the request was sent to.
+    pub path: String,
+    /// RCD-D6a/OIU-E5g multipart capture object when the request was sent as
+    /// multipart; `None` means the JSON `upstream_body` is the wire request.
+    pub capture_multipart_request: Option<Value>,
+    pub result: Result<reqwest::Response, upstream::UpstreamCallError>,
+}
+
+/// Dispatch one streaming upstream call, honoring OIU-S7: an `openai_image`
+/// attempt whose URP request contains user image input goes to
+/// `POST /v1/images/edits` as `multipart/form-data` (with the `stream` text
+/// field from OIU-E5f); every other attempt posts the JSON `upstream_body` to
+/// the provider's streaming path. `Err` is returned only for request-encode
+/// failures that no retry can fix; upstream transport failures stay inside
+/// `result` so callers keep their existing retry classification.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn call_streaming_image_capable_upstream(
+    http: &reqwest::Client,
+    attempt: &MonoizeAttempt,
+    req_attempt: &urp::UrpRequest,
+    upstream_body: &Value,
+    timeout_ms: u64,
+    extra_headers: &[(String, String)],
+    capture_active: bool,
+) -> AppResult<ImageCapableStreamCall> {
+    let provider = build_channel_provider_config(attempt);
+    let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
+        && urp::encode::openai_image::has_user_image_input(req_attempt);
+    if openai_image_edit {
+        let path = "/v1/images/edits".to_string();
+        let fields = urp::encode::openai_image::multipart_fields(req_attempt, &req_attempt.model)
+            .map_err(|message| {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+            })?;
+        let capture_multipart_request = capture_active.then(|| {
+            crate::request_capture::multipart_capture_object_from_upstream_fields(&fields)
+        });
+        let form = urp::encode::openai_image::form_from_fields(fields).map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        })?;
+        let result = upstream::call_upstream_multipart_with_timeout_and_headers(
+            http,
+            &provider,
+            &attempt.api_key,
+            &path,
+            form,
+            timeout_ms,
+            extra_headers,
+        )
+        .await;
+        return Ok(ImageCapableStreamCall {
+            path,
+            capture_multipart_request,
+            result,
+        });
+    }
+    let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
+    let result = upstream::call_upstream_raw_with_timeout_and_headers(
+        http,
+        &provider,
+        &attempt.api_key,
+        &path,
+        upstream_body,
+        timeout_ms,
+        extra_headers,
+    )
+    .await;
+    Ok(ImageCapableStreamCall {
+        path,
+        capture_multipart_request: None,
+        result,
+    })
 }
 
 /// Filter `req.extra_body` to only contain fields allowed by the upstream

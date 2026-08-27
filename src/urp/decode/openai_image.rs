@@ -71,59 +71,7 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         );
     }
 
-    let usage = obj.get("usage").and_then(|u| {
-        let usage_obj = u.as_object()?;
-        let input_tokens = usage_obj
-            .get("input_tokens")
-            .or_else(|| usage_obj.get("prompt_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let output_tokens = usage_obj
-            .get("output_tokens")
-            .or_else(|| usage_obj.get("completion_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let input_details = {
-            let mut details = InputDetails::default();
-            if let Some(id) = usage_obj
-                .get("input_tokens_details")
-                .and_then(|v| v.as_object())
-            {
-                details.cache_read_tokens = id
-                    .get("cached_tokens")
-                    .or_else(|| id.get("cache_read_tokens"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                details.cache_read_modality_breakdown = parse_cache_read_modality_breakdown(id);
-                if let Some(mb) = parse_modality_breakdown(id) {
-                    details.modality_breakdown = Some(mb);
-                }
-            }
-            Some(details)
-        };
-
-        let output_details = {
-            let mut details = OutputDetails::default();
-            if let Some(od) = usage_obj
-                .get("output_tokens_details")
-                .and_then(|v| v.as_object())
-            {
-                if let Some(mb) = parse_modality_breakdown(od) {
-                    details.modality_breakdown = Some(mb);
-                }
-            }
-            Some(details)
-        };
-
-        Some(Usage {
-            input_tokens,
-            output_tokens,
-            input_details,
-            output_details,
-            extra_body: HashMap::new(),
-        })
-    });
+    let usage = obj.get("usage").and_then(parse_image_usage);
 
     Ok(UrpResponse {
         id,
@@ -132,6 +80,62 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         output,
         finish_reason: Some(FinishReason::Stop),
         usage,
+        extra_body: HashMap::new(),
+    })
+}
+
+/// Parse an OpenAI Image API `usage` object (non-streaming response body or
+/// streaming `*.completed` event payload, OIU-D6/OIU-S3a) into URP `Usage`.
+pub(crate) fn parse_image_usage(usage_value: &Value) -> Option<Usage> {
+    let usage_obj = usage_value.as_object()?;
+    let input_tokens = usage_obj
+        .get("input_tokens")
+        .or_else(|| usage_obj.get("prompt_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let output_tokens = usage_obj
+        .get("output_tokens")
+        .or_else(|| usage_obj.get("completion_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let input_details = {
+        let mut details = InputDetails::default();
+        if let Some(id) = usage_obj
+            .get("input_tokens_details")
+            .and_then(|v| v.as_object())
+        {
+            details.cache_read_tokens = id
+                .get("cached_tokens")
+                .or_else(|| id.get("cache_read_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            details.cache_read_modality_breakdown = parse_cache_read_modality_breakdown(id);
+            if let Some(mb) = parse_modality_breakdown(id) {
+                details.modality_breakdown = Some(mb);
+            }
+        }
+        Some(details)
+    };
+
+    let output_details = {
+        let mut details = OutputDetails::default();
+        if let Some(od) = usage_obj
+            .get("output_tokens_details")
+            .and_then(|v| v.as_object())
+        {
+            if let Some(mb) = parse_modality_breakdown(od) {
+                details.modality_breakdown = Some(mb);
+            }
+        }
+        Some(details)
+    };
+
+    Some(Usage {
+        input_tokens,
+        output_tokens,
+        input_details,
+        output_details,
         extra_body: HashMap::new(),
     })
 }

@@ -83,8 +83,23 @@ between the role chunk and the first content delta, one
 MU13. `/v1/messages` MUST echo concatenated `text` blocks (stream and non-stream) in
 Anthropic Messages format.
 
-MU14. `/v1/images/generations` MUST return one fixed orange 256x256 PNG as `b64_json`
-with `revised_prompt = "mock render of: <prompt>"` and non-zero usage.
+MU14. `/v1/images/generations` without `stream: true` MUST return one fixed orange
+256x256 PNG as `b64_json` with `revised_prompt = "mock render of: <prompt>"` and
+non-zero usage.
 
-MU15. `/v1/images/edits` MUST require a file field `image` (else HTTP 400) and return
+MU14a. `/v1/images/generations` with `stream: true` MUST return SSE: one
+`image_generation.partial_image` frame per requested `partial_images` (integer,
+default `0`, capped at `3`) with 0-based `partial_image_index` and the fixed PNG as
+`b64_json`, then one `image_generation.completed` frame with the fixed PNG as
+`b64_json`, `output_format: "png"`, and the MU14 usage object, then `data: [DONE]`.
+Every frame MUST carry the event name in both the `event:` line and the `data:` JSON
+`type` field.
+
+MU15. `/v1/images/edits` MUST require at least one file part named `image` or
+`image[]` (else HTTP 400) and, without text field `stream` equal to `true`, return
 one fixed teal 256x256 PNG in the same shape as MU14.
+
+MU15a. `/v1/images/edits` with text field `stream` equal to `true` MUST return SSE in
+the MU14a shape with event names `image_edit.partial_image` /
+`image_edit.completed`, the teal PNG, and `partial_images` read from the same-named
+text field.

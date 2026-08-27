@@ -828,19 +828,45 @@ pub(super) async fn forward_stream_typed(
             let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
                 u64::try_from(upstream_body.to_string().len()).unwrap_or(u64::MAX),
             );
-            let provider = build_channel_provider_config(&attempt);
-            let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             let http = client_http_for_attempt(&state, &attempt)?;
-            let call = upstream::call_upstream_raw_with_timeout_and_headers(
+            // OIU-S7: openai_image edits stream through multipart
+            // `/v1/images/edits`; every other attempt posts the JSON body.
+            let stream_call = match call_streaming_image_capable_upstream(
                 &http,
-                &provider,
-                &attempt.api_key,
-                &path,
+                &attempt,
+                &req_attempt,
                 &upstream_body,
                 attempt.request_timeout_ms.saturating_mul(10).max(600_000),
                 &attempt_extra_headers(&attempt, &upstream_body),
+                capture.session.is_some(),
             )
-            .await;
+            .await
+            {
+                Ok(stream_call) => stream_call,
+                Err(err) => {
+                    spawn_stream_attempt_error(
+                        &state,
+                        &auth,
+                        &attempt,
+                        &logical_model,
+                        started_at,
+                        request_id.clone(),
+                        request_ip.clone(),
+                        None,
+                        &err,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers.clone(),
+                    );
+                    return Err(err);
+                }
+            };
+            let path = stream_call.path;
+            // RCD-D6a/OIU-E5g: a multipart edit attempt records the sent form
+            // as `upstream_request` instead of the unused JSON encoding.
+            let capture_upstream_request = stream_call
+                .capture_multipart_request
+                .unwrap_or_else(|| upstream_body.clone());
+            let call = stream_call.result;
             match call {
                 Ok(upstream_resp) => {
                     update_pending_channel_info(
@@ -913,7 +939,7 @@ pub(super) async fn forward_stream_typed(
                     let capture_raw_input = capture.raw_input.clone();
                     let capture_transform_chain_for_task = capture_transform_chain.clone();
                     let capture_req_attempt = req_attempt.clone();
-                    let capture_upstream_body = upstream_body.clone();
+                    let capture_upstream_body = capture_upstream_request.clone();
                     let capture_path = path.clone();
                     let capture_provider_id = attempt.provider_id.clone();
                     let capture_channel_id = attempt.channel_id.clone();
@@ -1483,7 +1509,7 @@ pub(super) async fn forward_stream_typed(
                                 &path,
                                 capture.raw_input.as_ref().clone(),
                                 &req_attempt,
-                                upstream_body.clone(),
+                                capture_upstream_request.clone(),
                                 None,
                                 None,
                                 None,

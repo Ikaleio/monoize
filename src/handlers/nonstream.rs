@@ -430,16 +430,44 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                 let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
-                let call = upstream::call_upstream_raw_with_timeout_and_headers(
+                // OIU-S7: openai_image edits stream through multipart
+                // `/v1/images/edits`; the helper keeps the JSON raw call for
+                // every other attempt shape.
+                let call = match call_streaming_image_capable_upstream(
                     &http,
-                    &provider,
-                    &attempt.api_key,
-                    &path,
+                    &attempt,
+                    &req_attempt,
                     &upstream_body,
                     attempt.request_timeout_ms.saturating_mul(10).max(600_000),
                     &extra_headers,
+                    capture.session.is_some(),
                 )
-                .await;
+                .await
+                {
+                    Ok(stream_call) => {
+                        if stream_call.capture_multipart_request.is_some() {
+                            capture_upstream_request = stream_call.capture_multipart_request;
+                        }
+                        stream_call.result
+                    }
+                    Err(err) => {
+                        return Err(finish_nonstream_error(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            started_at,
+                            &request_id,
+                            &request_ip,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                            &capture,
+                            false,
+                            err,
+                        )
+                        .await);
+                    }
+                };
                 match call {
                     Ok(upstream_resp) => match collect_streamed_upstream_response(
                         &req_attempt,

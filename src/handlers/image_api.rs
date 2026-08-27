@@ -1,6 +1,7 @@
 use super::*;
 use axum::extract::Multipart;
 use base64::Engine as _;
+use futures_util::StreamExt as _;
 use std::collections::HashMap;
 
 pub async fn create_image_generation(
@@ -55,6 +56,28 @@ pub async fn create_image_generation(
 
     let n = parse_n_field(obj.get("n"))?;
 
+    // IG3: `stream` must be a JSON boolean when present.
+    let stream_requested = match obj.get("stream") {
+        None => false,
+        Some(Value::Bool(flag)) => *flag,
+        Some(_) => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "stream must be a boolean",
+            ));
+        }
+    };
+    if stream_requested && n != 1 {
+        // IG4: streaming responses carry no image index, so fan-out is
+        // rejected instead of producing an ambiguous interleaved stream.
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "stream=true requires n=1",
+        ));
+    }
+
     ensure_model_allowed(&auth, &model)?;
 
     let max_multiplier_val =
@@ -62,7 +85,7 @@ pub async fn create_image_generation(
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
 
-    let extra_body = build_extra_body(obj, &["prompt", "model", "n", "max_multiplier"]);
+    let extra_body = build_extra_body(obj, &["prompt", "model", "n", "max_multiplier", "stream"]);
 
     let inputs = vec![urp::Node::Text {
         id: None,
@@ -71,6 +94,24 @@ pub async fn create_image_generation(
         phase: None,
         extra_body: HashMap::new(),
     }];
+
+    if stream_requested {
+        return run_image_stream_downstream(
+            state,
+            auth,
+            model,
+            inputs,
+            extra_body,
+            max_multiplier_val,
+            request_id,
+            request_ip,
+            extract_client_session_id(&headers),
+            capture_raw_input,
+            crate::request_capture::CaptureDownstreamProtocol::ImageGenerations,
+            ImageStreamEventFamily::Generation,
+        )
+        .await;
+    }
 
     let results = fan_out_subrequests(
         &state,
@@ -107,6 +148,7 @@ pub async fn create_image_edit(
     let mut prompt: Option<String> = None;
     let mut model: Option<String> = None;
     let mut n_raw: Option<String> = None;
+    let mut stream_raw: Option<String> = None;
     let mut image_data: Option<(String, String)> = None;
     let mut extra_images: Vec<(String, String)> = Vec::new();
     let mut mask_data: Option<(String, String)> = None;
@@ -157,6 +199,18 @@ pub async fn create_image_edit(
                     });
                 }
                 n_raw = Some(text);
+            }
+            "stream" => {
+                let text = field.text().await.map_err(|e| {
+                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
+                })?;
+                if capture_eligible {
+                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
+                        name: field_name,
+                        text: text.clone(),
+                    });
+                }
+                stream_raw = Some(text);
             }
             "max_multiplier" => {
                 let text = field.text().await.map_err(|e| {
@@ -265,6 +319,27 @@ pub async fn create_image_edit(
         None => 1,
     };
 
+    // IE4: `stream` text field accepts exactly `true` or `false`.
+    let stream_requested = match stream_raw.as_deref() {
+        None => false,
+        Some("true") => true,
+        Some("false") => false,
+        Some(_) => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "stream must be true or false",
+            ));
+        }
+    };
+    if stream_requested && n != 1 {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "stream=true requires n=1",
+        ));
+    }
+
     ensure_model_allowed(&auth, &model)?;
 
     let max_multiplier_val = {
@@ -323,6 +398,24 @@ pub async fn create_image_edit(
         });
     }
 
+    if stream_requested {
+        return run_image_stream_downstream(
+            state,
+            auth,
+            model,
+            inputs,
+            extra_text_fields,
+            max_multiplier_val,
+            request_id,
+            request_ip,
+            extract_client_session_id(&headers),
+            capture_raw_input,
+            crate::request_capture::CaptureDownstreamProtocol::ImageEdits,
+            ImageStreamEventFamily::Edit,
+        )
+        .await;
+    }
+
     let results = fan_out_subrequests(
         &state,
         &auth,
@@ -340,6 +433,237 @@ pub async fn create_image_edit(
     .await;
 
     assemble_image_response(results)
+}
+
+/// Downstream SSE event family for one streaming Image API request
+/// (`image-api-proxy.spec.md` §1).
+#[derive(Clone, Copy)]
+enum ImageStreamEventFamily {
+    Generation,
+    Edit,
+}
+
+impl ImageStreamEventFamily {
+    fn partial_event_name(self) -> &'static str {
+        match self {
+            Self::Generation => "image_generation.partial_image",
+            Self::Edit => "image_edit.partial_image",
+        }
+    }
+
+    fn completed_event_name(self) -> &'static str {
+        match self {
+            Self::Generation => "image_generation.completed",
+            Self::Edit => "image_edit.completed",
+        }
+    }
+}
+
+/// Downstream frame sink for one §5.5 streaming Image API sub-request. Send
+/// failures are ignored: a disconnected client must not fail the upstream
+/// collection, billing, or logging that the executor still has to finish.
+struct ImageStreamSink {
+    family: ImageStreamEventFamily,
+    tx: mpsc::Sender<Event>,
+    partial_frames_emitted: u64,
+    completed_frames_emitted: u64,
+}
+
+impl ImageStreamSink {
+    fn new(family: ImageStreamEventFamily, tx: mpsc::Sender<Event>) -> Self {
+        Self {
+            family,
+            tx,
+            partial_frames_emitted: 0,
+            completed_frames_emitted: 0,
+        }
+    }
+
+    /// IS7: true once any partial or completed frame reached the client.
+    fn frames_emitted(&self) -> bool {
+        self.partial_frames_emitted > 0 || self.completed_frames_emitted > 0
+    }
+
+    async fn send_frame(&self, event_name: &str, payload: Value) {
+        let _ = self
+            .tx
+            .send(Event::default().event(event_name).data(payload.to_string()))
+            .await;
+    }
+
+    /// IS3: one partial frame per canonical Base64 image delta.
+    async fn send_partial(
+        &mut self,
+        source: &urp::ImageSource,
+        extra_body: &HashMap<String, Value>,
+    ) {
+        let urp::ImageSource::Base64 { data, .. } = source else {
+            return;
+        };
+        let event_name = self.family.partial_event_name();
+        let mut payload = Map::new();
+        payload.insert("type".to_string(), Value::String(event_name.to_string()));
+        payload.insert("b64_json".to_string(), Value::String(data.clone()));
+        let index = extra_body
+            .get("partial_image_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(self.partial_frames_emitted);
+        payload.insert("partial_image_index".to_string(), Value::from(index));
+        let created_at = extra_body
+            .get("created_at")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
+        payload.insert("created_at".to_string(), Value::from(created_at));
+        for key in ["output_format", "size", "quality", "background"] {
+            if let Some(value) = extra_body.get(key) {
+                payload.insert(key.to_string(), value.clone());
+            }
+        }
+        self.partial_frames_emitted += 1;
+        self.send_frame(event_name, Value::Object(payload)).await;
+    }
+
+    /// IS4: one completed frame per extracted image; the last frame carries
+    /// `usage` iff the sub-request produced URP usage.
+    async fn send_completed(&mut self, resp: &urp::UrpResponse) {
+        let images = extract_images_from_response(resp);
+        let total = images.len();
+        for (position, image) in images.into_iter().enumerate() {
+            let event_name = self.family.completed_event_name();
+            let mut payload = Map::new();
+            payload.insert("type".to_string(), Value::String(event_name.to_string()));
+            if let Some(b64) = image.b64_json {
+                payload.insert("b64_json".to_string(), Value::String(b64));
+            } else if let Some(url) = image.url {
+                payload.insert("url".to_string(), Value::String(url));
+            }
+            payload.insert(
+                "created_at".to_string(),
+                Value::from(chrono::Utc::now().timestamp()),
+            );
+            if position + 1 == total
+                && let Some(usage) = &resp.usage
+            {
+                let mut aggregated = AggregatedUsage::default();
+                accumulate_usage(&mut aggregated, usage);
+                payload.insert("usage".to_string(), aggregated_usage_value(&aggregated));
+            }
+            self.completed_frames_emitted += 1;
+            self.send_frame(event_name, Value::Object(payload)).await;
+        }
+    }
+
+    /// IS6: exactly one `error` frame with the standard error object.
+    async fn send_error(&mut self, err: &AppError) {
+        self.send_frame(
+            "error",
+            json!({
+                "type": "error",
+                "error": {
+                    "message": err.message,
+                    "type": err.error_type,
+                    "code": err.code,
+                }
+            }),
+        )
+        .await;
+    }
+
+    /// IS5: `data: [DONE]` terminator.
+    async fn send_done(&self) {
+        let _ = self.tx.send(Event::default().data("[DONE]")).await;
+    }
+}
+
+/// IS7 guard used at every attempt-failover decision inside the streaming
+/// executor.
+fn sink_frames_emitted(sink: &Option<&mut ImageStreamSink>) -> bool {
+    sink.as_ref().is_some_and(|sink| sink.frames_emitted())
+}
+
+/// IS1/IM3a: run the single streaming Image API sub-request and answer with
+/// the §5.5 SSE stream. Billing and request logging happen inside the
+/// executor (IS8); this function only owns the downstream frame encoding.
+#[allow(clippy::too_many_arguments)]
+async fn run_image_stream_downstream(
+    state: AppState,
+    auth: crate::auth::AuthResult,
+    model: String,
+    inputs: Vec<urp::Node>,
+    extra_body: HashMap<String, Value>,
+    max_multiplier: Option<Multiplier>,
+    request_id: Option<String>,
+    request_ip: Option<String>,
+    client_session_id: Option<String>,
+    capture_raw_input: std::sync::Arc<Value>,
+    capture_protocol: crate::request_capture::CaptureDownstreamProtocol,
+    family: ImageStreamEventFamily,
+) -> AppResult<Response> {
+    let req = urp::UrpRequest {
+        model,
+        input: inputs,
+        stream: Some(true),
+        temperature: None,
+        top_p: None,
+        max_output_tokens: None,
+        reasoning: None,
+        tools: None,
+        tool_choice: None,
+        parallel_tool_calls: None,
+        stop: None,
+        verbosity: None,
+        response_format: None,
+        user: None,
+        extra_body,
+    };
+    // RCD-C16/RCD-D2c: one capture session for the single streaming
+    // sub-request, recorded with is_stream true.
+    let capture_session = state
+        .request_capture
+        .maybe_start_session(
+            &state.monoize_runtime,
+            &auth,
+            request_id.clone(),
+            capture_protocol,
+            true,
+        )
+        .await;
+    let capture = super::RequestCaptureContext {
+        raw_input: capture_raw_input,
+        session: capture_session,
+    };
+    let (tx, rx) = mpsc::channel::<Event>(64);
+    tokio::spawn(async move {
+        let task_state = AdmittedRequestTaskState::new(std::time::Instant::now());
+        task_state.set_stream(true);
+        let mut sink = ImageStreamSink::new(family, tx);
+        let result = execute_stream_collected_image_typed(
+            &state,
+            &auth,
+            req,
+            max_multiplier,
+            request_id,
+            request_ip,
+            client_session_id,
+            capture,
+            &task_state,
+            Some(&mut sink),
+        )
+        .await;
+        match result {
+            // IS4: completed frames come from the validated terminal response.
+            Ok((resp, _)) => sink.send_completed(&resp).await,
+            // IS6: completed frames exist only after executor success, so
+            // every failure emits exactly one error frame.
+            Err(err) => sink.send_error(&err).await,
+        }
+        sink.send_done().await;
+    });
+    let stream =
+        tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
+    Ok(Sse::new(stream)
+        .keep_alive(api_stream_keep_alive())
+        .into_response())
 }
 
 fn parse_n_field(value: Option<&Value>) -> AppResult<usize> {
@@ -616,6 +940,7 @@ async fn execute_image_subrequest_typed(
             client_session_id,
             capture,
             task_state,
+            None,
         )
         .await;
     }
@@ -726,6 +1051,7 @@ async fn execute_stream_collected_image_typed(
     client_session_id: Option<String>,
     capture: super::RequestCaptureContext,
     task_state: &AdmittedRequestTaskState,
+    mut sink: Option<&mut ImageStreamSink>,
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = task_state.started_at();
     let transform_match_model = resolve_model_suffix(state, &mut req).await?;
@@ -883,19 +1209,45 @@ async fn execute_stream_collected_image_typed(
                     .await);
                 }
             };
-            let provider = build_channel_provider_config(&attempt);
-            let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             let http = client_http_for_attempt(state, &attempt)?;
-            let call = upstream::call_upstream_raw_with_timeout_and_headers(
+            // OIU-S7/IS9: openai_image edits stream through multipart
+            // `/v1/images/edits`; every other attempt posts the JSON body.
+            let stream_call = match call_streaming_image_capable_upstream(
                 &http,
-                &provider,
-                &attempt.api_key,
-                &path,
+                &attempt,
+                &req_attempt,
                 &upstream_body,
                 attempt.request_timeout_ms.saturating_mul(10).max(600_000),
                 &attempt_extra_headers(&attempt, &upstream_body),
+                capture.session.is_some(),
             )
-            .await;
+            .await
+            {
+                Ok(stream_call) => stream_call,
+                Err(err) => {
+                    return Err(finish_image_stream_error(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        started_at,
+                        &request_id,
+                        &request_ip,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
+                        &capture,
+                        err,
+                    )
+                    .await);
+                }
+            };
+            let path = stream_call.path;
+            // RCD-D6a/OIU-E5g: a multipart edit attempt records the sent form
+            // as `upstream_request` instead of the unused JSON encoding.
+            let capture_upstream_request = stream_call
+                .capture_multipart_request
+                .unwrap_or_else(|| upstream_body.clone());
+            let call = stream_call.result;
 
             match call {
                 Ok(upstream_resp) => {
@@ -1013,6 +1365,17 @@ async fn execute_stream_collected_image_typed(
 
                     while let Some(event) = transformed_rx.recv().await {
                         match event {
+                            crate::urp::UrpStreamEvent::NodeDelta {
+                                delta: crate::urp::NodeDelta::Image { source },
+                                extra_body,
+                                ..
+                            } => {
+                                // IS3: partial image deltas surface downstream
+                                // only when the Image API sink is attached.
+                                if let Some(sink) = sink.as_deref_mut() {
+                                    sink.send_partial(&source, &extra_body).await;
+                                }
+                            }
                             crate::urp::UrpStreamEvent::ResponseDone {
                                 finish_reason,
                                 usage,
@@ -1109,7 +1472,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &upstream_body,
+                            &capture_upstream_request,
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1129,6 +1492,24 @@ async fn execute_stream_collected_image_typed(
                         )
                         .await;
                         last_failed_attempt = Some(attempt.clone());
+                        if sink_frames_emitted(&sink) {
+                            // IS7: image frames already reached the client, so failover
+                            // would duplicate them; the stream terminates with this error.
+                            return Err(finish_image_stream_error(
+                                state,
+                                auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                                &capture,
+                                err,
+                            )
+                            .await);
+                        }
                         if allow_same_channel_retry(
                             state,
                             &attempt,
@@ -1151,7 +1532,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &upstream_body,
+                            &capture_upstream_request,
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1180,7 +1561,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &upstream_body,
+                            &capture_upstream_request,
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1200,6 +1581,24 @@ async fn execute_stream_collected_image_typed(
                         )
                         .await;
                         last_failed_attempt = Some(attempt.clone());
+                        if sink_frames_emitted(&sink) {
+                            // IS7: image frames already reached the client, so failover
+                            // would duplicate them; the stream terminates with this error.
+                            return Err(finish_image_stream_error(
+                                state,
+                                auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                                &capture,
+                                err,
+                            )
+                            .await);
+                        }
                         if allow_same_channel_retry(
                             state,
                             &attempt,
@@ -1230,7 +1629,7 @@ async fn execute_stream_collected_image_typed(
                                 &logical_model,
                                 &req_attempt,
                                 &path,
-                                &upstream_body,
+                                &capture_upstream_request,
                                 reconstructed_urp_response.clone(),
                                 capture_transform_chain.clone(),
                                 Some(&err),
@@ -1250,6 +1649,24 @@ async fn execute_stream_collected_image_typed(
                             )
                             .await;
                             last_failed_attempt = Some(attempt.clone());
+                            if sink_frames_emitted(&sink) {
+                                // IS7: image frames already reached the client, so failover
+                                // would duplicate them; the stream terminates with this error.
+                                return Err(finish_image_stream_error(
+                                    state,
+                                    auth,
+                                    &attempt,
+                                    &logical_model,
+                                    started_at,
+                                    &request_id,
+                                    &request_ip,
+                                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                    tried_providers,
+                                    &capture,
+                                    err,
+                                )
+                                .await);
+                            }
                             if allow_same_channel_retry(
                                 state,
                                 &attempt,
@@ -1274,7 +1691,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &upstream_body,
+                            &capture_upstream_request,
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1294,6 +1711,24 @@ async fn execute_stream_collected_image_typed(
                         )
                         .await;
                         last_failed_attempt = Some(attempt.clone());
+                        if sink_frames_emitted(&sink) {
+                            // IS7: image frames already reached the client, so failover
+                            // would duplicate them; the stream terminates with this error.
+                            return Err(finish_image_stream_error(
+                                state,
+                                auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                                &capture,
+                                err,
+                            )
+                            .await);
+                        }
                         if allow_same_channel_retry(
                             state,
                             &attempt,
@@ -1320,7 +1755,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &upstream_body,
+                            &capture_upstream_request,
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1349,7 +1784,7 @@ async fn execute_stream_collected_image_typed(
                         &logical_model,
                         &req_attempt,
                         &path,
-                        &upstream_body,
+                        &capture_upstream_request,
                         reconstructed_urp_response.clone(),
                         capture_transform_chain.clone(),
                         None,
@@ -1425,7 +1860,7 @@ async fn execute_stream_collected_image_typed(
                         &logical_model,
                         &req_attempt,
                         &path,
-                        &upstream_body,
+                        &capture_upstream_request,
                         None,
                         capture_transform_chain.clone(),
                         Some(&app_err),
@@ -1442,6 +1877,24 @@ async fn execute_stream_collected_image_typed(
                     )
                     .await;
                     last_failed_attempt = Some(attempt.clone());
+                    if sink_frames_emitted(&sink) {
+                        // IS7: image frames already reached the client, so failover
+                        // would duplicate them; the stream terminates with this error.
+                        return Err(finish_image_stream_error(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            started_at,
+                            &request_id,
+                            &request_ip,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                            &capture,
+                            app_err,
+                        )
+                        .await);
+                    }
                     if allow_same_channel_retry(
                         state,
                         &attempt,
@@ -1615,28 +2068,7 @@ fn assemble_image_response(
                     data_items.push(Value::Object(item));
                 }
                 if let Some(usage) = &resp.usage {
-                    let agg = total_usage.get_or_insert(AggregatedUsage::default());
-                    agg.input_tokens += usage.input_tokens;
-                    agg.output_tokens += usage.output_tokens;
-                    if let Some(details) = &usage.input_details {
-                        agg.input_cached_tokens += details.cache_read_tokens;
-                        if let Some(cached_modality) = &details.cache_read_modality_breakdown {
-                            agg.input_cached_text_tokens +=
-                                cached_modality.text_tokens.unwrap_or(0);
-                            agg.input_cached_image_tokens +=
-                                cached_modality.image_tokens.unwrap_or(0);
-                        }
-                        if let Some(modality) = &details.modality_breakdown {
-                            agg.input_text_tokens += modality.text_tokens.unwrap_or(0);
-                            agg.input_image_tokens += modality.image_tokens.unwrap_or(0);
-                        }
-                    }
-                    if let Some(details) = &usage.output_details {
-                        if let Some(modality) = &details.modality_breakdown {
-                            agg.output_text_tokens += modality.text_tokens.unwrap_or(0);
-                            agg.output_image_tokens += modality.image_tokens.unwrap_or(0);
-                        }
-                    }
+                    accumulate_usage(total_usage.get_or_insert(AggregatedUsage::default()), usage);
                 }
             }
             Err(e) => {
@@ -1662,27 +2094,10 @@ fn assemble_image_response(
     });
 
     if let Some(usage) = total_usage {
-        response.as_object_mut().unwrap().insert(
-            "usage".to_string(),
-            json!({
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "total_tokens": usage.input_tokens + usage.output_tokens,
-                "input_tokens_details": {
-                    "text_tokens": usage.input_text_tokens,
-                    "image_tokens": usage.input_image_tokens,
-                    "cached_tokens": usage.input_cached_tokens,
-                    "cached_tokens_details": {
-                        "text_tokens": usage.input_cached_text_tokens,
-                        "image_tokens": usage.input_cached_image_tokens,
-                    },
-                },
-                "output_tokens_details": {
-                    "text_tokens": usage.output_text_tokens,
-                    "image_tokens": usage.output_image_tokens,
-                }
-            }),
-        );
+        response
+            .as_object_mut()
+            .unwrap()
+            .insert("usage".to_string(), aggregated_usage_value(&usage));
     }
 
     Ok(Json(response).into_response())
@@ -1699,6 +2114,51 @@ struct AggregatedUsage {
     input_cached_image_tokens: u64,
     output_text_tokens: u64,
     output_image_tokens: u64,
+}
+
+fn accumulate_usage(agg: &mut AggregatedUsage, usage: &urp::Usage) {
+    agg.input_tokens += usage.input_tokens;
+    agg.output_tokens += usage.output_tokens;
+    if let Some(details) = &usage.input_details {
+        agg.input_cached_tokens += details.cache_read_tokens;
+        if let Some(cached_modality) = &details.cache_read_modality_breakdown {
+            agg.input_cached_text_tokens += cached_modality.text_tokens.unwrap_or(0);
+            agg.input_cached_image_tokens += cached_modality.image_tokens.unwrap_or(0);
+        }
+        if let Some(modality) = &details.modality_breakdown {
+            agg.input_text_tokens += modality.text_tokens.unwrap_or(0);
+            agg.input_image_tokens += modality.image_tokens.unwrap_or(0);
+        }
+    }
+    if let Some(details) = &usage.output_details
+        && let Some(modality) = &details.modality_breakdown
+    {
+        agg.output_text_tokens += modality.text_tokens.unwrap_or(0);
+        agg.output_image_tokens += modality.image_tokens.unwrap_or(0);
+    }
+}
+
+/// IR10 usage envelope shared by the non-streaming response body and the IS4
+/// last completed frame.
+fn aggregated_usage_value(usage: &AggregatedUsage) -> Value {
+    json!({
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.input_tokens + usage.output_tokens,
+        "input_tokens_details": {
+            "text_tokens": usage.input_text_tokens,
+            "image_tokens": usage.input_image_tokens,
+            "cached_tokens": usage.input_cached_tokens,
+            "cached_tokens_details": {
+                "text_tokens": usage.input_cached_text_tokens,
+                "image_tokens": usage.input_cached_image_tokens,
+            },
+        },
+        "output_tokens_details": {
+            "text_tokens": usage.output_text_tokens,
+            "image_tokens": usage.output_image_tokens,
+        }
+    })
 }
 
 #[cfg(test)]
