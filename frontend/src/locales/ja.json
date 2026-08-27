@@ -63,7 +63,9 @@
 		"billingPlans": "プラン",
 		"adminDashboard": "システムダッシュボード",
 		"groups": "グループ",
-		"customTransforms": "カスタム変換"
+		"customTransforms": "カスタム変換",
+		"collapseSidebar": "サイドバーを折りたたむ",
+		"expandSidebar": "サイドバーを展開する"
 	},
 	"roles": {
 		"super_admin": "スーパー管理者",
@@ -837,6 +839,7 @@
 		"context": "コンテキスト",
 		"maxOutput": "最大出力",
 		"provider": "プロバイダー",
+		"resultCount": "{{total}} 件中 {{filtered}} 件のモデルを表示",
 		"noModels": "利用可能なモデルがありません",
 		"noModelsDesc": "管理者がモデルデータベースを同期すると、モデルデータがここに表示されます。"
 	},

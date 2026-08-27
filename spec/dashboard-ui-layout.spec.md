@@ -12,6 +12,21 @@ DL1. Desktop (`lg` and above) MUST render:
 - left sidebar navigation
 - main content area
 
+DL1a. The desktop sidebar MUST start expanded at every viewport width in the desktop
+range. A viewport width change within the desktop range MUST NOT collapse the sidebar.
+
+DL1b. The expanded desktop sidebar MUST use a `16rem` width. Its brand row MUST place a
+collapse button to the right of the Monoize brand link. Activating this button MUST
+collapse the sidebar to a `4rem` icon rail.
+
+DL1c. The collapsed desktop sidebar MUST render the 32 px Monoize brand surface as an
+expand button instead of a dashboard link. Activating this button MUST expand the
+sidebar. Pointer hover or keyboard focus MUST replace the visible Monoize mark with a
+lucide expand-sidebar icon while the button remains in that state.
+
+DL1d. The collapse and expand buttons MUST expose localized accessible names. The
+mobile sheet behavior in DL4 MUST remain independent of the desktop collapse state.
+
 DL2. Top header bar MUST NOT be rendered.
 
 DL3. User/account menu MUST be anchored at sidebar bottom.
@@ -251,6 +266,7 @@ PL18. In expanded provider card overview, channel runtime list row spacing MUST 
 - Each rendered channel row MUST use a minimum row height of `40px`.
 - Virtual list container height MUST be computed as `min(channel_count * 40, 190)`.
 - The row height constant used by the virtual list and the row element style MUST be the same value to prevent visible trailing blank space.
+- On desktop widths, the runtime health label, Channel name, and Channel Base URL MUST share one text baseline. The row action group MUST remain vertically centered independently.
 
 PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge layout and MUST NOT hide model badges behind a `+N` overflow badge or popover.
 

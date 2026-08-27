@@ -63,7 +63,9 @@
 		"billingPlans": "訂閱方案",
 		"adminDashboard": "系統儀表板",
 		"groups": "群組",
-		"customTransforms": "自訂變換"
+		"customTransforms": "自訂變換",
+		"collapseSidebar": "收合側邊欄",
+		"expandSidebar": "展開側邊欄"
 	},
 	"roles": {
 		"super_admin": "超級管理員",
@@ -837,6 +839,7 @@
 		"context": "上下文",
 		"maxOutput": "最大輸出",
 		"provider": "供應商",
+		"resultCount": "顯示 {{filtered}} / {{total}} 個模型",
 		"noModels": "尚無可用模型",
 		"noModelsDesc": "管理員同步模型資料庫後，模型資料將顯示在此處。"
 	},

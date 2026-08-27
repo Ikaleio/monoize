@@ -63,7 +63,9 @@
 		"billingPlans": "订阅套餐",
 		"adminDashboard": "系统仪表盘",
 		"groups": "分组",
-		"customTransforms": "自定义变换"
+		"customTransforms": "自定义变换",
+		"collapseSidebar": "收起侧边栏",
+		"expandSidebar": "展开侧边栏"
 	},
 	"roles": {
 		"super_admin": "超级管理员",
@@ -840,6 +842,7 @@
 		"context": "上下文",
 		"maxOutput": "最大输出",
 		"provider": "提供者",
+		"resultCount": "显示 {{filtered}} / {{total}} 个模型",
 		"noModels": "暂无可用模型",
 		"noModelsDesc": "管理员同步模型数据库后，模型数据将显示在此处。"
 	},

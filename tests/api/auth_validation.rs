@@ -225,6 +225,7 @@ async fn dashboard_auth_missing_session_uses_session_error() {
     let ctx = setup().await;
     let response = ctx
         .router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/dashboard/auth/me")

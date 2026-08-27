@@ -233,36 +233,15 @@ export function Composer({
             isLoading={groupsLoading}
           />
           <ModelCombobox
-            value={prefs.chatModel}
-            onChange={(model) => setPref("chatModel", model)}
+            key={mode}
+            value={mode === "image" ? prefs.imageModel : prefs.chatModel}
+            onChange={(model) =>
+              setPref(mode === "image" ? "imageModel" : "chatModel", model)
+            }
             records={models}
-            kind="chat"
+            kind={mode}
             isLoading={modelsLoading}
           />
-          <AnimatePresence initial={false}>
-            {mode === "image" && (
-              <motion.div
-                initial={
-                  shouldReduceMotion ? { opacity: 0 } : { opacity: 0, x: -8, scale: 0.96 }
-                }
-                animate={
-                  shouldReduceMotion ? { opacity: 1 } : { opacity: 1, x: 0, scale: 1 }
-                }
-                exit={
-                  shouldReduceMotion ? { opacity: 0 } : { opacity: 0, x: -8, scale: 0.96 }
-                }
-                transition={springs.smooth}
-              >
-                <ModelCombobox
-                  value={prefs.imageModel}
-                  onChange={(model) => setPref("imageModel", model)}
-                  records={models}
-                  kind="image"
-                  isLoading={modelsLoading}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
           <ApiKeyDropdown
             value={prefs.apiKeyId}
             onChange={(apiKeyId) => setPref("apiKeyId", apiKeyId)}

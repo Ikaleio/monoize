@@ -68,6 +68,8 @@ DB11. `DbPool` MUST expose the following public interface:
 - `connect(dsn: &str) -> Result<Self, DbErr>`: Construct from DSN string.
 - `read() -> &DatabaseConnection`: Connection for SELECT queries.
 - `write() -> &DatabaseConnection`: Connection for INSERT/UPDATE/DELETE/DDL.
+- `close() -> Result<(), DbErr>`: Mark both connection pools closed and wait until every
+  connection in both pools is closed. Calling `close()` more than once MUST succeed.
 - `backend() -> DbBackend`: Returns `DbBackend::Sqlite` or `DbBackend::Postgres`.
 - `is_sqlite() -> bool`: True iff backend is SQLite.
 - `is_postgres() -> bool`: True iff backend is PostgreSQL.

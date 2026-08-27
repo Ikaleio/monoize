@@ -122,8 +122,9 @@ second scrolling surface.
 ## 4. Selectors
 
 PG-SEL1. The composer MUST contain compact popover selectors (shadcn `Popover` +
-`Command`) for: routing group, chat model, and — while image mode is active — image
-model. Selectors MUST NOT be free-text-only inputs.
+`Command`) for the routing group and the model for the active mode. Chat mode MUST show
+only the chat-model selector. Image mode MUST show only the image-model selector.
+Selectors MUST NOT be free-text-only inputs.
 
 PG-SEL2. Group selector:
 
@@ -309,8 +310,9 @@ response using the current selector state.
 ## 7. Image Generation and Editing
 
 PG-IMG1. The composer has a chat/image mode toggle. Mode is session state (not
-persisted). While image mode is active the image-model selector is visible and the send
-action executes an image request instead of a chat request.
+persisted). While image mode is active the image-model selector is visible, the
+chat-model selector is hidden, and the send action executes an image request instead of
+a chat request.
 
 PG-IMG2. Image send with no attachment MUST call
 `POST /api/v1/images/generations` with JSON body

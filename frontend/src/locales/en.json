@@ -63,7 +63,9 @@
 		"billingPlans": "Plans",
 		"adminDashboard": "System Dashboard",
 		"groups": "Groups",
-		"customTransforms": "Custom Transforms"
+		"customTransforms": "Custom Transforms",
+		"collapseSidebar": "Collapse sidebar",
+		"expandSidebar": "Expand sidebar"
 	},
 	"roles": {
 		"super_admin": "Super Admin",
@@ -840,6 +842,7 @@
 		"context": "Context",
 		"maxOutput": "Max Output",
 		"provider": "Provider",
+		"resultCount": "Showing {{filtered}} of {{total}} models",
 		"noModels": "No models available",
 		"noModelsDesc": "Model data will appear here once the administrator syncs the model database."
 	},

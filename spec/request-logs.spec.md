@@ -450,6 +450,8 @@ FL7b. `/dashboard/logs` MUST read the optional `username` query parameter. For a
 
 FL7c. The free-text search input MUST debounce fetches. A keystroke MUST NOT issue a request-log fetch directly; the client applies the current search text to the active filter set only after 300 ms have elapsed without a further keystroke. Clearing the input follows the same 300 ms rule. Local (client-side) filtering of SSE-delivered rows per FL53 MAY use the debounced value.
 
+FL7d. The filter-control area first row MUST render controls in this order: free-text search input, automatic-update toggle, manual-refresh button, IP-visibility toggle, filter-expansion toggle, and summary. The three action buttons between the search input and filter-expansion toggle MUST be square icon buttons with equal dimensions. If the row wraps, the controls MUST retain this source order.
+
 FL8. Column order (left to right): merged `created_at/request_id`, merged `model/[channel]`, merged `[username/]api_key_name`, `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
 
 FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping visible lines in one column. The first line MUST render `created_at` per FL2. The second line MUST render the first 8 characters of `request_id` followed immediately by the FL36 status indicator. If `request_id` is absent, the second line MUST render `-`. When `has_capture == true`, the second line MUST also render the right-aligned capture-viewer button defined by `request-capture-viewer.spec.md` RCV-F2. The request tooltip behavior defined by FL28 and FL29 MUST remain attached to the second line.
@@ -489,7 +491,7 @@ FL12. Infinite loading MUST fetch in backend-paginated chunks using `limit=100` 
 
 FL13. The virtualized table viewport MUST occupy the remaining page height below the header + filter controls (using a flexible layout) so the first screen shows as many rows as possible.
 
-FL14. The filter-control area second row MUST include an IP visibility toggle button at the far right:
+FL14. The filter-control area first row MUST include an IP visibility toggle button between the manual-refresh button and the filter-expansion toggle:
 
 - The button MUST be a square icon button using an eye/eye-off glyph.
 - Initial state MUST be "hidden".
@@ -573,6 +575,8 @@ Hovering a `client_gone` row MUST show `error_code`, `error_message`, and `error
 FL37. Automatic updates MUST be enabled when the logs page mounts. While automatic updates are enabled, the logs page MUST auto-refresh the newest page so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
 
 FL37b. The logs filter toolbar MUST provide a localized toggle for automatic updates. Disabling automatic updates MUST close or suppress the request-log SSE subscription, stop the three-second fallback poll, and disable request-log revalidation triggered by window focus or network reconnection. The explicit manual-refresh action MUST remain enabled. Enabling automatic updates MUST immediately revalidate the current request-log page and the newest request-log page, then resume the SSE lifecycle defined in FL48. This toggle state is page-local and MUST reset to enabled after the logs page unmounts and mounts again.
+
+FL37c. The automatic-update toggle MUST render as a square icon-only button. It MUST show the radio-tower icon while enabled and the disconnected icon while disabled. Its localized accessible name and title MUST describe the action that the next activation performs.
 
 FL37a. When SWR revalidation replaces `loadedLogs` with server-fetched data (initial load, focus revalidation, reconnect revalidation, resync, or polling), the frontend MUST preserve any SSE-delivered `pending` rows that are not yet represented in the server response. Specifically: rows with `status = "pending"` whose `id` is absent from the server data AND whose `request_id` (when non-null) is absent from the server data MUST be re-prepended to the merged result. This prevents SSE-only pending items (which are never persisted to the database per RL1a-1) from being silently dropped by SWR cache replacement.
 

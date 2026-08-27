@@ -15,6 +15,8 @@ import {
   Gauge,
   Boxes,
   Code2,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -105,11 +107,15 @@ function NavLink({
 
 function Sidebar({
   onNavigate,
+  onCollapse,
+  onExpand,
   layoutId = "nav-active",
   disableLayoutAnimation = false,
   collapsed = false,
 }: {
   onNavigate?: () => void;
+  onCollapse?: () => void;
+  onExpand?: () => void;
   layoutId?: string;
   disableLayoutAnimation?: boolean;
   collapsed?: boolean;
@@ -145,28 +151,72 @@ function Sidebar({
         transition={{ duration: 0.2 }}
         className={cn("flex h-full flex-col p-3", collapsed ? "items-center" : "")}
       >
-        <Link
-          to="/dashboard"
-          className={cn(
-            "group flex items-center rounded-lg transition-colors hover:bg-accent/50",
-            collapsed ? "justify-center p-2" : "gap-3 px-2.5 py-2.5"
-          )}
-        >
-          <motion.div
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            transition={springs.snappy}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background shadow-sm"
-          >
-            <MonoizeLogo className="h-full w-full" />
-          </motion.div>
-          {!collapsed && (
-            <div className="flex flex-col leading-none">
-              <span className="font-display text-sm font-semibold tracking-tight">Monoize</span>
-              <span className="mt-0.5 text-xs text-muted-foreground">Console</span>
-            </div>
-          )}
-        </Link>
+        {collapsed ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="group size-10 p-1"
+                aria-label={t("nav.expandSidebar")}
+                aria-expanded={false}
+                onClick={onExpand}
+              >
+                <span className="relative flex size-8 items-center justify-center rounded-lg bg-foreground text-background shadow-sm">
+                  <MonoizeLogo className="absolute inset-0 !size-full transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0" />
+                  <PanelLeftOpen
+                    data-icon="inline-start"
+                    className="opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+                  />
+                </span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              {t("nav.expandSidebar")}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Link
+              to="/dashboard"
+              className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2.5 py-2.5 transition-colors hover:bg-accent/50"
+            >
+              <motion.div
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                transition={springs.snappy}
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background shadow-sm"
+              >
+                <MonoizeLogo className="size-full" />
+              </motion.div>
+              <div className="flex min-w-0 flex-col leading-none">
+                <span className="truncate font-display text-sm font-semibold tracking-tight">Monoize</span>
+                <span className="mt-0.5 truncate text-xs text-muted-foreground">Console</span>
+              </div>
+            </Link>
+            {onCollapse && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0"
+                    aria-label={t("nav.collapseSidebar")}
+                    aria-expanded={true}
+                    onClick={onCollapse}
+                  >
+                    <PanelLeftClose data-icon="inline-start" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>
+                  {t("nav.collapseSidebar")}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        )}
 
         <Separator className="my-3" />
 
@@ -218,6 +268,7 @@ export function DashboardLayout() {
   const { user, loading } = useAuth();
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
 
   if (loading) {
     return (
@@ -256,14 +307,20 @@ export function DashboardLayout() {
         </SheetContent>
       </Sheet>
 
-      {/* Desktop sidebar: full-bleed, responsive collapse */}
-      <aside className="hidden h-dvh shrink-0 border-r lg:block lg:w-16 xl:w-64">
-        {/* Collapsed sidebar at lg, expanded at xl */}
-        <div className="hidden h-full lg:block xl:hidden">
-          <Sidebar collapsed layoutId="nav-active-collapsed" />
-        </div>
-        <div className="hidden h-full xl:block">
-          <Sidebar />
+      {/* Desktop sidebar: full-bleed, user-controlled collapse */}
+      <aside
+        className={cn(
+          "hidden h-dvh shrink-0 overflow-hidden border-r transition-[width] duration-200 ease-out lg:block",
+          desktopSidebarCollapsed ? "w-16" : "w-64"
+        )}
+      >
+        <div className="h-full">
+          <Sidebar
+            collapsed={desktopSidebarCollapsed}
+            onCollapse={() => setDesktopSidebarCollapsed(true)}
+            onExpand={() => setDesktopSidebarCollapsed(false)}
+            layoutId={desktopSidebarCollapsed ? "nav-active-collapsed" : "nav-active"}
+          />
         </div>
       </aside>
 
