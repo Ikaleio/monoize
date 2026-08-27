@@ -28,6 +28,7 @@ import {
 import {
   Tooltip,
   TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { springs } from "@/components/ui/motion";
@@ -199,21 +200,23 @@ export function OrdersTab() {
                       <OrderStatusBadge status={order.status} />
                     </td>
                     <td className="px-4 py-2.5">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="font-mono text-xs text-muted-foreground">
-                            {order.id.slice(0, 8)}
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <span className="font-mono">{order.id}</span>
-                          {order.error_code && (
-                            <span className="ml-2 text-destructive">
-                              {order.error_code}
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {order.id.slice(0, 8)}
                             </span>
-                          )}
-                        </TooltipContent>
-                      </Tooltip>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <span className="font-mono">{order.id}</span>
+                            {order.error_code && (
+                              <span className="ml-2 text-destructive">
+                                {order.error_code}
+                              </span>
+                            )}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <Button
