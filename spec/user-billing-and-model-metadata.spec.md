@@ -250,7 +250,7 @@ M1. Server MUST persist model metadata in table `model_metadata_records`.
 
 M2. Primary key MUST be `model_id`.
 
-M3. After migration step `m20260901_000048_model_prices_cutover`
+M3. After migration step `m20260901_000049_model_prices_cutover`
 (`model-pricing.spec.md` §12.2), the table contains exactly:
 
 - `model_id: TEXT`

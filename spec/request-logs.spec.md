@@ -388,7 +388,7 @@ RL-S11. Expired-row cleanup defined in RL-S9 MUST also execute periodically in a
 
 RL-S12. Migration `m20260824_000040_drop_request_log_visible_tps` MUST drop columns `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, and `tps_mode` from `request_logs` on SQLite and PostgreSQL. Each drop MUST be a no-op when that column is already absent, so running the up migration twice succeeds and leaves the same schema. The migration MUST NOT modify any other column, row, or index. The down migration MUST be a no-op because dropped visible-TPS values cannot be reconstructed.
 
-RL-S13. Migration `m20260901_000049_request_logs_pending_status_index` MUST create the RL-S2a-1 partial index `idx_request_logs_status_pending` on `request_logs (status)` with predicate `status = 'pending'` on SQLite and PostgreSQL, using `IF NOT EXISTS` so running the up migration twice succeeds. The down migration MUST drop the index with `IF EXISTS`.
+RL-S13. Migration `m20260826_000047_request_logs_pending_status_index` MUST create the RL-S2a-1 partial index `idx_request_logs_status_pending` on `request_logs (status)` with predicate `status = 'pending'` on SQLite and PostgreSQL, using `IF NOT EXISTS` so running the up migration twice succeeds. The down migration MUST drop the index with `IF EXISTS`. This version name MUST remain the name shipped in v1.6.4.
 
 ## 5. Frontend display
 

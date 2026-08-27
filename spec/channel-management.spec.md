@@ -8,7 +8,7 @@
 - Compatibility rule: this migration has no legacy API compatibility. Removed fields MUST NOT be accepted.
 - Billing transition: the former Channel flags `allow_missing_usage` and
   `allow_unpriced_server_tools` are removed by migration step
-  `m20260901_000048_model_prices_cutover` (`model-pricing.spec.md` §12.2). This file
+  `m20260901_000049_model_prices_cutover` (`model-pricing.spec.md` §12.2). This file
   describes the post-cutover contract. Until that step ships, the stored columns and
   the pre-deprecation behavior remain in the legacy engine only.
 

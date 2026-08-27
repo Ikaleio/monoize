@@ -1,4 +1,4 @@
-//! Integration tests for `m20260901_000048_model_prices_cutover`
+//! Integration tests for `m20260901_000049_model_prices_cutover`
 //! (`model-pricing.spec.md` MP-M3..MP-M6).
 
 use monoize::migration::Migrator;
@@ -15,7 +15,7 @@ async fn connect() -> DatabaseConnection {
 async fn migrate_to_pre_cutover(db: &DatabaseConnection) {
     let cutover_index = Migrator::migrations()
         .iter()
-        .position(|migration| migration.name() == "m20260901_000048_model_prices_cutover")
+        .position(|migration| migration.name() == "m20260901_000049_model_prices_cutover")
         .expect("cutover migration is registered") as u32;
     Migrator::up(db, Some(cutover_index))
         .await
@@ -26,7 +26,7 @@ fn cutover_and_later_migration_count() -> u32 {
     let migrations = Migrator::migrations();
     let cutover_index = migrations
         .iter()
-        .position(|migration| migration.name() == "m20260901_000048_model_prices_cutover")
+        .position(|migration| migration.name() == "m20260901_000049_model_prices_cutover")
         .expect("cutover migration is registered");
     (migrations.len() - cutover_index) as u32
 }

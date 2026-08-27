@@ -12,7 +12,7 @@
   governed by `model-pricing.spec.md`. The former Billing Profiles and Advanced Rates
   tabs, the `billing_rate_records` CRUD endpoints, and the pricing-profile pattern
   endpoints do not exist in this model; migration step
-  `m20260901_000048_model_prices_cutover` removes their storage
+  `m20260901_000049_model_prices_cutover` removes their storage
   (`model-pricing.spec.md` §12.2).
 
 ## 1. Data Model
