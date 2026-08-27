@@ -4,11 +4,24 @@ import { CloudDownload, Eye, Play, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldTitle,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -82,7 +95,7 @@ function runStatusBadge(run: PriceSyncRun | undefined, t: (key: string, fallback
 export function UpstreamSyncTab() {
   const { t } = useTranslation();
   const { data: runs = [], isLoading: runsLoading, mutate: refreshRuns } = usePriceSyncRuns();
-  const { data: settings } = useSettings();
+  const { data: settings, isLoading: settingsLoading } = useSettings();
   const [preview, setPreview] = useState<PriceSyncPreview | null>(null);
   const [busySource, setBusySource] = useState<string | null>(null);
   const [metadataSyncing, setMetadataSyncing] = useState(false);
@@ -91,6 +104,7 @@ export function UpstreamSyncTab() {
   const [tokenTouched, setTokenTouched] = useState(false);
   const [connectionDirty, setConnectionDirty] = useState(false);
   const [savingConnection, setSavingConnection] = useState(false);
+  const [savingAutoSync, setSavingAutoSync] = useState(false);
 
   useEffect(() => {
     if (!connectionDirty && settings) {
@@ -190,8 +204,66 @@ export function UpstreamSyncTab() {
     }
   };
 
+  const setAutoSyncEnabled = async (enabled: boolean) => {
+    if (!settings) return;
+    setSavingAutoSync(true);
+    try {
+      await updateSettingsOptimistic(
+        { ...settings, price_sync_auto_enabled: enabled },
+        (error) =>
+          toast.error(t("modelPricing.sync.autoSaveFailed", "Failed to update automatic sync"), {
+            description: error.message,
+          })
+      );
+    } catch {
+      return;
+    } finally {
+      setSavingAutoSync(false);
+    }
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
+      {settingsLoading || !settings ? (
+        <Skeleton className="h-32 w-full" />
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {t("modelPricing.sync.autoTitle", "Automatic price sync")}
+            </CardTitle>
+            <CardDescription>
+              {t(
+                "modelPricing.sync.autoDescription",
+                "Runs at startup and every 24 hours. Each cycle syncs models.dev first, then uses OpenRouter to fill missing models."
+              )}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Field orientation="horizontal" data-disabled={savingAutoSync || undefined}>
+              <FieldContent>
+                <FieldTitle>
+                  {settings.price_sync_auto_enabled
+                    ? t("modelPricing.sync.autoEnabled", "Automatic sync enabled")
+                    : t("modelPricing.sync.autoDisabled", "Automatic sync disabled")}
+                </FieldTitle>
+                <FieldDescription>
+                  {t(
+                    "modelPricing.sync.autoToggleDescription",
+                    "Enabling this setting starts a cycle within 60 seconds."
+                  )}
+                </FieldDescription>
+              </FieldContent>
+              <Switch
+                aria-label={t("modelPricing.sync.autoTitle", "Automatic price sync")}
+                checked={settings.price_sync_auto_enabled}
+                disabled={savingAutoSync}
+                onCheckedChange={(checked) => void setAutoSyncEnabled(checked)}
+              />
+            </Field>
+          </CardContent>
+        </Card>
+      )}
       <div className="grid gap-4 lg:grid-cols-3">
         {SOURCES.map((source) => {
           const lastRun = latestRunBySource.get(source.id);

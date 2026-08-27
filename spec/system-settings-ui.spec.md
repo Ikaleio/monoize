@@ -39,10 +39,10 @@ denominated in MiB: the displayed value is `round(bytes / 1048576)`, and an inpu
 `request-capture-dumps.spec.md` RCD-C4). The field description MUST state that `0`
 disables the budget.
 
-SSU-3. `tool_prices`, `price_sync_new_api_base_url`, `price_sync_new_api_token`, and
-`updated_at` are not edited on this page. Save MUST pass them through unchanged from
-the current draft object. `tool_prices` and the price-sync settings are edited on the
-`/dashboard/models` page (`model-pricing.spec.md` §11).
+SSU-3. `tool_prices`, `price_sync_auto_enabled`, `price_sync_new_api_base_url`,
+`price_sync_new_api_token`, and `updated_at` are not edited on this page. Save MUST pass
+them through unchanged from the current draft object. `tool_prices` and the price-sync
+settings are edited on the `/dashboard/models` page (`model-pricing.spec.md` §11).
 
 SSU-3a. `allow_free_when_unpriced` and `allow_free_when_missing_usage` render as two
 switch rows in the `health` category. Each description MUST state the fail-closed

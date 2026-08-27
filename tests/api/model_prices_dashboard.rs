@@ -54,6 +54,42 @@ async fn json_call(
 }
 
 #[tokio::test]
+async fn automatic_price_sync_setting_defaults_enabled_and_updates() {
+    let ctx = setup().await;
+    let admin = admin_header(&ctx, "admin_mp_auto_sync").await;
+
+    let (status, settings) = json_call(
+        &ctx,
+        MpMethod::GET,
+        "/api/dashboard/settings",
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::OK);
+    assert_eq!(settings["price_sync_auto_enabled"], json!(true));
+
+    let (status, updated) = json_call(
+        &ctx,
+        MpMethod::PUT,
+        "/api/dashboard/settings",
+        Some(&admin),
+        Some(json!({ "price_sync_auto_enabled": false })),
+    )
+    .await;
+    assert_eq!(status, MpStatusCode::OK);
+    assert_eq!(updated["price_sync_auto_enabled"], json!(false));
+    assert!(
+        !ctx.state
+            .settings_store
+            .get_all()
+            .await
+            .unwrap()
+            .price_sync_auto_enabled
+    );
+}
+
+#[tokio::test]
 async fn model_price_crud_lifecycle() {
     let ctx = setup().await;
     let admin = admin_header(&ctx, "admin_mp_crud").await;

@@ -54,6 +54,7 @@ pub struct UpdateSettingsRequest {
     pub allow_free_when_unpriced: Option<bool>,
     pub allow_free_when_missing_usage: Option<bool>,
     pub tool_prices: Option<serde_json::Value>,
+    pub price_sync_auto_enabled: Option<bool>,
     pub price_sync_new_api_base_url: Option<String>,
     pub price_sync_new_api_token: Option<String>,
 }
@@ -261,6 +262,9 @@ pub async fn update_settings(
             AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
         })?;
         settings.tool_prices = v;
+    }
+    if let Some(v) = body.price_sync_auto_enabled {
+        settings.price_sync_auto_enabled = v;
     }
     if let Some(v) = body.price_sync_new_api_base_url {
         settings.price_sync_new_api_base_url = v.trim().to_string();

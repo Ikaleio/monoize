@@ -5,9 +5,12 @@
 //! without writes (MP-A6); apply performs the ownership-scoped upsert with
 //! field locks and an audit run row (MP-Y13..MP-Y16).
 
-use crate::model_price_store::{ModelPriceRecord, ModelPriceStore, PriceSyncRun};
+use crate::model_price_store::{
+    ModelPriceRecord, ModelPriceStore, PriceSyncRun, validate_billing_expr,
+};
 use crate::model_registry_store::{
     group_models_dev_variants, has_positive_input_variant, normalize_model_id, pick_best_variant,
+    usd_cost_string,
 };
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -15,6 +18,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// MP-Y3: fetch timeout for every sync source.
@@ -25,6 +31,15 @@ const MAX_CHANGE_ENTRIES: usize = 500;
 
 /// MP-D8: `detail_json` byte bound after serialization.
 const MAX_DETAIL_BYTES: usize = 262_144;
+
+const AUTO_SYNC_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const AUTO_SYNC_SETTING_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+static APPLY_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+fn apply_lock() -> &'static tokio::sync::Mutex<()> {
+    APPLY_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncSource {
@@ -64,6 +79,7 @@ pub struct SyncCandidate {
     pub cache_write_usd_per_1m: Option<String>,
     pub reasoning_usd_per_1m: Option<String>,
     pub per_request_usd: Option<String>,
+    pub billing_expr: Option<Value>,
     pub raw_json: Value,
 }
 
@@ -178,19 +194,146 @@ pub fn map_models_dev(root: &Value) -> Result<Vec<SyncCandidate>, String> {
         for variant in variants {
             providers_map.insert(variant.provider_id.clone(), variant.raw.clone());
         }
+        let billing_expr = models_dev_billing_expr(model_id, winner)?;
         candidates.push(SyncCandidate {
             model_id: model_id.clone(),
-            billing_mode: "per_token".to_string(),
+            billing_mode: if billing_expr.is_some() {
+                "tiered_expr".to_string()
+            } else {
+                "per_token".to_string()
+            },
             input_usd_per_1m: winner.cost_input.clone(),
             output_usd_per_1m: winner.cost_output.clone(),
             cache_read_usd_per_1m: winner.cost_cache_read.clone(),
             cache_write_usd_per_1m: winner.cost_cache_write.clone(),
             reasoning_usd_per_1m: winner.cost_reasoning.clone(),
             per_request_usd: None,
+            billing_expr,
             raw_json: json!({ "providers": Value::Object(providers_map) }),
         });
     }
     Ok(candidates)
+}
+
+fn put_tier_price(
+    target: &mut serde_json::Map<String, Value>,
+    target_field: &str,
+    raw: Option<&Value>,
+    model_id: &str,
+) -> Result<(), String> {
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let value = usd_cost_string(raw).ok_or_else(|| {
+        format!("parse_failed: models.dev model {model_id} has invalid tier price {target_field}")
+    })?;
+    target.insert(target_field.to_string(), Value::String(value));
+    Ok(())
+}
+
+fn models_dev_billing_expr(
+    model_id: &str,
+    winner: &crate::model_registry_store::SyncProviderVariant,
+) -> Result<Option<Value>, String> {
+    let Some(cost) = winner.raw.get("cost").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let source_tiers = match cost.get("tiers") {
+        None => return Ok(None),
+        Some(Value::Array(tiers)) => tiers,
+        Some(_) => {
+            return Err(format!(
+                "parse_failed: models.dev model {model_id} cost.tiers is not an array"
+            ));
+        }
+    };
+    if source_tiers.is_empty() {
+        return Ok(None);
+    }
+    if source_tiers.len() > 7 {
+        return Err(format!(
+            "parse_failed: models.dev model {model_id} has more than 7 cost tiers"
+        ));
+    }
+
+    let mut parsed = Vec::with_capacity(source_tiers.len());
+    for (index, source_tier) in source_tiers.iter().enumerate() {
+        let tier = source_tier.as_object().ok_or_else(|| {
+            format!(
+                "parse_failed: models.dev model {model_id} cost.tiers[{index}] is not an object"
+            )
+        })?;
+        let selector = tier.get("tier").and_then(Value::as_object).ok_or_else(|| {
+            format!("parse_failed: models.dev model {model_id} cost.tiers[{index}].tier is not an object")
+        })?;
+        if selector.get("type").and_then(Value::as_str) != Some("context") {
+            return Err(format!(
+                "parse_failed: models.dev model {model_id} cost.tiers[{index}] is not a context tier"
+            ));
+        }
+        let size = selector
+            .get("size")
+            .and_then(Value::as_u64)
+            .filter(|size| *size >= 1)
+            .ok_or_else(|| {
+                format!(
+                    "parse_failed: models.dev model {model_id} cost.tiers[{index}].tier.size is not an integer >= 1"
+                )
+            })?;
+        let mut mapped = serde_json::Map::new();
+        for (source, target) in [
+            ("input", "input_usd_per_1m"),
+            ("output", "output_usd_per_1m"),
+            ("cache_read", "cache_read_usd_per_1m"),
+            ("cache_write", "cache_write_usd_per_1m"),
+            ("reasoning", "reasoning_usd_per_1m"),
+        ] {
+            put_tier_price(&mut mapped, target, tier.get(source), model_id)?;
+        }
+        if !mapped.contains_key("input_usd_per_1m") {
+            return Err(format!(
+                "parse_failed: models.dev model {model_id} cost.tiers[{index}] has no input price"
+            ));
+        }
+        parsed.push((size, mapped));
+    }
+    parsed.sort_by_key(|(size, _)| *size);
+    if parsed.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(format!(
+            "parse_failed: models.dev model {model_id} has duplicate cost tier sizes"
+        ));
+    }
+
+    let mut base = serde_json::Map::new();
+    base.insert(
+        "when_input_tokens_lte".to_string(),
+        Value::from(parsed[0].0),
+    );
+    for (field, value) in [
+        ("input_usd_per_1m", winner.cost_input.as_ref()),
+        ("output_usd_per_1m", winner.cost_output.as_ref()),
+        ("cache_read_usd_per_1m", winner.cost_cache_read.as_ref()),
+        ("cache_write_usd_per_1m", winner.cost_cache_write.as_ref()),
+        ("reasoning_usd_per_1m", winner.cost_reasoning.as_ref()),
+    ] {
+        if let Some(value) = value {
+            base.insert(field.to_string(), Value::String(value.clone()));
+        }
+    }
+
+    let mut tiers = vec![Value::Object(base)];
+    for index in 0..parsed.len() {
+        let mut tier = parsed[index].1.clone();
+        if let Some((next_size, _)) = parsed.get(index + 1) {
+            tier.insert("when_input_tokens_lte".to_string(), Value::from(*next_size));
+        }
+        tiers.push(Value::Object(tier));
+    }
+    let expr = json!({ "tiers": tiers });
+    validate_billing_expr(&expr).map_err(|error| {
+        format!("parse_failed: models.dev model {model_id} produced invalid billing_expr: {error}")
+    })?;
+    Ok(Some(expr))
 }
 
 fn per_token_to_per_1m(value: &Value) -> Option<String> {
@@ -259,6 +402,7 @@ pub fn map_openrouter(root: &Value) -> Result<Vec<SyncCandidate>, String> {
                 .and_then(per_token_to_per_1m),
             reasoning_usd_per_1m: None,
             per_request_usd: None,
+            billing_expr: None,
             raw_json: entry.clone(),
         };
         match by_model.entry(model_id) {
@@ -348,6 +492,7 @@ pub fn map_new_api(root: &Value) -> Result<Vec<SyncCandidate>, String> {
                     cache_write_usd_per_1m: None,
                     reasoning_usd_per_1m: None,
                     per_request_usd: None,
+                    billing_expr: None,
                     raw_json: entry.clone(),
                 }
             }
@@ -367,6 +512,7 @@ pub fn map_new_api(root: &Value) -> Result<Vec<SyncCandidate>, String> {
                     cache_write_usd_per_1m: None,
                     reasoning_usd_per_1m: None,
                     per_request_usd: Some(trunc9(price)),
+                    billing_expr: None,
                     raw_json: entry.clone(),
                 }
             }
@@ -377,13 +523,13 @@ pub fn map_new_api(root: &Value) -> Result<Vec<SyncCandidate>, String> {
     Ok(by_model.into_values().collect())
 }
 
-fn merge_field(
+fn merge_field<T: Clone + PartialEq>(
     field: &str,
     locked: &[String],
-    stored: &Option<String>,
-    incoming: &Option<String>,
+    stored: &Option<T>,
+    incoming: &Option<T>,
     changed: &mut Vec<String>,
-) -> Option<String> {
+) -> Option<T> {
     if locked.iter().any(|lock| lock == field) {
         return stored.clone();
     }
@@ -442,6 +588,9 @@ pub fn compute_sync_plan(
                         fields.push(name.to_string());
                     }
                 }
+                if candidate.billing_expr.is_some() {
+                    fields.push("billing_expr".to_string());
+                }
                 plan.inserted += 1;
                 push_change(
                     &mut plan,
@@ -461,7 +610,7 @@ pub fn compute_sync_plan(
                     cache_write_1h_usd_per_1m: None,
                     reasoning_usd_per_1m: candidate.reasoning_usd_per_1m,
                     per_request_usd: candidate.per_request_usd,
-                    billing_expr: None,
+                    billing_expr: candidate.billing_expr,
                     source: source.as_str().to_string(),
                     locked_fields: Vec::new(),
                     raw_json: candidate.raw_json,
@@ -541,7 +690,13 @@ pub fn compute_sync_plan(
                         &candidate.per_request_usd,
                         &mut changed,
                     ),
-                    billing_expr: stored.billing_expr.clone(),
+                    billing_expr: merge_field(
+                        "billing_expr",
+                        locked,
+                        &stored.billing_expr,
+                        &candidate.billing_expr,
+                        &mut changed,
+                    ),
                     source: source.as_str().to_string(),
                     locked_fields: stored.locked_fields.clone(),
                     raw_json: candidate.raw_json,
@@ -626,6 +781,7 @@ pub async fn apply_sync_run(
     source: SyncSource,
     new_api_config: (&str, &str),
 ) -> Result<PriceSyncRun, (PriceSyncRun, String)> {
+    let _apply_guard = apply_lock().lock().await;
     let run = store
         .insert_sync_run(source.as_str())
         .await
@@ -689,6 +845,99 @@ pub async fn apply_sync_run(
     }
 }
 
+fn auto_sync_is_due(
+    enabled: bool,
+    was_enabled: bool,
+    elapsed_since_cycle_start: Option<Duration>,
+) -> bool {
+    enabled
+        && (!was_enabled
+            || elapsed_since_cycle_start.is_none_or(|elapsed| elapsed >= AUTO_SYNC_INTERVAL))
+}
+
+async fn run_auto_sync_cycle(
+    http: &reqwest::Client,
+    store: &ModelPriceStore,
+    registry: &crate::model_registry_store::ModelRegistryStore,
+) {
+    let models_dev = apply_sync_run(http, store, registry, SyncSource::ModelsDev, ("", "")).await;
+    match models_dev {
+        Ok(run) => {
+            tracing::info!(
+                source = "models_dev",
+                inserted = run.inserted,
+                updated = run.updated,
+                skipped = run.skipped,
+                deleted = run.deleted,
+                "automatic price sync completed"
+            );
+        }
+        Err((_, error)) => {
+            tracing::warn!(
+                source = "models_dev",
+                error = %error,
+                "automatic price sync failed; skipping OpenRouter"
+            );
+            return;
+        }
+    }
+
+    match apply_sync_run(http, store, registry, SyncSource::OpenRouter, ("", "")).await {
+        Ok(run) => {
+            tracing::info!(
+                source = "openrouter",
+                inserted = run.inserted,
+                updated = run.updated,
+                skipped = run.skipped,
+                deleted = run.deleted,
+                "automatic price sync completed"
+            );
+        }
+        Err((_, error)) => {
+            tracing::warn!(
+                source = "openrouter",
+                error = %error,
+                "automatic price sync failed"
+            );
+        }
+    }
+}
+
+/// MP-Y19..MP-Y24: starts the primary-only automatic sync scheduler.
+pub fn spawn_auto_sync_scheduler(
+    http: reqwest::Client,
+    store: ModelPriceStore,
+    registry: crate::model_registry_store::ModelRegistryStore,
+    settings: crate::settings::SettingsStore,
+    shutdown: Arc<AtomicBool>,
+) {
+    tokio::spawn(async move {
+        let mut was_enabled = false;
+        let mut last_cycle_started: Option<tokio::time::Instant> = None;
+        loop {
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
+            match settings.get_all().await {
+                Ok(current) => {
+                    let elapsed = last_cycle_started.map(|started| started.elapsed());
+                    let due =
+                        auto_sync_is_due(current.price_sync_auto_enabled, was_enabled, elapsed);
+                    was_enabled = current.price_sync_auto_enabled;
+                    if due {
+                        last_cycle_started = Some(tokio::time::Instant::now());
+                        run_auto_sync_cycle(&http, &store, &registry).await;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "automatic price sync could not read settings");
+                }
+            }
+            tokio::time::sleep(AUTO_SYNC_SETTING_POLL_INTERVAL).await;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -735,6 +984,57 @@ mod tests {
         // MP-Y6: every variant lands in raw_json.providers.
         assert!(candidate.raw_json["providers"]["openai"].is_object());
         assert!(candidate.raw_json["providers"]["reseller"].is_object());
+    }
+
+    #[test]
+    fn models_dev_mapping_converts_gpt_and_claude_context_tiers() {
+        let root = json!({
+            "openai": { "models": { "gpt-5.6": {
+                "cost": {
+                    "input": 4, "output": 20, "cache_read": 0.4, "cache_write": 5,
+                    "tiers": [{
+                        "input": 8, "output": 30, "cache_read": 0.8, "cache_write": 10,
+                        "tier": { "type": "context", "size": 272000 }
+                    }]
+                }
+            } } },
+            "anthropic": { "models": { "claude-sonnet-4-6": {
+                "cost": {
+                    "input": 3, "output": 15, "cache_read": 0.3, "cache_write": 3.75,
+                    "tiers": [{
+                        "input": 6, "output": 22.5, "cache_read": 0.6, "cache_write": 7.5,
+                        "tier": { "type": "context", "size": 200000 }
+                    }]
+                }
+            } } }
+        });
+
+        let candidates = map_models_dev(&root).unwrap();
+        for (model_id, bound, base_input, tier_input) in [
+            ("gpt-5.6", 272000, "4", "8"),
+            ("claude-sonnet-4-6", 200000, "3", "6"),
+        ] {
+            let candidate = candidates
+                .iter()
+                .find(|candidate| candidate.model_id == model_id)
+                .unwrap();
+            assert_eq!(candidate.billing_mode, "tiered_expr");
+            let tiers = candidate.billing_expr.as_ref().unwrap()["tiers"]
+                .as_array()
+                .unwrap();
+            assert_eq!(tiers.len(), 2);
+            assert_eq!(tiers[0]["when_input_tokens_lte"], json!(bound));
+            assert_eq!(tiers[0]["input_usd_per_1m"], json!(base_input));
+            assert_eq!(tiers[1]["input_usd_per_1m"], json!(tier_input));
+            assert!(tiers[1].get("when_input_tokens_lte").is_none());
+        }
+
+        let plan = compute_sync_plan(SyncSource::ModelsDev, &[], candidates);
+        assert!(
+            plan.writes
+                .iter()
+                .all(|row| { row.billing_mode == "tiered_expr" && row.billing_expr.is_some() })
+        );
     }
 
     #[test]
@@ -843,6 +1143,7 @@ mod tests {
                 cache_write_usd_per_1m: None,
                 reasoning_usd_per_1m: None,
                 per_request_usd: None,
+                billing_expr: None,
                 raw_json: json!({}),
             },
             SyncCandidate {
@@ -854,6 +1155,7 @@ mod tests {
                 cache_write_usd_per_1m: None,
                 reasoning_usd_per_1m: None,
                 per_request_usd: None,
+                billing_expr: None,
                 raw_json: json!({ "fresh": true }),
             },
             SyncCandidate {
@@ -865,6 +1167,7 @@ mod tests {
                 cache_write_usd_per_1m: None,
                 reasoning_usd_per_1m: None,
                 per_request_usd: None,
+                billing_expr: None,
                 raw_json: json!({}),
             },
         ];
@@ -903,6 +1206,7 @@ mod tests {
             cache_write_usd_per_1m: None,
             reasoning_usd_per_1m: None,
             per_request_usd: None,
+            billing_expr: None,
             raw_json: json!({ "refreshed": true }),
         }];
         let plan = compute_sync_plan(SyncSource::OpenRouter, &existing, candidates);
@@ -910,5 +1214,21 @@ mod tests {
         assert_eq!(plan.skipped, 1);
         assert_eq!(plan.writes.len(), 1);
         assert_eq!(plan.writes[0].raw_json, json!({ "refreshed": true }));
+    }
+
+    #[test]
+    fn automatic_sync_runs_on_enable_and_after_24_hours() {
+        assert!(!auto_sync_is_due(false, false, None));
+        assert!(auto_sync_is_due(true, false, None));
+        assert!(!auto_sync_is_due(
+            true,
+            true,
+            Some(Duration::from_secs(24 * 60 * 60 - 1))
+        ));
+        assert!(auto_sync_is_due(
+            true,
+            true,
+            Some(Duration::from_secs(24 * 60 * 60))
+        ));
     }
 }

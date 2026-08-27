@@ -77,6 +77,9 @@ pub struct SystemSettings {
     pub price_sync_new_api_base_url: String,
     #[serde(default)]
     pub price_sync_new_api_token: String,
+    /// MP-Y19..MP-Y24: primary-side daily models.dev and OpenRouter sync.
+    #[serde(default = "default_true")]
+    pub price_sync_auto_enabled: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -316,6 +319,7 @@ impl Default for SystemSettings {
             tool_prices: default_tool_prices(),
             price_sync_new_api_base_url: String::new(),
             price_sync_new_api_token: String::new(),
+            price_sync_auto_enabled: true,
             updated_at: Utc::now(),
         }
     }
@@ -522,6 +526,11 @@ impl SettingsStore {
         self.set_if_not_exists(
             "price_sync_new_api_token",
             &defaults.price_sync_new_api_token,
+        )
+        .await?;
+        self.set_if_not_exists(
+            "price_sync_auto_enabled",
+            &defaults.price_sync_auto_enabled.to_string(),
         )
         .await?;
         self.set_if_not_exists(
@@ -839,6 +848,9 @@ impl SettingsStore {
                 "price_sync_new_api_token" => {
                     settings.price_sync_new_api_token = row.value;
                 }
+                "price_sync_auto_enabled" => {
+                    settings.price_sync_auto_enabled = row.value.parse().unwrap_or(true);
+                }
                 _ => {}
             }
         }
@@ -1017,6 +1029,10 @@ impl SettingsStore {
             (
                 "price_sync_new_api_token",
                 settings.price_sync_new_api_token.clone(),
+            ),
+            (
+                "price_sync_auto_enabled",
+                settings.price_sync_auto_enabled.to_string(),
             ),
         ];
 

@@ -970,12 +970,36 @@ fn models_dev_variant_for_dashboard(value: &Value) -> Value {
     else {
         return value;
     };
-    for price in cost.values_mut() {
-        if let Value::Number(number) = price {
+    stringify_models_dev_cost(cost);
+    value
+}
+
+fn stringify_models_dev_cost(cost: &mut serde_json::Map<String, Value>) {
+    for field in [
+        "input",
+        "output",
+        "reasoning",
+        "cache_read",
+        "cache_write",
+        "input_audio",
+        "output_audio",
+    ] {
+        if let Some(price) = cost.get_mut(field)
+            && let Value::Number(number) = price
+        {
             *price = Value::String(number.to_string());
         }
     }
-    value
+    if let Some(Value::Array(tiers)) = cost.get_mut("tiers") {
+        for tier in tiers {
+            if let Some(tier) = tier.as_object_mut() {
+                stringify_models_dev_cost(tier);
+            }
+        }
+    }
+    if let Some(Value::Object(legacy)) = cost.get_mut("context_over_200k") {
+        stringify_models_dev_cost(legacy);
+    }
 }
 
 fn value_to_i64(value: &Value) -> Option<i64> {
@@ -1077,11 +1101,23 @@ mod tests {
     #[test]
     fn dashboard_raw_variant_keeps_costs_as_decimal_strings() {
         let variant = models_dev_variant_for_dashboard(&json!({
-            "cost": { "input": 1.001, "output": 2 },
+            "cost": {
+                "input": 1.001,
+                "output": 2,
+                "tiers": [{
+                    "input": 2.002,
+                    "output": 3,
+                    "tier": { "type": "context", "size": 200000 }
+                }],
+                "context_over_200k": { "input": 2.002, "output": 3 }
+            },
             "limit": { "context": 128000 }
         }));
         assert_eq!(variant["cost"]["input"], json!("1.001"));
         assert_eq!(variant["cost"]["output"], json!("2"));
+        assert_eq!(variant["cost"]["tiers"][0]["input"], json!("2.002"));
+        assert_eq!(variant["cost"]["tiers"][0]["tier"]["size"], json!(200000));
+        assert_eq!(variant["cost"]["context_over_200k"]["output"], json!("3"));
         assert_eq!(variant["limit"]["context"], json!(128000));
     }
 

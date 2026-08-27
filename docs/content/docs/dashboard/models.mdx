@@ -51,6 +51,11 @@ By default, Monoize rejects an unpriced model or a response without required Usa
 
 Sync does not change a locked field. Sync does not delete rows that you created manually.
 
+Automatic sync is enabled by default. Monoize starts one cycle at process startup and
+then runs every 24 hours. Each cycle syncs Models.dev first. It then uses OpenRouter to
+add models that Models.dev does not provide. Disable **Automatic price sync** to stop
+future cycles.
+
 ## Model listing
 
 `GET /v1/models` returns the logical models available to the calling API key. The result reflects key model restrictions and group membership.

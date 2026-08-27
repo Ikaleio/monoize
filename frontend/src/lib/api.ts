@@ -257,6 +257,7 @@ export interface SystemSettings {
   allow_free_when_unpriced: boolean;
   allow_free_when_missing_usage: boolean;
   tool_prices: Record<string, ToolPriceEntry>;
+  price_sync_auto_enabled: boolean;
   price_sync_new_api_base_url: string;
   price_sync_new_api_token: string;
   updated_at: string;
