@@ -123,10 +123,10 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
 ];
 
 #[derive(Clone, Copy)]
-struct LockedUserBalance {
-    balance: i128,
-    unlimited: bool,
-    enabled: bool,
+pub(crate) struct LockedUserBalance {
+    pub(crate) balance: i128,
+    pub(crate) unlimited: bool,
+    pub(crate) enabled: bool,
 }
 
 struct LockedApiKeyBalance {
@@ -1806,7 +1806,7 @@ impl UserStore {
         Ok(())
     }
 
-    async fn lock_user_balance_tx(
+    pub(crate) async fn lock_user_balance_tx(
         &self,
         tx: &DatabaseTransaction,
         user_id: &str,

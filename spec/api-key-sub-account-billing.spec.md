@@ -224,6 +224,8 @@ SA-MIG3. Data migration for existing keys:
 | `sub_account_debt_transfer`    | negative  | Negative sub-account balance transferred to user          |
 | `sub_account_delete_settlement`| either    | Signed sub-account balance consolidated before key delete |
 | `admin_sub_account_adjustment` | positive  | Admin direct increase of API key sub-account balance     |
+| `recharge`                     | positive  | Wallet credited by a succeeded recharge order (`recharge-system.spec.md` RC-L2) |
+| `recharge_refund`              | negative  | Wallet debited by a refunded recharge order (`recharge-system.spec.md` RC-L2) |
 
 ## 9. Error codes
 

@@ -474,6 +474,25 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             }
         });
     }
+    if !is_replica {
+        // RC-X1/RC-X2 (`recharge-system.spec.md`): primary-only expiry sweeper;
+        // the first tick runs when background tasks start.
+        let sweeper_store = user_store.clone();
+        let shutdown = background_shutdown.clone();
+        tokio::spawn(async move {
+            let interval =
+                std::time::Duration::from_secs(crate::recharge::tick_interval_secs());
+            loop {
+                if shutdown.load(Ordering::Acquire) {
+                    break;
+                }
+                if let Err(error) = sweeper_store.expire_due_recharge_orders().await {
+                    tracing::warn!(error, "recharge expiry sweep failed");
+                }
+                sleep(interval).await;
+            }
+        });
+    }
 
     let probe_store = monoize_store.clone();
     let probe_http_clients = http_clients.clone();
@@ -1957,5 +1976,42 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/admin/overview",
             get(crate::dashboard_handlers::get_admin_overview),
+        )
+        .route(
+            "/dashboard/recharge/channels",
+            get(crate::recharge::handlers::list_recharge_channels),
+        )
+        .route(
+            "/dashboard/recharge/orders",
+            get(crate::recharge::handlers::list_recharge_orders)
+                .post(crate::recharge::handlers::create_recharge_order),
+        )
+        .route(
+            "/dashboard/recharge/orders/{order_id}",
+            get(crate::recharge::handlers::get_recharge_order),
+        )
+        .route(
+            "/dashboard/recharge/orders/{order_id}/refund",
+            post(crate::recharge::handlers::refund_recharge_order),
+        )
+        .route(
+            "/dashboard/ledger",
+            get(crate::recharge::handlers::list_ledger),
+        )
+        .route(
+            "/dashboard/payment-channels",
+            get(crate::recharge::handlers::list_payment_channels)
+                .post(crate::recharge::handlers::create_payment_channel),
+        )
+        .route(
+            "/dashboard/payment-channels/{channel_id}",
+            put(crate::recharge::handlers::update_payment_channel)
+                .delete(crate::recharge::handlers::delete_payment_channel),
+        )
+        // RC-N1: outside session auth; adapter signatures are the only
+        // authenticity source. Mounted here so replicas never expose it.
+        .route(
+            "/pay/notify/{payment_channel_id}",
+            get(crate::recharge::handlers::pay_notify).post(crate::recharge::handlers::pay_notify),
         )
 }

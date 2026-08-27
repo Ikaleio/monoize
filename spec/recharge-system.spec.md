@@ -23,22 +23,20 @@
 
 ### 0.1 Implementation status
 
-RC-S1. This specification is accepted design. It is NOT implemented. No rule in
-this file is in force until migration step `m20260910_000050_recharge_system`
-(§14) ships. Until that step ships, Monoize has no recharge surface: no payment
-routes exist, and `billing_ledger` contains no `recharge` or `recharge_refund`
-rows.
+RC-S1. This specification is implemented. Migration step
+`m20260910_000050_recharge_system` (§14) ships with this file, and every rule
+in this file is in force.
 
-RC-S2. The implementation change that ships §14 MUST also land these companion
+RC-S2. The implementation change that ships §14 also landed these companion
 spec amendments in the same change, so specs and code stay aligned:
 
-1. `dashboard-ui-layout.spec.md` DL5 gains `/dashboard/wallet` between
+1. `dashboard-ui-layout.spec.md` DL5 gained `/dashboard/wallet` between
    `/dashboard/tokens` and `/dashboard/logs`.
-2. `dashboard-ui-layout.spec.md` DL6 gains `/dashboard/payments` immediately
+2. `dashboard-ui-layout.spec.md` DL6 gained `/dashboard/payments` immediately
    after `/dashboard/plans`.
-3. `api-key-sub-account-billing.spec.md` ledger-kind table gains the two rows
+3. `api-key-sub-account-billing.spec.md` ledger-kind table gained the two rows
    defined by RC-L2.
-4. `system-settings-ui.spec.md` gains the `recharge_public_origin` field (§4).
+4. `system-settings-ui.spec.md` gained the `recharge_public_origin` field (§4).
 
 ## 1. Concepts and units
 

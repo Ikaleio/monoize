@@ -95,8 +95,12 @@ DL5. Sidebar main navigation (always visible to authenticated users) MUST includ
 
 - `/dashboard`
 - `/dashboard/tokens`
+- `/dashboard/wallet`
 - `/dashboard/logs`
 - `/dashboard/playground`
+
+The `/dashboard/wallet` page content is governed by
+`spec/recharge-system.spec.md` §10.
 
 DL6. Sidebar admin navigation group (visible only when user role is `admin` or `super_admin`) MUST include exactly:
 
@@ -105,12 +109,15 @@ DL6. Sidebar admin navigation group (visible only when user role is `admin` or `
 - `/dashboard/models`
 - `/dashboard/custom-transforms`
 - `/dashboard/plans`
+- `/dashboard/payments`
 - `/dashboard/users`
 - `/dashboard/groups`
 - `/dashboard/admin-settings`
 
 The `/dashboard/custom-transforms` page content is governed by
 `spec/custom-js-transforms.spec.md` §11 (CJS-UI-1 through CJS-UI-7).
+The `/dashboard/payments` page content is governed by
+`spec/recharge-system.spec.md` §11.
 
 DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pane vertical scrolling:
 

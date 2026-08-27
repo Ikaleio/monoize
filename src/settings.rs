@@ -80,6 +80,9 @@ pub struct SystemSettings {
     /// MP-Y19..MP-Y24: primary-side daily models.dev and OpenRouter sync.
     #[serde(default = "default_true")]
     pub price_sync_auto_enabled: bool,
+    /// RC-G1 (`recharge-system.spec.md`): public origin for payment callbacks.
+    #[serde(default)]
+    pub recharge_public_origin: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -320,9 +323,35 @@ impl Default for SystemSettings {
             price_sync_new_api_base_url: String::new(),
             price_sync_new_api_token: String::new(),
             price_sync_auto_enabled: true,
+            recharge_public_origin: String::new(),
             updated_at: Utc::now(),
         }
     }
+}
+
+/// RC-G1: a non-empty `recharge_public_origin` must be an absolute `http` or
+/// `https` origin with no path, query, fragment, userinfo, or trailing slash.
+pub fn validate_recharge_public_origin(raw: &str) -> Result<(), String> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let error =
+        || "recharge_public_origin must be an http(s) origin without path or trailing slash"
+            .to_string();
+    let rest = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("http://"))
+        .ok_or_else(error)?;
+    if rest.is_empty()
+        || rest.contains('/')
+        || rest.contains('?')
+        || rest.contains('#')
+        || rest.contains('@')
+        || rest.contains(char::is_whitespace)
+    {
+        return Err(error());
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -533,6 +562,8 @@ impl SettingsStore {
             &defaults.price_sync_auto_enabled.to_string(),
         )
         .await?;
+        self.set_if_not_exists("recharge_public_origin", &defaults.recharge_public_origin)
+            .await?;
         self.set_if_not_exists(
             "dashboard_performance_group_ids",
             &serde_json::to_string(&defaults.dashboard_performance_group_ids)
@@ -851,6 +882,9 @@ impl SettingsStore {
                 "price_sync_auto_enabled" => {
                     settings.price_sync_auto_enabled = row.value.parse().unwrap_or(true);
                 }
+                "recharge_public_origin" => {
+                    settings.recharge_public_origin = row.value.trim().to_string();
+                }
                 _ => {}
             }
         }
@@ -1033,6 +1067,10 @@ impl SettingsStore {
             (
                 "price_sync_auto_enabled",
                 settings.price_sync_auto_enabled.to_string(),
+            ),
+            (
+                "recharge_public_origin",
+                settings.recharge_public_origin.clone(),
             ),
         ];
 

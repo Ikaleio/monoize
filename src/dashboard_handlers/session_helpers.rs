@@ -78,7 +78,7 @@ pub(crate) async fn get_current_user(headers: &HeaderMap, state: &AppState) -> A
     Ok(user)
 }
 
-pub(super) async fn require_admin(headers: &HeaderMap, state: &AppState) -> AppResult<User> {
+pub(crate) async fn require_admin(headers: &HeaderMap, state: &AppState) -> AppResult<User> {
     let user = get_current_user(headers, state).await?;
     if !user.role.can_manage_users() {
         return Err(AppError::new(

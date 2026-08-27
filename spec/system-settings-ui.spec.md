@@ -20,7 +20,7 @@ these stable ids, in this order:
 
 | # | id | title key | fields |
 |---|----|-----------|--------|
-| 01 | `site` | `settings.siteInformation` | `site_name`, `site_description`, `api_base_url` |
+| 01 | `site` | `settings.siteInformation` | `site_name`, `site_description`, `api_base_url`, `recharge_public_origin` |
 | 02 | `access` | `settings.accessControl` | `registration_enabled`, `default_user_role`, `captcha_enabled`, `session_ttl_days`, `api_key_max_per_user` |
 | 03 | `codex` | `settings.codexModels` | `codex_model_ids` |
 | 04 | `suffix` | `settings.reasoningSuffixMap` | `reasoning_suffix_map` |
@@ -47,6 +47,11 @@ settings are edited on the `/dashboard/models` page (`model-pricing.spec.md` §1
 SSU-3a. `allow_free_when_unpriced` and `allow_free_when_missing_usage` render as two
 switch rows in the `health` category. Each description MUST state the fail-closed
 default (`false`) and the effect defined by `model-pricing.spec.md` §7.
+
+SSU-3b. `recharge_public_origin` renders as one text input in the `site` category.
+Its value constraint, default, and rejection behavior are defined by
+`recharge-system.spec.md` RC-G1; the field description MUST state that order
+creation requires a non-empty value.
 
 ## 2. Horizontal category rail
 

@@ -24,6 +24,7 @@ pub mod monoize_routing;
 pub mod node_config;
 pub mod presets;
 pub mod price_sync;
+pub mod recharge;
 pub mod replica;
 pub mod request_capture;
 pub mod settings;
