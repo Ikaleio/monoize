@@ -838,7 +838,10 @@ PR6b. Responses streaming phase preservation:
 
 PR6c. Final Responses-stream object synthesis:
 
-- If the upstream Responses stream terminates without one of `response.completed`, `response.incomplete`, `response.failed`, or `response.cancelled`, Monoize MUST emit a terminal canonical `Error`. EOF or `[DONE]` without a protocol terminal response event MUST NOT synthesize `status="completed"` or `finish_reason="stop"`.
+- If the upstream Responses stream terminates without one of `response.completed`, `response.incomplete`, `response.failed`, or `response.cancelled` and without an accepted completed terminal snapshot, Monoize MUST emit a terminal canonical `Error`. EOF or `[DONE]` without either terminal form MUST NOT synthesize `status="completed"` or `finish_reason="stop"`.
+- If an upstream SSE data object contains a `response` object with `status = "completed"`, Monoize MUST accept that object as a completed terminal snapshot even when the SSE event name is not `response.completed`.
+- Monoize MUST process an accepted completed terminal snapshot with the same output merge, usage extraction, and downstream terminal encoding used for a `response.completed` event.
+- An upstream EOF, `[DONE]`, accumulated delta sequence, or `response.status` value other than `completed` MUST NOT activate this fallback.
 - If the upstream Responses stream already emitted `response.completed`, Monoize MUST forward at most one corresponding `ResponseDone`. Monoize MUST NOT emit a duplicate synthetic terminal response after forwarding the upstream terminal response.
 - `response.incomplete`, `response.failed`, and `response.cancelled` MUST preserve the exact response status, `incomplete_details`, and `error` state in `ResponseDone.extra_body` or a stricter typed equivalent. A downstream Responses encoder MUST emit the matching terminal event name and MUST NOT rewrite it to `response.completed`.
 - The synthesized or forwarded `ResponseDone.output` value MUST be the complete terminal flat node sequence.
