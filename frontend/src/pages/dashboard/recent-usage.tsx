@@ -12,7 +12,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { motion, transitions } from "@/components/ui/motion";
+import { cn } from "@/lib/utils";
 import type { RequestLog } from "@/lib/api";
+import type { UsageWindow } from "@/lib/usage-window";
+import { TimeWindowControl } from "./time-window-control";
 import {
   aggregateRecentUsage,
   formatCacheHit,
@@ -23,10 +26,21 @@ import {
 
 interface RecentUsagePanelProps {
   logs: RequestLog[];
+  /** First load with no data for the panel (DH-12a): show skeleton. */
   loading?: boolean;
+  /** Fetching another window while previous data is shown (DH-12b): dim only. */
+  pending?: boolean;
+  window: UsageWindow;
+  onWindowChange: (window: UsageWindow) => void;
 }
 
-export function RecentUsagePanel({ logs, loading }: RecentUsagePanelProps) {
+export function RecentUsagePanel({
+  logs,
+  loading,
+  pending,
+  window,
+  onWindowChange,
+}: RecentUsagePanelProps) {
   const { t } = useTranslation();
   const rows = useMemo(() => aggregateRecentUsage(logs), [logs]);
 
@@ -38,18 +52,26 @@ export function RecentUsagePanel({ logs, loading }: RecentUsagePanelProps) {
       className="h-full min-h-0"
     >
       <Card className="flex h-full min-h-0 flex-col">
-        <CardHeader className="flex flex-col gap-1 p-4 pb-2">
-          <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
-            {t("dashboard.recentUsage.title", "Recent Usage")}
-          </CardTitle>
-          <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
-            {t(
-              "dashboard.recentUsage.subtitle",
-              "Token usage, cache hit rate, and charges by model"
-            )}
-          </p>
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 p-4 pb-2">
+          <div className="flex min-w-0 flex-col gap-1">
+            <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
+              {t("dashboard.recentUsage.title", "Recent Usage")}
+            </CardTitle>
+            <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
+              {t(
+                "dashboard.recentUsage.subtitle",
+                "Token usage, cache hit rate, and charges by model"
+              )}
+            </p>
+          </div>
+          <TimeWindowControl value={window} onChange={onWindowChange} />
         </CardHeader>
-        <CardContent className="min-h-0 flex-1 p-4 pt-2">
+        <CardContent
+          className={cn(
+            "min-h-0 flex-1 p-4 pt-2 transition-opacity",
+            pending && "opacity-60"
+          )}
+        >
           {loading ? (
             <div className="flex flex-col gap-2">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -61,7 +83,7 @@ export function RecentUsagePanel({ logs, loading }: RecentUsagePanelProps) {
               title={t("dashboard.recentUsage.empty", "No recent usage")}
               description={t(
                 "dashboard.recentUsage.emptyDescription",
-                "Model usage appears here after you make API requests."
+                "No usage recorded in the selected time range."
               )}
               className="py-8"
             />

@@ -119,14 +119,14 @@
 		},
 		"usage": {
 			"title": "Your Usage",
-			"subtitle": "Your usage per day across this billing period",
-			"groupBy": "Group By",
-			"groupByModel": "Group By: Model",
+			"subtitle": "Cumulative token usage for the selected time range",
+			"timeRange": "Time range",
 			"cumulativeTokens": "Cumulative Tokens",
-			"dailyBreakdown": "Daily breakdown",
-			"dailyTotal": "Daily total",
+			"periodBreakdown": "Period breakdown",
+			"periodTotal": "Period total",
 			"cumulativeTotal": "Cumulative total",
 			"today": "Today",
+			"now": "Now",
 			"legend": "Model legend"
 		},
 		"recentUsage": {
@@ -137,7 +137,7 @@
 			"cacheHit": "Cache hit",
 			"charge": "Charge",
 			"empty": "No recent usage",
-			"emptyDescription": "Model usage appears here after you make API requests."
+			"emptyDescription": "No usage recorded in the selected time range."
 		},
 		"api": {
 			"chatCompletions": "Chat Completions",
