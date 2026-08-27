@@ -113,7 +113,9 @@ export function UsageChartPanel({
               >
                 <AreaChart
                   data={series.rows}
-                  margin={{ top: 12, right: 8, left: 0, bottom: 0 }}
+                  // Right margin leaves room for the Now/Today marker label,
+                  // which is centered on the final bucket's reference line.
+                  margin={{ top: 12, right: 20, left: 0, bottom: 0 }}
                 >
                   <CartesianGrid vertical={false} strokeDasharray="3 3" />
                   <XAxis
