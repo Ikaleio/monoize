@@ -1218,8 +1218,8 @@ pub(super) async fn call_streaming_image_capable_upstream(
         let path = "/v1/images/edits".to_string();
         let fields = urp::encode::openai_image::multipart_fields(req_attempt, &req_attempt.model)
             .map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-            })?;
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        })?;
         let capture_multipart_request = capture_active.then(|| {
             crate::request_capture::multipart_capture_object_from_upstream_fields(&fields)
         });

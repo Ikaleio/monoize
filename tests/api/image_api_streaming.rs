@@ -1,6 +1,7 @@
 use super::*;
 
-const TEST_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
+const TEST_PNG_B64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
 
 async fn sse_post_json(
     ctx: &TestContext,
@@ -22,7 +23,11 @@ async fn sse_post_json(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (status, content_type, String::from_utf8_lossy(&bytes).to_string())
+    (
+        status,
+        content_type,
+        String::from_utf8_lossy(&bytes).to_string(),
+    )
 }
 
 fn edit_multipart_body(boundary: &str, text_fields: &[(&str, &str)], with_mask: bool) -> Vec<u8> {
@@ -83,7 +88,11 @@ async fn sse_post_multipart(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (status, content_type, String::from_utf8_lossy(&bytes).to_string())
+    (
+        status,
+        content_type,
+        String::from_utf8_lossy(&bytes).to_string(),
+    )
 }
 
 fn captured_upstream_body(bodies: &CapturedBodies, endpoint: &str) -> Value {
@@ -129,11 +138,7 @@ async fn image_edits_stream_field_validation_rejects_bad_shapes() {
 
     let body = edit_multipart_body(
         boundary,
-        &[
-            ("model", "gpt-5-mini"),
-            ("prompt", "edit"),
-            ("stream", "1"),
-        ],
+        &[("model", "gpt-5-mini"), ("prompt", "edit"), ("stream", "1")],
         false,
     );
     let (status, _, text) = sse_post_multipart(&ctx, boundary, body).await;
@@ -209,23 +214,35 @@ async fn image_generations_stream_emits_partials_completed_and_done_via_openai_i
     assert_eq!(events.len(), 3, "{text}");
     for (index, (event, data)) in events.iter().take(2).enumerate() {
         assert_eq!(event, "image_generation.partial_image", "{text}");
-        assert_eq!(data["type"].as_str(), Some("image_generation.partial_image"));
+        assert_eq!(
+            data["type"].as_str(),
+            Some("image_generation.partial_image")
+        );
         assert_eq!(data["b64_json"].as_str(), Some(TEST_PNG_B64));
         assert_eq!(data["partial_image_index"].as_u64(), Some(index as u64));
         assert_eq!(data["size"].as_str(), Some("256x256"));
         assert_eq!(data["output_format"].as_str(), Some("png"));
-        assert!(data["created_at"].is_i64() || data["created_at"].is_u64(), "{data}");
+        assert!(
+            data["created_at"].is_i64() || data["created_at"].is_u64(),
+            "{data}"
+        );
     }
     let (completed_event, completed) = &events[2];
     assert_eq!(completed_event, "image_generation.completed", "{text}");
-    assert_eq!(completed["type"].as_str(), Some("image_generation.completed"));
+    assert_eq!(
+        completed["type"].as_str(),
+        Some("image_generation.completed")
+    );
     assert_eq!(completed["b64_json"].as_str(), Some(TEST_PNG_B64));
     assert_eq!(completed["usage"]["input_tokens"].as_u64(), Some(1));
     assert_eq!(completed["usage"]["output_tokens"].as_u64(), Some(1));
     assert_eq!(completed["usage"]["total_tokens"].as_u64(), Some(2));
 
     let upstream = captured_upstream_body(&captured_bodies, "image_generations");
-    assert_eq!(upstream["model"].as_str(), Some("gpt-image-gen-stream-test"));
+    assert_eq!(
+        upstream["model"].as_str(),
+        Some("gpt-image-gen-stream-test")
+    );
     assert_eq!(upstream["prompt"].as_str(), Some("draw a cat"));
     assert_eq!(upstream["stream"].as_bool(), Some(true));
     assert_eq!(upstream["partial_images"].as_u64(), Some(2));
@@ -285,7 +302,10 @@ async fn image_edits_stream_uses_multipart_with_mask_and_stream_field() {
         .collect();
     assert_eq!(events.len(), 2, "{text}");
     assert_eq!(events[0].0, "image_edit.partial_image", "{text}");
-    assert_eq!(events[0].1["type"].as_str(), Some("image_edit.partial_image"));
+    assert_eq!(
+        events[0].1["type"].as_str(),
+        Some("image_edit.partial_image")
+    );
     assert_eq!(events[0].1["b64_json"].as_str(), Some(TEST_PNG_B64));
     assert_eq!(events[0].1["partial_image_index"].as_u64(), Some(0));
     assert_eq!(events[1].0, "image_edit.completed", "{text}");
@@ -293,7 +313,10 @@ async fn image_edits_stream_uses_multipart_with_mask_and_stream_field() {
     assert_eq!(events[1].1["usage"]["total_tokens"].as_u64(), Some(2));
 
     let upstream = captured_upstream_body(&captured_bodies, "image_edits");
-    assert_eq!(upstream["model"].as_str(), Some("gpt-image-edit-stream-test"));
+    assert_eq!(
+        upstream["model"].as_str(),
+        Some("gpt-image-edit-stream-test")
+    );
     assert_eq!(upstream["prompt"].as_str(), Some("edit this image"));
     assert_eq!(upstream["stream"].as_str(), Some("true"));
     assert_eq!(upstream["partial_images"].as_str(), Some("1"));
@@ -428,6 +451,7 @@ async fn image_generations_stream_surfaces_partials_from_responses_upstream() {
         })
         .await
         .expect("create responses image stream provider");
+    seed_test_model_pricing(&ctx.state, &["gpt-image-resp-stream-test"]).await;
 
     let (status, _, text) = sse_post_json(
         &ctx,
@@ -553,7 +577,11 @@ async fn image_edits_nonstream_collects_forced_upstream_stream_as_multipart() {
         "{content_type:?}"
     );
     let v: Value = serde_json::from_str(&text).expect("image response JSON");
-    assert_eq!(v["data"][0]["b64_json"].as_str(), Some(TEST_PNG_B64), "{text}");
+    assert_eq!(
+        v["data"][0]["b64_json"].as_str(),
+        Some(TEST_PNG_B64),
+        "{text}"
+    );
 
     let upstream = captured_upstream_body(&captured_bodies, "image_edits");
     assert_eq!(upstream["stream"].as_str(), Some("true"), "{upstream}");
