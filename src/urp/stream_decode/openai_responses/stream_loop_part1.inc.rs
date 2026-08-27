@@ -89,10 +89,19 @@ pub(crate) async fn stream_responses_to_urp_events(
             record_stream_response_id(&runtime_metrics, native_response_id).await;
         }
         let native_start_event = matches!(ev.event.as_str(), "response.created" | "response.in_progress");
-        let terminal_response_event = matches!(
+        let canonical_terminal_response_event = matches!(
             ev.event.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
         );
+        let recovered_completed_response = !canonical_terminal_response_event
+            && data_val
+                .get("response")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("status"))
+                .and_then(Value::as_str)
+                == Some("completed");
+        let terminal_response_event =
+            canonical_terminal_response_event || recovered_completed_response;
         let output_event = ev.event.starts_with("response.output_")
             || ev.event.starts_with("response.content_part.")
             || ev.event.starts_with("response.reasoning_")
@@ -479,13 +488,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
-        let is_terminal_response_event = matches!(
-            ev.event.as_str(),
-            "response.completed"
-                | "response.incomplete"
-                | "response.failed"
-                | "response.cancelled"
-        );
+        let is_terminal_response_event = terminal_response_event;
         let stream_events = if is_terminal_response_event {
             for (output_index, output_state) in &index_state.output_state_by_index {
                 if let Some(item_id) = output_state
@@ -550,7 +553,11 @@ pub(crate) async fn stream_responses_to_urp_events(
             let _ = tx.send(stream_event).await;
         }
         if response_done_sent && is_terminal_response_event {
-            terminal_event_name = Some(ev.event);
+            terminal_event_name = Some(if recovered_completed_response {
+                "response.completed".to_string()
+            } else {
+                ev.event
+            });
             break;
         }
     }
