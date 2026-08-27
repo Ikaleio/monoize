@@ -351,8 +351,10 @@ export function ApiKeysPage() {
   const { user: currentUser } = useAuth();
   const { data: keys = [], isLoading } = useApiKeys();
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
+  const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
+  // /transforms/registry is admin-only; skip it for non-admins to avoid a 403 loop.
   const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
-    useTransformRegistry();
+    useTransformRegistry(undefined, { isPaused: () => !canManageSystem });
   const apiKeyTransformRegistry = useMemo(
     () => transformRegistry.filter((item) => item.supported_scopes.includes("api_key")),
     [transformRegistry]
@@ -388,7 +390,6 @@ export function ApiKeysPage() {
   const [updating, setUpdating] = useState(false);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreated | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
 
   const resetCreateForm = () => {
     setNewKeyName("");

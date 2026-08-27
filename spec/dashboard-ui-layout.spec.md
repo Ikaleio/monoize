@@ -401,6 +401,11 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 - The editor MUST show only transforms whose `supported_scopes` includes `api_key`.
 - The editor MUST continue filtering by `supported_phases` within the API-key-scoped subset.
 - Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
+- The transform-editor UI MUST fetch the registry only when the session user role is
+  `admin` or `super_admin`; for role `user` the client MUST NOT issue the registry
+  request at all (the endpoint is admin-only per SAC-1/SAC-3), and the transform editor
+  MUST render as unavailable (no registry options) instead of polling and failing with
+  HTTP 403.
 
 AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_inject_content_field` for response-phase rules.
 
