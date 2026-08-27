@@ -217,15 +217,18 @@ export function removeTrailingV1(baseUrl: string): string {
 	return baseUrl.trim().replace(/\/v1\/?$/i, '')
 }
 
+// MP-R3: a model counts as priced when its enabled `model_prices` row is
+// complete for its billing mode.
 export function buildPricedModelIdSet(modelPrices: ModelPriceRecord[]): Set<string> {
 	return new Set(
 		modelPrices
-			.filter(item => item.enabled && (
-				(item.billing_mode === 'per_token' && item.input_usd_per_1m != null)
-				|| (item.billing_mode === 'per_request' && item.per_request_usd != null)
-				|| (item.billing_mode === 'tiered_expr' && item.billing_expr != null)
-			))
-			.map(item => item.model_id)
+			.filter(record => {
+				if (!record.enabled) return false
+				if (record.billing_mode === 'per_token') return record.input_usd_per_1m != null
+				if (record.billing_mode === 'per_request') return record.per_request_usd != null
+				return record.billing_expr != null
+			})
+			.map(record => record.model_id)
 	)
 }
 

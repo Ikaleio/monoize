@@ -47,50 +47,6 @@ async fn retain_decoded_terminal_output(
     Ok(())
 }
 
-fn validate_attempt_server_tool_meters(
-    _auth: &crate::auth::AuthResult,
-    _attempt: &MonoizeAttempt,
-    _usage: &urp::Usage,
-    _output: Option<&[urp::Node]>,
-    _response_service_tier: Option<&str>,
-) -> AppResult<()> {
-    // MP-T8 makes missing or non-authoritative tool prices fail-open. The
-    // settlement breakdown records every ignored class.
-    Ok(())
-}
-
-async fn validate_terminal_server_tool_meters(
-    mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
-    tx: mpsc::Sender<urp::UrpStreamEvent>,
-    auth: crate::auth::AuthResult,
-    attempt: MonoizeAttempt,
-) -> AppResult<()> {
-    while let Some(event) = rx.recv().await {
-        if let urp::UrpStreamEvent::ResponseDone {
-            usage: Some(usage),
-            output,
-            extra_body,
-            ..
-        } = &event
-        {
-            let response_service_tier = extra_body
-                .get("service_tier")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|tier| !tier.is_empty());
-            validate_attempt_server_tool_meters(
-                &auth,
-                &attempt,
-                usage,
-                Some(output),
-                response_service_tier,
-            )?;
-        }
-        let _ = tx.send(event).await;
-    }
-    Ok(())
-}
-
 /// RCD-D10a (`request-capture-dumps.spec.md`): between response transforms
 /// and downstream encoding, retain the terminal `response_done` event as the
 /// URP non-stream reconstruction `{finish_reason?, usage?, output, ...extra}`.
@@ -541,41 +497,27 @@ pub(super) async fn forward_stream_typed(
                                 break 'channel_attempts;
                             }
                         };
-                        let missing_usage_substituted =
-                            substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
-                        if resp.usage.is_none() {
-                            let err = AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "upstream_usage_required",
-                                "upstream response did not include billable usage",
-                            );
-                            let same_channel_retryable = is_same_channel_retryable_app_error(&err);
-                            let passive_failure_class = same_channel_retryable
-                                .then(|| classify_retryable_app_failure(&err));
-                            record_upstream_attempt_failure(
-                                &state,
-                                &attempt,
-                                attempt_number,
-                                &err,
-                                passive_failure_class,
-                                &mut tried_providers,
-                                &mut execution_state,
-                            )
-                            .await;
-                            last_failed_attempt = Some(attempt.clone());
-                            if allow_same_channel_retry(
-                                &state,
-                                &attempt,
-                                &execution_state,
-                                channel_attempt + 1,
-                                passive_failure_class,
-                            )
-                            .await
-                            {
-                                maybe_sleep_before_channel_retry(&attempt).await;
-                                continue 'channel_attempts;
+                        // MP-F3: a fail-closed missing-usage billable success
+                        // rejects with 403 before the synthetic stream starts.
+                        if resp.usage.is_none() && missing_usage_rejects(&auth, &attempt) {
+                            let err = missing_usage_error();
+                            if let Some(session) = capture.session.as_ref() {
+                                session.persist_with_result(None, false).await;
                             }
-                            break 'channel_attempts;
+                            spawn_stream_attempt_error(
+                                &state,
+                                &auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                request_id.clone(),
+                                request_ip.clone(),
+                                None,
+                                &err,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers.clone(),
+                            );
+                            return Err(err);
                         }
                         mark_channel_success(&state, &attempt).await;
                         refresh_channel_affinity(&state, &attempt).await;
@@ -676,39 +618,6 @@ pub(super) async fn forward_stream_typed(
                         {
                             convert_assistant_images_to_markdown(&mut resp);
                         }
-                        if let Some(usage) = resp.usage.as_ref() {
-                            let response_service_tier = resp
-                                .extra_body
-                                .get("service_tier")
-                                .and_then(Value::as_str)
-                                .map(str::trim)
-                                .filter(|tier| !tier.is_empty());
-                            if let Err(err) = validate_attempt_server_tool_meters(
-                                &auth,
-                                &attempt,
-                                usage,
-                                Some(resp.output.as_slice()),
-                                response_service_tier,
-                            ) {
-                                if let Some(session) = capture.session.as_ref() {
-                                    session.persist_with_result(Some(usage), false).await;
-                                }
-                                spawn_stream_attempt_error(
-                                    &state,
-                                    &auth,
-                                    &attempt,
-                                    &logical_model,
-                                    started_at,
-                                    request_id.clone(),
-                                    request_ip.clone(),
-                                    None,
-                                    &err,
-                                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                                    tried_providers.clone(),
-                                );
-                                return Err(err);
-                            }
-                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -744,7 +653,6 @@ pub(super) async fn forward_stream_typed(
                                         &attempt_for_log,
                                         &logical_model_for_stream,
                                         &resp,
-                                        missing_usage_substituted,
                                         request_id_for_log.as_deref(),
                                     )
                                     .await
@@ -1049,9 +957,7 @@ pub(super) async fn forward_stream_typed(
                         let stream_future = async {
                             let (decoded_tx, decoded_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-                            let (metered_tx, metered_rx) =
-                                mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-                            let (validated_tx, validated_rx) =
+                            let (retained_tx, retained_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
                             let (transformed_tx, transformed_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
@@ -1078,22 +984,8 @@ pub(super) async fn forward_stream_typed(
                                 crate::request_capture::spawn_with_sse_capture(async move {
                                     retain_decoded_terminal_output(
                                         decoded_rx,
-                                        metered_tx,
+                                        retained_tx,
                                         terminal_output,
-                                    )
-                                    .await
-                                })
-                            };
-
-                            let meter_validation_handle = {
-                                let validation_auth = auth_for_log.clone();
-                                let validation_attempt = attempt_for_log.clone();
-                                crate::request_capture::spawn_with_sse_capture(async move {
-                                    validate_terminal_server_tool_meters(
-                                        metered_rx,
-                                        validated_tx,
-                                        validation_auth,
-                                        validation_attempt,
                                     )
                                     .await
                                 })
@@ -1108,7 +1000,7 @@ pub(super) async fn forward_stream_typed(
                                         });
                                     transform_urp_stream(
                                         &state_for_transform,
-                                        validated_rx,
+                                        retained_rx,
                                         transformed_tx,
                                         &provider_rules_for_transform,
                                         &global_rules_for_transform,
@@ -1157,13 +1049,11 @@ pub(super) async fn forward_stream_typed(
                             let (
                                 decode_result,
                                 retain_output_result,
-                                meter_validation_result,
                                 transform_result,
                                 encode_result,
                             ) = tokio::join!(
                                 decode_handle,
                                 retain_output_handle,
-                                meter_validation_handle,
                                 transform_handle,
                                 encode_handle
                             );
@@ -1181,13 +1071,6 @@ pub(super) async fn forward_stream_typed(
                                     ))
                                 })
                                 .and(retain_output_result.unwrap_or_else(|e| {
-                                    Err(AppError::new(
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        "task_panic",
-                                        e.to_string(),
-                                    ))
-                                }))
-                                .and(meter_validation_result.unwrap_or_else(|e| {
                                     Err(AppError::new(
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         "task_panic",
@@ -1230,20 +1113,23 @@ pub(super) async fn forward_stream_typed(
                             actual_upstream_usage,
                             usage,
                             is_estimated,
-                            missing_usage_substituted,
                             terminal_diagnostics,
                             response_id,
                             response_service_tier,
                         ) = {
                             let guard = runtime_metrics.lock().await;
                             let actual_upstream_usage = guard.usage.clone();
-                            let (usage, is_estimated, missing_usage_substituted) = match guard
-                                .usage
-                                .clone()
-                            {
-                                Some(u) => (Some(u), false, false),
-                                None if attempt_for_log.allow_free_when_missing_usage => {
-                                    (Some(urp::Usage::default()), false, true)
+                            // MP-F3: a pass-through stream without upstream
+                            // usage settles free under the effective
+                            // `allow_free_when_missing_usage` flag (or the
+                            // MP-F5 unpriced rule); otherwise it settles from
+                            // the byte estimate with `estimated = true`.
+                            let (usage, is_estimated) = match guard.usage.clone() {
+                                Some(u) => (Some(u), false),
+                                None if attempt_for_log.allow_free_when_missing_usage
+                                    || attempt_for_log.model_price.is_none() =>
+                                {
+                                    (None, false)
                                 }
                                 None => {
                                     let visible_output_bytes = guard
@@ -1265,7 +1151,6 @@ pub(super) async fn forward_stream_typed(
                                             extra_body: std::collections::HashMap::new(),
                                         }),
                                         true,
-                                        false,
                                     )
                                 }
                             };
@@ -1274,7 +1159,6 @@ pub(super) async fn forward_stream_typed(
                                 actual_upstream_usage,
                                 usage,
                                 is_estimated,
-                                missing_usage_substituted,
                                 guard.terminal.clone(),
                                 guard.response_id.clone(),
                                 guard.response_service_tier.clone(),
@@ -1466,16 +1350,19 @@ pub(super) async fn forward_stream_typed(
                             return;
                         }
 
-                        let usage_row = usage
-                            .as_ref()
-                            .expect("stream usage or a deterministic estimate must exist");
-                        let mut charge = match maybe_charge_stream_usage(
+                        let settled_usage = match usage.as_ref() {
+                            Some(u) if is_estimated => {
+                                crate::settlement::SettledUsage::Estimated(u)
+                            }
+                            Some(u) => crate::settlement::SettledUsage::Reported(u),
+                            None => crate::settlement::SettledUsage::MissingFree,
+                        };
+                        let charge = match maybe_charge_stream_usage(
                             &state_for_log,
                             &auth_for_log,
                             &attempt_for_log,
                             &model_for_log,
-                            usage_row,
-                            missing_usage_substituted,
+                            settled_usage,
                             &settled_output,
                             response_service_tier.as_deref(),
                             request_id_for_log.as_deref(),
@@ -1516,16 +1403,6 @@ pub(super) async fn forward_stream_typed(
                                 return;
                             }
                         };
-                        if is_estimated {
-                            if let Some(ref mut breakdown) = charge.billing_breakdown {
-                                if let Some(obj) = breakdown.as_object_mut() {
-                                    obj.insert(
-                                        "estimated".to_string(),
-                                        serde_json::Value::Bool(true),
-                                    );
-                                }
-                            }
-                        }
 
                         refresh_channel_affinity(&state_for_log, &attempt_for_log).await;
                         if attempt_for_log.provider_type == ProviderType::Responses

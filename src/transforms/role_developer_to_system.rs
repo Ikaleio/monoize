@@ -26,13 +26,22 @@ impl Transform for RoleDeveloperToSystemTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Role: developer to system"), ("zh", "角色：developer 转 system")]
+        &[
+            ("en", "Role: developer to system"),
+            ("zh", "角色：developer 转 system"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Rewrites developer-role ordinary nodes to the system role. Inverse of role_system_to_developer."),
-            ("zh", "将 developer 角色的普通节点改写为 system 角色。与 role_system_to_developer 互逆。"),
+            (
+                "en",
+                "Rewrites developer-role ordinary nodes to the system role. Inverse of role_system_to_developer.",
+            ),
+            (
+                "zh",
+                "将 developer 角色的普通节点改写为 system 角色。与 role_system_to_developer 互逆。",
+            ),
         ]
     }
 

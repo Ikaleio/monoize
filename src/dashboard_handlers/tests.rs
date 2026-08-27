@@ -2,7 +2,7 @@ use super::api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, CreateApiKeyRequest, UpdateApiKeyRequest,
 };
 use super::providers::{
-    build_models_list_url, provider_pricing_model,
+    build_models_list_url, channel_model_has_model_price, provider_pricing_model,
 };
 use super::users::{CreateUserRequest, UpdateUserRequest};
 use crate::dashboard_handlers::auth::UserResponse;
@@ -22,7 +22,7 @@ use crate::users::{
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[test]
 fn build_models_list_url_adds_v1_when_missing() {
@@ -67,6 +67,46 @@ fn provider_pricing_model_falls_back_to_logical_when_redirect_blank() {
         "gpt-5-logical"
     );
 }
+
+#[test]
+fn channel_model_pricing_status_checks_upstream_then_logical_key() {
+    let priced_keys = HashSet::from(["gpt-5-upstream".to_string(), "gpt-5-logical".to_string()]);
+    let suffixes = HashMap::new();
+
+    let redirected = MonoizeModelEntry {
+        redirect: Some("gpt-5-upstream".to_string()),
+        multiplier: crate::exact_decimal::Multiplier::ONE,
+    };
+    assert!(channel_model_has_model_price(
+        &priced_keys,
+        "anything",
+        &redirected,
+        &suffixes
+    ));
+
+    let logical_only = MonoizeModelEntry {
+        redirect: Some("unpriced-upstream".to_string()),
+        multiplier: crate::exact_decimal::Multiplier::ONE,
+    };
+    assert!(channel_model_has_model_price(
+        &priced_keys,
+        "gpt-5-logical",
+        &logical_only,
+        &suffixes
+    ));
+
+    let unpriced = MonoizeModelEntry {
+        redirect: None,
+        multiplier: crate::exact_decimal::Multiplier::ONE,
+    };
+    assert!(!channel_model_has_model_price(
+        &priced_keys,
+        "unpriced-model",
+        &unpriced,
+        &suffixes
+    ));
+}
+
 #[test]
 fn dashboard_create_provider_group_ids_default_to_empty() {
     let body: CreateMonoizeProviderInput = serde_json::from_value(json!({

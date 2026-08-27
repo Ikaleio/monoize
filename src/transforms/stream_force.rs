@@ -27,13 +27,22 @@ impl Transform for StreamForceTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Stream: force streaming mode"), ("zh", "流式：强制流式模式")]
+        &[
+            ("en", "Stream: force streaming mode"),
+            ("zh", "流式：强制流式模式"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Forces the upstream request stream flag to the configured enabled value."),
-            ("zh", "将上游请求的 stream 标志强制设置为配置的 enabled 值。"),
+            (
+                "en",
+                "Forces the upstream request stream flag to the configured enabled value.",
+            ),
+            (
+                "zh",
+                "将上游请求的 stream 标志强制设置为配置的 enabled 值。",
+            ),
         ]
     }
 

@@ -197,7 +197,8 @@ impl CustomTransformStore {
                 }),
             );
         }
-        self.snapshot.set(Arc::new(CustomTransformSnapshot { entries }));
+        self.snapshot
+            .set(Arc::new(CustomTransformSnapshot { entries }));
         Ok(())
     }
 
@@ -266,7 +267,9 @@ impl CustomTransformStore {
             .await;
         if let Err(error) = insert {
             let message = error.to_string();
-            if message.contains("UNIQUE") || message.contains("unique") || message.contains("duplicate")
+            if message.contains("UNIQUE")
+                || message.contains("unique")
+                || message.contains("duplicate")
             {
                 return Err(CustomTransformError::Exists);
             }
@@ -278,7 +281,9 @@ impl CustomTransformStore {
         txn.commit().await.map_err(CustomTransformError::internal)?;
         drop(write_guard);
 
-        self.reload().await.map_err(CustomTransformError::Internal)?;
+        self.reload()
+            .await
+            .map_err(CustomTransformError::Internal)?;
         self.get(&validated.meta.id)
             .await
             .map_err(CustomTransformError::Internal)?
@@ -316,14 +321,23 @@ impl CustomTransformStore {
                     "description",
                     sea_orm::Value::from(validated.meta.description.clone()),
                 ),
-                ("author", sea_orm::Value::from(validated.meta.author.clone())),
+                (
+                    "author",
+                    sea_orm::Value::from(validated.meta.author.clone()),
+                ),
                 ("source", sea_orm::Value::from(source.clone())),
                 (
                     "visibility",
                     sea_orm::Value::from(validated.meta.visibility.as_str()),
                 ),
-                ("phases", sea_orm::Value::from(validated.phases_json.clone())),
-                ("scopes", sea_orm::Value::from(validated.scopes_json.clone())),
+                (
+                    "phases",
+                    sea_orm::Value::from(validated.phases_json.clone()),
+                ),
+                (
+                    "scopes",
+                    sea_orm::Value::from(validated.scopes_json.clone()),
+                ),
                 (
                     "config_schema",
                     sea_orm::Value::from(validated.schema_json.clone()),
@@ -359,7 +373,9 @@ impl CustomTransformStore {
             .await
             .map_err(CustomTransformError::internal)?;
         if result.rows_affected() == 0 {
-            txn.rollback().await.map_err(CustomTransformError::internal)?;
+            txn.rollback()
+                .await
+                .map_err(CustomTransformError::internal)?;
             return Err(CustomTransformError::NotFound);
         }
         crate::settings::bump_config_epoch_in_tx(&self.db, &txn)
@@ -368,7 +384,9 @@ impl CustomTransformStore {
         txn.commit().await.map_err(CustomTransformError::internal)?;
         drop(write_guard);
 
-        self.reload().await.map_err(CustomTransformError::Internal)?;
+        self.reload()
+            .await
+            .map_err(CustomTransformError::Internal)?;
         self.get(id)
             .await
             .map_err(CustomTransformError::Internal)?
@@ -393,7 +411,9 @@ impl CustomTransformStore {
             .await
             .map_err(CustomTransformError::internal)?;
         if result.rows_affected() == 0 {
-            txn.rollback().await.map_err(CustomTransformError::internal)?;
+            txn.rollback()
+                .await
+                .map_err(CustomTransformError::internal)?;
             return Err(CustomTransformError::NotFound);
         }
         crate::settings::bump_config_epoch_in_tx(&self.db, &txn)
@@ -531,7 +551,9 @@ function transform(ctx) {
 "#;
 
     async fn test_store() -> (DbPool, CustomTransformStore) {
-        let db = DbPool::connect("sqlite::memory:").await.expect("db connects");
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
         {
             let write = db.write().await;
             Migrator::up(&*write, None).await.expect("migrates");
@@ -591,7 +613,8 @@ function transform(ctx) {
             Err(CustomTransformError::Invalid(_))
         ));
 
-        let no_function = "/* @monoize-transform\nid: js:x\nname: N\ndescription: D\nauthor: a */\nvar y = 1;";
+        let no_function =
+            "/* @monoize-transform\nid: js:x\nname: N\ndescription: D\nauthor: a */\nvar y = 1;";
         assert!(matches!(
             store.create(no_function.to_string(), true).await,
             Err(CustomTransformError::Invalid(_))

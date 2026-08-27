@@ -26,13 +26,22 @@ impl Transform for RoleMergeConsecutiveTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Role: merge consecutive"), ("zh", "角色：合并连续同角色消息")]
+        &[
+            ("en", "Role: merge consecutive"),
+            ("zh", "角色：合并连续同角色消息"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Merges adjacent ordinary nodes that share the same role without crossing tool results or control nodes."),
-            ("zh", "合并相邻且角色相同的普通节点，不跨越工具结果或控制节点。"),
+            (
+                "en",
+                "Merges adjacent ordinary nodes that share the same role without crossing tool results or control nodes.",
+            ),
+            (
+                "zh",
+                "合并相邻且角色相同的普通节点，不跨越工具结果或控制节点。",
+            ),
         ]
     }
 

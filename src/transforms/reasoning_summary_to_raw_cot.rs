@@ -35,13 +35,22 @@ impl Transform for ReasoningSummaryToRawCotTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Reasoning: summary to raw CoT"), ("zh", "推理：摘要转原始思维链")]
+        &[
+            ("en", "Reasoning: summary to raw CoT"),
+            ("zh", "推理：摘要转原始思维链"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Marks reasoning summaries for OpenWebUI-compatible raw chain-of-thought emission by downstream Chat encoders."),
-            ("zh", "标记推理摘要，使下游 Chat 编码器以 OpenWebUI 兼容的原始思维链字段输出。"),
+            (
+                "en",
+                "Marks reasoning summaries for OpenWebUI-compatible raw chain-of-thought emission by downstream Chat encoders.",
+            ),
+            (
+                "zh",
+                "标记推理摘要，使下游 Chat 编码器以 OpenWebUI 兼容的原始思维链字段输出。",
+            ),
         ]
     }
 

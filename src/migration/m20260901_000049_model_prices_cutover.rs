@@ -1,18 +1,16 @@
 use sea_orm::{ConnectionTrait, DatabaseTransaction, DbBackend, Statement, TransactionTrait};
 use sea_orm_migration::prelude::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-#[derive(Debug)]
-struct LegacyRate {
-    id: String,
-    model_pattern: String,
-    usage_class: String,
-    unit_price_nano_usd: String,
-}
-
+/// `model-pricing.spec.md` §12.2: destructive cutover step. Converts eligible
+/// manual token rules into `model_prices` rows (MP-M3), discards every other
+/// legacy rule (MP-M4), then drops `billing_rate_records`, the two Channel
+/// free-usage columns, the `pricing_profile_model_patterns` setting, and the
+/// `model_metadata_records` price columns (MP-M5). No compatibility alias
+/// remains. `down()` recreates the dropped schema empty (MP-M6).
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -42,7 +40,8 @@ impl MigrationTrait for Migration {
     }
 }
 
-fn price_column(usage_class: &str) -> Option<&'static str> {
+/// MP-M3 column mapping from legacy `usage_class` to `model_prices` columns.
+fn price_column_for_usage_class(usage_class: &str) -> Option<&'static str> {
     match usage_class {
         "input_uncached" => Some("input_usd_per_1m"),
         "output" => Some("output_usd_per_1m"),
@@ -54,156 +53,222 @@ fn price_column(usage_class: &str) -> Option<&'static str> {
     }
 }
 
-fn nano_per_token_to_usd_per_1m(raw: &str) -> Result<String, DbErr> {
-    let value = raw
-        .parse::<i128>()
-        .map_err(|_| DbErr::Migration(format!("invalid legacy unit price `{raw}`")))?;
-    if value < 0 {
-        return Err(DbErr::Migration(format!(
-            "negative legacy unit price `{raw}` cannot migrate"
-        )));
+/// MP-M3 price conversion: `usd_per_1m = unit_price_nano_usd / 1000` exact.
+/// A nano-USD-per-token integer maps losslessly to at most 9 fractional
+/// digits, but 1000 nano per token is exactly 1 USD per 1M so the scale stays
+/// at most 3 after division by 1000 for integer inputs.
+fn nano_per_token_to_usd_per_1m(raw: &str) -> Option<String> {
+    let value = rust_decimal::Decimal::from_str_exact(raw.trim()).ok()?;
+    if value.is_sign_negative() {
+        return None;
     }
-    let whole = value / 1000;
-    let remainder = value % 1000;
-    if remainder == 0 {
-        return Ok(whole.to_string());
-    }
-    let fraction = format!("{remainder:03}").trim_end_matches('0').to_string();
-    Ok(format!("{whole}.{fraction}"))
+    let usd = value.checked_div(rust_decimal::Decimal::from(1000u32))?;
+    Some(
+        usd.round_dp_with_strategy(9, rust_decimal::RoundingStrategy::ToZero)
+            .normalize()
+            .to_string(),
+    )
 }
 
-async fn migrate_legacy_manual_rates(
-    tx: &DatabaseTransaction,
-    backend: DbBackend,
-) -> Result<(), DbErr> {
-    let rows = tx
-        .query_all(Statement::from_string(
+/// The pricing-key normalization used at runtime: strip one configured or
+/// built-in reasoning-effort suffix. Mirrors
+/// `settings::normalize_pricing_model_key` with the map read from
+/// `system_settings` inside this transaction.
+fn normalize_model_key(model_id: &str, suffixes: &[String]) -> String {
+    let trimmed = model_id.trim();
+    for suffix in suffixes {
+        if let Some(base) = trimmed.strip_suffix(suffix.as_str()) {
+            if !base.is_empty() {
+                return base.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+const BUILTIN_SUFFIXES: &[&str] = &[
+    "-none", "-minimum", "-low", "-medium", "-high", "-xhigh", "-max",
+];
+
+struct LegacyRule {
+    id: String,
+    priority: i32,
+    usd_per_1m: String,
+}
+
+async fn migrate_up(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), DbErr> {
+    // Resolve the reasoning-suffix set the runtime uses for pricing keys.
+    let suffix_row = tx
+        .query_one(Statement::from_sql_and_values(
             backend,
-            "SELECT id, model_pattern, usage_class, unit_price_nano_usd \
+            "SELECT value FROM system_settings WHERE key = 'reasoning_suffix_map'",
+            [],
+        ))
+        .await?;
+    let mut suffixes: Vec<String> = Vec::new();
+    if let Some(row) = suffix_row {
+        let raw: String = row.try_get("", "value").unwrap_or_default();
+        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
+            suffixes.extend(map.into_keys());
+        }
+    }
+    suffixes.extend(BUILTIN_SUFFIXES.iter().map(|s| String::from(*s)));
+    // Longest-first so compound suffixes strip before their tails.
+    suffixes.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    suffixes.dedup();
+
+    // MP-M3: eligible manual token rules. Glob filtering happens in Rust so
+    // SQLite and PostgreSQL share one query.
+    let rows = tx
+        .query_all(Statement::from_sql_and_values(
+            backend,
+            "SELECT id, model_pattern, usage_class, unit_price_nano_usd, priority \
              FROM billing_rate_records \
              WHERE source = 'manual' AND enabled = 1 AND rate_kind = 'token' \
                AND model_pattern IS NOT NULL \
-               AND model_pattern NOT LIKE '%*%' AND model_pattern NOT LIKE '%?%' \
-               AND provider_type IS NULL AND modality IS NULL \
+               AND provider_type IS NULL \
+               AND modality IS NULL \
                AND (context_tier IS NULL OR context_tier = 'default') \
-               AND (service_tier IS NULL OR service_tier = 'default') \
-             ORDER BY priority DESC, id ASC"
-                .to_string(),
+               AND (service_tier IS NULL OR service_tier = 'default')",
+            [],
         ))
         .await?;
-    let legacy = rows
-        .iter()
-        .map(|row| {
-            Ok(LegacyRate {
-                id: row.try_get("", "id")?,
-                model_pattern: row.try_get("", "model_pattern")?,
-                usage_class: row.try_get("", "usage_class")?,
-                unit_price_nano_usd: row.try_get("", "unit_price_nano_usd")?,
-            })
-        })
-        .collect::<Result<Vec<_>, DbErr>>()?;
-    let existing = tx
-        .query_all(Statement::from_string(
-            backend,
-            "SELECT model_id FROM model_prices".to_string(),
-        ))
-        .await?
-        .iter()
-        .map(|row| row.try_get::<String>("", "model_id"))
-        .collect::<Result<HashSet<_>, _>>()?;
-    let mut converted: BTreeMap<String, BTreeMap<&'static str, String>> = BTreeMap::new();
-    let mut selected: HashSet<(String, &'static str)> = HashSet::new();
-    for rate in legacy {
-        let Some(column) = price_column(&rate.usage_class) else {
+
+    // model -> column -> winning legacy rule (higher priority, then lower id).
+    let mut converted: BTreeMap<String, BTreeMap<&'static str, LegacyRule>> = BTreeMap::new();
+    for row in &rows {
+        let pattern: String = row
+            .try_get("", "model_pattern")
+            .map_err(|e| DbErr::Custom(e.to_string()))?;
+        if pattern.contains('*') || pattern.contains('?') || pattern.trim().is_empty() {
+            continue;
+        }
+        let usage_class: String = row
+            .try_get("", "usage_class")
+            .map_err(|e| DbErr::Custom(e.to_string()))?;
+        let Some(column) = price_column_for_usage_class(&usage_class) else {
             continue;
         };
-        let model_id = crate::model_registry_store::normalize_model_id(&rate.model_pattern, None);
-        if model_id.is_empty() || existing.contains(&model_id) {
+        let price_raw: String = row
+            .try_get("", "unit_price_nano_usd")
+            .map_err(|e| DbErr::Custom(e.to_string()))?;
+        let Some(usd_per_1m) = nano_per_token_to_usd_per_1m(&price_raw) else {
             continue;
+        };
+        let rule = LegacyRule {
+            id: row
+                .try_get("", "id")
+                .map_err(|e| DbErr::Custom(e.to_string()))?,
+            priority: row
+                .try_get("", "priority")
+                .map_err(|e| DbErr::Custom(e.to_string()))?,
+            usd_per_1m,
+        };
+        let model_key = normalize_model_key(&pattern, &suffixes);
+        let slot = converted.entry(model_key).or_default();
+        // MP-M3 tie-break: higher priority wins, then lower id.
+        let keep_existing = slot.get(column).is_some_and(|existing| {
+            existing.priority > rule.priority
+                || (existing.priority == rule.priority && existing.id <= rule.id)
+        });
+        if !keep_existing {
+            slot.insert(column, rule);
         }
-        if !selected.insert((model_id.clone(), column)) {
-            continue;
-        }
-        let _legacy_id = rate.id;
-        converted.entry(model_id).or_default().insert(
-            column,
-            nano_per_token_to_usd_per_1m(&rate.unit_price_nano_usd)?,
-        );
     }
+
+    // An existing model_prices row keeps its values; the legacy rule is
+    // discarded (MP-M3).
+    let existing_rows = tx
+        .query_all(Statement::from_sql_and_values(
+            backend,
+            "SELECT model_id FROM model_prices",
+            [],
+        ))
+        .await?;
+    let existing_ids: std::collections::HashSet<String> = existing_rows
+        .iter()
+        .filter_map(|row| row.try_get("", "model_id").ok())
+        .collect();
+
     let now = chrono::Utc::now().to_rfc3339();
     for (model_id, columns) in converted {
-        let locked_fields = serde_json::to_string(&columns.keys().copied().collect::<Vec<_>>())
-            .map_err(|error| DbErr::Migration(error.to_string()))?;
-        let value = |column: &str| columns.get(column).cloned();
+        if existing_ids.contains(&model_id) {
+            continue;
+        }
+        let mut prices: HashMap<&'static str, String> = HashMap::new();
+        let mut locked: Vec<&'static str> = Vec::new();
+        for (column, rule) in columns {
+            prices.insert(column, rule.usd_per_1m);
+            locked.push(column);
+        }
+        let locked_json = serde_json::to_string(&locked)
+            .map_err(|e| DbErr::Custom(format!("locked_fields serialize: {e}")))?;
         tx.execute(Statement::from_sql_and_values(
             backend,
             "INSERT INTO model_prices (model_id, billing_mode, input_usd_per_1m, \
              output_usd_per_1m, cache_read_usd_per_1m, cache_write_usd_per_1m, \
              cache_write_1h_usd_per_1m, reasoning_usd_per_1m, per_request_usd, billing_expr, \
              source, locked_fields, raw_json, enabled, updated_at) \
-             VALUES ($1, 'per_token', $2, $3, $4, $5, $6, $7, NULL, NULL, \
-             'manual', $8, '{}', 1, $9) ON CONFLICT(model_id) DO NOTHING",
-            vec![
+             VALUES ($1, 'per_token', $2, $3, $4, $5, $6, $7, NULL, NULL, 'manual', $8, '{}', 1, $9)",
+            [
                 model_id.into(),
-                value("input_usd_per_1m").into(),
-                value("output_usd_per_1m").into(),
-                value("cache_read_usd_per_1m").into(),
-                value("cache_write_usd_per_1m").into(),
-                value("cache_write_1h_usd_per_1m").into(),
-                value("reasoning_usd_per_1m").into(),
-                locked_fields.into(),
+                prices.remove("input_usd_per_1m").into(),
+                prices.remove("output_usd_per_1m").into(),
+                prices.remove("cache_read_usd_per_1m").into(),
+                prices.remove("cache_write_usd_per_1m").into(),
+                prices.remove("cache_write_1h_usd_per_1m").into(),
+                prices.remove("reasoning_usd_per_1m").into(),
+                locked_json.into(),
                 now.clone().into(),
             ],
         ))
         .await?;
     }
-    Ok(())
-}
 
-async fn migrate_up(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), DbErr> {
-    migrate_legacy_manual_rates(tx, backend).await?;
-    let tool_prices = serde_json::json!({
-        "web_search": "10",
-        "x_search": "5",
-        "file_search_tool_call": "2.5",
-        "code_execution": "5",
-        "code_interpreter_duration": { "usd": "0.0015", "per": "minute", "minimum_units": 5 },
-        "code_execution_duration": { "usd": "0.000833333", "per": "minute", "minimum_units": 5 },
-        "code_interpreter_session": { "usd": "0.03", "per": "session" }
-    });
-    tx.execute(Statement::from_sql_and_values(
-        backend,
-        "INSERT INTO system_settings (key, value, updated_at) VALUES \
-         ('tool_prices', $1, $2) ON CONFLICT(key) DO NOTHING",
-        vec![
-            tool_prices.to_string().into(),
-            chrono::Utc::now().to_rfc3339().into(),
-        ],
-    ))
-    .await?;
-    tx.execute(Statement::from_string(
-        backend,
-        "DELETE FROM system_settings WHERE key = 'pricing_profile_model_patterns'".to_string(),
-    ))
-    .await?;
-    for sql in [
+    // MP-M5 destructive steps.
+    let drop_statements: &[&str] = &[
         "DROP TABLE billing_rate_records",
         "ALTER TABLE monoize_channels DROP COLUMN allow_missing_usage",
         "ALTER TABLE monoize_channels DROP COLUMN allow_unpriced_server_tools",
+        "DELETE FROM system_settings WHERE key = 'pricing_profile_model_patterns'",
         "ALTER TABLE model_metadata_records DROP COLUMN input_cost_per_token_nano",
         "ALTER TABLE model_metadata_records DROP COLUMN output_cost_per_token_nano",
         "ALTER TABLE model_metadata_records DROP COLUMN cache_read_input_cost_per_token_nano",
         "ALTER TABLE model_metadata_records DROP COLUMN cache_creation_input_cost_per_token_nano",
         "ALTER TABLE model_metadata_records DROP COLUMN output_cost_per_reasoning_token_nano",
-    ] {
-        tx.execute(Statement::from_string(backend, sql.to_string()))
+    ];
+    for sql in drop_statements {
+        tx.execute(Statement::from_string(backend, String::from(*sql)))
             .await?;
     }
     Ok(())
 }
 
 async fn migrate_down(tx: &DatabaseTransaction, backend: DbBackend) -> Result<(), DbErr> {
+    // MP-M6: recreate the dropped schema empty; converted data stays in
+    // model_prices and discarded rules are not reconstructible.
     for sql in [
+        "CREATE TABLE billing_rate_records (\
+         id TEXT NOT NULL PRIMARY KEY, \
+         source TEXT NOT NULL, \
+         pricing_profile TEXT NOT NULL, \
+         model_pattern TEXT NULL, \
+         provider_type TEXT NULL, \
+         rate_kind TEXT NOT NULL, \
+         usage_class TEXT NOT NULL, \
+         unit TEXT NOT NULL, \
+         unit_price_nano_usd TEXT NOT NULL, \
+         context_tier TEXT NULL, \
+         service_tier TEXT NULL, \
+         modality TEXT NULL, \
+         cache_ttl TEXT NULL, \
+         match_json TEXT NOT NULL DEFAULT '{}', \
+         priority INTEGER NOT NULL DEFAULT 0, \
+         enabled INTEGER NOT NULL DEFAULT 1, \
+         raw_json TEXT NOT NULL DEFAULT '{}', \
+         updated_at TEXT NOT NULL)",
+        "CREATE INDEX idx_billing_rate_records_lookup ON billing_rate_records \
+         (pricing_profile, rate_kind, usage_class)",
         "ALTER TABLE monoize_channels ADD COLUMN allow_missing_usage INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE monoize_channels ADD COLUMN allow_unpriced_server_tools INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE model_metadata_records ADD COLUMN input_cost_per_token_nano TEXT NULL",
@@ -211,18 +276,57 @@ async fn migrate_down(tx: &DatabaseTransaction, backend: DbBackend) -> Result<()
         "ALTER TABLE model_metadata_records ADD COLUMN cache_read_input_cost_per_token_nano TEXT NULL",
         "ALTER TABLE model_metadata_records ADD COLUMN cache_creation_input_cost_per_token_nano TEXT NULL",
         "ALTER TABLE model_metadata_records ADD COLUMN output_cost_per_reasoning_token_nano TEXT NULL",
-        "CREATE TABLE billing_rate_records (id TEXT NOT NULL PRIMARY KEY, source TEXT NOT NULL, \
-         pricing_profile TEXT NOT NULL, model_pattern TEXT NULL, provider_type TEXT NULL, \
-         rate_kind TEXT NOT NULL, usage_class TEXT NOT NULL, unit TEXT NOT NULL, \
-         unit_price_nano_usd TEXT NOT NULL, context_tier TEXT NULL, service_tier TEXT NULL, \
-         modality TEXT NULL, cache_ttl TEXT NULL, match_json TEXT NOT NULL DEFAULT '{}', \
-         priority INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, \
-         raw_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL)",
-        "CREATE INDEX idx_billing_rate_records_lookup ON billing_rate_records \
-         (pricing_profile, rate_kind, usage_class)",
     ] {
         tx.execute(Statement::from_string(backend, sql.to_string()))
             .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{nano_per_token_to_usd_per_1m, normalize_model_key, price_column_for_usage_class};
+
+    #[test]
+    fn nano_per_token_division_is_exact() {
+        assert_eq!(nano_per_token_to_usd_per_1m("1000"), Some("1".to_string()));
+        assert_eq!(
+            nano_per_token_to_usd_per_1m("2500"),
+            Some("2.5".to_string())
+        );
+        assert_eq!(nano_per_token_to_usd_per_1m("1"), Some("0.001".to_string()));
+        assert_eq!(nano_per_token_to_usd_per_1m("0"), Some("0".to_string()));
+        assert_eq!(nano_per_token_to_usd_per_1m("-5"), None);
+    }
+
+    #[test]
+    fn usage_class_mapping_matches_mp_m3() {
+        assert_eq!(
+            price_column_for_usage_class("input_uncached"),
+            Some("input_usd_per_1m")
+        );
+        assert_eq!(
+            price_column_for_usage_class("input_cached"),
+            Some("cache_read_usd_per_1m")
+        );
+        assert_eq!(
+            price_column_for_usage_class("cache_write_1h"),
+            Some("cache_write_1h_usd_per_1m")
+        );
+        assert_eq!(price_column_for_usage_class("web_search"), None);
+    }
+
+    #[test]
+    fn model_key_strips_builtin_reasoning_suffix() {
+        let suffixes = vec!["-high".to_string(), "-thinking".to_string()];
+        assert_eq!(
+            normalize_model_key("gpt-5-mini-high", &suffixes),
+            "gpt-5-mini"
+        );
+        assert_eq!(
+            normalize_model_key("claude-x-thinking", &suffixes),
+            "claude-x"
+        );
+        assert_eq!(normalize_model_key("plain-model", &suffixes), "plain-model");
+    }
 }

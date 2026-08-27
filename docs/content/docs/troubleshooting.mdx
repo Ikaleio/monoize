@@ -47,15 +47,7 @@ The user balance, or the key's sub-account balance, is zero or negative. Top up 
 
 ### Charges look wrong
 
-Charge = (model charge + tool charge) × Channel model `multiplier` × routed group `billing_ratio`. Check the version 3 billing breakdown in **Logs**. Then check all three inputs on the **Models** and **Providers** pages.
-
-### `403 model_pricing_required`
-
-Add an enabled and complete price on **Models**. Alternatively, allow free settlement globally or on the selected Provider.
-
-### `403 usage_required`
-
-Make the upstream return Usage. Alternatively, allow free settlement for missing Usage globally or on the selected Provider.
+Charge = base price × group `billing_ratio` × Channel model `multiplier`. Confirm the model has an enabled price row on the **Models** page. Check the group's billing ratio in **Models → Group Pricing**. Check the multiplier on the Channel model entry. A multiplier of `0` makes the Channel free.
 
 ## Streaming problems
 

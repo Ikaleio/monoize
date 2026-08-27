@@ -59,7 +59,8 @@ DH-5b. Subscription card MUST be sourced from the same session user object:
   show `balance_usd` vs `grant_amount_usd` and a single-row progress bar whose filled
   fraction is `clamp(balance_nano_usd / grant_amount_nano_usd, 0, 1)` with `BigInt`
   arithmetic when `grant_amount_nano_usd` parses as an integer greater than 0;
-- reset time: `next_grant_at` localized via `toLocaleString()` when present; otherwise a
+- reset time: the session user's `next_grant_at` (top-level field on the user object, NOT
+  a `billing_plan` property) localized via `toLocaleString()` when present; otherwise a
   localized unavailable label;
 - schedule MAY appear as secondary monospace text (`billing_plan.schedule`).
 
@@ -86,7 +87,11 @@ DH-6b. Each analytics bucket MUST include `tokens_by_model: Record<string, numbe
 each value is the exact integer sum of
 `COALESCE(input_tokens,0) + COALESCE(output_tokens,0) + COALESCE(cache_read_tokens,0) +
 COALESCE(cache_creation_tokens,0) + COALESCE(reasoning_tokens,0)` for that model in that
-bucket. Models with zero total tokens across all buckets MUST be omitted.
+bucket. The token aggregate MUST be wrapped in `CAST(... AS BIGINT)` so that PostgreSQL
+`SUM(bigint)` (type `NUMERIC`) and SQLite `SUM` (type `INTEGER`) both decode into the
+same `i64` column; an uncast `SUM` MUST NOT be used because PostgreSQL decoding then
+fails with a NUMERIC/INT8 mismatch. Models with zero total tokens across all buckets MUST
+be omitted.
 
 DH-6c. The chart Y-axis MUST represent cumulative tokens: for each model series at bucket
 index `i`, the plotted value equals the sum of that model's `tokens_by_model` over

@@ -2,14 +2,19 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Store } from "lucide-react";
 import { ModelBadge } from "@/components/ModelBadge";
+import { formatUsdDecimal } from "@/lib/exact-decimal";
 import { useMarketplaceModels } from "@/lib/swr";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
-import { DataTableShell, TableToolbarSearch, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
+import {
+  DataTableShell,
+  TableToolbarSearch,
+  VirtualTableCell,
+  VirtualTableHeaderCell,
+} from "@/components/ui/data-table-shell";
 import { TableVirtuoso } from "react-virtuoso";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
 
 function formatTokens(tokens?: number | null): string {
   if (tokens == null) return "-";
@@ -24,7 +29,7 @@ export function ModelMarketplacePage() {
   const [search, setSearch] = useState("");
 
   const filtered = records.filter((r) =>
-    r.model_id.toLowerCase().includes(search.toLowerCase())
+    r.model_id.toLowerCase().includes(search.toLowerCase()),
   );
 
   if (isLoading) {
@@ -42,7 +47,10 @@ export function ModelMarketplacePage() {
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
       >
-        <PageHeader title={t("modelMarketplace.title")} description={t("modelMarketplace.description")} />
+        <PageHeader
+          title={t("modelMarketplace.title")}
+          description={t("modelMarketplace.description")}
+        />
       </motion.div>
 
       <motion.div
@@ -51,7 +59,7 @@ export function ModelMarketplacePage() {
         transition={{ delay: 0.1, ...transitions.normal }}
       >
         <DataTableShell
-          toolbar={(
+          toolbar={
             <>
               <div className="flex items-center gap-2 text-base font-semibold">
                 <Store className="h-5 w-5" />
@@ -63,73 +71,88 @@ export function ModelMarketplacePage() {
                 placeholder={t("modelMarketplace.searchPlaceholder")}
               />
             </>
-          )}
+          }
           isEmpty={filtered.length === 0}
-          emptyState={(
+          emptyState={
             <EmptyState
               icon={<Store className="h-12 w-12" />}
               title={t("modelMarketplace.noModels")}
               description={t("modelMarketplace.noModelsDesc")}
             />
-          )}
+          }
         >
-              <TableVirtuoso
-                style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
-                data={filtered}
-                components={{
-                  Table: (props) => <table {...props} className="w-full caption-bottom text-sm" />,
-                  TableHead: (props) => <thead {...props} className="[&_tr]:border-b" />,
-                  TableRow: (props) => <tr {...props} className="border-b transition-colors hover:bg-muted/50" />,
-                  TableBody: (props) => <tbody {...props} className="[&_tr:last-child]:border-0" />,
-                }}
-                fixedHeaderContent={() => (
-                  <tr className="border-b bg-background">
-                    <VirtualTableHeaderCell className="min-w-[200px]">
-                      {t("modelMarketplace.modelId")}
-                    </VirtualTableHeaderCell>
-                    <VirtualTableHeaderCell>
-                      {t("modelMarketplace.inputCost")}
-                    </VirtualTableHeaderCell>
-                    <VirtualTableHeaderCell>
-                      {t("modelMarketplace.outputCost")}
-                    </VirtualTableHeaderCell>
-                    <VirtualTableHeaderCell>
-                      {t("modelMarketplace.context")}
-                    </VirtualTableHeaderCell>
-                    <VirtualTableHeaderCell>
-                      {t("modelMarketplace.maxOutput")}
-                    </VirtualTableHeaderCell>
-                  </tr>
-                )}
-                itemContent={(_index, record) => {
-                  const inputCost = record.input_usd_per_1m;
-                  const outputCost = record.output_usd_per_1m ?? inputCost;
+          <TableVirtuoso
+            style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
+            data={filtered}
+            components={{
+              Table: (props) => (
+                <table {...props} className="w-full caption-bottom text-sm" />
+              ),
+              TableHead: (props) => (
+                <thead {...props} className="[&_tr]:border-b" />
+              ),
+              TableRow: (props) => (
+                <tr
+                  {...props}
+                  className="border-b transition-colors hover:bg-muted/50"
+                />
+              ),
+              TableBody: (props) => (
+                <tbody {...props} className="[&_tr:last-child]:border-0" />
+              ),
+            }}
+            fixedHeaderContent={() => (
+              <tr className="border-b bg-background">
+                <VirtualTableHeaderCell className="min-w-[200px]">
+                  {t("modelMarketplace.modelId")}
+                </VirtualTableHeaderCell>
+                <VirtualTableHeaderCell>
+                  {t("modelMarketplace.inputCost")}
+                </VirtualTableHeaderCell>
+                <VirtualTableHeaderCell>
+                  {t("modelMarketplace.outputCost")}
+                </VirtualTableHeaderCell>
+                <VirtualTableHeaderCell>
+                  {t("modelMarketplace.context")}
+                </VirtualTableHeaderCell>
+                <VirtualTableHeaderCell>
+                  {t("modelMarketplace.maxOutput")}
+                </VirtualTableHeaderCell>
+              </tr>
+            )}
+            itemContent={(_index, record) => {
+              const inputCost = record.input_usd_per_1m;
+              const outputCost = record.output_usd_per_1m;
 
-                  return (
-                    <>
-                      <VirtualTableCell>
-                        <ModelBadge
-                          model={record.model_id}
-                          provider={record.models_dev_provider}
-                          showDetails={false}
-                        />
-                      </VirtualTableCell>
-                      <VirtualTableCell className="font-mono text-xs">
-                        {inputCost == null ? "-" : `${formatUsdDecimal(inputCost, 3)} / 1M`}
-                      </VirtualTableCell>
-                      <VirtualTableCell className="font-mono text-xs">
-                        {outputCost == null ? "-" : `${formatUsdDecimal(outputCost, 3)} / 1M`}
-                      </VirtualTableCell>
-                      <VirtualTableCell className="font-mono text-xs">
-                        {formatTokens(record.max_tokens)}
-                      </VirtualTableCell>
-                      <VirtualTableCell className="font-mono text-xs">
-                        {formatTokens(record.max_output_tokens)}
-                      </VirtualTableCell>
-                    </>
-                  );
-                }}
-              />
+              return (
+                <>
+                  <VirtualTableCell>
+                    <ModelBadge
+                      model={record.model_id}
+                      provider={record.models_dev_provider}
+                      showDetails={false}
+                    />
+                  </VirtualTableCell>
+                  <VirtualTableCell className="font-mono text-xs">
+                    {inputCost == null
+                      ? "-"
+                      : `${formatUsdDecimal(inputCost, 3)} / 1M`}
+                  </VirtualTableCell>
+                  <VirtualTableCell className="font-mono text-xs">
+                    {outputCost == null
+                      ? "-"
+                      : `${formatUsdDecimal(outputCost, 3)} / 1M`}
+                  </VirtualTableCell>
+                  <VirtualTableCell className="font-mono text-xs">
+                    {formatTokens(record.max_tokens)}
+                  </VirtualTableCell>
+                  <VirtualTableCell className="font-mono text-xs">
+                    {formatTokens(record.max_output_tokens)}
+                  </VirtualTableCell>
+                </>
+              );
+            }}
+          />
         </DataTableShell>
       </motion.div>
     </PageWrapper>

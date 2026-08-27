@@ -32,8 +32,14 @@ impl Transform for FieldRemoveTransform {
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Removes the JSON value at the configured extra-body path from the request or response."),
-            ("zh", "从请求或响应的 extra_body 中删除配置路径上的 JSON 值。"),
+            (
+                "en",
+                "Removes the JSON value at the configured extra-body path from the request or response.",
+            ),
+            (
+                "zh",
+                "从请求或响应的 extra_body 中删除配置路径上的 JSON 值。",
+            ),
         ]
     }
 

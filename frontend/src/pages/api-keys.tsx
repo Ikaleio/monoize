@@ -58,7 +58,7 @@ function parseOptionalMultiplier(value: string): string | undefined {
   if (!value.trim()) return undefined;
   const normalized = normalizeMultiplier(value);
   if (normalized == null) {
-    throw new Error("Multiplier must be a positive decimal with at most 9 fractional digits");
+    throw new Error("Multiplier must be a non-negative decimal with at most 9 fractional digits");
   }
   return normalized;
 }
@@ -351,8 +351,10 @@ export function ApiKeysPage() {
   const { user: currentUser } = useAuth();
   const { data: keys = [], isLoading } = useApiKeys();
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
+  const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
+  // /transforms/registry is admin-only; skip it for non-admins to avoid a 403 loop.
   const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
-    useTransformRegistry();
+    useTransformRegistry(undefined, { isPaused: () => !canManageSystem });
   const apiKeyTransformRegistry = useMemo(
     () => transformRegistry.filter((item) => item.supported_scopes.includes("api_key")),
     [transformRegistry]
@@ -388,7 +390,6 @@ export function ApiKeysPage() {
   const [updating, setUpdating] = useState(false);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreated | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
 
   const resetCreateForm = () => {
     setNewKeyName("");
@@ -634,7 +635,7 @@ export function ApiKeysPage() {
           {selectedKeys.length > 0 && (
             <Button variant="destructive" onClick={handleBatchDelete}>
               <Trash2 className="mr-2 h-4 w-4" />
-              {t("apiKeys.deleteSelected", { count: selectedKeys.length })}
+              {t("apiKeys.batchDelete")}
             </Button>
           )}
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>

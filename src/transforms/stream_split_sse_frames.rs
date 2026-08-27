@@ -34,13 +34,22 @@ impl Transform for StreamSplitSseFramesTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Stream: split oversized SSE frames"), ("zh", "流式：拆分超长 SSE 帧")]
+        &[
+            ("en", "Stream: split oversized SSE frames"),
+            ("zh", "流式：拆分超长 SSE 帧"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Splits oversized downstream SSE delta payloads into multiple protocol-valid events below the configured frame length."),
-            ("zh", "将超过配置长度的下游 SSE 增量载荷拆分为多个协议合法的事件。"),
+            (
+                "en",
+                "Splits oversized downstream SSE delta payloads into multiple protocol-valid events below the configured frame length.",
+            ),
+            (
+                "zh",
+                "将超过配置长度的下游 SSE 增量载荷拆分为多个协议合法的事件。",
+            ),
         ]
     }
 

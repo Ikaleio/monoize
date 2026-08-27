@@ -35,13 +35,22 @@ impl Transform for PromptStripOrphanedToolCallsTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Prompt: strip orphaned tool calls"), ("zh", "提示词：移除孤立工具调用")]
+        &[
+            ("en", "Prompt: strip orphaned tool calls"),
+            ("zh", "提示词：移除孤立工具调用"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Removes tool-call nodes whose call_id has no matching tool result in the request input."),
-            ("zh", "移除请求输入中没有对应工具结果 call_id 的工具调用节点。"),
+            (
+                "en",
+                "Removes tool-call nodes whose call_id has no matching tool result in the request input.",
+            ),
+            (
+                "zh",
+                "移除请求输入中没有对应工具结果 call_id 的工具调用节点。",
+            ),
         ]
     }
 

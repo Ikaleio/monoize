@@ -31,13 +31,22 @@ impl Transform for ImageOutputToMarkdownTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Image: image nodes to Markdown"), ("zh", "图像：图像节点转 Markdown")]
+        &[
+            ("en", "Image: image nodes to Markdown"),
+            ("zh", "图像：图像节点转 Markdown"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Renders assistant image nodes as Markdown image links appended to assistant text output. Inverse of image_markdown_to_output."),
-            ("zh", "将 assistant 图像节点渲染为 Markdown 图片链接并追加到 assistant 文本输出。与 image_markdown_to_output 互逆。"),
+            (
+                "en",
+                "Renders assistant image nodes as Markdown image links appended to assistant text output. Inverse of image_markdown_to_output.",
+            ),
+            (
+                "zh",
+                "将 assistant 图像节点渲染为 Markdown 图片链接并追加到 assistant 文本输出。与 image_markdown_to_output 互逆。",
+            ),
         ]
     }
 

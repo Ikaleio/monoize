@@ -57,9 +57,7 @@ fn redact_transform_chains_for_user(dump: &mut Value) {
         let mut hidden = 0usize;
         if let Some(Value::Array(chain)) = attempt_obj.get_mut("transform_chain") {
             let before = chain.len();
-            chain.retain(|entry| {
-                entry.get("scope").and_then(Value::as_str) == Some("api_key")
-            });
+            chain.retain(|entry| entry.get("scope").and_then(Value::as_str) == Some("api_key"));
             hidden = before - chain.len();
         }
         attempt_obj.insert("hidden_transforms".to_string(), json!(hidden));
@@ -117,8 +115,7 @@ pub async fn get_request_capture(
                     message,
                 ),
                 crate::request_capture::DumpReadError::Io(message) => internal_error(message),
-            })?
-        {
+            })? {
             Some(bytes) => bytes,
             None => {
                 // RCV-A8: the file is gone; drop the stale metadata row and

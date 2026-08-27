@@ -212,13 +212,6 @@ GR-X6. After commit, the process MUST invalidate the API-key authentication cach
 the routing config revision so in-flight affinity bindings re-validate against the new
 provider group sets.
 
-GR-X7. The GR-X2, GR-X3, and GR-X4 rewrites MUST NOT issue one UPDATE statement per
-affected row. Affected rows are collected per table, split into chunks of at most 250 rows,
-and each chunk is rewritten by one bulk
-`UPDATE ... SET group_ids = CASE id ... END WHERE id IN (...)` statement; for `api_keys`
-the same statement also rewrites `use_user_group`. Rows not affected by GR-X2..GR-X4 MUST
-NOT be modified.
-
 ## 4. Migration `m20260825_000042_groups_registry`
 
 The migration MUST run identically on SQLite and PostgreSQL and MUST be a pure schema/data

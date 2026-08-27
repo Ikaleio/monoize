@@ -29,13 +29,22 @@ impl Transform for CacheUserIdTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Auto-cache: user identity"), ("zh", "自动缓存：用户标识")]
+        &[
+            ("en", "Auto-cache: user identity"),
+            ("zh", "自动缓存：用户标识"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Injects the Monoize username into Anthropic metadata.user_id and the OpenAI user field to improve provider cache affinity; never overwrites existing values."),
-            ("zh", "将 Monoize 用户名注入 Anthropic metadata.user_id 与 OpenAI user 字段以提升缓存亲和性；不会覆盖已有值。"),
+            (
+                "en",
+                "Injects the Monoize username into Anthropic metadata.user_id and the OpenAI user field to improve provider cache affinity; never overwrites existing values.",
+            ),
+            (
+                "zh",
+                "将 Monoize 用户名注入 Anthropic metadata.user_id 与 OpenAI user 字段以提升缓存亲和性；不会覆盖已有值。",
+            ),
         ]
     }
 

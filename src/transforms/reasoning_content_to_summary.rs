@@ -40,12 +40,18 @@ impl Transform for ReasoningContentToSummaryTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Reasoning: content to summary"), ("zh", "推理：正文转摘要")]
+        &[
+            ("en", "Reasoning: content to summary"),
+            ("zh", "推理：正文转摘要"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Moves plaintext reasoning content into the reasoning summary field on responses and streams."),
+            (
+                "en",
+                "Moves plaintext reasoning content into the reasoning summary field on responses and streams.",
+            ),
             ("zh", "在响应与流中将明文推理正文移动到推理摘要字段。"),
         ]
     }

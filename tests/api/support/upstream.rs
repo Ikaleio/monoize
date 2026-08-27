@@ -5166,6 +5166,8 @@ async fn create_test_provider(
         .unwrap()
 }
 
+/// Seed `model_prices` rows (MP-D1) at 1 USD per 1M tokens for input and
+/// output, matching the legacy fixture rate of 1000 nano-USD per token.
 async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&str]) {
     for model_id in model_ids {
         state
@@ -5184,8 +5186,15 @@ async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&s
     }
 }
 
-async fn seed_test_server_tool_meter_rates(state: &monoize::app::AppState) {
-    state.monoize_runtime.write().await.tool_prices = json!({});
+/// MP-T1: zero-priced `tool_prices` entries for the server-tool classes the
+/// fixtures exercise, so tool usage settles at 0 without fail-open markers.
+async fn seed_test_tool_prices(state: &monoize::app::AppState) {
+    let mut runtime = state.monoize_runtime.write().await;
+    runtime.tool_prices = json!({
+        "web_search": "0",
+        "file_search_tool_call": "0",
+        "code_interpreter_duration": { "usd": "0", "per": "minute" }
+    });
 }
 
 async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
@@ -5321,7 +5330,7 @@ async fn setup_with_unknown_fields() -> TestContext {
         ],
     )
     .await;
-    seed_test_server_tool_meter_rates(&state).await;
+    seed_test_tool_prices(&state).await;
 
     let router = monoize::app::build_app(state.clone());
 
@@ -5369,6 +5378,7 @@ async fn mock_nonstream_usage_can_be_explicitly_omitted_for_negative_billing_tes
     )
     .await;
 
+    // MP-F3: a priced non-stream success without usage rejects fail-closed.
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let error: Value = serde_json::from_str(&body).expect("error response JSON");
     assert_eq!(error["error"]["code"], json!("usage_required"));

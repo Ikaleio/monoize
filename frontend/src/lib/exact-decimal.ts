@@ -45,13 +45,14 @@ export function formatNanoPerTokenPerMillion(value?: string | null): string {
 	return decimal == null ? '—' : `$${groupInteger(decimal.split('.')[0])}${decimal.includes('.') ? `.${decimal.split('.')[1]}` : ''}`
 }
 
+// CP-INV-3/MP-C12: multipliers accept any non-negative decimal with at most 9
+// fractional digits; "0" is a valid explicit free configuration.
 export function normalizeMultiplier(value: string): string | null {
 	const trimmed = value.trim()
 	if (!/^\d+(?:\.\d{0,9})?$/.test(trimmed)) return null
 	const [wholeRaw, fractionRaw = ''] = trimmed.split('.')
 	const whole = wholeRaw.replace(/^0+(?=\d)/, '')
 	const fraction = fractionRaw.replace(/0+$/, '')
-	if (BigInt(whole || '0') === 0n && !/[1-9]/.test(fraction)) return null
 	if (BigInt(`${whole || '0'}${fraction}`) > RUST_DECIMAL_MAX) return null
 	return fraction ? `${whole || '0'}.${fraction}` : whole || '0'
 }

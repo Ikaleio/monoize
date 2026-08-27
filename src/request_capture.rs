@@ -362,8 +362,8 @@ pub(crate) fn multipart_capture_object(parts: &[CapturedMultipartPart]) -> Value
 pub(crate) fn multipart_capture_object_from_upstream_fields(
     fields: &[crate::urp::encode::openai_image::MultipartField],
 ) -> Value {
-    use base64::Engine as _;
     use crate::urp::encode::openai_image::MultipartField;
+    use base64::Engine as _;
     let parts: Vec<CapturedMultipartPart> = fields
         .iter()
         .map(|field| match field {
@@ -610,11 +610,10 @@ impl RequestCaptureStore {
         let horizon = std::time::SystemTime::now()
             .checked_sub(std::time::Duration::from_secs(ORPHAN_FILE_HORIZON_SECS))
             .unwrap_or(std::time::UNIX_EPOCH);
-        let candidates = tokio::task::spawn_blocking(move || {
-            list_files_older_than(&dump_dir, horizon)
-        })
-        .await
-        .map_err(|err| err.to_string())??;
+        let candidates =
+            tokio::task::spawn_blocking(move || list_files_older_than(&dump_dir, horizon))
+                .await
+                .map_err(|err| err.to_string())??;
         for chunk in candidates.chunks(CLEANUP_BATCH_SIZE) {
             let placeholders = (0..chunk.len())
                 .map(|index| format!("${}", index + 1))
@@ -694,8 +693,7 @@ impl RequestCaptureStore {
             let mut victims: Vec<String> = Vec::new();
             let mut freed: i64 = 0;
             for row in rows {
-                let file_name: String =
-                    row.try_get("", "file_name").map_err(|e| e.to_string())?;
+                let file_name: String = row.try_get("", "file_name").map_err(|e| e.to_string())?;
                 let size_bytes: i64 = row.try_get("", "size_bytes").map_err(|e| e.to_string())?;
                 victims.push(file_name);
                 freed = freed.saturating_add(size_bytes);
@@ -1858,7 +1856,11 @@ mod tests {
         insert_record(&db, "a_oldest.json.zst", base_ms - 3_000, 100, far_expiry).await;
         insert_record(&db, "b_middle.json.zst", base_ms - 2_000, 100, far_expiry).await;
         insert_record(&db, "c_newest.json.zst", base_ms - 1_000, 100, far_expiry).await;
-        for name in ["a_oldest.json.zst", "b_middle.json.zst", "c_newest.json.zst"] {
+        for name in [
+            "a_oldest.json.zst",
+            "b_middle.json.zst",
+            "c_newest.json.zst",
+        ] {
             write_dump_file(&store, name, b"x");
         }
 

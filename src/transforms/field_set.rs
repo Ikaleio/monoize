@@ -56,8 +56,14 @@ impl Transform for FieldSetTransform {
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Writes a JSON value at the configured extra-body path, optionally only when the current value equals when_equals."),
-            ("zh", "在配置路径写入 JSON 值；配置 when_equals 时仅当当前值与其相等才写入。"),
+            (
+                "en",
+                "Writes a JSON value at the configured extra-body path, optionally only when the current value equals when_equals.",
+            ),
+            (
+                "zh",
+                "在配置路径写入 JSON 值；配置 when_equals 时仅当当前值与其相等才写入。",
+            ),
         ]
     }
 

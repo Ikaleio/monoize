@@ -30,13 +30,22 @@ impl Transform for CacheAnthropicToolUseTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Auto-cache: Anthropic tool results"), ("zh", "自动缓存：Anthropic 工具结果")]
+        &[
+            ("en", "Auto-cache: Anthropic tool results"),
+            ("zh", "自动缓存：Anthropic 工具结果"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "On tool-result submissions, inserts an Anthropic ephemeral cache_control breakpoint on the latest user node before the tool-call run."),
-            ("zh", "在提交工具结果时，于工具调用串前最近的 user 节点插入 Anthropic ephemeral cache_control 缓存断点。"),
+            (
+                "en",
+                "On tool-result submissions, inserts an Anthropic ephemeral cache_control breakpoint on the latest user node before the tool-call run.",
+            ),
+            (
+                "zh",
+                "在提交工具结果时，于工具调用串前最近的 user 节点插入 Anthropic ephemeral cache_control 缓存断点。",
+            ),
         ]
     }
 

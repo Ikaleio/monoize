@@ -423,6 +423,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         )
     })?;
     let model_price_store = crate::model_price_store::ModelPriceStore::new(db.clone());
+
     let metrics = init_metrics()?;
 
     let settings_snapshot = settings_store.get_all().await.map_err(|err| {
@@ -747,11 +748,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                             channel.name.clone(),
                             model_name.to_string(),
                             upstream_model.clone(),
-                            pricing_snapshot.resolve(
-                                &upstream_model,
-                                model_name,
-                                channel.provider_type.as_str(),
-                            ),
+                            pricing_snapshot.resolve(&upstream_model, model_name),
                             usage_snapshot,
                             probe_started_at.elapsed().as_millis() as u64,
                             probe_request_id,
@@ -1054,37 +1051,34 @@ fn active_probe_user_init_error(error: String) -> AppError {
     )
 }
 
+/// MP-M7 (`model-pricing.spec.md`): the active probe prices through
+/// `model_prices` with MP-R1 key normalization. Applicable rows for every
+/// candidate pricing key are loaded by one set-based query (MP-R8).
 #[derive(Debug, Clone, Default)]
 struct ActiveProbePricingSnapshot {
     reasoning_suffix_map: HashMap<String, String>,
-    prices: HashMap<String, crate::model_price_store::ModelPriceRecord>,
+    rows: HashMap<String, crate::model_price_store::ModelPriceRecord>,
 }
 
 impl ActiveProbePricingSnapshot {
+    /// MP-R1: normalized upstream key first, then the normalized logical key
+    /// for redirected models. Returns the pricing key plus the applicable row.
     fn resolve(
         &self,
         upstream_model: &str,
         logical_model: &str,
-        _provider_type: &str,
-    ) -> Result<Option<(String, crate::model_price_store::ModelPriceRecord)>, String> {
-        let upstream_key =
-            normalize_pricing_model_key(upstream_model, &self.reasoning_suffix_map);
-        if let Some(row) = self.prices.get(&upstream_key)
-            && row.enabled
-            && row.is_complete()
-        {
-            return Ok(Some((upstream_key, row.clone())));
-        }
-        if upstream_model == logical_model {
-            return Ok(None);
+    ) -> (String, Option<crate::model_price_store::ModelPriceRecord>) {
+        let upstream_key = normalize_pricing_model_key(upstream_model, &self.reasoning_suffix_map);
+        if let Some(row) = self.rows.get(&upstream_key) {
+            return (upstream_key, Some(row.clone()));
         }
         let logical_key = normalize_pricing_model_key(logical_model, &self.reasoning_suffix_map);
-        Ok(self
-            .prices
-            .get(&logical_key)
-            .filter(|row| row.enabled && row.is_complete())
-            .cloned()
-            .map(|row| (logical_key, row)))
+        if logical_key != upstream_key
+            && let Some(row) = self.rows.get(&logical_key)
+        {
+            return (logical_key, Some(row.clone()));
+        }
+        (upstream_key, None)
     }
 }
 
@@ -1094,7 +1088,7 @@ async fn build_active_probe_pricing_snapshot(
     runtime: &MonoizeRuntimeConfig,
 ) -> Result<ActiveProbePricingSnapshot, String> {
     let reasoning_suffix_map = runtime.reasoning_suffix_map.clone();
-    let mut models = Vec::new();
+    let mut keys = std::collections::HashSet::new();
     for provider in providers {
         for channel in &provider.channels {
             let configured_model = channel
@@ -1117,22 +1111,28 @@ async fn build_active_probe_pricing_snapshot(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(&logical_model);
-            models.push(normalize_pricing_model_key(
+            keys.insert(normalize_pricing_model_key(
                 upstream_model,
                 &reasoning_suffix_map,
             ));
-            if upstream_model != logical_model {
-                models.push(normalize_pricing_model_key(
-                    &logical_model,
-                    &reasoning_suffix_map,
-                ));
-            }
+            keys.insert(normalize_pricing_model_key(
+                &logical_model,
+                &reasoning_suffix_map,
+            ));
         }
     }
-    let prices = model_price_store.get_many(&models).await?;
+    let mut keys = keys.into_iter().collect::<Vec<_>>();
+    keys.sort();
+    let rows = model_price_store.list_by_model_ids(&keys).await?;
+    let rows = rows
+        .into_iter()
+        // MP-R2/MP-R4: a disabled or incomplete row is exactly a missing row.
+        .filter(|row| row.enabled && row.is_complete())
+        .map(|row| (row.model_id.clone(), row))
+        .collect();
     Ok(ActiveProbePricingSnapshot {
         reasoning_suffix_map,
-        prices,
+        rows,
     })
 }
 
@@ -1231,22 +1231,20 @@ async fn persist_active_probe_request_log(
     provider_id: String,
     provider_name: String,
     provider_type: crate::monoize_routing::MonoizeProviderType,
-    provider_multiplier: Option<Multiplier>,
+    channel_multiplier: Option<Multiplier>,
     channel_id: String,
     channel_name: String,
     logical_model: String,
     upstream_model: String,
-    pricing_resolution: Result<
-        Option<(String, crate::model_price_store::ModelPriceRecord)>,
-        String,
-    >,
+    pricing: (String, Option<crate::model_price_store::ModelPriceRecord>),
     usage_snapshot: Option<Value>,
     duration_ms: u64,
     request_id: String,
     created_at: chrono::DateTime<chrono::Utc>,
     reservation: crate::db_cache::RequestLogReservation,
 ) -> Result<(), String> {
-    let provider_multiplier = provider_multiplier.unwrap_or(Multiplier::ONE);
+    let channel_multiplier = channel_multiplier.unwrap_or(Multiplier::ONE);
+    let (pricing_model_key, model_price) = pricing;
     let parsed_prompt_tokens = usage_snapshot
         .as_ref()
         .and_then(|v| v.get("prompt_tokens"))
@@ -1256,47 +1254,45 @@ async fn persist_active_probe_request_log(
         .and_then(|v| v.get("completion_tokens"))
         .and_then(|v| v.as_u64());
     let usage_tokens = parsed_prompt_tokens.zip(parsed_completion_tokens);
-    let (charge_nano_usd, billing_breakdown_json) =
-        if let Some((prompt_tokens, completion_tokens)) = usage_tokens {
-            match pricing_resolution {
-                Ok(Some((pricing_key, pricing))) => {
-                    let usage = crate::urp::Usage {
-                        input_tokens: prompt_tokens,
-                        output_tokens: completion_tokens,
-                        ..Default::default()
-                    };
-                    match crate::handlers::calculate_active_probe_charge(
-                        &pricing,
-                        &pricing_key,
-                        &usage,
-                        provider_multiplier,
-                    ) {
-                    Ok((charge, breakdown)) => (Some(charge), Some(breakdown)),
-                    Err(err) => {
-                        tracing::warn!(
-                            logical_model,
-                            upstream_model,
-                            error = %err,
-                            "active probe charge calculation failed"
-                        );
-                        (None, None)
-                    }
-                    }
-                }
-                Ok(None) => (None, None),
-                Err(err) => {
-                    tracing::warn!(
-                        logical_model,
-                        upstream_model,
-                        error = %err,
-                        "active probe pricing resolution failed"
-                    );
-                    (None, None)
-                }
-            }
-        } else {
-            (None, None)
+    let (charge_nano_usd, billing_breakdown_json) = if let Some(price) = model_price.as_ref()
+        && let Some((prompt_tokens, completion_tokens)) = usage_tokens
+    {
+        let usage = crate::urp::Usage {
+            input_tokens: prompt_tokens,
+            output_tokens: completion_tokens,
+            input_details: None,
+            output_details: None,
+            extra_body: HashMap::new(),
         };
+        // The probe settles at group ratio 1 and the channel multiplier; the
+        // probe user has no group memberships.
+        let inputs = crate::settlement::SettlementInputs {
+            usage: crate::settlement::SettledUsage::Reported(&usage),
+            output: None,
+            price: Some(price),
+            pricing_model_key: &pricing_model_key,
+            tool_prices: &Value::Object(serde_json::Map::new()),
+            requested_tool_classes: &[],
+            service_tier: None,
+            billing_group_id: None,
+            group_billing_ratio: Multiplier::ONE,
+            channel_multiplier,
+        };
+        match crate::settlement::settle(&inputs) {
+            Ok(outcome) => (Some(outcome.final_charge_nano), Some(outcome.breakdown)),
+            Err(err) => {
+                tracing::warn!(
+                    logical_model,
+                    upstream_model,
+                    error = %err,
+                    "active probe charge calculation failed"
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
 
     let usage_breakdown_json = usage_tokens.map(|(prompt_tokens, completion_tokens)| {
         build_probe_usage_breakdown(prompt_tokens, completion_tokens)
@@ -1325,7 +1321,7 @@ async fn persist_active_probe_request_log(
         reasoning_tokens: None,
         accepted_prediction_tokens: None,
         rejected_prediction_tokens: None,
-        provider_multiplier: Some(provider_multiplier),
+        provider_multiplier: Some(channel_multiplier),
         charge_nano_usd,
         status: "success".to_string(),
         usage_breakdown_json,
@@ -1404,6 +1400,41 @@ mod active_probe_billing_tests {
         );
     }
 
+    fn price_row(model_id: &str) -> crate::model_price_store::ModelPriceRecord {
+        crate::model_price_store::ModelPriceRecord {
+            model_id: model_id.to_string(),
+            billing_mode: "per_token".to_string(),
+            input_usd_per_1m: Some("11".to_string()),
+            output_usd_per_1m: Some("22".to_string()),
+            cache_read_usd_per_1m: None,
+            cache_write_usd_per_1m: None,
+            cache_write_1h_usd_per_1m: None,
+            reasoning_usd_per_1m: None,
+            per_request_usd: None,
+            billing_expr: None,
+            source: "manual".to_string(),
+            locked_fields: Vec::new(),
+            raw_json: json!({}),
+            enabled: true,
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn probe_snapshot_resolves_upstream_key_before_logical_key() {
+        let snapshot = ActiveProbePricingSnapshot {
+            reasoning_suffix_map: HashMap::new(),
+            rows: HashMap::from([("logical-model".to_string(), price_row("logical-model"))]),
+        };
+        // MP-R1: the upstream key misses, the logical key applies.
+        let (key, row) = snapshot.resolve("upstream-model", "logical-model");
+        assert_eq!(key, "logical-model");
+        assert!(row.is_some());
+        // A total miss records the normalized upstream key.
+        let (key, row) = snapshot.resolve("other-upstream", "other-logical");
+        assert_eq!(key, "other-upstream");
+        assert!(row.is_none());
+    }
 }
 
 fn resolve_database_dsn() -> String {
@@ -1855,6 +1886,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/marketplace/models",
             get(crate::dashboard_handlers::list_marketplace_models),
+        )
+        .route(
+            "/dashboard/model-metadata/sync/models-dev",
+            post(crate::dashboard_handlers::sync_model_metadata_models_dev),
         )
         .route(
             "/dashboard/model-metadata/{*model_id}",

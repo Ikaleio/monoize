@@ -36,13 +36,22 @@ impl Transform for PromptInjectSystemTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Prompt: inject system prompt"), ("zh", "提示词：注入系统提示词")]
+        &[
+            ("en", "Prompt: inject system prompt"),
+            ("zh", "提示词：注入系统提示词"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Prepends or appends the configured text to the request system prompt, creating a system node when none exists."),
-            ("zh", "将配置文本前置或追加到系统提示词；不存在 system 节点时创建新节点。"),
+            (
+                "en",
+                "Prepends or appends the configured text to the request system prompt, creating a system node when none exists.",
+            ),
+            (
+                "zh",
+                "将配置文本前置或追加到系统提示词；不存在 system 节点时创建新节点。",
+            ),
         ]
     }
 

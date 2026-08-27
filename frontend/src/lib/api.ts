@@ -4,7 +4,9 @@ type UnauthorizedHandler = () => void;
 
 const unauthorizedHandlers = new Set<UnauthorizedHandler>();
 
-export function subscribeDashboardUnauthorized(handler: UnauthorizedHandler): () => void {
+export function subscribeDashboardUnauthorized(
+  handler: UnauthorizedHandler,
+): () => void {
   unauthorizedHandlers.add(handler);
   return () => {
     unauthorizedHandlers.delete(handler);
@@ -146,7 +148,8 @@ export interface ModelRedirectRule {
   replace: string;
 }
 
-export type RequestCaptureMode = "off" | "capture-all" | "capture-only-abnormal";
+export type RequestCaptureMode =
+  "off" | "capture-all" | "capture-only-abnormal";
 
 /** Per-key capture retention (RCD-C5a, `request-capture-dumps.spec.md`). */
 export type RequestCaptureRetention = "5m" | "1h" | "24h" | "7d";
@@ -254,6 +257,7 @@ export interface SystemSettings {
   allow_free_when_unpriced: boolean;
   allow_free_when_missing_usage: boolean;
   tool_prices: Record<string, ToolPriceEntry>;
+  price_sync_auto_enabled: boolean;
   price_sync_new_api_base_url: string;
   price_sync_new_api_token: string;
   updated_at: string;
@@ -447,7 +451,13 @@ export interface ProviderModelRuntimeStatus {
   unpriced_channels: ProviderModelRuntimeChannel[];
 }
 
-export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini" | "openai_image" | "replicate";
+export type ProviderType =
+  | "responses"
+  | "chat_completion"
+  | "messages"
+  | "gemini"
+  | "openai_image"
+  | "replicate";
 export type AffinityFailbackMode = "sticky" | "prefer_higher_priority";
 
 export interface ApiTypeOverride {
@@ -570,6 +580,13 @@ export interface ModelMetadataRecord {
   updated_at: string;
 }
 
+// Marketplace rows join the enabled `model_prices` row on `model_id`
+// (model-marketplace.spec.md); prices are decimal USD-per-1M strings.
+export interface MarketplaceModelRecord extends ModelMetadataRecord {
+  input_usd_per_1m: string | null;
+  output_usd_per_1m: string | null;
+}
+
 export interface UpsertModelMetadataInput {
   source?: "manual" | "models_dev";
   models_dev_provider?: string | null;
@@ -579,10 +596,11 @@ export interface UpsertModelMetadataInput {
   max_tokens?: number | null;
 }
 
-export interface MarketplaceModelRecord extends ModelMetadataRecord {
-  billing_mode?: BillingMode;
-  input_usd_per_1m?: string;
-  output_usd_per_1m?: string;
+export interface ModelMetadataSyncResult {
+  success: boolean;
+  upserted: number;
+  skipped: number;
+  fetched_at: string;
 }
 
 export interface RequestLogProvider {
@@ -836,10 +854,7 @@ export interface DashboardAnalytics {
 }
 
 export type DashboardPerformanceBrickStatus =
-  | "up"
-  | "degraded"
-  | "down"
-  | "empty";
+  "up" | "degraded" | "down" | "empty";
 
 export interface DashboardPerformanceBrick {
   index: number;
@@ -919,7 +934,7 @@ export interface FetchChannelModelsInput {
 class ApiClient {
   private async request<T>(
     path: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
   ): Promise<T> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -938,21 +953,31 @@ class ApiClient {
       if (response.status === 401 && data.error?.code === "unauthorized") {
         notifyDashboardUnauthorized();
       }
-      throw new Error(data.error?.message || data.error?.code || "Request failed");
+      throw new Error(
+        data.error?.message || data.error?.code || "Request failed",
+      );
     }
 
     return data;
   }
 
   // Auth
-  async register(username: string, password: string, captchaToken: string): Promise<AuthResponse> {
+  async register(
+    username: string,
+    password: string,
+    captchaToken: string,
+  ): Promise<AuthResponse> {
     return this.request("/auth/register", {
       method: "POST",
       body: JSON.stringify({ username, password, captcha_token: captchaToken }),
     });
   }
 
-  async login(username: string, password: string, captchaToken: string): Promise<AuthResponse> {
+  async login(
+    username: string,
+    password: string,
+    captchaToken: string,
+  ): Promise<AuthResponse> {
     return this.request("/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password, captcha_token: captchaToken }),
@@ -967,7 +992,10 @@ class ApiClient {
     return this.request("/auth/me");
   }
 
-  async changePassword(currentPassword: string, newPassword: string): Promise<AuthResponse> {
+  async changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<AuthResponse> {
     return this.request("/auth/password", {
       method: "PUT",
       body: JSON.stringify({
@@ -990,7 +1018,7 @@ class ApiClient {
     username: string,
     password: string,
     role?: string,
-    group_id?: string
+    group_id?: string,
   ): Promise<User> {
     return this.request("/users", {
       method: "POST",
@@ -1011,7 +1039,7 @@ class ApiClient {
       email?: string | null;
       group_id?: string;
       billing_plan_id?: string | null;
-    }
+    },
   ): Promise<User> {
     return this.request(`/users/${id}`, {
       method: "PUT",
@@ -1031,7 +1059,10 @@ class ApiClient {
     });
   }
 
-  async updateBillingPlan(id: string, input: BillingPlanInput): Promise<{ success: boolean }> {
+  async updateBillingPlan(
+    id: string,
+    input: BillingPlanInput,
+  ): Promise<{ success: boolean }> {
     return this.request(`/billing-plans/${id}`, {
       method: "PUT",
       body: JSON.stringify(input),
@@ -1044,7 +1075,7 @@ class ApiClient {
   }
 
   async resetBillingPlan(
-    id: string
+    id: string,
   ): Promise<{ success: boolean; reset_count: number }> {
     return this.request(`/billing-plans/${id}/reset`, { method: "POST" });
   }
@@ -1087,14 +1118,23 @@ class ApiClient {
     await this.request(`/tokens/${id}`, { method: "DELETE" });
   }
 
-  async batchDeleteApiKeys(ids: string[]): Promise<{ success: boolean; deleted_count: number }> {
+  async batchDeleteApiKeys(
+    ids: string[],
+  ): Promise<{ success: boolean; deleted_count: number }> {
     return this.request("/tokens/batch-delete", {
       method: "POST",
       body: JSON.stringify({ ids }),
     });
   }
 
-  async transferToSubAccount(keyId: string, input: { amount_nano_usd?: string; amount_usd?: string }): Promise<{ success: boolean; api_key_balance_nano_usd: string; user_balance_nano_usd: string }> {
+  async transferToSubAccount(
+    keyId: string,
+    input: { amount_nano_usd?: string; amount_usd?: string },
+  ): Promise<{
+    success: boolean;
+    api_key_balance_nano_usd: string;
+    user_balance_nano_usd: string;
+  }> {
     return this.request(`/tokens/${keyId}/transfer`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -1107,7 +1147,7 @@ class ApiClient {
   }
 
   async updateSettings(
-    settings: Partial<SystemSettings>
+    settings: Partial<SystemSettings>,
   ): Promise<SystemSettings> {
     return this.request("/settings", {
       method: "PUT",
@@ -1176,7 +1216,10 @@ class ApiClient {
     });
   }
 
-  async updateProvider(id: string, input: UpdateProviderInput): Promise<Provider> {
+  async updateProvider(
+    id: string,
+    input: UpdateProviderInput,
+  ): Promise<Provider> {
     return this.request(`/providers/${id}`, {
       method: "PUT",
       body: JSON.stringify(input),
@@ -1200,7 +1243,7 @@ class ApiClient {
 
   async listCustomTransforms(): Promise<CustomTransform[]> {
     const response = await this.request<{ transforms: CustomTransform[] }>(
-      "/custom-transforms"
+      "/custom-transforms",
     );
     return response.transforms;
   }
@@ -1214,7 +1257,7 @@ class ApiClient {
 
   async updateCustomTransform(
     id: string,
-    input: { source?: string; enabled?: boolean }
+    input: { source?: string; enabled?: boolean },
   ): Promise<CustomTransform> {
     return this.request(`/custom-transforms/${encodeURIComponent(id)}`, {
       method: "PUT",
@@ -1238,7 +1281,7 @@ class ApiClient {
 
   async upsertModelMetadata(
     modelId: string,
-    input: UpsertModelMetadataInput
+    input: UpsertModelMetadataInput,
   ): Promise<ModelMetadataRecord> {
     return this.request(`/model-metadata/${encodeURIComponent(modelId)}`, {
       method: "PUT",
@@ -1252,13 +1295,19 @@ class ApiClient {
     });
   }
 
+  async syncModelMetadataFromModelsDev(): Promise<ModelMetadataSyncResult> {
+    return this.request("/model-metadata/sync/models-dev", {
+      method: "POST",
+    });
+  }
+
   async listModelPrices(): Promise<ModelPriceRecord[]> {
     return this.request("/model-prices");
   }
 
   async upsertModelPrice(
     modelId: string,
-    input: UpsertModelPriceInput
+    input: UpsertModelPriceInput,
   ): Promise<ModelPriceRecord> {
     return this.request(`/model-prices/${encodeURIComponent(modelId)}`, {
       method: "PUT",
@@ -1309,7 +1358,11 @@ class ApiClient {
     });
   }
 
-  async listRequestLogs(limit = 50, offset = 0, filters?: RequestLogsFilter): Promise<RequestLogsResponse> {
+  async listRequestLogs(
+    limit = 50,
+    offset = 0,
+    filters?: RequestLogsFilter,
+  ): Promise<RequestLogsResponse> {
     const params = new URLSearchParams();
     params.set("limit", String(limit));
     params.set("offset", String(offset));
@@ -1323,16 +1376,22 @@ class ApiClient {
     return this.request(`/request-logs?${params.toString()}`);
   }
 
-  async getRequestCapture(requestId: string, userId?: string): Promise<RequestCaptureDetail> {
+  async getRequestCapture(
+    requestId: string,
+    userId?: string,
+  ): Promise<RequestCaptureDetail> {
     const params = new URLSearchParams();
     if (userId) params.set("user_id", userId);
     const query = params.toString();
     return this.request(
-      `/request-captures/${encodeURIComponent(requestId)}${query ? `?${query}` : ""}`
+      `/request-captures/${encodeURIComponent(requestId)}${query ? `?${query}` : ""}`,
     );
   }
 
-  async getDashboardAnalytics(buckets = 8, rangeHours = 24): Promise<DashboardAnalytics> {
+  async getDashboardAnalytics(
+    buckets = 8,
+    rangeHours = 24,
+  ): Promise<DashboardAnalytics> {
     const params = new URLSearchParams();
     params.set("buckets", String(buckets));
     params.set("range_hours", String(rangeHours));
@@ -1355,7 +1414,7 @@ class ApiClient {
     providerId: string,
     channelId: string,
     model?: string,
-    stream = true
+    stream = true,
   ): Promise<ChannelTestResult> {
     return this.request(`/providers/${providerId}/channels/${channelId}/test`, {
       method: "POST",

@@ -24,13 +24,16 @@
 
 ### 0.1 Implementation status
 
-MP-S1. This specification defines the implemented behavior. Migration
-`m20260826_000048_model_prices` creates the new storage. Migration
-`m20260901_000049_model_prices_cutover` removes the legacy engine and activates this
-settlement model.
+MP-S1. This specification is implemented. Delivery was split into two migration
+steps (§12). Step `m20260826_000048_model_prices` is additive and shipped with the
+pricing dashboard skeleton. Step `m20260901_000049_model_prices_cutover` removes the
+legacy engine and ships together with the settlement rewrite, the §9 sync engine, and
+the §10 dashboard endpoints in the same release.
 
-MP-S2. New settlements MUST use `model_prices`. The deprecated rules in
-`metered-billing.spec.md` do not govern new settlements.
+MP-S2. The cutover step removed the legacy `billing_rate_records` engine. No runtime
+code path reads `billing_rate_records` or `pricing_profile_model_patterns`. The
+deprecated rules in `metered-billing.spec.md` describe only historical stored data
+(version-2 breakdowns, `request-logs.spec.md` RL16a).
 
 ## 1. Concepts and units
 
@@ -136,7 +139,7 @@ optional `boolean | null`. Read paths MUST return `true`, `false`, and `null` di
 
 ### 2.5 System settings
 
-MP-D13. Three settings are added to `system_settings` and exposed through
+MP-D13. Four settings are added to `system_settings` and exposed through
 `GET/PUT /api/dashboard/settings`:
 
 | Key | Type | Default |
@@ -144,9 +147,10 @@ MP-D13. Three settings are added to `system_settings` and exposed through
 | `allow_free_when_unpriced` | boolean | `false` |
 | `allow_free_when_missing_usage` | boolean | `false` |
 | `tool_prices` | JSON object | §6.4 seed table |
+| `price_sync_auto_enabled` | boolean | `true` |
 
-MP-D14. Both boolean settings default to `false`. `false` is the fail-closed state:
-missing prices and missing usage reject as defined in §7.
+MP-D14. Both free-settlement settings default to `false`. `false` is the fail-closed
+state: missing prices and missing usage reject as defined in §7.
 
 ## 3. Price resolution
 
@@ -525,7 +529,31 @@ the JSON tokens, never through binary floating point):
 | `cost.cache_write` | `cache_write_usd_per_1m` |
 | `cost.reasoning` | `reasoning_usd_per_1m` |
 
-`billing_mode = "per_token"`. Missing cost subfields store NULL.
+If `cost.tiers` is absent or empty, `billing_mode = "per_token"` and
+`billing_expr = NULL`. Missing cost subfields store NULL.
+
+MP-Y5a. If the selected variant contains a non-empty `cost.tiers` array, the sync MUST
+set `billing_mode = "tiered_expr"`. The sync MUST convert the base `cost` object and
+the context tiers into `billing_expr` as follows:
+
+- Every source tier MUST have `tier.type = "context"`.
+- Every source tier MUST have an integer `tier.size >= 1`.
+- Source tier sizes MUST be unique. The sync MUST order source tiers by size ascending.
+- The base `cost` object becomes the first expression tier. Its
+  `when_input_tokens_lte` equals the smallest source tier size.
+- Source tier `i` uses the next source tier size as `when_input_tokens_lte`.
+- The last source tier omits `when_input_tokens_lte`.
+- `input`, `output`, `cache_read`, `cache_write`, and `reasoning` map to the expression
+  fields defined by MP-C6.
+- The base price columns defined by MP-Y5 MUST still store the base `cost` values.
+- `billing_expr` MUST satisfy MP-C10.
+
+The generated expression applies the base price when `usage.input_tokens` is at most
+the first source tier size. It applies the first source tier above that boundary.
+If the source has more than seven tiers, has duplicate sizes, or has an invalid tier,
+the models.dev sync MUST fail with `parse_failed`. The sync MUST NOT replace a tiered
+row with one flat price after such an error. `cost.tiers` is authoritative when both
+`cost.tiers` and legacy `cost.context_over_200k` exist.
 
 MP-Y6. All grouped variants MUST be stored in `raw_json` as
 `{ "providers": { "<provider_id>": <variant model JSON>, ... } }` with every cost value
@@ -614,7 +642,8 @@ the run's source or that do not exist. It MUST NOT modify a row whose `source` i
 `manual` or a different sync source; such rows are counted in `skipped`.
 
 MP-Y14. Within an upserted row, a column listed in `locked_fields` MUST keep its stored
-value. The sync MUST still refresh `raw_json` and `updated_at`.
+value. This rule includes `billing_mode` and `billing_expr`. The sync MUST still
+refresh `raw_json` and `updated_at`.
 
 MP-Y15. A `models_dev` sync run deletes rows with `source = "models_dev"` whose
 canonical model id is absent from the fetched snapshot. Other sources do not delete.
@@ -632,6 +661,33 @@ an existing synced row keeps its `source`, gaining only the lock entries.
 
 MP-Y18. A dashboard upsert MAY replace `locked_fields` explicitly to remove locks.
 Removing every lock from a synced row re-enables full sync updates for it.
+
+### 9.7 Automatic sync
+
+MP-Y19. A primary process MUST start one automatic price-sync scheduler. A replica
+process MUST NOT start this scheduler.
+
+MP-Y20. If `price_sync_auto_enabled = true` when the scheduler starts, the scheduler
+MUST start one cycle without waiting for the 24-hour interval. Changing the setting
+from `false` to `true` MUST also start one cycle within 60 seconds.
+
+MP-Y21. While `price_sync_auto_enabled = true`, the scheduler MUST start the next cycle
+no earlier than 24 hours and no later than 24 hours plus 60 seconds after the prior
+cycle started. Changing the setting to `false` MUST prevent the next cycle. It MUST NOT
+cancel a cycle that already started.
+
+MP-Y22. One automatic cycle MUST apply `models_dev` first. If that run succeeds, the
+cycle MUST then apply `openrouter`. The OpenRouter run fills absent model ids and updates
+rows that it already owns under MP-Y13. If the models.dev run fails, the cycle MUST skip
+OpenRouter so that OpenRouter cannot claim rows from an incomplete models.dev snapshot.
+
+MP-Y23. Manual and automatic apply runs in one process MUST use one single-flight lock.
+At most one apply run may fetch, plan, or write at a time. A waiting run MUST start after
+the active run releases the lock.
+
+MP-Y24. Every automatic source run MUST create and finalize the same `price_sync_runs`
+row as a manual apply run. An automatic failure MUST be logged. It MUST NOT stop the
+process or disable later cycles.
 
 ## 10. Dashboard APIs
 
@@ -670,8 +726,9 @@ MP-A7. `POST /api/dashboard/price-sync/{source}/apply` performs MP-Y13..MP-Y16 a
 returns the finalized run row.
 
 MP-A8. `tool_prices`, `allow_free_when_unpriced`, `allow_free_when_missing_usage`,
-`price_sync_new_api_base_url`, and `price_sync_new_api_token` are read and written
-through the existing `GET/PUT /api/dashboard/settings` endpoints.
+`price_sync_auto_enabled`, `price_sync_new_api_base_url`, and
+`price_sync_new_api_token` are read and written through the existing
+`GET/PUT /api/dashboard/settings` endpoints.
 
 MP-A9. Group `billing_ratio` is read through `GET /api/dashboard/groups` and written
 through the group create/update endpoints (`groups-registry.spec.md` §2).
@@ -708,8 +765,18 @@ MP-UI6. Upstream Sync tab: one card per source (models.dev, OpenRouter, new-api)
 last-run status from MP-A5, a preview action rendering the MP-A6 diff, and an apply
 action. The new-api card exposes the base-URL and token settings.
 
-MP-UI6a. Applying the models.dev source MUST update prices and metadata from the same
-fetched snapshot. A separate metadata-sync action or endpoint MUST NOT exist.
+MP-UI6a. The models.dev card additionally exposes the metadata sync action
+(`POST /api/dashboard/model-metadata/sync/models-dev`,
+`model-metadata-dashboard.spec.md` §2). The preview action calls MP-A6 and renders the
+returned diff in a dialog without mutating client caches. The apply action calls MP-A7
+and, on success, revalidates the model-prices, unpriced-models, sync-runs, and
+model-metadata caches.
+
+MP-UI6b. The Upstream Sync tab MUST expose one `price_sync_auto_enabled` switch above
+the source cards. The switch description MUST state the fixed 24-hour interval and the
+source order. The switch mutation MUST use the existing optimistic settings update. A
+failed mutation MUST restore the prior value and display an error toast. While settings
+are loading, the automatic-sync block MUST render a skeleton.
 
 MP-UI7. Group Pricing tab: lists registry groups with an editable `billing_ratio`
 column persisting through the group update endpoint.

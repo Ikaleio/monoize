@@ -29,13 +29,22 @@ impl Transform for PromptStripAnthropicBillingHeaderTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Prompt: strip Anthropic billing header"), ("zh", "提示词：移除 Anthropic 计费标记")]
+        &[
+            ("en", "Prompt: strip Anthropic billing header"),
+            ("zh", "提示词：移除 Anthropic 计费标记"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Removes x-anthropic-billing-header lines from system and developer text nodes, dropping nodes that become empty."),
-            ("zh", "从 system/developer 文本节点中移除 x-anthropic-billing-header 行，并删除因此变空的节点。"),
+            (
+                "en",
+                "Removes x-anthropic-billing-header lines from system and developer text nodes, dropping nodes that become empty.",
+            ),
+            (
+                "zh",
+                "从 system/developer 文本节点中移除 x-anthropic-billing-header 行，并删除因此变空的节点。",
+            ),
         ]
     }
 

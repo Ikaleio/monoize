@@ -71,9 +71,15 @@ SDK19b. `sdk-tests/openai-agent-tool-smoke.ts` MUST set the channel `provider_ty
 
 SDK20. The runner MUST fail if any request in SDK14-SDK19 returns a non-success HTTP status or omits a required response field.
 
-SDK21. Each runner MUST seed one enabled `per_token` price for `gpt-4o-mini` by sending `PUT /api/dashboard/model-prices/gpt-4o-mini`. The request MUST set `input_usd_per_1m = "0.001"` and `output_usd_per_1m = "0.001"` before issuing a forwarded SDK request.
+SDK21. Each runner MUST seed model metadata for `gpt-4o-mini` by sending `PUT /api/dashboard/model-metadata/gpt-4o-mini` with `max_input_tokens = 8192` and `max_output_tokens = 4096` before issuing any forwarded SDK request.
 
-SDK22. The runner MUST fail if the model-price request in SDK21 returns a non-success HTTP status.
+SDK21a. After SDK21, each runner MUST create exactly one `model_prices` row (`model-pricing.spec.md` MP-A2) by sending an authenticated `PUT /api/dashboard/model-prices/gpt-4o-mini` with:
+
+- `billing_mode = "per_token"`
+- `input_usd_per_1m = "0.001"`
+- `output_usd_per_1m = "0.001"`
+
+SDK22. The runner MUST fail if the metadata request in SDK21 or the model-price request in SDK21a returns a non-success HTTP status.
 
 ## 4. OpenAI SDK smoke assertion
 

@@ -324,27 +324,23 @@ pub(super) fn provider_pricing_model<'a>(
         .unwrap_or(logical_model)
 }
 
-fn channel_model_has_price(
-    prices: &HashMap<String, crate::model_price_store::ModelPriceRecord>,
+/// MP-UI3: a channel model is priced when an enabled, complete `model_prices`
+/// row exists for its normalized upstream key or normalized logical key.
+pub(super) fn channel_model_has_model_price(
+    priced_keys: &HashSet<String>,
     logical_model: &str,
     model_entry: &crate::monoize_routing::MonoizeModelEntry,
     reasoning_suffix_map: &HashMap<String, String>,
 ) -> bool {
     let upstream_model = provider_pricing_model(logical_model, model_entry);
-    let upstream_key = normalize_pricing_model_key(upstream_model, reasoning_suffix_map);
-    if prices
-        .get(&upstream_key)
-        .is_some_and(|row| row.enabled && row.is_complete())
-    {
+    let normalized_upstream_model =
+        normalize_pricing_model_key(upstream_model, reasoning_suffix_map);
+    if priced_keys.contains(&normalized_upstream_model) {
         return true;
     }
-    if upstream_model == logical_model {
-        return false;
-    }
-    let logical_key = normalize_pricing_model_key(logical_model, reasoning_suffix_map);
-    prices
-        .get(&logical_key)
-        .is_some_and(|row| row.enabled && row.is_complete())
+    let normalized_logical_model = normalize_pricing_model_key(logical_model, reasoning_suffix_map);
+    normalized_logical_model != normalized_upstream_model
+        && priced_keys.contains(&normalized_logical_model)
 }
 
 pub async fn list_providers(
@@ -365,30 +361,33 @@ pub async fn list_providers(
         .await
         .reasoning_suffix_map
         .clone();
-    let mut pricing_models = Vec::new();
+    let mut pricing_keys = HashSet::new();
     for provider in &providers {
         for channel in &provider.channels {
             for (logical_model, model_entry) in &channel.models {
-                let normalized_upstream_model = normalize_pricing_model_key(
+                pricing_keys.insert(normalize_pricing_model_key(
                     provider_pricing_model(logical_model, model_entry),
                     &reasoning_suffix_map,
-                );
-                let normalized_logical_model =
-                    normalize_pricing_model_key(logical_model, &reasoning_suffix_map);
-                pricing_models.push(normalized_upstream_model.clone());
-                if normalized_upstream_model != normalized_logical_model {
-                    pricing_models.push(normalized_logical_model);
-                }
+                ));
+                pricing_keys.insert(normalize_pricing_model_key(
+                    logical_model,
+                    &reasoning_suffix_map,
+                ));
             }
         }
     }
+    let mut pricing_models = pricing_keys.into_iter().collect::<Vec<_>>();
     pricing_models.sort();
-    pricing_models.dedup();
-    let price_rows = state
+    let priced_keys: HashSet<String> = state
         .model_price_store
-        .get_many(&pricing_models)
+        .list_by_model_ids(&pricing_models)
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .into_iter()
+        // MP-R2/MP-R4: disabled or incomplete rows count as missing.
+        .filter(|row| row.enabled && row.is_complete())
+        .map(|row| row.model_id)
+        .collect();
 
     let mut out = Vec::with_capacity(providers.len());
     for provider in providers {
@@ -396,8 +395,8 @@ pub async fn list_providers(
         let mut unpriced_entries = HashSet::new();
         for channel in &provider.channels {
             for (logical_model, model_entry) in &channel.models {
-                let has_pricing = channel_model_has_price(
-                    &price_rows,
+                let has_pricing = channel_model_has_model_price(
+                    &priced_keys,
                     logical_model,
                     model_entry,
                     &reasoning_suffix_map,

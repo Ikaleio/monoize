@@ -29,13 +29,22 @@ impl Transform for CacheAnthropicSystemTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Auto-cache: Anthropic system prompt"), ("zh", "自动缓存：Anthropic 系统提示词")]
+        &[
+            ("en", "Auto-cache: Anthropic system prompt"),
+            ("zh", "自动缓存：Anthropic 系统提示词"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Inserts an Anthropic ephemeral cache_control breakpoint on the last system or developer node so the stable system prefix can be cached."),
-            ("zh", "在最后一个 system/developer 节点插入 Anthropic ephemeral cache_control 缓存断点，使稳定的系统前缀可以被缓存。"),
+            (
+                "en",
+                "Inserts an Anthropic ephemeral cache_control breakpoint on the last system or developer node so the stable system prefix can be cached.",
+            ),
+            (
+                "zh",
+                "在最后一个 system/developer 节点插入 Anthropic ephemeral cache_control 缓存断点，使稳定的系统前缀可以被缓存。",
+            ),
         ]
     }
 

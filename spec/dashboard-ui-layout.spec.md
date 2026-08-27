@@ -401,6 +401,11 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 - The editor MUST show only transforms whose `supported_scopes` includes `api_key`.
 - The editor MUST continue filtering by `supported_phases` within the API-key-scoped subset.
 - Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
+- The transform-editor UI MUST fetch the registry only when the session user role is
+  `admin` or `super_admin`; for role `user` the client MUST NOT issue the registry
+  request at all (the endpoint is admin-only per SAC-1/SAC-3), and the transform editor
+  MUST render as unavailable (no registry options) instead of polling and failing with
+  HTTP 403.
 
 AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_inject_content_field` for response-phase rules.
 
@@ -535,6 +540,8 @@ AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized renderi
 - Table body rows MUST be rendered via `itemContent` callback.
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 - Select-all checkbox MUST remain in the fixed header; per-row checkboxes MUST remain in `itemContent`.
+
+AK-UI-BATCH-1. When one or more API keys are selected, the page header MUST show a destructive batch-delete action with a localized label equivalent to "Delete selected". The frontend MUST render the translated label and MUST NOT render an untranslated locale-key identifier.
 
 AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include a group section
 containing exactly:

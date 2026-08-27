@@ -27,12 +27,18 @@ impl Transform for FieldOverrideMaxTokensTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Field: override max tokens"), ("zh", "字段：覆盖最大输出 token")]
+        &[
+            ("en", "Field: override max tokens"),
+            ("zh", "字段：覆盖最大输出 token"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Sets the request max output token limit to the configured value."),
+            (
+                "en",
+                "Sets the request max output token limit to the configured value.",
+            ),
             ("zh", "将请求的最大输出 token 上限设置为配置值。"),
         ]
     }

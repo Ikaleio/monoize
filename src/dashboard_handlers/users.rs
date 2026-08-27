@@ -176,7 +176,12 @@ pub async fn create_user(
     }
 
     let user = user_store
-        .create_user(&body.username, &body.password, role, body.group_id.as_deref())
+        .create_user(
+            &body.username,
+            &body.password,
+            role,
+            body.group_id.as_deref(),
+        )
         .await
         .map_err(|e| {
             if e.starts_with("unknown group id") {

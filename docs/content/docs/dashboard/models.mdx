@@ -17,23 +17,44 @@ A Channel model entry can set `redirect` to the real upstream model name.
 
 Example: clients call `my-fast-model`. Channel A redirects it to `gpt-4o-mini`. Channel B redirects it to `claude-3-5-haiku-20241022`. Billing and logs always show the logical name.
 
-## Configure model pricing
+## Model pricing
 
-Open **Models** to manage prices, tool charges, synchronization, and group ratios.
+The **Models** page is the pricing console. It has five tabs:
 
-1. Use **Model Pricing** to set token, request, or tiered prices. Enter prices in USD.
-2. Use **Unpriced Models** to find routed models without an enabled price.
-3. Use **Tool Prices** to set server-native tool charges.
-4. Use **Upstream Sync** to preview or apply prices from models.dev, OpenRouter, or new-api.
-5. Use **Group Pricing** to set each group's `billing_ratio`.
+- **Model Pricing**: one price row per model. Each row sets a billing mode: `per_token`, `per_request`, or `tiered_expr`.
+- **Unpriced Models**: mapped models that have no enabled price row.
+- **Tool Prices**: prices for server-side tool classes. Units are `1k_calls`, `minute`, and `session`.
+- **Upstream Sync**: price import from Models.dev, OpenRouter, or a new-api instance.
+- **Group Pricing**: one billing ratio per group.
 
-The models.dev apply action updates prices and metadata from one snapshot. Manual price edits lock the changed fields. Later syncs keep locked fields.
+Monoize computes each charge in this order:
+
+1. Compute the base charge from the model's price row and the recorded usage.
+2. Multiply by the group's `billing_ratio`.
+3. Multiply by the Channel model entry's `multiplier`.
+4. Truncate to a whole number of nano-dollars.
+
+A Channel `multiplier` of `0` makes requests on that Channel free.
 
 Monoize resolves the redirected upstream model first. It falls back to the logical model only for a redirect without an upstream price.
 
 Monoize multiplies the base charge by the Channel model `multiplier` and the routed group's `billing_ratio`. It records the final charge in nano-USD.
 
 By default, Monoize rejects an unpriced model or a response without required Usage. Set the global free-settlement flags or a Provider override only when zero settlement is acceptable.
+
+## Price sync
+
+1. Open **Models → Upstream Sync**.
+2. Select a source: Models.dev, OpenRouter, or a new-api instance.
+3. Click **Preview**. The table shows new rows and changed fields.
+4. Click **Apply**. Monoize writes the changes and records an audit row.
+
+Sync does not change a locked field. Sync does not delete rows that you created manually.
+
+Automatic sync is enabled by default. Monoize starts one cycle at process startup and
+then runs every 24 hours. Each cycle syncs Models.dev first. It then uses OpenRouter to
+add models that Models.dev does not provide. Disable **Automatic price sync** to stop
+future cycles.
 
 ## Model listing
 

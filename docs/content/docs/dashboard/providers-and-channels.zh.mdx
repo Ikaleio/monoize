@@ -29,6 +29,7 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 3. 填写上游 Base URL 和 API 密钥。
 4. 设置权重。流量按权重比例在符合条件的 Channel 之间分配。默认 `1`。
 5. 可选：为单个 Channel 设置 `proxy_url`，覆盖进程级上游代理。
+
 之后编辑 Channel 时，API 密钥留空则保持原有密钥不变。
 
 ## 映射模型
@@ -36,7 +37,7 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 每个 Channel 列出它服务的逻辑模型。模型条目包含：
 
 - `redirect`：真实的上游模型名。留空则按逻辑名原样发送。
-- `multiplier`：用于计费的正数价格乘数。
+- `multiplier`：用于计费的非负价格乘数。`0` 表示该 Channel 上的请求免费。
 
 只有当 Provider 内至少有一个已启用的 Channel 映射了某个逻辑模型时，该模型才会路由到这个 Provider。
 

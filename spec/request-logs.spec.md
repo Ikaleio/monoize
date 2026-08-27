@@ -200,17 +200,9 @@ RL15b. If normalized usage contains an authoritative cached-input modality split
 
 RL15a. `usage_breakdown_json.input.total_tokens` MUST be the aggregate/inclusive prompt token total as defined in `user-billing-and-model-metadata.spec.md` § 5 C3 — i.e. it MUST include cache-read tokens and cache-creation tokens. `usage_breakdown_json.input.uncached_tokens` MUST equal `input.total_tokens - cached_tokens - cache_creation_tokens` clamped at zero (the base-rate billable bucket). These fields MUST be computed uniformly across all upstream provider types, because upstream usage is normalized at decode time per C3-ii of the billing spec. Provider-type branching in usage-breakdown construction MUST NOT exist.
 
-RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the request-time version 3 pricing snapshot defined by `model-pricing.spec.md` §8. The snapshot MUST include at least:
+RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the version-3 settlement snapshot defined by `model-pricing.spec.md` §8 (MP-B1). New settlements MUST NOT write any other version.
 
-- unit prices used for each billed token class,
-- token quantities used in each billed class,
-- per-class subtotal charges,
-- tool quantities and subtotals,
-- the selected tier index and service tier,
-- Channel multiplier and group billing ratio,
-- base charge and final charge.
-
-RL16a. New billing snapshots MUST set `billing_breakdown_json.version = 3` and include:
+RL16a. Version-2 snapshots persisted before the model-prices cutover remain readable in stored request logs (MP-B6). A stored version-2 snapshot contains:
 
 - `token_line_items: array`
 - `tool_line_items: array`
@@ -222,9 +214,9 @@ RL16a. New billing snapshots MUST set `billing_breakdown_json.version = 3` and i
 - `base_charge_nano: string`
 - `final_charge_nano: string`
 
-RL16b. Each token line item MUST include `usage_class`, `quantity`, `usd_per_1m`, and `charge_nano`.
+RL16b. Each stored version-2 token line item contains `usage_class`, `unit`, `unit_price_nano`, `quantity`, `charge_nano`, and any selected dimension fields among `context_tier`, `service_tier`, `modality`, and `cache_ttl`.
 
-RL16c. Each tool line item MUST include `usage_class`, `quantity`, `per`, `usd`, and `charge_nano`.
+RL16c. The request-log viewer MUST render line items, tiers, multipliers, and charges for both version 2 and version 3 snapshots. For version 3 it MUST additionally render `free_reason` markers, non-empty `unpriced_tool_classes`, and `group_billing_ratio` when it differs from `"1"`.
 
 RL17. When a request triggers waterfall fail-forward, `tried_providers_json` MUST record each failed upstream attempt. This rule applies to every upstream error class. Each persisted entry MUST contain `attempt_number`, `provider_id`, `channel_id`, `provider_name`, `channel_name`, and `error`. `error` MUST equal the attempt's unmasked, truncated internal detail per `upstream-error-sanitization.spec.md` SAN-5/SAN-10; the attempt's client-facing `client_error` text MUST NOT be persisted. It MUST also persist `duration_ms`, `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` when those values exist on the failed attempt. `duration_ms` MUST equal the wall-clock milliseconds from the start of that upstream attempt to the failure. `provider_name` and `channel_name` MUST equal the Provider and Channel display names at attempt time. The array MUST be ordered chronologically. When no upstream attempt failed, the field MUST be null.
 
@@ -232,11 +224,11 @@ RL17a. `GET /api/dashboard/request-logs` MUST return `tried_providers` as that J
 
 RL18. Successful active probe connectivity tests that can incur upstream token cost MUST be persisted as request logs with `request_kind = "active_probe_connectivity"`. Failed active probe connectivity tests MUST NOT be persisted as request logs.
 
-RL18a. When a successful active probe returns both prompt and completion token counts, its charge calculation MUST read `model_prices`; it MUST NOT read prices from `model_metadata_records`. Pricing-key normalization and redirected-upstream-model then logical-model fallback MUST follow `model-pricing.spec.md` MP-R1 through MP-R4.
+RL18a. When a successful active probe returns both prompt and completion token counts, its charge calculation MUST read the `model_prices` row selected by pricing-key normalization (`model-pricing.spec.md` §3) of the redirected upstream model, falling back to the logical model key. It MUST NOT read token prices from `model_metadata_records`. A disabled or incomplete row is exactly a missing row (MP-R2/MP-R4).
 
-RL18b. Active-probe billing MUST accept only a complete enabled `per_token` row. It MUST apply `output_usd_per_1m` fallback per MP-R5. Token multiplication, addition, and Channel-multiplier scaling MUST use checked exact arithmetic.
+RL18b. A priced probe MUST settle through the `model-pricing.spec.md` §6 settlement with `group_billing_ratio = 1`, the selected Channel model entry `multiplier`, an empty `tool_prices` object, and no requested tool classes. All arithmetic MUST use checked exact decimal and integer operations (MP-C1).
 
-RL18c. A successful active probe with missing usage, no complete RL18b row, an invalid selected price, or arithmetic overflow MUST still persist its connectivity log with `charge_nano_usd = null` and `billing_breakdown_json = null`. It MUST NOT substitute zero for a missing or failed calculation. A calculated probe snapshot MUST use version 3 and satisfy RL16a through RL16c.
+RL18c. A successful active probe with missing usage, no matching price row, or a settlement error MUST still persist its connectivity log with `charge_nano_usd = null` and `billing_breakdown_json = null`. It MUST NOT substitute zero for a missing or failed calculation. A successful calculated probe snapshot MUST be a version-3 breakdown (MP-B1) whose `pricing_model_key` is the RL18a key.
 
 RL18d. Monoize MUST resolve the active-probe system user ID once during process startup and reuse that ID for every probe log. The system user MUST have unlimited balance before startup completes. If the user cannot be read, created, or changed to unlimited balance, startup MUST fail with `active_probe_user_init_failed`. One scheduler tick MUST NOT execute a system-user query per Provider, Channel, or probe.
 
@@ -396,7 +388,7 @@ RL-S11. Expired-row cleanup defined in RL-S9 MUST also execute periodically in a
 
 RL-S12. Migration `m20260824_000040_drop_request_log_visible_tps` MUST drop columns `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, and `tps_mode` from `request_logs` on SQLite and PostgreSQL. Each drop MUST be a no-op when that column is already absent, so running the up migration twice succeeds and leaves the same schema. The migration MUST NOT modify any other column, row, or index. The down migration MUST be a no-op because dropped visible-TPS values cannot be reconstructed.
 
-RL-S13. Migration `m20260826_000047_request_logs_pending_status_index` MUST create the RL-S2a-1 partial index `idx_request_logs_status_pending` on `request_logs (status)` with predicate `status = 'pending'` on SQLite and PostgreSQL, using `IF NOT EXISTS` so running the up migration twice succeeds. The down migration MUST drop the index with `IF EXISTS`.
+RL-S13. Migration `m20260826_000047_request_logs_pending_status_index` MUST create the RL-S2a-1 partial index `idx_request_logs_status_pending` on `request_logs (status)` with predicate `status = 'pending'` on SQLite and PostgreSQL, using `IF NOT EXISTS` so running the up migration twice succeeds. The down migration MUST drop the index with `IF EXISTS`. This version name MUST remain the name shipped in v1.6.4.
 
 ## 5. Frontend display
 
@@ -578,7 +570,9 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 
 Hovering a `client_gone` row MUST show `error_code`, `error_message`, and `error_http_status` the same way FL28 shows those fields for `error` rows. The status filter MUST include a `client_gone` option.
 
-FL37. The logs page MUST auto-refresh the newest page periodically so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
+FL37. Automatic updates MUST be enabled when the logs page mounts. While automatic updates are enabled, the logs page MUST auto-refresh the newest page so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
+
+FL37b. The logs filter toolbar MUST provide a localized toggle for automatic updates. Disabling automatic updates MUST close or suppress the request-log SSE subscription, stop the three-second fallback poll, and disable request-log revalidation triggered by window focus or network reconnection. The explicit manual-refresh action MUST remain enabled. Enabling automatic updates MUST immediately revalidate the current request-log page and the newest request-log page, then resume the SSE lifecycle defined in FL48. This toggle state is page-local and MUST reset to enabled after the logs page unmounts and mounts again.
 
 FL37a. When SWR revalidation replaces `loadedLogs` with server-fetched data (initial load, focus revalidation, reconnect revalidation, resync, or polling), the frontend MUST preserve any SSE-delivered `pending` rows that are not yet represented in the server response. Specifically: rows with `status = "pending"` whose `id` is absent from the server data AND whose `request_id` (when non-null) is absent from the server data MUST be re-prepended to the merged result. This prevents SSE-only pending items (which are never persisted to the database per RL1a-1) from being silently dropped by SWR cache replacement.
 
@@ -603,6 +597,8 @@ FL43. Time-range selection MUST be bidirectionally synchronized:
 - selecting calendar range or committing manual inputs MUST activate the matching fixed preset (`today`, `yesterday`, `this_month`, `last_month`) when and only when the selected range matches that preset, otherwise no preset is active.
 
 FL44. Active preset buttons (including `All Time`) MUST use a high-contrast foreground/background pair so text remains legible in both light and dark themes.
+
+FL44a. The admin username text filter, model text filter, API-key select trigger, and status select trigger MUST render one focus boundary. A focused text filter and an open or keyboard-focused select trigger MUST use the semantic `ring` color on the control border and MUST NOT render an additional outer ring. A select trigger that was opened by pointer input MUST return to its normal border after its menu closes.
 
 ## 6. SSE Real-Time Updates
 
@@ -651,7 +647,7 @@ FL48. The SSE connection lifecycle MUST follow these phases:
 
 1. **Connect**: The client MUST open the SSE stream using a `fetch()`-based reader with `credentials: "include"` and without an `Authorization` header.
     The frontend integration layer for this stream MUST be implemented through SWR subscription state, so stream lifecycle and event delivery are owned by the SWR data layer rather than a page-local ad hoc subscription mechanism.
-    The client MUST begin attempting this SSE connection as soon as the logs page mounts; it MUST NOT gate connection startup on completion of the initial REST page fetch.
+    When automatic updates are enabled, the client MUST begin attempting this SSE connection as soon as the logs page mounts; it MUST NOT gate connection startup on completion of the initial REST page fetch. When automatic updates are disabled, the client MUST NOT maintain or reconnect the SSE connection.
     After authentication succeeds, the server MUST emit an initial SSE frame without waiting for a future request-log broadcast. If the current pending-snapshot map defined in RL1a-3 contains one or more entries visible to the authenticated user, the initial frame MUST be a `log_batch` event containing those entries ordered by `created_at DESC`. Otherwise, the initial frame MUST be an SSE comment frame. This initial frame exists so the client can mark the stream connected promptly and so in-flight `pending` requests that began before stream establishment become visible.
 2. **Receive**: On each `log_batch` event, the client MUST merge the received `RequestLog` objects into the existing table data array (newest first). If an incoming row has the same `request_id` as an existing row, the incoming row MUST be processed before active UI filters are applied. If the incoming row matches active UI filters, it MUST replace the existing row instead of creating a duplicate. If the incoming row does not match active UI filters, the existing row with that `request_id` MUST be removed from the visible table. This replacement/removal rule is required for the `pending -> success/error` SSE-only lifecycle defined in RL1a-1 and RL1a-2, including the case where the active filter is `status = pending` and a terminal row arrives.
 3. **Disconnect**: On network error, HTTP error, or stream close, the client MUST fall back to SWR polling (see FL50).
@@ -660,11 +656,11 @@ FL48. The SSE connection lifecycle MUST follow these phases:
 
 ### 6.5 SSE as primary real-time mechanism
 
-FL49. When an SSE connection is active and receiving events, SSE replaces the periodic SWR polling defined in FL37 as the primary real-time data delivery mechanism. The SWR auto-refresh interval defined in FL37 MUST be paused while SSE is connected. Polling MUST resume only when SSE is disconnected (see FL50).
+FL49. When automatic updates are enabled and an SSE connection is active and receiving events, SSE replaces the periodic SWR polling defined in FL37 as the primary real-time data delivery mechanism. The SWR auto-refresh interval defined in FL37 MUST be paused while SSE is connected. Polling MUST resume only when SSE is disconnected and automatic updates remain enabled (see FL50).
 
 ### 6.6 Polling fallback on SSE disconnect
 
-FL50. When the SSE connection is lost (network failure, server restart, or stream termination), the client MUST immediately activate SWR polling at an interval of approximately 3 seconds. This polling MUST continue until the SSE connection is re-established, at which point polling MUST be paused again per FL49.
+FL50. When automatic updates are enabled and the SSE connection is lost (network failure, server restart, or stream termination), the client MUST immediately activate SWR polling at an interval of approximately 3 seconds. This polling MUST continue until the SSE connection is re-established, at which point polling MUST be paused again per FL49. When automatic updates are disabled, this fallback polling MUST remain stopped.
 
 ### 6.7 Aggregate values remain REST-derived
 

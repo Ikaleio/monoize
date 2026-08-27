@@ -24,6 +24,16 @@ async fn run() -> Result<(), AppError> {
     state.user_store.spawn_background_tasks_for_role(is_replica);
 
     if !is_replica {
+        monoize::price_sync::spawn_auto_sync_scheduler(
+            state.http.clone(),
+            state.model_price_store.clone(),
+            state.model_registry_store.clone(),
+            state.settings_store.clone(),
+            state.background_shutdown.clone(),
+        );
+    }
+
+    if !is_replica {
         // PRP11: retention/pending-log deletion is a primary responsibility.
         match state.user_store.cleanup_pending_request_logs().await {
             Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up stale pending request logs"),

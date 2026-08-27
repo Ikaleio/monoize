@@ -54,6 +54,7 @@ pub struct UpdateSettingsRequest {
     pub allow_free_when_unpriced: Option<bool>,
     pub allow_free_when_missing_usage: Option<bool>,
     pub tool_prices: Option<serde_json::Value>,
+    pub price_sync_auto_enabled: Option<bool>,
     pub price_sync_new_api_base_url: Option<String>,
     pub price_sync_new_api_token: Option<String>,
 }
@@ -262,6 +263,9 @@ pub async fn update_settings(
         })?;
         settings.tool_prices = v;
     }
+    if let Some(v) = body.price_sync_auto_enabled {
+        settings.price_sync_auto_enabled = v;
+    }
     if let Some(v) = body.price_sync_new_api_base_url {
         settings.price_sync_new_api_base_url = v.trim().to_string();
     }
@@ -295,10 +299,10 @@ pub async fn update_settings(
         rt.set_global_model_redirects(updated.global_model_redirects.clone())
             .expect("validated global model redirects compile");
         rt.reasoning_suffix_map = updated.reasoning_suffix_map.clone();
+        rt.codex_model_ids = updated.codex_model_ids.clone();
         rt.allow_free_when_unpriced = updated.allow_free_when_unpriced;
         rt.allow_free_when_missing_usage = updated.allow_free_when_missing_usage;
         rt.tool_prices = updated.tool_prices.clone();
-        rt.codex_model_ids = updated.codex_model_ids.clone();
         rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
         rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
         rt.request_capture_enabled = updated.monoize_request_capture_enabled;

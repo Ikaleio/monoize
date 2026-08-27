@@ -53,7 +53,8 @@ pub use model_prices::{
 };
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,
-    list_marketplace_models, list_model_metadata, list_models, update_model, upsert_model_metadata,
+    list_marketplace_models, list_model_metadata, list_models, sync_model_metadata_models_dev,
+    update_model, upsert_model_metadata,
 };
 pub use performance::get_dashboard_performance;
 pub use request_captures::{RequestCaptureQuery, get_request_capture};

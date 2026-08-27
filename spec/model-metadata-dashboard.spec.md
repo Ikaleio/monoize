@@ -100,7 +100,6 @@ SP7. Admin MAY reset a manual record back to sync-managed by updating it with
 
 ```json
 {
-  "source": "manual",
   "models_dev_provider": "openai",
   "mode": "chat",
   "max_input_tokens": 128000,
@@ -109,13 +108,11 @@ SP7. Admin MAY reset a manual record back to sync-managed by updating it with
 }
 ```
 
-- `source` MAY be `manual` or `models_dev`. An omitted `source` resolves to `manual`.
-  Another value is invalid.
-- If row exists: update only fields present in the JSON object. Set `source` to the
-  resolved source. Set `updated_at = now()`. An omitted field preserves its stored
+- If row exists: update only fields present in the JSON object, set
+  `source = 'manual'`, set `updated_at = now()`. An omitted field preserves its stored
   value. An explicitly null nullable field clears its stored value.
-- If row does not exist: insert with provided fields, the resolved source,
-  `raw_json = '{}'`, and `updated_at = now()`.
+- If row does not exist: insert with provided fields, `source = 'manual'`,
+  `raw_json = '{}'`, `updated_at = now()`.
 - Response: `200 OK` with the full updated record.
 - Errors: `400 invalid_request` if the `model_id` path param is empty. Price fields
   are unknown fields on this endpoint and MUST be rejected with `400 invalid_request`;
@@ -152,8 +149,8 @@ floating-point arithmetic.
 
 ## 5. Invariants
 
-INV1. A PUT request with omitted `source` stores `source = 'manual'`. A PUT request
-with `source = 'models_dev'` stores `source = 'models_dev'` and enables SP7.
+INV1. `source = 'manual'` whenever the metadata row was created or updated via the PUT
+endpoint.
 
 INV2. Sync MUST NOT modify metadata records where `source = 'manual'`.
 

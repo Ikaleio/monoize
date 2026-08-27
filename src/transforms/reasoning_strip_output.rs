@@ -38,13 +38,22 @@ impl Transform for ReasoningStripOutputTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Reasoning: strip from response output"), ("zh", "推理：移除响应输出中的推理")]
+        &[
+            ("en", "Reasoning: strip from response output"),
+            ("zh", "推理：移除响应输出中的推理"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Removes reasoning nodes from response output and stream events. Counterpart of reasoning_strip_input."),
-            ("zh", "移除响应输出与流事件中的推理节点。与 reasoning_strip_input 对应。"),
+            (
+                "en",
+                "Removes reasoning nodes from response output and stream events. Counterpart of reasoning_strip_input.",
+            ),
+            (
+                "zh",
+                "移除响应输出与流事件中的推理节点。与 reasoning_strip_input 对应。",
+            ),
         ]
     }
 

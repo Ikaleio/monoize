@@ -2449,9 +2449,7 @@ impl UserStore {
         }
         let disabling_sub_account = input.sub_account_enabled == Some(false);
         let group_fields_changed = input.use_user_group.is_some() || input.group_ids.is_some();
-        let effective_use_user_group = input
-            .use_user_group
-            .unwrap_or(existing_key.use_user_group);
+        let effective_use_user_group = input.use_user_group.unwrap_or(existing_key.use_user_group);
         // TM-GRP-4: an inheriting key stores []; an explicit key needs >= 1 group.
         let effective_group_ids = if effective_use_user_group {
             Vec::new()
@@ -3266,8 +3264,8 @@ mod tests {
     use super::{
         DEFAULT_SESSION_CLEANUP_INTERVAL_SECS, canonicalize_ip_whitelist,
         parse_api_key_batch_delete_limit, parse_group_ids_json, parse_positive_limit,
-        parse_session_cleanup_interval_secs, sanitize_api_key_transforms,
-        serialize_group_ids_json, validate_api_key_transforms,
+        parse_session_cleanup_interval_secs, sanitize_api_key_transforms, serialize_group_ids_json,
+        validate_api_key_transforms,
     };
     use crate::db::DbPool;
     use crate::migration::Migrator;
@@ -3398,7 +3396,10 @@ mod tests {
             let raw: String = row.try_get("", "transforms").expect("transforms decode");
             let transforms: Vec<TransformRuleConfig> =
                 serde_json::from_str(&raw).expect("transforms parse");
-            assert_eq!(transforms[0].transform, "prompt_strip_anthropic_billing_header");
+            assert_eq!(
+                transforms[0].transform,
+                "prompt_strip_anthropic_billing_header"
+            );
         }
         let markers = db
             .read()
@@ -3491,11 +3492,7 @@ mod tests {
                 r#"["not-an-ip"]"#.to_string().into(),
                 "[]".to_string().into(),
             ),
-            (
-                "group_ids",
-                "{".to_string().into(),
-                "[]".to_string().into(),
-            ),
+            ("group_ids", "{".to_string().into(), "[]".to_string().into()),
             (
                 "transforms",
                 "{".to_string().into(),
@@ -3563,11 +3560,9 @@ mod tests {
 
         // users.group_id needs no corruption case here: it is NOT NULL at the
         // schema level and any stored text decodes as an opaque id.
-        for (column, invalid, valid) in [(
-            "enabled",
-            SeaValue::Int(Some(2)),
-            SeaValue::Int(Some(1)),
-        )] {
+        for (column, invalid, valid) in
+            [("enabled", SeaValue::Int(Some(2)), SeaValue::Int(Some(1)))]
+        {
             db.write()
                 .await
                 .execute(db.stmt(
@@ -4254,7 +4249,10 @@ mod tests {
         let sanitized = sanitize_api_key_transforms(transforms, false, &Default::default());
 
         assert_eq!(sanitized.len(), 1);
-        assert_eq!(sanitized[0].transform, "prompt_strip_anthropic_billing_header");
+        assert_eq!(
+            sanitized[0].transform,
+            "prompt_strip_anthropic_billing_header"
+        );
     }
 
     #[test]
@@ -4397,12 +4395,8 @@ mod tests {
         }
         // Admin bypass keeps every rule.
         assert!(
-            validate_api_key_transforms(
-                &[rule("js:admin-only", Phase::Request)],
-                true,
-                &snapshot
-            )
-            .is_ok()
+            validate_api_key_transforms(&[rule("js:admin-only", Phase::Request)], true, &snapshot)
+                .is_ok()
         );
 
         let sanitized = sanitize_api_key_transforms(
@@ -4458,12 +4452,8 @@ mod tests {
             vec!["g-b".to_string(), "g-a".to_string()]
         );
         assert_eq!(
-            serialize_group_ids_json(&[
-                " g-b ".to_string(),
-                "g-a".to_string(),
-                "g-b".to_string(),
-            ])
-            .expect("serialize group ids"),
+            serialize_group_ids_json(&[" g-b ".to_string(), "g-a".to_string(), "g-b".to_string(),])
+                .expect("serialize group ids"),
             r#"["g-b","g-a"]"#
         );
     }

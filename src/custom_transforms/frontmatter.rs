@@ -190,7 +190,9 @@ fn normalize_frontmatter_line(line: &str) -> Option<&str> {
 fn require_value(key: &str, value: Option<String>) -> Result<String, String> {
     match value {
         Some(value) if !value.is_empty() => Ok(value),
-        _ => Err(format!("required frontmatter key '{key}' is missing or empty")),
+        _ => Err(format!(
+            "required frontmatter key '{key}' is missing or empty"
+        )),
     }
 }
 
@@ -334,6 +336,10 @@ function transform(ctx) {}
     #[test]
     fn rejects_missing_required_keys() {
         let source = "/* @monoize-transform\nid: js:x\nname: N\nauthor: a */";
-        assert!(parse_frontmatter(source).unwrap_err().contains("description"));
+        assert!(
+            parse_frontmatter(source)
+                .unwrap_err()
+                .contains("description")
+        );
     }
 }

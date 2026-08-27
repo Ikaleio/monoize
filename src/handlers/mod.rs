@@ -1,6 +1,5 @@
 mod account_balance;
 mod billing;
-pub(crate) use billing::calculate_active_probe_charge;
 mod compact;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
@@ -671,78 +670,61 @@ pub async fn create_embeddings(
                         started_at,
                     )
                     .await;
-                    let mut usage = parse_usage_from_embeddings_object(&value);
-                    let missing_usage_substituted =
-                        substitute_zero_usage_if_allowed(&mut usage, &attempt);
+                    let usage = parse_usage_from_embeddings_object(&value);
+                    // MP-F3: a fail-closed missing-usage billable success
+                    // rejects with 403 before response delivery.
+                    if usage.is_none() && missing_usage_rejects(&auth, &attempt) {
+                        let err = missing_usage_error();
+                        spawn_request_log_error(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            false,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            &err,
+                            None,
+                            tried_providers,
+                        );
+                        return Err(err);
+                    }
                     let response_service_tier =
                         usage::response_service_tier(&value).map(str::to_string);
-                    let charge = match usage.as_ref() {
-                        Some(usage_row) => {
-                            mark_channel_success(&state, &attempt).await;
-                            match maybe_charge_usage(
+                    mark_channel_success(&state, &attempt).await;
+                    let settled_usage = match usage.as_ref() {
+                        Some(usage_row) => crate::settlement::SettledUsage::Reported(usage_row),
+                        None => crate::settlement::SettledUsage::MissingFree,
+                    };
+                    let charge = match maybe_charge_settled(
+                        &state,
+                        &auth,
+                        &attempt,
+                        &logical_model,
+                        settled_usage,
+                        None,
+                        response_service_tier.as_deref(),
+                        request_id.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(charge) => charge,
+                        Err(err) => {
+                            spawn_request_log_error(
                                 &state,
                                 &auth,
                                 &attempt,
                                 &logical_model,
-                                usage_row,
-                                missing_usage_substituted,
-                                response_service_tier.as_deref(),
-                                request_id.as_deref(),
-                            )
-                            .await
-                            {
-                                Ok(charge) => charge,
-                                Err(err) => {
-                                    spawn_request_log_error(
-                                        &state,
-                                        &auth,
-                                        &attempt,
-                                        &logical_model,
-                                        false,
-                                        started_at,
-                                        request_id.clone(),
-                                        request_ip.clone(),
-                                        &err,
-                                        None,
-                                        tried_providers,
-                                    );
-                                    return Err(err);
-                                }
-                            }
-                        }
-                        None => {
-                            let err = AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "upstream_usage_required",
-                                "upstream response did not include billable usage",
-                            );
-                            let same_channel_retryable = is_same_channel_retryable_app_error(&err);
-                            let passive_failure_class = same_channel_retryable
-                                .then(|| classify_retryable_app_failure(&err));
-                            record_upstream_attempt_failure(
-                                &state,
-                                &attempt,
-                                attempt_number,
+                                false,
+                                started_at,
+                                request_id.clone(),
+                                request_ip.clone(),
                                 &err,
-                                passive_failure_class,
-                                &mut tried_providers,
-                                &mut execution_state,
-                            )
-                            .await;
-                            last_failed_attempt = Some(attempt.clone());
-                            if allow_same_channel_retry(
-                                &state,
-                                &attempt,
-                                &execution_state,
-                                channel_attempt + 1,
-                                passive_failure_class,
-                            )
-                            .await
-                            {
-                                maybe_sleep_before_channel_retry(&attempt).await;
-                                continue;
-                            }
-                            break;
+                                None,
+                                tried_providers,
+                            );
+                            return Err(err);
                         }
                     };
 
@@ -912,14 +894,20 @@ struct MonoizeAttempt {
     request_timeout_ms: u64,
     extra_fields_whitelist: Option<Vec<String>>,
     strip_cross_protocol_nested_extra: bool,
-    billable_pricing_available: bool,
-    pricing_model_key: String,
+    /// MP-R7 (`model-pricing.spec.md`): the applicable `model_prices` row
+    /// snapshot resolved at preflight. `None` means the attempt is an
+    /// unpriced free settlement admitted under `allow_free_when_unpriced`.
     model_price: Option<crate::model_price_store::ModelPriceRecord>,
+    /// MP-R1: the normalized pricing key recorded in the breakdown.
+    pricing_model_key: String,
+    /// MP-F1: effective free-settlement flags (Provider override else global).
     allow_free_when_unpriced: bool,
     allow_free_when_missing_usage: bool,
-    tool_prices: serde_json::Value,
+    /// MP-G1/MP-G3: `effective_groups[group_rank(provider)]`; `None` for
+    /// system-originated internal traffic.
     billing_group_id: Option<String>,
-    group_billing_ratio: String,
+    /// MP-G2: `billing_ratio` of the billing group's registry row.
+    group_billing_ratio: Multiplier,
     affinity_key: Option<String>,
     affinity_key_hash: Option<String>,
     affinity_hit: Option<bool>,
@@ -1363,10 +1351,13 @@ async fn ensure_balance_before_forward(
     }
 }
 
+/// The balance gate applies when any candidate attempt can settle a positive
+/// charge: a priced model row, or requested server tools that carry tool
+/// charges even in a free settlement (MP-F2, MP-T9).
 fn attempts_require_balance(attempts: &[MonoizeAttempt]) -> bool {
-    attempts
-        .iter()
-        .any(|attempt| attempt.billable_pricing_available)
+    attempts.iter().any(|attempt| {
+        attempt.model_price.is_some() || !attempt.server_tool_usage_classes.is_empty()
+    })
 }
 
 async fn ensure_balance_before_forward_for_attempts(

@@ -15,7 +15,6 @@ use std::collections::{BTreeSet, HashMap};
 
 const GROUP_ROUTING_MODEL: &str = "gpt-group-routing";
 
-
 fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {
     build_test_auth_with_role(effective_groups, UserRole::User)
 }
@@ -835,10 +834,101 @@ async fn build_monoize_attempts_allows_declared_server_tool_without_meter_rate()
     let auth = build_test_auth_with_role(None, UserRole::Admin);
     let attempts = build_monoize_attempts(&state, &req, &auth)
         .await
-        .expect("declaring a server tool must not require a meter rate");
+        .expect("declaring a server tool must not require a tool price (MP-T8 fail-open)");
 
     assert_eq!(attempts.len(), 1);
-    assert!(attempts[0].billable_pricing_available);
+    assert!(attempts[0].model_price.is_some());
+    assert_eq!(
+        attempts[0].server_tool_usage_classes,
+        vec!["web_search".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_is_priced() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+
+    state
+        .monoize_store
+        .create_provider(CreateMonoizeProviderInput {
+            allow_free_when_unpriced_override: None,
+            allow_free_when_missing_usage_override: None,
+            name: "OpenAI".to_string(),
+            max_retries: 0,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            group_ids: Vec::new(),
+            enabled: true,
+            priority: Some(0),
+            channels: vec![CreateMonoizeChannelInput {
+                id: None,
+                name: "primary".to_string(),
+                provider_type: MonoizeProviderType::Responses,
+                base_url: "https://example.com".to_string(),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                weight: 1,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+                models: std::collections::HashMap::from([(
+                    "gpt-fallback-src".to_string(),
+                    MonoizeModelEntry {
+                        redirect: Some("gpt-fallback-dest".to_string()),
+                        multiplier: Multiplier::ONE,
+                    },
+                )]),
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
+                affinity_enabled_override: None,
+                affinity_idle_ttl_seconds_override: None,
+                affinity_failback_mode_override: None,
+                affinity_failback_delay_seconds_override: None,
+
+                proxy_url: None,
+                extra_headers: None,
+                session_affinity_auto: None,
+            }],
+        })
+        .await
+        .expect("provider created");
+
+    // MP-R1: only the logical model carries a complete price row; the
+    // redirected upstream key misses and falls back to the logical key.
+    seed_model_pricing(&state, "gpt-fallback-src").await;
+
+    let req = build_test_routing_request("gpt-fallback-src");
+    let auth = build_test_auth(None);
+    let attempts = build_monoize_attempts(&state, &req, &auth)
+        .await
+        .expect("fallback-priced model should be allowed");
+
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].upstream_model, "gpt-fallback-dest");
+    assert_eq!(attempts[0].pricing_model_key, "gpt-fallback-src");
+    assert!(attempts[0].model_price.is_some());
 }
 
 #[tokio::test]
@@ -2107,14 +2197,12 @@ fn affinity_test_attempt(
         request_timeout_ms: 30_000,
         extra_fields_whitelist: None,
         strip_cross_protocol_nested_extra: true,
-        billable_pricing_available: true,
-        pricing_model_key: "gpt-affinity".to_string(),
         model_price: None,
+        pricing_model_key: "gpt-affinity".to_string(),
         allow_free_when_unpriced: true,
         allow_free_when_missing_usage: false,
-        tool_prices: crate::settings::default_tool_prices(),
         billing_group_id: None,
-        group_billing_ratio: "1".to_string(),
+        group_billing_ratio: Multiplier::ONE,
         affinity_key: None,
         affinity_key_hash: None,
         affinity_hit: None,

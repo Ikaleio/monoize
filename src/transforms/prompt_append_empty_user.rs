@@ -33,13 +33,22 @@ impl Transform for PromptAppendEmptyUserTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Prompt: append empty user message"), ("zh", "提示词：追加空 user 消息")]
+        &[
+            ("en", "Prompt: append empty user message"),
+            ("zh", "提示词：追加空 user 消息"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Appends a padding user text node when the request input ends with an assistant node."),
-            ("zh", "当请求输入以 assistant 节点结尾时，追加一个占位 user 文本节点。"),
+            (
+                "en",
+                "Appends a padding user text node when the request input ends with an assistant node.",
+            ),
+            (
+                "zh",
+                "当请求输入以 assistant 节点结尾时，追加一个占位 user 文本节点。",
+            ),
         ]
     }
 

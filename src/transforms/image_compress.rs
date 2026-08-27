@@ -116,13 +116,22 @@ impl Transform for ImageCompressInputTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Image: compress request images"), ("zh", "图像：压缩请求图片")]
+        &[
+            ("en", "Image: compress request images"),
+            ("zh", "图像：压缩请求图片"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Re-encodes and optionally resizes base64 user-message images in the request to reduce upstream payload size."),
-            ("zh", "对请求中 user 消息的 base64 图片重新编码并可选缩放，以减小上游请求体积。"),
+            (
+                "en",
+                "Re-encodes and optionally resizes base64 user-message images in the request to reduce upstream payload size.",
+            ),
+            (
+                "zh",
+                "对请求中 user 消息的 base64 图片重新编码并可选缩放，以减小上游请求体积。",
+            ),
         ]
     }
 
@@ -252,13 +261,22 @@ impl Transform for ImageCompressOutputTransform {
     }
 
     fn display_name(&self) -> crate::transforms::LocalizedText {
-        &[("en", "Image: compress response images"), ("zh", "图像：压缩响应图片")]
+        &[
+            ("en", "Image: compress response images"),
+            ("zh", "图像：压缩响应图片"),
+        ]
     }
 
     fn display_description(&self) -> crate::transforms::LocalizedText {
         &[
-            ("en", "Re-encodes and optionally resizes assistant output images in the response or stream."),
-            ("zh", "对响应或流中 assistant 输出的图片重新编码并可选缩放。"),
+            (
+                "en",
+                "Re-encodes and optionally resizes assistant output images in the response or stream.",
+            ),
+            (
+                "zh",
+                "对响应或流中 assistant 输出的图片重新编码并可选缩放。",
+            ),
         ]
     }
 
