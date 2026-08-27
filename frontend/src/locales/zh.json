@@ -26,7 +26,8 @@
 		"creating": "创建中...",
 		"deleting": "删除中...",
 		"add": "添加",
-		"refresh": "刷新"
+		"refresh": "刷新",
+		"unavailable": "不可用"
 	},
 	"auth": {
 		"signIn": "登录",
@@ -75,7 +76,7 @@
 	"dashboard": {
 		"title": "仪表盘",
 		"greeting": "下午好，{{username}}",
-		"subtitle": "账户状态、资源消耗与路由数据的实时总览",
+		"subtitle": "账户、用量、API 与平台性能一览",
 		"searchAction": "搜索",
 		"refreshAction": "刷新数据",
 		"welcomeBack": "欢迎回来，{{username}}！",
@@ -107,6 +108,58 @@
 		"apiBaseUrl": "API 基址",
 		"syncMetadata": "同步 Models.dev 元数据",
 		"syncing": "同步中...",
+		"account": {
+			"balanceTitle": "账户余额",
+			"subscriptionTitle": "订阅"
+		},
+		"subscription": {
+			"remaining": "剩余配额",
+			"reset": "重置时间",
+			"resetUnavailable": "未排程"
+		},
+		"usage": {
+			"title": "你的用量",
+			"subtitle": "本计费周期内每日用量",
+			"groupBy": "分组依据",
+			"groupByModel": "分组依据：Model",
+			"cumulativeTokens": "累计 Tokens",
+			"dailyBreakdown": "每日明细",
+			"dailyTotal": "每日合计",
+			"cumulativeTotal": "累计合计",
+			"today": "今日",
+			"legend": "模型图例"
+		},
+		"recentUsage": {
+			"title": "最近用量",
+			"subtitle": "按 Model 汇总的 Token 用量、缓存命中率与费用",
+			"model": "Model",
+			"tokens": "Tokens",
+			"cacheHit": "缓存命中",
+			"charge": "费用",
+			"empty": "暂无最近用量",
+			"emptyDescription": "发起 API 请求后，此处将显示 Model 用量。"
+		},
+		"api": {
+			"chatCompletions": "Chat Completions",
+			"responses": "Responses",
+			"models": "Models",
+			"messages": "Messages"
+		},
+		"performance": {
+			"title": "性能",
+			"subtitle": "近 24 小时 · 可用性砖块、avgTTFT 与 avgTPS",
+			"avgTtft": "avgTTFT",
+			"avgTps": "avgTPS",
+			"uptimeAria": "{{name}} 的可用性",
+			"empty": "未配置性能监控目标",
+			"emptyDescription": "管理员可在系统设置中选择分组与 Model。",
+			"status": {
+				"up": "正常",
+				"degraded": "降级",
+				"down": "不可用",
+				"empty": "无数据"
+			}
+		},
 		"cards": {
 			"accountData": "账户数据",
 			"currentBalance": "当前余额",
@@ -375,7 +428,17 @@
 		"allowFreeWhenUnpriced": "未定价模型允许免费结算",
 		"allowFreeWhenUnpricedDescription": "模型没有价格记录时按零费用结算，而不是拒绝请求。默认关闭（失败即拒绝）。",
 		"allowFreeWhenMissingUsage": "缺失 Usage 允许免费结算",
-		"allowFreeWhenMissingUsageDescription": "上游在计费响应中未返回 Usage 时按零费用结算，而不是拒绝。默认关闭（失败即拒绝）。"
+		"allowFreeWhenMissingUsageDescription": "上游在计费响应中未返回 Usage 时按零费用结算，而不是拒绝。默认关闭（失败即拒绝）。",
+		"dashboardPerformanceKicker": "仪表盘",
+		"dashboardPerformanceTitle": "首页性能目标",
+		"dashboardPerformanceDescription": "选择在用户仪表盘性能面板中展示的分组与 Model。指标为近 24 小时的全局聚合。",
+		"dashboardPerformanceGroups": "分组",
+		"dashboardPerformanceModels": "Models",
+		"dashboardPerformanceModelsSelected": "已选 {{count}} 个",
+		"dashboardPerformanceModelsSearch": "搜索模型",
+		"dashboardPerformanceModelsLoadFailed": "加载模型失败",
+		"dashboardPerformanceModelsEmpty": "暂无模型",
+		"dashboardPerformanceModelsEmptyDescription": "请启用带有模型的 Channel，或清空搜索。"
 	},
 	"providers": {
 		"title": "服务提供者",

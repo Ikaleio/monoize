@@ -228,6 +228,8 @@ export interface SystemSettings {
   global_model_redirects: ModelRedirectRule[];
   reasoning_suffix_map: Record<string, string>;
   codex_model_ids: string[];
+  dashboard_performance_group_ids: string[];
+  dashboard_performance_model_ids: string[];
   monoize_active_probe_enabled: boolean;
   monoize_active_probe_interval_seconds: number;
   monoize_active_probe_success_threshold: number;
@@ -819,6 +821,7 @@ export interface DashboardAnalyticsBucket {
   label: string;
   cost_by_model: Record<string, string>;
   calls_by_model: Record<string, number>;
+  tokens_by_model: Record<string, number>;
   calls_by_provider: Record<string, number>;
 }
 
@@ -830,6 +833,39 @@ export interface DashboardAnalytics {
   total_calls: number;
   today_cost_nano_usd: string;
   today_calls: number;
+}
+
+export type DashboardPerformanceBrickStatus =
+  | "up"
+  | "degraded"
+  | "down"
+  | "empty";
+
+export interface DashboardPerformanceBrick {
+  index: number;
+  status: DashboardPerformanceBrickStatus;
+}
+
+export interface DashboardPerformanceGroup {
+  id: string;
+  name: string;
+  bricks: DashboardPerformanceBrick[];
+  avg_ttft_ms: number | null;
+  avg_tps: number | null;
+}
+
+export interface DashboardPerformanceModel {
+  id: string;
+  bricks: DashboardPerformanceBrick[];
+  avg_ttft_ms: number | null;
+  avg_tps: number | null;
+}
+
+export interface DashboardPerformance {
+  groups: DashboardPerformanceGroup[];
+  models: DashboardPerformanceModel[];
+  brick_count: number;
+  window_hours: number;
 }
 
 // Rolling 60-second own-usage aggregate (user-live-usage.spec.md LU-6).
@@ -1301,6 +1337,10 @@ class ApiClient {
     params.set("buckets", String(buckets));
     params.set("range_hours", String(rangeHours));
     return this.request(`/analytics?${params.toString()}`);
+  }
+
+  async getDashboardPerformance(): Promise<DashboardPerformance> {
+    return this.request("/performance");
   }
 
   async getMyLiveUsage(): Promise<UserLiveUsage> {

@@ -26,7 +26,8 @@
 		"creating": "作成中...",
 		"deleting": "削除中...",
 		"add": "追加",
-		"refresh": "更新"
+		"refresh": "更新",
+		"unavailable": "利用不可"
 	},
 	"auth": {
 		"signIn": "ログイン",
@@ -75,7 +76,7 @@
 	"dashboard": {
 		"title": "ダッシュボード",
 		"greeting": "こんにちは、{{username}}さん",
-		"subtitle": "アカウント状況、使用量、ルーティングデータのリアルタイム概要",
+		"subtitle": "アカウント、使用量、API、プラットフォーム性能を一覧表示",
 		"searchAction": "検索",
 		"refreshAction": "データを更新",
 		"welcomeBack": "おかえりなさい、{{username}}さん！",
@@ -107,6 +108,58 @@
 		"apiBaseUrl": "API ベース URL",
 		"syncMetadata": "Models.dev メタデータを同期",
 		"syncing": "同期中...",
+		"account": {
+			"balanceTitle": "アカウント残高",
+			"subscriptionTitle": "サブスクリプション"
+		},
+		"subscription": {
+			"remaining": "残りクォータ",
+			"reset": "リセット",
+			"resetUnavailable": "未設定"
+		},
+		"usage": {
+			"title": "使用量",
+			"subtitle": "本請求期間の日別使用量",
+			"groupBy": "グループ化",
+			"groupByModel": "グループ化: Model",
+			"cumulativeTokens": "累計 Tokens",
+			"dailyBreakdown": "日別内訳",
+			"dailyTotal": "日次合計",
+			"cumulativeTotal": "累計合計",
+			"today": "今日",
+			"legend": "モデル凡例"
+		},
+		"recentUsage": {
+			"title": "最近の使用量",
+			"subtitle": "Model 別の Token 使用量、キャッシュヒット率、課金",
+			"model": "Model",
+			"tokens": "Tokens",
+			"cacheHit": "キャッシュヒット",
+			"charge": "課金",
+			"empty": "最近の使用量がありません",
+			"emptyDescription": "API リクエスト後に Model の使用量がここに表示されます。"
+		},
+		"api": {
+			"chatCompletions": "Chat Completions",
+			"responses": "Responses",
+			"models": "Models",
+			"messages": "Messages"
+		},
+		"performance": {
+			"title": "パフォーマンス",
+			"subtitle": "直近 24 時間 · 稼働レンガ、avgTTFT、avgTPS",
+			"avgTtft": "avgTTFT",
+			"avgTps": "avgTPS",
+			"uptimeAria": "{{name}} の稼働状況",
+			"empty": "パフォーマンス対象が設定されていません",
+			"emptyDescription": "管理者はシステム設定でグループと Model を選択できます。",
+			"status": {
+				"up": "正常",
+				"degraded": "低下",
+				"down": "停止",
+				"empty": "データなし"
+			}
+		},
 		"cards": {
 			"accountData": "アカウントデータ",
 			"currentBalance": "現在の残高",
@@ -372,7 +425,17 @@
 		"allowFreeWhenUnpriced": "価格未設定時の無料決済を許可",
 		"allowFreeWhenUnpricedDescription": "モデル価格行が無い場合、リクエストを拒否せず費用ゼロで決済します。既定はオフ（フェイルクローズ）。",
 		"allowFreeWhenMissingUsage": "Usage 欠落時の無料決済を許可",
-		"allowFreeWhenMissingUsageDescription": "課金対象レスポンスで上流が Usage を返さない場合、拒否せず費用ゼロで決済します。既定はオフ（フェイルクローズ）。"
+		"allowFreeWhenMissingUsageDescription": "課金対象レスポンスで上流が Usage を返さない場合、拒否せず費用ゼロで決済します。既定はオフ（フェイルクローズ）。",
+		"dashboardPerformanceKicker": "ダッシュボード",
+		"dashboardPerformanceTitle": "ホームのパフォーマンス対象",
+		"dashboardPerformanceDescription": "ユーザーダッシュボードのパフォーマンスパネルに表示するグループと Model を選択します。指標は直近 24 時間のグローバル集計です。",
+		"dashboardPerformanceGroups": "グループ",
+		"dashboardPerformanceModels": "Models",
+		"dashboardPerformanceModelsSelected": "{{count}} 件選択中",
+		"dashboardPerformanceModelsSearch": "モデルを検索",
+		"dashboardPerformanceModelsLoadFailed": "モデルの読み込みに失敗しました",
+		"dashboardPerformanceModelsEmpty": "モデルがありません",
+		"dashboardPerformanceModelsEmptyDescription": "モデル付きの Channel を有効にするか、検索をクリアしてください。"
 	},
 	"providers": {
 		"title": "プロバイダー",

@@ -294,16 +294,52 @@ fn analytics_bucket_expr(is_sqlite: bool) -> &'static str {
     }
 }
 
+fn analytics_token_sum_expr() -> &'static str {
+    "SUM(\
+        COALESCE(rl.input_tokens, 0) + COALESCE(rl.output_tokens, 0) + \
+        COALESCE(rl.cache_read_tokens, 0) + COALESCE(rl.cache_creation_tokens, 0) + \
+        COALESCE(rl.reasoning_tokens, 0)\
+     ) AS token_count"
+}
+
+fn append_performance_target_filters(
+    sql: &mut String,
+    values: &mut Vec<SeaValue>,
+    idx: &mut usize,
+    provider_ids: Option<&[String]>,
+    model: Option<&str>,
+) {
+    if let Some(ids) = provider_ids {
+        sql.push_str(" AND rl.provider_id IN (");
+        for (i, id) in ids.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&format!("${}", *idx));
+            values.push(id.clone().into());
+            *idx += 1;
+        }
+        sql.push(')');
+    }
+    if let Some(model) = model {
+        sql.push_str(&format!(" AND rl.model = ${}", *idx));
+        values.push(model.to_string().into());
+        *idx += 1;
+    }
+}
+
 fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
     let bucket_expr = analytics_bucket_expr(is_sqlite);
     let charge_columns = charge_aggregate_columns(!is_sqlite);
+    let token_sum = analytics_token_sum_expr();
     let user_filter = if user_scoped {
         " AND rl.user_id = $6"
     } else {
         ""
     };
     format!(
-        "SELECT {bucket_expr} AS bucket_idx, rl.model, {charge_columns}, COUNT(*) AS call_count \
+        "SELECT {bucket_expr} AS bucket_idx, rl.model, {charge_columns}, COUNT(*) AS call_count, \
+         {token_sum} \
          FROM request_logs rl \
          WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter} \
          GROUP BY bucket_idx, rl.model \
@@ -548,38 +584,51 @@ mod tests {
         db.write()
             .await
             .execute_unprepared(
-                "CREATE TABLE request_logs (created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, charge_nano_usd TEXT, user_id TEXT)",
+                "CREATE TABLE request_logs (\
+                    created_at_unix_ms INTEGER NOT NULL, model TEXT NOT NULL, \
+                    charge_nano_usd TEXT, user_id TEXT, \
+                    input_tokens INTEGER, output_tokens INTEGER, \
+                    cache_read_tokens INTEGER, cache_creation_tokens INTEGER, \
+                    reasoning_tokens INTEGER)",
             )
             .await
             .unwrap();
-        for (created_at_unix_ms, model, charge, user_id) in [
-            (100_i64, "exact", "9223372036854775807", "u1"),
-            (200_i64, "exact", "1", "u1"),
-            (300_i64, "exact", "+9", "u1"),
+        for (created_at_unix_ms, model, charge, user_id, input_tokens, output_tokens) in [
+            (100_i64, "exact", "9223372036854775807", "u1", Some(10_i64), Some(5_i64)),
+            (200_i64, "exact", "1", "u1", Some(1), Some(2)),
+            (300_i64, "exact", "+9", "u1", None, None),
             (
                 400_i64,
                 "out-of-range",
                 "170141183460469231731687303715884105728",
                 "u1",
+                Some(0),
+                Some(0),
             ),
             (
                 600_i64,
                 "overflow",
                 "170141183460469231731687303715884105727",
                 "u1",
+                Some(3),
+                Some(4),
             ),
-            (700_i64, "overflow", "1", "u1"),
-            (100_i64, "excluded", "99", "u2"),
+            (700_i64, "overflow", "1", "u1", Some(1), Some(1)),
+            (100_i64, "excluded", "99", "u2", Some(100), Some(100)),
         ] {
             db.write()
                 .await
                 .execute(db.stmt(
-                    "INSERT INTO request_logs (created_at_unix_ms, model, charge_nano_usd, user_id) VALUES ($1, $2, $3, $4)",
+                    "INSERT INTO request_logs (\
+                        created_at_unix_ms, model, charge_nano_usd, user_id, \
+                        input_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6)",
                     vec![
                         created_at_unix_ms.into(),
                         model.into(),
                         charge.into(),
                         user_id.into(),
+                        input_tokens.into(),
+                        output_tokens.into(),
                     ],
                 ))
                 .await
@@ -588,6 +637,7 @@ mod tests {
 
         let sql = analytics_model_bucket_sql(true, true);
         assert!(sql.contains("GROUP BY bucket_idx, rl.model"));
+        assert!(sql.contains("AS token_count"));
         assert!(!sql.contains("SELECT rl.created_at_unix_ms"));
         let rows = db
             .read()
@@ -611,22 +661,31 @@ mod tests {
             let model: String = row.try_get("", "model").unwrap();
             let bucket_idx: i64 = row.try_get("", "bucket_idx").unwrap();
             let call_count: i64 = row.try_get("", "call_count").unwrap();
+            let token_count: i64 = row.try_get("", "token_count").unwrap();
             groups.insert(
                 model,
-                (bucket_idx, call_count, decode_charge_aggregate(&row, false)),
+                (
+                    bucket_idx,
+                    call_count,
+                    token_count,
+                    decode_charge_aggregate(&row, false),
+                ),
             );
         }
 
         assert_eq!(groups["exact"].0, 0);
         assert_eq!(groups["exact"].1, 3);
-        assert_eq!(groups["exact"].2.as_deref().unwrap(), "9223372036854775808");
+        // 10+5 + 1+2 + 0+0 = 18
+        assert_eq!(groups["exact"].2, 18);
+        assert_eq!(groups["exact"].3.as_deref().unwrap(), "9223372036854775808");
         assert_eq!(
-            groups["out-of-range"].2.as_ref().unwrap_err(),
+            groups["out-of-range"].3.as_ref().unwrap_err(),
             "request log charge is outside the signed i128 domain"
         );
         assert_eq!(groups["overflow"].0, 1);
+        assert_eq!(groups["overflow"].2, 9);
         assert_eq!(
-            groups["overflow"].2.as_ref().unwrap_err(),
+            groups["overflow"].3.as_ref().unwrap_err(),
             "request log charge aggregate overflow"
         );
         assert!(!groups.contains_key("excluded"));
@@ -1773,11 +1832,16 @@ impl UserStore {
                     .parse::<i128>()
                     .map_err(|_| "request log charge aggregate overflow".to_string())?;
                 let call_count = row.try_get("", "call_count").map_err(|e| e.to_string())?;
+                let token_count: i64 = row
+                    .try_get::<Option<i64>>("", "token_count")
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or(0);
                 Ok(AnalyticsModelBucketRow {
                     bucket_idx: bucket_idx.clamp(0, bucket_count - 1),
                     model,
                     cost_nano,
                     call_count,
+                    token_count,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -1881,6 +1945,155 @@ impl UserStore {
             total_calls,
             today_cost_nano_usd,
             today_calls,
+        })
+    }
+
+    /// Global (not user-scoped) performance aggregates for one dashboard target
+    /// over `[time_from_unix_ms, time_to_unix_ms)` split into `brick_count`
+    /// equal-width hour bricks (DH-9b).
+    pub async fn get_performance_target_stats(
+        &self,
+        time_from_unix_ms: i64,
+        time_to_unix_ms: i64,
+        brick_count: i64,
+        provider_ids: Option<&[String]>,
+        model: Option<&str>,
+    ) -> Result<super::PerformanceTargetRaw, String> {
+        if brick_count <= 0 || time_to_unix_ms <= time_from_unix_ms {
+            return Err("performance window and brick count must be positive".to_string());
+        }
+        if let Some(ids) = provider_ids
+            && ids.is_empty()
+        {
+            return Ok(super::PerformanceTargetRaw {
+                hour_buckets: Vec::new(),
+                avg_ttft_ms: None,
+                avg_tps: None,
+            });
+        }
+
+        let is_sqlite = self.db.is_sqlite();
+        let range_ms = time_to_unix_ms
+            .checked_sub(time_from_unix_ms)
+            .ok_or_else(|| "performance time range overflow".to_string())?;
+        let hour_expr = if is_sqlite {
+            "CAST(((rl.created_at_unix_ms - $1) * $3) / $4 AS BIGINT)"
+        } else {
+            "FLOOR(((rl.created_at_unix_ms - $1)::NUMERIC * $3) / $4)::BIGINT"
+        };
+
+        let mut hour_sql = format!(
+            "SELECT {hour_expr} AS hour_idx, \
+             COUNT(*) AS finished_count, \
+             SUM(CASE WHEN rl.status IN ('success', 'client_gone') THEN 1 ELSE 0 END) \
+                 AS success_count \
+             FROM request_logs rl \
+             WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
+               AND rl.status <> 'pending'"
+        );
+        let mut values: Vec<SeaValue> = vec![
+            time_from_unix_ms.into(),
+            time_to_unix_ms.into(),
+            brick_count.into(),
+            range_ms.into(),
+        ];
+        let mut idx = 5usize;
+        append_performance_target_filters(
+            &mut hour_sql,
+            &mut values,
+            &mut idx,
+            provider_ids,
+            model,
+        );
+        hour_sql.push_str(" GROUP BY hour_idx");
+
+        let hour_rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(&hour_sql, values))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let hour_buckets = hour_rows
+            .into_iter()
+            .map(|row| {
+                let hour_idx: i64 = row.try_get("", "hour_idx").map_err(|e| e.to_string())?;
+                Ok(super::PerformanceHourBucketRow {
+                    hour_idx: hour_idx.clamp(0, brick_count - 1),
+                    finished_count: row.try_get("", "finished_count").map_err(|e| e.to_string())?,
+                    success_count: row
+                        .try_get::<Option<i64>>("", "success_count")
+                        .map_err(|e| e.to_string())?
+                        .unwrap_or(0),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        // FL4a / frontend computeTps: stream+ttfb uses duration-ttfb window;
+        // otherwise duration. Numerator is output_tokens.
+        let tps_expr = "CASE \
+            WHEN COALESCE(rl.output_tokens, 0) > 0 \
+                 AND (CASE \
+                        WHEN rl.is_stream = 1 \
+                             AND rl.duration_ms IS NOT NULL \
+                             AND rl.ttfb_ms IS NOT NULL \
+                             AND rl.duration_ms > rl.ttfb_ms \
+                          THEN rl.duration_ms - rl.ttfb_ms \
+                        ELSE rl.duration_ms \
+                      END) > 0 \
+            THEN (CAST(COALESCE(rl.output_tokens, 0) AS REAL) * 1000.0) \
+                 / CAST( \
+                     CASE \
+                       WHEN rl.is_stream = 1 \
+                            AND rl.duration_ms IS NOT NULL \
+                            AND rl.ttfb_ms IS NOT NULL \
+                            AND rl.duration_ms > rl.ttfb_ms \
+                         THEN rl.duration_ms - rl.ttfb_ms \
+                       ELSE rl.duration_ms \
+                     END AS REAL \
+                   ) \
+            ELSE NULL \
+          END";
+
+        let mut avg_sql = format!(
+            "SELECT \
+               AVG(CASE WHEN rl.ttfb_ms IS NOT NULL AND rl.ttfb_ms > 0 \
+                        THEN CAST(rl.ttfb_ms AS REAL) ELSE NULL END) AS avg_ttft_ms, \
+               AVG({tps_expr}) AS avg_tps \
+             FROM request_logs rl \
+             WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms < $2 \
+               AND rl.status <> 'pending'"
+        );
+        let mut avg_values: Vec<SeaValue> =
+            vec![time_from_unix_ms.into(), time_to_unix_ms.into()];
+        let mut avg_idx = 3usize;
+        append_performance_target_filters(
+            &mut avg_sql,
+            &mut avg_values,
+            &mut avg_idx,
+            provider_ids,
+            model,
+        );
+
+        let avg_row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(&avg_sql, avg_values))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no performance average row".to_string())?;
+
+        let avg_ttft_ms: Option<f64> = avg_row
+            .try_get::<Option<f64>>("", "avg_ttft_ms")
+            .map_err(|e| e.to_string())?;
+        let avg_tps: Option<f64> = avg_row
+            .try_get::<Option<f64>>("", "avg_tps")
+            .map_err(|e| e.to_string())?;
+
+        Ok(super::PerformanceTargetRaw {
+            hour_buckets,
+            avg_ttft_ms,
+            avg_tps,
         })
     }
 
@@ -2400,5 +2613,149 @@ mod retention_tests {
             .map(|row| row.try_get("", "id").expect("id decodes"))
             .collect();
         assert_eq!(remaining, vec!["legacy-null", "recent"]);
+    }
+
+    #[tokio::test]
+    async fn performance_target_stats_aggregate_hours_and_averages() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_tx, _) = tokio::sync::broadcast::channel(1);
+        let store = UserStore::new(db.clone(), log_tx)
+            .await
+            .expect("store creates");
+
+        let now_ms = Utc::now().timestamp_millis();
+        let window_start = now_ms - 24 * 3_600_000;
+        let hour0 = window_start + 60_000;
+        let hour23 = now_ms - 60_000;
+
+        for (id, model, provider_id, status, created_ms, is_stream, duration_ms, ttfb_ms, output) in [
+            (
+                "p1",
+                "m-a",
+                "prov-1",
+                "success",
+                hour0,
+                1_i64,
+                2000_i64,
+                500_i64,
+                150_i64,
+            ),
+            (
+                "p2",
+                "m-a",
+                "prov-1",
+                "error",
+                hour0,
+                0,
+                1000,
+                0,
+                0,
+            ),
+            (
+                "p3",
+                "m-a",
+                "prov-2",
+                "client_gone",
+                hour23,
+                0,
+                1000,
+                200,
+                50,
+            ),
+            (
+                "p4",
+                "m-b",
+                "prov-1",
+                "success",
+                hour23,
+                0,
+                1000,
+                100,
+                10,
+            ),
+            (
+                "p5",
+                "m-a",
+                "prov-1",
+                "pending",
+                hour23,
+                0,
+                1000,
+                100,
+                10,
+            ),
+        ] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (\
+                        id, user_id, model, provider_id, is_stream, status, \
+                        created_at, created_at_unix_ms, duration_ms, ttfb_ms, output_tokens\
+                     ) VALUES ($1, 'u1', $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    vec![
+                        id.into(),
+                        model.into(),
+                        provider_id.into(),
+                        is_stream.into(),
+                        status.into(),
+                        Utc::now().to_rfc3339().into(),
+                        created_ms.into(),
+                        duration_ms.into(),
+                        ttfb_ms.into(),
+                        output.into(),
+                    ],
+                ))
+                .await
+                .expect("log inserted");
+        }
+
+        let by_model = store
+            .get_performance_target_stats(window_start, now_ms, 24, None, Some("m-a"))
+            .await
+            .expect("model stats");
+        let mut finished = [0i64; 24];
+        let mut success = [0i64; 24];
+        for row in &by_model.hour_buckets {
+            finished[row.hour_idx as usize] += row.finished_count;
+            success[row.hour_idx as usize] += row.success_count;
+        }
+        assert_eq!(finished[0], 2);
+        assert_eq!(success[0], 1);
+        assert_eq!(finished[23], 1);
+        assert_eq!(success[23], 1);
+        // ttfb samples for m-a: 500 and 200 -> mean 350
+        assert!((by_model.avg_ttft_ms.unwrap() - 350.0).abs() < 1e-6);
+        // TPS samples: stream (150/(1.5s))=100, non-stream (50/1s)=50 -> mean 75
+        assert!((by_model.avg_tps.unwrap() - 75.0).abs() < 1e-6);
+
+        let by_providers = store
+            .get_performance_target_stats(
+                window_start,
+                now_ms,
+                24,
+                Some(&["prov-1".to_string()]),
+                None,
+            )
+            .await
+            .expect("provider stats");
+        let finished_p1: i64 = by_providers
+            .hour_buckets
+            .iter()
+            .map(|r| r.finished_count)
+            .sum();
+        assert_eq!(finished_p1, 3);
+
+        let empty = store
+            .get_performance_target_stats(window_start, now_ms, 24, Some(&[]), None)
+            .await
+            .expect("empty provider filter");
+        assert!(empty.hour_buckets.is_empty());
+        assert!(empty.avg_ttft_ms.is_none());
     }
 }

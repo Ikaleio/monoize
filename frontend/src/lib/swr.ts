@@ -7,6 +7,7 @@ import type {
   DashboardStats,
   DashboardAnalytics,
   AdminOverview,
+  DashboardPerformance,
   ConfigOverview,
   SystemSettings,
   PublicSystemSettings,
@@ -76,6 +77,7 @@ export const SWR_KEYS = {
   BILLING_PLANS: "/dashboard/billing-plans",
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
+  PERFORMANCE: "/dashboard/performance",
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
   LIVE_USAGE: "/dashboard/me/live-usage",
   CUSTOM_TRANSFORMS: "/dashboard/custom-transforms",
@@ -277,6 +279,14 @@ export function useDashboardAnalytics(buckets = 8, rangeHours = 24, config?: SWR
     `${SWR_KEYS.ANALYTICS}?buckets=${buckets}&range_hours=${rangeHours}`,
     () => api.getDashboardAnalytics(buckets, rangeHours),
     { ...defaultConfig, ...config }
+  );
+}
+
+export function useDashboardPerformance(config?: SWRConfiguration) {
+  return useSWR<DashboardPerformance>(
+    SWR_KEYS.PERFORMANCE,
+    () => api.getDashboardPerformance(),
+    { ...defaultConfig, refreshInterval: 60000, ...config }
   );
 }
 
