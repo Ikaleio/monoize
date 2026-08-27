@@ -54,8 +54,9 @@ export function AccountStrip({ user, loading }: AccountStripProps) {
       ? `${formatUsdDecimal(user.balance_usd, 2)} / ${formatUsdDecimal(plan.grant_amount_usd, 2)}`
       : t("dashboard.cards.noPlan", "No plan");
 
-  const resetLabel = plan?.next_grant_at
-    ? new Date(plan.next_grant_at).toLocaleString()
+  // next_grant_at lives on the user object, not on billing_plan (DH-5b).
+  const resetLabel = user.next_grant_at
+    ? new Date(user.next_grant_at).toLocaleString()
     : t("dashboard.subscription.resetUnavailable", "Not scheduled");
 
   return (

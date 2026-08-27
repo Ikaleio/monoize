@@ -295,11 +295,13 @@ fn analytics_bucket_expr(is_sqlite: bool) -> &'static str {
 }
 
 fn analytics_token_sum_expr() -> &'static str {
-    "SUM(\
+    // CAST to BIGINT so PostgreSQL SUM(bigint) (NUMERIC) and SQLite SUM
+    // (INTEGER) decode identically into i64, mirroring get_user_live_usage.
+    "CAST(SUM(\
         COALESCE(rl.input_tokens, 0) + COALESCE(rl.output_tokens, 0) + \
         COALESCE(rl.cache_read_tokens, 0) + COALESCE(rl.cache_creation_tokens, 0) + \
         COALESCE(rl.reasoning_tokens, 0)\
-     ) AS token_count"
+     ) AS BIGINT) AS token_count"
 }
 
 fn append_performance_target_filters(
