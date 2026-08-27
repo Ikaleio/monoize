@@ -1,16 +1,3 @@
-fn effective_responses_sse_event_name(wire_event_name: &str, data: &Value) -> String {
-    if (wire_event_name.is_empty() || wire_event_name == "message")
-        && let Some(payload_event_name) = data.get("type").and_then(Value::as_str)
-        && (payload_event_name == "error"
-            || payload_event_name.starts_with("response.")
-            || payload_event_name.starts_with("image_generation."))
-    {
-        return payload_event_name.to_string();
-    }
-
-    wire_event_name.to_string()
-}
-
 pub(crate) async fn stream_responses_to_urp_events(
     urp: &HandlerUrpRequest,
     mut pending_request_envelope_extra: Option<HashMap<String, Value>>,
@@ -91,7 +78,6 @@ pub(crate) async fn stream_responses_to_urp_events(
                 return Ok(());
             }
         };
-        let event_name = effective_responses_sse_event_name(&ev.event, &data_val);
         record_stream_response_service_tier(&runtime_metrics, &data_val).await;
         if let Some(native_response_id) = data_val
             .get("response")
@@ -102,20 +88,17 @@ pub(crate) async fn stream_responses_to_urp_events(
             response_id = native_response_id.to_string();
             record_stream_response_id(&runtime_metrics, native_response_id).await;
         }
-        let native_start_event = matches!(
-            event_name.as_str(),
-            "response.created" | "response.in_progress"
-        );
+        let native_start_event = matches!(ev.event.as_str(), "response.created" | "response.in_progress");
         let terminal_response_event = matches!(
-            event_name.as_str(),
+            ev.event.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
         );
-        let output_event = event_name.starts_with("response.output_")
-            || event_name.starts_with("response.content_part.")
-            || event_name.starts_with("response.reasoning_")
-            || event_name.starts_with("response.function_call_")
-            || event_name.starts_with("response.image_generation")
-            || event_name.starts_with("image_generation.");
+        let output_event = ev.event.starts_with("response.output_")
+            || ev.event.starts_with("response.content_part.")
+            || ev.event.starts_with("response.reasoning_")
+            || ev.event.starts_with("response.function_call_")
+            || ev.event.starts_with("response.image_generation")
+            || ev.event.starts_with("image_generation.");
         if !response_start_sent && (native_start_event || terminal_response_event || output_event) {
             let source_response = data_val
                 .get("response")
@@ -179,9 +162,9 @@ pub(crate) async fn stream_responses_to_urp_events(
         )
         .await;
 
-        if matches!(event_name.as_str(), "error" | "response.failed") {
+        if matches!(ev.event.as_str(), "error" | "response.failed") {
             let (code, message, extra_body, terminal_error) =
-                responses_stream_error_parts(&event_name, data_val);
+                responses_stream_error_parts(&ev.event, data_val);
             let _ = tx
                 .send(UrpStreamEvent::Error {
                     code,
@@ -189,11 +172,11 @@ pub(crate) async fn stream_responses_to_urp_events(
                     extra_body,
                 })
                 .await;
-            record_stream_terminal_error(&runtime_metrics, &event_name, terminal_error).await;
+            record_stream_terminal_error(&runtime_metrics, &ev.event, terminal_error).await;
             return Ok(());
         }
 
-        if event_name == "response.output_text.delta" {
+        if ev.event == "response.output_text.delta" {
             if let Some(text) = data_val.get("delta").and_then(|v| v.as_str()) {
                 let output_index = data_val
                     .get("output_index")
@@ -213,7 +196,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 saw_text_delta = true;
             }
         }
-        if event_name == "response.reasoning_text.delta" {
+        if ev.event == "response.reasoning_text.delta" {
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -225,7 +208,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 );
             }
         }
-        if event_name == "response.reasoning_text.done" {
+        if ev.event == "response.reasoning_text.done" {
             if let Some(text) = data_val
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -237,7 +220,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 );
             }
         }
-        if event_name == "response.reasoning_summary_text.delta" {
+        if ev.event == "response.reasoning_summary_text.delta" {
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -258,7 +241,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
-        if event_name == "response.reasoning_summary_text.done" {
+        if ev.event == "response.reasoning_summary_text.done" {
             if let Some(summary) = data_val
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -271,7 +254,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 );
             }
         }
-        if event_name == "response.reasoning_summary_part.done"
+        if ev.event == "response.reasoning_summary_part.done"
             && let Some(part) = data_val.get("part")
             && let Some(summary) = part.get("text").and_then(Value::as_str)
         {
@@ -281,7 +264,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 summary,
             );
         }
-        if event_name == "response.output_item.added" {
+        if ev.event == "response.output_item.added" {
             let item = data_val.get("item").unwrap_or(&data_val);
             if let (Some(idx), Some(id)) = (
                 data_val.get("output_index").and_then(|v| v.as_u64()),
@@ -351,10 +334,10 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if matches!(
-            event_name.as_str(),
+            ev.event.as_str(),
             "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta"
         ) {
-            let tool_type = if event_name == "response.custom_tool_call_input.delta" {
+            let tool_type = if ev.event == "response.custom_tool_call_input.delta" {
                 ToolCallType::Custom
             } else {
                 ToolCallType::Function
@@ -391,7 +374,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if matches!(
-            event_name.as_str(),
+            ev.event.as_str(),
             "response.function_call_arguments.done" | "response.custom_tool_call_input.done"
         ) {
             let call_id_opt = data_val
@@ -406,7 +389,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 });
             if let Some(call_id) = call_id_opt {
                 let args = data_val
-                    .get(if event_name == "response.custom_tool_call_input.done" {
+                    .get(if ev.event == "response.custom_tool_call_input.done" {
                         "input"
                     } else {
                         "arguments"
@@ -415,7 +398,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if let Some(entry) = calls.get_mut(call_id.as_str()) {
-                    if event_name == "response.custom_tool_call_input.done" {
+                    if ev.event == "response.custom_tool_call_input.done" {
                         entry.0 = ToolCallType::Custom;
                     }
                     if entry.2.is_empty() && !args.is_empty() {
@@ -424,7 +407,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
-        if event_name == "response.output_item.done" {
+        if ev.event == "response.output_item.done" {
             let item = data_val.get("item").unwrap_or(&data_val);
             if let (Some(idx), Some(id)) = (
                 data_val.get("output_index").and_then(|v| v.as_u64()),
@@ -497,7 +480,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         let is_terminal_response_event = matches!(
-            event_name.as_str(),
+            ev.event.as_str(),
             "response.completed"
                 | "response.incomplete"
                 | "response.failed"
@@ -532,7 +515,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             )
         } else {
             map_responses_event_to_urp_events_with_state(
-                &event_name,
+                &ev.event,
                 data_val,
                 &message_phases_by_output_index,
                 &mut index_state,
@@ -567,7 +550,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             let _ = tx.send(stream_event).await;
         }
         if response_done_sent && is_terminal_response_event {
-            terminal_event_name = Some(event_name);
+            terminal_event_name = Some(ev.event);
             break;
         }
     }
