@@ -294,8 +294,9 @@ export function UsageChartPanel({
                       strokeDasharray="4 4"
                       label={{
                         value: markerText,
-                        position: "insideTop",
-                        offset: 8,
+                        // The final reference line is at the right plot edge. Place
+                        // the label above the plot and extend it left from the line.
+                        position: { x: -4, y: -8 },
                         fill: "hsl(var(--muted-foreground))",
                         fontSize: 11,
                       }}

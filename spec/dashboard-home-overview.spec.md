@@ -148,8 +148,9 @@ line label MUST be:
   (the final day-width bucket overlaps the current local calendar day);
 - localized "Now" (`dashboard.usage.now`) when the selected window is `1h` or `24h`.
 
-The line label MUST render inside the chart bounds with enough top clearance to show the
-complete localized text. No glyph may be clipped by the chart container.
+The line label MUST render in the reserved top margin above the plotting area. Its right
+edge MUST be inset from the final reference line. The label MUST NOT overlap an Area
+series. No glyph may be clipped by the chart container.
 
 DH-6e. Hover/focus tooltip MUST show:
 
