@@ -445,25 +445,29 @@ The normative home-overview contract lives in `spec/dashboard-home-overview.spec
 This section restates the layout binding for `/dashboard` and MUST stay aligned with that
 file.
 
-DH1. `/dashboard` MUST render these sections in order: greeting header; account strip
-(balance + subscription); full-width usage chart; recent-usage table + API information;
-performance panel. Details: `dashboard-home-overview.spec.md` DH-1 through DH-9c.
+DH1. `/dashboard` MUST render these sections in order: greeting header; account overview;
+full-width usage chart; recent-usage table + API information; performance panel. Details:
+`dashboard-home-overview.spec.md` DH-1 through DH-9c.
 
-DH2. Account strip balance and subscription cards MUST follow
-`dashboard-home-overview.spec.md` DH-5 through DH-5c.
+DH2. The flat five-cell account overview, its fixed 24-hour Analytics data, and its
+conditional active-model/subscription cell MUST follow
+`dashboard-home-overview.spec.md` DH-5 through DH-5e.
 
 DH3. The usage chart MUST be a stacked cumulative token `AreaChart` driven by
 `GET /api/dashboard/analytics` with `buckets` and `range_hours` derived from the
 selected time window (`1h`, `24h`, `7d`, `30d`; default `1h`) per the
 `dashboard-home-overview.spec.md` DH-6a mapping, including `tokens_by_model`, a
-Today/Now marker, and a vertically scrolling legend
+fully visible Today/Now marker, and a width-adaptive paginated horizontal legend whose
+controls appear on the right of the same row
 (`dashboard-home-overview.spec.md` DH-6 through DH-6i).
 
 DH4. Recent usage and API information panels MUST follow
-`dashboard-home-overview.spec.md` DH-7, DH-7a, and DH-8 through DH-8d.
+`dashboard-home-overview.spec.md` DH-7 through DH-8d, including bounded table scrolling
+and the Messages-before-Models endpoint order.
 
 DH5. The performance panel and admin-configurable targets MUST follow
-`dashboard-home-overview.spec.md` DH-9 through DH-9c.
+`dashboard-home-overview.spec.md` DH-9 through DH-9c. The ready state MUST use the
+specified four-column table alignment and shared nonlinear row-entry motion.
 
 DH6. Loading and motion contracts MUST follow
 `dashboard-home-overview.spec.md` DH-11 through DH-13, including the

@@ -110,7 +110,19 @@
 		"syncing": "同步中...",
 		"account": {
 			"balanceTitle": "帳戶餘額",
-			"subscriptionTitle": "訂閱"
+			"subscriptionTitle": "訂閱",
+			"overviewTitle": "帳戶概覽",
+			"currentBalance": "目前餘額",
+			"balanceUnlimitedNote": "帳戶無額度限制",
+			"balanceAvailableNote": "帳戶可用餘額",
+			"todaySpend": "今日費用",
+			"todaySpendNote": "USD · 截至目前",
+			"todayRequests": "今日請求",
+			"callsUnit": "次呼叫",
+			"tokens24h": "24h Token",
+			"tokens24hNote": "全部 Token 類別",
+			"activeModels": "活躍模型",
+			"activeModelsNote": "過去 24 小時"
 		},
 		"subscription": {
 			"remaining": "剩餘配額",
@@ -127,7 +139,10 @@
 			"cumulativeTotal": "累計合計",
 			"today": "今日",
 			"now": "現在",
-			"legend": "模型圖例"
+			"legend": "模型圖例",
+			"previousLegendPage": "上一頁圖例",
+			"nextLegendPage": "下一頁圖例",
+			"legendPage": "{{current}} / {{total}}"
 		},
 		"recentUsage": {
 			"title": "最近用量",
@@ -150,6 +165,8 @@
 			"subtitle": "近 24 小時 · 可用性磚塊、avgTTFT 與 avgTPS",
 			"avgTtft": "avgTTFT",
 			"avgTps": "avgTPS",
+			"target": "目標",
+			"availability": "可用性（24 小時）",
 			"uptimeAria": "{{name}} 的可用性",
 			"empty": "未設定效能監控目標",
 			"emptyDescription": "管理員可在系統設定中選擇群組與 Model。",

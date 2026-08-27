@@ -51,7 +51,7 @@ export function RecentUsagePanel({
       transition={{ delay: 0.18, ...transitions.normal }}
       className="h-full min-h-0"
     >
-      <Card className="flex h-full min-h-0 flex-col">
+      <Card className="flex h-full max-h-96 min-h-0 flex-col">
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 p-4 pb-2">
           <div className="flex min-w-0 flex-col gap-1">
             <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
@@ -60,7 +60,7 @@ export function RecentUsagePanel({
             <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
               {t(
                 "dashboard.recentUsage.subtitle",
-                "Token usage, cache hit rate, and charges by model"
+                "Token usage, cache hit rate, and charges by model",
               )}
             </p>
           </div>
@@ -68,8 +68,8 @@ export function RecentUsagePanel({
         </CardHeader>
         <CardContent
           className={cn(
-            "min-h-0 flex-1 p-4 pt-2 transition-opacity",
-            pending && "opacity-60"
+            "flex min-h-0 flex-1 flex-col overflow-hidden p-4 pt-2 transition-opacity",
+            pending && "opacity-60",
           )}
         >
           {loading ? (
@@ -83,16 +83,18 @@ export function RecentUsagePanel({
               title={t("dashboard.recentUsage.empty", "No recent usage")}
               description={t(
                 "dashboard.recentUsage.emptyDescription",
-                "No usage recorded in the selected time range."
+                "No usage recorded in the selected time range.",
               )}
               className="py-8"
             />
           ) : (
-            <div className="max-h-80 overflow-auto rounded-md border">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t("dashboard.recentUsage.model", "Model")}</TableHead>
+                    <TableHead>
+                      {t("dashboard.recentUsage.model", "Model")}
+                    </TableHead>
                     <TableHead className="text-right">
                       {t("dashboard.recentUsage.tokens", "Tokens")}
                     </TableHead>
@@ -113,7 +115,9 @@ export function RecentUsagePanel({
                             className="h-2 w-2 shrink-0 rounded-sm"
                             style={{ backgroundColor: modelToColor(row.model) }}
                           />
-                          <span className="truncate font-mono text-xs">{row.model}</span>
+                          <span className="truncate font-mono text-xs">
+                            {row.model}
+                          </span>
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs tabular-nums">

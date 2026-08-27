@@ -7,10 +7,22 @@ import { motion, transitions } from "@/components/ui/motion";
 import type { PublicSystemSettings } from "@/lib/api";
 
 const ENDPOINTS = [
-  { labelKey: "dashboard.api.chatCompletions", fallback: "Chat Completions", path: "/v1/chat/completions" },
-  { labelKey: "dashboard.api.responses", fallback: "Responses", path: "/v1/responses" },
+  {
+    labelKey: "dashboard.api.chatCompletions",
+    fallback: "Chat Completions",
+    path: "/v1/chat/completions",
+  },
+  {
+    labelKey: "dashboard.api.responses",
+    fallback: "Responses",
+    path: "/v1/responses",
+  },
+  {
+    labelKey: "dashboard.api.messages",
+    fallback: "Messages",
+    path: "/v1/messages",
+  },
   { labelKey: "dashboard.api.models", fallback: "Models", path: "/v1/models" },
-  { labelKey: "dashboard.api.messages", fallback: "Messages", path: "/v1/messages" },
 ] as const;
 
 interface ApiInfoPanelProps {
@@ -56,7 +68,7 @@ export function ApiInfoPanel({ settings, loading }: ApiInfoPanelProps) {
               title={t("dashboard.noApiInfo", "No API Information")}
               description={t(
                 "dashboard.noApiInfoDescription",
-                "Please configure the API base URL in system settings."
+                "Please configure the API base URL in system settings.",
               )}
               className="flex-1 py-6"
             />
@@ -70,7 +82,9 @@ export function ApiInfoPanel({ settings, loading }: ApiInfoPanelProps) {
                 <p className="text-xs text-muted-foreground">
                   {t("dashboard.apiBaseUrl", "API Base URL")}
                 </p>
-                <p className="mt-0.5 truncate font-mono text-xs font-semibold">{baseUrl}</p>
+                <p className="mt-0.5 truncate font-mono text-xs font-semibold">
+                  {baseUrl}
+                </p>
               </button>
               {ENDPOINTS.map((endpoint, index) => {
                 const fullUrl = `${baseUrl.replace(/\/+$/, "")}${endpoint.path}`;
@@ -80,7 +94,10 @@ export function ApiInfoPanel({ settings, loading }: ApiInfoPanelProps) {
                     type="button"
                     initial={{ opacity: 0, x: 10 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.04 * (index + 1), ...transitions.normal }}
+                    transition={{
+                      delay: 0.04 * (index + 1),
+                      ...transitions.normal,
+                    }}
                     className="w-full rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 active:bg-muted/70"
                     onClick={() => void copy(fullUrl)}
                   >

@@ -110,7 +110,19 @@
 		"syncing": "Syncing...",
 		"account": {
 			"balanceTitle": "Account Balance",
-			"subscriptionTitle": "Subscription"
+			"subscriptionTitle": "Subscription",
+			"overviewTitle": "Account Overview",
+			"currentBalance": "Current Balance",
+			"balanceUnlimitedNote": "No account limit",
+			"balanceAvailableNote": "Available account balance",
+			"todaySpend": "Today's Spend",
+			"todaySpendNote": "USD · so far today",
+			"todayRequests": "Today's Requests",
+			"callsUnit": "calls",
+			"tokens24h": "24h Tokens",
+			"tokens24hNote": "All token categories",
+			"activeModels": "Active Models",
+			"activeModelsNote": "Past 24 hours"
 		},
 		"subscription": {
 			"remaining": "Remaining quota",
@@ -127,7 +139,10 @@
 			"cumulativeTotal": "Cumulative total",
 			"today": "Today",
 			"now": "Now",
-			"legend": "Model legend"
+			"legend": "Model legend",
+			"previousLegendPage": "Previous legend page",
+			"nextLegendPage": "Next legend page",
+			"legendPage": "{{current}} / {{total}}"
 		},
 		"recentUsage": {
 			"title": "Recent Usage",
@@ -150,6 +165,8 @@
 			"subtitle": "Last 24 hours · uptime bricks, avgTTFT, and avgTPS",
 			"avgTtft": "avgTTFT",
 			"avgTps": "avgTPS",
+			"target": "Target",
+			"availability": "Availability (24h)",
 			"uptimeAria": "Uptime for {{name}}",
 			"empty": "Performance targets are not configured",
 			"emptyDescription": "An administrator can select groups and models in system settings.",

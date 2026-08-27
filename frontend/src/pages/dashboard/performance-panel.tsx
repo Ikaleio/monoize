@@ -1,14 +1,23 @@
 import { useTranslation } from "react-i18next";
+import { useReducedMotion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { motion, transitions } from "@/components/ui/motion";
+import { motion, springs, transitions } from "@/components/ui/motion";
 import type {
   DashboardPerformance,
   DashboardPerformanceBrick,
@@ -20,6 +29,8 @@ interface PerformancePanelProps {
   data: DashboardPerformance | undefined;
   loading?: boolean;
 }
+
+const MotionTableRow = motion.create(TableRow);
 
 function brickClass(status: DashboardPerformanceBrickStatus): string {
   switch (status) {
@@ -61,9 +72,13 @@ function UptimeBricks({
       <div
         className="flex min-w-0 flex-1 items-center gap-0.5"
         role="img"
-        aria-label={t("dashboard.performance.uptimeAria", "Uptime for {{name}}", {
-          name: label,
-        })}
+        aria-label={t(
+          "dashboard.performance.uptimeAria",
+          "Uptime for {{name}}",
+          {
+            name: label,
+          },
+        )}
       >
         {ordered.map((brick) => (
           <Tooltip key={brick.index}>
@@ -71,13 +86,13 @@ function UptimeBricks({
               <span
                 className={cn(
                   "h-3 min-w-1.5 flex-1 rounded-sm",
-                  brickClass(brick.status)
+                  brickClass(brick.status),
                 )}
               />
             </TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
-              {t(`dashboard.performance.status.${brick.status}`, brick.status)} · h
-              {brick.index + 1}
+              {t(`dashboard.performance.status.${brick.status}`, brick.status)}{" "}
+              · h{brick.index + 1}
             </TooltipContent>
           </Tooltip>
         ))}
@@ -99,31 +114,35 @@ function PerfRow({
   avgTps: number | null;
   index: number;
 }) {
-  const { t } = useTranslation();
+  const reduceMotion = useReducedMotion();
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
+    <MotionTableRow
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.04 * index, ...transitions.normal }}
-      className="grid gap-2 rounded-lg border bg-muted/15 px-3 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_auto_auto] sm:items-center"
+      transition={
+        reduceMotion
+          ? { duration: 0 }
+          : { delay: 0.04 * index, ...springs.smooth }
+      }
     >
-      <p className="truncate font-mono text-xs font-medium" title={name}>
-        {name}
-      </p>
-      <UptimeBricks bricks={bricks} label={name} />
-      <div className="flex items-baseline justify-between gap-4 sm:block sm:text-right">
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground sm:hidden">
-          {t("dashboard.performance.avgTtft", "avgTTFT")}
+      <TableCell className="w-64 text-left">
+        <span
+          className="block truncate font-mono text-xs font-medium"
+          title={name}
+        >
+          {name}
         </span>
-        <span className="font-mono text-xs tabular-nums">{formatTtft(avgTtft)}</span>
-      </div>
-      <div className="flex items-baseline justify-between gap-4 sm:block sm:text-right">
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground sm:hidden">
-          {t("dashboard.performance.avgTps", "avgTPS")}
-        </span>
-        <span className="font-mono text-xs tabular-nums">{formatTps(avgTps)}</span>
-      </div>
-    </motion.div>
+      </TableCell>
+      <TableCell className="text-left">
+        <UptimeBricks bricks={bricks} label={name} />
+      </TableCell>
+      <TableCell className="w-32 text-right font-mono text-xs tabular-nums">
+        {formatTtft(avgTtft)}
+      </TableCell>
+      <TableCell className="w-32 text-right font-mono text-xs tabular-nums">
+        {formatTps(avgTps)}
+      </TableCell>
+    </MotionTableRow>
   );
 }
 
@@ -140,28 +159,16 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
       transition={{ delay: 0.26, ...transitions.normal }}
     >
       <Card>
-        <CardHeader className="p-4 pb-2">
-          <div className="flex flex-wrap items-end justify-between gap-2">
-            <div className="flex flex-col gap-1">
-              <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
-                {t("dashboard.performance.title", "Performance")}
-              </CardTitle>
-              <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
-                {t(
-                  "dashboard.performance.subtitle",
-                  "Last 24 hours · uptime bricks, avgTTFT, and avgTPS"
-                )}
-              </p>
-            </div>
-            <div className="hidden gap-4 text-[10px] uppercase tracking-wide text-muted-foreground sm:flex">
-              <span className="w-16 text-right">
-                {t("dashboard.performance.avgTtft", "avgTTFT")}
-              </span>
-              <span className="w-16 text-right">
-                {t("dashboard.performance.avgTps", "avgTPS")}
-              </span>
-            </div>
-          </div>
+        <CardHeader className="flex flex-col gap-1 p-4 pb-2">
+          <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
+            {t("dashboard.performance.title", "Performance")}
+          </CardTitle>
+          <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
+            {t(
+              "dashboard.performance.subtitle",
+              "Last 24 hours · uptime bricks, avgTTFT, and avgTPS",
+            )}
+          </p>
         </CardHeader>
         <CardContent className="flex flex-col gap-2 p-4 pt-2">
           {loading ? (
@@ -174,36 +181,59 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
             <EmptyState
               title={t(
                 "dashboard.performance.empty",
-                "Performance targets are not configured"
+                "Performance targets are not configured",
               )}
               description={t(
                 "dashboard.performance.emptyDescription",
-                "An administrator can select groups and models in system settings."
+                "An administrator can select groups and models in system settings.",
               )}
               className="py-8"
             />
           ) : (
-            <div className="flex flex-col gap-2">
-              {groups.map((group, index) => (
-                <PerfRow
-                  key={`group-${group.id}`}
-                  name={group.name || group.id}
-                  bricks={group.bricks}
-                  avgTtft={group.avg_ttft_ms}
-                  avgTps={group.avg_tps}
-                  index={index}
-                />
-              ))}
-              {models.map((model, index) => (
-                <PerfRow
-                  key={`model-${model.id}`}
-                  name={model.id}
-                  bricks={model.bricks}
-                  avgTtft={model.avg_ttft_ms}
-                  avgTps={model.avg_tps}
-                  index={groups.length + index}
-                />
-              ))}
+            <div className="overflow-hidden rounded-lg border">
+              <Table className="min-w-[48rem] table-fixed">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-64 text-left">
+                      {t("dashboard.performance.target", "Target")}
+                    </TableHead>
+                    <TableHead className="text-left">
+                      {t(
+                        "dashboard.performance.availability",
+                        "Availability (24h)",
+                      )}
+                    </TableHead>
+                    <TableHead className="w-32 text-right">
+                      {t("dashboard.performance.avgTtft", "avgTTFT")}
+                    </TableHead>
+                    <TableHead className="w-32 text-right">
+                      {t("dashboard.performance.avgTps", "avgTPS")}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {groups.map((group, index) => (
+                    <PerfRow
+                      key={`group-${group.id}`}
+                      name={group.name || group.id}
+                      bricks={group.bricks}
+                      avgTtft={group.avg_ttft_ms}
+                      avgTps={group.avg_tps}
+                      index={index}
+                    />
+                  ))}
+                  {models.map((model, index) => (
+                    <PerfRow
+                      key={`model-${model.id}`}
+                      name={model.id}
+                      bricks={model.bricks}
+                      avgTtft={model.avg_ttft_ms}
+                      avgTps={model.avg_tps}
+                      index={groups.length + index}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           )}
         </CardContent>

@@ -99,8 +99,8 @@
 		"spend": "消耗",
 		"calls": "调用次数",
 		"value": "值",
-		"apiInformation": "API信息",
-		"noApiInfo": "暂无API信息",
+		"apiInformation": "API 信息",
+		"noApiInfo": "暂无 API 信息",
 		"noApiInfoDescription": "请在系统设置中配置 API 基址。",
 		"noAnalysisData": "暂无可用请求日志数据",
 		"noAnalysisDataDescription": "产生请求后将自动展示真实统计。",
@@ -110,7 +110,19 @@
 		"syncing": "同步中...",
 		"account": {
 			"balanceTitle": "账户余额",
-			"subscriptionTitle": "订阅"
+			"subscriptionTitle": "订阅",
+			"overviewTitle": "账户概览",
+			"currentBalance": "当前余额",
+			"balanceUnlimitedNote": "账户无额度限制",
+			"balanceAvailableNote": "账户可用余额",
+			"todaySpend": "今日费用",
+			"todaySpendNote": "USD · 截至现在",
+			"todayRequests": "今日请求",
+			"callsUnit": "次调用",
+			"tokens24h": "24h Token",
+			"tokens24hNote": "全部 Token 类别",
+			"activeModels": "活跃模型",
+			"activeModelsNote": "过去 24 小时"
 		},
 		"subscription": {
 			"remaining": "剩余配额",
@@ -127,7 +139,10 @@
 			"cumulativeTotal": "累计合计",
 			"today": "今日",
 			"now": "现在",
-			"legend": "模型图例"
+			"legend": "模型图例",
+			"previousLegendPage": "上一页图例",
+			"nextLegendPage": "下一页图例",
+			"legendPage": "{{current}} / {{total}}"
 		},
 		"recentUsage": {
 			"title": "最近用量",
@@ -150,6 +165,8 @@
 			"subtitle": "近 24 小时 · 可用性砖块、avgTTFT 与 avgTPS",
 			"avgTtft": "avgTTFT",
 			"avgTps": "avgTPS",
+			"target": "目标",
+			"availability": "可用性（24 小时）",
 			"uptimeAria": "{{name}} 的可用性",
 			"empty": "未配置性能监控目标",
 			"emptyDescription": "管理员可在系统设置中选择分组与 Model。",

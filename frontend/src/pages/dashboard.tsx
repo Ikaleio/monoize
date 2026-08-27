@@ -21,6 +21,8 @@ import { RecentUsagePanel } from "./dashboard/recent-usage";
 import { ApiInfoPanel } from "./dashboard/api-info-panel";
 import { PerformancePanel } from "./dashboard/performance-panel";
 
+const ACCOUNT_OVERVIEW_QUERY = USAGE_WINDOW_QUERY["24h"];
+
 function GreetingSkeleton() {
   return (
     <div className="flex flex-col gap-2">
@@ -47,6 +49,11 @@ export function DashboardPage() {
     chartQuery.rangeHours,
     { keepPreviousData: true }
   );
+  const { data: accountAnalytics, isLoading: accountAnalyticsLoading } =
+    useDashboardAnalytics(
+      ACCOUNT_OVERVIEW_QUERY.buckets,
+      ACCOUNT_OVERVIEW_QUERY.rangeHours,
+    );
   const { data: requestLogsResponse, isLoading: logsLoading } =
     useWindowedRequestLogs(recentWindow, 200);
   const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
@@ -86,7 +93,14 @@ export function DashboardPage() {
         )}
       </motion.header>
 
-      <AccountStrip user={user} loading={userLoading} />
+      <AccountStrip
+        user={user}
+        analytics={accountAnalytics}
+        loading={
+          userLoading ||
+          (accountAnalyticsLoading && accountAnalytics === undefined)
+        }
+      />
       <UsageChartPanel
         analytics={usageAnalytics}
         loading={usageLoading && !usageAnalytics}

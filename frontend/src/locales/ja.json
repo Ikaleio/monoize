@@ -110,7 +110,19 @@
 		"syncing": "同期中...",
 		"account": {
 			"balanceTitle": "アカウント残高",
-			"subscriptionTitle": "サブスクリプション"
+			"subscriptionTitle": "サブスクリプション",
+			"overviewTitle": "アカウント概要",
+			"currentBalance": "現在の残高",
+			"balanceUnlimitedNote": "アカウント上限なし",
+			"balanceAvailableNote": "利用可能な残高",
+			"todaySpend": "本日の費用",
+			"todaySpendNote": "USD · 現在まで",
+			"todayRequests": "本日のリクエスト",
+			"callsUnit": "件",
+			"tokens24h": "24時間のトークン",
+			"tokens24hNote": "すべてのトークン種別",
+			"activeModels": "使用中のモデル",
+			"activeModelsNote": "過去24時間"
 		},
 		"subscription": {
 			"remaining": "残りクォータ",
@@ -127,7 +139,10 @@
 			"cumulativeTotal": "累計合計",
 			"today": "今日",
 			"now": "現在",
-			"legend": "モデル凡例"
+			"legend": "モデル凡例",
+			"previousLegendPage": "前の凡例ページ",
+			"nextLegendPage": "次の凡例ページ",
+			"legendPage": "{{current}} / {{total}}"
 		},
 		"recentUsage": {
 			"title": "最近の使用量",
@@ -150,6 +165,8 @@
 			"subtitle": "直近 24 時間 · 稼働レンガ、avgTTFT、avgTPS",
 			"avgTtft": "avgTTFT",
 			"avgTps": "avgTPS",
+			"target": "対象",
+			"availability": "可用性（24時間）",
 			"uptimeAria": "{{name}} の稼働状況",
 			"empty": "パフォーマンス対象が設定されていません",
 			"emptyDescription": "管理者はシステム設定でグループと Model を選択できます。",
