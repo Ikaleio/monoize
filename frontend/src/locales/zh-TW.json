@@ -119,14 +119,14 @@
 		},
 		"usage": {
 			"title": "你的用量",
-			"subtitle": "本計費週期內每日用量",
-			"groupBy": "分組依據",
-			"groupByModel": "分組依據：Model",
+			"subtitle": "所選時間範圍內的累計 Token 用量",
+			"timeRange": "時間範圍",
 			"cumulativeTokens": "累計 Tokens",
-			"dailyBreakdown": "每日明細",
-			"dailyTotal": "每日合計",
+			"periodBreakdown": "區間明細",
+			"periodTotal": "區間合計",
 			"cumulativeTotal": "累計合計",
 			"today": "今日",
+			"now": "現在",
 			"legend": "模型圖例"
 		},
 		"recentUsage": {
@@ -137,7 +137,7 @@
 			"cacheHit": "快取命中",
 			"charge": "費用",
 			"empty": "尚無最近用量",
-			"emptyDescription": "發起 API 請求後，此處將顯示 Model 用量。"
+			"emptyDescription": "所選時間範圍內沒有用量記錄。"
 		},
 		"api": {
 			"chatCompletions": "Chat Completions",

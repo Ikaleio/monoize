@@ -119,14 +119,14 @@
 		},
 		"usage": {
 			"title": "使用量",
-			"subtitle": "本請求期間の日別使用量",
-			"groupBy": "グループ化",
-			"groupByModel": "グループ化: Model",
+			"subtitle": "選択した期間の累計 Token 使用量",
+			"timeRange": "期間",
 			"cumulativeTokens": "累計 Tokens",
-			"dailyBreakdown": "日別内訳",
-			"dailyTotal": "日次合計",
+			"periodBreakdown": "期間の内訳",
+			"periodTotal": "期間合計",
 			"cumulativeTotal": "累計合計",
 			"today": "今日",
+			"now": "現在",
 			"legend": "モデル凡例"
 		},
 		"recentUsage": {
@@ -137,7 +137,7 @@
 			"cacheHit": "キャッシュヒット",
 			"charge": "課金",
 			"empty": "最近の使用量がありません",
-			"emptyDescription": "API リクエスト後に Model の使用量がここに表示されます。"
+			"emptyDescription": "選択した期間に使用量の記録はありません。"
 		},
 		"api": {
 			"chatCompletions": "Chat Completions",

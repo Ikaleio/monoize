@@ -1,6 +1,11 @@
-import type { DashboardAnalyticsBucket, RequestLog } from "@/lib/api";
+import type { DashboardAnalytics, RequestLog } from "@/lib/api";
 import { formatCacheHitRate } from "@/lib/live-usage";
 import { formatNanoUsd, isSignedIntegerString } from "@/lib/exact-decimal";
+import {
+  bucketLabelForWindow,
+  bucketStartDates,
+  type UsageWindow,
+} from "@/lib/usage-window";
 
 export const CHART_COLORS = Array.from(
   { length: 16 },
@@ -109,15 +114,24 @@ export interface CumulativeSeries {
   models: string[];
   /** Cumulative stacked rows for AreaChart. */
   rows: Array<Record<string, number | string>>;
-  /** Per-bucket daily (non-cumulative) totals by model. */
-  dailyByBucket: Array<Record<string, number>>;
-  dailyTotals: number[];
+  /** Per-bucket (non-cumulative) totals by model. */
+  bucketByModel: Array<Record<string, number>>;
+  bucketTotals: number[];
   cumulativeTotals: number[];
 }
 
 export function buildCumulativeTokenSeries(
-  buckets: DashboardAnalyticsBucket[]
+  analytics: DashboardAnalytics | undefined,
+  window: UsageWindow
 ): CumulativeSeries {
+  const buckets = analytics?.buckets ?? [];
+  // DH-6c: labels come from the response time range; the backend `label`
+  // field truncates minutes (`%H:00`) so it cannot distinguish 5-minute
+  // buckets. Fall back to the backend label when the range does not parse.
+  const starts = analytics
+    ? bucketStartDates(analytics.time_from, analytics.time_to, buckets.length)
+    : null;
+
   const totals = new Map<string, number>();
   for (const bucket of buckets) {
     for (const [model, tokens] of Object.entries(bucket.tokens_by_model ?? {})) {
@@ -133,21 +147,22 @@ export function buildCumulativeTokenSeries(
 
   const running = new Map<string, number>(models.map((m) => [m, 0]));
   const rows: Array<Record<string, number | string>> = [];
-  const dailyByBucket: Array<Record<string, number>> = [];
-  const dailyTotals: number[] = [];
+  const bucketByModel: Array<Record<string, number>> = [];
+  const bucketTotals: number[] = [];
   const cumulativeTotals: number[] = [];
 
-  for (const bucket of buckets) {
-    const daily: Record<string, number> = {};
-    let dayTotal = 0;
+  buckets.forEach((bucket, index) => {
+    const perBucket: Record<string, number> = {};
+    let bucketTotal = 0;
     for (const model of models) {
-      const day = Number(bucket.tokens_by_model?.[model] ?? 0) || 0;
-      daily[model] = day;
-      dayTotal += day;
-      running.set(model, (running.get(model) ?? 0) + day);
+      const value = Number(bucket.tokens_by_model?.[model] ?? 0) || 0;
+      perBucket[model] = value;
+      bucketTotal += value;
+      running.set(model, (running.get(model) ?? 0) + value);
     }
+    const start = starts?.[index];
     const row: Record<string, number | string> = {
-      label: shortBucketLabel(bucket.label),
+      label: start ? bucketLabelForWindow(window, start) : shortBucketLabel(bucket.label),
       rawLabel: bucket.label,
     };
     let cum = 0;
@@ -157,10 +172,10 @@ export function buildCumulativeTokenSeries(
       cum += value;
     }
     rows.push(row);
-    dailyByBucket.push(daily);
-    dailyTotals.push(dayTotal);
+    bucketByModel.push(perBucket);
+    bucketTotals.push(bucketTotal);
     cumulativeTotals.push(cum);
-  }
+  });
 
-  return { models, rows, dailyByBucket, dailyTotals, cumulativeTotals };
+  return { models, rows, bucketByModel, bucketTotals, cumulativeTotals };
 }
