@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { UIMessage } from "ai";
+import {
+  clampPlaygroundImageDimension,
+  normalizePlaygroundImageSize,
+  parsePlaygroundImageSize,
+} from "../src/components/playground/image-size";
 import { filePartsForEditedUserMessage } from "../src/components/playground/message-operations";
 import {
   buildImageEditForm,
@@ -21,29 +26,46 @@ function generationInput(size: string): ImageRequestInput {
 }
 
 describe("Playground image size (PG-SEL6, PG-IMG2, PG-IMG3)", () => {
-  test("omits size for auto and unsupported values", () => {
+  test("accepts custom dimensions within the configured range", () => {
+    expect(normalizePlaygroundImageSize("1344x768")).toBe("1344x768");
+    expect(normalizePlaygroundImageSize("256x4096")).toBe("256x4096");
+    expect(parsePlaygroundImageSize("1023x777")).toEqual({
+      width: 1023,
+      height: 777,
+    });
+  });
+
+  test("omits size for auto and invalid values", () => {
     expect(JSON.parse(buildImageGenerationBody(generationInput("")))).toEqual({
       model: "gpt-image-2",
       prompt: "draw a lighthouse",
       n: 1,
     });
     expect(
-      JSON.parse(buildImageGenerationBody(generationInput("4096x4096"))),
+      JSON.parse(buildImageGenerationBody(generationInput("4097x4096"))),
     ).toEqual({
       model: "gpt-image-2",
       prompt: "draw a lighthouse",
       n: 1,
     });
+    expect(normalizePlaygroundImageSize("255x1024")).toBe("");
+    expect(normalizePlaygroundImageSize("1024.5x1024")).toBe("");
+  });
+
+  test("clamps numeric input to the supported range", () => {
+    expect(clampPlaygroundImageDimension(128)).toBe(256);
+    expect(clampPlaygroundImageDimension(768.4)).toBe(768);
+    expect(clampPlaygroundImageDimension(8192)).toBe(4096);
   });
 
   test("adds an explicit size to generation JSON", () => {
     expect(
-      JSON.parse(buildImageGenerationBody(generationInput("1536x1024"))),
+      JSON.parse(buildImageGenerationBody(generationInput("1344x768"))),
     ).toEqual({
       model: "gpt-image-2",
       prompt: "draw a lighthouse",
       n: 1,
-      size: "1536x1024",
+      size: "1344x768",
     });
   });
 
@@ -54,14 +76,14 @@ describe("Playground image size (PG-SEL6, PG-IMG2, PG-IMG3)", () => {
       url: "data:image/png;base64,aW1hZ2U=",
     };
     const form = buildImageEditForm({
-      ...generationInput("1024x1536"),
+      ...generationInput("832x1216"),
       attachment,
     });
 
     expect(form.get("model")).toBe("gpt-image-2");
     expect(form.get("prompt")).toBe("draw a lighthouse");
     expect(form.get("n")).toBe("1");
-    expect(form.get("size")).toBe("1024x1536");
+    expect(form.get("size")).toBe("832x1216");
     expect(form.get("image")).toBeInstanceOf(File);
   });
 

@@ -29,7 +29,7 @@ PG-STATE2. Exactly these preference keys MAY be persisted in `localStorage`:
 | `playground_group` | string | Selected routing group id; empty/absent means "auto". |
 | `playground_chat_model` | string | Selected chat model id. |
 | `playground_image_model` | string | Selected image model id. |
-| `playground_image_size` | string | Selected image size. Empty/absent means "auto". |
+| `playground_image_size` | string | Selected image size as `<width>x<height>`. Empty/absent means `auto`. |
 | `playground_api_key_id` | string | Explicitly selected API-key id; empty/absent means the built-in Playground credential. |
 | `playground_temperature` | string | Decimal string; empty/absent means "omit from request". |
 | `playground_max_tokens` | string | Integer string; empty/absent means "omit from request". |
@@ -165,11 +165,15 @@ MUST render as a skeleton pill instead of an interactive control. While `useApiK
 loading with no cached data, the credential picker MUST keep the built-in option available
 and render a skeleton in place of API-key rows.
 
-PG-SEL6. Image mode MUST render one compact shadcn `Select` for the output image size.
-The selector MUST be hidden in chat mode. The options MUST appear in this order:
-`auto`, `1024x1024`, `1024x1536`, and `1536x1024`. The `auto` option MUST store an empty
-`playground_image_size` value. Each explicit option MUST store its literal value. An
-unsupported persisted value MUST resolve to `auto` and MUST NOT reach an image request.
+PG-SEL6. Image mode MUST render one compact shadcn `Popover` trigger for the output image
+size. The control MUST be hidden in chat mode. The trigger MUST show `auto` when
+`playground_image_size` is empty. Otherwise, it MUST show the selected width and height.
+The popover MUST contain separate width and height controls. Each dimension control MUST
+contain a shadcn `Slider` and a numeric `Input`. Each dimension MUST accept every integer
+from 256 through 4096 pixels. Each slider MUST use a 64-pixel step. Changing either
+dimension MUST store `<width>x<height>` in `playground_image_size`. The `auto` action MUST
+store an empty value. An invalid persisted value MUST resolve to `auto` and MUST NOT reach
+an image request.
 
 ## 5. Chat Execution (AI SDK)
 
