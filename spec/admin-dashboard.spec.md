@@ -73,10 +73,10 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
   - `username`: string or null;
   - `call_count`: integer;
   - `cost_nano_usd`: nano-dollar integer string.
-  The aggregation window MUST be the last 24 hours ending now, computed from
-  `request_logs.created_at_unix_ms >= now - 24h` and only over rows whose
-  `created_at_unix_ms` is not null. Charge decoding MUST follow the existing
-  analytics aggregate rules (RL-analytics).
+    The aggregation window MUST be the last 24 hours ending now, computed from
+    `request_logs.created_at_unix_ms >= now - 24h` and only over rows whose
+    `created_at_unix_ms` is not null. Charge decoding MUST follow the existing
+    analytics aggregate rules (RL-analytics).
 - `channel_health`: array of objects, one per channel known to the routing
   store, ordered by provider priority ascending then channel name ascending:
   - `provider_id`, `provider_name`, `channel_id`, `channel_name`: strings;
@@ -115,9 +115,16 @@ exclusively for admin-role sessions (same role predicate as the existing admin
 nav items). Direct navigation by a non-admin MUST show an unauthorized/empty
 state without calling the admin endpoint.
 
-ADF-2. The page MUST render four sections in order: System status, User usage
-ranking, Model/channel health, and Replica status. Each section MUST be a
-card.
+ADF-2. The page MUST render four card sections. At viewport widths below the
+`lg` breakpoint, the cards MUST use this single-column order: System status,
+User usage ranking, Model/channel health, Replica status.
+
+At viewport widths at or above the `lg` breakpoint, the cards MUST use two
+independently stacked columns. The left column MUST occupy 5 of 12 grid columns
+and MUST contain System status followed by Replica status. The right column
+MUST occupy 7 of 12 grid columns and MUST contain User usage ranking followed by
+Model/channel health. A short card MUST NOT force the next card in the same
+column to align below a taller card in the other column.
 
 ADF-3. System status card MUST show: node role, version, uptime (humanized,
 e.g. `2d 4h 12m`), listen address, metrics path, database backend, redacted
@@ -128,15 +135,39 @@ columns: rank, username (or user id when username is null), call count, and
 cost formatted as USD with 6 fractional digits. Rows MUST be ordered as the
 endpoint returns them.
 
-ADF-5. Model/channel health card MUST render one row per channel with columns:
-provider name, channel name, enabled, weight, auto session affinity, health
-status (healthy/unhealthy/cooling-down), last probe time, today's calls, and
-today's cost formatted as USD with 2 fractional digits. Health status MUST
-derive from `healthy` and `cooldown_until`: a channel with
+ADF-4a. The User usage ranking table MUST have a fixed header and a bounded
+data-row viewport. The viewport MUST virtualize its rows and MUST scroll
+vertically when the rendered row height exceeds its bound. The table MUST
+preserve horizontal scrolling when its columns do not fit the card width.
+The table height MUST equal `min(40 + users_ranking.length * 44, 260)` CSS
+pixels. The fixed header height MUST be 40 CSS pixels. Each data row height
+MUST be 44 CSS pixels.
+
+ADF-5. Model/channel health card MUST render one row per channel with six
+columns: Channel, Weight, Affinity, Status, Today's spend, and Last probe. The
+Channel column MUST show the channel name and provider name. The Affinity
+column MUST show `auto` when auto session affinity is enabled and `-` otherwise.
+The Status column MUST show disabled, healthy, unhealthy, or cooling-down. The
+Today's spend column MUST show today's cost formatted as USD with 2 fractional
+digits and today's call count. The Last probe column MUST show the probe time.
+Health status MUST derive from `enabled`, `healthy`, and `cooldown_until`: a channel with
 `cooldown_until > now` renders as cooling-down regardless of `healthy`. When
 `unhealthy_models` is non-empty, the status cell MUST list those model ids.
 The card header MUST also show the process-wide `today.cost_nano_usd` and
 `today.calls` totals.
+
+ADF-5a. The Model/channel health table MUST have a fixed header and a bounded
+data-row viewport. The viewport MUST virtualize its rows and MUST scroll
+vertically when the rendered row height exceeds its bound. The table MUST
+preserve horizontal scrolling when its columns do not fit the card width.
+The table height MUST equal `min(40 + channel_health.length * 64, 360)` CSS
+pixels. The fixed header height MUST be 40 CSS pixels. Each data row height
+MUST be 64 CSS pixels.
+
+ADF-5b. Each virtualized table MUST render semantic `table`, `thead`, `tbody`,
+`tr`, `th`, and `td` elements. Each row MUST use a stable endpoint identifier
+as its virtual item key. The User usage ranking table MUST use `user_id`. The
+Model/channel health table MUST use `channel_id`.
 
 ADF-6. Replica status card MUST render the node role, ingest-enabled state,
 spool pending count, and spool pending bytes. When the node is a primary and

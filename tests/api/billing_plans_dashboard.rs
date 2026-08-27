@@ -11,9 +11,17 @@ use tower::ServiceExt;
 struct TestContext {
     router: axum::Router,
     auth_header: String,
+    state: monoize::app::AppState,
+}
+
+impl Drop for TestContext {
+    fn drop(&mut self) {
+        super::close_test_state(&self.state, None);
+    }
 }
 
 async fn setup() -> TestContext {
+    super::assert_test_cleanup_succeeded();
     async fn siteverify(Json(body): Json<Value>) -> Json<Value> {
         Json(json!({
             "success": body["secret"] == json!("test-cap-secret")
@@ -59,8 +67,9 @@ async fn setup() -> TestContext {
         .expect("session created");
 
     TestContext {
-        router: build_app(state),
+        router: build_app(state.clone()),
         auth_header: format!("Bearer {}", session.token),
+        state,
     }
 }
 

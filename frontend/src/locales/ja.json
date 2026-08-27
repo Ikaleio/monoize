@@ -63,7 +63,9 @@
 		"billingPlans": "プラン",
 		"adminDashboard": "システムダッシュボード",
 		"groups": "グループ",
-		"customTransforms": "カスタム変換"
+		"customTransforms": "カスタム変換",
+		"collapseSidebar": "サイドバーを折りたたむ",
+		"expandSidebar": "サイドバーを展開する"
 	},
 	"roles": {
 		"super_admin": "スーパー管理者",
@@ -110,7 +112,19 @@
 		"syncing": "同期中...",
 		"account": {
 			"balanceTitle": "アカウント残高",
-			"subscriptionTitle": "サブスクリプション"
+			"subscriptionTitle": "サブスクリプション",
+			"overviewTitle": "アカウント概要",
+			"currentBalance": "現在の残高",
+			"balanceUnlimitedNote": "アカウント上限なし",
+			"balanceAvailableNote": "利用可能な残高",
+			"todaySpend": "本日の費用",
+			"todaySpendNote": "USD · 現在まで",
+			"todayRequests": "本日のリクエスト",
+			"callsUnit": "件",
+			"tokens24h": "24時間のトークン",
+			"tokens24hNote": "すべてのトークン種別",
+			"activeModels": "使用中のモデル",
+			"activeModelsNote": "過去24時間"
 		},
 		"subscription": {
 			"remaining": "残りクォータ",
@@ -119,15 +133,18 @@
 		},
 		"usage": {
 			"title": "使用量",
-			"subtitle": "本請求期間の日別使用量",
-			"groupBy": "グループ化",
-			"groupByModel": "グループ化: Model",
+			"subtitle": "選択した期間の累計 Token 使用量",
+			"timeRange": "期間",
 			"cumulativeTokens": "累計 Tokens",
-			"dailyBreakdown": "日別内訳",
-			"dailyTotal": "日次合計",
+			"periodBreakdown": "期間の内訳",
+			"periodTotal": "期間合計",
 			"cumulativeTotal": "累計合計",
 			"today": "今日",
-			"legend": "モデル凡例"
+			"now": "現在",
+			"legend": "モデル凡例",
+			"previousLegendPage": "前の凡例ページ",
+			"nextLegendPage": "次の凡例ページ",
+			"legendPage": "{{current}} / {{total}}"
 		},
 		"recentUsage": {
 			"title": "最近の使用量",
@@ -137,7 +154,7 @@
 			"cacheHit": "キャッシュヒット",
 			"charge": "課金",
 			"empty": "最近の使用量がありません",
-			"emptyDescription": "API リクエスト後に Model の使用量がここに表示されます。"
+			"emptyDescription": "選択した期間に使用量の記録はありません。"
 		},
 		"api": {
 			"chatCompletions": "Chat Completions",
@@ -150,6 +167,8 @@
 			"subtitle": "直近 24 時間 · 稼働レンガ、avgTTFT、avgTPS",
 			"avgTtft": "avgTTFT",
 			"avgTps": "avgTPS",
+			"target": "対象",
+			"availability": "可用性（24時間）",
 			"uptimeAria": "{{name}} の稼働状況",
 			"empty": "パフォーマンス対象が設定されていません",
 			"emptyDescription": "管理者はシステム設定でグループと Model を選択できます。",
@@ -820,6 +839,7 @@
 		"context": "コンテキスト",
 		"maxOutput": "最大出力",
 		"provider": "プロバイダー",
+		"resultCount": "{{total}} 件中 {{filtered}} 件のモデルを表示",
 		"noModels": "利用可能なモデルがありません",
 		"noModelsDesc": "管理者がモデルデータベースを同期すると、モデルデータがここに表示されます。"
 	},

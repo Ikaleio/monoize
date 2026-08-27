@@ -478,15 +478,17 @@ export function ProviderCard({
 											data={provider.channels}
 											itemContent={(_idx, channel) => (
 												<div className='flex min-h-10 items-center gap-3 px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors border-b last:border-b-0'>
-													<ChannelRuntimeStatus
-														channel={channel}
-														perModelCircuitBreak={provider.per_model_circuit_break}
-													/>
-													<span className='font-medium truncate min-w-0'>
-														{channel.name}
-													</span>
-													<span className='font-mono text-xs text-muted-foreground truncate min-w-0 hidden sm:inline'>
-														{channel.base_url}
+													<span className='flex min-w-0 items-baseline gap-3'>
+														<ChannelRuntimeStatus
+															channel={channel}
+															perModelCircuitBreak={provider.per_model_circuit_break}
+														/>
+														<span className='min-w-0 truncate font-medium'>
+															{channel.name}
+														</span>
+														<span className='hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:inline'>
+															{channel.base_url}
+														</span>
 													</span>
 													<span className='ml-auto flex items-center gap-3 shrink-0'>
 														<span className='inline-flex items-center rounded-md border overflow-hidden h-7'>

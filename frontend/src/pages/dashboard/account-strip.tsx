@@ -1,39 +1,132 @@
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { motion, springs, transitions } from "@/components/ui/motion";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
+import { SlideUp } from "@/components/ui/motion";
+import { formatNanoUsd, formatUsdDecimal } from "@/lib/exact-decimal";
 import { planRemainingFraction } from "@/lib/live-usage";
-import type { User } from "@/lib/api";
+import type { DashboardAnalytics, User } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { formatCompactTokens } from "./utils";
 
 interface AccountStripProps {
   user: User | null | undefined;
+  analytics: DashboardAnalytics | undefined;
   loading?: boolean;
 }
 
-function MetricCardSkeleton() {
+interface MetricCellProps {
+  label: string;
+  value: string;
+  note: string;
+  primary?: boolean;
+  mobileDivider?: boolean;
+}
+
+interface AccountAnalyticsSummary {
+  tokens: number;
+  activeModels: number;
+}
+
+function summarizeAnalytics(
+  analytics: DashboardAnalytics | undefined,
+): AccountAnalyticsSummary {
+  const modelTotals = new Map<string, number>();
+
+  for (const bucket of analytics?.buckets ?? []) {
+    for (const [model, rawTokens] of Object.entries(
+      bucket.tokens_by_model ?? {},
+    )) {
+      const tokens = Number(rawTokens) || 0;
+      if (tokens > 0) {
+        modelTotals.set(model, (modelTotals.get(model) ?? 0) + tokens);
+      }
+    }
+  }
+
+  return {
+    tokens: [...modelTotals.values()].reduce(
+      (total, value) => total + value,
+      0,
+    ),
+    activeModels: modelTotals.size,
+  };
+}
+
+function MetricCell({
+  label,
+  value,
+  note,
+  primary,
+  mobileDivider,
+}: MetricCellProps) {
   return (
-    <Card>
-      <CardHeader className="p-4 pb-2">
-        <Skeleton className="h-4 w-24" />
+    <div
+      className={cn(
+        "flex min-h-28 min-w-0 flex-col justify-center gap-1 p-4",
+        primary
+          ? "sm:col-span-2 lg:col-span-1"
+          : "border-t lg:border-l lg:border-t-0",
+        mobileDivider && "sm:border-l",
+      )}
+    >
+      <p className="truncate text-sm font-medium text-muted-foreground">
+        {label}
+      </p>
+      <p
+        className={cn(
+          "truncate font-display text-2xl font-semibold tracking-tight tabular-nums",
+          primary && "text-3xl",
+        )}
+        title={value}
+      >
+        {value}
+      </p>
+      <p className="truncate text-sm text-muted-foreground" title={note}>
+        {note}
+      </p>
+    </div>
+  );
+}
+
+function AccountOverviewSkeleton({ title }: { title: string }) {
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="sr-only">
+        <CardTitle>{title}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2 p-4 pt-0">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-3 w-40" />
+      <CardContent className="grid p-0 sm:grid-cols-2 lg:grid-cols-[1.35fr_repeat(4,minmax(0,1fr))]">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <div
+            key={index}
+            className={cn(
+              "flex min-h-28 flex-col justify-center gap-2 p-4",
+              index === 0
+                ? "sm:col-span-2 lg:col-span-1"
+                : "border-t lg:border-l lg:border-t-0",
+              (index === 2 || index === 4) && "sm:border-l",
+            )}
+          >
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="h-8 w-28" />
+            <Skeleton className="h-4 w-32 max-w-full" />
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
 }
 
-export function AccountStrip({ user, loading }: AccountStripProps) {
+export function AccountStrip({ user, analytics, loading }: AccountStripProps) {
   const { t } = useTranslation();
+  const overviewTitle = t(
+    "dashboard.account.overviewTitle",
+    "Account Overview",
+  );
 
   if (loading || !user) {
     return (
-      <section className="grid gap-3 md:grid-cols-2">
-        <MetricCardSkeleton />
-        <MetricCardSkeleton />
+      <section aria-label={overviewTitle}>
+        <AccountOverviewSkeleton title={overviewTitle} />
       </section>
     );
   }
@@ -41,105 +134,107 @@ export function AccountStrip({ user, loading }: AccountStripProps) {
   const balanceValue = user.balance_unlimited
     ? t("users.unlimited", "Unlimited")
     : formatUsdDecimal(user.balance_usd, 2);
-
+  const balanceNote = user.balance_unlimited
+    ? t("dashboard.account.balanceUnlimitedNote", "No account limit")
+    : t("dashboard.account.balanceAvailableNote", "Available account balance");
+  const summary = summarizeAnalytics(analytics);
   const plan = user.billing_plan;
   const remainingFraction =
     plan && !user.balance_unlimited
       ? planRemainingFraction(user.balance_nano_usd, plan.grant_amount_nano_usd)
       : null;
-
   const remainingLabel = user.balance_unlimited
     ? t("users.unlimited", "Unlimited")
     : plan
       ? `${formatUsdDecimal(user.balance_usd, 2)} / ${formatUsdDecimal(plan.grant_amount_usd, 2)}`
-      : t("dashboard.cards.noPlan", "No plan");
-
-  // next_grant_at lives on the user object, not on billing_plan (DH-5b).
+      : "";
   const resetLabel = user.next_grant_at
-    ? new Date(user.next_grant_at).toLocaleString()
+    ? new Date(user.next_grant_at).toLocaleString(undefined, {
+        dateStyle: "short",
+        timeStyle: "short",
+      })
     : t("dashboard.subscription.resetUnavailable", "Not scheduled");
 
   return (
-    <section className="grid gap-3 md:grid-cols-2">
-      <motion.div
-        initial={{ opacity: 0, y: 16, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ delay: 0.04, ...transitions.normal }}
-        whileHover={{ y: -2, transition: springs.snappy }}
-        className="h-full"
-      >
-        <Card className="h-full">
-          <CardHeader className="p-4 pb-2">
-            <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
-              {t("dashboard.account.balanceTitle", "Account Balance")}
-            </CardTitle>
+    <SlideUp delay={0.04}>
+      <section aria-label={overviewTitle}>
+        <Card className="overflow-hidden">
+          <CardHeader className="sr-only">
+            <CardTitle>{overviewTitle}</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-1 p-4 pt-0">
-            <p className="font-display text-3xl font-semibold tracking-tight tabular-nums">
-              {balanceValue}
-            </p>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {t("dashboard.cards.currentBalance", "Current Balance")}
-            </p>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 16, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ delay: 0.1, ...transitions.normal }}
-        whileHover={{ y: -2, transition: springs.snappy }}
-        className="h-full"
-      >
-        <Card className="h-full">
-          <CardHeader className="p-4 pb-2">
-            <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
-              {t("dashboard.account.subscriptionTitle", "Subscription")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 p-4 pt-0">
-            {!plan ? (
-              <p className="text-xl font-semibold">
-                {t("dashboard.cards.noPlan", "No plan")}
-              </p>
-            ) : (
-              <>
-                <div className="flex items-baseline justify-between gap-3">
-                  <p className="truncate text-balance text-xl font-semibold">{plan.name}</p>
-                  <p className="shrink-0 font-mono text-xs text-muted-foreground">
-                    {plan.schedule}
+          <CardContent className="grid p-0 sm:grid-cols-2 lg:grid-cols-[1.35fr_repeat(4,minmax(0,1fr))]">
+            <MetricCell
+              primary
+              label={t("dashboard.account.currentBalance", "Current Balance")}
+              value={balanceValue}
+              note={balanceNote}
+            />
+            <MetricCell
+              label={t("dashboard.account.todaySpend", "Today's Spend")}
+              value={formatNanoUsd(analytics?.today_cost_nano_usd, 4)}
+              note={t("dashboard.account.todaySpendNote", "USD · so far today")}
+            />
+            <MetricCell
+              mobileDivider
+              label={t("dashboard.account.todayRequests", "Today's Requests")}
+              value={(analytics?.today_calls ?? 0).toLocaleString()}
+              note={t("dashboard.account.callsUnit", "calls")}
+            />
+            <MetricCell
+              label={t("dashboard.account.tokens24h", "24h Tokens")}
+              value={formatCompactTokens(summary.tokens)}
+              note={t(
+                "dashboard.account.tokens24hNote",
+                "All token categories",
+              )}
+            />
+            {plan ? (
+              <div className="flex min-h-28 min-w-0 flex-col justify-center gap-1 border-t p-4 sm:border-l lg:border-l lg:border-t-0">
+                <p className="truncate text-sm font-medium text-muted-foreground">
+                  {t("dashboard.account.subscriptionTitle", "Subscription")}
+                </p>
+                <p
+                  className="truncate font-display text-2xl font-semibold tracking-tight"
+                  title={plan.name}
+                >
+                  {plan.name}
+                </p>
+                <div className="flex min-w-0 flex-col gap-1">
+                  <p
+                    className="truncate text-sm text-muted-foreground"
+                    title={remainingLabel}
+                  >
+                    {remainingLabel}
                   </p>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="text-muted-foreground">
-                      {t("dashboard.subscription.remaining", "Remaining quota")}
-                    </span>
-                    <span className="font-medium tabular-nums">{remainingLabel}</span>
-                  </div>
-                  {remainingFraction != null && (
+                  {remainingFraction != null ? (
                     <div className="h-1.5 overflow-hidden rounded-md bg-muted">
                       <div
-                        className={cn(
-                          "h-full rounded-md bg-primary transition-[width] duration-500 ease-out"
-                        )}
-                        style={{ width: `${Math.round(remainingFraction * 100)}%` }}
+                        className="h-full rounded-md bg-primary transition-[width] duration-500 ease-out"
+                        style={{
+                          width: `${Math.round(remainingFraction * 100)}%`,
+                        }}
                       />
                     </div>
-                  )}
+                  ) : null}
+                  <p
+                    className="truncate text-sm text-muted-foreground"
+                    title={resetLabel}
+                  >
+                    {resetLabel}
+                  </p>
                 </div>
-                <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="text-muted-foreground">
-                    {t("dashboard.subscription.reset", "Resets")}
-                  </span>
-                  <span className="truncate tabular-nums text-foreground">{resetLabel}</span>
-                </div>
-              </>
+              </div>
+            ) : (
+              <MetricCell
+                mobileDivider
+                label={t("dashboard.account.activeModels", "Active Models")}
+                value={summary.activeModels.toLocaleString()}
+                note={t("dashboard.account.activeModelsNote", "Past 24 hours")}
+              />
             )}
           </CardContent>
         </Card>
-      </motion.div>
-    </section>
+      </section>
+    </SlideUp>
   );
 }

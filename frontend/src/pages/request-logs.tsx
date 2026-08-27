@@ -555,6 +555,67 @@ export function RequestLogsPage() {
 							onChange={e => setSearchInput(e.target.value)}
 						/>
 					</div>
+					<div className='flex items-center gap-1'>
+						<Button
+							type='button'
+							variant='outline'
+							size='icon'
+							className={cn(
+								'size-9',
+								automaticUpdatesEnabled && 'border-primary/50 bg-primary/10 text-primary'
+							)}
+							onClick={toggleAutomaticUpdates}
+							aria-pressed={automaticUpdatesEnabled}
+							aria-label={t(
+								automaticUpdatesEnabled ?
+									'requestLogs.disableAutomaticUpdates'
+								: 'requestLogs.enableAutomaticUpdates'
+							)}
+							title={t(
+								automaticUpdatesEnabled ?
+									'requestLogs.disableAutomaticUpdates'
+								: 'requestLogs.enableAutomaticUpdates'
+							)}
+						>
+							{automaticUpdatesEnabled ?
+								<RadioTower
+									data-icon='inline-start'
+									className={cn(!sseConnected && 'animate-pulse')}
+								/>
+							: <WifiOff data-icon='inline-start' />}
+						</Button>
+						<Button
+							type='button'
+							variant='outline'
+							size='icon'
+							className='size-9'
+							onClick={() => {
+								void mutate()
+							}}
+							disabled={isValidating}
+							title={t('requestLogs.refresh')}
+							aria-label={t('requestLogs.refresh')}
+						>
+							<RefreshCw
+								data-icon='inline-start'
+								className={cn(isValidating && 'animate-spin')}
+							/>
+						</Button>
+						<Button
+							type='button'
+							variant='outline'
+							size='icon'
+							className='size-9'
+							onClick={() => setShowIp(prev => !prev)}
+							title={showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')}
+							aria-label={showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')}
+							aria-pressed={showIp}
+						>
+							{showIp ?
+								<Eye data-icon='inline-start' />
+							: <EyeOff data-icon='inline-start' />}
+						</Button>
+					</div>
 					<Button
 						type='button'
 						variant='ghost'
@@ -664,59 +725,6 @@ export function RequestLogsPage() {
 									onChange={handleTimeRangeChange}
 									t={t}
 								/>
-								<div className='ml-auto flex items-center gap-1'>
-									<Button
-										type='button'
-										variant='outline'
-										size='sm'
-										className={cn(
-											'h-9 gap-2',
-											automaticUpdatesEnabled && 'border-primary/50 bg-primary/10 text-primary'
-										)}
-										onClick={toggleAutomaticUpdates}
-										aria-pressed={automaticUpdatesEnabled}
-										title={t(
-											automaticUpdatesEnabled ?
-												'requestLogs.disableAutomaticUpdates'
-											: 'requestLogs.enableAutomaticUpdates'
-										)}
-									>
-										{automaticUpdatesEnabled ?
-											<RadioTower className={cn('h-4 w-4', !sseConnected && 'animate-pulse')} />
-										: <WifiOff className='h-4 w-4' />}
-										<span>{t('requestLogs.automaticUpdates')}</span>
-									</Button>
-									<Button
-										type='button'
-										variant='outline'
-										size='icon'
-										className='h-9 w-9'
-										onClick={() => {
-											void mutate()
-										}}
-										disabled={isValidating}
-										title={t('requestLogs.refresh')}
-										aria-label={t('requestLogs.refresh')}
-									>
-										<RefreshCw
-											className={cn('h-4 w-4', isValidating && 'animate-spin')}
-										/>
-									</Button>
-									<Button
-										type='button'
-										variant='outline'
-										size='icon'
-										className='h-9 w-9'
-										onClick={() => setShowIp(prev => !prev)}
-										title={showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')}
-										aria-label={showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')}
-										aria-pressed={showIp}
-									>
-										{showIp ?
-											<Eye className='h-4 w-4' />
-										: <EyeOff className='h-4 w-4' />}
-									</Button>
-								</div>
 							</div>
 						</motion.div>
 					)}

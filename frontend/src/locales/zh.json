@@ -63,7 +63,9 @@
 		"billingPlans": "订阅套餐",
 		"adminDashboard": "系统仪表盘",
 		"groups": "分组",
-		"customTransforms": "自定义变换"
+		"customTransforms": "自定义变换",
+		"collapseSidebar": "收起侧边栏",
+		"expandSidebar": "展开侧边栏"
 	},
 	"roles": {
 		"super_admin": "超级管理员",
@@ -99,8 +101,8 @@
 		"spend": "消耗",
 		"calls": "调用次数",
 		"value": "值",
-		"apiInformation": "API信息",
-		"noApiInfo": "暂无API信息",
+		"apiInformation": "API 信息",
+		"noApiInfo": "暂无 API 信息",
 		"noApiInfoDescription": "请在系统设置中配置 API 基址。",
 		"noAnalysisData": "暂无可用请求日志数据",
 		"noAnalysisDataDescription": "产生请求后将自动展示真实统计。",
@@ -110,7 +112,19 @@
 		"syncing": "同步中...",
 		"account": {
 			"balanceTitle": "账户余额",
-			"subscriptionTitle": "订阅"
+			"subscriptionTitle": "订阅",
+			"overviewTitle": "账户概览",
+			"currentBalance": "当前余额",
+			"balanceUnlimitedNote": "账户无额度限制",
+			"balanceAvailableNote": "账户可用余额",
+			"todaySpend": "今日费用",
+			"todaySpendNote": "USD · 截至现在",
+			"todayRequests": "今日请求",
+			"callsUnit": "次调用",
+			"tokens24h": "24h Token",
+			"tokens24hNote": "全部 Token 类别",
+			"activeModels": "活跃模型",
+			"activeModelsNote": "过去 24 小时"
 		},
 		"subscription": {
 			"remaining": "剩余配额",
@@ -119,15 +133,18 @@
 		},
 		"usage": {
 			"title": "你的用量",
-			"subtitle": "本计费周期内每日用量",
-			"groupBy": "分组依据",
-			"groupByModel": "分组依据：Model",
+			"subtitle": "所选时间范围内的累计 Token 用量",
+			"timeRange": "时间范围",
 			"cumulativeTokens": "累计 Tokens",
-			"dailyBreakdown": "每日明细",
-			"dailyTotal": "每日合计",
+			"periodBreakdown": "区间明细",
+			"periodTotal": "区间合计",
 			"cumulativeTotal": "累计合计",
 			"today": "今日",
-			"legend": "模型图例"
+			"now": "现在",
+			"legend": "模型图例",
+			"previousLegendPage": "上一页图例",
+			"nextLegendPage": "下一页图例",
+			"legendPage": "{{current}} / {{total}}"
 		},
 		"recentUsage": {
 			"title": "最近用量",
@@ -137,7 +154,7 @@
 			"cacheHit": "缓存命中",
 			"charge": "费用",
 			"empty": "暂无最近用量",
-			"emptyDescription": "发起 API 请求后，此处将显示 Model 用量。"
+			"emptyDescription": "所选时间范围内没有用量记录。"
 		},
 		"api": {
 			"chatCompletions": "Chat Completions",
@@ -150,6 +167,8 @@
 			"subtitle": "近 24 小时 · 可用性砖块、avgTTFT 与 avgTPS",
 			"avgTtft": "avgTTFT",
 			"avgTps": "avgTPS",
+			"target": "目标",
+			"availability": "可用性（24 小时）",
 			"uptimeAria": "{{name}} 的可用性",
 			"empty": "未配置性能监控目标",
 			"emptyDescription": "管理员可在系统设置中选择分组与 Model。",
@@ -823,6 +842,7 @@
 		"context": "上下文",
 		"maxOutput": "最大输出",
 		"provider": "提供者",
+		"resultCount": "显示 {{filtered}} / {{total}} 个模型",
 		"noModels": "暂无可用模型",
 		"noModelsDesc": "管理员同步模型数据库后，模型数据将显示在此处。"
 	},

@@ -12,6 +12,21 @@ DL1. Desktop (`lg` and above) MUST render:
 - left sidebar navigation
 - main content area
 
+DL1a. The desktop sidebar MUST start expanded at every viewport width in the desktop
+range. A viewport width change within the desktop range MUST NOT collapse the sidebar.
+
+DL1b. The expanded desktop sidebar MUST use a `16rem` width. Its brand row MUST place a
+collapse button to the right of the Monoize brand link. Activating this button MUST
+collapse the sidebar to a `4rem` icon rail.
+
+DL1c. The collapsed desktop sidebar MUST render the 32 px Monoize brand surface as an
+expand button instead of a dashboard link. Activating this button MUST expand the
+sidebar. Pointer hover or keyboard focus MUST replace the visible Monoize mark with a
+lucide expand-sidebar icon while the button remains in that state.
+
+DL1d. The collapse and expand buttons MUST expose localized accessible names. The
+mobile sheet behavior in DL4 MUST remain independent of the desktop collapse state.
+
 DL2. Top header bar MUST NOT be rendered.
 
 DL3. User/account menu MUST be anchored at sidebar bottom.
@@ -251,6 +266,7 @@ PL18. In expanded provider card overview, channel runtime list row spacing MUST 
 - Each rendered channel row MUST use a minimum row height of `40px`.
 - Virtual list container height MUST be computed as `min(channel_count * 40, 190)`.
 - The row height constant used by the virtual list and the row element style MUST be the same value to prevent visible trailing blank space.
+- On desktop widths, the runtime health label, Channel name, and Channel Base URL MUST share one text baseline. The row action group MUST remain vertically centered independently.
 
 PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge layout and MUST NOT hide model badges behind a `+N` overflow badge or popover.
 
@@ -445,26 +461,33 @@ The normative home-overview contract lives in `spec/dashboard-home-overview.spec
 This section restates the layout binding for `/dashboard` and MUST stay aligned with that
 file.
 
-DH1. `/dashboard` MUST render these sections in order: greeting header; account strip
-(balance + subscription); full-width usage chart; recent-usage table + API information;
-performance panel. Details: `dashboard-home-overview.spec.md` DH-1 through DH-9c.
+DH1. `/dashboard` MUST render these sections in order: greeting header; account overview;
+full-width usage chart; recent-usage table + API information; performance panel. Details:
+`dashboard-home-overview.spec.md` DH-1 through DH-9c.
 
-DH2. Account strip balance and subscription cards MUST follow
-`dashboard-home-overview.spec.md` DH-5 through DH-5c.
+DH2. The flat five-cell account overview, its fixed 24-hour Analytics data, and its
+conditional active-model/subscription cell MUST follow
+`dashboard-home-overview.spec.md` DH-5 through DH-5e.
 
 DH3. The usage chart MUST be a stacked cumulative token `AreaChart` driven by
-`GET /api/dashboard/analytics` with `buckets=7` and `range_hours=168`, including
-`tokens_by_model`, a Today marker, and a vertically scrolling legend
-(`dashboard-home-overview.spec.md` DH-6 through DH-6h).
+`GET /api/dashboard/analytics` with `buckets` and `range_hours` derived from the
+selected time window (`1h`, `24h`, `7d`, `30d`; default `1h`) per the
+`dashboard-home-overview.spec.md` DH-6a mapping, including `tokens_by_model`, a
+fully visible Today/Now marker, and a width-adaptive paginated horizontal legend whose
+controls appear on the right of the same row
+(`dashboard-home-overview.spec.md` DH-6 through DH-6i).
 
 DH4. Recent usage and API information panels MUST follow
-`dashboard-home-overview.spec.md` DH-7 and DH-8 through DH-8d.
+`dashboard-home-overview.spec.md` DH-7 through DH-8d, including bounded table scrolling
+and the Messages-before-Models endpoint order.
 
 DH5. The performance panel and admin-configurable targets MUST follow
-`dashboard-home-overview.spec.md` DH-9 through DH-9c.
+`dashboard-home-overview.spec.md` DH-9 through DH-9c. The ready state MUST use the
+specified four-column table alignment and shared nonlinear row-entry motion.
 
 DH6. Loading and motion contracts MUST follow
-`dashboard-home-overview.spec.md` DH-11 through DH-13.
+`dashboard-home-overview.spec.md` DH-11 through DH-13, including the
+no-skeleton-on-revalidate and no-animation-replay rules (DH-12a through DH-12c).
 
 DH7. `/dashboard` MUST NOT throw runtime errors when optional config fields are absent
 from settings or analytics payloads.

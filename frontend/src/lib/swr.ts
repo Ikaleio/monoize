@@ -1,6 +1,7 @@
 import useSWR, { mutate } from "swr";
 import type { SWRConfiguration } from "swr";
 import { api } from "./api";
+import { usageWindowStartIso, type UsageWindow } from "./usage-window";
 import type {
   User,
   ApiKey,
@@ -269,6 +270,29 @@ export function useRequestLogs(
     `${SWR_KEYS.REQUEST_LOGS}?limit=${limit}&offset=${offset}&f=${filterKey}`,
     () => api.listRequestLogs(limit, offset, filters),
     { ...defaultConfig, ...config },
+  );
+}
+
+// Recent-usage request logs scoped to a time window (dashboard-home-overview
+// spec DH-7a). The SWR key carries only the window token so the cache entry is
+// stable per selection; time bounds are evaluated at fetch time so every
+// revalidation observes logs created after the window was selected.
+// keepPreviousData satisfies DH-12b (no skeleton flash on window switch).
+export function useWindowedRequestLogs(
+  window: UsageWindow,
+  limit = 200,
+  config?: SWRConfiguration
+) {
+  return useSWR<RequestLogsResponse>(
+    `${SWR_KEYS.REQUEST_LOGS}?window=${window}&limit=${limit}`,
+    () => {
+      const now = new Date();
+      return api.listRequestLogs(limit, 0, {
+        time_from: usageWindowStartIso(window, now),
+        time_to: now.toISOString(),
+      });
+    },
+    { ...defaultConfig, keepPreviousData: true, ...config }
   );
 }
 

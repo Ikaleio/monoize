@@ -5225,6 +5225,7 @@ async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
 }
 
 async fn setup_with_unknown_fields() -> TestContext {
+    assert_test_cleanup_succeeded();
     let (upstream_addr, captured_headers, captured_bodies) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
@@ -5340,7 +5341,7 @@ async fn setup_with_unknown_fields() -> TestContext {
         state,
         captured_headers,
         captured_bodies,
-        _temp_dir: temp_dir,
+        _temp_dir: TestTempDir(Some(temp_dir)),
     }
 }
 

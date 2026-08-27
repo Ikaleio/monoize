@@ -208,6 +208,12 @@ impl DbPool {
         })
     }
 
+    /// Mark both pools closed and wait for every physical connection to close.
+    pub async fn close(&self) -> Result<(), DbErr> {
+        self.read.close_by_ref().await?;
+        self.write_conn.close_by_ref().await
+    }
+
     /// Create a Statement with automatic placeholder conversion.
     /// Write SQL with $1, $2, ... placeholders.
     /// For SQLite, $N placeholders are auto-converted to numbered ?N placeholders.
@@ -382,5 +388,12 @@ mod tests {
         ] {
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    #[tokio::test]
+    async fn explicit_close_is_idempotent() {
+        let db = DbPool::connect("sqlite::memory:").await.unwrap();
+        db.close().await.unwrap();
+        db.close().await.unwrap();
     }
 }

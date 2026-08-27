@@ -1,47 +1,39 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Store } from "lucide-react";
-import { ModelBadge } from "@/components/ModelBadge";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
+import { ModelMarketplaceCard } from "@/components/model-marketplace/model-card";
+import { ModelMarketplaceSkeleton } from "@/components/model-marketplace/marketplace-skeleton";
+import { Badge } from "@/components/ui/badge";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { useMarketplaceModels } from "@/lib/swr";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
-import { TablePageSkeleton } from "@/components/ui/page-skeleton";
-import {
-  DataTableShell,
-  TableToolbarSearch,
-  VirtualTableCell,
-  VirtualTableHeaderCell,
-} from "@/components/ui/data-table-shell";
-import { TableVirtuoso } from "react-virtuoso";
-
-function formatTokens(tokens?: number | null): string {
-  if (tokens == null) return "-";
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(0)}K`;
-  return tokens.toString();
-}
 
 export function ModelMarketplacePage() {
   const { t } = useTranslation();
   const { data: records = [], isLoading } = useMarketplaceModels();
   const [search, setSearch] = useState("");
 
-  const filtered = records.filter((r) =>
-    r.model_id.toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    if (!query) return records;
+    return records.filter((record) =>
+      record.model_id.toLocaleLowerCase().includes(query),
+    );
+  }, [records, search]);
 
   if (isLoading) {
     return (
-      <PageWrapper className="space-y-6">
-        <TablePageSkeleton showToolbar />
+      <PageWrapper>
+        <ModelMarketplaceSkeleton />
       </PageWrapper>
     );
   }
 
   return (
-    <PageWrapper className="space-y-6">
+    <PageWrapper className="flex flex-col gap-6">
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -50,110 +42,57 @@ export function ModelMarketplacePage() {
         <PageHeader
           title={t("modelMarketplace.title")}
           description={t("modelMarketplace.description")}
+          className="[&_h1]:font-sans"
+          actions={
+            <Badge variant="outline" className="text-sm font-normal">
+              {t("modelMarketplace.resultCount", {
+                filtered: filtered.length,
+                total: records.length,
+              })}
+            </Badge>
+          }
         />
       </motion.div>
+
+      <Field className="max-w-xl">
+        <FieldLabel htmlFor="model-marketplace-search" className="sr-only">
+          {t("modelMarketplace.searchPlaceholder")}
+        </FieldLabel>
+        <Input
+          id="model-marketplace-search"
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={t("modelMarketplace.searchPlaceholder")}
+          autoComplete="off"
+        />
+      </Field>
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, ...transitions.normal }}
       >
-        <DataTableShell
-          toolbar={
-            <>
-              <div className="flex items-center gap-2 text-base font-semibold">
-                <Store className="h-5 w-5" />
-                {t("modelMarketplace.title")}
-              </div>
-              <TableToolbarSearch
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t("modelMarketplace.searchPlaceholder")}
-              />
-            </>
-          }
-          isEmpty={filtered.length === 0}
-          emptyState={
-            <EmptyState
-              icon={<Store className="h-12 w-12" />}
-              title={t("modelMarketplace.noModels")}
-              description={t("modelMarketplace.noModelsDesc")}
-            />
-          }
-        >
-          <TableVirtuoso
-            style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
-            data={filtered}
-            components={{
-              Table: (props) => (
-                <table {...props} className="w-full caption-bottom text-sm" />
-              ),
-              TableHead: (props) => (
-                <thead {...props} className="[&_tr]:border-b" />
-              ),
-              TableRow: (props) => (
-                <tr
-                  {...props}
-                  className="border-b transition-colors hover:bg-muted/50"
-                />
-              ),
-              TableBody: (props) => (
-                <tbody {...props} className="[&_tr:last-child]:border-0" />
-              ),
-            }}
-            fixedHeaderContent={() => (
-              <tr className="border-b bg-background">
-                <VirtualTableHeaderCell className="min-w-[200px]">
-                  {t("modelMarketplace.modelId")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("modelMarketplace.inputCost")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("modelMarketplace.outputCost")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("modelMarketplace.context")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("modelMarketplace.maxOutput")}
-                </VirtualTableHeaderCell>
-              </tr>
-            )}
-            itemContent={(_index, record) => {
-              const inputCost = record.input_usd_per_1m;
-              const outputCost = record.output_usd_per_1m;
-
-              return (
-                <>
-                  <VirtualTableCell>
-                    <ModelBadge
-                      model={record.model_id}
-                      provider={record.models_dev_provider}
-                      showDetails={false}
-                    />
-                  </VirtualTableCell>
-                  <VirtualTableCell className="font-mono text-xs">
-                    {inputCost == null
-                      ? "-"
-                      : `${formatUsdDecimal(inputCost, 3)} / 1M`}
-                  </VirtualTableCell>
-                  <VirtualTableCell className="font-mono text-xs">
-                    {outputCost == null
-                      ? "-"
-                      : `${formatUsdDecimal(outputCost, 3)} / 1M`}
-                  </VirtualTableCell>
-                  <VirtualTableCell className="font-mono text-xs">
-                    {formatTokens(record.max_tokens)}
-                  </VirtualTableCell>
-                  <VirtualTableCell className="font-mono text-xs">
-                    {formatTokens(record.max_output_tokens)}
-                  </VirtualTableCell>
-                </>
-              );
-            }}
+        {filtered.length === 0 ? (
+          <EmptyState
+            icon={<Store className="size-12" />}
+            title={t("modelMarketplace.noModels")}
+            description={t("modelMarketplace.noModelsDesc")}
           />
-        </DataTableShell>
+        ) : (
+          <section
+            aria-label={t("modelMarketplace.title")}
+            className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-12"
+          >
+            {filtered.map((record, index) => (
+              <ModelMarketplaceCard
+                key={record.model_id}
+                index={index}
+                record={record}
+              />
+            ))}
+          </section>
+        )}
       </motion.div>
     </PageWrapper>
   );

@@ -63,7 +63,9 @@
 		"billingPlans": "Plans",
 		"adminDashboard": "System Dashboard",
 		"groups": "Groups",
-		"customTransforms": "Custom Transforms"
+		"customTransforms": "Custom Transforms",
+		"collapseSidebar": "Collapse sidebar",
+		"expandSidebar": "Expand sidebar"
 	},
 	"roles": {
 		"super_admin": "Super Admin",
@@ -110,7 +112,19 @@
 		"syncing": "Syncing...",
 		"account": {
 			"balanceTitle": "Account Balance",
-			"subscriptionTitle": "Subscription"
+			"subscriptionTitle": "Subscription",
+			"overviewTitle": "Account Overview",
+			"currentBalance": "Current Balance",
+			"balanceUnlimitedNote": "No account limit",
+			"balanceAvailableNote": "Available account balance",
+			"todaySpend": "Today's Spend",
+			"todaySpendNote": "USD · so far today",
+			"todayRequests": "Today's Requests",
+			"callsUnit": "calls",
+			"tokens24h": "24h Tokens",
+			"tokens24hNote": "All token categories",
+			"activeModels": "Active Models",
+			"activeModelsNote": "Past 24 hours"
 		},
 		"subscription": {
 			"remaining": "Remaining quota",
@@ -119,15 +133,18 @@
 		},
 		"usage": {
 			"title": "Your Usage",
-			"subtitle": "Your usage per day across this billing period",
-			"groupBy": "Group By",
-			"groupByModel": "Group By: Model",
+			"subtitle": "Cumulative token usage for the selected time range",
+			"timeRange": "Time range",
 			"cumulativeTokens": "Cumulative Tokens",
-			"dailyBreakdown": "Daily breakdown",
-			"dailyTotal": "Daily total",
+			"periodBreakdown": "Period breakdown",
+			"periodTotal": "Period total",
 			"cumulativeTotal": "Cumulative total",
 			"today": "Today",
-			"legend": "Model legend"
+			"now": "Now",
+			"legend": "Model legend",
+			"previousLegendPage": "Previous legend page",
+			"nextLegendPage": "Next legend page",
+			"legendPage": "{{current}} / {{total}}"
 		},
 		"recentUsage": {
 			"title": "Recent Usage",
@@ -137,7 +154,7 @@
 			"cacheHit": "Cache hit",
 			"charge": "Charge",
 			"empty": "No recent usage",
-			"emptyDescription": "Model usage appears here after you make API requests."
+			"emptyDescription": "No usage recorded in the selected time range."
 		},
 		"api": {
 			"chatCompletions": "Chat Completions",
@@ -150,6 +167,8 @@
 			"subtitle": "Last 24 hours · uptime bricks, avgTTFT, and avgTPS",
 			"avgTtft": "avgTTFT",
 			"avgTps": "avgTPS",
+			"target": "Target",
+			"availability": "Availability (24h)",
 			"uptimeAria": "Uptime for {{name}}",
 			"empty": "Performance targets are not configured",
 			"emptyDescription": "An administrator can select groups and models in system settings.",
@@ -823,6 +842,7 @@
 		"context": "Context",
 		"maxOutput": "Max Output",
 		"provider": "Provider",
+		"resultCount": "Showing {{filtered}} of {{total}} models",
 		"noModels": "No models available",
 		"noModelsDesc": "Model data will appear here once the administrator syncs the model database."
 	},
