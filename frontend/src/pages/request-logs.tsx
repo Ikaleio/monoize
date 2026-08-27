@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, Eye, EyeOff, RefreshCw, Search } from 'lucide-react'
+import { ChevronDown, Eye, EyeOff, RadioTower, RefreshCw, Search, WifiOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -12,12 +12,6 @@ import {
 	SelectTrigger,
 	SelectValue
 } from '@/components/ui/select'
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger
-} from '@/components/ui/tooltip'
 import { useRequestLogs, useApiKeys, useProviders } from '@/lib/swr'
 import { useRequestLogSSE } from '@/lib/sse'
 import { useAuth } from '@/hooks/use-auth'
@@ -70,6 +64,7 @@ export function RequestLogsPage() {
 	const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined)
 	const [timeTo, setTimeTo] = useState<Date | undefined>(undefined)
 	const [filtersExpanded, setFiltersExpanded] = useState(true)
+	const [automaticUpdatesEnabled, setAutomaticUpdatesEnabled] = useState(true)
 	const openTooltipIdsRef = useRef<Set<string>>(new Set())
 	const pendingPageDataRef = useRef<RequestLogsResponse | null>(null)
 	const pendingNewestDataRef = useRef<RequestLogsResponse | null>(null)
@@ -142,7 +137,10 @@ export function RequestLogsPage() {
 		isLoading,
 		isValidating,
 		mutate
-	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters)
+	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters, {
+		revalidateOnFocus: automaticUpdatesEnabled,
+		revalidateOnReconnect: automaticUpdatesEnabled
+	})
 
 	const matchesActiveFilters = useCallback(
 		(log: RequestLog) => {
@@ -282,17 +280,32 @@ export function RequestLogsPage() {
 		[matchesActiveFilters]
 	)
 
-	const { connected: sseConnected, event: sseEvent } = useRequestLogSSE(true)
+	const { connected: sseConnected, event: sseEvent } = useRequestLogSSE(
+		automaticUpdatesEnabled
+	)
 
 	const { data: newestPageData, mutate: mutateNewest } = useRequestLogs(
 		REQUEST_LOGS_PAGE_SIZE,
 		0,
 		activeFilters,
 		{
-			refreshInterval: sseConnected ? 0 : 3000,
+			refreshInterval: automaticUpdatesEnabled && !sseConnected ? 3000 : 0,
+			revalidateOnFocus: automaticUpdatesEnabled,
+			revalidateOnReconnect: automaticUpdatesEnabled,
 			isPaused: () => openTooltipIdsRef.current.size > 0
 		}
 	)
+
+	const toggleAutomaticUpdates = useCallback(() => {
+		if (automaticUpdatesEnabled) {
+			setAutomaticUpdatesEnabled(false)
+			return
+		}
+
+		setAutomaticUpdatesEnabled(true)
+		void mutate()
+		void mutateNewest()
+	}, [automaticUpdatesEnabled, mutate, mutateNewest])
 
 	// RCV-L4: SSE rows always carry `has_capture: false`, so one trailing
 	// 1500 ms debounced newest-page revalidation refreshes the capture flag
@@ -317,7 +330,7 @@ export function RequestLogsPage() {
 	)
 
 	useEffect(() => {
-		if (!sseEvent) return
+		if (!automaticUpdatesEnabled || !sseEvent) return
 
 		if (sseEvent.type === 'resync') {
 			void mutate()
@@ -340,16 +353,34 @@ export function RequestLogsPage() {
 
 		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SSE event with the local visible list
 		prependSSELogs(sseEvent.logs)
-	}, [sseEvent, mutate, mutateNewest, prependSSELogs, scheduleCaptureFlagRevalidate])
+	}, [
+		automaticUpdatesEnabled,
+		sseEvent,
+		mutate,
+		mutateNewest,
+		prependSSELogs,
+		scheduleCaptureFlagRevalidate
+	])
 
 	const prevConnectedRef = useRef(false)
 	useEffect(() => {
+		if (!automaticUpdatesEnabled) {
+			prevConnectedRef.current = false
+			return
+		}
+
 		if (sseConnected && !prevConnectedRef.current) {
 			void mutate()
 			void mutateNewest()
 		}
 		prevConnectedRef.current = sseConnected
-	}, [sseConnected, mutate, mutateNewest])
+	}, [automaticUpdatesEnabled, sseConnected, mutate, mutateNewest])
+
+	useEffect(() => {
+		if (automaticUpdatesEnabled || captureRevalidateTimerRef.current == null) return
+		window.clearTimeout(captureRevalidateTimerRef.current)
+		captureRevalidateTimerRef.current = null
+	}, [automaticUpdatesEnabled])
 
 	useEffect(() => {
 		if (!pageData) return
@@ -568,7 +599,7 @@ export function RequestLogsPage() {
 							<div className='flex flex-wrap items-center gap-2 pt-0.5'>
 								{isAdmin && (
 									<Input
-										className='w-[140px] h-9'
+										className='w-[140px] h-9 focus-visible:border-ring focus-visible:ring-0'
 										placeholder={t('requestLogs.filterUsernamePlaceholder')}
 										value={usernameInput}
 										onChange={e => setUsernameInput(e.target.value)}
@@ -579,7 +610,7 @@ export function RequestLogsPage() {
 									/>
 								)}
 								<Input
-									className='w-[200px] h-9'
+									className='w-[200px] h-9 focus-visible:border-ring focus-visible:ring-0'
 									placeholder={t('requestLogs.filterModelPlaceholder')}
 									value={modelInput}
 									onChange={e => setModelInput(e.target.value)}
@@ -592,7 +623,7 @@ export function RequestLogsPage() {
 									value={filters.api_key_id || 'all'}
 									onValueChange={handleTokenChange}
 								>
-									<SelectTrigger className='w-[140px] h-9'>
+									<SelectTrigger className='w-[140px] h-9 focus:border-border focus:ring-0 focus-visible:border-ring data-[state=open]:border-ring'>
 										<SelectValue placeholder={t('requestLogs.filterToken')} />
 									</SelectTrigger>
 									<SelectContent>
@@ -608,7 +639,7 @@ export function RequestLogsPage() {
 									value={filters.status || 'all'}
 									onValueChange={handleStatusChange}
 								>
-									<SelectTrigger className='w-[120px] h-9'>
+									<SelectTrigger className='w-[120px] h-9 focus:border-border focus:ring-0 focus-visible:border-ring data-[state=open]:border-ring'>
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
@@ -634,25 +665,27 @@ export function RequestLogsPage() {
 									t={t}
 								/>
 								<div className='ml-auto flex items-center gap-1'>
-									<TooltipProvider>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<span
-													className={cn(
-														'inline-block h-2 w-2 rounded-full transition-colors duration-300',
-														sseConnected ? 'bg-success' : 'bg-warning animate-pulse'
-													)}
-												/>
-											</TooltipTrigger>
-											<TooltipContent side='bottom'>
-												<p className='text-xs'>
-													{sseConnected ?
-														'Real-time updates active'
-													: 'Real-time updates disconnected, polling...'}
-												</p>
-											</TooltipContent>
-										</Tooltip>
-									</TooltipProvider>
+									<Button
+										type='button'
+										variant='outline'
+										size='sm'
+										className={cn(
+											'h-9 gap-2',
+											automaticUpdatesEnabled && 'border-primary/50 bg-primary/10 text-primary'
+										)}
+										onClick={toggleAutomaticUpdates}
+										aria-pressed={automaticUpdatesEnabled}
+										title={t(
+											automaticUpdatesEnabled ?
+												'requestLogs.disableAutomaticUpdates'
+											: 'requestLogs.enableAutomaticUpdates'
+										)}
+									>
+										{automaticUpdatesEnabled ?
+											<RadioTower className={cn('h-4 w-4', !sseConnected && 'animate-pulse')} />
+										: <WifiOff className='h-4 w-4' />}
+										<span>{t('requestLogs.automaticUpdates')}</span>
+									</Button>
 									<Button
 										type='button'
 										variant='outline'

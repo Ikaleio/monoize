@@ -570,7 +570,9 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 
 Hovering a `client_gone` row MUST show `error_code`, `error_message`, and `error_http_status` the same way FL28 shows those fields for `error` rows. The status filter MUST include a `client_gone` option.
 
-FL37. The logs page MUST auto-refresh the newest page periodically so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
+FL37. Automatic updates MUST be enabled when the logs page mounts. While automatic updates are enabled, the logs page MUST auto-refresh the newest page so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
+
+FL37b. The logs filter toolbar MUST provide a localized toggle for automatic updates. Disabling automatic updates MUST close or suppress the request-log SSE subscription, stop the three-second fallback poll, and disable request-log revalidation triggered by window focus or network reconnection. The explicit manual-refresh action MUST remain enabled. Enabling automatic updates MUST immediately revalidate the current request-log page and the newest request-log page, then resume the SSE lifecycle defined in FL48. This toggle state is page-local and MUST reset to enabled after the logs page unmounts and mounts again.
 
 FL37a. When SWR revalidation replaces `loadedLogs` with server-fetched data (initial load, focus revalidation, reconnect revalidation, resync, or polling), the frontend MUST preserve any SSE-delivered `pending` rows that are not yet represented in the server response. Specifically: rows with `status = "pending"` whose `id` is absent from the server data AND whose `request_id` (when non-null) is absent from the server data MUST be re-prepended to the merged result. This prevents SSE-only pending items (which are never persisted to the database per RL1a-1) from being silently dropped by SWR cache replacement.
 
@@ -595,6 +597,8 @@ FL43. Time-range selection MUST be bidirectionally synchronized:
 - selecting calendar range or committing manual inputs MUST activate the matching fixed preset (`today`, `yesterday`, `this_month`, `last_month`) when and only when the selected range matches that preset, otherwise no preset is active.
 
 FL44. Active preset buttons (including `All Time`) MUST use a high-contrast foreground/background pair so text remains legible in both light and dark themes.
+
+FL44a. The admin username text filter, model text filter, API-key select trigger, and status select trigger MUST render one focus boundary. A focused text filter and an open or keyboard-focused select trigger MUST use the semantic `ring` color on the control border and MUST NOT render an additional outer ring. A select trigger that was opened by pointer input MUST return to its normal border after its menu closes.
 
 ## 6. SSE Real-Time Updates
 
@@ -643,7 +647,7 @@ FL48. The SSE connection lifecycle MUST follow these phases:
 
 1. **Connect**: The client MUST open the SSE stream using a `fetch()`-based reader with `credentials: "include"` and without an `Authorization` header.
     The frontend integration layer for this stream MUST be implemented through SWR subscription state, so stream lifecycle and event delivery are owned by the SWR data layer rather than a page-local ad hoc subscription mechanism.
-    The client MUST begin attempting this SSE connection as soon as the logs page mounts; it MUST NOT gate connection startup on completion of the initial REST page fetch.
+    When automatic updates are enabled, the client MUST begin attempting this SSE connection as soon as the logs page mounts; it MUST NOT gate connection startup on completion of the initial REST page fetch. When automatic updates are disabled, the client MUST NOT maintain or reconnect the SSE connection.
     After authentication succeeds, the server MUST emit an initial SSE frame without waiting for a future request-log broadcast. If the current pending-snapshot map defined in RL1a-3 contains one or more entries visible to the authenticated user, the initial frame MUST be a `log_batch` event containing those entries ordered by `created_at DESC`. Otherwise, the initial frame MUST be an SSE comment frame. This initial frame exists so the client can mark the stream connected promptly and so in-flight `pending` requests that began before stream establishment become visible.
 2. **Receive**: On each `log_batch` event, the client MUST merge the received `RequestLog` objects into the existing table data array (newest first). If an incoming row has the same `request_id` as an existing row, the incoming row MUST be processed before active UI filters are applied. If the incoming row matches active UI filters, it MUST replace the existing row instead of creating a duplicate. If the incoming row does not match active UI filters, the existing row with that `request_id` MUST be removed from the visible table. This replacement/removal rule is required for the `pending -> success/error` SSE-only lifecycle defined in RL1a-1 and RL1a-2, including the case where the active filter is `status = pending` and a terminal row arrives.
 3. **Disconnect**: On network error, HTTP error, or stream close, the client MUST fall back to SWR polling (see FL50).
@@ -652,11 +656,11 @@ FL48. The SSE connection lifecycle MUST follow these phases:
 
 ### 6.5 SSE as primary real-time mechanism
 
-FL49. When an SSE connection is active and receiving events, SSE replaces the periodic SWR polling defined in FL37 as the primary real-time data delivery mechanism. The SWR auto-refresh interval defined in FL37 MUST be paused while SSE is connected. Polling MUST resume only when SSE is disconnected (see FL50).
+FL49. When automatic updates are enabled and an SSE connection is active and receiving events, SSE replaces the periodic SWR polling defined in FL37 as the primary real-time data delivery mechanism. The SWR auto-refresh interval defined in FL37 MUST be paused while SSE is connected. Polling MUST resume only when SSE is disconnected and automatic updates remain enabled (see FL50).
 
 ### 6.6 Polling fallback on SSE disconnect
 
-FL50. When the SSE connection is lost (network failure, server restart, or stream termination), the client MUST immediately activate SWR polling at an interval of approximately 3 seconds. This polling MUST continue until the SSE connection is re-established, at which point polling MUST be paused again per FL49.
+FL50. When automatic updates are enabled and the SSE connection is lost (network failure, server restart, or stream termination), the client MUST immediately activate SWR polling at an interval of approximately 3 seconds. This polling MUST continue until the SSE connection is re-established, at which point polling MUST be paused again per FL49. When automatic updates are disabled, this fallback polling MUST remain stopped.
 
 ### 6.7 Aggregate values remain REST-derived
 
