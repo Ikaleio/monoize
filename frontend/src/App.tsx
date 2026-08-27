@@ -19,6 +19,8 @@ import { RequestLogsPage } from "@/pages/request-logs";
 import { ModelPricingPage } from "@/pages/model-pricing";
 import { ModelMarketplacePage } from "@/pages/model-marketplace";
 import { CustomTransformsPage } from "@/pages/custom-transforms";
+import { WalletPage } from "@/pages/wallet";
+import { PaymentsPage } from "@/pages/payments";
 import "@/i18n";
 
 function App() {
@@ -40,6 +42,7 @@ function App() {
             <Route path="admin" element={<AdminDashboardPage />} />
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="tokens" element={<ApiKeysPage />} />
+            <Route path="wallet" element={<WalletPage />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
             <Route path="marketplace" element={<ModelMarketplacePage />} />
@@ -47,6 +50,7 @@ function App() {
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="plans" element={<BillingPlansPage />} />
+            <Route path="payments" element={<PaymentsPage />} />
             <Route path="custom-transforms" element={<CustomTransformsPage />} />
             <Route path="admin-settings" element={<SettingsPage />} />
           </Route>

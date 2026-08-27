@@ -664,12 +664,15 @@ its config fields from the RC-P5 schema of the selected `type_id`. Delete
 opens a confirmation dialog naming the channel.
 
 RC-M3. The Orders tab renders the admin view of RC-A2 (all users) with
-`status` and `username` filters, the RC-A3 columns plus username, and a
-per-row refund action enabled only when `status = succeeded`. The refund
-action opens a confirmation dialog; for a `supports_refund = false` channel
-the dialog contains the RC-R4 manual acknowledgment checkbox and blocks
-confirm until checked. Mutations optimistically update the orders cache and
-roll back on error with the server message.
+`status` and `username` filters and these columns: created time (FL2 format),
+username, channel name, credit (`credit_usd`), payment (`pay_amount` +
+`pay_currency`), status badge, and order id (first 8 chars; the tooltip shows
+the full id and, when set, `error_code`). Each row has a refund action enabled
+only when `status = succeeded`. The refund action opens a confirmation dialog;
+for a `supports_refund = false` channel the dialog contains the RC-R4 manual
+acknowledgment checkbox and blocks confirm until checked. Mutations
+optimistically update the orders cache and roll back on error with the server
+message.
 
 ## 12. Placement relative to request logs
 

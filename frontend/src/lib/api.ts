@@ -1,5 +1,16 @@
 const API_BASE = "/api/dashboard";
 
+/** Error carrying the backend `error.code`, for code-keyed localized toasts. */
+export class DashboardApiError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "DashboardApiError";
+    this.code = code;
+  }
+}
+
 type UnauthorizedHandler = () => void;
 
 const unauthorizedHandlers = new Set<UnauthorizedHandler>();
@@ -260,7 +271,127 @@ export interface SystemSettings {
   price_sync_auto_enabled: boolean;
   price_sync_new_api_base_url: string;
   price_sync_new_api_token: string;
+  recharge_public_origin: string;
   updated_at: string;
+}
+
+// Recharge system (recharge-system.spec.md §9)
+
+/** RC-A1 user-facing channel object; never contains config_json. */
+export interface RechargeChannel {
+  id: string;
+  name: string;
+  type_id: string;
+  currency: string;
+  usd_rate: string;
+  min_credit_usd: string;
+  max_credit_usd: string;
+  pay_scale: number;
+}
+
+export type RechargeOrderStatus =
+  | "pending"
+  | "succeeded"
+  | "failed"
+  | "expired"
+  | "refunded";
+
+/** RC-A3 order object; `username` present only for admin callers. */
+export interface RechargeOrder {
+  id: string;
+  user_id: string;
+  username?: string | null;
+  payment_channel_id: string;
+  channel_type_id: string;
+  channel_name: string;
+  status: RechargeOrderStatus;
+  credit_nano_usd: string;
+  credit_usd: string;
+  pay_currency: string;
+  pay_amount: string;
+  usd_rate: string;
+  provider_order_id: string | null;
+  error_code: string | null;
+  paid_at: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface RechargeOrdersResponse {
+  orders: RechargeOrder[];
+  total: number;
+}
+
+export interface CreateRechargeOrderInput {
+  payment_channel_id: string;
+  credit_nano_usd?: string;
+  credit_usd?: string;
+}
+
+export interface CreateRechargeOrderResponse {
+  order: RechargeOrder;
+  payment: { kind: "redirect"; url: string };
+}
+
+export interface RechargeOrdersFilter {
+  status?: RechargeOrderStatus;
+  username?: string;
+}
+
+/** RC-A5 ledger entry; `username` present only for admin callers. */
+export interface LedgerEntry {
+  id: string;
+  user_id: string;
+  username?: string | null;
+  kind: string;
+  delta_nano_usd: string;
+  delta_usd: string;
+  balance_after_nano_usd: string | null;
+  meta_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface LedgerResponse {
+  entries: LedgerEntry[];
+  total: number;
+}
+
+/** §9.2 admin channel object; secret config fields are masked to "". */
+export interface PaymentChannel {
+  id: string;
+  name: string;
+  type_id: string;
+  enabled: boolean;
+  currency: string;
+  usd_rate: string;
+  min_credit_usd: string;
+  max_credit_usd: string;
+  config: Record<string, string>;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePaymentChannelInput {
+  name: string;
+  type_id: string;
+  currency: string;
+  usd_rate: string;
+  min_credit_usd?: string;
+  max_credit_usd?: string;
+  enabled?: boolean;
+  sort_order?: number;
+  config: Record<string, string>;
+}
+
+export interface UpdatePaymentChannelInput {
+  name?: string;
+  usd_rate?: string;
+  min_credit_usd?: string;
+  max_credit_usd?: string;
+  enabled?: boolean;
+  sort_order?: number;
+  config?: Record<string, string>;
 }
 
 export type ToolPriceUnit = "1k_calls" | "minute" | "session";
@@ -953,7 +1084,8 @@ class ApiClient {
       if (response.status === 401 && data.error?.code === "unauthorized") {
         notifyDashboardUnauthorized();
       }
-      throw new Error(
+      throw new DashboardApiError(
+        data.error?.code || "request_failed",
         data.error?.message || data.error?.code || "Request failed",
       );
     }
@@ -1424,6 +1556,103 @@ class ApiClient {
 
   async listMarketplaceModels(): Promise<MarketplaceModelRecord[]> {
     return this.request("/marketplace/models");
+  }
+
+  // Recharge (recharge-system.spec.md §9)
+  async listRechargeChannels(): Promise<RechargeChannel[]> {
+    const response = await this.request<{ channels: RechargeChannel[] }>(
+      "/recharge/channels",
+    );
+    return response.channels;
+  }
+
+  async createRechargeOrder(
+    input: CreateRechargeOrderInput,
+  ): Promise<CreateRechargeOrderResponse> {
+    return this.request("/recharge/orders", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async listRechargeOrders(
+    limit = 20,
+    offset = 0,
+    filters?: RechargeOrdersFilter,
+  ): Promise<RechargeOrdersResponse> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.username) params.set("username", filters.username);
+    return this.request(`/recharge/orders?${params.toString()}`);
+  }
+
+  async getRechargeOrder(orderId: string): Promise<RechargeOrder> {
+    const response = await this.request<{ order: RechargeOrder }>(
+      `/recharge/orders/${encodeURIComponent(orderId)}`,
+    );
+    return response.order;
+  }
+
+  async refundRechargeOrder(
+    orderId: string,
+    manual: boolean,
+  ): Promise<RechargeOrder> {
+    const response = await this.request<{ order: RechargeOrder }>(
+      `/recharge/orders/${encodeURIComponent(orderId)}/refund`,
+      { method: "POST", body: JSON.stringify({ manual }) },
+    );
+    return response.order;
+  }
+
+  async listLedger(
+    limit = 20,
+    offset = 0,
+    kinds?: string[],
+    username?: string,
+  ): Promise<LedgerResponse> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    if (kinds && kinds.length > 0) params.set("kinds", kinds.join(","));
+    if (username) params.set("username", username);
+    return this.request(`/ledger?${params.toString()}`);
+  }
+
+  // Payment channels (admin, recharge-system.spec.md §9.2)
+  async listPaymentChannels(): Promise<PaymentChannel[]> {
+    const response = await this.request<{ channels: PaymentChannel[] }>(
+      "/payment-channels",
+    );
+    return response.channels;
+  }
+
+  async createPaymentChannel(
+    input: CreatePaymentChannelInput,
+  ): Promise<PaymentChannel> {
+    const response = await this.request<{ channel: PaymentChannel }>(
+      "/payment-channels",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    return response.channel;
+  }
+
+  async updatePaymentChannel(
+    id: string,
+    input: UpdatePaymentChannelInput,
+  ): Promise<PaymentChannel> {
+    const response = await this.request<{ channel: PaymentChannel }>(
+      `/payment-channels/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+    return response.channel;
+  }
+
+  async deletePaymentChannel(id: string): Promise<void> {
+    await this.request(`/payment-channels/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 }
 

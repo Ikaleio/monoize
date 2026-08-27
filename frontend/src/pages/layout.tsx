@@ -17,6 +17,8 @@ import {
   Code2,
   PanelLeftClose,
   PanelLeftOpen,
+  Wallet,
+  CreditCard,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -127,6 +129,7 @@ function Sidebar({
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
+    { to: "/dashboard/wallet", icon: Wallet, label: t("nav.wallet") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
@@ -137,6 +140,7 @@ function Sidebar({
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
     { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
+    { to: "/dashboard/payments", icon: CreditCard, label: t("nav.payments") },
     { to: "/dashboard/users", icon: Users, label: t("nav.users") },
     { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
     { to: "/dashboard/custom-transforms", icon: Code2, label: t("nav.customTransforms") },
