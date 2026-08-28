@@ -45,6 +45,20 @@ export function SiteSection({ settings, onChange }: SiteSectionProps) {
         />
         <FieldDescription>{t("settings.apiBaseUrlDescription")}</FieldDescription>
       </Field>
+      <Field className="sm:col-span-2">
+        <FieldLabel htmlFor="recharge_public_origin">
+          {t("settings.rechargePublicOrigin")}
+        </FieldLabel>
+        <Input
+          id="recharge_public_origin"
+          value={settings.recharge_public_origin}
+          onChange={(e) => onChange({ recharge_public_origin: e.target.value })}
+          placeholder={t("settings.rechargePublicOriginPlaceholder")}
+        />
+        <FieldDescription>
+          {t("settings.rechargePublicOriginDescription")}
+        </FieldDescription>
+      </Field>
     </div>
   );
 }

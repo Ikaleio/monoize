@@ -57,6 +57,7 @@ pub struct UpdateSettingsRequest {
     pub price_sync_auto_enabled: Option<bool>,
     pub price_sync_new_api_base_url: Option<String>,
     pub price_sync_new_api_token: Option<String>,
+    pub recharge_public_origin: Option<String>,
 }
 
 /// MP-Y2: read APIs never return a stored token; `""` = unset, `"__set__"` = set.
@@ -274,6 +275,13 @@ pub async fn update_settings(
         && v != "__set__"
     {
         settings.price_sync_new_api_token = v;
+    }
+    if let Some(v) = body.recharge_public_origin {
+        let trimmed = v.trim().to_string();
+        crate::settings::validate_recharge_public_origin(&trimmed).map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+        })?;
+        settings.recharge_public_origin = trimmed;
     }
 
     let updated = settings_store

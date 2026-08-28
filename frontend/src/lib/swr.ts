@@ -35,6 +35,16 @@ import type {
   UpdateGroupInput,
   UserLiveUsage,
   CustomTransform,
+  RechargeChannel,
+  RechargeOrder,
+  RechargeOrdersResponse,
+  RechargeOrdersFilter,
+  CreateRechargeOrderInput,
+  CreateRechargeOrderResponse,
+  LedgerResponse,
+  PaymentChannel,
+  CreatePaymentChannelInput,
+  UpdatePaymentChannelInput,
 } from "./api";
 
 // SWR fetcher functions
@@ -82,10 +92,32 @@ export const SWR_KEYS = {
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
   LIVE_USAGE: "/dashboard/me/live-usage",
   CUSTOM_TRANSFORMS: "/dashboard/custom-transforms",
+  RECHARGE_CHANNELS: "/dashboard/recharge/channels",
+  RECHARGE_ORDERS: "/dashboard/recharge/orders",
+  LEDGER: "/dashboard/ledger",
+  PAYMENT_CHANNELS: "/dashboard/payment-channels",
 } as const;
 
 export function providerDetailSWRKey(providerId: string) {
   return `provider-detail:${providerId}`;
+}
+
+export function rechargeOrdersSWRKey(
+  limit: number,
+  offset: number,
+  filters?: RechargeOrdersFilter,
+) {
+  const filterKey = filters ? JSON.stringify(filters) : "";
+  return `${SWR_KEYS.RECHARGE_ORDERS}?limit=${limit}&offset=${offset}&f=${filterKey}`;
+}
+
+export function ledgerSWRKey(
+  limit: number,
+  offset: number,
+  kinds?: string[],
+  username?: string,
+) {
+  return `${SWR_KEYS.LEDGER}?limit=${limit}&offset=${offset}&kinds=${kinds?.join(",") ?? ""}&u=${username ?? ""}`;
 }
 
 // Default SWR config
@@ -346,6 +378,54 @@ export function useLiveUsage(config?: SWRConfiguration) {
       refreshInterval: 10000,
       ...config,
     },
+  );
+}
+
+// Recharge hooks (recharge-system.spec.md §9-§11)
+
+export function useRechargeChannels(config?: SWRConfiguration) {
+  return useSWR<RechargeChannel[]>(
+    SWR_KEYS.RECHARGE_CHANNELS,
+    () => api.listRechargeChannels(),
+    { ...defaultConfig, ...config },
+  );
+}
+
+// RC-W4/RC-M3 order list. keepPreviousData avoids skeleton flashes while the
+// pending-order poll (refreshInterval set by the caller) revalidates the page.
+export function useRechargeOrders(
+  limit = 20,
+  offset = 0,
+  filters?: RechargeOrdersFilter,
+  config?: SWRConfiguration,
+) {
+  return useSWR<RechargeOrdersResponse>(
+    rechargeOrdersSWRKey(limit, offset, filters),
+    () => api.listRechargeOrders(limit, offset, filters),
+    { ...defaultConfig, keepPreviousData: true, ...config },
+  );
+}
+
+export function useLedger(
+  limit = 20,
+  offset = 0,
+  kinds?: string[],
+  username?: string,
+  config?: SWRConfiguration,
+) {
+  return useSWR<LedgerResponse>(
+    ledgerSWRKey(limit, offset, kinds, username),
+    () => api.listLedger(limit, offset, kinds, username),
+    { ...defaultConfig, keepPreviousData: true, ...config },
+  );
+}
+
+// Admin payment channels (§9.2)
+export function usePaymentChannels(config?: SWRConfiguration) {
+  return useSWR<PaymentChannel[]>(
+    SWR_KEYS.PAYMENT_CHANNELS,
+    () => api.listPaymentChannels(),
+    { ...defaultConfig, ...config },
   );
 }
 
@@ -1268,6 +1348,187 @@ export async function deleteCustomTransformOptimistic(
     mutate(SWR_KEYS.TRANSFORM_REGISTRY);
   } catch (error) {
     mutate(SWR_KEYS.CUSTOM_TRANSFORMS, currentTransforms, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+// Recharge mutation helpers (recharge-system.spec.md §10-§11)
+
+const isRechargeOrdersKey = (key: unknown): boolean =>
+  typeof key === "string" && key.startsWith(SWR_KEYS.RECHARGE_ORDERS);
+
+const isLedgerKey = (key: unknown): boolean =>
+  typeof key === "string" && key.startsWith(SWR_KEYS.LEDGER);
+
+/**
+ * RC-W3: POST the order, then insert the returned pending order at the top of
+ * the first-page orders cache before the caller navigates to `payment.url`.
+ */
+export async function createRechargeOrderOptimistic(
+  input: CreateRechargeOrderInput,
+  firstPageKey: string,
+  onError?: (error: Error) => void,
+): Promise<CreateRechargeOrderResponse> {
+  try {
+    const result = await api.createRechargeOrder(input);
+    mutate(
+      firstPageKey,
+      (current: RechargeOrdersResponse | undefined) =>
+        current
+          ? {
+              orders: [result.order, ...current.orders],
+              total: current.total + 1,
+            }
+          : { orders: [result.order], total: 1 },
+      false,
+    );
+    return result;
+  } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+/** Revalidate every order/ledger page plus the session user (RC-W6). */
+export function revalidateRechargeCaches() {
+  mutate(isRechargeOrdersKey);
+  mutate(isLedgerKey);
+  mutate(SWR_KEYS.ME);
+  mutate(SWR_KEYS.STATS);
+  mutate(SWR_KEYS.USERS);
+}
+
+export async function refundRechargeOrderOptimistic(
+  order: RechargeOrder,
+  manual: boolean,
+  pageKey: string,
+  onError?: (error: Error) => void,
+): Promise<RechargeOrder> {
+  let snapshot: RechargeOrdersResponse | undefined;
+  await mutate(
+    pageKey,
+    (current: RechargeOrdersResponse | undefined) => {
+      snapshot = current;
+      if (!current) return current;
+      return {
+        ...current,
+        orders: current.orders.map((row) =>
+          row.id === order.id
+            ? { ...row, status: "refunded" as const }
+            : row,
+        ),
+      };
+    },
+    false,
+  );
+
+  try {
+    const refunded = await api.refundRechargeOrder(order.id, manual);
+    revalidateRechargeCaches();
+    return refunded;
+  } catch (error) {
+    mutate(pageKey, snapshot, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function createPaymentChannelOptimistic(
+  input: CreatePaymentChannelInput,
+  currentChannels: PaymentChannel[],
+  onError?: (error: Error) => void,
+) {
+  const now = new Date().toISOString();
+  const tempChannel: PaymentChannel = {
+    id: `temp-${Date.now()}`,
+    name: input.name.trim(),
+    type_id: input.type_id,
+    enabled: input.enabled ?? true,
+    currency: input.currency,
+    usd_rate: input.usd_rate,
+    min_credit_usd: input.min_credit_usd ?? "1",
+    max_credit_usd: input.max_credit_usd ?? "10000",
+    config: {},
+    sort_order: input.sort_order ?? 0,
+    created_at: now,
+    updated_at: now,
+  };
+  mutate(SWR_KEYS.PAYMENT_CHANNELS, [...currentChannels, tempChannel], false);
+
+  try {
+    const created = await api.createPaymentChannel(input);
+    mutate(SWR_KEYS.PAYMENT_CHANNELS);
+    mutate(SWR_KEYS.RECHARGE_CHANNELS);
+    return created;
+  } catch (error) {
+    mutate(SWR_KEYS.PAYMENT_CHANNELS, currentChannels, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function updatePaymentChannelOptimistic(
+  id: string,
+  input: UpdatePaymentChannelInput,
+  currentChannels: PaymentChannel[],
+  onError?: (error: Error) => void,
+) {
+  const optimistic = currentChannels.map((channel) =>
+    channel.id === id
+      ? {
+          ...channel,
+          name: input.name ?? channel.name,
+          usd_rate: input.usd_rate ?? channel.usd_rate,
+          min_credit_usd: input.min_credit_usd ?? channel.min_credit_usd,
+          max_credit_usd: input.max_credit_usd ?? channel.max_credit_usd,
+          enabled: input.enabled ?? channel.enabled,
+          sort_order: input.sort_order ?? channel.sort_order,
+          updated_at: new Date().toISOString(),
+        }
+      : channel,
+  );
+  mutate(SWR_KEYS.PAYMENT_CHANNELS, optimistic, false);
+
+  try {
+    const updated = await api.updatePaymentChannel(id, input);
+    mutate(SWR_KEYS.PAYMENT_CHANNELS);
+    mutate(SWR_KEYS.RECHARGE_CHANNELS);
+    return updated;
+  } catch (error) {
+    mutate(SWR_KEYS.PAYMENT_CHANNELS, currentChannels, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function deletePaymentChannelOptimistic(
+  id: string,
+  currentChannels: PaymentChannel[],
+  onError?: (error: Error) => void,
+) {
+  mutate(
+    SWR_KEYS.PAYMENT_CHANNELS,
+    currentChannels.filter((channel) => channel.id !== id),
+    false,
+  );
+
+  try {
+    await api.deletePaymentChannel(id);
+    mutate(SWR_KEYS.PAYMENT_CHANNELS);
+    mutate(SWR_KEYS.RECHARGE_CHANNELS);
+  } catch (error) {
+    mutate(SWR_KEYS.PAYMENT_CHANNELS, currentChannels, false);
     if (onError && error instanceof Error) {
       onError(error);
     }
