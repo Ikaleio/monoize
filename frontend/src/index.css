@@ -11,6 +11,9 @@
 		--foreground: 0 0% 9%;
 		--card: 0 0% 100%;
 		--card-foreground: 0 0% 9%;
+		--wallet: 220 17% 8%;
+		--wallet-foreground: 210 20% 98%;
+		--wallet-muted: 215 12% 65%;
 		--popover: 0 0% 100%;
 		--popover-foreground: 0 0% 9%;
 		--primary: 217 91% 53%;
@@ -78,6 +81,9 @@
 		--foreground: 0 0% 93%;
 		--card: 0 0% 7%;
 		--card-foreground: 0 0% 93%;
+		--wallet: 220 17% 11%;
+		--wallet-foreground: 210 20% 98%;
+		--wallet-muted: 215 12% 65%;
 		--popover: 0 0% 5%;
 		--popover-foreground: 0 0% 93%;
 		--primary: 217 91% 60%;

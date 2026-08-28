@@ -10,6 +10,10 @@
 
 DS1. Shared UI components MUST use CSS variables from `frontend/src/index.css` for base colors.
 
+DS1a. The Vite entry document's `html` element MUST apply the Tailwind
+`bg-background` class so browser overscroll and pre-rendered document areas use
+the active theme background token.
+
 DS2. Tailwind theme colors MUST expose the base tokens used by shadcn/ui:
 
 - `background`
@@ -131,6 +135,9 @@ DS26. Long-form dialogs MUST place overflow on an internal body container when c
 DS26a. Long-form dialog content MUST set viewport-bounded max height and `overflow-hidden` on the outer content element.
 
 DS26b. Long-form dialog footers MUST be `shrink-0` so actions remain reachable while the dialog body scrolls.
+
+DS26c. A long-form dialog MUST keep at least 24 CSS pixels between its action
+footer controls and the bottom border of the dialog at every viewport height.
 
 DS27. Dialog action footers MUST use shadcn button variants.
 

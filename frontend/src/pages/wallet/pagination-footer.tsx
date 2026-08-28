@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AnimatedButton } from "@/components/ui/motion";
 
 interface PaginationFooterProps {
   total: number;
@@ -27,28 +28,32 @@ export function PaginationFooter({
         {t("wallet.page", { page, pages })}
       </span>
       <div className="flex items-center gap-1">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="size-8"
-          aria-label={t("wallet.previousPage")}
-          disabled={offset === 0}
-          onClick={() => onOffsetChange(Math.max(0, offset - pageSize))}
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="size-8"
-          aria-label={t("wallet.nextPage")}
-          disabled={page >= pages}
-          onClick={() => onOffsetChange(offset + pageSize)}
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
+        <AnimatedButton>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-8"
+            aria-label={t("wallet.previousPage")}
+            disabled={offset === 0}
+            onClick={() => onOffsetChange(Math.max(0, offset - pageSize))}
+          >
+            <ChevronLeft aria-hidden="true" />
+          </Button>
+        </AnimatedButton>
+        <AnimatedButton>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-8"
+            aria-label={t("wallet.nextPage")}
+            disabled={page >= pages}
+            onClick={() => onOffsetChange(offset + pageSize)}
+          >
+            <ChevronRight aria-hidden="true" />
+          </Button>
+        </AnimatedButton>
       </div>
     </div>
   );

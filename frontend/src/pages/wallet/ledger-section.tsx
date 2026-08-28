@@ -1,17 +1,17 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, useReducedMotion } from "framer-motion";
-import { BookOpenText } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ArrowDownLeft, ArrowUpRight, BookOpenText } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { springs } from "@/components/ui/motion";
 import { PaginationFooter } from "./pagination-footer";
 import { formatTime } from "@/pages/request-logs/utils";
@@ -23,11 +23,14 @@ import { cn } from "@/lib/utils";
 const PAGE_SIZE = 10;
 const ALL_KINDS = [...WALLET_LEDGER_KINDS];
 
-/**
- * RC-W5: wallet-level ledger entries. The default `kinds` filter is exactly
- * the non-per-request kind list; per-request charges stay on /dashboard/logs.
- */
-export function LedgerSection({ username }: { username: string }) {
+/** RC-W5: wallet-level movements; per-request charges stay on request logs. */
+export function LedgerSection({
+  active,
+  username,
+}: {
+  active: boolean;
+  username: string;
+}) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
   const [kind, setKind] = useState<string>("all");
@@ -35,17 +38,18 @@ export function LedgerSection({ username }: { username: string }) {
 
   const kinds = kind === "all" ? ALL_KINDS : [kind];
   const { data, isLoading } = useLedger(PAGE_SIZE, offset, kinds, username);
-
   const kindLabel = (value: string) =>
     t(`wallet.kinds.${value}`, { defaultValue: value });
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <BookOpenText className="h-4 w-4" />
-          {t("wallet.ledgerTitle")}
-        </CardTitle>
+    <motion.section
+      aria-label={t("wallet.ledgerTitle")}
+      initial={false}
+      animate={active || reduced ? { opacity: 1, x: 0 } : { opacity: 0, x: 24 }}
+      transition={reduced ? { duration: 0 } : springs.gentle}
+      className="flex flex-col gap-4"
+    >
+      <div className="flex justify-end">
         <Select
           value={kind}
           onValueChange={(value) => {
@@ -53,88 +57,109 @@ export function LedgerSection({ username }: { username: string }) {
             setOffset(0);
           }}
         >
-          <SelectTrigger className="h-8 w-52" aria-label={t("wallet.kind")}>
+          <SelectTrigger
+            className="w-full sm:w-64"
+            aria-label={t("wallet.kind")}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t("wallet.kindFilterAll")}</SelectItem>
-            {ALL_KINDS.map((value) => (
-              <SelectItem key={value} value={value}>
-                {kindLabel(value)}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              <SelectItem value="all">{t("wallet.kindFilterAll")}</SelectItem>
+              {ALL_KINDS.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {kindLabel(value)}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="flex flex-col gap-3" aria-busy="true">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <Skeleton key={index} className="h-9 w-full" />
-            ))}
-          </div>
-        ) : !data || data.entries.length === 0 ? (
-          <EmptyState variant="inline" title={t("wallet.noLedger")} />
-        ) : (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: reduced ? 0 : 0.25 }}
-            className="overflow-x-auto"
-          >
-            <table className="w-full text-sm">
-              <thead className="text-left text-muted-foreground">
-                <tr className="border-b">
-                  <th className="px-3 py-2 font-medium">{t("common.created")}</th>
-                  <th className="px-3 py-2 font-medium">{t("wallet.kind")}</th>
-                  <th className="px-3 py-2 font-medium">{t("wallet.delta")}</th>
-                  <th className="px-3 py-2 font-medium">{t("wallet.balanceAfter")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.entries.map((entry) => {
-                  const positive = !entry.delta_nano_usd.startsWith("-");
-                  return (
-                    <motion.tr
-                      key={entry.id}
-                      layout={!reduced}
-                      initial={reduced ? { opacity: 0 } : { opacity: 0, y: -8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={reduced ? { duration: 0.15 } : springs.smooth}
-                      className="border-b transition-colors last:border-b-0 hover:bg-accent/40"
+      </div>
+
+      {isLoading ? (
+        <div className="flex flex-col gap-3" aria-busy="true">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-20 w-full" />
+          ))}
+        </div>
+      ) : !data || data.entries.length === 0 ? (
+        <EmptyState
+          variant="inline"
+          icon={<BookOpenText className="size-6" aria-hidden="true" />}
+          title={t("wallet.noLedger")}
+        />
+      ) : (
+        <div className="flex flex-col gap-3">
+          <motion.ul layout={!reduced} className="flex flex-col gap-1">
+            {data.entries.map((entry, index) => {
+              const positive = !entry.delta_nano_usd.startsWith("-");
+              const EntryIcon = positive ? ArrowDownLeft : ArrowUpRight;
+
+              return (
+                <motion.li
+                  key={entry.id}
+                  layout={!reduced}
+                  initial={reduced ? { opacity: 0 } : { opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={
+                    reduced
+                      ? { duration: 0 }
+                      : {
+                          ...springs.gentle,
+                          delay: Math.min(index * 0.035, 0.2),
+                        }
+                  }
+                  className="flex items-start justify-between gap-4 rounded-lg px-3 py-4 transition-colors hover:bg-muted/50 sm:px-4"
+                >
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span
+                      className={cn(
+                        "flex size-9 shrink-0 items-center justify-center rounded-full",
+                        positive
+                          ? "bg-success-soft text-success-foreground"
+                          : "bg-destructive/10 text-destructive",
+                      )}
                     >
-                      <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-muted-foreground">
+                      <EntryIcon aria-hidden="true" />
+                    </span>
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <span className="text-pretty font-medium">
+                        {kindLabel(entry.kind)}
+                      </span>
+                      <span className="text-xs text-muted-foreground tabular-nums">
                         {formatTime(entry.created_at)}
-                      </td>
-                      <td className="px-3 py-2.5">{kindLabel(entry.kind)}</td>
-                      <td
-                        className={cn(
-                          "whitespace-nowrap px-3 py-2.5 font-medium tabular-nums",
-                          positive ? "text-success" : "text-destructive",
-                        )}
-                      >
-                        {positive ? "+" : ""}
-                        {formatNanoUsd(entry.delta_nano_usd, 4)}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-muted-foreground">
-                        {entry.balance_after_nano_usd !== null
-                          ? formatNanoUsd(entry.balance_after_nano_usd, 4)
-                          : "—"}
-                      </td>
-                    </motion.tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <PaginationFooter
-              total={data.total}
-              pageSize={PAGE_SIZE}
-              offset={offset}
-              onOffsetChange={setOffset}
-            />
-          </motion.div>
-        )}
-      </CardContent>
-    </Card>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span
+                      className={cn(
+                        "font-display text-lg font-semibold tabular-nums",
+                        positive ? "text-success" : "text-destructive",
+                      )}
+                    >
+                      {positive ? "+" : ""}
+                      {formatNanoUsd(entry.delta_nano_usd, 4)}
+                    </span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {t("wallet.balanceAfter")}:{" "}
+                      {entry.balance_after_nano_usd !== null
+                        ? formatNanoUsd(entry.balance_after_nano_usd, 4)
+                        : "—"}
+                    </span>
+                  </div>
+                </motion.li>
+              );
+            })}
+          </motion.ul>
+          <PaginationFooter
+            total={data.total}
+            pageSize={PAGE_SIZE}
+            offset={offset}
+            onOffsetChange={setOffset}
+          />
+        </div>
+      )}
+    </motion.section>
   );
 }

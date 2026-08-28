@@ -600,10 +600,17 @@ HTTP `404`, code `not_found`.
 ## 10. Wallet page (`/dashboard/wallet`)
 
 RC-W1. `/dashboard/wallet` is a main-navigation page for every authenticated
-user (RC-S2 amendment 1). It renders, top to bottom: a prepaid-balance and recharge row, a plan-capacity card, a recharge-orders section, and a ledger section.
+user (RC-S2 amendment 1). It renders, top to bottom: a page heading, one wallet
+stage that contains the prepaid balance and recharge controls, a plan-capacity
+card, and one activity card. The activity card contains `orders` and `ledger`
+tabs. `orders` is selected on first render.
 
-RC-W2. The balance card reads the session user object (`balance_usd`,
-`balance_unlimited`) exactly like `dashboard-ui-layout.spec.md` DL3a/US2, without extra fetches. The card labels this value as prepaid balance.
+RC-W2. The balance region reads the session user object (`balance_usd`,
+`balance_unlimited`) exactly like `dashboard-ui-layout.spec.md` DL3a/US2,
+without extra fetches. It labels this value as prepaid balance. A balance value
+change replaces the old value with the new value in the same bounded region.
+The balance region MUST use the wallet ink surface and wallet foreground tokens
+in both light and dark themes.
 
 RC-W2a. The plan-capacity card MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price and allow purchase. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
 
@@ -625,29 +632,41 @@ RC-W3. The recharge card:
   entered state intact.
 
 RC-W4. The recharge-orders section lists the caller's RC-A2 orders (newest
-first) with columns: created time (FL2 format), channel name, credit
-(`credit_usd`), payment (`pay_amount` + `pay_currency`), status badge, and
-order id (first 8 chars, full id in a tooltip). While any displayed own order
-has `status = pending`, the SWR hook MUST poll with `refreshInterval = 5000`;
-when none is pending, polling MUST stop. A `?order_id=` query parameter
-(RC-G2 return URL) highlights the matching row; state correctness MUST rely
-on polling, never on return-URL parameters.
+first) in the activity card's `orders` tab. Each order item shows created time
+(FL2 format), channel name, credit (`credit_usd`), payment (`pay_amount` +
+`pay_currency`), status badge, and order id (first 8 chars, full id in a
+tooltip). While any loaded own order has `status = pending`, the SWR hook MUST
+poll with `refreshInterval = 5000`; when none is pending, polling MUST stop. A
+`?order_id=` query parameter (RC-G2 return URL) highlights the matching item;
+state correctness MUST rely on polling, never on return-URL parameters.
 
-RC-W5. The ledger section lists the caller's RC-A5 entries with columns:
-created time, kind (localized label), delta (`delta_usd`, signed, green for
-positive / red for negative), and balance after. The default `kinds` filter
-sent by the page is exactly
+RC-W5. The activity card's `ledger` tab lists the caller's RC-A5 entries. Each
+ledger item shows created time, kind (localized label), delta (`delta_usd`,
+signed, semantic success color for positive and semantic destructive color for
+negative), and balance after. The default `kinds` filter sent by the page is exactly
 `recharge,recharge_refund,admin_adjustment,plan_purchase,sub_account_transfer_out,sub_account_transfer_in,sub_account_refund,sub_account_debt_transfer,sub_account_delete_settlement,admin_sub_account_adjustment`
 (every non-per-request kind); a kind filter control MAY narrow it. Per-request
 charges (`request_charge`, `api_key_charge`) are intentionally excluded here —
 they remain on `/dashboard/logs` (§12).
 
-RC-W6. Both sections render skeleton rows while loading and load further pages
-with `limit`/`offset` paging. A completed recharge MUST appear (order
-`succeeded`, ledger `recharge` row, updated sidebar balance via session-user
-revalidation) without a page close/reopen: the pending-order poll that
-observes the terminal status MUST also revalidate the ledger cache and the
-session user cache.
+RC-W6. Both activity tabs remain mounted after the page renders. They render
+skeleton rows while loading and load further pages with `limit`/`offset`
+paging. A completed recharge MUST appear (order `succeeded`, ledger `recharge`
+row, updated sidebar balance via session-user revalidation) without a page
+close/reopen: the pending-order poll that observes the terminal status MUST
+also revalidate the ledger cache and the session user cache.
+
+RC-W7. The wallet page MUST use mobile-first layout. The balance and recharge
+regions stack at widths below the `lg` breakpoint and render in two columns at
+or above `lg`. Order and ledger items MUST remain readable without horizontal
+page scrolling.
+
+RC-W8. Wallet page entry, balance replacement, amount selection, pay-preview
+replacement, plan-meter updates, activity-tab changes, and activity-item entry
+MUST use non-linear spring transitions. A tab change MUST move the entering
+content horizontally by at most 32 CSS pixels and MUST keep the activity card
+in the document flow. If `prefers-reduced-motion: reduce` matches, these
+transitions MUST use no x-offset, y-offset, scale, or rotation animation.
 
 ## 11. Payments admin page (`/dashboard/payments`)
 

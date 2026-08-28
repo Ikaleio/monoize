@@ -66,6 +66,11 @@ module.exports = {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))'
         },
+        wallet: {
+          DEFAULT: 'hsl(var(--wallet))',
+          foreground: 'hsl(var(--wallet-foreground))',
+          muted: 'hsl(var(--wallet-muted))'
+        },
         chart: {
           1: 'hsl(var(--chart-1))',
           2: 'hsl(var(--chart-2))',
