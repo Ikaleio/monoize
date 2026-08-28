@@ -262,12 +262,14 @@ impl RequestCaptureMode {
         self,
         upstream_usage: Option<&crate::urp::Usage>,
         upstream_error_seen: bool,
+        multiple_upstream_attempts: bool,
     ) -> bool {
         match self {
             Self::Off => false,
             Self::CaptureAll => true,
             Self::CaptureOnlyAbnormal => {
                 upstream_error_seen
+                    || multiple_upstream_attempts
                     || upstream_usage.is_none()
                     || upstream_usage.is_some_and(|usage| usage.total_tokens() == 0)
             }
@@ -832,13 +834,30 @@ pub use utils::{format_nano_to_usd, parse_nano_usd, parse_usd_to_nano};
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, canonicalize_group_ids,
-        is_provider_group_eligible, provider_group_rank, resolve_effective_groups,
-        validate_model_redirects,
+        MAX_MODEL_REDIRECT_PATTERN_BYTES, ModelRedirectRule, RequestCaptureMode,
+        canonicalize_group_ids, is_provider_group_eligible, provider_group_rank,
+        resolve_effective_groups, validate_model_redirects,
     };
+    use crate::urp::Usage;
 
     fn ids(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn abnormal_capture_persists_any_multi_attempt_request() {
+        let usage = Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..Usage::default()
+        };
+
+        assert!(!RequestCaptureMode::CaptureOnlyAbnormal.should_persist(
+            Some(&usage),
+            false,
+            false,
+        ));
+        assert!(RequestCaptureMode::CaptureOnlyAbnormal.should_persist(Some(&usage), false, true,));
     }
 
     #[test]

@@ -148,9 +148,10 @@ line label MUST be:
   (the final day-width bucket overlaps the current local calendar day);
 - localized "Now" (`dashboard.usage.now`) when the selected window is `1h` or `24h`.
 
-The line label MUST render in the reserved top margin above the plotting area. Its right
-edge MUST be inset from the final reference line. The label MUST NOT overlap an Area
-series. No glyph may be clipped by the chart container.
+The line label MUST render in the reserved top margin above the plotting area. The
+horizontal center of the label MUST equal the X coordinate of the final reference line.
+The label MUST NOT overlap an Area series. No glyph may be clipped by the chart
+container.
 
 DH-6e. Hover/focus tooltip MUST show:
 
@@ -297,14 +298,21 @@ user and MUST return:
     }
   ],
   "brick_count": 24,
-  "window_hours": 24
+  "window_hours": 24,
+  "time_from": "2026-08-27T09:47:00.000Z",
+  "time_to": "2026-08-28T09:47:00.000Z"
 }
 ```
 
 Semantics:
 
-- `brick_count` MUST be 24 and `window_hours` MUST be 24. Brick `index` `0` is the oldest
-  hour in `[NOW-24h, NOW)`; index `23` is the newest hour.
+- `brick_count` MUST be 24 and `window_hours` MUST be 24. `time_from` and `time_to`
+  MUST be RFC3339 timestamps that define the exact aggregation interval
+  `[time_from, time_to)`. The endpoint MUST return these fields when both configured
+  target lists are empty. Brick `index` `i` represents
+  `[time_from + i * (time_to - time_from) / brick_count,
+  time_from + (i + 1) * (time_to - time_from) / brick_count)`. Brick `index` `0` is the
+  oldest interval. Brick `index` `23` is the newest interval.
 - `status` MUST be one of `up`, `degraded`, `down`, `empty`:
   - `empty`: zero finished requests in that hour for the target;
   - `up`: success rate ≥ 0.99 among finished requests in that hour;
@@ -342,6 +350,12 @@ availability bricks, average TTFT, average TPS. Target names and availability br
 MUST be left-aligned independently. Average TTFT and average TPS headings and values MUST
 be right-aligned independently. Rows MUST use separators instead of individual nested
 cards. The table MAY scroll horizontally when the viewport cannot fit all four columns.
+
+Each availability brick tooltip MUST show the localized status and the brick's actual
+start-to-end time interval. The frontend MUST derive that interval from `time_from`,
+`time_to`, `brick_count`, and the brick `index`. It MUST format the interval in the
+browser's locale and local time zone. It MUST NOT show an ordinal hour label such as
+`h1` or `h24`.
 
 Each row MUST enter with a staggered nonlinear spring transition from the shared motion
 system. Reduced-motion mode MUST remove translation and spring motion while preserving

@@ -6,7 +6,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use chrono::{Duration, Utc};
+use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
@@ -104,6 +104,12 @@ pub async fn get_dashboard_performance(
 
     let configured_group_ids = settings.dashboard_performance_group_ids;
     let configured_model_ids = settings.dashboard_performance_model_ids;
+    let now = Utc::now();
+    let time_from = now - Duration::hours(WINDOW_HOURS);
+    let time_to_unix_ms = now.timestamp_millis();
+    let time_from_unix_ms = time_from.timestamp_millis();
+    let time_from_rfc3339 = time_from.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let time_to_rfc3339 = now.to_rfc3339_opts(SecondsFormat::Millis, true);
 
     if configured_group_ids.is_empty() && configured_model_ids.is_empty() {
         return Ok(Json(json!({
@@ -111,12 +117,10 @@ pub async fn get_dashboard_performance(
             "models": [],
             "brick_count": BRICK_COUNT,
             "window_hours": WINDOW_HOURS,
+            "time_from": time_from_rfc3339,
+            "time_to": time_to_rfc3339,
         })));
     }
-
-    let now = Utc::now();
-    let time_to_unix_ms = now.timestamp_millis();
-    let time_from_unix_ms = (now - Duration::hours(WINDOW_HOURS)).timestamp_millis();
 
     let registry_groups = state
         .user_store
@@ -197,6 +201,8 @@ pub async fn get_dashboard_performance(
         "models": models_json,
         "brick_count": BRICK_COUNT,
         "window_hours": WINDOW_HOURS,
+        "time_from": time_from_rfc3339,
+        "time_to": time_to_rfc3339,
     })))
 }
 

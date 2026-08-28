@@ -43,10 +43,19 @@ RCD-C11. If `request_capture_mode == "capture-all"`, Monoize MUST persist a dump
 RCD-C12. If `request_capture_mode == "capture-only-abnormal"`, Monoize MUST persist a dump file only when at least one of the following conditions is true for the request:
 
 1. an upstream call failed and produced an upstream error for any recorded attempt;
-2. the final request result contains no upstream `usage` object;
-3. the final request result contains an upstream `usage` object whose `input_tokens + output_tokens == 0`.
+2. the request made more than one upstream attempt, including a retry against the same
+   Channel or a fallback to another Channel or Provider;
+3. the final request result contains no upstream `usage` object;
+4. the final request result contains an upstream `usage` object whose
+   `input_tokens + output_tokens == 0`.
 
-RCD-C13. For RCD-C12, synthetic usage created only for estimated billing MUST NOT cause condition 2 to become false. The abnormal-only decision MUST be based on upstream-provided usage data before estimated billing fallback.
+A request that succeeds on its first and only upstream attempt with positive upstream
+usage MUST NOT persist in this mode. A persisted dump MUST include all attempts retained
+for that request in chronological order, subject to the RCD-C14 and RCD-D13 bounds.
+
+RCD-C13. For RCD-C12, synthetic usage created only for estimated billing MUST NOT cause
+condition 3 to become false. The abnormal-only decision MUST be based on
+upstream-provided usage data before estimated billing fallback.
 
 RCD-C14. Capture resource bounds MUST be process configuration. Defaults are:
 

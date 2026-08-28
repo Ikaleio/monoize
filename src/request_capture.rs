@@ -1006,13 +1006,16 @@ impl RequestCaptureSession {
         if attempts.is_empty() {
             return None;
         }
-        if !self
-            .mode
-            .should_persist(upstream_usage, upstream_error_seen)
-        {
+        let mut truncation = self.truncation.lock().await.clone();
+        let multiple_upstream_attempts =
+            attempts.len().saturating_add(truncation.omitted_attempts) > 1;
+        if !self.mode.should_persist(
+            upstream_usage,
+            upstream_error_seen,
+            multiple_upstream_attempts,
+        ) {
             return None;
         }
-        let mut truncation = self.truncation.lock().await.clone();
         let encoded = loop {
             let payload = json!({
                 "version": 2,
@@ -1767,6 +1770,62 @@ mod tests {
             runtime: None,
         };
         (store, db)
+    }
+
+    #[tokio::test]
+    async fn abnormal_mode_persists_a_successful_multi_attempt_chain() {
+        let temp = TempDir::new().expect("temporary directory");
+        let (store, _db) = store_with_migrated_db(&temp).await;
+        let runtime = RwLock::new(MonoizeRuntimeConfig {
+            request_capture_enabled: true,
+            ..MonoizeRuntimeConfig::default()
+        });
+        let session = store
+            .maybe_start_session(
+                &runtime,
+                &test_auth(RequestCaptureMode::CaptureOnlyAbnormal),
+                Some("req_retry_success".to_string()),
+                CaptureDownstreamProtocol::Responses,
+                false,
+            )
+            .await
+            .expect("capture starts");
+        session
+            .push_attempt(json!({
+                "attempt_number": 1,
+                "provider_id": "provider-a",
+                "error": {"message": "retry"}
+            }))
+            .await;
+        session
+            .push_attempt(json!({
+                "attempt_number": 2,
+                "provider_id": "provider-b",
+                "error": null
+            }))
+            .await;
+        let usage = crate::urp::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..crate::urp::Usage::default()
+        };
+
+        persist_and_wait(&session, Some(&usage), false).await;
+
+        let records = store
+            .list_capture_records("req_retry_success", None)
+            .await
+            .expect("records query succeeds");
+        assert_eq!(records.len(), 1);
+        let bytes = store
+            .read_dump_file(&records[0].file_name)
+            .await
+            .expect("dump read succeeds")
+            .expect("dump exists");
+        let payload: Value = serde_json::from_slice(&bytes).expect("dump is JSON");
+        assert_eq!(payload["attempts"].as_array().map(Vec::len), Some(2));
+        assert_eq!(payload["attempts"][0]["attempt_number"], 1);
+        assert_eq!(payload["attempts"][1]["attempt_number"], 2);
     }
 
     async fn insert_record(

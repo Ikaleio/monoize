@@ -23,6 +23,7 @@ import type {
   DashboardPerformanceBrick,
   DashboardPerformanceBrickStatus,
 } from "@/lib/api";
+import { formatPerformanceBrickRange } from "@/lib/performance-time";
 import { cn } from "@/lib/utils";
 
 interface PerformancePanelProps {
@@ -60,11 +61,17 @@ function formatTps(tps: number | null | undefined): string {
 function UptimeBricks({
   bricks,
   label,
+  brickCount,
+  timeFrom,
+  timeTo,
 }: {
   bricks: DashboardPerformanceBrick[];
   label: string;
+  brickCount: number;
+  timeFrom: string;
+  timeTo: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ordered = [...bricks].sort((a, b) => a.index - b.index);
 
   return (
@@ -80,22 +87,34 @@ function UptimeBricks({
           },
         )}
       >
-        {ordered.map((brick) => (
-          <Tooltip key={brick.index}>
-            <TooltipTrigger asChild>
-              <span
-                className={cn(
-                  "h-3 min-w-1.5 flex-1 rounded-sm",
-                  brickClass(brick.status),
+        {ordered.map((brick) => {
+          const timeRange = formatPerformanceBrickRange(
+            brick.index,
+            brickCount,
+            timeFrom,
+            timeTo,
+            i18n.language,
+          );
+          return (
+            <Tooltip key={brick.index}>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn(
+                    "h-3 min-w-1.5 flex-1 rounded-sm",
+                    brickClass(brick.status),
+                  )}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                {t(
+                  `dashboard.performance.status.${brick.status}`,
+                  brick.status,
                 )}
-              />
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              {t(`dashboard.performance.status.${brick.status}`, brick.status)}{" "}
-              · h{brick.index + 1}
-            </TooltipContent>
-          </Tooltip>
-        ))}
+                {timeRange ? ` · ${timeRange}` : null}
+              </TooltipContent>
+            </Tooltip>
+          );
+        })}
       </div>
     </TooltipProvider>
   );
@@ -107,12 +126,18 @@ function PerfRow({
   avgTtft,
   avgTps,
   index,
+  brickCount,
+  timeFrom,
+  timeTo,
 }: {
   name: string;
   bricks: DashboardPerformanceBrick[];
   avgTtft: number | null;
   avgTps: number | null;
   index: number;
+  brickCount: number;
+  timeFrom: string;
+  timeTo: string;
 }) {
   const reduceMotion = useReducedMotion();
   return (
@@ -134,7 +159,13 @@ function PerfRow({
         </span>
       </TableCell>
       <TableCell className="text-left">
-        <UptimeBricks bricks={bricks} label={name} />
+        <UptimeBricks
+          bricks={bricks}
+          label={name}
+          brickCount={brickCount}
+          timeFrom={timeFrom}
+          timeTo={timeTo}
+        />
       </TableCell>
       <TableCell className="w-32 text-right font-mono text-xs tabular-nums">
         {formatTtft(avgTtft)}
@@ -150,6 +181,9 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
   const { t } = useTranslation();
   const groups = data?.groups ?? [];
   const models = data?.models ?? [];
+  const brickCount = data?.brick_count ?? 0;
+  const timeFrom = data?.time_from ?? "";
+  const timeTo = data?.time_to ?? "";
   const empty = !loading && groups.length === 0 && models.length === 0;
 
   return (
@@ -220,6 +254,9 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
                       avgTtft={group.avg_ttft_ms}
                       avgTps={group.avg_tps}
                       index={index}
+                      brickCount={brickCount}
+                      timeFrom={timeFrom}
+                      timeTo={timeTo}
                     />
                   ))}
                   {models.map((model, index) => (
@@ -230,6 +267,9 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
                       avgTtft={model.avg_ttft_ms}
                       avgTps={model.avg_tps}
                       index={groups.length + index}
+                      brickCount={brickCount}
+                      timeFrom={timeFrom}
+                      timeTo={timeTo}
                     />
                   ))}
                 </TableBody>

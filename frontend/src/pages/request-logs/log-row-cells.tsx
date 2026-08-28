@@ -660,7 +660,7 @@ export function LogRowCells({
       </td>
 
       <td className="px-2 py-1 align-middle whitespace-nowrap">
-        <span className="inline-flex flex-col items-start leading-4">
+        <span className="inline-flex h-9 flex-col items-start justify-center leading-4">
           <TooltipProvider delayDuration={200}>
             <Tooltip onOpenChange={modelTooltipOpenChange}>
               <TooltipTrigger asChild>
@@ -773,9 +773,7 @@ export function LogRowCells({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-          ) : (
-            <span aria-hidden="true" className="h-4" />
-          )}
+          ) : null}
         </span>
       </td>
 

@@ -881,6 +881,8 @@ export interface DashboardPerformance {
   models: DashboardPerformanceModel[];
   brick_count: number;
   window_hours: number;
+  time_from: string;
+  time_to: string;
 }
 
 // Rolling 60-second own-usage aggregate (user-live-usage.spec.md LU-6).

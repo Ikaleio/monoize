@@ -458,11 +458,11 @@ FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping 
 
 FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells, the admin-visible merged User/Token cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
 
-FL9. The merged `model/[channel]` cell MUST use exactly two non-wrapping layout lines in one column:
+FL9. The merged `model/[channel]` cell MUST use a non-wrapping column layout inside the fixed-height row:
 
-- The first line MUST render the ModelBadge defined by FL3.
+- For an admin viewer, the first line MUST render the ModelBadge defined by FL3.
 - For an admin viewer, the second line MUST render the first non-empty value among `channel_name`, `channel_id`, and `-`.
-- For a non-admin viewer, the second line MUST remain visually empty and MUST NOT expose Provider or Channel information.
+- For a non-admin viewer, the cell MUST render only the ModelBadge defined by FL3. The ModelBadge MUST be vertically centered in the cell. The cell MUST NOT reserve an empty Channel line and MUST NOT expose Provider or Channel information.
 - When `affinity_hit` is true for an admin viewer, the second line MUST include a localized sticky-session badge immediately after the Channel display value. The badge MUST NOT appear when `affinity_hit` is false or null.
 - Retry-chain hops MUST NOT create a third visible line. Their full path remains available through FL9b and their count remains visible through FL4.
 - On hover, focus, or activate, the tooltip MUST show the content defined by FL9b. Activation MUST work on touch devices; activating outside the tooltip or pressing Escape MUST close it.
