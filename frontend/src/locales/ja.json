@@ -67,7 +67,10 @@
 		"groups": "グループ",
 		"customTransforms": "カスタム変換",
 		"collapseSidebar": "サイドバーを折りたたむ",
-		"expandSidebar": "サイドバーを展開する"
+		"expandSidebar": "サイドバーを展開する",
+		"openSidebar": "ナビゲーションを開く",
+		"sidebarTitle": "ナビゲーション",
+		"sidebarDescription": "ダッシュボードのナビゲーションとアカウント操作です。"
 	},
 	"roles": {
 		"super_admin": "スーパー管理者",
@@ -797,9 +800,17 @@
 	"userMenu": {
 		"balance": "残高",
 		"plan": "プラン",
-		"grant": "付与額",
-		"nextReset": "次回リセット",
-		"remainingOfGrant": "プラン付与額の残り",
+		"usedOfLimit": "{{used}} / {{limit}}",
+		"windowUsageLabel": "{{window}}の使用量：{{usage}}",
+		"resetsAt": "{{time}}にリセット",
+		"fullyAvailable": "全額利用可能",
+		"planUsageError": "プラン使用量を読み込めません",
+		"windows": {
+			"fiveHour": "5時間",
+			"twentyFourHour": "24時間",
+			"sevenDay": "7日",
+			"thirtyDay": "30日"
+		},
 		"liveUsage": "直近 60 秒",
 		"rpm": "RPM",
 		"tpm": "TPM",
@@ -1127,6 +1138,8 @@
 		"balanceAfter": "変動後残高",
 		"kind": "種類",
 		"delta": "変動",
+		"statusCol": "ステータス",
+		"createdAt": "作成日時",
 		"page": "{{page}} / {{pages}} ページ",
 		"previousPage": "前のページ",
 		"nextPage": "次のページ",

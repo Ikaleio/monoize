@@ -67,7 +67,10 @@
 		"groups": "Groups",
 		"customTransforms": "Custom Transforms",
 		"collapseSidebar": "Collapse sidebar",
-		"expandSidebar": "Expand sidebar"
+		"expandSidebar": "Expand sidebar",
+		"openSidebar": "Open navigation",
+		"sidebarTitle": "Navigation",
+		"sidebarDescription": "Dashboard navigation and account controls."
 	},
 	"roles": {
 		"super_admin": "Super Admin",
@@ -800,9 +803,17 @@
 	"userMenu": {
 		"balance": "Balance",
 		"plan": "Plan",
-		"grant": "Grant",
-		"nextReset": "Next reset",
-		"remainingOfGrant": "Remaining of plan grant",
+		"usedOfLimit": "{{used}} / {{limit}}",
+		"windowUsageLabel": "{{window}} usage: {{usage}}",
+		"resetsAt": "Resets {{time}}",
+		"fullyAvailable": "Fully available",
+		"planUsageError": "Plan usage is unavailable",
+		"windows": {
+			"fiveHour": "5 hours",
+			"twentyFourHour": "24 hours",
+			"sevenDay": "7 days",
+			"thirtyDay": "30 days"
+		},
 		"liveUsage": "Last 60s",
 		"rpm": "RPM",
 		"tpm": "TPM",
@@ -1130,6 +1141,8 @@
 		"balanceAfter": "Balance after",
 		"kind": "Kind",
 		"delta": "Change",
+		"statusCol": "Status",
+		"createdAt": "Created",
 		"page": "Page {{page}} of {{pages}}",
 		"previousPage": "Previous page",
 		"nextPage": "Next page",

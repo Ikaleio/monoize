@@ -122,6 +122,7 @@ export interface BillingPlanWindowUsage {
   limit_nano_usd: string;
   used_nano_usd: string;
   remaining_nano_usd: string;
+  next_reset_at: string | null;
 }
 
 export interface BillingPlanSubscription {

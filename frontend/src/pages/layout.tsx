@@ -23,7 +23,13 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import {
   Tooltip,
   TooltipContent,
@@ -301,12 +307,16 @@ export function DashboardLayout() {
             variant="outline"
             size="icon"
             className="fixed left-4 top-4 z-50 lg:hidden"
+            aria-label={t("nav.openSidebar")}
           >
-            <Menu className="h-5 w-5" />
-            <span className="sr-only">Toggle menu</span>
+            <Menu className="h-5 w-5" aria-hidden="true" />
           </Button>
         </SheetTrigger>
         <SheetContent side="left" className="w-64 border-r bg-background p-0 shadow-none">
+          <SheetTitle className="sr-only">{t("nav.sidebarTitle")}</SheetTitle>
+          <SheetDescription className="sr-only">
+            {t("nav.sidebarDescription")}
+          </SheetDescription>
           <Sidebar onNavigate={() => setOpen(false)} disableLayoutAnimation />
         </SheetContent>
       </Sheet>

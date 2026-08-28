@@ -89,6 +89,7 @@ pub struct PlanWindowUsage {
     pub limit_nano_usd: String,
     pub used_nano_usd: String,
     pub remaining_nano_usd: String,
+    pub next_reset_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +132,12 @@ struct PlanLimits {
     twenty_four_hour: Option<i128>,
     seven_day: Option<i128>,
     thirty_day: Option<i128>,
+}
+
+#[derive(Debug, Default)]
+struct PlanUsageSnapshot {
+    sums: [i128; 4],
+    next_reset_at: [Option<DateTime<Utc>>; 4],
 }
 
 impl PlanLimits {
@@ -669,12 +676,12 @@ impl UserStore {
         row.as_ref().map(row_to_subscription).transpose()
     }
 
-    async fn usage_sums_on<C: ConnectionTrait>(
+    async fn usage_snapshot_on<C: ConnectionTrait>(
         &self,
         connection: &C,
         subscription: &SubscriptionSnapshot,
         now: DateTime<Utc>,
-    ) -> Result<[i128; 4], String> {
+    ) -> Result<PlanUsageSnapshot, String> {
         let oldest = now
             .checked_sub_signed(Duration::seconds(subscription.limits.max_window_seconds()))
             .ok_or_else(|| "plan window timestamp overflow".to_string())?;
@@ -689,7 +696,7 @@ impl UserStore {
             ))
             .await
             .map_err(|error| error.to_string())?;
-        let mut sums = [0_i128; 4];
+        let mut usage = PlanUsageSnapshot::default();
         for row in rows {
             let amount = parse_nano_usd(
                 &row.try_get::<String>("", "amount_nano_usd")
@@ -707,13 +714,20 @@ impl UserStore {
                             .checked_sub_signed(Duration::seconds(seconds))
                             .ok_or_else(|| "plan window timestamp overflow".to_string())?
                 {
-                    sums[index] = sums[index]
+                    usage.sums[index] = usage.sums[index]
                         .checked_add(amount)
                         .ok_or_else(|| "plan usage sum overflow".to_string())?;
+                    let reset_at = created_at
+                        .checked_add_signed(Duration::seconds(seconds))
+                        .ok_or_else(|| "plan window timestamp overflow".to_string())?;
+                    usage.next_reset_at[index] = Some(
+                        usage.next_reset_at[index]
+                            .map_or(reset_at, |current| current.min(reset_at)),
+                    );
                 }
             }
         }
-        Ok(sums)
+        Ok(usage)
     }
 
     fn remaining_capacity(
@@ -738,7 +752,11 @@ impl UserStore {
             .ok_or_else(|| "subscription has no configured limit".to_string())
     }
 
-    fn window_usage(limit: Option<i128>, used: i128) -> Result<Option<PlanWindowUsage>, String> {
+    fn window_usage(
+        limit: Option<i128>,
+        used: i128,
+        next_reset_at: Option<DateTime<Utc>>,
+    ) -> Result<Option<PlanWindowUsage>, String> {
         limit
             .map(|limit| {
                 let remaining = limit
@@ -749,6 +767,7 @@ impl UserStore {
                     limit_nano_usd: limit.to_string(),
                     used_nano_usd: used.to_string(),
                     remaining_nano_usd: remaining.to_string(),
+                    next_reset_at,
                 })
             })
             .transpose()
@@ -760,7 +779,9 @@ impl UserStore {
         subscription: SubscriptionSnapshot,
         now: DateTime<Utc>,
     ) -> Result<BillingPlanSubscription, String> {
-        let sums = self.usage_sums_on(connection, &subscription, now).await?;
+        let usage = self
+            .usage_snapshot_on(connection, &subscription, now)
+            .await?;
         Ok(BillingPlanSubscription {
             id: subscription.id,
             user_id: subscription.user_id,
@@ -774,13 +795,26 @@ impl UserStore {
             starts_at: subscription.starts_at,
             expires_at: subscription.expires_at,
             windows: BillingPlanUsageWindows {
-                five_hour: Self::window_usage(subscription.limits.five_hour, sums[0])?,
+                five_hour: Self::window_usage(
+                    subscription.limits.five_hour,
+                    usage.sums[0],
+                    usage.next_reset_at[0],
+                )?,
                 twenty_four_hour: Self::window_usage(
                     subscription.limits.twenty_four_hour,
-                    sums[1],
+                    usage.sums[1],
+                    usage.next_reset_at[1],
                 )?,
-                seven_day: Self::window_usage(subscription.limits.seven_day, sums[2])?,
-                thirty_day: Self::window_usage(subscription.limits.thirty_day, sums[3])?,
+                seven_day: Self::window_usage(
+                    subscription.limits.seven_day,
+                    usage.sums[2],
+                    usage.next_reset_at[2],
+                )?,
+                thirty_day: Self::window_usage(
+                    subscription.limits.thirty_day,
+                    usage.sums[3],
+                    usage.next_reset_at[3],
+                )?,
             },
         })
     }
@@ -970,8 +1004,8 @@ impl UserStore {
         {
             return Ok(false);
         }
-        let sums = self.usage_sums_on(&*read, &subscription, now).await?;
-        let remaining = Self::remaining_capacity(&subscription, sums)?;
+        let usage = self.usage_snapshot_on(&*read, &subscription, now).await?;
+        let remaining = Self::remaining_capacity(&subscription, usage.sums)?;
         let pending = subscription
             .multiplier
             .checked_scale_i128(pending_nano_usd.max(0))
@@ -1049,11 +1083,11 @@ impl UserStore {
             .ok_or_else(|| {
                 BillingError::new(BillingErrorKind::Overflow, "plan multiplier overflow")
             })?;
-        let sums = self
-            .usage_sums_on(tx, &subscription, now)
+        let usage = self
+            .usage_snapshot_on(tx, &subscription, now)
             .await
             .map_err(|error| BillingError::new(BillingErrorKind::Internal, error))?;
-        let remaining = Self::remaining_capacity(&subscription, sums)
+        let remaining = Self::remaining_capacity(&subscription, usage.sums)
             .map_err(|error| BillingError::new(BillingErrorKind::Internal, error))?;
         let covered = adjusted.min(remaining);
         let fallback = adjusted.checked_sub(covered).ok_or_else(|| {
@@ -1212,6 +1246,7 @@ mod tests {
             .unwrap();
         let write = store.db.write().await;
         let tx = write.begin().await.unwrap();
+        let now = Utc::now();
         let allocation = store
             .allocate_plan_charge_tx(
                 &tx,
@@ -1220,13 +1255,33 @@ mod tests {
                 Some(&group_id),
                 "request-1",
                 2400,
-                Utc::now(),
+                now,
             )
             .await
             .unwrap();
         assert_eq!(allocation.adjusted_charge_nano_usd, 1200);
         assert_eq!(allocation.plan_covered_nano_usd, 1000);
         assert_eq!(allocation.fallback_nano_usd, 200);
+        let snapshot = store
+            .active_subscription_on(&tx, &user.id, now, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let subscription = store
+            .subscription_response_on(&tx, snapshot, now)
+            .await
+            .unwrap();
+        let five_hour = subscription.windows.five_hour.unwrap();
+        assert_eq!(five_hour.used_nano_usd, "1000");
+        assert_eq!(
+            five_hour.next_reset_at,
+            now.checked_add_signed(Duration::seconds(FIVE_HOURS_SECONDS))
+        );
+        let twenty_four_hour = subscription.windows.twenty_four_hour.unwrap();
+        assert_eq!(
+            twenty_four_hour.next_reset_at,
+            now.checked_add_signed(Duration::seconds(TWENTY_FOUR_HOURS_SECONDS))
+        );
         tx.rollback().await.unwrap();
     }
 }

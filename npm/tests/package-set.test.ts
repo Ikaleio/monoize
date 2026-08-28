@@ -38,7 +38,7 @@ describe("partial npm package sets", () => {
       await runPackage([
         "stage-platform",
         "--tag",
-        "v1.7.0",
+        "v1.7.1",
         "--target",
         "x86_64-unknown-linux-musl",
         "--binary",
@@ -48,26 +48,26 @@ describe("partial npm package sets", () => {
       ]),
     ).toMatchObject({ exitCode: 0 });
     expect(
-      await runPackage(["stage-root", "--tag", "v1.7.0", "--output-dir", STAGE]),
+      await runPackage(["stage-root", "--tag", "v1.7.1", "--output-dir", STAGE]),
     ).toMatchObject({ exitCode: 0 });
     expect(
       await runPackage(["pack", "--packages-dir", STAGE, "--output-dir", DIST]),
     ).toMatchObject({ exitCode: 0 });
 
     expect(
-      await runPackage(["verify", "--tag", "v1.7.0", "--directory", DIST]),
+      await runPackage(["verify", "--tag", "v1.7.1", "--directory", DIST]),
     ).toMatchObject({ exitCode: 0 });
     expect((await readdir(DIST)).sort()).toEqual([
-      "monoize-1.7.0-linux-x64.tgz",
-      "monoize-1.7.0.tgz",
+      "monoize-1.7.1-linux-x64.tgz",
+      "monoize-1.7.1.tgz",
     ]);
 
-    const unknown = path.join(DIST, "monoize-1.7.0-unknown.tgz");
+    const unknown = path.join(DIST, "monoize-1.7.1-unknown.tgz");
     await Bun.write(unknown, "unknown\n");
     const unknownResult = await runPackage([
       "verify",
       "--tag",
-      "v1.7.0",
+      "v1.7.1",
       "--directory",
       DIST,
     ]);
@@ -75,11 +75,11 @@ describe("partial npm package sets", () => {
     expect(unknownResult.stderr).toContain("npm package set mismatch");
 
     await rm(unknown);
-    await rm(path.join(DIST, "monoize-1.7.0-linux-x64.tgz"));
+    await rm(path.join(DIST, "monoize-1.7.1-linux-x64.tgz"));
     const emptyResult = await runPackage([
       "verify",
       "--tag",
-      "v1.7.0",
+      "v1.7.1",
       "--directory",
       DIST,
     ]);

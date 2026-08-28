@@ -67,7 +67,10 @@
 		"groups": "分组",
 		"customTransforms": "自定义变换",
 		"collapseSidebar": "收起侧边栏",
-		"expandSidebar": "展开侧边栏"
+		"expandSidebar": "展开侧边栏",
+		"openSidebar": "打开导航",
+		"sidebarTitle": "导航",
+		"sidebarDescription": "仪表盘导航和账户操作。"
 	},
 	"roles": {
 		"super_admin": "超级管理员",
@@ -800,9 +803,17 @@
 	"userMenu": {
 		"balance": "余额",
 		"plan": "套餐",
-		"grant": "额度",
-		"nextReset": "下次重置",
-		"remainingOfGrant": "套餐额度剩余比例",
+		"usedOfLimit": "{{used}} / {{limit}}",
+		"windowUsageLabel": "{{window}}用量：{{usage}}",
+		"resetsAt": "{{time}} 重置",
+		"fullyAvailable": "额度已全部可用",
+		"planUsageError": "套餐用量暂时无法加载",
+		"windows": {
+			"fiveHour": "5 小时",
+			"twentyFourHour": "24 小时",
+			"sevenDay": "7 天",
+			"thirtyDay": "30 天"
+		},
 		"liveUsage": "最近 60 秒",
 		"rpm": "RPM",
 		"tpm": "TPM",
@@ -1130,6 +1141,8 @@
 		"balanceAfter": "变动后余额",
 		"kind": "类型",
 		"delta": "变动",
+		"statusCol": "状态",
+		"createdAt": "创建时间",
 		"page": "第 {{page}} / {{pages}} 页",
 		"previousPage": "上一页",
 		"nextPage": "下一页",

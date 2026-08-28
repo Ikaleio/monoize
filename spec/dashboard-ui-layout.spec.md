@@ -42,8 +42,9 @@ exactly these sections in order, separated by menu separators:
 
 1. identity header,
 2. prepaid-balance block,
-3. live-usage block,
-4. actions (settings, theme toggle, sign out).
+3. active-plan block when an active subscription exists,
+4. live-usage block,
+5. actions (settings, theme toggle, sign out).
 
 The dropdown MUST use the shared DropdownMenu (Radix) component so keyboard and
 dismissal contracts are unchanged, and lucide icons only (no emoji glyphs).
@@ -56,11 +57,29 @@ DL3d. The prepaid-balance block MUST be sourced from the session user object onl
 NOT call `GET /api/dashboard/billing-plans`. It MUST render:
 
 - a balance row: localized unlimited label when `balance_unlimited` is true, otherwise
-  `balance_usd` formatted as USD with 2 fractional digits via `formatUsdDecimal`;
-- no plan, grant, reset, or plan-progress rows. The Wallet page owns the separate plan-capacity view.
+  `balance_usd` formatted as USD with 2 fractional digits via `formatUsdDecimal`.
 
 While the session user object has not resolved, the block MUST render skeleton
 placeholders instead of empty rows.
+
+DL3d1. The active-plan block MUST load
+`GET /api/dashboard/billing-plan-subscription` through the
+`useBillingPlanSubscription` SWR hook. It MUST NOT load
+`GET /api/dashboard/billing-plans` or the plan marketplace. When the endpoint returns an
+active subscription, the block MUST show the plan name and one row for every configured
+sliding window in the order 5 hours, 24 hours, 7 days, and 30 days. Each row MUST show:
+
+- the localized window label;
+- `used_nano_usd / limit_nano_usd`, formatted as USD with 2 fractional digits;
+- a progress indicator whose value is `clamp(used / limit * 100, 0, 100)`;
+- the localized next-reset label and the locale-formatted `next_reset_at`, or a localized
+  fully-available label when `next_reset_at` is `null`.
+
+The block MUST be absent when the endpoint returns `null`. While no response is cached,
+it MUST render skeleton placeholders. When the fetch fails and no cached response exists,
+it MUST render a compact localized failure message and retry action. A failure MUST NOT
+unmount or break the other dropdown sections. The menu MUST render the plan block on both
+desktop and mobile.
 
 DL3e. The live-usage block MUST show the authenticated user's own rolling 60-second
 metrics fetched from `GET /api/dashboard/me/live-usage` through the `useLiveUsage` SWR
@@ -79,7 +98,9 @@ expansion.
 DL3g. The mobile sheet sidebar (DL4) MUST render the same account dropdown component,
 so DL3b through DL3f hold on both desktop and mobile.
 
-DL4. Mobile (`< lg`) MUST render sidebar via left sheet menu.
+DL4. Mobile (`< lg`) MUST render sidebar via left sheet menu. The menu trigger MUST expose
+a localized accessible name. The Sheet content MUST contain a localized accessible title
+and description even when both strings are visually hidden.
 
 DL5. Sidebar main navigation (always visible to authenticated users) MUST include exactly:
 

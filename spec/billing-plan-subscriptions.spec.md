@@ -35,6 +35,11 @@ BP-U4. At instant `T`, usage for a window of `W` seconds is the checked sum of
 BP-U5. Remaining capacity for a configured window is `max(limit - usage, 0)`. The plan's
 remaining capacity is the minimum remaining capacity across its configured windows.
 
+BP-U6. At instant `T`, `next_reset_at` for a configured window of `W` seconds is the
+minimum `created_at + W` among the usage rows counted by BP-U4. It is `null` when the
+window usage is zero. This timestamp identifies the next instant when current usage exits
+the sliding window; it does not define a fixed calendar reset.
+
 ## 2. Data model
 
 ### 2.1 `billing_plans`
@@ -159,8 +164,10 @@ BP-P1. Marketplace returns only plans where `listed = 1`. It returns every curre
 for those plans. It MUST NOT return an unlisted plan.
 
 BP-P2. The subscription endpoint returns `null` when no active subscription exists. When
-one exists, it returns the immutable snapshot, the four current window-usage sums, and the
-four remaining values.
+one exists, it returns the immutable snapshot and one object for each configured window.
+Each window object contains `limit_nano_usd`, `used_nano_usd`,
+`remaining_nano_usd`, and `next_reset_at`. Amounts are canonical nano-USD integer
+strings. `next_reset_at` is an RFC 3339 UTC timestamp or `null` as defined by BP-U6.
 
 BP-P3. Purchase MUST run in one transaction. It MUST lock the user row, re-read the listed
 plan and selected price, and reject a second active subscription with HTTP 409

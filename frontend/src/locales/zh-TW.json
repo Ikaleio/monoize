@@ -67,7 +67,10 @@
 		"groups": "群組",
 		"customTransforms": "自訂變換",
 		"collapseSidebar": "收合側邊欄",
-		"expandSidebar": "展開側邊欄"
+		"expandSidebar": "展開側邊欄",
+		"openSidebar": "開啟導覽",
+		"sidebarTitle": "導覽",
+		"sidebarDescription": "儀表板導覽和帳戶操作。"
 	},
 	"roles": {
 		"super_admin": "超級管理員",
@@ -797,9 +800,17 @@
 	"userMenu": {
 		"balance": "餘額",
 		"plan": "方案",
-		"grant": "額度",
-		"nextReset": "下次重置",
-		"remainingOfGrant": "方案額度剩餘比例",
+		"usedOfLimit": "{{used}} / {{limit}}",
+		"windowUsageLabel": "{{window}}用量：{{usage}}",
+		"resetsAt": "{{time}} 重置",
+		"fullyAvailable": "額度已全部可用",
+		"planUsageError": "方案用量暫時無法載入",
+		"windows": {
+			"fiveHour": "5 小時",
+			"twentyFourHour": "24 小時",
+			"sevenDay": "7 天",
+			"thirtyDay": "30 天"
+		},
 		"liveUsage": "最近 60 秒",
 		"rpm": "RPM",
 		"tpm": "TPM",
@@ -1127,6 +1138,8 @@
 		"balanceAfter": "異動後餘額",
 		"kind": "類型",
 		"delta": "異動",
+		"statusCol": "狀態",
+		"createdAt": "建立時間",
 		"page": "第 {{page}} / {{pages}} 頁",
 		"previousPage": "上一頁",
 		"nextPage": "下一頁",

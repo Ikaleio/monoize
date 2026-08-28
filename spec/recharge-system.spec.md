@@ -600,24 +600,29 @@ HTTP `404`, code `not_found`.
 ## 10. Wallet page (`/dashboard/wallet`)
 
 RC-W1. `/dashboard/wallet` is a main-navigation page for every authenticated
-user (RC-S2 amendment 1). It renders, top to bottom: a page heading, one wallet
-stage that contains the prepaid balance and recharge controls, a plan-capacity
-card, and one activity card. The activity card contains `orders` and `ledger`
-tabs. `orders` is selected on first render. The prepaid-balance and recharge
-regions are peer surfaces inside the wallet stage. The stage MUST NOT add a
-third bordered surface around those two regions.
+user (RC-S2 amendment 1). It renders, top to bottom: a page heading, one
+full-width balance band, one funding workspace, and one activity workspace.
+The funding workspace contains separate recharge and plan-capacity regions.
+The activity workspace contains `orders` and `ledger` tabs. `orders` is
+selected on first render. The page MUST NOT reuse the dashboard overview card
+grid or place any of these three regions inside an additional bordered stage.
 
 RC-W2. The balance region reads the session user object (`balance_usd`,
 `balance_unlimited`) exactly like `dashboard-ui-layout.spec.md` DL3a/US2,
 without extra fetches. It labels this value as prepaid balance. A balance value
 change replaces the old value with the new value in the same bounded region.
-The balance region MUST use the wallet ink surface and wallet foreground tokens
-in both light and dark themes.
+The balance band MUST use the wallet ink surface and wallet foreground tokens
+in both light and dark themes. The balance, currency label, unlimited status,
+recharge action, and prepaid-balance explanation MUST remain inside the same
+band. The recharge action MUST move focus to the recharge region without
+changing the URL.
 
 RC-W2a. The plan-capacity card MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price and allow purchase. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
 If either load fails, the card MUST render a localized compact error state with
 a retry action. The error state MUST NOT expose the raw error message. A failed
 revalidation that retains cached data MUST keep rendering the cached data.
+The purchase failure toast MUST use localized safe text and MUST NOT expose the
+raw server error message.
 
 RC-W3. The recharge card:
 
@@ -673,16 +678,18 @@ close/reopen: the pending-order poll that observes the terminal status MUST
 also revalidate the ledger cache and the session user cache.
 
 RC-W7. The wallet page MUST use mobile-first layout. The balance and recharge
-regions stack at widths below the `lg` breakpoint and render in two columns at
-or above `lg`. Below `lg`, each region's height MUST be determined by its
-content. At or above `lg`, the wallet-stage grid MUST stretch both regions to
-the height of their shared row. Order and ledger items MUST remain readable
-without horizontal page scrolling.
+regions MUST each span the available width below the `lg` breakpoint. At or
+above `lg`, the recharge region MUST occupy five of twelve funding-workspace
+columns and the plan-capacity region MUST occupy seven of twelve columns. Each
+region's height MUST be determined by its content; the grid MUST NOT stretch a
+shorter region to create empty space. Order and ledger items MUST use stacked
+mobile rows below `md` and aligned data columns at or above `md`. They MUST
+remain readable without horizontal page scrolling.
 
 RC-W8. Wallet page entry, balance replacement, amount selection, pay-preview
 replacement, plan-meter updates, activity-tab changes, and activity-item entry
 MUST use non-linear spring transitions. A tab change MUST move the entering
-content horizontally by at most 32 CSS pixels and MUST keep the activity card
+content horizontally by at most 32 CSS pixels and MUST keep the activity workspace
 in the document flow. If `prefers-reduced-motion: reduce` matches, these
 transitions MUST use no x-offset, y-offset, scale, or rotation animation.
 

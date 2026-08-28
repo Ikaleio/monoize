@@ -1,23 +1,26 @@
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Activity, Cog, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
+import { Activity, Cog, Gauge, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
-import { useLiveUsage } from "@/lib/swr";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
+import { useBillingPlanSubscription, useLiveUsage } from "@/lib/swr";
+import { formatNanoUsd, formatUsdDecimal, isSignedIntegerString } from "@/lib/exact-decimal";
 import { formatCacheHitRate } from "@/lib/live-usage";
 import { cn, getGravatarUrl } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { springs } from "@/components/ui/motion";
@@ -91,6 +94,169 @@ function LiveMetric({ label, value }: { label: string; value: string }) {
         {label}
       </span>
     </div>
+  );
+}
+
+const PLAN_WINDOWS = [
+  ["fiveHour", "five_hour"],
+  ["twentyFourHour", "twenty_four_hour"],
+  ["sevenDay", "seven_day"],
+  ["thirtyDay", "thirty_day"],
+] as const;
+
+function planUsagePercent(usedRaw: string, limitRaw: string): number {
+  if (!isSignedIntegerString(usedRaw) || !isSignedIntegerString(limitRaw)) return 0;
+  const used = BigInt(usedRaw);
+  const limit = BigInt(limitRaw);
+  if (limit <= 0n) return 0;
+  return Math.max(0, Math.min(100, Number((used * 10_000n) / limit) / 100));
+}
+
+function formatResetTime(value: string, locale: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function PlanUsageSection() {
+  const { t, i18n } = useTranslation();
+  const { data: subscription, error, mutate } = useBillingPlanSubscription();
+
+  if (error && subscription === undefined) {
+    return (
+      <>
+        <DropdownMenuSeparator />
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+          <span className="text-sm text-destructive">
+            {t("userMenu.planUsageError")}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 px-2"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void mutate();
+            }}
+          >
+            <RefreshCw data-icon="inline-start" />
+            {t("common.retry")}
+          </Button>
+        </div>
+      </>
+    );
+  }
+
+  if (subscription === undefined) {
+    return (
+      <>
+        <DropdownMenuSeparator />
+        <div className="flex flex-col gap-3 px-2 py-2" aria-busy="true">
+          <div className="flex items-center gap-2">
+            <Skeleton className="size-7 rounded-md" />
+            <div className="flex flex-1 flex-col gap-1.5">
+              <Skeleton className="h-3 w-14" />
+              <Skeleton className="h-4 w-28" />
+            </div>
+          </div>
+          {Array.from({ length: 2 }).map((_, index) => (
+            <div key={index} className="flex flex-col gap-1.5">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-1.5 w-full rounded-full" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+          ))}
+        </div>
+      </>
+    );
+  }
+
+  if (subscription === null) return null;
+
+  const windows = PLAN_WINDOWS.flatMap(([labelKey, windowKey]) => {
+    const window = subscription.windows[windowKey];
+    return window ? [{ labelKey, windowKey, window }] : [];
+  });
+
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <section
+        className="flex flex-col gap-3 px-2 py-2"
+        aria-labelledby="user-plan-heading"
+      >
+        <div className="flex min-w-0 items-start gap-2">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-primary">
+            <Gauge className="size-4" aria-hidden="true" />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="text-xs text-muted-foreground">
+              {t("userMenu.plan")}
+            </span>
+            <span
+              id="user-plan-heading"
+              className="truncate text-sm font-medium"
+              title={subscription.plan_name}
+            >
+              {subscription.plan_name}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {windows.map(({ labelKey, windowKey, window }) => {
+            const percent = planUsagePercent(
+              window.used_nano_usd,
+              window.limit_nano_usd,
+            );
+            const usageLabel = t("userMenu.usedOfLimit", {
+              used: formatNanoUsd(window.used_nano_usd, 2),
+              limit: formatNanoUsd(window.limit_nano_usd, 2),
+            });
+            return (
+              <div key={windowKey} className="flex flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-sm font-medium">
+                    {t(`userMenu.windows.${labelKey}`)}
+                  </span>
+                  <span
+                    className="min-w-0 truncate font-mono text-sm tabular-nums"
+                    title={usageLabel}
+                  >
+                    {usageLabel}
+                  </span>
+                </div>
+                <Progress
+                  value={percent}
+                  className="h-1.5"
+                  aria-label={t("userMenu.windowUsageLabel", {
+                    window: t(`userMenu.windows.${labelKey}`),
+                    usage: usageLabel,
+                  })}
+                />
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {window.next_reset_at
+                    ? t("userMenu.resetsAt", {
+                        time: formatResetTime(
+                          window.next_reset_at,
+                          i18n.resolvedLanguage ?? i18n.language,
+                        ),
+                      })
+                    : t("userMenu.fullyAvailable")}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -228,9 +394,12 @@ export function UserCenterMenu({
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-sm font-medium">{user?.username}</span>
-              <span className="shrink-0 rounded-md border px-1.5 text-[10px] leading-4 text-muted-foreground">
+              <Badge
+                variant="outline"
+                className="shrink-0 px-1.5 py-0 text-xs font-normal text-muted-foreground"
+              >
                 {roleLabel}
-              </span>
+              </Badge>
             </div>
             {user?.email && (
               <span className="truncate text-xs text-muted-foreground">{user.email}</span>
@@ -253,35 +422,40 @@ export function UserCenterMenu({
             </>
           )}
         </div>
+        <PlanUsageSection />
         <DropdownMenuSeparator />
         {/* Own last-60s usage (DL3e) */}
         <LiveUsageSection />
         <DropdownMenuSeparator />
         {/* Actions (DL3f) */}
-        <DropdownMenuItem
-          onClick={() => {
-            onNavigate?.();
-            navigate("/settings");
-          }}
-        >
-          <Cog className="mr-2 h-4 w-4" />
-          {t("userSettings.title")}
-        </DropdownMenuItem>
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            onClick={() => {
+              onNavigate?.();
+              navigate("/settings");
+            }}
+          >
+            <Cog className="mr-2 h-4 w-4" />
+            {t("userSettings.title")}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="p-0 font-normal">
           <ThemeToggle />
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onClick={() => {
-            onNavigate?.();
-            logout();
-          }}
-          className="text-destructive"
-        >
-          <LogOut className="mr-2 h-4 w-4" />
-          {t("auth.signOut")}
-        </DropdownMenuItem>
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            onClick={() => {
+              onNavigate?.();
+              logout();
+            }}
+            className="text-destructive"
+          >
+            <LogOut className="mr-2 h-4 w-4" />
+            {t("auth.signOut")}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
