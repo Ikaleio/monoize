@@ -1086,12 +1086,12 @@
 	"wallet": {
 		"title": "ウォレット",
 		"description": "残高、チャージ、ウォレット履歴",
-		"balanceTitle": "残高",
+		"balanceTitle": "前払い残高",
 		"unlimited": "無制限",
 		"currentPlan": "プラン",
 		"nextGrant": "次回付与",
 		"noPlan": "プラン未設定",
-		"prepaidBalanceHelp": "チャージ金額とプラン対象外のリクエスト料金は、この前払い残高を使用します。",
+		"prepaidBalanceHelp": "チャージ金額はここに入金されます。プラン対象外のリクエスト料金はこの残高から引かれます。",
 		"planTitle": "プラン上限",
 		"planExpires": "有効期限：{{time}}",
 		"noListedPlans": "購入できるプランはありません。",
@@ -1108,6 +1108,9 @@
 		"youPay": "支払額",
 		"rechargeSubmit": "支払いへ進む",
 		"redirecting": "リダイレクト中…",
+		"loadErrorTitle": "このセクションを読み込めません",
+		"loadErrorDescription": "再試行してください。ウォレットの他のセクションは利用できます。",
+		"retry": "再試行",
 		"activityTitle": "ウォレット履歴",
 		"activityDescription": "支払い注文とウォレット残高の変更を確認します。",
 		"ordersTab": "注文",
@@ -1149,6 +1152,7 @@
 			"api_key_charge": "API キー課金"
 		},
 		"errors": {
+			"request_failed": "リクエストに失敗しました。再試行してください。",
 			"not_found": "支払い方法が見つかりません",
 			"channel_disabled": "この支払い方法は無効です",
 			"recharge_origin_unset": "サーバーにチャージ用オリジンが設定されていません",

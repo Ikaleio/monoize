@@ -14,12 +14,12 @@ export function BalanceCard({ user }: { user: User }) {
 
   return (
     <section
-      className="flex min-h-80 flex-col justify-between gap-10 bg-wallet p-6 text-wallet-foreground sm:p-8 lg:min-h-full lg:p-10"
+      className="flex flex-col justify-between gap-8 rounded-lg bg-wallet p-5 text-wallet-foreground sm:p-6 lg:col-span-5"
       aria-labelledby="wallet-balance-title"
     >
       <header className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <span className="flex size-10 items-center justify-center rounded-full bg-wallet-foreground/10">
+          <span className="flex size-10 items-center justify-center rounded-lg bg-wallet-foreground/10">
             <WalletCards className="size-5" aria-hidden="true" />
           </span>
           <div className="flex flex-col gap-1">
@@ -39,8 +39,11 @@ export function BalanceCard({ user }: { user: User }) {
         ) : null}
       </header>
 
-      <div className="flex flex-col gap-4">
-        <div className="relative min-h-16 overflow-hidden" aria-live="polite">
+      <div className="flex flex-col gap-3">
+        <div
+          className="relative min-h-12 overflow-hidden sm:min-h-14"
+          aria-live="polite"
+        >
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.p
               key={balance}
@@ -52,7 +55,7 @@ export function BalanceCard({ user }: { user: User }) {
                 reduced ? { opacity: 0 } : { opacity: 0, y: -28, scale: 0.96 }
               }
               transition={reduced ? { duration: 0 } : springs.gentle}
-              className="font-display text-5xl font-semibold tracking-tight tabular-nums sm:text-6xl"
+              className="font-display text-3xl font-semibold tracking-tight tabular-nums sm:text-5xl"
             >
               {balance}
             </motion.p>

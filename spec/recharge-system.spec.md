@@ -603,7 +603,9 @@ RC-W1. `/dashboard/wallet` is a main-navigation page for every authenticated
 user (RC-S2 amendment 1). It renders, top to bottom: a page heading, one wallet
 stage that contains the prepaid balance and recharge controls, a plan-capacity
 card, and one activity card. The activity card contains `orders` and `ledger`
-tabs. `orders` is selected on first render.
+tabs. `orders` is selected on first render. The prepaid-balance and recharge
+regions are peer surfaces inside the wallet stage. The stage MUST NOT add a
+third bordered surface around those two regions.
 
 RC-W2. The balance region reads the session user object (`balance_usd`,
 `balance_unlimited`) exactly like `dashboard-ui-layout.spec.md` DL3a/US2,
@@ -613,16 +615,24 @@ The balance region MUST use the wallet ink surface and wallet foreground tokens
 in both light and dark themes.
 
 RC-W2a. The plan-capacity card MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price and allow purchase. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
+If either load fails, the card MUST render a localized compact error state with
+a retry action. The error state MUST NOT expose the raw error message. A failed
+revalidation that retains cached data MUST keep rendering the cached data.
 
 RC-W3. The recharge card:
 
 - loads channels from RC-A1 through an SWR hook and renders skeleton rows
   while loading (AGENTS.md §4);
+- when the channel load fails, renders a localized compact error state with a
+  retry action and no raw error message. A failed revalidation that retains
+  cached channel data MUST keep rendering the cached data;
 - when zero enabled channels exist, renders a localized empty state and no
   amount controls;
 - renders a channel selector, preset amount buttons for `5`, `10`, `25`, `50`,
   and `100` USD, and one custom-amount input. A preset outside the selected
-  channel's `[min_credit_usd, max_credit_usd]` MUST be disabled;
+  channel's `[min_credit_usd, max_credit_usd]` MUST be disabled. The channel
+  field and amount field stack below the `sm` breakpoint and render as two
+  columns at or above `sm`;
 - shows the computed `pay_amount` and `pay_currency` for the entered amount
   using RC-U6 with `BigInt`/exact-decimal arithmetic before submission;
 - on submit, POSTs RC-O2, optimistically inserts the returned `pending` order
@@ -639,6 +649,9 @@ tooltip). While any loaded own order has `status = pending`, the SWR hook MUST
 poll with `refreshInterval = 5000`; when none is pending, polling MUST stop. A
 `?order_id=` query parameter (RC-G2 return URL) highlights the matching item;
 state correctness MUST rely on polling, never on return-URL parameters.
+When the order load fails, the section MUST render a localized compact error
+state with a retry action and no raw error message. A failed revalidation that
+retains cached order data MUST keep rendering the cached data.
 
 RC-W5. The activity card's `ledger` tab lists the caller's RC-A5 entries. Each
 ledger item shows created time, kind (localized label), delta (`delta_usd`,
@@ -648,6 +661,9 @@ negative), and balance after. The default `kinds` filter sent by the page is exa
 (every non-per-request kind); a kind filter control MAY narrow it. Per-request
 charges (`request_charge`, `api_key_charge`) are intentionally excluded here —
 they remain on `/dashboard/logs` (§12).
+When the ledger load fails, the section MUST render a localized compact error
+state with a retry action and no raw error message. A failed revalidation that
+retains cached ledger data MUST keep rendering the cached data.
 
 RC-W6. Both activity tabs remain mounted after the page renders. They render
 skeleton rows while loading and load further pages with `limit`/`offset`
@@ -658,8 +674,10 @@ also revalidate the ledger cache and the session user cache.
 
 RC-W7. The wallet page MUST use mobile-first layout. The balance and recharge
 regions stack at widths below the `lg` breakpoint and render in two columns at
-or above `lg`. Order and ledger items MUST remain readable without horizontal
-page scrolling.
+or above `lg`. Below `lg`, each region's height MUST be determined by its
+content. At or above `lg`, the wallet-stage grid MUST stretch both regions to
+the height of their shared row. Order and ledger items MUST remain readable
+without horizontal page scrolling.
 
 RC-W8. Wallet page entry, balance replacement, amount selection, pay-preview
 replacement, plan-meter updates, activity-tab changes, and activity-item entry

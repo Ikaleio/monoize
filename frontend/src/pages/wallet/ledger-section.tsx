@@ -19,6 +19,7 @@ import { formatNanoUsd } from "@/lib/exact-decimal";
 import { WALLET_LEDGER_KINDS } from "@/lib/recharge";
 import { useLedger } from "@/lib/swr";
 import { cn } from "@/lib/utils";
+import { WalletSectionError } from "./section-error";
 
 const PAGE_SIZE = 10;
 const ALL_KINDS = [...WALLET_LEDGER_KINDS];
@@ -37,7 +38,12 @@ export function LedgerSection({
   const [offset, setOffset] = useState(0);
 
   const kinds = kind === "all" ? ALL_KINDS : [kind];
-  const { data, isLoading } = useLedger(PAGE_SIZE, offset, kinds, username);
+  const { data, error, isLoading, mutate } = useLedger(
+    PAGE_SIZE,
+    offset,
+    kinds,
+    username,
+  );
   const kindLabel = (value: string) =>
     t(`wallet.kinds.${value}`, { defaultValue: value });
 
@@ -58,7 +64,7 @@ export function LedgerSection({
           }}
         >
           <SelectTrigger
-            className="w-full sm:w-64"
+            className="h-11 w-full sm:h-9 sm:w-64"
             aria-label={t("wallet.kind")}
           >
             <SelectValue />
@@ -82,15 +88,18 @@ export function LedgerSection({
             <Skeleton key={index} className="h-20 w-full" />
           ))}
         </div>
+      ) : error && !data ? (
+        <WalletSectionError onRetry={mutate} />
       ) : !data || data.entries.length === 0 ? (
         <EmptyState
           variant="inline"
+          className="px-4 py-6"
           icon={<BookOpenText className="size-6" aria-hidden="true" />}
           title={t("wallet.noLedger")}
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          <motion.ul layout={!reduced} className="flex flex-col gap-1">
+        <div className="flex flex-col gap-2">
+          <motion.ul layout={!reduced} className="divide-y">
             {data.entries.map((entry, index) => {
               const positive = !entry.delta_nano_usd.startsWith("-");
               const EntryIcon = positive ? ArrowDownLeft : ArrowUpRight;
@@ -109,7 +118,7 @@ export function LedgerSection({
                           delay: Math.min(index * 0.035, 0.2),
                         }
                   }
-                  className="flex items-start justify-between gap-4 rounded-lg px-3 py-4 transition-colors hover:bg-muted/50 sm:px-4"
+                  className="flex items-start justify-between gap-4 px-1 py-3 transition-colors hover:bg-muted/50 sm:px-2 sm:py-4"
                 >
                   <div className="flex min-w-0 items-start gap-3">
                     <span

@@ -33,7 +33,7 @@ export function PaginationFooter({
             type="button"
             variant="outline"
             size="icon"
-            className="size-8"
+            className="size-11 sm:size-9"
             aria-label={t("wallet.previousPage")}
             disabled={offset === 0}
             onClick={() => onOffsetChange(Math.max(0, offset - pageSize))}
@@ -46,7 +46,7 @@ export function PaginationFooter({
             type="button"
             variant="outline"
             size="icon"
-            className="size-8"
+            className="size-11 sm:size-9"
             aria-label={t("wallet.nextPage")}
             disabled={page >= pages}
             onClick={() => onOffsetChange(offset + pageSize)}

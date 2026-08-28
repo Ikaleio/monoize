@@ -22,15 +22,16 @@ import {
   useBillingPlanSubscription,
 } from "@/lib/swr";
 import type { BillingPlanWindowUsage } from "@/lib/api";
+import { WalletSectionError } from "./section-error";
 
 function PlanCardSkeleton() {
   return (
     <Card aria-busy="true">
-      <CardHeader>
+      <CardHeader className="p-5 pb-4">
         <Skeleton className="h-6 w-40" />
         <Skeleton className="h-4 w-64 max-w-full" />
       </CardHeader>
-      <CardContent className="grid gap-5 sm:grid-cols-2">
+      <CardContent className="grid gap-4 p-5 pt-0 sm:grid-cols-2">
         {Array.from({ length: 4 }).map((_, index) => (
           <div key={index} className="flex flex-col gap-2">
             <Skeleton className="h-4 w-28" />
@@ -87,21 +88,31 @@ function WindowRow({
 
 export function PlanCard() {
   const { t } = useTranslation();
-  const { data: subscription, isLoading } = useBillingPlanSubscription();
-  const { data: plans = [], isLoading: plansLoading } =
-    useBillingPlanMarketplace();
+  const {
+    data: subscription,
+    error: subscriptionError,
+    isLoading,
+    mutate: mutateSubscription,
+  } = useBillingPlanSubscription();
+  const {
+    data: plans,
+    error: plansError,
+    isLoading: plansLoading,
+    mutate: mutatePlans,
+  } = useBillingPlanMarketplace();
   const [purchasing, setPurchasing] = useState<string | null>(null);
+  const listedPlans = plans ?? [];
 
   if (isLoading || plansLoading) return <PlanCardSkeleton />;
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-foreground">
+      <CardHeader className="flex flex-row items-start gap-3 p-5 pb-4">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
           <Gauge className="size-5" aria-hidden="true" />
         </span>
         <div className="flex min-w-0 flex-col gap-1.5">
-          <CardTitle className="text-balance font-display text-xl">
+          <CardTitle className="text-balance font-display text-lg">
             {t("wallet.planTitle")}
           </CardTitle>
           <CardDescription className="text-pretty">
@@ -109,10 +120,15 @@ export function PlanCard() {
           </CardDescription>
         </div>
       </CardHeader>
-      <CardContent>
-        {subscription ? (
-          <div className="flex flex-col gap-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+      <CardContent className="p-5 pt-0">
+        {(subscriptionError && subscription === undefined) ||
+        (plansError && plans === undefined) ? (
+          <WalletSectionError
+            onRetry={() => Promise.all([mutateSubscription(), mutatePlans()])}
+          />
+        ) : subscription ? (
+          <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex flex-col gap-1">
                 <span className="text-sm text-muted-foreground">
                   {t("wallet.currentPlan")}
@@ -131,7 +147,7 @@ export function PlanCard() {
               </div>
             </div>
 
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               {subscription.windows.five_hour ? (
                 <WindowRow label="5h" window={subscription.windows.five_hour} />
               ) : null}
@@ -152,13 +168,13 @@ export function PlanCard() {
               ) : null}
             </div>
           </div>
-        ) : plans.length === 0 ? (
+        ) : listedPlans.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {t("wallet.noListedPlans")}
           </p>
         ) : (
-          <div className="flex flex-col gap-5">
-            {plans.map((plan, index) => (
+          <div className="flex flex-col gap-4">
+            {listedPlans.map((plan, index) => (
               <Fragment key={plan.id}>
                 {index > 0 ? <Separator /> : null}
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -174,6 +190,7 @@ export function PlanCard() {
                         <Button
                           size="sm"
                           variant="outline"
+                          className="h-11 sm:h-8"
                           disabled={purchasing !== null}
                           onClick={async () => {
                             setPurchasing(price.id);

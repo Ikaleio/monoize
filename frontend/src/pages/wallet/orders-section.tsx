@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { revalidateRechargeCaches, useRechargeOrders } from "@/lib/swr";
 import type { RechargeOrdersResponse } from "@/lib/api";
 import { PaginationFooter } from "./pagination-footer";
+import { WalletSectionError } from "./section-error";
 
 interface OrdersSectionProps {
   active: boolean;
@@ -42,7 +43,7 @@ export function OrdersSection({
   const [searchParams] = useSearchParams();
   const highlightedOrderId = searchParams.get("order_id");
 
-  const { data, isLoading } = useRechargeOrders(
+  const { data, error, isLoading, mutate } = useRechargeOrders(
     pageSize,
     offset,
     { username },
@@ -87,15 +88,18 @@ export function OrdersSection({
             <Skeleton key={index} className="h-24 w-full" />
           ))}
         </div>
+      ) : error && !data ? (
+        <WalletSectionError onRetry={mutate} />
       ) : !data || data.orders.length === 0 ? (
         <EmptyState
           variant="inline"
+          className="px-4 py-6"
           icon={<ReceiptText className="size-6" aria-hidden="true" />}
           title={t("wallet.noOrders")}
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          <motion.ul layout={!reduced} className="flex flex-col gap-1">
+        <div className="flex flex-col gap-2">
+          <motion.ul layout={!reduced} className="divide-y">
             {data.orders.map((order, index) => (
               <motion.li
                 key={order.id}
@@ -108,7 +112,7 @@ export function OrdersSection({
                     : { ...springs.gentle, delay: Math.min(index * 0.035, 0.2) }
                 }
                 className={cn(
-                  "flex flex-col gap-3 rounded-lg px-3 py-4 transition-colors hover:bg-muted/50 sm:px-4",
+                  "flex flex-col gap-3 px-1 py-3 transition-colors hover:bg-muted/50 sm:px-2 sm:py-4",
                   order.id === highlightedOrderId && "bg-info-soft",
                 )}
               >
@@ -144,7 +148,7 @@ export function OrdersSection({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="font-mono underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="inline-flex min-h-11 items-center font-mono underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-0"
                         >
                           {order.id.slice(0, 8)}
                         </button>

@@ -1089,12 +1089,12 @@
 	"wallet": {
 		"title": "钱包",
 		"description": "余额、充值与钱包账单",
-		"balanceTitle": "余额",
+		"balanceTitle": "预付余额",
 		"unlimited": "不限额",
 		"currentPlan": "套餐",
 		"nextGrant": "下次发放",
 		"noPlan": "未绑定套餐",
-		"prepaidBalanceHelp": "充值金额和套餐未覆盖的请求费用使用此预付余额。",
+		"prepaidBalanceHelp": "充值金额会存入此处。套餐未覆盖的请求费用会从此余额扣除。",
 		"planTitle": "套餐额度",
 		"planExpires": "到期时间：{{time}}",
 		"noListedPlans": "暂无可购买套餐。",
@@ -1111,6 +1111,9 @@
 		"youPay": "应付",
 		"rechargeSubmit": "前往支付",
 		"redirecting": "正在跳转…",
+		"loadErrorTitle": "此区域加载失败",
+		"loadErrorDescription": "请重试。钱包的其他区域仍可使用。",
+		"retry": "重试",
 		"activityTitle": "资金动态",
 		"activityDescription": "查看支付订单和每笔钱包余额变动。",
 		"ordersTab": "订单",
@@ -1152,6 +1155,7 @@
 			"api_key_charge": "密钥扣费"
 		},
 		"errors": {
+			"request_failed": "请求失败，请重试。",
 			"not_found": "支付方式不存在",
 			"channel_disabled": "该支付方式已停用",
 			"recharge_origin_unset": "服务器未配置充值回调地址",

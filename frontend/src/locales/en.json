@@ -1089,12 +1089,12 @@
 	"wallet": {
 		"title": "Wallet",
 		"description": "Balance, recharge, and wallet activity",
-		"balanceTitle": "Balance",
+		"balanceTitle": "Prepaid balance",
 		"unlimited": "Unlimited",
 		"currentPlan": "Plan",
 		"nextGrant": "Next grant",
 		"noPlan": "No billing plan",
-		"prepaidBalanceHelp": "Recharge and request fallback charges use this prepaid balance.",
+		"prepaidBalanceHelp": "Recharge funds are added here. Charges not covered by a plan use this balance.",
 		"planTitle": "Plan capacity",
 		"planExpires": "Expires {{time}}",
 		"noListedPlans": "No plans are available for purchase.",
@@ -1111,6 +1111,9 @@
 		"youPay": "You pay",
 		"rechargeSubmit": "Continue to payment",
 		"redirecting": "Redirecting…",
+		"loadErrorTitle": "This section could not load",
+		"loadErrorDescription": "Try again. The other wallet sections remain available.",
+		"retry": "Try again",
 		"activityTitle": "Activity",
 		"activityDescription": "Track payments and every wallet balance change.",
 		"ordersTab": "Orders",
@@ -1152,6 +1155,7 @@
 			"api_key_charge": "API key charge"
 		},
 		"errors": {
+			"request_failed": "The request failed. Try again.",
 			"not_found": "Payment method not found",
 			"channel_disabled": "This payment method is disabled",
 			"recharge_origin_unset": "Recharge is not configured on this server",

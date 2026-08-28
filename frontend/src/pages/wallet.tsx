@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { PageWrapper, StaggerItem, StaggerList } from "@/components/ui/motion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { rechargeOrdersSWRKey } from "@/lib/swr";
@@ -39,27 +40,27 @@ function ActivityCard({
 
   return (
     <Card>
-      <CardHeader className="flex flex-col gap-4 pb-2 sm:flex-row sm:items-center sm:justify-between">
+      <CardHeader className="flex flex-col gap-4 p-5 pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 flex-col gap-1.5">
-          <CardTitle className="text-balance font-display text-2xl">
+          <CardTitle className="text-balance font-display text-lg">
             {t("wallet.activityTitle")}
           </CardTitle>
           <CardDescription className="text-pretty">
             {t("wallet.activityDescription")}
           </CardDescription>
         </div>
-        <TabsList className="grid w-full grid-cols-2 sm:w-auto">
-          <TabsTrigger value="orders" className="gap-2">
+        <TabsList className="grid h-12 w-full grid-cols-2 sm:h-9 sm:w-auto">
+          <TabsTrigger value="orders" className="h-10 gap-2 sm:h-7">
             <ReceiptText aria-hidden="true" />
             {t("wallet.ordersTab")}
           </TabsTrigger>
-          <TabsTrigger value="ledger" className="gap-2">
+          <TabsTrigger value="ledger" className="h-10 gap-2 sm:h-7">
             <BookOpenText aria-hidden="true" />
             {t("wallet.ledgerTab")}
           </TabsTrigger>
         </TabsList>
       </CardHeader>
-      <CardContent>
+      <CardContent className="p-5 pt-2">
         <TabsContent
           forceMount
           value="orders"
@@ -95,28 +96,25 @@ export function WalletPage() {
   if (!user) return null;
 
   return (
-    <PageWrapper className="flex flex-col gap-8 pb-10">
-      <header className="flex min-w-0 flex-col gap-2">
-        <h1 className="text-balance font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-          {t("wallet.title")}
-        </h1>
-        <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
-          {t("wallet.description")}
-        </p>
-      </header>
+    <PageWrapper className="flex flex-col gap-6 pb-8">
+      <PageHeader
+        title={t("wallet.title")}
+        description={t("wallet.description")}
+      />
 
-      <StaggerList className="flex flex-col gap-6">
+      <StaggerList className="flex flex-col gap-5">
         <StaggerItem>
-          <Card className="overflow-hidden">
-            <CardContent className="grid p-0 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <BalanceCard user={user} />
-              <RechargeCard
-                ordersFirstPageKey={rechargeOrdersSWRKey(ORDERS_PAGE_SIZE, 0, {
-                  username: user.username,
-                })}
-              />
-            </CardContent>
-          </Card>
+          <section
+            aria-label={t("wallet.title")}
+            className="grid items-stretch gap-4 lg:grid-cols-12"
+          >
+            <BalanceCard user={user} />
+            <RechargeCard
+              ordersFirstPageKey={rechargeOrdersSWRKey(ORDERS_PAGE_SIZE, 0, {
+                username: user.username,
+              })}
+            />
+          </section>
         </StaggerItem>
 
         <StaggerItem>

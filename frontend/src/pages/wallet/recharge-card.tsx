@@ -4,6 +4,13 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, CircleDollarSign, LoaderCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   Field,
@@ -26,6 +33,7 @@ import { AnimatedButton, springs } from "@/components/ui/motion";
 import { DashboardApiError } from "@/lib/api";
 import { parseUsdToNano, previewPayAmount } from "@/lib/recharge";
 import { createRechargeOrderOptimistic, useRechargeChannels } from "@/lib/swr";
+import { WalletSectionError } from "./section-error";
 
 const PRESET_AMOUNTS = ["5", "10", "25", "50", "100"];
 
@@ -36,10 +44,7 @@ interface RechargeCardProps {
 
 function RechargeSkeleton() {
   return (
-    <div
-      className="flex flex-col gap-5"
-      aria-busy="true"
-    >
+    <div className="flex flex-col gap-5" aria-busy="true">
       <div className="flex flex-col gap-2">
         <Skeleton className="h-4 w-24" />
         <Skeleton className="h-9 w-full" />
@@ -58,7 +63,12 @@ function RechargeSkeleton() {
 export function RechargeCard({ ordersFirstPageKey }: RechargeCardProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
-  const { data: channels, isLoading } = useRechargeChannels();
+  const {
+    data: channels,
+    error,
+    isLoading,
+    mutate,
+  } = useRechargeChannels();
   const [channelId, setChannelId] = useState<string | null>(null);
   const [amount, setAmount] = useState("10");
   const [submitting, setSubmitting] = useState(false);
@@ -111,184 +121,196 @@ export function RechargeCard({ ordersFirstPageKey }: RechargeCardProps) {
       setSubmitting(false);
       const message =
         error instanceof DashboardApiError
-          ? t(`wallet.errors.${error.code}`, { defaultValue: error.message })
-          : error instanceof Error
-            ? error.message
-            : t("common.error");
+          ? t(`wallet.errors.${error.code}`, {
+              defaultValue: t("wallet.errors.request_failed"),
+            })
+          : t("wallet.errors.request_failed");
       toast.error(message);
     }
   };
 
   return (
-    <section
-      className="flex flex-col gap-6 p-6 sm:p-8 lg:p-10"
+    <Card
+      role="region"
+      className="lg:col-span-7"
       aria-labelledby="wallet-recharge-title"
     >
-      <header className="flex items-center gap-3">
-        <span className="flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
+      <CardHeader className="flex flex-row items-start gap-3 p-5 pb-0 sm:p-6 sm:pb-0">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <CircleDollarSign className="size-5" aria-hidden="true" />
         </span>
-        <div className="flex flex-col gap-1">
-          <h2
+        <div className="flex min-w-0 flex-col gap-1">
+          <CardTitle
             id="wallet-recharge-title"
-            className="font-display text-xl font-semibold tracking-tight"
+            className="text-balance font-display text-lg"
           >
             {t("wallet.rechargeTitle")}
-          </h2>
-          <p className="text-sm text-muted-foreground">
+          </CardTitle>
+          <CardDescription className="text-pretty">
             {t("wallet.rechargeDescription")}
-          </p>
+          </CardDescription>
         </div>
-      </header>
+      </CardHeader>
 
-      {isLoading ? (
-        <RechargeSkeleton />
-      ) : !channels || channels.length === 0 ? (
-        <EmptyState
-          variant="inline"
-          icon={<CircleDollarSign className="size-6" aria-hidden="true" />}
-          title={t("wallet.noChannelsTitle")}
-          description={t("wallet.noChannelsDescription")}
-        />
-      ) : (
-        <motion.div
-          initial={reduced ? { opacity: 0 } : { opacity: 0, x: 24 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={reduced ? { duration: 0 } : springs.gentle}
-          className="flex flex-1 flex-col gap-6"
-        >
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="recharge-channel">
-                {t("wallet.channel")}
-              </FieldLabel>
-              <Select
-                value={channel?.id ?? ""}
-                onValueChange={(value) => setChannelId(value)}
-              >
-                <SelectTrigger id="recharge-channel">
-                  <SelectValue placeholder={t("wallet.channelPlaceholder")} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {channels.map((candidate) => (
-                      <SelectItem key={candidate.id} value={candidate.id}>
-                        {candidate.name}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
+      <CardContent className="p-5 pt-5 sm:p-6 sm:pt-5">
+        {isLoading ? (
+          <RechargeSkeleton />
+        ) : error && channels === undefined ? (
+          <WalletSectionError onRetry={mutate} />
+        ) : !channels || channels.length === 0 ? (
+          <EmptyState
+            variant="inline"
+            className="px-4 py-6"
+            icon={<CircleDollarSign className="size-6" aria-hidden="true" />}
+            title={t("wallet.noChannelsTitle")}
+            description={t("wallet.noChannelsDescription")}
+          />
+        ) : (
+          <motion.div
+            initial={reduced ? { opacity: 0 } : { opacity: 0, x: 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={reduced ? { duration: 0 } : springs.gentle}
+            className="flex flex-col gap-5"
+          >
+            <FieldGroup className="grid gap-5 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              <Field>
+                <FieldLabel htmlFor="recharge-channel">
+                  {t("wallet.channel")}
+                </FieldLabel>
+                <Select
+                  value={channel?.id ?? ""}
+                  onValueChange={(value) => setChannelId(value)}
+                >
+                  <SelectTrigger id="recharge-channel" className="h-11 sm:h-9">
+                    <SelectValue placeholder={t("wallet.channelPlaceholder")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {channels.map((candidate) => (
+                        <SelectItem key={candidate.id} value={candidate.id}>
+                          {candidate.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
 
-            <Field data-invalid={amount !== "" && !inRange ? true : undefined}>
-              <FieldLabel htmlFor="recharge-amount">
-                {t("wallet.amountUsd")}
-              </FieldLabel>
-              <ToggleGroup
-                type="single"
-                value={selectedPreset}
-                onValueChange={(value) => {
-                  if (value) setAmount(value);
-                }}
-                variant="outline"
-                size="sm"
-                className="grid grid-cols-5"
-                aria-label={t("wallet.amountUsd")}
-              >
-                {PRESET_AMOUNTS.map((preset) => (
-                  <ToggleGroupItem
-                    key={preset}
-                    value={preset}
-                    disabled={presetDisabled(preset)}
-                    className="relative isolate w-full overflow-hidden px-1 tabular-nums data-[state=on]:bg-transparent"
-                  >
-                    {selectedPreset === preset ? (
-                      <motion.span
-                        layoutId={reduced ? undefined : "wallet-amount-selection"}
-                        transition={reduced ? { duration: 0 } : springs.snappy}
-                        className="absolute inset-0 -z-10 rounded-md bg-accent"
-                      />
-                    ) : null}
-                    <span>${preset}</span>
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-              <Input
-                id="recharge-amount"
-                inputMode="decimal"
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-                placeholder={t("wallet.customAmount")}
-                aria-invalid={amount !== "" && !inRange}
-              />
-              {channel ? (
-                <FieldDescription>
-                  {t("wallet.amountRange", {
-                    min: channel.min_credit_usd,
-                    max: channel.max_credit_usd,
-                  })}
-                </FieldDescription>
-              ) : null}
-            </Field>
-          </FieldGroup>
+              <Field data-invalid={amount !== "" && !inRange ? true : undefined}>
+                <FieldLabel htmlFor="recharge-amount">
+                  {t("wallet.amountUsd")}
+                </FieldLabel>
+                <ToggleGroup
+                  type="single"
+                  value={selectedPreset}
+                  onValueChange={(value) => {
+                    if (value) setAmount(value);
+                  }}
+                  variant="outline"
+                  size="default"
+                  className="grid grid-cols-5"
+                  aria-label={t("wallet.amountUsd")}
+                >
+                  {PRESET_AMOUNTS.map((preset) => (
+                    <ToggleGroupItem
+                      key={preset}
+                      value={preset}
+                      disabled={presetDisabled(preset)}
+                      className="relative isolate h-11 w-full overflow-hidden px-1 tabular-nums data-[state=on]:bg-transparent sm:h-10"
+                    >
+                      {selectedPreset === preset ? (
+                        <motion.span
+                          layoutId={
+                            reduced ? undefined : "wallet-amount-selection"
+                          }
+                          transition={reduced ? { duration: 0 } : springs.snappy}
+                          className="absolute inset-0 -z-10 rounded-md bg-accent"
+                        />
+                      ) : null}
+                      <span>${preset}</span>
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+                <Input
+                  id="recharge-amount"
+                  className="h-11 sm:h-9"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                  placeholder={t("wallet.customAmount")}
+                  aria-invalid={amount !== "" && !inRange}
+                />
+                {channel ? (
+                  <FieldDescription>
+                    {t("wallet.amountRange", {
+                      min: channel.min_credit_usd,
+                      max: channel.max_credit_usd,
+                    })}
+                  </FieldDescription>
+                ) : null}
+              </Field>
+            </FieldGroup>
 
-          <motion.div layout={!reduced} className="flex flex-col gap-4">
-            <div className="flex min-h-20 items-center justify-between gap-4 rounded-lg bg-muted p-4">
-              <span className="text-sm text-muted-foreground">
-                {t("wallet.youPay")}
-              </span>
-              <div className="relative flex min-h-8 min-w-0 flex-1 justify-end overflow-hidden">
-                <AnimatePresence mode="popLayout" initial={false}>
-                  <motion.span
-                    key={preview ? `${preview}-${channel.currency}` : "empty"}
-                    initial={
-                      reduced
-                        ? { opacity: 0 }
-                        : { opacity: 0, y: 18, scale: 0.96 }
-                    }
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={
-                      reduced
-                        ? { opacity: 0 }
-                        : { opacity: 0, y: -18, scale: 0.96 }
-                    }
-                    transition={reduced ? { duration: 0 } : springs.snappy}
-                    className="truncate font-display text-xl font-semibold tabular-nums"
-                  >
-                    {preview ? `${preview} ${channel.currency}` : "—"}
-                  </motion.span>
-                </AnimatePresence>
+            <motion.div
+              layout={!reduced}
+              className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+            >
+              <div className="flex min-h-14 items-center justify-between gap-4 rounded-lg bg-muted px-4 py-3">
+                <span className="text-sm text-muted-foreground">
+                  {t("wallet.youPay")}
+                </span>
+                <div className="relative flex min-h-8 min-w-0 flex-1 justify-end overflow-hidden">
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.span
+                      key={preview ? `${preview}-${channel.currency}` : "empty"}
+                      initial={
+                        reduced
+                          ? { opacity: 0 }
+                          : { opacity: 0, y: 18, scale: 0.96 }
+                      }
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={
+                        reduced
+                          ? { opacity: 0 }
+                          : { opacity: 0, y: -18, scale: 0.96 }
+                      }
+                      transition={reduced ? { duration: 0 } : springs.snappy}
+                      className="truncate font-display text-xl font-semibold tabular-nums"
+                    >
+                      {preview ? `${preview} ${channel.currency}` : "—"}
+                    </motion.span>
+                  </AnimatePresence>
+                </div>
               </div>
-            </div>
 
-            <AnimatedButton className="w-full">
-              <Button
-                type="button"
-                variant="primary"
-                size="lg"
-                className="w-full"
-                disabled={!channel || !inRange || submitting}
-                onClick={handleSubmit}
-              >
-                {submitting ? (
-                  <LoaderCircle
-                    data-icon="inline-start"
-                    className="animate-spin"
-                    aria-hidden="true"
-                  />
-                ) : null}
-                {submitting
-                  ? t("wallet.redirecting")
-                  : t("wallet.rechargeSubmit")}
-                {!submitting ? (
-                  <ArrowRight data-icon="inline-end" aria-hidden="true" />
-                ) : null}
-              </Button>
-            </AnimatedButton>
+              <AnimatedButton className="w-full sm:w-auto">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="lg"
+                  className="h-12 w-full sm:h-14 sm:w-auto"
+                  disabled={!channel || !inRange || submitting}
+                  onClick={handleSubmit}
+                >
+                  {submitting ? (
+                    <LoaderCircle
+                      data-icon="inline-start"
+                      className="animate-spin"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  {submitting
+                    ? t("wallet.redirecting")
+                    : t("wallet.rechargeSubmit")}
+                  {!submitting ? (
+                    <ArrowRight data-icon="inline-end" aria-hidden="true" />
+                  ) : null}
+                </Button>
+              </AnimatedButton>
+            </motion.div>
           </motion.div>
-        </motion.div>
-      )}
-    </section>
+        )}
+      </CardContent>
+    </Card>
   );
 }
