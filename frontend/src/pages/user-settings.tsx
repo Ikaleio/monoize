@@ -186,54 +186,12 @@ export function UserSettingsPage() {
                       : formatUsdDecimal(user?.balance_usd, 2)}
                   </p>
                 </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">{t("userSettings.plan")}</p>
-                  <p className="text-xl font-semibold">
-                    {user?.billing_plan
-                      ? user.billing_plan.name
-                      : t("userSettings.noPlan")}
-                  </p>
-                  {user?.billing_plan && !user.billing_plan.enabled && (
-                    <p className="text-xs text-muted-foreground">{t("common.disabled")}</p>
-                  )}
-                </div>
               </div>
               {user?.group_id && (
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">{t("users.group")}</p>
                   <GroupsBadge groupIds={[user.group_id]} />
                 </div>
-              )}
-              {user?.billing_plan && (
-                <>
-                  <Separator />
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-1">
-                      <p className="text-sm text-muted-foreground">{t("userSettings.grantAmount")}</p>
-                      <p className="font-medium tabular-nums">
-                        {formatUsdDecimal(user.billing_plan.grant_amount_usd, 2)}
-                        {" / "}
-                        <span className="font-mono">{user.billing_plan.schedule}</span>
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-sm text-muted-foreground">{t("userSettings.nextGrant")}</p>
-                      <p className="font-medium">
-                        {user.next_grant_at
-                          ? new Date(user.next_grant_at).toLocaleString()
-                          : t("common.never")}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-sm text-muted-foreground">{t("billingPlans.groups")}</p>
-                    {user.billing_plan.group_ids.length > 0 ? (
-                      <GroupsBadge groupIds={user.billing_plan.group_ids} />
-                    ) : (
-                      <p className="text-sm">{t("userSettings.unrestrictedGroups")}</p>
-                    )}
-                  </div>
-                </>
               )}
             </CardContent>
           </Card>

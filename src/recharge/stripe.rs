@@ -45,8 +45,8 @@ fn minor_units_from_pay_amount(pay_amount: &str) -> String {
 }
 
 fn compute_signature(secret: &str, timestamp: &str, raw_body: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts keys of any length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any length");
     mac.update(timestamp.as_bytes());
     mac.update(b".");
     mac.update(raw_body);
@@ -64,7 +64,11 @@ impl PaymentAdapter for StripeAdapter {
         if !valid {
             return Err("stripe currency must be a 3-letter uppercase ISO 4217 code".to_string());
         }
-        Ok(if ZERO_DECIMAL.contains(&currency) { 0 } else { 2 })
+        Ok(if ZERO_DECIMAL.contains(&currency) {
+            0
+        } else {
+            2
+        })
     }
 
     fn secret_fields(&self) -> &'static [&'static str] {
@@ -202,10 +206,7 @@ impl PaymentAdapter for StripeAdapter {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let provider_order_id = object
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let provider_order_id = object.get("id").and_then(Value::as_str).map(str::to_string);
 
         // RC-T3 event mapping; everything else is acknowledged and ignored.
         let verified = match event_type {

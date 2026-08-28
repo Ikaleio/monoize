@@ -83,7 +83,7 @@ async fn ingest_applies_balance_delta_idempotently() {
     };
 
     // T2 first delivery: one ledger row, balance reduced.
-    let ack1 = apply_metering_batch(&state.db_pool, &batch)
+    let ack1 = apply_metering_batch(&state.db_pool, &state.user_store, &batch)
         .await
         .expect("apply");
     assert_eq!(ack1.applied_balance_deltas, 1);
@@ -96,7 +96,7 @@ async fn ingest_applies_balance_delta_idempotently() {
     assert_eq!(balance.balance_nano_usd, 4_000_000_000);
 
     // I6 replay: nothing changes, counts report zero new applies.
-    let ack2 = apply_metering_batch(&state.db_pool, &batch)
+    let ack2 = apply_metering_batch(&state.db_pool, &state.user_store, &batch)
         .await
         .expect("replay");
     assert_eq!(ack2.applied_balance_deltas, 0);
@@ -146,7 +146,7 @@ async fn ingest_allows_negative_result_and_counts_unlimited_as_applied_without_u
         last_used: vec![],
         balance_deltas: vec![delta("request_charge", &limited.id, None, 100)],
     };
-    let ack = apply_metering_batch(&state.db_pool, &batch)
+    let ack = apply_metering_batch(&state.db_pool, &state.user_store, &batch)
         .await
         .expect("apply");
     assert_eq!(ack.applied_balance_deltas, 1);
@@ -165,7 +165,7 @@ async fn ingest_allows_negative_result_and_counts_unlimited_as_applied_without_u
         last_used: vec![],
         balance_deltas: vec![delta("request_charge", &unlimited.id, None, 77)],
     };
-    let ack_u = apply_metering_batch(&state.db_pool, &batch_u)
+    let ack_u = apply_metering_batch(&state.db_pool, &state.user_store, &batch_u)
         .await
         .expect("apply u");
     assert_eq!(ack_u.applied_balance_deltas, 1);
@@ -306,7 +306,7 @@ async fn promotion_drain_applies_leftover_deltas_locally() {
         .expect("enqueue leftover");
     assert_eq!(spool.pending_files(), 1);
 
-    drain_delta_spool_to_local_db(&state.db_pool, &spool)
+    drain_delta_spool_to_local_db(&state.db_pool, &state.user_store, &spool)
         .await
         .expect("drain");
     assert_eq!(spool.pending_files(), 0, "PRP9 drain empties the spool");
@@ -855,11 +855,11 @@ async fn t8_postgres_ingest_parity_when_configured() {
         last_used: vec![],
         balance_deltas: vec![delta("request_charge", &user.id, None, 1_000_000_000)],
     };
-    let ack1 = apply_metering_batch(&state.db_pool, &batch)
+    let ack1 = apply_metering_batch(&state.db_pool, &state.user_store, &batch)
         .await
         .expect("apply");
     assert_eq!(ack1.applied_balance_deltas, 1);
-    let ack2 = apply_metering_batch(&state.db_pool, &batch)
+    let ack2 = apply_metering_batch(&state.db_pool, &state.user_store, &batch)
         .await
         .expect("replay");
     assert_eq!(ack2.applied_balance_deltas, 0);

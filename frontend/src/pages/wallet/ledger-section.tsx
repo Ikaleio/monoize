@@ -27,14 +27,14 @@ const ALL_KINDS = [...WALLET_LEDGER_KINDS];
  * RC-W5: wallet-level ledger entries. The default `kinds` filter is exactly
  * the non-per-request kind list; per-request charges stay on /dashboard/logs.
  */
-export function LedgerSection() {
+export function LedgerSection({ username }: { username: string }) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
   const [kind, setKind] = useState<string>("all");
   const [offset, setOffset] = useState(0);
 
   const kinds = kind === "all" ? ALL_KINDS : [kind];
-  const { data, isLoading } = useLedger(PAGE_SIZE, offset, kinds);
+  const { data, isLoading } = useLedger(PAGE_SIZE, offset, kinds, username);
 
   const kindLabel = (value: string) =>
     t(`wallet.kinds.${value}`, { defaultValue: value });

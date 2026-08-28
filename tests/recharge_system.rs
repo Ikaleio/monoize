@@ -9,6 +9,7 @@ use http_body_util::BodyExt;
 use md5::Digest;
 use monoize::app::{AppState, RuntimeConfig, build_app, load_state_with_runtime};
 use monoize::recharge::store::RechargeOrder;
+use monoize::recharge::{NotifyResult, VerifiedNotification};
 use monoize::users::UserRole;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -330,6 +331,69 @@ async fn order_creation_validation_codes() {
     assert_eq!(error_code(response).await, "too_many_pending_orders");
 }
 
+#[tokio::test]
+async fn concurrent_order_creation_cannot_exceed_pending_cap() {
+    let ctx = setup().await;
+    set_origin(&ctx).await;
+    let channel_id = create_epay_channel(&ctx, "epay-pending-race", "key-pending-race").await;
+    let futures = (0..24).map(|_| {
+        request(
+            &ctx.router,
+            Method::POST,
+            "/api/dashboard/recharge/orders",
+            Some(&ctx.user_token),
+            Some(json!({ "payment_channel_id": channel_id, "credit_usd": "10" })),
+        )
+    });
+    let responses = futures_util::future::join_all(futures).await;
+    let successes = responses
+        .iter()
+        .filter(|response| response.status() == StatusCode::OK)
+        .count();
+    let rejected = responses
+        .iter()
+        .filter(|response| response.status() == StatusCode::TOO_MANY_REQUESTS)
+        .count();
+    assert_eq!(successes, 10);
+    assert_eq!(rejected, 14);
+}
+
+#[tokio::test]
+async fn successful_notification_without_paid_fields_fails_closed() {
+    let ctx = setup().await;
+    set_origin(&ctx).await;
+    let channel_id = create_epay_channel(&ctx, "epay-missing-paid", "key-missing-paid").await;
+    let created = create_order(&ctx, &channel_id, "10").await;
+    let order_id = created["order"]["id"]
+        .as_str()
+        .expect("order id")
+        .to_string();
+    let result = ctx
+        .state
+        .user_store
+        .apply_verified_notification(
+            &channel_id,
+            &VerifiedNotification {
+                order_id: order_id.clone(),
+                provider_order_id: Some("provider-missing-paid".to_string()),
+                result: NotifyResult::Success,
+                paid_amount: None,
+                paid_currency: None,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    let order = ctx
+        .state
+        .user_store
+        .get_recharge_order(&order_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.status, "pending");
+    assert_eq!(balance_nano(&ctx, &ctx.user_id).await, 0);
+}
+
 /// Spec §15 T5: two sequential success notifications credit exactly once.
 #[tokio::test]
 async fn sequential_notifications_credit_exactly_once() {
@@ -387,7 +451,10 @@ async fn concurrent_notifications_and_idempotency_barrier() {
     set_origin(&ctx).await;
     let channel_id = create_epay_channel(&ctx, "epay-t6", "key-t6").await;
     let created = create_order(&ctx, &channel_id, "10").await;
-    let order_id = created["order"]["id"].as_str().expect("order id").to_string();
+    let order_id = created["order"]["id"]
+        .as_str()
+        .expect("order id")
+        .to_string();
 
     let before = balance_nano(&ctx, &ctx.user_id).await;
     let verified = monoize::recharge::VerifiedNotification {
@@ -403,8 +470,16 @@ async fn concurrent_notifications_and_idempotency_barrier() {
         tokio::spawn(async move { store.apply_verified_notification(&channel, &verified).await })
     };
     let (left, right) = tokio::join!(
-        task(ctx.state.user_store.clone(), channel_id.clone(), verified.clone()),
-        task(ctx.state.user_store.clone(), channel_id.clone(), verified.clone()),
+        task(
+            ctx.state.user_store.clone(),
+            channel_id.clone(),
+            verified.clone()
+        ),
+        task(
+            ctx.state.user_store.clone(),
+            channel_id.clone(),
+            verified.clone()
+        ),
     );
     let outcomes = [
         left.expect("join").expect("apply"),
@@ -421,7 +496,10 @@ async fn concurrent_notifications_and_idempotency_barrier() {
     // RC-N8 second barrier: a duplicated idempotency key rolls back the
     // whole transaction and leaves the order in its prior state.
     let created = create_order(&ctx, &channel_id, "10").await;
-    let second_order_id = created["order"]["id"].as_str().expect("order id").to_string();
+    let second_order_id = created["order"]["id"]
+        .as_str()
+        .expect("order id")
+        .to_string();
     {
         use sea_orm::ConnectionTrait;
         let write = ctx.state.db_pool.write().await;
@@ -578,7 +656,10 @@ async fn refund_flow_and_double_refund_rejection() {
     set_origin(&ctx).await;
     let channel_id = create_epay_channel(&ctx, "epay-t9", "key-t9").await;
     let created = create_order(&ctx, &channel_id, "10").await;
-    let order_id = created["order"]["id"].as_str().expect("order id").to_string();
+    let order_id = created["order"]["id"]
+        .as_str()
+        .expect("order id")
+        .to_string();
     let query = epay_success_query(&order_id, "73.00", "key-t9");
     let response = notify(&ctx, &channel_id, &query).await;
     assert_eq!(body_text(response).await, "success");
@@ -954,7 +1035,11 @@ async fn recharge_origin_validation() {
             Some(json!({ "recharge_public_origin": origin })),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "accepted {origin:?}");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "accepted {origin:?}"
+        );
         assert_eq!(error_code(response).await, "invalid_request");
     }
     let response = request(

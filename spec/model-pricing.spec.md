@@ -296,6 +296,8 @@ zero-charge configurations. They MUST settle a normal breakdown with
 MP-C13. Settlement, ledger append, negative-balance semantics, and stream lifecycle
 rules remain governed by `user-billing-and-model-metadata.spec.md` §6.
 
+MP-C14. When an eligible active plan covers a request, Monoize MUST apply the plan multiplier after MP-C11: `adjusted_charge_nano = trunc(final_charge_nano * plan_multiplier)`. The plan-capacity allocator MUST receive this adjusted charge. It MUST debit plan capacity before prepaid or API-key sub-account balance as defined by `billing-plan-subscriptions.spec.md`.
+
 ## 5. Billing group resolution
 
 MP-G1. The billing group of a request is the group actually used for routing: for the
@@ -465,7 +467,15 @@ MP-B1. A settled request MUST persist `billing_breakdown_json` with this schema:
   "group_billing_ratio": "1",
   "channel_multiplier": "1",
   "base_charge_nano": "3000",
+  "pre_plan_charge_nano": "3000",
   "final_charge_nano": "3000",
+  "plan": {
+    "subscription_id": null,
+    "plan_id": null,
+    "multiplier": null,
+    "covered_nano": "0",
+    "fallback_nano": "3000"
+  },
   "free_reason": null,
   "estimated": false
 }
@@ -482,6 +492,8 @@ zero-based selected tier for `tiered_expr` mode, else `null`.
 MP-B4. `free_reason` domain is `null`, `"unpriced"`, `"missing_usage"`.
 
 MP-B5. `estimated = true` only for the pass-through byte-estimate path of MP-F3.
+
+MP-B6. `pre_plan_charge_nano` is the MP-C11 result. `final_charge_nano` is the MP-C14 adjusted result. `plan.covered_nano` and `plan.fallback_nano` MUST sum to `final_charge_nano`. When no plan applies, the plan identifiers and multiplier are null, covered is zero, and fallback equals final charge.
 
 MP-B6. Version 2 breakdowns remain readable in stored request logs. New settlements
 MUST write only version 3 after the cutover migration.

@@ -547,7 +547,7 @@ async fn dashboard_user_group_id_round_trip_through_store_and_response() {
 
     let response = serde_json::to_value(UserResponse::from(fetched)).expect("response serializes");
     assert_eq!(response.get("group_id"), Some(&json!(default_group_id)));
-    assert_eq!(response.get("billing_plan"), Some(&json!(null)));
+    assert!(response.get("billing_plan").is_none());
     assert!(response.get("today_calls").is_none());
 }
 
@@ -566,13 +566,11 @@ fn user_response_serializes_group_id() {
         balance_unlimited: false,
         email: None,
         group_id: "g-alpha".to_string(),
-        billing_plan_id: None,
-        next_grant_at: None,
     };
 
     let value = serde_json::to_value(UserResponse::from(user)).expect("response serializes");
     assert_eq!(value.get("group_id"), Some(&json!("g-alpha")));
-    assert_eq!(value.get("billing_plan"), Some(&json!(null)));
+    assert!(value.get("billing_plan").is_none());
     assert!(value.get("today_calls").is_none());
     assert!(value.get("today_cost_nano_usd").is_none());
 }

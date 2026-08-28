@@ -83,7 +83,7 @@ export const WALLET_LEDGER_KINDS = [
   "recharge",
   "recharge_refund",
   "admin_adjustment",
-  "plan_grant",
+  "plan_purchase",
   "sub_account_transfer_out",
   "sub_account_transfer_in",
   "sub_account_refund",

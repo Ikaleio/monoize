@@ -8,8 +8,7 @@ import { formatUsdDecimal } from "@/lib/exact-decimal";
 import type { User } from "@/lib/api";
 
 /**
- * RC-W2: renders `balance_usd`, `balance_unlimited`, and `billing_plan` from
- * the session user object without extra fetches. The balance figure animates
+ * RC-W2: renders the prepaid balance from the session user object. The figure animates
  * with a vertical spring slide whenever the value changes (poll-driven).
  */
 export function BalanceCard({ user }: { user: User }) {
@@ -43,22 +42,7 @@ export function BalanceCard({ user }: { user: User }) {
             </motion.p>
           </AnimatePresence>
         </div>
-        {user.billing_plan ? (
-          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
-            <span className="text-muted-foreground">{t("wallet.currentPlan")}</span>
-            <span className="font-medium">{user.billing_plan.name}</span>
-            {user.next_grant_at && (
-              <>
-                <span className="text-muted-foreground">{t("wallet.nextGrant")}</span>
-                <span className="tabular-nums">
-                  {new Date(user.next_grant_at).toLocaleString()}
-                </span>
-              </>
-            )}
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">{t("wallet.noPlan")}</p>
-        )}
+        <p className="text-sm text-muted-foreground">{t("wallet.prepaidBalanceHelp")}</p>
       </CardContent>
     </Card>
   );

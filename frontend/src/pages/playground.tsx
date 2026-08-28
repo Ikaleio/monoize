@@ -95,17 +95,13 @@ export function PlaygroundPage() {
   );
   const selectableGroups = useMemo(() => {
     if (!groups || !user) return [];
-    const planGroups =
-      user.billing_plan?.enabled && user.billing_plan.group_ids.length > 0
-        ? new Set(user.billing_plan.group_ids)
-        : null;
     return groups.filter((group) => {
       const userMaySelect =
         user.role === "admin" ||
         user.role === "super_admin" ||
         group.user_selectable ||
         group.id === user.group_id;
-      return userMaySelect && (!planGroups || planGroups.has(group.id));
+      return userMaySelect;
     });
   }, [groups, user]);
 

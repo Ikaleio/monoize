@@ -369,3 +369,11 @@ ISM6.2. If defined, foreign key edges SHOULD follow:
 - `monoize_channel_models.channel_id -> monoize_channels.id`
 
 ISM6.3. `request_logs.user_id -> users.id` MUST NOT be defined. `request_logs.user_id` MUST accept an identifier that has no current `users` row.
+
+## 7. Sliding-window plan replacement
+
+ISM7.1. Migration `m20260911_000051_billing_plan_sliding_windows` MUST run after migration 50.
+
+ISM7.2. The up migration MUST discard all legacy plan assignments and plan rows. It MUST drop `users.billing_plan_id` and `users.next_grant_at`. It MUST create the plan, price, subscription, and usage tables defined by `billing-plan-subscriptions.spec.md`.
+
+ISM7.3. The migration MUST NOT convert legacy plan rows into new plan rows or subscriptions.

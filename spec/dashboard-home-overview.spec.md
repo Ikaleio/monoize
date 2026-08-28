@@ -48,7 +48,7 @@ DH-5a. The grid MUST render five cells in this order:
 2. today's spend;
 3. today's requests;
 4. 24-hour Tokens;
-5. active models when `billing_plan` is null, otherwise subscription.
+5. active models.
 
 The cells MUST use shared outer Card boundaries and standard border-token separators.
 No metric cell MAY use a colored accent border. Values MUST use display typography and
@@ -73,19 +73,7 @@ hook, independent of the usage chart's selected window. It MUST derive:
 
 When the usage chart also selects `24h`, both consumers MUST use the same SWR cache key.
 
-DH-5d. The fifth cell MUST render active models only when the authenticated session
-user's `billing_plan` is null. It MUST render subscription information only when
-`billing_plan` is non-null. The page MUST NOT render a no-plan subscription placeholder.
-
-For a non-null `billing_plan`, the subscription cell MUST show the plan name, remaining
-quota, and reset time. Remaining quota MUST show the localized unlimited label when
-`balance_unlimited` is true. Otherwise it MUST show `balance_usd` vs
-`grant_amount_usd` and a progress bar whose filled fraction is
-`clamp(balance_nano_usd / grant_amount_nano_usd, 0, 1)` with `BigInt` arithmetic when
-`grant_amount_nano_usd` parses as an integer greater than 0. Reset time MUST use the
-session user's top-level `next_grant_at`, localized via `toLocaleString()` when present;
-the call MUST use `dateStyle: "short"` and `timeStyle: "short"` so the value remains
-visible in the metric cell. Otherwise it MUST use a localized unavailable label.
+DH-5d. The fifth cell MUST render active models. Subscription state belongs to the Wallet page and MUST NOT alter the account overview.
 
 DH-5e. The account overview MUST NOT display `my_api_keys_count`.
 

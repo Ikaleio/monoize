@@ -1247,25 +1247,6 @@ async fn authenticate_playground_session(
         ));
     }
 
-    if let Some(plan_id) = user.billing_plan_id.as_deref() {
-        let plan = state
-            .user_store
-            .get_billing_plan_by_id(plan_id)
-            .await
-            .map_err(|error| {
-                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-            })?;
-        if let Some(plan) = plan.filter(|plan| plan.enabled && !plan.group_ids.is_empty()) {
-            if !plan.group_ids.iter().any(|allowed| allowed == &group_id) {
-                return Err(AppError::new(
-                    StatusCode::FORBIDDEN,
-                    "playground_group_forbidden",
-                    "playground routing group is excluded by the billing plan",
-                ));
-            }
-        }
-    }
-
     Ok(crate::auth::AuthResult {
         tenant_id: user.id.clone(),
         user_id: Some(user.id),
@@ -1367,6 +1348,38 @@ async fn ensure_balance_before_forward_for_attempts(
 ) -> AppResult<()> {
     if !attempts_require_balance(attempts) {
         return Ok(());
+    }
+    if let (Some(user_id), Some(api_key_id)) = (auth.user_id.as_deref(), auth.api_key_id.as_deref())
+    {
+        let billing_groups = attempts
+            .iter()
+            .map(|attempt| attempt.billing_group_id.clone())
+            .collect::<Option<Vec<_>>>();
+        if let Some(mut billing_groups) = billing_groups {
+            billing_groups.sort();
+            billing_groups.dedup();
+            let pending = if state.node.is_replica() {
+                state.metering.as_ref().map_or(0, |metering| {
+                    metering.pending().outstanding(if auth.sub_account_enabled {
+                        api_key_id
+                    } else {
+                        user_id
+                    })
+                })
+            } else {
+                0
+            };
+            if state
+                .user_store
+                .has_plan_capacity_for_groups(user_id, Some(api_key_id), &billing_groups, pending)
+                .await
+                .map_err(|error| {
+                    AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+                })?
+            {
+                return Ok(());
+            }
+        }
     }
     ensure_balance_before_forward(state, auth).await
 }

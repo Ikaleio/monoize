@@ -10,6 +10,34 @@ pub(super) struct ChargeComputation {
     pub(super) billing_breakdown: Option<Value>,
 }
 
+fn apply_plan_allocation_to_breakdown(
+    breakdown: &mut Value,
+    allocation: &crate::users::PlanChargeAllocation,
+) {
+    let Some(object) = breakdown.as_object_mut() else {
+        return;
+    };
+    let pre_plan_charge = object
+        .get("final_charge_nano")
+        .cloned()
+        .unwrap_or(Value::Null);
+    object.insert("pre_plan_charge_nano".to_string(), pre_plan_charge);
+    object.insert(
+        "final_charge_nano".to_string(),
+        Value::String(allocation.adjusted_charge_nano_usd.to_string()),
+    );
+    object.insert(
+        "plan".to_string(),
+        json!({
+            "subscription_id": allocation.subscription_id,
+            "plan_id": allocation.plan_id,
+            "multiplier": allocation.multiplier,
+            "covered_nano": allocation.plan_covered_nano_usd.to_string(),
+            "fallback_nano": allocation.fallback_nano_usd.to_string(),
+        }),
+    );
+}
+
 pub(super) fn parse_u64_value(value: &Value) -> Option<u64> {
     value
         .as_u64()
@@ -272,7 +300,7 @@ pub(super) async fn maybe_charge_settled(
         )
     })?;
     let charge_nano = outcome.final_charge_nano;
-    let billing_breakdown = outcome.breakdown;
+    let mut billing_breakdown = outcome.breakdown;
     if charge_nano <= 0 {
         return Ok(ChargeComputation {
             charge_nano_usd: None,
@@ -351,9 +379,10 @@ pub(super) async fn maybe_charge_settled(
             .charge_sub_account_balance_nano(api_key_id, user_id, charge_nano, &meta)
             .await
         {
-            Ok(()) => {
+            Ok(allocation) => {
+                apply_plan_allocation_to_breakdown(&mut billing_breakdown, &allocation);
                 return Ok(ChargeComputation {
-                    charge_nano_usd: Some(charge_nano),
+                    charge_nano_usd: Some(allocation.adjusted_charge_nano_usd),
                     billing_breakdown: Some(billing_breakdown),
                 });
             }
@@ -388,10 +417,13 @@ pub(super) async fn maybe_charge_settled(
         .charge_user_balance_nano(user_id, charge_nano, &meta)
         .await
     {
-        Ok(()) => Ok(ChargeComputation {
-            charge_nano_usd: Some(charge_nano),
-            billing_breakdown: Some(billing_breakdown),
-        }),
+        Ok(allocation) => {
+            apply_plan_allocation_to_breakdown(&mut billing_breakdown, &allocation);
+            Ok(ChargeComputation {
+                charge_nano_usd: Some(allocation.adjusted_charge_nano_usd),
+                billing_breakdown: Some(billing_breakdown),
+            })
+        }
         Err(err) => match err.kind {
             BillingErrorKind::InsufficientBalance => Err(AppError::new(
                 StatusCode::PAYMENT_REQUIRED,

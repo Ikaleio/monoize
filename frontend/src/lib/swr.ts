@@ -30,6 +30,7 @@ import type {
   PriceSyncSource,
   BillingPlan,
   BillingPlanInput,
+  BillingPlanSubscription,
   Group,
   CreateGroupInput,
   UpdateGroupInput,
@@ -64,6 +65,8 @@ const fetchers = {
   unpricedModels: async () => (await api.listUnpricedModels()).models,
   priceSyncRuns: () => api.listPriceSyncRuns(),
   billingPlans: () => api.listBillingPlans(),
+  billingPlanMarketplace: () => api.listBillingPlanMarketplace(),
+  billingPlanSubscription: () => api.getBillingPlanSubscription(),
   marketplaceModels: () => api.listMarketplaceModels(),
   customTransforms: () => api.listCustomTransforms(),
 };
@@ -86,6 +89,8 @@ export const SWR_KEYS = {
   PRICE_SYNC_RUNS: "/dashboard/price-sync/runs",
   MARKETPLACE_MODELS: "/dashboard/marketplace/models",
   BILLING_PLANS: "/dashboard/billing-plans",
+  BILLING_PLAN_MARKETPLACE: "/dashboard/billing-plans/marketplace",
+  BILLING_PLAN_SUBSCRIPTION: "/dashboard/billing-plan-subscription",
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
   PERFORMANCE: "/dashboard/performance",
@@ -157,6 +162,22 @@ export function useBillingPlans(config?: SWRConfiguration) {
     ...defaultConfig,
     ...config,
   });
+}
+
+export function useBillingPlanMarketplace(config?: SWRConfiguration) {
+  return useSWR<BillingPlan[]>(
+    SWR_KEYS.BILLING_PLAN_MARKETPLACE,
+    fetchers.billingPlanMarketplace,
+    { ...defaultConfig, ...config },
+  );
+}
+
+export function useBillingPlanSubscription(config?: SWRConfiguration) {
+  return useSWR<BillingPlanSubscription | null>(
+    SWR_KEYS.BILLING_PLAN_SUBSCRIPTION,
+    fetchers.billingPlanSubscription,
+    { ...defaultConfig, ...config },
+  );
 }
 
 // Dashboard stats hook
@@ -510,9 +531,6 @@ export async function createUserOptimistic(
     balance_usd: "0",
     balance_unlimited: false,
     group_id: groupId ?? "",
-    billing_plan_id: null,
-    next_grant_at: null,
-    billing_plan: null,
     today_calls: 0,
     today_cost_nano_usd: "0",
     today_cost_usd: "0",
@@ -725,70 +743,31 @@ export async function deleteGroupOptimistic(
   }
 }
 
-const NANO_PER_USD = 1_000_000_000n;
-
-function formatNanoToUsd(nano: bigint): string {
-  const negative = nano < 0n;
-  const abs = negative ? -nano : nano;
-  const whole = abs / NANO_PER_USD;
-  const frac = abs % NANO_PER_USD;
-  if (frac === 0n) {
-    return `${negative ? "-" : ""}${whole.toString()}`;
-  }
-  const fracStr = frac.toString().padStart(9, "0").replace(/0+$/, "");
-  return `${negative ? "-" : ""}${whole.toString()}.${fracStr}`;
-}
-
-function optimisticGrantFields(input: BillingPlanInput): {
-  grant_amount_nano_usd: string;
-  grant_amount_usd: string;
-} {
-  if (input.grant_amount_nano_usd !== undefined) {
-    let usd = input.grant_amount_usd;
-    if (usd === undefined) {
-      try {
-        usd = formatNanoToUsd(BigInt(input.grant_amount_nano_usd));
-      } catch {
-        usd = "0";
-      }
-    }
-    return {
-      grant_amount_nano_usd: input.grant_amount_nano_usd,
-      grant_amount_usd: usd,
-    };
-  }
-  if (input.grant_amount_usd !== undefined) {
-    return {
-      grant_amount_nano_usd: "0",
-      grant_amount_usd: input.grant_amount_usd,
-    };
-  }
-  return { grant_amount_nano_usd: "0", grant_amount_usd: "0" };
-}
-
 export async function createBillingPlanOptimistic(
   input: BillingPlanInput,
   currentPlans: BillingPlan[],
   onError?: (error: Error) => void,
 ) {
-  const amounts = optimisticGrantFields(input);
+  const now = new Date().toISOString();
   const tempPlan: BillingPlan = {
     id: `temp-${Date.now()}`,
-    name: input.name,
-    grant_amount_nano_usd: amounts.grant_amount_nano_usd,
-    grant_amount_usd: amounts.grant_amount_usd,
-    schedule: input.schedule,
-    group_ids: input.group_ids ?? [],
-    enabled: input.enabled ?? true,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    ...input,
+    prices: input.prices.map((price, index) => ({
+      id: `temp-price-${index}`,
+      price_nano_usd: price.price_nano_usd ?? "0",
+      price_usd: price.price_usd ?? "0",
+      duration_seconds: price.duration_seconds,
+      created_at: now,
+    })),
+    created_at: now,
+    updated_at: now,
   };
   mutate(SWR_KEYS.BILLING_PLANS, [...currentPlans, tempPlan], false);
 
   try {
     await api.createBillingPlan(input);
     mutate(SWR_KEYS.BILLING_PLANS);
-    mutate(SWR_KEYS.USERS);
+    mutate(SWR_KEYS.BILLING_PLAN_MARKETPLACE);
   } catch (error) {
     mutate(SWR_KEYS.BILLING_PLANS, currentPlans, false);
     if (onError && error instanceof Error) {
@@ -804,18 +783,19 @@ export async function updateBillingPlanOptimistic(
   currentPlans: BillingPlan[],
   onError?: (error: Error) => void,
 ) {
-  const amounts = optimisticGrantFields(input);
-  const hasAmount =
-    input.grant_amount_nano_usd !== undefined ||
-    input.grant_amount_usd !== undefined;
   const updatedPlans = currentPlans.map((p) =>
     p.id === planId
       ? {
           ...p,
           ...input,
-          ...(hasAmount ? amounts : {}),
-          group_ids: input.group_ids ?? p.group_ids,
-          enabled: input.enabled ?? p.enabled,
+          prices: input.prices.map((price, index) => ({
+            id: p.prices[index]?.id ?? `temp-price-${index}`,
+            price_nano_usd: price.price_nano_usd ?? "0",
+            price_usd: price.price_usd ?? "0",
+            duration_seconds: price.duration_seconds,
+            created_at: p.prices[index]?.created_at ?? new Date().toISOString(),
+          })),
+          updated_at: new Date().toISOString(),
         }
       : p,
   );
@@ -824,7 +804,7 @@ export async function updateBillingPlanOptimistic(
   try {
     await api.updateBillingPlan(planId, input);
     mutate(SWR_KEYS.BILLING_PLANS);
-    mutate(SWR_KEYS.USERS);
+    mutate(SWR_KEYS.BILLING_PLAN_MARKETPLACE);
   } catch (error) {
     mutate(SWR_KEYS.BILLING_PLANS, currentPlans, false);
     if (onError && error instanceof Error) {
@@ -845,6 +825,7 @@ export async function deleteBillingPlanOptimistic(
   try {
     await api.deleteBillingPlan(planId);
     mutate(SWR_KEYS.BILLING_PLANS);
+    mutate(SWR_KEYS.BILLING_PLAN_MARKETPLACE);
   } catch (error) {
     mutate(SWR_KEYS.BILLING_PLANS, currentPlans, false);
     if (onError && error instanceof Error) {
@@ -854,45 +835,39 @@ export async function deleteBillingPlanOptimistic(
   }
 }
 
-export async function resetBillingPlanOptimistic(
-  plan: BillingPlan,
+export async function purchaseBillingPlanOptimistic(
+  planId: string,
+  priceId: string,
+  priceNanoUsd: string,
   onError?: (error: Error) => void,
-): Promise<{ success: boolean; reset_count: number }> {
-  let snapshot: User[] | undefined;
+) {
+  let userSnapshot: User | undefined;
   await mutate(
-    SWR_KEYS.USERS,
-    (current: User[] | undefined) => {
-      snapshot = current;
-      if (!current) return current;
-      return current.map((user) => {
-        if (
-          user.billing_plan_id !== plan.id ||
-          user.balance_unlimited ||
-          !user.enabled
-        ) {
-          return user;
-        }
-        return {
-          ...user,
-          balance_nano_usd: plan.grant_amount_nano_usd,
-          balance_usd: plan.grant_amount_usd,
-        };
-      });
+    SWR_KEYS.ME,
+    (current: User | undefined) => {
+      userSnapshot = current;
+      if (!current || current.balance_unlimited) return current;
+      try {
+        const next = BigInt(current.balance_nano_usd) - BigInt(priceNanoUsd);
+        if (next < 0n) return current;
+        const fraction = (next % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
+        return { ...current, balance_nano_usd: next.toString(), balance_usd: `${next / 1_000_000_000n}${fraction ? `.${fraction}` : ""}` };
+      } catch {
+        return current;
+      }
     },
     false,
   );
-
   try {
-    const result = await api.resetBillingPlan(plan.id);
-    mutate(SWR_KEYS.USERS);
-    mutate(SWR_KEYS.ME);
-    mutate(SWR_KEYS.STATS);
-    return result;
+    const subscription = await api.purchaseBillingPlan(planId, priceId);
+    mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION, subscription, false);
+    mutate(SWR_KEYS.BILLING_PLAN_MARKETPLACE);
+    revalidateRechargeCaches();
+    return subscription;
   } catch (error) {
-    mutate(SWR_KEYS.USERS, snapshot, false);
-    if (onError && error instanceof Error) {
-      onError(error);
-    }
+    mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION);
+    mutate(SWR_KEYS.ME, userSnapshot, false);
+    if (onError && error instanceof Error) onError(error);
     throw error;
   }
 }

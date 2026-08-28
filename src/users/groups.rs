@@ -55,6 +55,7 @@ pub enum GroupStoreError {
     InvalidBillingRatio,
     InvalidReorder(String),
     CannotDeleteDefault,
+    PlanRequiresGroup,
     Storage(String),
 }
 
@@ -626,7 +627,7 @@ impl UserStore {
                 .map_err(storage)?;
         }
 
-        // GR-X4: an emptied plan ceiling stays [] (unrestricted).
+        // A purchasable plan must always retain at least one eligible group.
         let rows = tx
             .query_all(
                 self.db
@@ -644,6 +645,9 @@ impl UserStore {
                 continue;
             }
             let remaining: Vec<String> = group_ids.into_iter().filter(|gid| gid != id).collect();
+            if remaining.is_empty() {
+                return Err(GroupStoreError::PlanRequiresGroup);
+            }
             plan_updates.push((row_id, serde_json::to_string(&remaining).map_err(storage)?));
         }
         for chunk in plan_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
@@ -834,7 +838,7 @@ mod tests {
         exec(
             &db,
             &format!(
-                r#"INSERT INTO billing_plans (id, name, grant_amount_nano_usd, schedule, group_ids, created_at, updated_at) VALUES ('plan-cascade', 'cascade', '0', '0 0 * * *', '["{}","{}"]', '2026-08-26T00:00:00Z', '2026-08-26T00:00:00Z')"#,
+                r#"INSERT INTO billing_plans (id, name, description, limit_5h_nano_usd, group_ids, multiplier, listed, created_at, updated_at) VALUES ('plan-cascade', 'cascade', '', '1', '["{}","{}"]', '1', 0, '2026-08-26T00:00:00Z', '2026-08-26T00:00:00Z')"#,
                 doomed.id, kept.id
             ),
         )

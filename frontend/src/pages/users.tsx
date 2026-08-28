@@ -38,16 +38,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/use-auth";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   useUsers,
   useDashboardGroups,
-  useBillingPlans,
   createUserOptimistic,
   updateUserOptimistic,
   deleteUserOptimistic,
@@ -115,7 +107,6 @@ export function UsersPage() {
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useUsers();
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
-  const { data: billingPlans = [] } = useBillingPlans();
   const defaultGroupId = useMemo(
     () => groups.find((group) => group.is_default)?.id ?? "",
     [groups]
@@ -142,7 +133,6 @@ export function UsersPage() {
     balanceUnlimited: false,
     email: "",
     groupId: "",
-    billingPlanId: "" as string,
   });
   const [balanceMode, setBalanceMode] = useState<"set" | "add">("set");
   const [balanceAddAmount, setBalanceAddAmount] = useState("");
@@ -169,7 +159,6 @@ export function UsersPage() {
         balanceUnlimited: false,
         email: "",
         groupId: "",
-        billingPlanId: "",
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("users.failedCreate"));
@@ -191,7 +180,6 @@ export function UsersPage() {
         balance_unlimited?: boolean;
         email?: string | null;
         group_id?: string;
-        billing_plan_id?: string | null;
       } = {};
       if (formData.username.trim() && formData.username !== editUser.username) {
         updates.username = formData.username.trim();
@@ -222,13 +210,6 @@ export function UsersPage() {
       if (formData.groupId && formData.groupId !== editUser.group_id) {
         updates.group_id = formData.groupId;
       }
-      const nextPlanId =
-        !formData.billingPlanId || formData.billingPlanId === "none"
-          ? null
-          : formData.billingPlanId;
-      if (nextPlanId !== (editUser.billing_plan_id ?? null)) {
-        updates.billing_plan_id = nextPlanId;
-      }
       await updateUserOptimistic(
         editUser.id,
         updates,
@@ -245,7 +226,6 @@ export function UsersPage() {
         balanceUnlimited: false,
         email: "",
         groupId: "",
-        billingPlanId: "",
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("users.failedUpdate"));
@@ -296,7 +276,6 @@ export function UsersPage() {
       balanceUnlimited: user.balance_unlimited,
       email: user.email ?? "",
       groupId: user.group_id,
-      billingPlanId: user.billing_plan_id ?? "",
     });
   };
 
@@ -523,46 +502,6 @@ export function UsersPage() {
                   />
                   <p className="text-xs text-muted-foreground">{t("users.groupHelp")}</p>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-billing-plan">{t("billingPlans.title")}</Label>
-                  <Select
-                    value={formData.billingPlanId || "none"}
-                    onValueChange={(value) =>
-                      setFormData({
-                        ...formData,
-                        billingPlanId: value === "none" ? "" : value,
-                      })
-                    }
-                  >
-                    <SelectTrigger id="edit-billing-plan" className="w-full">
-                      <SelectValue placeholder={t("billingPlans.none")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">{t("billingPlans.none")}</SelectItem>
-                      {billingPlans
-                        .filter((p) => p.enabled || p.id === editUser?.billing_plan_id)
-                        .map((plan) => (
-                          <SelectItem key={plan.id} value={plan.id}>
-                            {plan.name} · ${plan.grant_amount_usd}/
-                            {plan.schedule}
-                            {!plan.enabled ? ` (${t("common.disabled")})` : ""}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                  {(() => {
-                    const assigned = billingPlans.find((p) => p.id === editUser?.billing_plan_id);
-                    if (!assigned || !editUser?.next_grant_at) return null;
-                    return (
-                      <p className="text-xs text-muted-foreground">
-                        {t("billingPlans.nextReset", {
-                          name: assigned.name,
-                          time: new Date(editUser.next_grant_at).toLocaleString(),
-                        })}
-                      </p>
-                    );
-                  })()}
-                </div>
                 {currentUser?.role && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
@@ -699,9 +638,6 @@ export function UsersPage() {
                     {t("users.role")}
                   </VirtualTableHeaderCell>
                   <VirtualTableHeaderCell>
-                    {t("users.plan")}
-                  </VirtualTableHeaderCell>
-                  <VirtualTableHeaderCell>
                     {t("users.balance")}
                   </VirtualTableHeaderCell>
                   <VirtualTableHeaderCell>
@@ -752,19 +688,6 @@ export function UsersPage() {
                           {t(`roles.${user.role}`)}
                         </Badge>
                       </div>
-                    </VirtualTableCell>
-                    <VirtualTableCell>
-                      {user.billing_plan ? (
-                        <Badge
-                          variant={user.billing_plan.enabled ? "secondary" : "outline"}
-                          className="max-w-[12rem] truncate"
-                        >
-                          {user.billing_plan.name}
-                          {!user.billing_plan.enabled ? ` (${t("common.disabled")})` : ""}
-                        </Badge>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">{t("users.noPlan")}</span>
-                      )}
                     </VirtualTableCell>
                     <VirtualTableCell className="tabular-nums">
                       {user.balance_unlimited

@@ -6,7 +6,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { useLiveUsage } from "@/lib/swr";
 import { formatUsdDecimal } from "@/lib/exact-decimal";
-import { formatCacheHitRate, planRemainingFraction } from "@/lib/live-usage";
+import { formatCacheHitRate } from "@/lib/live-usage";
 import { cn, getGravatarUrl } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -168,13 +168,7 @@ export function UserCenterMenu({
   const balanceLabel = user?.balance_unlimited
     ? t("users.unlimited")
     : formatUsdDecimal(user?.balance_usd, 2);
-  const accountSummary = user?.billing_plan?.name
-    ? `${user.billing_plan.name} · ${balanceLabel}`
-    : balanceLabel;
-  const remainingFraction =
-    user && user.billing_plan && !user.balance_unlimited
-      ? planRemainingFraction(user.balance_nano_usd, user.billing_plan.grant_amount_nano_usd)
-      : null;
+  const accountSummary = balanceLabel;
 
   return (
     <DropdownMenu>
@@ -244,57 +238,13 @@ export function UserCenterMenu({
           </div>
         </div>
         <DropdownMenuSeparator />
-        {/* Quota / plan block from the session user only (DL3d) */}
+        {/* Prepaid balance from the session user only (DL3d). */}
         <div className="flex flex-col gap-1 px-2 py-1.5">
           {user ? (
             <>
               <QuotaRow label={t("userMenu.balance", "Balance")}>
                 <span className="font-mono text-xs font-medium tabular-nums">{balanceLabel}</span>
               </QuotaRow>
-              {user.billing_plan ? (
-                <>
-                  <QuotaRow label={t("userMenu.plan", "Plan")}>
-                    <span className="truncate text-xs font-medium">{user.billing_plan.name}</span>
-                  </QuotaRow>
-                  <QuotaRow label={t("userMenu.grant", "Grant")}>
-                    <span className="truncate font-mono text-xs tabular-nums">
-                      {formatUsdDecimal(user.billing_plan.grant_amount_usd, 2)}
-                      <span className="text-muted-foreground">
-                        {" · "}
-                        {user.billing_plan.schedule}
-                      </span>
-                    </span>
-                  </QuotaRow>
-                  {user.next_grant_at && (
-                    <QuotaRow label={t("userMenu.nextReset", "Next reset")}>
-                      <span className="truncate text-xs">
-                        {new Date(user.next_grant_at).toLocaleString()}
-                      </span>
-                    </QuotaRow>
-                  )}
-                  {remainingFraction != null && (
-                    <div
-                      className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-muted"
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(remainingFraction * 100)}
-                      aria-label={t("userMenu.remainingOfGrant", "Remaining of plan grant")}
-                    >
-                      <div
-                        className="h-full rounded-full bg-primary"
-                        style={{ width: `${remainingFraction * 100}%` }}
-                      />
-                    </div>
-                  )}
-                </>
-              ) : (
-                <QuotaRow label={t("userMenu.plan", "Plan")}>
-                  <span className="text-xs text-muted-foreground">
-                    {t("userSettings.noPlan")}
-                  </span>
-                </QuotaRow>
-              )}
             </>
           ) : (
             <>

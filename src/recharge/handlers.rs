@@ -46,9 +46,7 @@ fn order_json(order: &RechargeOrder, include_username: bool) -> Value {
         "expires_at": order.expires_at,
         "created_at": order.created_at,
     });
-    if include_username
-        && let Some(map) = object.as_object_mut()
-    {
+    if include_username && let Some(map) = object.as_object_mut() {
         map.insert("username".to_string(), order.username.clone().into());
     }
     object
@@ -115,7 +113,11 @@ pub async fn create_recharge_order(
         .await
         .map_err(internal)?
         .ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, "not_found", "payment channel not found")
+            AppError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "payment channel not found",
+            )
         })?;
     // RC-O3 step 2: disabled channel.
     if !channel.enabled {
@@ -141,8 +143,13 @@ pub async fn create_recharge_order(
         ));
     }
     // RC-O3 step 4 / RC-O2: nano wins when both amounts are present.
-    let invalid_amount =
-        || AppError::new(StatusCode::BAD_REQUEST, "invalid_amount", "invalid recharge amount");
+    let invalid_amount = || {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_amount",
+            "invalid recharge amount",
+        )
+    };
     let credit_nano_usd = match (&body.credit_nano_usd, &body.credit_usd) {
         (Some(nano), _) => parse_canonical_positive_nano(nano).map_err(|_| invalid_amount())?,
         (None, Some(usd)) => parse_positive_usd_to_nano(usd).map_err(|_| invalid_amount())?,
@@ -160,22 +167,11 @@ pub async fn create_recharge_order(
             "amount is outside the channel's credit bounds",
         ));
     }
-    // RC-O3 step 6: per-user pending cap.
-    let pending = state
-        .user_store
-        .count_pending_orders(&user.id)
-        .await
-        .map_err(internal)?;
-    if pending >= crate::recharge::max_pending_orders() as i64 {
-        return Err(AppError::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too_many_pending_orders",
-            "too many pending recharge orders",
-        ));
-    }
-
     let adapter = adapter_for(&channel.type_id).ok_or_else(|| {
-        internal(format!("stored type_id {:?} not in registry", channel.type_id))
+        internal(format!(
+            "stored type_id {:?} not in registry",
+            channel.type_id
+        ))
     })?;
     let scale = adapter
         .currency_scale(&channel.currency)
@@ -210,11 +206,18 @@ pub async fn create_recharge_order(
         updated_at: now.to_rfc3339(),
         username: Some(user.username.clone()),
     };
-    state
+    let inserted = state
         .user_store
-        .insert_recharge_order(&order)
+        .insert_recharge_order_under_limit(&order, crate::recharge::max_pending_orders() as i64)
         .await
         .map_err(internal)?;
+    if !inserted {
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_pending_orders",
+            "too many pending recharge orders",
+        ));
+    }
 
     let urls = PaymentUrls::derive(&origin, &channel.id, &order_id);
     let initiation = match adapter.create_payment(&order, &channel.config, &urls).await {
@@ -291,7 +294,11 @@ pub async fn list_recharge_orders(
         user_id: (!is_admin).then(|| user.id.clone()),
         status: query.status.clone(),
         // RC-A2: the username filter is ignored for role `user`.
-        username: if is_admin { query.username.clone() } else { None },
+        username: if is_admin {
+            query.username.clone()
+        } else {
+            None
+        },
         limit: query.limit.clamp(1, 100),
         offset: query.offset,
     };
@@ -314,8 +321,13 @@ pub async fn get_recharge_order(
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
     let is_admin = user.role.can_manage_users();
-    let not_found =
-        || AppError::new(StatusCode::NOT_FOUND, "not_found", "recharge order not found");
+    let not_found = || {
+        AppError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "recharge order not found",
+        )
+    };
     let order = state
         .user_store
         .get_recharge_order(&order_id)
@@ -359,7 +371,9 @@ pub async fn list_ledger(
                 .filter(|entry| !entry.is_empty())
                 .map(|entry| {
                     let valid = (1..=64).contains(&entry.len())
-                        && entry.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_');
+                        && entry
+                            .bytes()
+                            .all(|byte| byte.is_ascii_lowercase() || byte == b'_');
                     if valid {
                         Ok(entry.to_string())
                     } else {
@@ -376,7 +390,11 @@ pub async fn list_ledger(
     let filter = LedgerListFilter {
         user_id: (!is_admin).then(|| user.id.clone()),
         kinds,
-        username: if is_admin { query.username.clone() } else { None },
+        username: if is_admin {
+            query.username.clone()
+        } else {
+            None
+        },
         limit: query.limit.clamp(1, 100),
         offset: query.offset,
     };
@@ -398,9 +416,7 @@ pub async fn list_ledger(
                 "meta_json": entry.meta_json,
                 "created_at": entry.created_at,
             });
-            if is_admin
-                && let Some(map) = object.as_object_mut()
-            {
+            if is_admin && let Some(map) = object.as_object_mut() {
                 map.insert("username".to_string(), entry.username.clone().into());
             }
             object
@@ -483,9 +499,8 @@ fn validate_channel_name(raw: &str) -> AppResult<String> {
 /// RC-A6 rate validation: `usd_rate`, `min_credit_usd`, `max_credit_usd` are
 /// RC-U5 decimals with `min <= max`, all mapping to `invalid_rate`.
 fn validate_channel_rates(usd_rate: &str, min: &str, max: &str) -> AppResult<()> {
-    let invalid = |message: &str| {
-        AppError::new(StatusCode::BAD_REQUEST, "invalid_rate", message.to_string())
-    };
+    let invalid =
+        |message: &str| AppError::new(StatusCode::BAD_REQUEST, "invalid_rate", message.to_string());
     parse_positive_decimal(usd_rate).map_err(|_| invalid("malformed usd_rate"))?;
     let min_nano =
         parse_positive_usd_to_nano(min).map_err(|_| invalid("malformed min_credit_usd"))?;
@@ -513,16 +528,18 @@ pub async fn create_payment_channel(
         )
     })?;
     // RC-P4: currency constraint.
-    adapter.currency_scale(&body.currency).map_err(|message| {
-        AppError::new(StatusCode::BAD_REQUEST, "invalid_currency", message)
-    })?;
+    adapter
+        .currency_scale(&body.currency)
+        .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "invalid_currency", message))?;
     let min_credit_usd = body.min_credit_usd.unwrap_or_else(|| "1".to_string());
     let max_credit_usd = body.max_credit_usd.unwrap_or_else(|| "10000".to_string());
     validate_channel_rates(&body.usd_rate, &min_credit_usd, &max_credit_usd)?;
     // RC-P5/RC-P6: on create every secret field must be non-empty.
-    adapter.validate_config(&body.config, true).map_err(|message| {
-        AppError::new(StatusCode::BAD_REQUEST, "invalid_channel_config", message)
-    })?;
+    adapter
+        .validate_config(&body.config, true)
+        .map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_channel_config", message)
+        })?;
 
     let now = Utc::now().to_rfc3339();
     let channel = RechargeChannel {
@@ -584,11 +601,18 @@ pub async fn update_payment_channel(
         .await
         .map_err(internal)?
         .ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, "not_found", "payment channel not found")
+            AppError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "payment channel not found",
+            )
         })?;
     // RC-D1: type_id and currency are immutable after create.
     if body.type_id.as_ref().is_some_and(|v| *v != channel.type_id)
-        || body.currency.as_ref().is_some_and(|v| *v != channel.currency)
+        || body
+            .currency
+            .as_ref()
+            .is_some_and(|v| *v != channel.currency)
     {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -597,7 +621,10 @@ pub async fn update_payment_channel(
         ));
     }
     let adapter = adapter_for(&channel.type_id).ok_or_else(|| {
-        internal(format!("stored type_id {:?} not in registry", channel.type_id))
+        internal(format!(
+            "stored type_id {:?} not in registry",
+            channel.type_id
+        ))
     })?;
     if let Some(name) = &body.name {
         channel.name = validate_channel_name(name)?;
@@ -611,7 +638,11 @@ pub async fn update_payment_channel(
     if let Some(max) = body.max_credit_usd {
         channel.max_credit_usd = max;
     }
-    validate_channel_rates(&channel.usd_rate, &channel.min_credit_usd, &channel.max_credit_usd)?;
+    validate_channel_rates(
+        &channel.usd_rate,
+        &channel.min_credit_usd,
+        &channel.max_credit_usd,
+    )?;
     if let Some(enabled) = body.enabled {
         channel.enabled = enabled;
     }
@@ -625,9 +656,7 @@ pub async fn update_payment_channel(
                 let incoming_empty = object
                     .get(*field)
                     .is_none_or(|value| value.as_str() == Some(""));
-                if incoming_empty
-                    && let Some(stored) = channel.config.get(*field)
-                {
+                if incoming_empty && let Some(stored) = channel.config.get(*field) {
                     object.insert((*field).to_string(), stored.clone());
                 }
             }
@@ -698,7 +727,11 @@ pub async fn refund_recharge_order(
         .await
         .map_err(internal)?
         .ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, "not_found", "recharge order not found")
+            AppError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "recharge order not found",
+            )
         })?;
     // RC-R3 precheck; RC-R5 step 1 re-checks under the row lock.
     if order.status != "succeeded" {
@@ -780,7 +813,11 @@ pub async fn pay_notify(
     request: axum::extract::Request,
 ) -> Response {
     // RC-N2: unknown channel returns 404 before the body is read.
-    let channel = match state.user_store.get_payment_channel(&payment_channel_id).await {
+    let channel = match state
+        .user_store
+        .get_payment_channel(&payment_channel_id)
+        .await
+    {
         Ok(Some(channel)) => channel,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(error) => {

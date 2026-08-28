@@ -101,7 +101,10 @@ fn channel_from_row(row: &QueryResult) -> Result<RechargeChannel, String> {
         id: row.try_get("", "id").map_err(|e| e.to_string())?,
         name: row.try_get("", "name").map_err(|e| e.to_string())?,
         type_id: row.try_get("", "type_id").map_err(|e| e.to_string())?,
-        enabled: row.try_get::<i32>("", "enabled").map_err(|e| e.to_string())? == 1,
+        enabled: row
+            .try_get::<i32>("", "enabled")
+            .map_err(|e| e.to_string())?
+            == 1,
         currency: row.try_get("", "currency").map_err(|e| e.to_string())?,
         usd_rate: row.try_get("", "usd_rate").map_err(|e| e.to_string())?,
         min_credit_usd: row
@@ -145,7 +148,8 @@ fn order_from_row(row: &QueryResult, with_username: bool) -> Result<RechargeOrde
         error_code: row.try_get("", "error_code").map_err(|e| e.to_string())?,
         paid_at: row.try_get("", "paid_at").map_err(|e| e.to_string())?,
         expires_at: row.try_get("", "expires_at").map_err(|e| e.to_string())?,
-        meta_json: serde_json::from_str(&meta_raw).unwrap_or_else(|_| Value::Object(Default::default())),
+        meta_json: serde_json::from_str(&meta_raw)
+            .unwrap_or_else(|_| Value::Object(Default::default())),
         created_at: row.try_get("", "created_at").map_err(|e| e.to_string())?,
         updated_at: row.try_get("", "updated_at").map_err(|e| e.to_string())?,
         username: if with_username {
@@ -170,7 +174,11 @@ impl UserStore {
         &self,
         enabled_only: bool,
     ) -> Result<Vec<RechargeChannel>, String> {
-        let filter = if enabled_only { "WHERE enabled = 1" } else { "" };
+        let filter = if enabled_only {
+            "WHERE enabled = 1"
+        } else {
+            ""
+        };
         let rows = self
             .db
             .read()
@@ -289,7 +297,15 @@ impl UserStore {
 
     pub async fn insert_recharge_order(&self, order: &RechargeOrder) -> Result<(), String> {
         let write = self.db.write().await;
-        write
+        self.insert_recharge_order_on(&*write, order).await
+    }
+
+    async fn insert_recharge_order_on<C: ConnectionTrait>(
+        &self,
+        connection: &C,
+        order: &RechargeOrder,
+    ) -> Result<(), String> {
+        connection
             .execute(self.db.stmt(
                 "INSERT INTO recharge_orders (id, user_id, payment_channel_id, channel_type_id, \
                  channel_name, status, credit_nano_usd, pay_currency, pay_amount, usd_rate, \
@@ -319,6 +335,53 @@ impl UserStore {
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// RC-O3: serialize the per-user pending-count check with insertion.
+    pub async fn insert_recharge_order_under_limit(
+        &self,
+        order: &RechargeOrder,
+        max_pending: i64,
+    ) -> Result<bool, String> {
+        let tx = self
+            .db
+            .begin_write()
+            .await
+            .map_err(|error| error.to_string())?;
+        let lock_suffix = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        if tx
+            .query_one(self.db.stmt(
+                &format!("SELECT id FROM users WHERE id = $1{lock_suffix}"),
+                vec![order.user_id.clone().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            tx.rollback().await.map_err(|error| error.to_string())?;
+            return Err("user not found".to_string());
+        }
+        let pending: i64 = tx
+            .query_one(self.db.stmt(
+                "SELECT COUNT(*) AS pending_count FROM recharge_orders WHERE user_id = $1 AND status = 'pending'",
+                vec![order.user_id.clone().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "count query returned no row".to_string())?
+            .try_get("", "pending_count")
+            .map_err(|error| error.to_string())?;
+        if pending >= max_pending {
+            tx.rollback().await.map_err(|error| error.to_string())?;
+            return Ok(false);
+        }
+        self.insert_recharge_order_on(&*tx, order).await?;
+        tx.commit().await.map_err(|error| error.to_string())?;
+        Ok(true)
     }
 
     /// RC-T1: persist the provider-assigned id before the create response.
@@ -360,7 +423,10 @@ impl UserStore {
         Ok(())
     }
 
-    pub async fn get_recharge_order(&self, order_id: &str) -> Result<Option<RechargeOrder>, String> {
+    pub async fn get_recharge_order(
+        &self,
+        order_id: &str,
+    ) -> Result<Option<RechargeOrder>, String> {
         let row = self
             .db
             .read()
@@ -373,7 +439,9 @@ impl UserStore {
             ))
             .await
             .map_err(|e| e.to_string())?;
-        row.as_ref().map(|row| order_from_row(row, true)).transpose()
+        row.as_ref()
+            .map(|row| order_from_row(row, true))
+            .transpose()
     }
 
     pub async fn list_recharge_orders(
@@ -467,9 +535,11 @@ impl UserStore {
         match verified.result {
             NotifyResult::Success => {
                 // RC-N5 amount check before the success transition.
-                if let (Some(paid_amount), Some(paid_currency)) =
-                    (&verified.paid_amount, &verified.paid_currency)
-                {
+                let paid_fields = verified
+                    .paid_amount
+                    .as_ref()
+                    .zip(verified.paid_currency.as_ref());
+                if let Some((paid_amount, paid_currency)) = paid_fields {
                     let amount_matches = paid_currency == &order.pay_currency
                         && decimals_equal(paid_amount, &order.pay_amount);
                     if !amount_matches {
@@ -502,6 +572,11 @@ impl UserStore {
                             }
                         };
                     }
+                } else {
+                    tx.rollback().await.map_err(|e| e.to_string())?;
+                    return Err(
+                        "successful notification omitted paid amount or currency".to_string()
+                    );
                 }
 
                 match order.status.as_str() {
@@ -527,9 +602,7 @@ impl UserStore {
                         Ok(NotifyOutcome::FailedRecorded)
                     }
                     // RC-N6 step 4: the single credit transaction.
-                    "pending" | "expired" => {
-                        self.credit_order_tx(tx, &order, verified).await
-                    }
+                    "pending" | "expired" => self.credit_order_tx(tx, &order, verified).await,
                     other => {
                         tx.rollback().await.map_err(|e| e.to_string())?;
                         Err(format!("invalid stored order status {other:?}"))
@@ -850,7 +923,9 @@ impl UserStore {
                     .map_err(|e| e.to_string())?;
                 let meta_raw: String = row.try_get("", "meta_json").map_err(|e| e.to_string())?;
                 Ok(LedgerEntry {
-                    id: row.try_get("", "id").map_err(|e: sea_orm::DbErr| e.to_string())?,
+                    id: row
+                        .try_get("", "id")
+                        .map_err(|e: sea_orm::DbErr| e.to_string())?,
                     user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
                     username: row.try_get("", "username").ok(),
                     kind: row.try_get("", "kind").map_err(|e| e.to_string())?,
@@ -879,7 +954,11 @@ impl UserStore {
         tx: &DatabaseTransaction,
         order_id: &str,
     ) -> Result<Option<RechargeOrder>, String> {
-        let lock_suffix = if self.db.is_postgres() { " FOR UPDATE" } else { "" };
+        let lock_suffix = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
         let row = tx
             .query_one(self.db.stmt(
                 &format!(
@@ -890,7 +969,9 @@ impl UserStore {
             ))
             .await
             .map_err(|e| e.to_string())?;
-        row.as_ref().map(|row| order_from_row(row, false)).transpose()
+        row.as_ref()
+            .map(|row| order_from_row(row, false))
+            .transpose()
     }
 
     async fn update_order_status_tx(

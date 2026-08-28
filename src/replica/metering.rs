@@ -12,6 +12,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use dashmap::DashMap;
+use sea_orm::ConnectionTrait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -991,7 +992,7 @@ pub(crate) async fn ingest_metering_handler(
         );
     }
 
-    match apply_metering_batch(&state.db_pool, &batch).await {
+    match apply_metering_batch(&state.db_pool, &state.user_store, &batch).await {
         Ok(ack) => {
             if !batch.request_logs.is_empty() {
                 let rows = batch
@@ -1022,6 +1023,7 @@ const LAST_USED_CHUNK_ENTRIES: usize = 256;
 
 pub async fn apply_metering_batch(
     db: &DbPool,
+    user_store: &crate::users::UserStore,
     batch: &MeteringBatch,
 ) -> Result<MeteringAck, String> {
     use sea_orm::{ConnectionTrait, TransactionTrait};
@@ -1070,7 +1072,7 @@ pub async fn apply_metering_batch(
 
     if apply_error.is_none() {
         for delta in &batch.balance_deltas {
-            match apply_balance_delta(db, &tx, delta).await {
+            match apply_balance_delta(db, user_store, &tx, delta).await {
                 Ok(count) => applied_balance_deltas += count,
                 Err(error) => {
                     apply_error = Some(error);
@@ -1096,110 +1098,211 @@ pub async fn apply_metering_batch(
     })
 }
 
-/// I4 step 3: ledger insert is the idempotency anchor; the balance update runs only
-/// when this specific delta had not been applied before. Returns 1 iff newly inserted.
-async fn apply_balance_delta<C>(db: &DbPool, tx: &C, delta: &BalanceDelta) -> Result<u64, String>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    // Both backends require the index predicate in the conflict target to match a
-    // partial unique index.
-    let conflict_clause =
-        "ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING";
-    let sql = format!(
-        "INSERT INTO billing_ledger (id, user_id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at, idempotency_key) \
-         VALUES ($1, $2, $3, $4, NULL, $5, $6, $7) {conflict_clause}"
-    );
-    let insert_result = tx
-        .execute(db.stmt(
-            &sql,
-            vec![
-                    delta.delta_id.clone().into(),
-                    delta.user_id.clone().into(),
-                    delta.kind.clone().into(),
-                    (-delta
-                        .amount_nano_usd
-                        .trim()
-                        .parse::<i128>()
-                        .map_err(|_| "amount_nano_usd must be decimal i128 text")?)
-                    .to_string()
-                    .into(),
-                    delta.meta_json.to_string().into(),
-                    delta.created_at.clone().into(),
-                    delta.delta_id.clone().into(),
-                ],
+/// Apply one replica charge atomically. The pre-check avoids replaying plan usage. The
+/// unique ledger key remains the database idempotency anchor for concurrent applies.
+async fn apply_balance_delta(
+    db: &DbPool,
+    user_store: &crate::users::UserStore,
+    tx: &sea_orm::DatabaseTransaction,
+    delta: &BalanceDelta,
+) -> Result<u64, String> {
+    let already_applied = tx
+        .query_one(db.stmt(
+            "SELECT id FROM billing_ledger WHERE idempotency_key = $1",
+            vec![delta.delta_id.clone().into()],
         ))
         .await
-        .map_err(|error| error.to_string())?;
-    if insert_result.rows_affected() == 0 {
+        .map_err(|error| error.to_string())?
+        .is_some();
+    if already_applied {
         return Ok(0);
     }
-
     let amount = delta
         .amount_nano_usd
         .trim()
         .parse::<i128>()
         .map_err(|_| "amount_nano_usd must be decimal i128 text".to_string())?;
-    match delta.kind.as_str() {
-        "request_charge" => {
-            subtract_user_balance_tx(db, tx, &delta.user_id, amount).await?;
-        }
-        "api_key_charge" => {
-            let api_key_id = delta.api_key_id.clone().unwrap_or_default();
-            let lock_suffix = if db.is_sqlite() { "" } else { " FOR UPDATE" };
-            let _ = tx
-                .query_one(db.stmt(
-                    &format!("SELECT id FROM users WHERE id = $1{lock_suffix}"),
-                    vec![delta.user_id.clone().into()],
-                ))
-                .await
-                .map_err(|error| error.to_string())?;
-            let rows = tx
-                .query_all(
-                    db.stmt(
-                        &format!(
-                            "SELECT user_id, sub_account_enabled, sub_account_balance_nano FROM api_keys WHERE id = $1{lock_suffix}"
-                        ),
-                        vec![api_key_id.clone().into()],
-                    ),
-                )
-                .await
-                .map_err(|error| error.to_string())?;
-            let sub_state = rows.first().map(|row| {
-                (
-                    row.try_get::<String>("", "user_id")
-                        .map_err(|e| e.to_string()),
-                    row.try_get::<Option<i32>>("", "sub_account_enabled")
-                        .map(|flag| flag.unwrap_or(0) != 0)
-                        .map_err(|e| e.to_string()),
-                    row.try_get::<Option<String>>("", "sub_account_balance_nano")
-                        .map_err(|e| e.to_string()),
-                )
-            });
-            let Some((user_id_res, enabled, stored_balance)) = sub_state else {
-                // Key vanished between enqueue and apply: keep the ledger event, no balance change.
-                return Ok(1);
-            };
-            let owner_user_id = user_id_res?;
-            let enabled = enabled?;
-            let current = stored_balance?
-                .and_then(|raw| raw.trim().parse::<i128>().ok())
-                .unwrap_or(0);
-            if enabled {
-                let next = checked_sub_allow_negative(current, amount)?;
-                tx.execute(db.stmt(
-                    "UPDATE api_keys SET sub_account_balance_nano = $1 WHERE id = $2",
-                    vec![next.to_string().into(), api_key_id.into()],
-                ))
-                .await
-                .map_err(|error| error.to_string())?;
-            } else {
-                // Fallback mirrors charge_sub_account_balance_nano on the primary.
-                subtract_user_balance_tx(db, tx, &owner_user_id, amount).await?;
+    let request_id = delta
+        .meta_json
+        .get("request_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "replica charge metadata is missing request_id".to_string())?;
+    let billing_group_id = delta
+        .meta_json
+        .get("billing_group_id")
+        .and_then(Value::as_str);
+    let user = user_store
+        .lock_user_balance_tx(tx, &delta.user_id)
+        .await
+        .map_err(|error| error.message)?;
+    let now = chrono::Utc::now();
+
+    let mut sub_account: Option<(String, i128)> = None;
+    let mut missing_key = false;
+    if delta.kind == "api_key_charge" {
+        let api_key_id = delta.api_key_id.as_deref().unwrap_or_default();
+        let lock_suffix = if db.is_sqlite() { "" } else { " FOR UPDATE" };
+        let row = tx
+            .query_one(db.stmt(
+                &format!("SELECT user_id, sub_account_enabled, sub_account_balance_nano FROM api_keys WHERE id = $1{lock_suffix}"),
+                vec![api_key_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        match row {
+            None => missing_key = true,
+            Some(row) => {
+                let owner: String = row
+                    .try_get("", "user_id")
+                    .map_err(|error| error.to_string())?;
+                if owner != delta.user_id {
+                    return Err("replica charge API key owner mismatch".to_string());
+                }
+                let enabled = row
+                    .try_get::<Option<i32>>("", "sub_account_enabled")
+                    .map_err(|error| error.to_string())?
+                    .unwrap_or(0)
+                    != 0;
+                if enabled {
+                    let raw = row
+                        .try_get::<Option<String>>("", "sub_account_balance_nano")
+                        .map_err(|error| error.to_string())?
+                        .unwrap_or_else(|| "0".to_string());
+                    let current = raw
+                        .parse::<i128>()
+                        .map_err(|_| "malformed stored sub-account balance".to_string())?;
+                    sub_account = Some((api_key_id.to_string(), current));
+                }
             }
         }
-        other => return Err(format!("unsupported delta kind {other:?}")),
     }
+
+    let bypass = missing_key || (sub_account.is_none() && user.unlimited);
+    let allocation = if bypass {
+        crate::users::PlanChargeAllocation {
+            adjusted_charge_nano_usd: amount,
+            plan_covered_nano_usd: 0,
+            fallback_nano_usd: 0,
+            subscription_id: None,
+            plan_id: None,
+            multiplier: None,
+        }
+    } else {
+        user_store
+            .allocate_plan_charge_tx(
+                tx,
+                &delta.user_id,
+                delta.api_key_id.as_deref(),
+                billing_group_id,
+                request_id,
+                amount,
+                now,
+            )
+            .await
+            .map_err(|error| error.message)?
+    };
+
+    let balance_after = if let Some((api_key_id, current)) = sub_account {
+        let next = checked_sub_allow_negative(current, allocation.fallback_nano_usd)?;
+        if allocation.fallback_nano_usd > 0 {
+            tx.execute(db.stmt(
+                "UPDATE api_keys SET sub_account_balance_nano = $1 WHERE id = $2",
+                vec![next.to_string().into(), api_key_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        Some(next)
+    } else if bypass {
+        None
+    } else {
+        let next = checked_sub_allow_negative(user.balance, allocation.fallback_nano_usd)?;
+        if allocation.fallback_nano_usd > 0 {
+            tx.execute(db.stmt(
+                "UPDATE users SET balance_nano_usd = $1, updated_at = $2 WHERE id = $3",
+                vec![
+                    next.to_string().into(),
+                    now.to_rfc3339().into(),
+                    delta.user_id.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        Some(next)
+    };
+
+    let ledger_meta = crate::users::plan_charge_meta(&delta.meta_json, &allocation);
+    let conflict_clause =
+        "ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING";
+    let sql = format!(
+        "INSERT INTO billing_ledger (id, user_id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at, idempotency_key) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) {conflict_clause}"
+    );
+    let insert_result = tx
+        .execute(db.stmt(
+            &sql,
+            vec![
+                delta.delta_id.clone().into(),
+                delta.user_id.clone().into(),
+                delta.kind.clone().into(),
+                (-allocation.fallback_nano_usd).to_string().into(),
+                balance_after.map(|value| value.to_string()).into(),
+                ledger_meta.to_string().into(),
+                delta.created_at.clone().into(),
+                delta.delta_id.clone().into(),
+            ],
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+    if insert_result.rows_affected() == 0 {
+        return Err("replica delta idempotency raced with another apply".to_string());
+    }
+
+    let breakdown = tx
+        .query_one(db.stmt(
+            "SELECT billing_breakdown_json FROM request_logs WHERE request_id = $1",
+            vec![request_id.into()],
+        ))
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|row| {
+            row.try_get::<Option<String>>("", "billing_breakdown_json")
+                .ok()
+                .flatten()
+        })
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .map(|mut value| {
+            if let Some(object) = value.as_object_mut() {
+                let pre_plan = object
+                    .get("final_charge_nano")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                object.insert("pre_plan_charge_nano".to_string(), pre_plan);
+                object.insert(
+                    "final_charge_nano".to_string(),
+                    Value::String(allocation.adjusted_charge_nano_usd.to_string()),
+                );
+                object.insert(
+                    "plan".to_string(),
+                    serde_json::json!({
+                        "subscription_id": allocation.subscription_id,
+                        "plan_id": allocation.plan_id,
+                        "multiplier": allocation.multiplier,
+                        "covered_nano": allocation.plan_covered_nano_usd.to_string(),
+                        "fallback_nano": allocation.fallback_nano_usd.to_string(),
+                    }),
+                );
+            }
+            value.to_string()
+        });
+    tx.execute(db.stmt(
+        "UPDATE request_logs SET charge_nano_usd = $1, billing_breakdown_json = COALESCE($2, billing_breakdown_json) WHERE request_id = $3",
+        vec![allocation.adjusted_charge_nano_usd.to_string().into(), breakdown.into(), request_id.into()],
+    ))
+    .await
+    .map_err(|error| error.to_string())?;
     Ok(1)
 }
 
@@ -1210,55 +1313,13 @@ fn checked_sub_allow_negative(current: i128, amount: i128) -> Result<i128, Strin
         .ok_or_else(|| "balance overflow".to_string())
 }
 
-async fn subtract_user_balance_tx<C>(
-    db: &DbPool,
-    tx: &C,
-    user_id: &str,
-    amount: i128,
-) -> Result<(), String>
-where
-    C: sea_orm::ConnectionTrait,
-{
-    let lock_suffix = if db.is_sqlite() { "" } else { " FOR UPDATE" };
-    let select_sql =
-        format!("SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1{lock_suffix}");
-    let rows = tx
-        .query_all(db.stmt(&select_sql, vec![user_id.to_string().into()]))
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(row) = rows.first() else {
-        // Unknown user: ledger row already recorded above; nothing else to mutate.
-        return Ok(());
-    };
-    let unlimited: bool = row
-        .try_get::<Option<i32>>("", "balance_unlimited")
-        .map(|flag| flag.unwrap_or(0) != 0)
-        .map_err(|error| error.to_string())?;
-    if unlimited {
-        return Ok(());
-    }
-    let current: i128 = row
-        .try_get::<Option<String>>("", "balance_nano_usd")
-        .map_err(|error| error.to_string())?
-        .and_then(|raw| raw.trim().parse::<i128>().ok())
-        .ok_or_else(|| "malformed stored balance".to_string())?;
-    let next = checked_sub_allow_negative(current, amount)?;
-    tx.execute(db.stmt(
-        "UPDATE users SET balance_nano_usd = $1, updated_at = $2 WHERE id = $3",
-        vec![
-            next.to_string().into(),
-            chrono::Utc::now().to_rfc3339().into(),
-            user_id.to_string().into(),
-        ],
-    ))
-    .await
-    .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
 /// PRP9: drain leftover delta spool entries directly into the local database when a
 /// former replica starts as the primary. Runs after migrations, before serving traffic.
-pub async fn drain_delta_spool_to_local_db(db: &DbPool, spool: &DeltaSpool) -> Result<(), String> {
+pub async fn drain_delta_spool_to_local_db(
+    db: &DbPool,
+    user_store: &crate::users::UserStore,
+    spool: &DeltaSpool,
+) -> Result<(), String> {
     loop {
         let files = spool.load_batch(METERING_BATCH_HARD_CAP).await;
         if files.is_empty() {
@@ -1270,12 +1331,14 @@ pub async fn drain_delta_spool_to_local_db(db: &DbPool, spool: &DeltaSpool) -> R
             last_used: Vec::new(),
             balance_deltas: files.iter().map(|(_, _, delta)| delta.clone()).collect(),
         };
-        let ack = apply_metering_batch(db, &batch).await.map_err(|error| {
-            format!(
-                "promotion drain failed: {error}; spool entries preserved at {}",
-                spool.dir_display()
-            )
-        })?;
+        let ack = apply_metering_batch(db, user_store, &batch)
+            .await
+            .map_err(|error| {
+                format!(
+                    "promotion drain failed: {error}; spool entries preserved at {}",
+                    spool.dir_display()
+                )
+            })?;
         // Every entry is now either applied or already present server-side under the
         // same idempotency key, so releasing all of them is safe.
         let refs: Vec<(PathBuf, u64)> = files

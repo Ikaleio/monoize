@@ -5,7 +5,11 @@ mod store;
 mod utils;
 
 pub use groups::{CreateGroupInput, Group, GroupStoreError, ReorderGroupsInput, UpdateGroupInput};
-pub use plans::{BillingPlan, BillingPlanInput};
+pub use plans::{
+    BillingPlan, BillingPlanInput, BillingPlanPrice, BillingPlanPriceInput,
+    BillingPlanSubscription, BillingPlanUsageWindows, PlanChargeAllocation, PlanWindowUsage,
+};
+pub(crate) use store::plan_charge_meta;
 
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;
@@ -80,12 +84,6 @@ pub struct User {
     /// The user's single routing group id (`groups-registry.spec.md` §1.1).
     #[serde(default)]
     pub group_id: String,
-    /// Assigned billing plan, if any. Referential integrity is enforced by write paths.
-    #[serde(default)]
-    pub billing_plan_id: Option<String>,
-    /// Scheduled next balance grant time; present iff billing_plan_id is present.
-    #[serde(default)]
-    pub next_grant_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -341,8 +339,6 @@ pub struct AdminUpdateUserInput {
     pub balance_unlimited: Option<bool>,
     pub email: Option<Option<String>>,
     pub group_id: Option<String>,
-    /// Outer Option = field present in the request; inner Option = target plan (None clears).
-    pub billing_plan_id: Option<Option<String>>,
 }
 
 fn default_true() -> bool {
@@ -406,29 +402,18 @@ pub fn canonicalize_group_ids(group_ids: &[String]) -> Vec<String> {
 ///
 /// `base = [user_group_id]` when the key inherits the owner's group
 /// (`use_user_group` true) or stores no explicit groups (GR-I3); otherwise the
-/// key's ordered `group_ids`. A present non-empty plan layer filters `base` by
-/// membership while preserving `base` order. The result is always a concrete
-/// ordered list; `None`-typed unrestricted access exists only for internal
-/// system traffic and is never produced here.
+/// key's ordered `group_ids`. Billing plans never change routing groups.
 pub fn resolve_effective_groups(
     user_group_id: &str,
     use_user_group: bool,
     key_group_ids: &[String],
-    plan_group_ids: Option<&[String]>,
 ) -> Vec<String> {
     let base: Vec<String> = if use_user_group || key_group_ids.is_empty() {
         vec![user_group_id.to_string()]
     } else {
         key_group_ids.to_vec()
     };
-    let filtered: Vec<String> = match plan_group_ids {
-        Some(plan) if !plan.is_empty() => base
-            .into_iter()
-            .filter(|id| plan.iter().any(|allowed| allowed == id))
-            .collect(),
-        _ => base,
-    };
-    canonicalize_group_ids(&filtered)
+    canonicalize_group_ids(&base)
 }
 
 /// R-GRP-1 eligibility: `None` means internal system traffic (all providers
@@ -874,38 +859,23 @@ mod tests {
     fn resolve_effective_groups_follows_akg5() {
         // use_user_group => owner's single group.
         assert_eq!(
-            resolve_effective_groups("g-user", true, &ids(&["g-1", "g-2"]), None),
+            resolve_effective_groups("g-user", true, &ids(&["g-1", "g-2"])),
             ids(&["g-user"])
         );
         // Explicit empty group_ids resolves like use_user_group (GR-I3).
         assert_eq!(
-            resolve_effective_groups("g-user", false, &[], None),
+            resolve_effective_groups("g-user", false, &[]),
             ids(&["g-user"])
         );
         // Explicit ordered selection preserves order.
         assert_eq!(
-            resolve_effective_groups("g-user", false, &ids(&["g-2", "g-1"]), None),
+            resolve_effective_groups("g-user", false, &ids(&["g-2", "g-1"])),
             ids(&["g-2", "g-1"])
         );
-        // Non-empty plan layer filters by membership in base order.
+        // Billing plans do not filter routing groups.
         assert_eq!(
-            resolve_effective_groups(
-                "g-user",
-                false,
-                &ids(&["g-2", "g-1", "g-3"]),
-                Some(&ids(&["g-3", "g-2"]))
-            ),
-            ids(&["g-2", "g-3"])
-        );
-        // Empty plan layer is unrestricted.
-        assert_eq!(
-            resolve_effective_groups("g-user", true, &[], Some(&[])),
-            ids(&["g-user"])
-        );
-        // Plan ceiling can exclude every base group.
-        assert_eq!(
-            resolve_effective_groups("g-user", true, &[], Some(&ids(&["g-other"]))),
-            Vec::<String>::new()
+            resolve_effective_groups("g-user", false, &ids(&["g-2", "g-1", "g-3"]),),
+            ids(&["g-2", "g-1", "g-3"])
         );
     }
 

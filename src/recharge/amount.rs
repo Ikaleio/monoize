@@ -200,7 +200,10 @@ mod tests {
     #[test]
     fn canonical_nano_rejects_non_canonical_forms() {
         for raw in ["", "0", "-5", "+5", "01", "1.5", "abc"] {
-            assert!(parse_canonical_positive_nano(raw).is_err(), "accepted {raw:?}");
+            assert!(
+                parse_canonical_positive_nano(raw).is_err(),
+                "accepted {raw:?}"
+            );
         }
         assert_eq!(
             parse_canonical_positive_nano("5000000000").expect("parses"),

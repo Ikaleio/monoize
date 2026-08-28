@@ -31,10 +31,9 @@ DL2. Top header bar MUST NOT be rendered.
 
 DL3. User/account menu MUST be anchored at sidebar bottom.
 
-DL3a. The expanded sidebar account trigger MUST show the authenticated user's remaining
+DL3a. The expanded sidebar account trigger MUST show the authenticated user's prepaid
 balance on the second line (localized unlimited label when `balance_unlimited` is true;
-otherwise `balance_usd` formatted as USD with 2 fractional digits). When `billing_plan`
-is non-null, that second line MUST also include `billing_plan.name`. The collapsed
+otherwise `balance_usd` formatted as USD with 2 fractional digits). The collapsed
 sidebar MUST expose the same summary through the account-trigger tooltip. This display
 MUST use the session user object and MUST NOT call `GET /api/dashboard/billing-plans`.
 
@@ -42,7 +41,7 @@ DL3b. The account dropdown content MUST be a compact `18rem`-wide (`w-72`) menu 
 exactly these sections in order, separated by menu separators:
 
 1. identity header,
-2. quota/plan block,
+2. prepaid-balance block,
 3. live-usage block,
 4. actions (settings, theme toggle, sign out).
 
@@ -53,21 +52,12 @@ DL3c. The identity header MUST show the Gravatar avatar (same `getGravatarUrl` s
 the trigger, username-initial fallback), the username (truncated), the localized role
 label (`roles.{role}`), and the email truncated when present.
 
-DL3d. The quota/plan block MUST be sourced from the session user object only and MUST
+DL3d. The prepaid-balance block MUST be sourced from the session user object only and MUST
 NOT call `GET /api/dashboard/billing-plans`. It MUST render:
 
 - a balance row: localized unlimited label when `balance_unlimited` is true, otherwise
   `balance_usd` formatted as USD with 2 fractional digits via `formatUsdDecimal`;
-- when `billing_plan` is non-null: a plan row with `billing_plan.name`, a grant row with
-  `grant_amount_usd` (USD, 2 fractional digits) and the cron `schedule` as monospace
-  text, and a next-reset row with `next_grant_at` localized via `toLocaleString()` when
-  present;
-- when `billing_plan` is non-null, `balance_unlimited` is false, and
-  `grant_amount_nano_usd` parses as an integer greater than 0: a single-row progress bar
-  whose filled fraction is `clamp(balance_nano_usd / grant_amount_nano_usd, 0, 1)`
-  computed with `BigInt` arithmetic;
-- when `billing_plan` is null: a localized none/unassigned label. Grant, schedule,
-  next-reset, and progress rows MUST be absent in this case.
+- no plan, grant, reset, or plan-progress rows. The Wallet page owns the separate plan-capacity view.
 
 While the session user object has not resolved, the block MUST render skeleton
 placeholders instead of empty rows.
@@ -523,12 +513,7 @@ UP12. The user create and edit dialogs MUST select the user's group through the 
 single-select group selector (GS rules, §11). They MUST NOT offer freeform group text
 entry.
 
-UP6. The users table MUST include columns for assigned billing plan, UTC-calendar-day spend,
-and UTC-calendar-day call count, in addition to the existing user/role/balance/status columns.
-
-UP7. The plan cell MUST render `billing_plan.name` when `billing_plan` is non-null, and a
-localized none label when `billing_plan` is null. A disabled plan MUST remain visible with a
-disabled marker.
+UP6. The users table MUST include columns for UTC-calendar-day spend and UTC-calendar-day call count, in addition to the existing user, role, prepaid-balance, and status columns. It MUST NOT include a plan-assignment column.
 
 UP8. The today-spend cell MUST display `today_cost_nano_usd` as USD with 2 fractional digits
 using exact integer formatting (`BigInt`). A missing value MUST display as `$0.00`.
@@ -547,16 +532,10 @@ initialize the request-log username filter as defined by `spec/request-logs.spec
 
 ## 8. User Settings Page
 
-US1. `/settings` MUST render a read-only billing card sourced from the authenticated user
+US1. `/settings` MUST render a read-only prepaid-balance card sourced from the authenticated user
 object. The card MUST NOT call `GET /api/dashboard/billing-plans`.
 
-US2. The billing card MUST show:
-- current balance, or the localized unlimited label when `balance_unlimited` is true;
-- assigned plan name, or an explicit none label when `billing_plan` is null.
-
-US3. When `billing_plan` is non-null, the billing card MUST also show grant amount,
-period, `next_grant_at` when present, and `billing_plan.group_ids` rendered as group
-names (empty array renders as unrestricted).
+US2. The billing card MUST show current prepaid balance, or the localized unlimited label when `balance_unlimited` is true. It MUST NOT show plan data.
 
 US4. The billing card MUST use the same skeleton/loading contract as the rest of `/settings`
 when the user object has not yet resolved. It MUST NOT require a page close/reopen to

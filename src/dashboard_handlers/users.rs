@@ -25,6 +25,7 @@ pub struct CreateUserRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateUserRequest {
     pub username: Option<String>,
     pub password: Option<String>,
@@ -35,9 +36,6 @@ pub struct UpdateUserRequest {
     pub balance_unlimited: Option<bool>,
     pub email: Option<Option<String>>,
     pub group_id: Option<String>,
-    /// Absent = no change; null = unassign; string = assign plan (BP-S1..S4).
-    #[serde(default)]
-    pub billing_plan_id: Option<Option<String>>,
 }
 
 pub async fn list_users(
@@ -52,10 +50,6 @@ pub async fn list_users(
         .list_users()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let plans = user_store
-        .list_billing_plans()
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     let today_start = Utc::now()
         .date_naive()
         .and_time(NaiveTime::MIN)
@@ -66,10 +60,6 @@ pub async fn list_users(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let plan_by_id: HashMap<_, _> = plans
-        .into_iter()
-        .map(|plan| (plan.id.clone(), plan))
-        .collect();
     let usage_by_id: HashMap<_, _> = usage_rows
         .into_iter()
         .map(|row| (row.user_id.clone(), row))
@@ -83,12 +73,8 @@ pub async fn list_users(
     let responses: Vec<UserResponse> = users
         .into_iter()
         .map(|user| {
-            let plan = user
-                .billing_plan_id
-                .as_ref()
-                .and_then(|id| plan_by_id.get(id).cloned());
             let today = usage_by_id.get(&user.id).unwrap_or(&zero_usage);
-            UserResponse::from_user(user, plan, Some(today))
+            UserResponse::from_user(user, Some(today))
         })
         .collect();
     Ok(Json(responses))
@@ -299,15 +285,12 @@ pub async fn update_user(
                 balance_unlimited: body.balance_unlimited,
                 email: body.email,
                 group_id: body.group_id,
-                billing_plan_id: body.billing_plan_id,
             },
             &current_user.id,
         )
         .await
         .map_err(|e| {
-            if e == "billing plan not found" {
-                AppError::new(StatusCode::BAD_REQUEST, "invalid_billing_plan", e)
-            } else if e.starts_with("unknown group id") {
+            if e.starts_with("unknown group id") {
                 AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
             } else if e.contains("not found") {
                 AppError::new(StatusCode::NOT_FOUND, "not_found", e)

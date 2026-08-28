@@ -49,6 +49,11 @@ fn map_group_error(error: GroupStoreError) -> AppError {
             "cannot_delete_default_group",
             "the default group cannot be deleted",
         ),
+        GroupStoreError::PlanRequiresGroup => AppError::new(
+            StatusCode::CONFLICT,
+            "group_required_by_plan",
+            "a billing plan must retain at least one eligible group",
+        ),
         GroupStoreError::Storage(error) => {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
         }

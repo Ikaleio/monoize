@@ -9,12 +9,20 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub name: String,
     #[sea_orm(column_type = "Text")]
-    pub grant_amount_nano_usd: String,
+    pub description: String,
     #[sea_orm(column_type = "Text")]
-    pub schedule: String,
+    pub limit_5h_nano_usd: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub limit_24h_nano_usd: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub limit_7d_nano_usd: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub limit_30d_nano_usd: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub group_ids: String,
-    pub enabled: i32,
+    #[sea_orm(column_type = "Text")]
+    pub multiplier: String,
+    pub listed: i32,
     #[sea_orm(column_type = "Text")]
     pub created_at: String,
     #[sea_orm(column_type = "Text")]

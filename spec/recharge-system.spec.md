@@ -40,10 +40,10 @@ spec amendments in the same change, so specs and code stay aligned:
 
 ## 1. Concepts and units
 
-RC-U1. The wallet denomination is nano-USD exactly as defined by
+RC-U1. The prepaid wallet denomination is nano-USD exactly as defined by
 `user-billing-and-model-metadata.spec.md` B1/B2. Recharge MUST NOT introduce a
 second stored balance denomination, a per-currency wallet, or a points/credits
-unit. Every recharge credits `users.balance_nano_usd`.
+unit. Every recharge credits `users.balance_nano_usd`. A recharge MUST NOT modify plan capacity.
 
 RC-U2. All recharge amount arithmetic MUST use exact decimal or checked `i128`
 integer arithmetic. No amount, rate, or conversion may pass through `f32` or
@@ -362,7 +362,7 @@ RC-O3. Validation order and error codes (first failure wins):
 6. The user already has `>= MONOIZE_RECHARGE_MAX_PENDING_ORDERS` orders with
    `status = pending` → HTTP `429`, code `too_many_pending_orders`.
 
-RC-O4. On success the server inserts one `recharge_orders` row with
+RC-O4. The pending-order count and the insert MUST execute in one write transaction while the user row is locked. On success the server inserts one `recharge_orders` row with
 `status = pending`, `expires_at = now + MONOIZE_RECHARGE_ORDER_TTL_SECS`, and
 the RC-D4 snapshots, then calls the adapter's `create_payment`.
 
@@ -401,8 +401,7 @@ RC-N4. A verified notification whose `order_id` resolves no `recharge_orders`
 row, or resolves an order whose `payment_channel_id` differs from the route's
 channel id, MUST return the `unknown_order` ack and MUST NOT write anything.
 
-RC-N5. Amount check, evaluated before the success transition when the verified
-notification carries `paid_amount`/`paid_currency` (both bindings in §2 do):
+RC-N5. Both payment adapters MUST return `paid_amount` and `paid_currency` for a verified success notification. If either field is absent, Monoize MUST roll back, leave the order unchanged, and return HTTP `500` so the provider retries. Amount check, evaluated before the success transition:
 `paid_currency` MUST equal the order's `pay_currency` and `paid_amount` MUST
 be numerically equal to the order's `pay_amount`. On mismatch with the order
 in `pending` or `expired`, the server MUST transition the order to `failed`
@@ -601,12 +600,12 @@ HTTP `404`, code `not_found`.
 ## 10. Wallet page (`/dashboard/wallet`)
 
 RC-W1. `/dashboard/wallet` is a main-navigation page for every authenticated
-user (RC-S2 amendment 1). It renders, top to bottom: a balance card, a
-recharge card, a recharge-orders section, and a ledger section.
+user (RC-S2 amendment 1). It renders, top to bottom: a prepaid-balance and recharge row, a plan-capacity card, a recharge-orders section, and a ledger section.
 
 RC-W2. The balance card reads the session user object (`balance_usd`,
-`balance_unlimited`, `billing_plan`) exactly like
-`dashboard-ui-layout.spec.md` DL3a/US2, without extra fetches.
+`balance_unlimited`) exactly like `dashboard-ui-layout.spec.md` DL3a/US2, without extra fetches. The card labels this value as prepaid balance.
+
+RC-W2a. The plan-capacity card MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price and allow purchase. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
 
 RC-W3. The recharge card:
 
@@ -638,7 +637,7 @@ RC-W5. The ledger section lists the caller's RC-A5 entries with columns:
 created time, kind (localized label), delta (`delta_usd`, signed, green for
 positive / red for negative), and balance after. The default `kinds` filter
 sent by the page is exactly
-`recharge,recharge_refund,admin_adjustment,plan_grant,sub_account_transfer_out,sub_account_transfer_in,sub_account_refund,sub_account_debt_transfer,sub_account_delete_settlement,admin_sub_account_adjustment`
+`recharge,recharge_refund,admin_adjustment,plan_purchase,sub_account_transfer_out,sub_account_transfer_in,sub_account_refund,sub_account_debt_transfer,sub_account_delete_settlement,admin_sub_account_adjustment`
 (every non-per-request kind); a kind filter control MAY narrow it. Per-request
 charges (`request_charge`, `api_key_charge`) are intentionally excluded here —
 they remain on `/dashboard/logs` (§12).

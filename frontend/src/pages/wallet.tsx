@@ -8,6 +8,7 @@ import { BalanceCard } from "./wallet/balance-card";
 import { RechargeCard } from "./wallet/recharge-card";
 import { OrdersSection } from "./wallet/orders-section";
 import { LedgerSection } from "./wallet/ledger-section";
+import { PlanCard } from "./wallet/plan-card";
 
 const ORDERS_PAGE_SIZE = 10;
 
@@ -30,19 +31,25 @@ export function WalletPage() {
           <div className="grid gap-6 lg:grid-cols-2">
             <BalanceCard user={user} />
             <RechargeCard
-              ordersFirstPageKey={rechargeOrdersSWRKey(ORDERS_PAGE_SIZE, 0, undefined)}
+              ordersFirstPageKey={rechargeOrdersSWRKey(ORDERS_PAGE_SIZE, 0, {
+                username: user.username,
+              })}
             />
           </div>
+        </StaggerItem>
+        <StaggerItem>
+          <PlanCard />
         </StaggerItem>
         <StaggerItem>
           <OrdersSection
             pageSize={ORDERS_PAGE_SIZE}
             offset={ordersOffset}
             onOffsetChange={setOrdersOffset}
+            username={user.username}
           />
         </StaggerItem>
         <StaggerItem>
-          <LedgerSection />
+          <LedgerSection username={user.username} />
         </StaggerItem>
       </StaggerList>
     </PageWrapper>

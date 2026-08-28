@@ -590,18 +590,7 @@ mod tests {
             .create_api_key(&user.id, "scoped-key", None)
             .await
             .expect("scoped key creates");
-        let plan = user_store
-            .create_billing_plan(crate::users::BillingPlanInput {
-                name: "legacy-plan".to_string(),
-                grant_amount_nano_usd: Some("0".to_string()),
-                grant_amount_usd: None,
-                schedule: "0 0 * * *".to_string(),
-                group_ids: None,
-                enabled: Some(true),
-            })
-            .await
-            .expect("plan storage ok")
-            .expect("plan creates");
+        let plan_id = uuid::Uuid::new_v4().to_string();
         drop(user_store);
 
         let routing_store = crate::monoize_routing::MonoizeRoutingStore::new(db.clone())
@@ -643,6 +632,14 @@ mod tests {
                 .expect("down through groups registry restores legacy schema");
         }
 
+        exec(
+            &db,
+            &format!(
+                "INSERT INTO billing_plans (id, name, grant_amount_nano_usd, schedule, allowed_groups, enabled, created_at, updated_at) VALUES ('{plan_id}', 'legacy-plan', '0', '0 0 * * *', '[]', 1, '2026-08-25T00:00:00+00:00', '2026-08-25T00:00:00+00:00')"
+            ),
+        )
+        .await;
+
         // Plant legacy labels exactly as the pre-registry system stored them.
         exec(
             &db,
@@ -672,14 +669,16 @@ mod tests {
             &db,
             &format!(
                 r#"UPDATE billing_plans SET allowed_groups = '["team-a","gamma"]' WHERE id = '{}'"#,
-                plan.id
+                plan_id
             ),
         )
         .await;
 
         {
             let write = db.write().await;
-            Migrator::up(&*write, None).await.expect("populated-db up");
+            Migrator::up(&*write, Some(1))
+                .await
+                .expect("groups-registry migration reapplies");
         }
 
         // GM-2: exactly one default row named "default".
@@ -779,7 +778,7 @@ mod tests {
                 &db,
                 &format!(
                     "SELECT group_ids AS value FROM billing_plans WHERE id = '{}'",
-                    plan.id
+                    plan_id
                 )
             )
             .await,

@@ -176,8 +176,6 @@ mod tests {
             balance_unlimited: false,
             email: None,
             group_id: String::new(),
-            billing_plan_id: None,
-            next_grant_at: None,
         }
     }
 

@@ -202,7 +202,10 @@ mod tests {
 
     #[test]
     fn env_parser_falls_back_on_invalid_values() {
-        assert_eq!(parse_positive_env("MONOIZE_RECHARGE_TEST_UNSET", 3600), 3600);
+        assert_eq!(
+            parse_positive_env("MONOIZE_RECHARGE_TEST_UNSET", 3600),
+            3600
+        );
         // SAFETY: test-only env mutation in a single-threaded test context.
         unsafe {
             std::env::set_var("MONOIZE_RECHARGE_TEST_A", "0");
@@ -232,7 +235,10 @@ mod tests {
     fn form_decoder_handles_percent_and_plus() {
         let pairs = parse_form_urlencoded("a=1&name=Monoize+Recharge&x=%E4%B8%AD");
         assert_eq!(pairs[0], ("a".to_string(), "1".to_string()));
-        assert_eq!(pairs[1], ("name".to_string(), "Monoize Recharge".to_string()));
+        assert_eq!(
+            pairs[1],
+            ("name".to_string(), "Monoize Recharge".to_string())
+        );
         assert_eq!(pairs[2], ("x".to_string(), "中".to_string()));
     }
 }

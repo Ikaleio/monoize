@@ -215,9 +215,10 @@ SA-MIG3. Data migration for existing keys:
 
 | Kind                           | Direction | Description                                              |
 |--------------------------------|-----------|----------------------------------------------------------|
-| `request_charge`               | negative  | Charge against user balance (existing, unchanged)        |
-| `api_key_charge`               | negative  | Charge against API key sub-account balance               |
+| `request_charge`               | non-positive | Request fallback charged to prepaid balance after plan allocation |
+| `api_key_charge`               | non-positive | Request fallback charged to API key sub-account after plan allocation |
 | `admin_adjustment`             | either    | Admin adjustment of user balance (existing)              |
+| `plan_purchase`                | non-positive | Plan purchase from prepaid balance; zero for unlimited users |
 | `sub_account_transfer_out`     | negative  | User balance deducted for transfer to API key            |
 | `sub_account_transfer_in`      | positive  | API key sub-account credited from user transfer          |
 | `sub_account_refund`           | positive  | Positive sub-account balance returned to user             |

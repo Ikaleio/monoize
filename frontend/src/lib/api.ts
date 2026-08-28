@@ -58,16 +58,6 @@ export interface UpdateGroupInput {
   billing_ratio?: string;
 }
 
-export interface UserBillingPlan {
-  id: string;
-  name: string;
-  grant_amount_nano_usd: string;
-  grant_amount_usd: string;
-  schedule: string;
-  group_ids: string[];
-  enabled: boolean;
-}
-
 export interface User {
   id: string;
   username: string;
@@ -80,9 +70,6 @@ export interface User {
   balance_unlimited: boolean;
   email?: string | null;
   group_id: string;
-  billing_plan_id?: string | null;
-  next_grant_at?: string | null;
-  billing_plan?: UserBillingPlan | null;
   today_calls?: number;
   today_cost_nano_usd?: string;
   today_cost_usd?: string;
@@ -91,22 +78,70 @@ export interface User {
 export interface BillingPlan {
   id: string;
   name: string;
-  grant_amount_nano_usd: string;
-  grant_amount_usd: string;
-  schedule: string;
+  description: string;
+  limit_5h_nano_usd: string | null;
+  limit_24h_nano_usd: string | null;
+  limit_7d_nano_usd: string | null;
+  limit_30d_nano_usd: string | null;
   group_ids: string[];
-  enabled: boolean;
+  multiplier: string;
+  listed: boolean;
+  prices: BillingPlanPrice[];
   created_at: string;
   updated_at: string;
 }
 
+export interface BillingPlanPrice {
+  id: string;
+  price_nano_usd: string;
+  price_usd: string;
+  duration_seconds: number;
+  created_at: string;
+}
+
+export interface BillingPlanPriceInput {
+  price_nano_usd?: string;
+  price_usd?: string;
+  duration_seconds: number;
+}
+
 export interface BillingPlanInput {
   name: string;
-  grant_amount_nano_usd?: string;
-  grant_amount_usd?: string;
-  schedule: string;
-  group_ids?: string[];
-  enabled?: boolean;
+  description: string;
+  limit_5h_nano_usd: string | null;
+  limit_24h_nano_usd: string | null;
+  limit_7d_nano_usd: string | null;
+  limit_30d_nano_usd: string | null;
+  group_ids: string[];
+  multiplier: string;
+  listed: boolean;
+  prices: BillingPlanPriceInput[];
+}
+
+export interface BillingPlanWindowUsage {
+  limit_nano_usd: string;
+  used_nano_usd: string;
+  remaining_nano_usd: string;
+}
+
+export interface BillingPlanSubscription {
+  id: string;
+  user_id: string;
+  plan_id: string;
+  price_id: string;
+  plan_name: string;
+  plan_description: string;
+  group_ids: string[];
+  multiplier: string;
+  price_nano_usd: string;
+  starts_at: string;
+  expires_at: string;
+  windows: {
+    five_hour: BillingPlanWindowUsage | null;
+    twenty_four_hour: BillingPlanWindowUsage | null;
+    seven_day: BillingPlanWindowUsage | null;
+    thirty_day: BillingPlanWindowUsage | null;
+  };
 }
 
 export interface AuthResponse {
@@ -1172,7 +1207,6 @@ class ApiClient {
       balance_unlimited?: boolean;
       email?: string | null;
       group_id?: string;
-      billing_plan_id?: string | null;
     },
   ): Promise<User> {
     return this.request(`/users/${id}`, {
@@ -1208,10 +1242,22 @@ class ApiClient {
     return { success: true };
   }
 
-  async resetBillingPlan(
-    id: string,
-  ): Promise<{ success: boolean; reset_count: number }> {
-    return this.request(`/billing-plans/${id}/reset`, { method: "POST" });
+  async listBillingPlanMarketplace(): Promise<BillingPlan[]> {
+    return this.request("/billing-plans/marketplace");
+  }
+
+  async getBillingPlanSubscription(): Promise<BillingPlanSubscription | null> {
+    return this.request("/billing-plan-subscription");
+  }
+
+  async purchaseBillingPlan(
+    planId: string,
+    priceId: string,
+  ): Promise<BillingPlanSubscription> {
+    return this.request(`/billing-plans/${planId}/purchase`, {
+      method: "POST",
+      body: JSON.stringify({ price_id: priceId }),
+    });
   }
 
   async updateMe(updates: { email?: string | null }): Promise<User> {

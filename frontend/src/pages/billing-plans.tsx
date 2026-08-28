@@ -1,87 +1,65 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CalendarClock, Coins, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { GroupMultiSelect } from "@/components/groups/GroupPicker";
-import { toast } from "sonner";
-import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { PageWrapper } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
-import {
-  deleteBillingPlanOptimistic,
-  updateBillingPlanOptimistic,
-  useBillingPlans,
-  useDashboardGroups,
-  createBillingPlanOptimistic,
-  resetBillingPlanOptimistic,
-} from "@/lib/swr";
-import type { BillingPlan } from "@/lib/api";
+import { createBillingPlanOptimistic, deleteBillingPlanOptimistic, updateBillingPlanOptimistic, useBillingPlans, useDashboardGroups } from "@/lib/swr";
+import { formatNanoUsd } from "@/lib/exact-decimal";
+import type { BillingPlan, BillingPlanInput } from "@/lib/api";
 
 const NANO_PER_USD = 1_000_000_000n;
+const WINDOWS = [
+  ["limit_5h_nano_usd", "5h"], ["limit_24h_nano_usd", "24h"],
+  ["limit_7d_nano_usd", "7d"], ["limit_30d_nano_usd", "30d"],
+] as const;
 
-function parseUsdToNanoBigInt(usd: string): bigint | null {
-  const trimmed = usd.trim();
-  if (!trimmed) return null;
-  const negative = trimmed.startsWith("-");
-  const unsigned = negative ? trimmed.slice(1) : trimmed;
-  const [wholeRaw, fracRaw = ""] = unsigned.split(".");
-  if (!/^\d*$/.test(wholeRaw) || !/^\d*$/.test(fracRaw)) return null;
-  if (!wholeRaw && !fracRaw) return null;
-  const frac = (fracRaw + "000000000").slice(0, 9);
-  try {
-    const value = BigInt(wholeRaw || "0") * NANO_PER_USD + BigInt(frac);
-    return negative ? -value : value;
-  } catch {
-    return null;
-  }
+function usdToNano(value: string): string | null {
+  const match = /^(\d+)(?:\.(\d{0,9}))?$/.exec(value.trim());
+  if (!match) return null;
+  return (BigInt(match[1]) * NANO_PER_USD + BigInt((match[2] ?? "").padEnd(9, "0"))).toString();
 }
 
-interface PlanFormState {
-  name: string;
-  amount_usd: string;
-  schedule: string;
-  group_ids: string[];
-  enabled: boolean;
+function nanoToUsd(value: string | null): string {
+  if (!value) return "";
+  const nano = BigInt(value);
+  const fraction = (nano % NANO_PER_USD).toString().padStart(9, "0").replace(/0+$/, "");
+  return `${nano / NANO_PER_USD}${fraction ? `.${fraction}` : ""}`;
 }
 
-const EMPTY_FORM: PlanFormState = {
-  name: "",
-  amount_usd: "",
-  schedule: "0 0 * * *",
-  group_ids: [],
-  enabled: true,
+type WindowKey = (typeof WINDOWS)[number][0];
+type FormState = {
+  name: string; description: string; limits: Record<WindowKey, string>;
+  groupIds: string[]; multiplier: string; listed: boolean;
+  prices: Array<{ priceUsd: string; durationDays: string }>;
 };
 
-function formFromPlan(plan: BillingPlan): PlanFormState {
+const emptyForm = (): FormState => ({
+  name: "", description: "",
+  limits: { limit_5h_nano_usd: "", limit_24h_nano_usd: "", limit_7d_nano_usd: "", limit_30d_nano_usd: "" },
+  groupIds: [], multiplier: "1", listed: false, prices: [],
+});
+
+function formFromPlan(plan: BillingPlan): FormState {
   return {
-    name: plan.name,
-    amount_usd: plan.grant_amount_usd,
-    schedule: plan.schedule,
-    group_ids: plan.group_ids,
-    enabled: plan.enabled,
+    name: plan.name, description: plan.description,
+    limits: {
+      limit_5h_nano_usd: nanoToUsd(plan.limit_5h_nano_usd), limit_24h_nano_usd: nanoToUsd(plan.limit_24h_nano_usd),
+      limit_7d_nano_usd: nanoToUsd(plan.limit_7d_nano_usd), limit_30d_nano_usd: nanoToUsd(plan.limit_30d_nano_usd),
+    },
+    groupIds: plan.group_ids, multiplier: plan.multiplier, listed: plan.listed,
+    prices: plan.prices.map((price) => ({ priceUsd: price.price_usd, durationDays: String(price.duration_seconds / 86400) })),
   };
 }
 
@@ -90,384 +68,69 @@ export function BillingPlansPage() {
   const { data, isLoading } = useBillingPlans();
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const plans = useMemo(() => data ?? [], [data]);
-
-  const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState<PlanFormState>(EMPTY_FORM);
-  const [editTarget, setEditTarget] = useState<BillingPlan | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<BillingPlan | null>(null);
-  const [resetTarget, setResetTarget] = useState<BillingPlan | null>(null);
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<BillingPlan | null>(null);
+  const [deleting, setDeleting] = useState<BillingPlan | null>(null);
   const [saving, setSaving] = useState(false);
-  const [resetting, setResetting] = useState(false);
 
-  const openCreate = () => {
-    setForm(EMPTY_FORM);
-    setCreateOpen(true);
+  const startCreate = () => { setEditing(null); setForm(emptyForm()); setOpen(true); };
+  const startEdit = (plan: BillingPlan) => { setEditing(plan); setForm(formFromPlan(plan)); setOpen(true); };
+
+  const buildInput = (): BillingPlanInput | null => {
+    const limits = {} as Record<WindowKey, string | null>;
+    let invalidLimit = false;
+    for (const [key] of WINDOWS) {
+      limits[key] = form.limits[key] ? usdToNano(form.limits[key]) : null;
+      if (form.limits[key] && limits[key] === null) invalidLimit = true;
+    }
+    if (!form.name.trim() || invalidLimit || !Object.values(limits).some(Boolean) || form.groupIds.length === 0 || !/^\d+(?:\.\d+)?$/.test(form.multiplier) || Number(form.multiplier) <= 0) {
+      toast.error(t("billingPlans.invalidForm")); return null;
+    }
+    const prices = form.prices.map((price) => ({ price_usd: price.priceUsd.trim(), duration_seconds: Number(price.durationDays) * 86400 }));
+    if (prices.some((price) => usdToNano(price.price_usd) === null || !Number.isSafeInteger(price.duration_seconds) || price.duration_seconds <= 0) || (form.listed && prices.length === 0)) {
+      toast.error(t("billingPlans.invalidPrices")); return null;
+    }
+    return { name: form.name.trim(), description: form.description.trim(), ...limits, group_ids: form.groupIds, multiplier: form.multiplier, listed: form.listed, prices };
   };
 
-  const buildInput = () => {
-    const amount = parseUsdToNanoBigInt(form.amount_usd);
-    const schedule = form.schedule.trim().split(/\s+/).filter(Boolean).join(" ");
-    if (amount === null || amount < 0n) {
-      toast.error(t("billingPlans.invalidAmount"));
-      return null;
-    }
-    if (schedule.split(" ").length !== 5) {
-      toast.error(t("billingPlans.invalidSchedule"));
-      return null;
-    }
-    const name = form.name.trim();
-    if (!name) {
-      toast.error(t("billingPlans.nameRequired"));
-      return null;
-    }
-    return {
-      name,
-      grant_amount_nano_usd: amount.toString(),
-      schedule,
-      group_ids: form.group_ids,
-      enabled: form.enabled,
-    };
-  };
-
-  const handleCreate = async () => {
-    const input = buildInput();
-    if (!input || saving) return;
+  const save = async () => {
+    const input = buildInput(); if (!input) return;
     setSaving(true);
     try {
-      await createBillingPlanOptimistic(input, plans, (error) =>
-        toast.error(error.message)
-      );
-      setCreateOpen(false);
-      toast.success(t("common.success"));
-    } catch {
-      // optimistic helper already rolled back and toasted
-    } finally {
-      setSaving(false);
-    }
+      if (editing) await updateBillingPlanOptimistic(editing.id, input, plans, (error) => toast.error(error.message));
+      else await createBillingPlanOptimistic(input, plans, (error) => toast.error(error.message));
+      toast.success(t(editing ? "billingPlans.updated" : "billingPlans.created")); setOpen(false);
+    } finally { setSaving(false); }
   };
 
-  const handleUpdate = async () => {
-    if (!editTarget) return;
-    const input = buildInput();
-    if (!input || saving) return;
-    setSaving(true);
-    try {
-      await updateBillingPlanOptimistic(editTarget.id, input, plans, (error) =>
-        toast.error(error.message)
-      );
-      setEditTarget(null);
-      toast.success(t("common.success"));
-    } catch {
-      // optimistic helper already rolled back and toasted
-    } finally {
-      setSaving(false);
-    }
-  };
+  if (isLoading) return <TablePageSkeleton />;
+  return <PageWrapper className="space-y-6">
+    <PageHeader title={t("billingPlans.title")} description={t("billingPlans.description")} actions={<Button onClick={startCreate}><Plus className="mr-2 h-4 w-4" />{t("billingPlans.create")}</Button>} />
+    {plans.length === 0 ? <EmptyState title={t("billingPlans.emptyTitle")} description={t("billingPlans.emptyDescription")} /> : <div className="overflow-x-auto rounded-lg border"><table className="w-full text-left text-sm">
+      <thead className="bg-muted/50 text-muted-foreground"><tr><th className="px-4 py-3">{t("billingPlans.name")}</th><th className="px-4 py-3">{t("billingPlans.limits")}</th><th className="px-4 py-3">{t("billingPlans.groups")}</th><th className="px-4 py-3">{t("billingPlans.prices")}</th><th className="px-4 py-3">{t("billingPlans.multiplier")}</th><th className="px-4 py-3 text-right">{t("common.actions")}</th></tr></thead>
+      <tbody>{plans.map((plan) => <tr key={plan.id} className="border-t align-top">
+        <td className="px-4 py-3"><div className="font-medium">{plan.name}</div><div className="max-w-64 text-xs text-muted-foreground">{plan.description}</div>{plan.listed && <div className="mt-1 text-xs text-primary">{t("billingPlans.listed")}</div>}</td>
+        <td className="px-4 py-3 text-xs">{WINDOWS.map(([key, label]) => plan[key] && <div key={key}>{label}: {formatNanoUsd(plan[key]!)}</div>)}</td>
+        <td className="px-4 py-3"><GroupsBadge groupIds={plan.group_ids} /></td>
+        <td className="px-4 py-3 text-xs">{plan.prices.map((price) => <div key={price.id}>{price.price_usd} USD / {price.duration_seconds / 86400}d</div>)}</td>
+        <td className="px-4 py-3 font-mono">{plan.multiplier}×</td>
+        <td className="px-4 py-3"><div className="flex justify-end gap-1"><Button size="icon" variant="ghost" onClick={() => startEdit(plan)}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => setDeleting(plan)}><Trash2 className="h-4 w-4" /></Button></div></td>
+      </tr>)}</tbody></table></div>}
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-    try {
-      await deleteBillingPlanOptimistic(deleteTarget.id, plans, (error) =>
-        toast.error(error.message)
-      );
-      toast.success(t("common.success"));
-    } catch {
-      // optimistic helper already rolled back and toasted
-    } finally {
-      setDeleteTarget(null);
-    }
-  };
-
-  const handleReset = async () => {
-    if (!resetTarget || resetting) return;
-    setResetting(true);
-    try {
-      const result = await resetBillingPlanOptimistic(resetTarget, (error) =>
-        toast.error(error.message)
-      );
-      toast.success(t("billingPlans.resetSuccess", { count: result.reset_count }));
-      setResetTarget(null);
-    } catch {
-      // optimistic helper already rolled back and toasted; keep dialog open
-    } finally {
-      setResetting(false);
-    }
-  };
-
-  const toggleEnabled = async (plan: BillingPlan, enabled: boolean) => {
-    await updateBillingPlanOptimistic(
-      plan.id,
-      {
-        name: plan.name,
-        grant_amount_nano_usd: plan.grant_amount_nano_usd,
-        schedule: plan.schedule,
-        group_ids: plan.group_ids,
-        enabled,
-      },
-      plans,
-      (error) => toast.error(error.message)
-    ).catch(() => undefined);
-  };
-
-  const renderForm = (onSubmit: () => void) => (
-    <>
-      <div className="grid gap-4 py-4">
-        <div className="grid gap-2">
-          <Label htmlFor="plan-name">{t("billingPlans.name")}</Label>
-          <Input
-            id="plan-name"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder={t("billingPlans.namePlaceholder")}
-          />
+    <Dialog open={open} onOpenChange={setOpen}><DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{t(editing ? "billingPlans.edit" : "billingPlans.create")}</DialogTitle><DialogDescription>{t("billingPlans.formDescription")}</DialogDescription></DialogHeader>
+      <div className="grid gap-5 py-2">
+        <div className="grid gap-2"><Label>{t("billingPlans.name")}</Label><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></div>
+        <div className="grid gap-2"><Label>{t("billingPlans.planDescription")}</Label><Textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></div>
+        <div className="grid grid-cols-2 gap-3">{WINDOWS.map(([key, label]) => <div className="grid gap-2" key={key}><Label>{label} {t("billingPlans.limitUsd")}</Label><Input inputMode="decimal" value={form.limits[key]} onChange={(event) => setForm({ ...form, limits: { ...form.limits, [key]: event.target.value } })} placeholder={t("billingPlans.optional")} /></div>)}</div>
+        <div className="grid gap-2"><Label>{t("billingPlans.groups")}</Label><GroupMultiSelect value={form.groupIds} groups={groups} loading={groupsLoading} onChange={(groupIds) => setForm({ ...form, groupIds })} /></div>
+        <div className="grid gap-2"><Label>{t("billingPlans.multiplier")}</Label><Input inputMode="decimal" value={form.multiplier} onChange={(event) => setForm({ ...form, multiplier: event.target.value })} /></div>
+        <div className="flex items-center justify-between rounded-md border p-3"><div><Label>{t("billingPlans.listed")}</Label><p className="text-xs text-muted-foreground">{t("billingPlans.listedHelp")}</p></div><Switch checked={form.listed} onCheckedChange={(listed) => setForm({ ...form, listed })} /></div>
+        <div className="grid gap-2"><div className="flex items-center justify-between"><Label>{t("billingPlans.prices")}</Label><Button type="button" size="sm" variant="outline" onClick={() => setForm({ ...form, prices: [...form.prices, { priceUsd: "", durationDays: "30" }] })}><Plus className="mr-1 h-3.5 w-3.5" />{t("billingPlans.addPrice")}</Button></div>
+          {form.prices.map((price, index) => <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2"><Input inputMode="decimal" placeholder={t("billingPlans.priceUsd")} value={price.priceUsd} onChange={(event) => setForm({ ...form, prices: form.prices.map((entry, i) => i === index ? { ...entry, priceUsd: event.target.value } : entry) })} /><Input inputMode="numeric" placeholder={t("billingPlans.durationDays")} value={price.durationDays} onChange={(event) => setForm({ ...form, prices: form.prices.map((entry, i) => i === index ? { ...entry, durationDays: event.target.value } : entry) })} /><Button type="button" size="icon" variant="ghost" onClick={() => setForm({ ...form, prices: form.prices.filter((_, i) => i !== index) })}><X className="h-4 w-4" /></Button></div>)}
         </div>
-        <div className="grid gap-2">
-          <Label htmlFor="plan-amount">{t("billingPlans.amount")}</Label>
-          <Input
-            id="plan-amount"
-            inputMode="decimal"
-            value={form.amount_usd}
-            onChange={(e) => setForm({ ...form, amount_usd: e.target.value })}
-            placeholder="5"
-          />
-          <p className="text-xs text-muted-foreground">
-            {t("billingPlans.amountHelp")}
-          </p>
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="plan-schedule">{t("billingPlans.schedule")}</Label>
-          <Input
-            id="plan-schedule"
-            value={form.schedule}
-            onChange={(e) => setForm({ ...form, schedule: e.target.value })}
-            placeholder="0 0 * * *"
-            className="font-mono"
-          />
-          <div className="flex flex-wrap gap-1.5">
-            {[
-              { value: "0 0 * * *", label: t("billingPlans.scheduleDaily") },
-              { value: "0 * * * *", label: t("billingPlans.scheduleHourly") },
-              { value: "0 0 * * 1", label: t("billingPlans.scheduleWeekly") },
-            ].map((preset) => (
-              <Button
-                key={preset.value}
-                type="button"
-                variant={form.schedule.trim() === preset.value ? "secondary" : "outline"}
-                size="sm"
-                className="h-7 px-2 text-xs"
-                onClick={() => setForm({ ...form, schedule: preset.value })}
-              >
-                {preset.label}
-              </Button>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground">{t("billingPlans.scheduleHelp")}</p>
-        </div>
-        <div className="grid gap-2">
-          <Label>{t("billingPlans.groups")}</Label>
-          <GroupMultiSelect
-            value={form.group_ids}
-            groups={groups}
-            loading={groupsLoading}
-            onChange={(group_ids) => setForm({ ...form, group_ids })}
-          />
-          <p className="text-xs text-muted-foreground">{t("billingPlans.groupsHelp")}</p>
-        </div>
-        <div className="flex items-center justify-between rounded-lg border p-3">
-          <Label htmlFor="plan-enabled">{t("billingPlans.enabled")}</Label>
-          <Switch
-            id="plan-enabled"
-            checked={form.enabled}
-            onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
-          />
-        </div>
-      </div>
-      <DialogFooter>
-        <Button type="button" onClick={onSubmit} disabled={saving}>
-          {saving ? t("common.loading") : t("common.save")}
-        </Button>
-      </DialogFooter>
-    </>
-  );
-
-  return (
-    <PageWrapper>
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={transitions.normal}
-        className="space-y-6"
-      >
-        <PageHeader
-          title={t("billingPlans.title")}
-          description={t("billingPlans.description")}
-          actions={
-            <Button onClick={openCreate}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t("billingPlans.create")}
-            </Button>
-          }
-        />
-
-        {isLoading ? (
-          <TablePageSkeleton />
-        ) : plans.length === 0 ? (
-          <EmptyState
-            variant="card"
-            icon={<Coins className="h-10 w-10 text-muted-foreground" />}
-            title={t("billingPlans.emptyTitle")}
-            description={t("billingPlans.emptyDescription")}
-          />
-        ) : (
-          <div className="overflow-hidden rounded-lg border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-left text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">{t("billingPlans.name")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("billingPlans.amount")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("billingPlans.schedule")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("billingPlans.groups")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("billingPlans.enabled")}</th>
-                  <th className="px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {plans.map((plan) => (
-                  <tr key={plan.id} className="border-t transition-colors hover:bg-accent/40">
-                    <td className="px-4 py-3 font-medium">{plan.name}</td>
-                    <td className="px-4 py-3 tabular-nums">${plan.grant_amount_usd}</td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-1.5">
-                        <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
-                        <span className="font-mono">{plan.schedule}</span>
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {plan.group_ids.length > 0 ? (
-                        <GroupsBadge groupIds={plan.group_ids} />
-                      ) : (
-                        <span className="text-sm text-muted-foreground">
-                          {t("billingPlans.groupsUnrestricted")}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Switch
-                        checked={plan.enabled}
-                        onCheckedChange={(checked) => toggleEnabled(plan, checked)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2"
-                          title={t("billingPlans.reset")}
-                          onClick={() => setResetTarget(plan)}
-                        >
-                          <RotateCcw className="mr-1 h-4 w-4" />
-                          {t("billingPlans.reset")}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 touch-manipulation sm:size-9"
-                          aria-label={t("common.edit")}
-                          onClick={() => {
-                            setForm(formFromPlan(plan));
-                            setEditTarget(plan);
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 touch-manipulation sm:size-9"
-                          aria-label={t("common.delete")}
-                          onClick={() => setDeleteTarget(plan)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Create dialog */}
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("billingPlans.create")}</DialogTitle>
-              <DialogDescription>{t("billingPlans.description")}</DialogDescription>
-            </DialogHeader>
-            {renderForm(handleCreate)}
-          </DialogContent>
-        </Dialog>
-
-        {/* Edit dialog */}
-        <Dialog open={editTarget !== null} onOpenChange={(open) => !open && setEditTarget(null)}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("billingPlans.edit")}</DialogTitle>
-              <DialogDescription>{editTarget?.name}</DialogDescription>
-            </DialogHeader>
-            {renderForm(handleUpdate)}
-          </DialogContent>
-        </Dialog>
-
-        {/* Delete confirm */}
-        <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("billingPlans.deleteTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("billingPlans.deleteDescription", { name: deleteTarget?.name })}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-              <AlertDialogAction onClick={handleDelete}>
-                {t("common.delete")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        <AlertDialog
-          open={resetTarget !== null}
-          onOpenChange={(open) => {
-            if (!open && !resetting) setResetTarget(null);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("billingPlans.resetTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("billingPlans.resetDescription", { name: resetTarget?.name })}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={resetting}>{t("common.cancel")}</AlertDialogCancel>
-              <AlertDialogAction
-                disabled={resetting}
-                onClick={(event) => {
-                  event.preventDefault();
-                  void handleReset();
-                }}
-              >
-                {resetting ? t("common.loading") : t("billingPlans.reset")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-      </motion.div>
-    </PageWrapper>
-  );
+      </div><DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>{t("common.cancel")}</Button><Button disabled={saving} onClick={save}>{saving ? t("common.loading") : t("common.save")}</Button></DialogFooter>
+    </DialogContent></Dialog>
+    <AlertDialog open={Boolean(deleting)} onOpenChange={(value) => !value && setDeleting(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t("billingPlans.deleteTitle")}</AlertDialogTitle><AlertDialogDescription>{t("billingPlans.deleteDescription", { name: deleting?.name })}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel><AlertDialogAction onClick={async () => { if (!deleting) return; await deleteBillingPlanOptimistic(deleting.id, plans, (error) => toast.error(error.message)); setDeleting(null); }}>{t("common.delete")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  </PageWrapper>;
 }

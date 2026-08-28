@@ -167,7 +167,7 @@ invalidation cost is accepted).
 - Authorization: admin.
 - Response: `{ "success": true }`.
 - Errors: `404 not_found` for an unknown id; HTTP `400` code `cannot_delete_default_group`
-  when the target row has `is_default = 1`.
+  when the target row has `is_default = 1`; HTTP `409` code `group_required_by_plan` when deletion would leave a billing plan without an eligible group.
 
 GR-A7. Because the default group cannot be deleted, the registry always contains at least
 one row and GR-D2 cannot be violated by deletion.
@@ -203,7 +203,7 @@ GR-X3. Every `monoize_providers` row whose `group_ids` array contains `X.id` has
 element removed. If the resulting array is empty, it is replaced by `[default_group_id]`.
 
 GR-X4. Every `billing_plans` row whose `group_ids` array contains `X.id` has that element
-removed. An empty result stays `[]` (unrestricted ceiling).
+removed. If any result would be empty, the transaction MUST fail with HTTP `409` code `group_required_by_plan` and delete nothing.
 
 GR-X5. Rows whose stored `group_ids` value fails GR-C4 decoding MUST abort the transaction
 with a storage error; the cascade MUST NOT silently repair or skip corrupt rows.

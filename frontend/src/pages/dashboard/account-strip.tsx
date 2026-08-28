@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SlideUp } from "@/components/ui/motion";
 import { formatNanoUsd, formatUsdDecimal } from "@/lib/exact-decimal";
-import { planRemainingFraction } from "@/lib/live-usage";
 import type { DashboardAnalytics, User } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatCompactTokens } from "./utils";
@@ -138,22 +137,6 @@ export function AccountStrip({ user, analytics, loading }: AccountStripProps) {
     ? t("dashboard.account.balanceUnlimitedNote", "No account limit")
     : t("dashboard.account.balanceAvailableNote", "Available account balance");
   const summary = summarizeAnalytics(analytics);
-  const plan = user.billing_plan;
-  const remainingFraction =
-    plan && !user.balance_unlimited
-      ? planRemainingFraction(user.balance_nano_usd, plan.grant_amount_nano_usd)
-      : null;
-  const remainingLabel = user.balance_unlimited
-    ? t("users.unlimited", "Unlimited")
-    : plan
-      ? `${formatUsdDecimal(user.balance_usd, 2)} / ${formatUsdDecimal(plan.grant_amount_usd, 2)}`
-      : "";
-  const resetLabel = user.next_grant_at
-    ? new Date(user.next_grant_at).toLocaleString(undefined, {
-        dateStyle: "short",
-        timeStyle: "short",
-      })
-    : t("dashboard.subscription.resetUnavailable", "Not scheduled");
 
   return (
     <SlideUp delay={0.04}>
@@ -188,50 +171,7 @@ export function AccountStrip({ user, analytics, loading }: AccountStripProps) {
                 "All token categories",
               )}
             />
-            {plan ? (
-              <div className="flex min-h-28 min-w-0 flex-col justify-center gap-1 border-t p-4 sm:border-l lg:border-l lg:border-t-0">
-                <p className="truncate text-sm font-medium text-muted-foreground">
-                  {t("dashboard.account.subscriptionTitle", "Subscription")}
-                </p>
-                <p
-                  className="truncate font-display text-2xl font-semibold tracking-tight"
-                  title={plan.name}
-                >
-                  {plan.name}
-                </p>
-                <div className="flex min-w-0 flex-col gap-1">
-                  <p
-                    className="truncate text-sm text-muted-foreground"
-                    title={remainingLabel}
-                  >
-                    {remainingLabel}
-                  </p>
-                  {remainingFraction != null ? (
-                    <div className="h-1.5 overflow-hidden rounded-md bg-muted">
-                      <div
-                        className="h-full rounded-md bg-primary transition-[width] duration-500 ease-out"
-                        style={{
-                          width: `${Math.round(remainingFraction * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  ) : null}
-                  <p
-                    className="truncate text-sm text-muted-foreground"
-                    title={resetLabel}
-                  >
-                    {resetLabel}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <MetricCell
-                mobileDivider
-                label={t("dashboard.account.activeModels", "Active Models")}
-                value={summary.activeModels.toLocaleString()}
-                note={t("dashboard.account.activeModelsNote", "Past 24 hours")}
-              />
-            )}
+            <MetricCell mobileDivider label={t("dashboard.account.activeModels", "Active Models")} value={summary.activeModels.toLocaleString()} note={t("dashboard.account.activeModelsNote", "Past 24 hours")} />
           </CardContent>
         </Card>
       </section>

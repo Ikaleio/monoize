@@ -12,7 +12,7 @@
 
 B1. Balance unit MUST be nano-dollar (`1 USD = 1_000_000_000 nano_usd`).
 
-B2. Persistent balance MUST use signed integer nano-dollar string storage in `users.balance_nano_usd` (`TEXT` column), not floating point.
+B2. Persistent prepaid balance MUST use signed integer nano-dollar string storage in `users.balance_nano_usd` (`TEXT` column), not floating point. Plan capacity MUST use the separate tables defined by `billing-plan-subscriptions.spec.md`.
 
 B3. User balance unlimited switch MUST be persisted in `users.balance_unlimited` (`INTEGER` column, `0|1`).
 
@@ -33,11 +33,10 @@ U1. User read model exposed by dashboard/auth APIs MUST include:
 - `balance_unlimited: boolean`
 - `email: string | null`
 - `group_id: string` (the user's single group id, see `groups-registry.spec.md`)
-- `billing_plan_id: string | null`
-- `next_grant_at: string | null` (RFC 3339)
-- `billing_plan: object | null` as defined by `spec/billing-plan-subscriptions.spec.md` BP-U2
 
 U2. `balance_usd` MUST be computed from `balance_nano_usd` with nano precision and no binary floating conversion.
+
+U2a. `balance_nano_usd` and `balance_usd` represent prepaid balance only. They MUST NOT include active plan capacity or plan usage.
 
 U2.1. Nano-dollar formatting MUST cover the complete signed `i128` domain, including `i128::MIN`, without panic or lossy conversion.
 
@@ -85,6 +84,8 @@ A2. `PUT /api/dashboard/users/{user_id}` MUST accept optional fields:
 - `balance_unlimited: boolean`
 - `email: string | null`
 - `group_id: string`
+
+A2b. The endpoint MUST reject unknown fields. It MUST reject the removed `billing_plan_id` field with HTTP `422`.
 
 A2a. `POST /api/dashboard/users` MUST accept optional field `group_id: string`. If the field is omitted, the stored value MUST be the default group id.
 

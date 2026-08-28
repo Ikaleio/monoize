@@ -480,8 +480,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         let sweeper_store = user_store.clone();
         let shutdown = background_shutdown.clone();
         tokio::spawn(async move {
-            let interval =
-                std::time::Duration::from_secs(crate::recharge::tick_interval_secs());
+            let interval = std::time::Duration::from_secs(crate::recharge::tick_interval_secs());
             loop {
                 if shutdown.load(Ordering::Acquire) {
                     break;
@@ -923,7 +922,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     err,
                 )
             })?;
-            crate::replica::metering::drain_delta_spool_to_local_db(&db, &spool)
+            crate::replica::metering::drain_delta_spool_to_local_db(&db, &user_store, &spool)
                 .await
                 .map_err(|err| {
                     AppError::new(
@@ -1763,13 +1762,21 @@ fn build_dashboard_api_router() -> Router<AppState> {
                 .post(crate::dashboard_handlers::create_billing_plan),
         )
         .route(
+            "/dashboard/billing-plans/marketplace",
+            get(crate::dashboard_handlers::list_billing_plan_marketplace),
+        )
+        .route(
+            "/dashboard/billing-plan-subscription",
+            get(crate::dashboard_handlers::get_billing_plan_subscription),
+        )
+        .route(
             "/dashboard/billing-plans/{plan_id}",
             put(crate::dashboard_handlers::update_billing_plan)
                 .delete(crate::dashboard_handlers::delete_billing_plan),
         )
         .route(
-            "/dashboard/billing-plans/{plan_id}/reset",
-            post(crate::dashboard_handlers::reset_billing_plan),
+            "/dashboard/billing-plans/{plan_id}/purchase",
+            post(crate::dashboard_handlers::purchase_billing_plan),
         )
         .route(
             "/dashboard/tokens",

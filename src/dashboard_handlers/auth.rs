@@ -5,7 +5,7 @@ use crate::dashboard_handlers::session_helpers::{
 };
 use crate::error::{AppError, AppResult};
 use crate::users::{
-    BillingPlan, RegisterUserError, User, UserRole, UserStore, UserTodayUsage, format_nano_to_usd,
+    RegisterUserError, User, UserRole, UserStore, UserTodayUsage, format_nano_to_usd,
 };
 use axum::Json;
 use axum::extract::State;
@@ -39,35 +39,6 @@ pub struct AuthResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct UserBillingPlanResponse {
-    pub id: String,
-    pub name: String,
-    pub grant_amount_nano_usd: String,
-    pub grant_amount_usd: String,
-    pub schedule: String,
-    pub group_ids: Vec<String>,
-    pub enabled: bool,
-}
-
-impl From<BillingPlan> for UserBillingPlanResponse {
-    fn from(plan: BillingPlan) -> Self {
-        let nano = plan
-            .grant_amount_nano_usd
-            .parse::<i128>()
-            .expect("UserStore must validate persisted plan amounts");
-        Self {
-            id: plan.id,
-            name: plan.name,
-            grant_amount_usd: format_nano_to_usd(nano),
-            grant_amount_nano_usd: plan.grant_amount_nano_usd,
-            schedule: plan.schedule,
-            group_ids: plan.group_ids,
-            enabled: plan.enabled,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
 pub struct UserResponse {
     pub id: String,
     pub username: String,
@@ -81,9 +52,6 @@ pub struct UserResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     pub group_id: String,
-    pub billing_plan_id: Option<String>,
-    pub next_grant_at: Option<String>,
-    pub billing_plan: Option<UserBillingPlanResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub today_calls: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,7 +61,7 @@ pub struct UserResponse {
 }
 
 impl UserResponse {
-    pub fn from_user(u: User, plan: Option<BillingPlan>, today: Option<&UserTodayUsage>) -> Self {
+    pub fn from_user(u: User, today: Option<&UserTodayUsage>) -> Self {
         let balance_nano = u
             .balance_nano_usd
             .parse::<i128>()
@@ -118,9 +86,6 @@ impl UserResponse {
             balance_unlimited: u.balance_unlimited,
             email: u.email,
             group_id: u.group_id,
-            billing_plan_id: u.billing_plan_id,
-            next_grant_at: u.next_grant_at.map(|d| d.to_rfc3339()),
-            billing_plan: plan.map(UserBillingPlanResponse::from),
             today_calls,
             today_cost_nano_usd,
             today_cost_usd,
@@ -130,19 +95,15 @@ impl UserResponse {
 
 impl From<User> for UserResponse {
     fn from(u: User) -> Self {
-        Self::from_user(u, None, None)
+        Self::from_user(u, None)
     }
 }
 
 pub async fn user_response_from_store(
-    store: &UserStore,
+    _store: &UserStore,
     user: User,
 ) -> Result<UserResponse, String> {
-    let plan = match user.billing_plan_id.as_deref() {
-        Some(id) => store.get_billing_plan_by_id(id).await?,
-        None => None,
-    };
-    Ok(UserResponse::from_user(user, plan, None))
+    Ok(UserResponse::from(user))
 }
 
 fn map_user_response_error(error: String) -> AppError {

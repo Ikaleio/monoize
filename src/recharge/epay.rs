@@ -95,7 +95,10 @@ impl PaymentAdapter for EpayAdapter {
         let pay_type = config_str(config, "pay_type");
 
         let mut pairs: Vec<(String, String)> = vec![
-            ("pid".to_string(), config_str(config, "merchant_id").to_string()),
+            (
+                "pid".to_string(),
+                config_str(config, "merchant_id").to_string(),
+            ),
             ("out_trade_no".to_string(), order.id.clone()),
             ("notify_url".to_string(), urls.notify_url.clone()),
             ("return_url".to_string(), urls.return_url.clone()),
@@ -111,12 +114,7 @@ impl PaymentAdapter for EpayAdapter {
 
         let query = pairs
             .iter()
-            .map(|(key, value)| {
-                format!(
-                    "{key}={}",
-                    utf8_percent_encode(value, NON_ALPHANUMERIC)
-                )
-            })
+            .map(|(key, value)| format!("{key}={}", utf8_percent_encode(value, NON_ALPHANUMERIC)))
             .collect::<Vec<_>>()
             .join("&");
         Ok(PaymentInitiation {
@@ -220,13 +218,7 @@ mod tests {
         let adapter = EpayAdapter;
         let query = to_query(&signed_pairs("73.00", "secret-key"));
         let verified = adapter
-            .verify_notification(
-                &Method::GET,
-                &HeaderMap::new(),
-                b"",
-                &query,
-                &config,
-            )
+            .verify_notification(&Method::GET, &HeaderMap::new(), b"", &query, &config)
             .ok();
         match verified {
             Some(Verification::Verified(notification)) => {

@@ -31,12 +31,13 @@ pub use api_keys::{
 };
 pub use auth::{
     AuthResponse, ChangePasswordRequest, LoginRequest, RegisterRequest, UpdateMeRequest,
-    UserBillingPlanResponse, UserResponse, change_password, get_me, login, logout, register,
-    update_me, user_response_from_store,
+    UserResponse, change_password, get_me, login, logout, register, update_me,
+    user_response_from_store,
 };
 pub use billing_plans::{
     BillingPlanResponse, CreateBillingPlanRequest, UpdateBillingPlanRequest, create_billing_plan,
-    delete_billing_plan, list_billing_plans, reset_billing_plan, update_billing_plan,
+    delete_billing_plan, get_billing_plan_subscription, list_billing_plan_marketplace,
+    list_billing_plans, purchase_billing_plan, update_billing_plan,
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use custom_transforms::{

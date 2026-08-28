@@ -25,6 +25,7 @@ interface OrdersSectionProps {
   pageSize: number;
   offset: number;
   onOffsetChange: (offset: number) => void;
+  username: string;
 }
 
 /**
@@ -32,14 +33,14 @@ interface OrdersSectionProps {
  * displayed order is `pending`; a poll that observes a pending order reach a
  * terminal state revalidates the ledger and the session user caches.
  */
-export function OrdersSection({ pageSize, offset, onOffsetChange }: OrdersSectionProps) {
+export function OrdersSection({ pageSize, offset, onOffsetChange, username }: OrdersSectionProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
   const { refreshUser } = useAuth();
   const [searchParams] = useSearchParams();
   const highlightedOrderId = searchParams.get("order_id");
 
-  const { data, isLoading } = useRechargeOrders(pageSize, offset, undefined, {
+  const { data, isLoading } = useRechargeOrders(pageSize, offset, { username }, {
     refreshInterval: (latest: RechargeOrdersResponse | undefined) =>
       latest?.orders.some((order) => order.status === "pending") ? 5000 : 0,
   });

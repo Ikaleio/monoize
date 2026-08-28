@@ -66,14 +66,13 @@ impl AuthState {
         if token.starts_with("sk-") && token.len() >= 12 {
             if let Some(store) = user_store {
                 match store.validate_api_key(token).await {
-                    Ok(Some((api_key, user, plan_group_ids))) => {
+                    Ok(Some((api_key, user))) => {
                         // GR-I4: API-key auth always yields a concrete ordered list;
                         // `None` is reserved for internal system traffic.
                         let effective_groups = Some(resolve_effective_groups(
                             &user.group_id,
                             api_key.use_user_group,
                             &api_key.group_ids,
-                            plan_group_ids.as_deref(),
                         ));
                         return Some(AuthResult {
                             tenant_id: user.id.clone(),
@@ -178,7 +177,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authenticate_token_preserves_key_group_order_and_applies_plan_filter() {
+    async fn authenticate_token_preserves_key_group_order() {
         let store = make_user_store().await;
         let team_a = store
             .create_group(CreateGroupInput {
@@ -226,36 +225,5 @@ mod tests {
             auth.effective_groups,
             Some(vec![team_b.id.clone(), team_a.id.clone()])
         );
-
-        // A plan ceiling filters the key's ordered list by membership.
-        let plan = store
-            .create_billing_plan(crate::users::BillingPlanInput {
-                name: "restricted".to_string(),
-                grant_amount_nano_usd: None,
-                grant_amount_usd: Some("1".to_string()),
-                schedule: "* * * * *".to_string(),
-                group_ids: Some(vec![team_a.id.clone()]),
-                enabled: None,
-            })
-            .await
-            .expect("plan create runs")
-            .expect("plan valid");
-        store
-            .admin_update_user_atomic(
-                &user.id,
-                crate::users::AdminUpdateUserInput {
-                    billing_plan_id: Some(Some(plan.id.clone())),
-                    ..Default::default()
-                },
-                "actor",
-            )
-            .await
-            .expect("plan assigned");
-
-        let filtered_auth = AuthState::new()
-            .authenticate_token(&token, Some(&store))
-            .await
-            .expect("auth succeeds");
-        assert_eq!(filtered_auth.effective_groups, Some(vec![team_a.id]));
     }
 }

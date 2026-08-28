@@ -335,9 +335,10 @@ pub fn validate_recharge_public_origin(raw: &str) -> Result<(), String> {
     if raw.is_empty() {
         return Ok(());
     }
-    let error =
-        || "recharge_public_origin must be an http(s) origin without path or trailing slash"
-            .to_string();
+    let error = || {
+        "recharge_public_origin must be an http(s) origin without path or trailing slash"
+            .to_string()
+    };
     let rest = raw
         .strip_prefix("https://")
         .or_else(|| raw.strip_prefix("http://"))
