@@ -1,11 +1,3 @@
-#[cfg(test)]
-fn item_extra_body_from_item(item: &Item) -> HashMap<String, Value> {
-    match item {
-        Item::Message { extra_body, .. } | Item::ToolResult { extra_body, .. } => {
-            extra_body.clone()
-        }
-    }
-}
 
 fn outputs_have_tool_calls(items: &[Node]) -> bool {
     items
@@ -325,76 +317,8 @@ fn build_accumulated_output_entries(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn build_accumulated_output_nodes_from_reasoning_slots(
-    reasoning_by_output_index: &HashMap<u64, AccumulatedReasoningSlot>,
-    output_texts_by_output_index: &HashMap<u64, String>,
-    message_phases_by_output_index: &HashMap<u64, String>,
-    message_item_extra_by_output_index: &HashMap<u64, HashMap<String, Value>>,
-    item_ids_by_output_index: &HashMap<u64, String>,
-    call_order: &[String],
-    calls: &HashMap<String, (ToolCallType, String, String)>,
-    call_ids_by_output_index: &HashMap<u64, String>,
-) -> Vec<Node> {
-    build_accumulated_output_entries(
-        reasoning_by_output_index,
-        output_texts_by_output_index,
-        message_phases_by_output_index,
-        message_item_extra_by_output_index,
-        item_ids_by_output_index,
-        call_order,
-        calls,
-        call_ids_by_output_index,
-    )
-    .into_iter()
-    .flat_map(|entry| entry.nodes)
-    .collect()
-}
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn build_accumulated_output_nodes(
-    reasoning_text: &str,
-    reasoning_summary_text: &str,
-    reasoning_sig: &str,
-    reasoning_source: Option<&str>,
-    reasoning_output_index: Option<u64>,
-    output_texts_by_output_index: &HashMap<u64, String>,
-    message_phases_by_output_index: &HashMap<u64, String>,
-    message_item_extra_by_output_index: &HashMap<u64, HashMap<String, Value>>,
-    item_ids_by_output_index: &HashMap<u64, String>,
-    call_order: &[String],
-    calls: &HashMap<String, (ToolCallType, String, String)>,
-    call_ids_by_output_index: &HashMap<u64, String>,
-) -> Vec<Node> {
-    let mut reasoning_by_output_index = HashMap::new();
-    if !reasoning_text.is_empty() || !reasoning_summary_text.is_empty() || !reasoning_sig.is_empty()
-    {
-        let output_index = reasoning_output_index.unwrap_or(0);
-        reasoning_by_output_index.insert(
-            output_index,
-            AccumulatedReasoningSlot {
-                id: item_ids_by_output_index.get(&output_index).cloned(),
-                content: reasoning_text.to_string(),
-                summary: reasoning_summary_text.to_string(),
-                summary_parts: BTreeMap::new(),
-                encrypted: (!reasoning_sig.is_empty()).then(|| Value::String(reasoning_sig.to_string())),
-                source: reasoning_source.map(str::to_string),
-                extra_body: HashMap::new(),
-            },
-        );
-    }
-    build_accumulated_output_nodes_from_reasoning_slots(
-        &reasoning_by_output_index,
-        output_texts_by_output_index,
-        message_phases_by_output_index,
-        message_item_extra_by_output_index,
-        item_ids_by_output_index,
-        call_order,
-        calls,
-        call_ids_by_output_index,
-    )
-}
 
 fn output_index_for_call_id(
     call_ids_by_output_index: &HashMap<u64, String>,

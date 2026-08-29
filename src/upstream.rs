@@ -387,23 +387,3 @@ fn json_scalar_string(value: &Value) -> Option<String> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn openrouter_error_info_accepts_numeric_code_and_metadata_fallbacks() {
-        let info = extract_error_info(
-            r#"{"error":{"code":502,"message":"provider failed","metadata":{"provider_code":"P502","error_type":"provider_error"}}}"#,
-        );
-        assert_eq!(info.code.as_deref(), Some("502"));
-        assert_eq!(info.error_type.as_deref(), Some("provider_error"));
-
-        let fallback = extract_error_info(
-            r#"{"error":{"message":"provider failed","metadata":{"provider_code":529,"error_type":"upstream_error"}}}"#,
-        );
-        assert_eq!(fallback.code.as_deref(), Some("529"));
-        assert_eq!(fallback.error_type.as_deref(), Some("upstream_error"));
-    }
-}

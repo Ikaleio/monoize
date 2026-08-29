@@ -41,13 +41,11 @@ The selected upstream adapter encodes these nodes into the target protocol. The 
 
 This design provides these properties:
 
-- The Responses, Chat Completions, and Messages matrix is tested in streaming and non-streaming modes.
+- The Responses, Chat Completions, and Messages matrix supports streaming and non-streaming modes.
 - Encrypted reasoning remains separate from visible reasoning. Optional `mz2` envelopes preserve opaque reasoning across incompatible replay formats.
 - Tool-call IDs, parallel calls, multipart tool results, and assistant history keep their roles.
 - Responses output items and Messages content blocks maintain balanced lifecycle events.
 - Unknown fields within the same protocol family pass through. Monoize strips unsafe nested fields at cross-family boundaries to avoid invalid requests.
-
-See the [protocol test matrix](spec/urp-v2-flat-protocol-test-matrix.spec.md) for test cases.
 
 ### Retry before commit
 
@@ -294,12 +292,6 @@ The workflow also builds four npm tarballs: one TypeScript-derived launcher and 
 
 ## Development and verification
 
-Run the backend tests:
-
-```bash
-cargo test
-```
-
 Run the frontend checks:
 
 ```bash
@@ -308,15 +300,6 @@ bun install
 bun run lint
 bun run build
 ```
-
-Run the live three-protocol suite against a configured instance:
-
-```bash
-cd sdk-tests
-bun run live-protocol-suite.ts <baseURL> <apiKey> <model>
-```
-
-The suite checks non-streaming text, streaming text, tool loops, and streaming tool loops through Chat Completions, Responses, and Messages.
 
 Observable behavior is specified under [`spec/`](spec/). Code and specifications change together.
 

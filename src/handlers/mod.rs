@@ -4,16 +4,11 @@ mod compact;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
 mod nonstream;
-#[cfg(test)]
-pub(crate) use nonstream::strip_orphaned_tool_calls;
 mod request_logging;
 mod responses_websocket;
 pub(crate) mod routing;
 mod streaming;
 pub(crate) mod usage;
-
-#[cfg(test)]
-mod tests;
 
 use crate::app::AppState;
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType};

@@ -9,6 +9,7 @@ During the development process, you must strictly adhere to the rules in this do
 
 - You are an automated coding / tooling agent working inside this repository.
 - You must **not** modify files outside the project root during ordinary code, test, or tooling work.
+- You must **not** write or add tests unless the user explicitly requests tests.
 - Deployment is an explicit exception: when the user explicitly requests deployment, you may run project-owned deployment
   scripts or commands that write their documented deployment targets outside the project root, such as copying release
   artifacts to `/opt/monoize` or restarting the configured process manager. Do not modify unrelated external paths.

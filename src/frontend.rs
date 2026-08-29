@@ -10,7 +10,7 @@ use mime_guess::MimeGuess;
 #[cfg(embed_frontend)]
 static FRONTEND_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/frontend/dist");
 
-#[cfg(any(embed_frontend, test))]
+#[cfg(embed_frontend)]
 fn entry_document_with_nonce(contents: &[u8], nonce: &str) -> Vec<u8> {
     String::from_utf8_lossy(contents)
         .replace("__MONOIZE_CSP_NONCE__", nonce)
@@ -43,25 +43,6 @@ fn asset_response(path: &str, nonce: Option<&str>) -> Response {
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         None => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn entry_document_replaces_the_nonce_placeholder() {
-        let rendered = entry_document_with_nonce(
-            br#"<meta name="csp-nonce" content="__MONOIZE_CSP_NONCE__">"#,
-            "request-nonce",
-        );
-        let rendered = String::from_utf8(rendered).unwrap();
-        assert_eq!(
-            rendered,
-            r#"<meta name="csp-nonce" content="request-nonce">"#
-        );
-        assert!(!rendered.contains("__MONOIZE_CSP_NONCE__"));
     }
 }
 

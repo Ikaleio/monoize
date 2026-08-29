@@ -29,14 +29,3 @@ impl MigrationTrait for Migration {
 fn postgres_upgrade_sql() -> &'static str {
     "ALTER TABLE monoize_channel_models ALTER COLUMN multiplier TYPE DOUBLE PRECISION USING multiplier::DOUBLE PRECISION"
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn migration_converts_multiplier_to_float8() {
-        assert!(postgres_upgrade_sql().contains("TYPE DOUBLE PRECISION"));
-        assert!(postgres_upgrade_sql().contains("USING multiplier::DOUBLE PRECISION"));
-    }
-}

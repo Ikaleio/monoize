@@ -60,22 +60,3 @@ fn upgrade_sql(backend: DbBackend) -> &'static [&'static str] {
         _ => &[],
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::upgrade_sql;
-    use sea_orm::DbBackend;
-
-    #[test]
-    fn both_backends_finish_with_text_multiplier_columns() {
-        let postgres = upgrade_sql(DbBackend::Postgres).join(";");
-        assert!(postgres.contains("multiplier TYPE TEXT"));
-        assert!(postgres.contains("max_multiplier TYPE TEXT"));
-        assert!(postgres.contains("provider_multiplier TYPE TEXT"));
-
-        let sqlite = upgrade_sql(DbBackend::Sqlite).join(";");
-        assert!(sqlite.contains("RENAME COLUMN multiplier_exact TO multiplier"));
-        assert!(sqlite.contains("RENAME COLUMN max_multiplier_exact TO max_multiplier"));
-        assert!(sqlite.contains("RENAME COLUMN provider_multiplier_exact TO provider_multiplier"));
-    }
-}

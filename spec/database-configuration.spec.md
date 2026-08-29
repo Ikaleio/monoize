@@ -184,10 +184,6 @@ DB20. All SQL statements MUST be compatible with both SQLite and PostgreSQL. Spe
 
 DB21. Request-log storage MUST use a single canonical table schema across SQLite and PostgreSQL. PostgreSQL-specific shadow columns for type-specialized mirrors are forbidden. If an older PostgreSQL database still contains such shadow columns, migrations MUST remove them while preserving canonical data.
 
-### 10.1 Backend parity tests
-
-DB-T1. SQLite database-semantic tests MUST run without external services. PostgreSQL parity tests MUST use `MONOIZE_TEST_POSTGRES_DSN` when that environment variable is present and non-empty, and MUST skip without failure when it is absent. PostgreSQL parity tests MUST isolate their fixtures in a transaction or temporary tables and MUST NOT mutate persistent application tables.
-
 ## 11. Settings Mutation Ordering
 
 DB22. The process MUST serialize every dashboard settings mutation, from its initial read or validation through database writes and publication to `monoize_runtime`, using one process-local settings-update lock.

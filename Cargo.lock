@@ -1216,12 +1216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fastrand"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
-
-[[package]]
 name = "fax"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2383,8 +2377,6 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
- "http-body-util",
- "hyper",
  "image",
  "include_dir",
  "inventory",
@@ -2397,7 +2389,6 @@ dependencies = [
  "mime",
  "mime_guess",
  "mozjpeg",
- "once_cell",
  "oxipng",
  "pdf-extract",
  "percent-encoding",
@@ -2413,13 +2404,11 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
- "tempfile",
  "thiserror 2.0.17",
  "tiktoken-rs",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
- "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -4422,19 +4411,6 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
-
-[[package]]
-name = "tempfile"
-version = "3.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "655da9c7eb6305c55742045d5a8d2037996d61d8de95806335c7c86ce0f82e9c"
-dependencies = [
- "fastrand",
- "getrandom 0.3.4",
- "once_cell",
- "rustix",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "terminal_size"

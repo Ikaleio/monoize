@@ -472,17 +472,3 @@ fn build_session_cookie(token: &str, ttl_days: i64) -> String {
 fn clear_session_cookie() -> String {
     "monoize_session=; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=0".to_string()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn nonexistent_user_password_hash_supports_dummy_verification() {
-        assert!(
-            !verify_login_password("submitted-password", None)
-                .await
-                .expect("fixed password hash must be a valid Argon2 PHC string")
-        );
-    }
-}

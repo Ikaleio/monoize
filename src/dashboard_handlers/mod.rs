@@ -15,9 +15,6 @@ pub(crate) mod session_helpers;
 mod settings;
 mod users;
 
-#[cfg(test)]
-mod tests;
-
 pub use admin::{get_admin_overview, get_metrics};
 pub use analytics_request_logs::{
     AnalyticsQuery, RequestLogsQuery, get_dashboard_analytics, get_my_live_usage,

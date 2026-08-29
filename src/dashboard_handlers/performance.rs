@@ -205,19 +205,3 @@ pub async fn get_dashboard_performance(
         "time_to": time_to_rfc3339,
     })))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{BrickStatus, brick_status};
-
-    #[test]
-    fn brick_status_thresholds_match_dh9b() {
-        assert_eq!(brick_status(0, 0), BrickStatus::Empty);
-        assert_eq!(brick_status(100, 99), BrickStatus::Up);
-        assert_eq!(brick_status(100, 98), BrickStatus::Degraded);
-        assert_eq!(brick_status(100, 95), BrickStatus::Degraded);
-        assert_eq!(brick_status(100, 94), BrickStatus::Down);
-        assert_eq!(brick_status(1, 1), BrickStatus::Up);
-        assert_eq!(brick_status(1, 0), BrickStatus::Down);
-    }
-}

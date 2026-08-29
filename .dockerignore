@@ -6,9 +6,7 @@ target
 data
 dist
 **/node_modules
-sdk-tests
 mock
-tests
 spec
 scripts
 deploy.sh

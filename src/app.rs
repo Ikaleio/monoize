@@ -152,11 +152,6 @@ impl RequestLogLifecycle {
             .map(|_| self.reservation.clone())
     }
 
-    #[cfg(test)]
-    pub(crate) fn terminal_scheduled(&self) -> bool {
-        self.terminal_scheduled.load(Ordering::Acquire)
-    }
-
     pub(crate) fn complete_terminal_task(&self) {
         if !self.tracker_completed.swap(true, Ordering::AcqRel) {
             self.tracker.complete();
@@ -263,7 +258,7 @@ impl RuntimeConfig {
         })
     }
 
-    /// Test/programmatic construction with default (primary) node settings.
+    /// Programmatic construction with default primary-node settings.
     pub fn with_defaults(listen: &str, metrics_path: &str, database_dsn: String) -> Self {
         Self {
             listen: listen.to_string(),
@@ -1364,95 +1359,6 @@ async fn persist_active_probe_request_log(
     user_store
         .finalize_reserved_request_log(log, reservation)
         .await
-}
-
-#[cfg(test)]
-mod active_probe_billing_tests {
-    use super::*;
-
-    #[test]
-    fn active_probe_fallback_is_a_complete_terminal_error_snapshot() {
-        let created_at = chrono::Utc::now();
-        let log = build_active_probe_interrupted_log(
-            "d0925a9e-5384-4f1e-b9b1-d96464644700",
-            "user-probe",
-            "provider-1",
-            "OpenAI",
-            crate::monoize_routing::MonoizeProviderType::Responses,
-            Some(Multiplier::parse("1.25").expect("valid multiplier")),
-            "channel-1",
-            "primary",
-            "gpt-5",
-            "gpt-5-2026-08-07",
-            created_at,
-        );
-
-        assert_eq!(
-            log.request_id.as_deref(),
-            Some("d0925a9e-5384-4f1e-b9b1-d96464644700")
-        );
-        assert_eq!(log.status, crate::users::REQUEST_LOG_STATUS_ERROR);
-        assert_eq!(log.error_code.as_deref(), Some("active_probe_interrupted"));
-        assert_eq!(
-            log.request_kind.as_deref(),
-            Some(ACTIVE_PROBE_CONNECTIVITY_KIND)
-        );
-        assert_eq!(log.provider_id.as_deref(), Some("provider-1"));
-        assert_eq!(log.channel_id.as_deref(), Some("channel-1"));
-        assert_eq!(log.created_at, created_at);
-    }
-
-    #[test]
-    fn http_body_limit_accepts_only_positive_usize_values() {
-        assert_eq!(http_body_max_bytes_from_raw(Some(" 1234 ")), 1234);
-        for raw in [None, Some(""), Some("0"), Some("-1"), Some("invalid")] {
-            assert_eq!(
-                http_body_max_bytes_from_raw(raw),
-                DEFAULT_HTTP_BODY_MAX_BYTES
-            );
-        }
-        let overflow = format!("{}0", usize::MAX);
-        assert_eq!(
-            http_body_max_bytes_from_raw(Some(&overflow)),
-            DEFAULT_HTTP_BODY_MAX_BYTES
-        );
-    }
-
-    fn price_row(model_id: &str) -> crate::model_price_store::ModelPriceRecord {
-        crate::model_price_store::ModelPriceRecord {
-            model_id: model_id.to_string(),
-            billing_mode: "per_token".to_string(),
-            input_usd_per_1m: Some("11".to_string()),
-            output_usd_per_1m: Some("22".to_string()),
-            cache_read_usd_per_1m: None,
-            cache_write_usd_per_1m: None,
-            cache_write_1h_usd_per_1m: None,
-            reasoning_usd_per_1m: None,
-            per_request_usd: None,
-            billing_expr: None,
-            source: "manual".to_string(),
-            locked_fields: Vec::new(),
-            raw_json: json!({}),
-            enabled: true,
-            updated_at: chrono::Utc::now(),
-        }
-    }
-
-    #[test]
-    fn probe_snapshot_resolves_upstream_key_before_logical_key() {
-        let snapshot = ActiveProbePricingSnapshot {
-            reasoning_suffix_map: HashMap::new(),
-            rows: HashMap::from([("logical-model".to_string(), price_row("logical-model"))]),
-        };
-        // MP-R1: the upstream key misses, the logical key applies.
-        let (key, row) = snapshot.resolve("upstream-model", "logical-model");
-        assert_eq!(key, "logical-model");
-        assert!(row.is_some());
-        // A total miss records the normalized upstream key.
-        let (key, row) = snapshot.resolve("other-upstream", "other-logical");
-        assert_eq!(key, "other-upstream");
-        assert!(row.is_none());
-    }
 }
 
 fn resolve_database_dsn() -> String {

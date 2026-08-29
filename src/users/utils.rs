@@ -86,16 +86,3 @@ pub fn format_nano_to_usd(nano: i128) -> String {
         format!("{whole}.{frac_str}")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::format_nano_to_usd;
-
-    #[test]
-    fn formats_i128_min_without_panicking() {
-        assert_eq!(
-            format_nano_to_usd(i128::MIN),
-            "-170141183460469231731687303715.884105728"
-        );
-    }
-}

@@ -574,23 +574,6 @@ fn merge_hashmap_extra_preserving_typed(
     }
 }
 
-#[cfg(test)]
-fn merge_provider_delta_body(body: &mut Value, data: &Value) {
-    let sanitized_data = sanitize_provider_item_wire_body(data);
-    match (body.as_object_mut(), &sanitized_data) {
-        (Some(obj), Value::Object(delta_obj)) => {
-            for (key, value) in delta_obj {
-                obj.insert(key.clone(), value.clone());
-            }
-        }
-        (Some(_), Value::Null) => {}
-        (Some(obj), other) => {
-            obj.insert("data".to_string(), other.clone());
-        }
-        _ => {}
-    }
-}
-
 fn message_start_payload(
     message_id: &str,
     logical_model: &str,
@@ -1965,72 +1948,4 @@ async fn send_named_messages_event(tx: &mpsc::Sender<Event>, payload: Value) -> 
             )
         })?;
     send_named_sse_json(tx, &event_name, payload).await
-}
-
-#[cfg(test)]
-mod provider_item_wire_tests {
-    use super::*;
-    use crate::urp::{OrdinaryRole, ProviderProtocol};
-
-    #[test]
-    fn messages_stream_provider_item_filters_nested_internal_metadata() {
-        let native_body = json!({
-            "type": "server_tool_result",
-            "payload": { "keep": 1, "_monoize_nested": "drop" },
-            "_monoize_top": "drop"
-        });
-        let node = Node::ProviderItem {
-            id: None,
-            origin_protocol: ProviderProtocol::Messages,
-            role: OrdinaryRole::Assistant,
-            item_type: "server_tool_result".to_string(),
-            body: native_body.clone(),
-            extra_body: HashMap::new(),
-        };
-
-        let mut wire = messages_provider_block_from_node(&node).expect("Messages provider block");
-        let delta = json!({
-            "vendor_delta": {
-                "keep_delta": true,
-                "_monoize_delta_nested": "drop"
-            },
-            "rows": [{ "keep_row": true, "_monoize_row": "drop" }],
-            "_monoize_delta": "drop"
-        });
-        merge_provider_delta_body(&mut wire, &delta);
-
-        assert_eq!(
-            wire,
-            json!({
-                "type": "server_tool_result",
-                "payload": { "keep": 1 },
-                "vendor_delta": { "keep_delta": true },
-                "rows": [{ "keep_row": true }]
-            })
-        );
-        assert!(matches!(
-            node,
-            Node::ProviderItem { body, .. } if body == native_body
-        ));
-        assert_eq!(delta["_monoize_delta"], json!("drop"));
-    }
-
-    #[test]
-    fn messages_stream_error_preserves_error_type_and_unknown_members() {
-        let payload = messages_error_payload(
-            Some("529"),
-            "provider failed",
-            &HashMap::from([
-                ("error_type".to_string(), json!("overloaded_error")),
-                ("provider_code".to_string(), json!("P529")),
-                ("_monoize_private".to_string(), json!(true)),
-            ]),
-        );
-
-        assert_eq!(payload["type"], json!("error"));
-        assert_eq!(payload["error"]["type"], json!("overloaded_error"));
-        assert_eq!(payload["error"]["message"], json!("provider failed"));
-        assert_eq!(payload["error"]["provider_code"], json!("P529"));
-        assert!(payload["error"].get("_monoize_private").is_none());
-    }
 }

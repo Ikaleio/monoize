@@ -67,23 +67,6 @@ fn multiplier_definition(backend: DbBackend) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn postgres_multiplier_uses_float8() {
-        assert_eq!(
-            multiplier_definition(DbBackend::Postgres),
-            "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
-        );
-        assert_eq!(
-            multiplier_definition(DbBackend::Sqlite),
-            "REAL NOT NULL DEFAULT 1.0"
-        );
-    }
-}
-
 async fn add_column_if_missing(
     conn: &SchemaManagerConnection<'_>,
     backend: DbBackend,

@@ -1,12 +1,9 @@
 /target
 /data/
 .playwright-mcp
-frontend/playwright-report/
-frontend/test-results/
 .env
 .env.*
 deploy.sh
 .Sisyphus/
 .sisyphus/
-tests/e2e/.out/
 __pycache__/

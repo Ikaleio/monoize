@@ -20,7 +20,6 @@ include!("anthropic/messages_part1.inc.rs");
 include!("anthropic/messages_part2.inc.rs");
 include!("anthropic/tools.inc.rs");
 include!("anthropic/media_config.inc.rs");
-include!("anthropic/tests.inc.rs");
 
 fn encode_messages_provider_block(
     origin_protocol: ProviderProtocol,

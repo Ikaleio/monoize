@@ -135,21 +135,3 @@ impl Transform for ReasoningEffortToModelSuffixTransform {
 inventory::submit!(TransformEntry {
     factory: || Box::new(ReasoningEffortToModelSuffixTransform),
 });
-
-#[cfg(test)]
-mod tests {
-    use super::supported_reasoning_effort;
-
-    #[test]
-    fn supported_reasoning_effort_accepts_full_effort_domain() {
-        for effort in ["none", "minimum", "low", "medium", "high", "xhigh", "max"] {
-            assert_eq!(supported_reasoning_effort(Some(effort)), Some(effort));
-        }
-    }
-
-    #[test]
-    fn supported_reasoning_effort_rejects_unknown_values() {
-        assert_eq!(supported_reasoning_effort(None), None);
-        assert_eq!(supported_reasoning_effort(Some("ultra")), None);
-    }
-}

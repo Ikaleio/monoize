@@ -236,29 +236,3 @@ XR2. `database-configuration.spec.md` DB16 runs on the primary role only; replic
 XR3. `db-performance-tuning.spec.md` DPT-LU3/DPT-LU6 flush-to-database behavior and DPT-RL4 flush-to-database behavior apply to the primary role; on replicas they are replaced by M4–M5 with buffering semantics preserved (PRP12).
 
 XR4. `user-billing-and-model-metadata.spec.md` LC5 single-attempt semantics apply to the primary synchronous charge path; the replica charge path is enqueue-or-fail (M3) without retry loops inside the request lifecycle.
-
-## 12. Test matrix
-
-T1. Config validation: each error code in PRP1/PRP3–PRP7/PX2 has one unit test asserting the exact code.
-
-T1a. Delta spool construction: a writable directory accepts `DeltaSpool::new`; a directory the process cannot write MUST return an error whose text begins with `metering_spool_unwritable`.
-
-T2. Ingest idempotency (SQLite in-memory): replaying one batch twice yields exactly one ledger row per delta, one net balance effect, identical response counts; duplicate `request_logs` ids are no-ops; last-used keeps the later timestamp.
-
-T3. Ingest semantics: unlimited owner skips balance update but counts applied; sub-account delta updates `sub_account_balance_nano`; negative result allowed; batch >2000 returns 413 without partial state.
-
-T4. Shipper against a mock primary: HTTP 200 deletes shipped spool files and clears buffers/counters; HTTP 500 retains everything; transport error retains everything; consecutive-failure warn appears at the third failure.
-
-T4a. Request-log shipment discovers on-disk `.json` spool files even when the in-memory buffer is empty and deletes them only after the sink reports success.
-
-T5. Epoch: primary mutation increments epoch within its transaction; replica poll observes change and swaps snapshot; failed poll keeps prior snapshot.
-
-T6. Replica surface: `/api/dashboard/**` and `/` return 404 `replica_dashboard_disabled` on a replica; `/v1/**` and `/metrics` are served locally; no dashboard route exists in the router. `/metrics` MUST enforce `security-access-control.spec.md` SAC-1 through SAC-5 instead of returning `replica_dashboard_disabled`.
-
-T7. Promotion drain: a data directory with leftover delta spool entries started as primary applies them before serving and then serves with empty spool.
-
-T8. PostgreSQL parity: SC1 migration and T2/T3 scenarios run against `MONOIZE_TEST_POSTGRES_DSN` when provided and skip otherwise (DB-T1 rules).
-
-T9. Replica identity (M9): first resolution in an empty spool directory creates `replica-identity` containing one version-4 UUID plus `\n`; a second resolution over the same directory returns the identical identity; `DeltaSpool` construction over the same directory preserves the file and a subsequent resolution still returns the identical identity; a corrupt identity file is replaced by a newly generated identity; a valid `MONOIZE_REPLICA_ID` yields its canonical lowercase hyphenated form without creating the file; a non-UUID or non-version-4 `MONOIZE_REPLICA_ID` yields an error whose text begins with `replica_id_invalid`.
-
-T10. Heartbeat eviction (M4a): with ship interval `s`, a map entry with `now - last_seen_at > 360 * s` is removed by the overview read path while an entry with `now - last_seen_at <= 360 * s` is retained.

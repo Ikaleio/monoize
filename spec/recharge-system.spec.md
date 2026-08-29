@@ -763,36 +763,3 @@ MUST NOT alter `billing_ledger` (the `idempotency_key` column and unique index
 already exist) and MUST NOT alter `users`.
 
 RC-V2. The step is purely additive; `down` drops the two tables.
-
-## 15. Test matrix
-
-Automated tests shipped with the implementation MUST cover at least:
-
-- T1. RC-U6 conversion: `credit_usd = "10"`, `usd_rate = "7.30"`, CNY →
-  `pay_amount = "73.00"`; `usd_rate = "7.333333333"` → `pay_amount = "73.34"`
-  (ceiling); JPY via stripe scale 0 → integer string.
-- T2. Order creation validation: each RC-O3 code, including the pending cap.
-- T3. EPay sign round-trip: RC-E2 signing then RC-E3 verification; a mutated
-  `money` parameter fails verification.
-- T4. Stripe signature: valid `v1` HMAC accepted; stale timestamp (> 300 s)
-  rejected; wrong secret rejected.
-- T5. Exactly-once: two sequential verified success notifications for one
-  order produce exactly one balance credit and one ledger row; the second
-  returns the `duplicate` ack.
-- T6. Race: two concurrent success notifications (write-pool serialized)
-  produce exactly one credit; direct ledger insert with a duplicated
-  idempotency key aborts and rolls back the order transition (RC-N8).
-- T7. Amount mismatch: notification with a different `money` transitions the
-  order to `failed` with `error_code = "amount_mismatch"` and credits nothing.
-- T8. Expiry: sweeper expires a stale `pending` order; a later verified
-  success on the `expired` order credits once (RC-X3).
-- T9. Refund: full flow debits `credit_nano_usd` into a possibly negative
-  balance, writes `recharge_refund` with `manual` flag; a second refund
-  attempt returns `invalid_order_state`.
-- T10. Role scoping: role `user` sees only own orders/ledger entries; the
-  `username` filter is ignored for role `user` and honored for admins.
-- T11. Secret masking: channel `GET` returns empty secret fields; `PUT` with
-  empty secret keeps the stored value; `PUT` with a new value replaces it.
-- T12. Notify surface: unknown channel id → 404; invalid signature → adapter
-  `signature_error` ack with no state change; unknown order → `unknown_order`
-  ack with no state change.

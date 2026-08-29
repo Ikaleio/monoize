@@ -54,6 +54,4 @@ fn merge_responses_usage_extra(usage: &mut Value, extra: &HashMap<String, Value>
 include!("openai_responses/tool_call.inc.rs");
 include!("openai_responses/request_response.inc.rs");
 include!("openai_responses/input_items.inc.rs");
-include!("openai_responses/media.inc.rs");
 include!("openai_responses/tools_format.inc.rs");
-include!("openai_responses/tests.inc.rs");

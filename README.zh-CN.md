@@ -40,13 +40,12 @@ Monoize 将接入的协议统一解码为 URP v2 规范表示。URP v2 采用扁
 
 该设计提供以下特性：
 
-- Responses、Chat Completions 与 Messages 之间的双向转换均覆盖流式与非流式测试用例。
+- Responses、Chat Completions 与 Messages 之间的双向转换均支持流式与非流式模式。
 - 加密推理与明文推理隔离，可选的 `mz2` 信封机制可在跨格式重放时保留不透明推理状态。
 - 工具调用 ID、并行调用、多段工具结果及助手历史维持原始角色与层级结构。
 - Responses 输出项与 Anthropic 内容块生命周期保持有序开启与闭合。
 - 同协议族内的未知字段正常透传；跨协议族转换时自动剥离无对应表示的嵌套字段，避免触发上游 400 参数校验错误。
 
-规范场景及对应测试用例见[协议测试矩阵](spec/urp-v2-flat-protocol-test-matrix.spec.md)。
 ### 首字节前重试与故障转移
 
 一个逻辑模型可配置多个按优先级排序的 Provider，每个 Provider 包含若干带权重的 Channel。
@@ -290,12 +289,6 @@ Linux 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文
 
 ## 开发与验证
 
-运行后端测试：
-
-```bash
-cargo test
-```
-
 检查前端：
 
 ```bash
@@ -304,15 +297,6 @@ bun install
 bun run lint
 bun run build
 ```
-
-对已配置实例运行三协议实时测试：
-
-```bash
-cd sdk-tests
-bun run live-protocol-suite.ts <baseURL> <apiKey> <model>
-```
-
-该测试覆盖 Chat Completions、Responses 和 Messages 的非流式文本、流式文本、工具循环和流式工具循环。
 
 所有可观察行为都在 [`spec/`](spec/) 中定义。代码和规范必须同步修改。
 

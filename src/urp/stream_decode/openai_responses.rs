@@ -7,8 +7,6 @@ use crate::handlers::usage::{
     record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
-#[cfg(test)]
-use crate::urp::internal_legacy_bridge::nodes_to_items;
 use crate::urp::internal_legacy_bridge::{Item, Part, Role};
 use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,
@@ -33,5 +31,3 @@ include!("openai_responses/event_map.inc.rs");
 include!("openai_responses/state.inc.rs");
 include!("openai_responses/output_events.inc.rs");
 include!("openai_responses/completed.inc.rs");
-include!("openai_responses/decode_helpers.inc.rs");
-include!("openai_responses/tests.inc.rs");

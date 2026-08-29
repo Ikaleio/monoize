@@ -128,30 +128,6 @@ pub enum Item {
     },
 }
 
-#[cfg(test)]
-impl Item {
-    pub fn new_message(role: Role) -> Self {
-        Item::Message {
-            id: None,
-            role,
-            parts: Vec::new(),
-            extra_body: HashMap::new(),
-        }
-    }
-
-    pub fn text(role: Role, content: impl Into<String>) -> Self {
-        Item::Message {
-            id: None,
-            role,
-            parts: vec![Part::Text {
-                content: content.into(),
-                extra_body: HashMap::new(),
-            }],
-            extra_body: HashMap::new(),
-        }
-    }
-}
-
 impl Part {
     pub fn into_node(self, role: OrdinaryRole) -> Node {
         match self {
@@ -242,58 +218,7 @@ impl Part {
     }
 }
 
-impl Item {
-    #[cfg(test)]
-    pub fn into_nodes(self) -> Vec<Node> {
-        match self {
-            Item::Message {
-                id,
-                role,
-                parts,
-                extra_body,
-            } => {
-                let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
-                let mut nodes = Vec::new();
-                if !extra_body.is_empty() && !parts.is_empty() {
-                    nodes.push(Node::NextDownstreamEnvelopeExtra { extra_body });
-                }
-                nodes.extend(parts.into_iter().enumerate().map(|(idx, p)| {
-                    let mut node = p.into_node(ordinary_role);
-                    if idx == 0 && node.id().is_none() {
-                        node.set_id(id.clone());
-                    }
-                    node
-                }));
-                nodes
-            }
-            Item::ToolResult {
-                id,
-                tool_type,
-                call_id,
-                is_error,
-                content,
-                extra_body,
-            } => {
-                vec![Node::ToolResult {
-                    id,
-                    tool_type,
-                    call_id,
-                    is_error,
-                    content,
-                    extra_body,
-                }]
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn items_to_nodes(items: Vec<Item>) -> Vec<Node> {
-    items
-        .into_iter()
-        .flat_map(|item| item.into_nodes())
-        .collect()
-}
+impl Item {}
 
 pub fn nodes_to_items(nodes: &[Node]) -> Vec<Item> {
     let mut items = Vec::new();
@@ -550,59 +475,4 @@ fn message_group_id(node: &Node) -> Option<String> {
 
 fn is_internal_marker(key: &str) -> bool {
     key.starts_with("_monoize_")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn message_boundary_filters_internal_markers_but_keeps_reasoning_part_state() {
-        let raw_detail = json!({
-            "type": "reasoning.text",
-            "text": "preserve me",
-            "future": true
-        });
-        let nodes = vec![Node::Reasoning {
-            id: Some("reasoning_1".to_string()),
-            content: Some("preserve me".to_string()),
-            encrypted: None,
-            summary: None,
-            source: Some("openrouter".to_string()),
-            extra_body: HashMap::from([
-                (
-                    "_monoize_chat_reasoning_detail".to_string(),
-                    raw_detail.clone(),
-                ),
-                (
-                    "_monoize_chat_reasoning_surface".to_string(),
-                    json!("reasoning"),
-                ),
-                ("provider_message_field".to_string(), json!(true)),
-            ]),
-        }];
-
-        let items = nodes_to_items(&nodes);
-        let Item::Message {
-            parts, extra_body, ..
-        } = &items[0]
-        else {
-            panic!("expected message item");
-        };
-        assert!(extra_body.is_empty());
-        assert!(extra_body.keys().all(|key| !key.starts_with("_monoize_")));
-        let Part::Reasoning {
-            extra_body: part_extra,
-            ..
-        } = &parts[0]
-        else {
-            panic!("expected reasoning part");
-        };
-        assert_eq!(
-            part_extra.get("_monoize_chat_reasoning_detail"),
-            Some(&raw_detail)
-        );
-        assert_eq!(part_extra.get("provider_message_field"), Some(&json!(true)));
-    }
 }

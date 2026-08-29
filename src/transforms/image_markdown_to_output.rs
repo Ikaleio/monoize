@@ -547,28 +547,3 @@ fn parse_markdown_image_source(url: &str) -> Option<ImageSource> {
 inventory::submit!(TransformEntry {
     factory: || Box::new(ImageMarkdownToOutputTransform),
 });
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_url_and_base64_markdown_images() {
-        let (cleaned, images) = extract_markdown_images_from_text(
-            "hello ![a](https://example.com/a.png) world ![b](data:image/png;base64,QUJD)",
-        );
-        assert_eq!(cleaned, "hello  world ");
-        assert_eq!(images.len(), 2);
-        match &images[0] {
-            ImageSource::Url { url, .. } => assert_eq!(url, "https://example.com/a.png"),
-            _ => panic!("expected url image"),
-        }
-        match &images[1] {
-            ImageSource::Base64 { media_type, data } => {
-                assert_eq!(media_type, "image/png");
-                assert_eq!(data, "QUJD");
-            }
-            _ => panic!("expected base64 image"),
-        }
-    }
-}

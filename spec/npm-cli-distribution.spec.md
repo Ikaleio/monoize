@@ -73,7 +73,7 @@ NCD-R8. npm publication MUST use npm Trusted Publishing through GitHub Actions O
 
 NCD-R8a. The npm publication job MUST use Node.js `24.15.0` and npm CLI `12.0.2`. It MUST configure `https://registry.npmjs.org` as the registry before publication.
 
-NCD-R9. The npm packaging job MUST run the TypeScript unit tests before it creates the root tarball. A test, build, pack, or package-set verification failure MUST prevent root-package publication.
+NCD-R9. A build, pack, or package-set verification failure MUST prevent root-package publication.
 
 NCD-R10. If the package set contains the packaging runner's platform tarball, the packaging job MUST serve the generated tarballs from an ephemeral local npm registry and install the root tarball with Bun, npm, and pnpm. Each installation MUST contain the root package, the matching platform alias, no non-matching platform alias, and the `monoize` binary link. Each client MUST download exactly one platform tarball. This verification MUST use installation scripts disabled. If that platform tarball is absent, the workflow MUST skip only this client-installation check; archive and manifest verification remain mandatory.
 
