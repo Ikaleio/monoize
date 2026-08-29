@@ -269,7 +269,10 @@ pub(super) async fn forward_stream_typed(
             &auth.transforms,
             &logical_model,
             downstream,
-        ) || attempt.provider_type == ProviderType::Replicate;
+        ) || attempt.provider_type == ProviderType::Replicate
+            || (matches!(downstream, DownstreamProtocol::Responses)
+                && attempt.provider_type == ProviderType::Messages
+                && responses_additional_tools_require_messages_buffering(&original_req));
         let max_channel_attempts = same_channel_attempt_slots(&attempt);
 
         'channel_attempts: for channel_attempt in 0..max_channel_attempts {
@@ -282,6 +285,9 @@ pub(super) async fn forward_stream_typed(
             // that the cross-family strip runs BEFORE provider, global, and
             // API-key transforms; see `execute_nonstream_typed`.
             let mut req_attempt = original_req.clone();
+            if matches!(downstream, DownstreamProtocol::Responses) {
+                promote_responses_additional_tools(&mut req_attempt, attempt.provider_type);
+            }
             if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
                 urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
                 if target_protocol == urp::ProviderProtocol::Responses {
@@ -464,6 +470,7 @@ pub(super) async fn forward_stream_typed(
                             &value,
                             &nonstream_req.model,
                             state.monoize_runtime.read().await.mask_sensitive_info,
+                            &nonstream_req,
                         ) {
                             Ok(resp) => resp,
                             Err(err) => {

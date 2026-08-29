@@ -2,7 +2,7 @@ use super::*;
 use crate::transforms::stream_split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
 use crate::urp::ImageSource;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
 use xxhash_rust::xxh3::Xxh3;
 
@@ -1332,6 +1332,252 @@ const MESSAGES_NATIVE_TOOL_TYPES: &[&str] = &[
     "tool_search_tool_bm25",
     "tool_search_tool_regex",
 ];
+
+const RESPONSES_CUSTOM_MESSAGES_BRIDGE_EXTRA_KEY: &str =
+    "_monoize_responses_custom_messages_bridge";
+
+fn tool_wire_name(tool: &urp::ToolDefinition) -> Option<&str> {
+    match tool.tool_type.as_str() {
+        "function" => tool
+            .function
+            .as_ref()
+            .map(|function| function.name.as_str()),
+        "custom" => tool.custom.as_ref().map(|custom| custom.name.as_str()),
+        _ => tool.name.as_deref(),
+    }
+}
+
+fn collect_additional_tool_leaves(value: &Value, output: &mut Vec<Value>) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("namespace") => {
+            if let Some(tools) = object.get("tools").and_then(Value::as_array) {
+                for tool in tools {
+                    collect_additional_tool_leaves(tool, output);
+                }
+            }
+        }
+        Some("function" | "custom") => output.push(value.clone()),
+        _ => {}
+    }
+}
+
+fn responses_additional_tool_leaves(req: &urp::UrpRequest) -> Vec<Value> {
+    let mut output = Vec::new();
+    for node in &req.input {
+        let urp::Node::ProviderItem {
+            origin_protocol: urp::ProviderProtocol::Responses,
+            item_type,
+            body,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if item_type != "additional_tools" {
+            continue;
+        }
+        if let Some(tools) = body.get("tools").and_then(Value::as_array) {
+            for tool in tools {
+                collect_additional_tool_leaves(tool, &mut output);
+            }
+        }
+    }
+    output
+}
+
+pub(super) fn responses_additional_tools_require_messages_buffering(req: &urp::UrpRequest) -> bool {
+    responses_additional_tool_leaves(req)
+        .iter()
+        .filter_map(urp::decode::parse_tool_definition)
+        .any(|tool| tool.tool_type == "custom" && !custom_tool_has_messages_input_schema(&tool))
+}
+
+fn custom_tool_has_messages_input_schema(tool: &urp::ToolDefinition) -> bool {
+    tool.custom.as_ref().is_some_and(|custom| {
+        custom.extra_body.contains_key("input_schema")
+            || tool.extra_body.contains_key("input_schema")
+    })
+}
+
+fn messages_custom_bridge_function(tool: urp::ToolDefinition) -> urp::ToolDefinition {
+    let custom = tool
+        .custom
+        .expect("custom tool promotion requires a custom definition");
+    urp::ToolDefinition {
+        tool_type: "function".to_string(),
+        name: None,
+        description: None,
+        function: Some(urp::FunctionDefinition {
+            name: custom.name,
+            description: custom.description,
+            parameters: Some(json!({
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string" }
+                },
+                "required": ["input"],
+                "additionalProperties": false
+            })),
+            strict: None,
+            extra_body: HashMap::new(),
+        }),
+        custom: None,
+        extra_body: HashMap::from([(
+            RESPONSES_CUSTOM_MESSAGES_BRIDGE_EXTRA_KEY.to_string(),
+            Value::Bool(true),
+        )]),
+    }
+}
+
+fn messages_custom_bridge_names(req: &urp::UrpRequest) -> HashSet<String> {
+    req.tools
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|tool| {
+            tool.extra_body
+                .get(RESPONSES_CUSTOM_MESSAGES_BRIDGE_EXTRA_KEY)
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .filter_map(tool_wire_name)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn bridge_messages_custom_history(req: &mut urp::UrpRequest) {
+    let names = messages_custom_bridge_names(req);
+    if names.is_empty() {
+        return;
+    }
+
+    let mut bridged_call_ids = HashSet::new();
+    for node in &mut req.input {
+        let urp::Node::ToolCall {
+            tool_type,
+            call_id,
+            name,
+            arguments,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if *tool_type == urp::ToolCallType::Custom && names.contains(name) {
+            *tool_type = urp::ToolCallType::Function;
+            *arguments = json!({ "input": arguments.clone() }).to_string();
+            bridged_call_ids.insert(call_id.clone());
+        }
+    }
+    for node in &mut req.input {
+        let urp::Node::ToolResult {
+            tool_type, call_id, ..
+        } = node
+        else {
+            continue;
+        };
+        if *tool_type == urp::ToolCallType::Custom && bridged_call_ids.contains(call_id) {
+            *tool_type = urp::ToolCallType::Function;
+        }
+    }
+
+    let Some(urp::ToolChoice::Specific(Value::Object(selector))) = req.tool_choice.as_mut() else {
+        return;
+    };
+    if selector.get("type").and_then(Value::as_str) != Some("custom") {
+        return;
+    }
+    let Some(name) = selector_name(selector, "custom")
+        .filter(|name| names.contains(*name))
+        .map(ToOwned::to_owned)
+    else {
+        return;
+    };
+    *selector = serde_json::Map::from_iter([
+        ("type".to_string(), Value::String("function".to_string())),
+        ("function".to_string(), json!({ "name": name })),
+    ]);
+}
+
+pub(super) fn promote_responses_additional_tools(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+) {
+    if !matches!(
+        provider_type,
+        ProviderType::ChatCompletion | ProviderType::Messages
+    ) {
+        return;
+    }
+
+    let mut names: HashSet<String> = req
+        .tools
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(tool_wire_name)
+        .map(ToOwned::to_owned)
+        .collect();
+    let mut promoted = Vec::new();
+    for raw in responses_additional_tool_leaves(req) {
+        let Some(mut tool) = urp::decode::parse_tool_definition(&raw) else {
+            continue;
+        };
+        if provider_type == ProviderType::Messages
+            && tool.tool_type == "custom"
+            && !custom_tool_has_messages_input_schema(&tool)
+        {
+            tool = messages_custom_bridge_function(tool);
+        }
+        let Some(name) = tool_wire_name(&tool).map(ToOwned::to_owned) else {
+            continue;
+        };
+        if names.insert(name) {
+            promoted.push(tool);
+        }
+    }
+    if !promoted.is_empty() {
+        req.tools.get_or_insert_with(Vec::new).extend(promoted);
+    }
+    if provider_type == ProviderType::Messages {
+        bridge_messages_custom_history(req);
+    }
+}
+
+pub(super) fn restore_messages_custom_tool_calls(
+    request: &urp::UrpRequest,
+    response: &mut urp::UrpResponse,
+) {
+    let names = messages_custom_bridge_names(request);
+    if names.is_empty() {
+        return;
+    }
+    for node in &mut response.output {
+        let urp::Node::ToolCall {
+            tool_type,
+            name,
+            arguments,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        if *tool_type != urp::ToolCallType::Function || !names.contains(name) {
+            continue;
+        }
+        let Ok(Value::Object(object)) = serde_json::from_str::<Value>(arguments) else {
+            continue;
+        };
+        let Some(input) = object.get("input").and_then(Value::as_str) else {
+            continue;
+        };
+        *tool_type = urp::ToolCallType::Custom;
+        *arguments = input.to_string();
+    }
+}
 
 fn provider_native_tool_family(tool_type: &str) -> Option<ProviderNativeToolFamily> {
     if RESPONSES_NATIVE_TOOL_TYPES.contains(&tool_type) {
