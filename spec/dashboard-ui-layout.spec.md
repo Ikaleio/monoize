@@ -618,6 +618,10 @@ unordered multi-select group selector (GS rules, §11) instead of freeform text.
 list MUST render `group_ids` as group-name badges; an empty array renders the localized
 unrestricted label.
 
+BP-UI5. Every header cell and data cell in the plan table MUST center its content on the
+horizontal and vertical axes. When a cell contains multiple text lines, the complete text
+block MUST remain centered within the cell.
+
 ## 11. Groups Management Page and Shared Group Selector
 
 ### 11.1 Groups page

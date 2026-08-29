@@ -107,15 +107,15 @@ export function BillingPlansPage() {
   if (isLoading) return <TablePageSkeleton />;
   return <PageWrapper className="space-y-6">
     <PageHeader title={t("billingPlans.title")} description={t("billingPlans.description")} actions={<Button onClick={startCreate}><Plus className="mr-2 h-4 w-4" />{t("billingPlans.create")}</Button>} />
-    {plans.length === 0 ? <EmptyState title={t("billingPlans.emptyTitle")} description={t("billingPlans.emptyDescription")} /> : <div className="overflow-x-auto rounded-lg border"><table className="w-full text-left text-sm">
-      <thead className="bg-muted/50 text-muted-foreground"><tr><th className="px-4 py-3">{t("billingPlans.name")}</th><th className="px-4 py-3">{t("billingPlans.limits")}</th><th className="px-4 py-3">{t("billingPlans.groups")}</th><th className="px-4 py-3">{t("billingPlans.prices")}</th><th className="px-4 py-3">{t("billingPlans.multiplier")}</th><th className="px-4 py-3 text-right">{t("common.actions")}</th></tr></thead>
-      <tbody>{plans.map((plan) => <tr key={plan.id} className="border-t align-top">
-        <td className="px-4 py-3"><div className="font-medium">{plan.name}</div><div className="max-w-64 text-xs text-muted-foreground">{plan.description}</div>{plan.listed && <div className="mt-1 text-xs text-primary">{t("billingPlans.listed")}</div>}</td>
+    {plans.length === 0 ? <EmptyState title={t("billingPlans.emptyTitle")} description={t("billingPlans.emptyDescription")} /> : <div className="overflow-x-auto rounded-lg border"><table className="w-full text-center text-sm [&_td]:align-middle [&_th]:align-middle">
+      <thead className="bg-muted/50 text-muted-foreground"><tr><th className="px-4 py-3">{t("billingPlans.name")}</th><th className="px-4 py-3">{t("billingPlans.limits")}</th><th className="px-4 py-3">{t("billingPlans.groups")}</th><th className="px-4 py-3">{t("billingPlans.prices")}</th><th className="px-4 py-3">{t("billingPlans.multiplier")}</th><th className="px-4 py-3">{t("common.actions")}</th></tr></thead>
+      <tbody>{plans.map((plan) => <tr key={plan.id} className="border-t">
+        <td className="px-4 py-3"><div className="font-medium">{plan.name}</div><div className="mx-auto max-w-64 text-xs text-muted-foreground">{plan.description}</div>{plan.listed && <div className="mt-1 text-xs text-primary">{t("billingPlans.listed")}</div>}</td>
         <td className="px-4 py-3 text-xs">{WINDOWS.map(([key, label]) => plan[key] && <div key={key}>{label}: {formatNanoUsd(plan[key]!)}</div>)}</td>
         <td className="px-4 py-3"><GroupsBadge groupIds={plan.group_ids} /></td>
         <td className="px-4 py-3 text-xs">{plan.prices.map((price) => <div key={price.id}>{price.price_usd} USD / {price.duration_seconds / 86400}d</div>)}</td>
         <td className="px-4 py-3 font-mono">{plan.multiplier}×</td>
-        <td className="px-4 py-3"><div className="flex justify-end gap-1"><Button size="icon" variant="ghost" onClick={() => startEdit(plan)}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => setDeleting(plan)}><Trash2 className="h-4 w-4" /></Button></div></td>
+        <td className="px-4 py-3"><div className="flex justify-center gap-1"><Button size="icon" variant="ghost" onClick={() => startEdit(plan)}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => setDeleting(plan)}><Trash2 className="h-4 w-4" /></Button></div></td>
       </tr>)}</tbody></table></div>}
 
     <Dialog open={open} onOpenChange={setOpen}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]"><div className="flex min-h-0 flex-col p-6"><DialogHeader className="shrink-0"><DialogTitle>{t(editing ? "billingPlans.edit" : "billingPlans.create")}</DialogTitle><DialogDescription>{t("billingPlans.formDescription")}</DialogDescription></DialogHeader>
