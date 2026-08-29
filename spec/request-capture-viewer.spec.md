@@ -160,6 +160,8 @@ RCV-F18. On `sm` and wider viewports, the dialog width MUST be capped (max-w-4xl
 
 RCV-F19. Tabs, the attempt selector, copy buttons, and collapse toggles MUST be operable by keyboard, and interactive controls MUST have accessible names.
 
+RCV-F19a. If a JSON-tree collapse label wraps, its Chevron MUST align with the first rendered text line. A one-line label and its Chevron MUST share one visual vertical center.
+
 ## 5. Localization
 
 RCV-F20. All user-facing strings introduced by this feature MUST use i18n keys under `requestLogs.capture.*` with translations in `en`, `ja`, `zh`, and `zh-TW`.

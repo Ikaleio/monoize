@@ -83,6 +83,8 @@ TCU-10. The config dialog MUST remain operable at viewport width `375px`: field 
 
 TCU-10a. Each phase section's add-transform controls MUST form one vertical group below the `sm` breakpoint. The selector and add button MUST each use the full group width. At the `sm` breakpoint and above, the controls MUST form one horizontal row with a `260px` selector and a content-width add button. Selector content MUST remain inside the selector border at every supported width.
 
+TCU-10b. A scalar editor and its clear or array-item action buttons MUST use the same rendered height at each viewport. Multi-line and structured editors MUST keep their actions top-aligned.
+
 TCU-11. The transform registry MUST be fetched through the shared SWR hook (`useTransformRegistry`). Surfaces that render transform chains while the registry is loading MUST render skeleton placeholders instead of empty chain state, and chain mutations MUST keep the existing optimistic-update behavior of their host forms (dialog-local draft state applied to the parent form value on save).
 
 TCU-12. A transform absent from the registry (unknown `type_id`) MUST render its config read-only as pretty-printed JSON with a copy action, per `dashboard-ui-layout.spec.md` PL10.

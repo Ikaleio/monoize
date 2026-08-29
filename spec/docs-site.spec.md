@@ -88,6 +88,10 @@ DOC-52. Custom components on the landing page MUST use shadcn/ui (new-york style
 
 DOC-53. Icons MUST come from `lucide-react`. Emoji characters MUST NOT be used as icons.
 
+DOC-54. A documentation footer icon and a one-line page title MUST share one visual vertical center. If the title wraps, the icon MUST align with the first rendered title line.
+
+DOC-55. A heading anchor-copy button MUST align with the first rendered heading line. It MUST NOT center against the complete multi-line heading block.
+
 ## 7. Screenshots
 
 DOC-60. Screenshots of the Monoize dashboard MUST be stored as WebP files under `docs/public/images`.

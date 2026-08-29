@@ -151,7 +151,17 @@ DS30. Field validation errors MUST render inline when the error is tied to a spe
 
 DS31. Operation failures that are not tied to a specific field MUST render as toast or alert feedback.
 
-## 9. Motion
+## 9. Inline alignment
+
+DS31a. A horizontal group that contains one-line text, an icon, a badge, or another compact element MUST align the rendered boxes by vertical center.
+
+DS31b. If text in a horizontal group can wrap, each adjacent icon or compact action MUST align with the first rendered text line. It MUST NOT center against the complete multi-line text block.
+
+DS31c. Interactive controls that share one horizontal row MUST use the same rendered height at that viewport. A multi-line editor MAY keep adjacent actions top-aligned.
+
+DS31d. Ordinary card-header text MUST NOT use a vertical translation to compensate for sibling geometry. The header layout MUST establish alignment through flex or grid alignment.
+
+## 10. Motion
 
 DS32. Shared motion helpers MUST respect the user's reduced motion preference.
 
@@ -174,7 +184,7 @@ Pages MUST NOT wrap buttons in ad-hoc `motion.div` elements with `whileHover`/`w
 
 DS34d. Hover-triggered scale or offset transforms MUST NOT be applied to non-interactive decorative elements (for example, a static brand mark that is not a link or button).
 
-## 10. Internationalized Copy
+## 11. Internationalized Copy
 
 DS35. User-visible copy in reusable components MUST be provided through the frontend i18n system.
 

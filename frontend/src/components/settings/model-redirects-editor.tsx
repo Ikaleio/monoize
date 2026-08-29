@@ -71,10 +71,12 @@ export function ModelRedirectsEditor({
                 />
               </Field>
 
-              <ArrowRight
-                aria-hidden="true"
-                className="justify-self-center text-muted-foreground rotate-90 sm:mb-2 sm:rotate-0"
-              />
+              <div className="flex justify-center sm:h-9 sm:items-center">
+                <ArrowRight
+                  aria-hidden="true"
+                  className="size-6 text-muted-foreground rotate-90 sm:rotate-0"
+                />
+              </div>
 
               <Field className="min-w-0">
                 <FieldLabel htmlFor={replacementId}>

@@ -59,6 +59,8 @@ Each card MUST use `Card`, `CardHeader`, `CardContent`, `Separator`, and
 | Footer  | `modelMarketplace.context`    | `record.max_tokens`          | Human-readable, for example `128K` or `1M` |
 | Footer  | `modelMarketplace.maxOutput`  | `record.max_output_tokens`   | Human-readable, for example `16K`          |
 
+The model icon container and the mode Badge in the card header MUST share one visual vertical center. The loaded card and its skeleton MUST use the same alignment.
+
 ### 4.3 Non-linear Grid Contract
 
 - The DOM order MUST equal the endpoint result order.

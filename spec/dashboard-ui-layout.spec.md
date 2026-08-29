@@ -284,7 +284,9 @@ PL18. In expanded provider card overview, channel runtime list row spacing MUST 
 - Each rendered channel row MUST use a minimum row height of `40px`.
 - Virtual list container height MUST be computed as `min(channel_count * 40, 190)`.
 - The row height constant used by the virtual list and the row element style MUST be the same value to prevent visible trailing blank space.
-- On desktop widths, the runtime health label, Channel name, and Channel Base URL MUST share one text baseline. The row action group MUST remain vertically centered independently.
+- The runtime health label, Channel name, and Channel Base URL MUST share one visual vertical center at every viewport width. The row action group MUST remain vertically centered independently.
+
+PL18a. The Provider card header title, status badges, and visible metadata MUST share one visual vertical center. The title MUST NOT use a vertical translation.
 
 PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge layout and MUST NOT hide model badges behind a `+N` overflow badge or popover.
 
@@ -562,6 +564,8 @@ US1. `/settings` MUST render a read-only prepaid-balance card sourced from the a
 object. The card MUST NOT call `GET /api/dashboard/billing-plans`.
 
 US2. The billing card MUST show current prepaid balance, or the localized unlimited label when `balance_unlimited` is true. It MUST NOT show plan data.
+
+US3. The Email field label icon and label text MUST form one inline group whose rendered boxes share one visual vertical center.
 
 US4. The billing card MUST use the same skeleton/loading contract as the rest of `/settings`
 when the user object has not yet resolved. It MUST NOT require a page close/reopen to

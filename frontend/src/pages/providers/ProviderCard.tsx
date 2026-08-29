@@ -310,7 +310,7 @@ export function ProviderCard({
 								<Server className='h-4 w-4' />
 							</div>
 							<div className='flex items-center gap-2 min-w-0 flex-wrap'>
-								<CardTitle className='text-base leading-normal -translate-y-px'>
+								<CardTitle className='text-base leading-normal'>
 									{provider.name}
 								</CardTitle>
 								<BadgeOverflowList
@@ -478,7 +478,7 @@ export function ProviderCard({
 											data={provider.channels}
 											itemContent={(_idx, channel) => (
 												<div className='flex min-h-10 items-center gap-3 px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors border-b last:border-b-0'>
-													<span className='flex min-w-0 items-baseline gap-3'>
+													<span className='flex min-w-0 items-center gap-3'>
 														<ChannelRuntimeStatus
 															channel={channel}
 															perModelCircuitBreak={provider.per_model_circuit_break}

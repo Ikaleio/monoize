@@ -44,7 +44,7 @@ export function ModelMarketplaceCard({
     <article className={getModelCardSpan(index)} aria-labelledby={titleId}>
       <Card className="flex h-full flex-col overflow-hidden">
         <CardHeader>
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center justify-between gap-4">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-md border bg-secondary text-secondary-foreground">
               <ModelIcon
                 model={record.model_id}

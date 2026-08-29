@@ -586,12 +586,12 @@ function JsonCompositeNode({
 				type='button'
 				onClick={() => setExpanded(prev => !prev)}
 				aria-expanded={expanded}
-				className='inline-flex max-w-full items-baseline gap-0.5 rounded-sm text-left hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+				className='inline-flex max-w-full items-start gap-0.5 rounded-sm text-left hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 			>
 				<motion.span
 					animate={{ rotate: expanded ? 90 : 0 }}
 					transition={expandTransition}
-					className='inline-flex self-center'
+					className='mt-1 inline-flex shrink-0'
 				>
 					<ChevronRight className='h-3 w-3 text-muted-foreground' />
 				</motion.span>

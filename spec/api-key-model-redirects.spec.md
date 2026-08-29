@@ -208,6 +208,8 @@ pattern and replacement controls vertically without horizontal overflow. At
 widths of `640px` and above, the pattern and replacement controls MUST occupy
 two columns.
 
+FR-11a. At viewport widths of `640px` and above, the visual arrow MUST occupy an input-height alignment lane. Its vertical center MUST equal both input centers.
+
 FR-12. Saving global settings MUST omit rows whose trimmed `pattern` or trimmed
 `replace` is empty. The remaining row order MUST be preserved.
 

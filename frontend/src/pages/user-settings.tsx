@@ -140,8 +140,8 @@ export function UserSettingsPage() {
               </div>
               <Separator />
               <div className="space-y-2">
-                <Label htmlFor="email">
-                  <Mail className="mr-1 inline h-4 w-4" />
+                <Label htmlFor="email" className="inline-flex items-center gap-1">
+                  <Mail className="size-4" />
                   {t("userSettings.email")}
                 </Label>
                 <Input

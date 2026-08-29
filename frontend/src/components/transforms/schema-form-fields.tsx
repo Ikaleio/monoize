@@ -157,7 +157,7 @@ function FieldRow({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 shrink-0 touch-manipulation text-muted-foreground sm:size-8"
+              className="size-11 shrink-0 touch-manipulation text-muted-foreground sm:size-9"
               aria-label={t("transforms.fieldClear")}
               disabled={disabled}
               onClick={() => onChange({ kind: "unset" })}
@@ -199,7 +199,7 @@ function DraftValueEditor({
         disabled={disabled}
         onValueChange={(next) => onChange({ kind: "enum", value: next })}
       >
-        <SelectTrigger className="w-full">
+        <SelectTrigger className="h-11 w-full sm:h-9">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -215,7 +215,7 @@ function DraftValueEditor({
 
   if (widget === "boolean" && draft.kind === "boolean") {
     return (
-      <div className="flex h-9 items-center gap-2">
+      <div className="flex h-11 items-center gap-2 sm:h-9">
         <Switch
           checked={draft.value}
           disabled={disabled}
@@ -231,6 +231,7 @@ function DraftValueEditor({
   if ((widget === "number" || widget === "integer") && draft.kind === "number") {
     return (
       <Input
+        className="h-11 sm:h-9"
         type="number"
         inputMode={widget === "integer" ? "numeric" : "decimal"}
         disabled={disabled}
@@ -246,6 +247,7 @@ function DraftValueEditor({
   if (widget === "string" && draft.kind === "string") {
     return (
       <Input
+        className="h-11 sm:h-9"
         value={draft.text}
         disabled={disabled}
         onChange={(e) => onChange({ kind: "string", text: e.target.value })}
@@ -371,7 +373,7 @@ function ArrayItemsEditor({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 touch-manipulation sm:size-7"
+              className="size-11 touch-manipulation sm:size-9"
               aria-label={t("transforms.arrayMoveUp")}
               disabled={disabled || index === 0}
               onClick={() => move(index, index - 1)}
@@ -382,7 +384,7 @@ function ArrayItemsEditor({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 touch-manipulation sm:size-7"
+              className="size-11 touch-manipulation sm:size-9"
               aria-label={t("transforms.arrayMoveDown")}
               disabled={disabled || index === items.length - 1}
               onClick={() => move(index, index + 1)}
@@ -393,7 +395,7 @@ function ArrayItemsEditor({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 touch-manipulation text-destructive hover:text-destructive sm:size-7"
+              className="size-11 touch-manipulation text-destructive hover:text-destructive sm:size-9"
               aria-label={t("transforms.arrayRemoveItem")}
               disabled={disabled}
               onClick={() => setItems(items.filter((_, idx) => idx !== index))}
