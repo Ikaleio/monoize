@@ -326,11 +326,7 @@ export interface RechargeChannel {
 }
 
 export type RechargeOrderStatus =
-  | "pending"
-  | "succeeded"
-  | "failed"
-  | "expired"
-  | "refunded";
+  "pending" | "succeeded" | "failed" | "expired" | "refunded";
 
 /** RC-A3 order object; `username` present only for admin callers. */
 export interface RechargeOrder {
@@ -1251,6 +1247,31 @@ class ApiClient {
     return this.request("/billing-plan-subscription");
   }
 
+  async getUserBillingPlanSubscription(
+    userId: string,
+  ): Promise<BillingPlanSubscription | null> {
+    return this.request(`/users/${userId}/billing-plan-subscription`);
+  }
+
+  async assignUserBillingPlanSubscription(
+    userId: string,
+    planId: string,
+    priceId: string,
+  ): Promise<BillingPlanSubscription> {
+    return this.request(`/users/${userId}/billing-plan-subscription`, {
+      method: "PUT",
+      body: JSON.stringify({ plan_id: planId, price_id: priceId }),
+    });
+  }
+
+  async revokeUserBillingPlanSubscription(
+    userId: string,
+  ): Promise<{ success: boolean }> {
+    return this.request(`/users/${userId}/billing-plan-subscription`, {
+      method: "DELETE",
+    });
+  }
+
   async purchaseBillingPlan(
     planId: string,
     priceId: string,
@@ -1650,7 +1671,10 @@ class ApiClient {
   ): Promise<RechargeOrder> {
     const response = await this.request<{ order: RechargeOrder }>(
       `/recharge/orders/${encodeURIComponent(orderId)}/refund`,
-      { method: "POST", body: JSON.stringify({ manual }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ manual }),
+      },
     );
     return response.order;
   }
@@ -1693,7 +1717,10 @@ class ApiClient {
   ): Promise<PaymentChannel> {
     const response = await this.request<{ channel: PaymentChannel }>(
       `/payment-channels/${encodeURIComponent(id)}`,
-      { method: "PUT", body: JSON.stringify(input) },
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      },
     );
     return response.channel;
   }

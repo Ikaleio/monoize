@@ -534,6 +534,11 @@ UP12. The user create and edit dialogs MUST select the user's group through the 
 single-select group selector (GS rules, §11). They MUST NOT offer freeform group text
 entry.
 
+UP13. The user edit dialog MUST provide the active-subscription management surface defined
+by `billing-plan-subscriptions.spec.md` BP-UI6 through BP-UI8. Subscription assignment
+MUST remain separate from prepaid-balance editing. The users table MUST continue to omit a
+plan-assignment column.
+
 UP6. The users table MUST include columns for UTC-calendar-day spend and UTC-calendar-day call count, in addition to the existing user, role, prepaid-balance, and status columns. It MUST NOT include a plan-assignment column.
 
 UP8. The today-spend cell MUST display `today_cost_nano_usd` as USD with 2 fractional digits

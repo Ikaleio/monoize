@@ -1,7 +1,8 @@
 use crate::app::AppState;
 use crate::error::{AppError, AppResult};
 use crate::users::{
-    BillingPlan, BillingPlanInput, BillingPlanPrice, BillingPlanPriceInput, format_nano_to_usd,
+    BillingPlan, BillingPlanInput, BillingPlanPrice, BillingPlanPriceInput, User, UserRole,
+    format_nano_to_usd,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -162,6 +163,37 @@ fn map_plan_error(error: String) -> AppError {
     }
 }
 
+async fn require_manageable_user(
+    state: &AppState,
+    current_user: &User,
+    user_id: &str,
+) -> AppResult<User> {
+    let target_user = state
+        .user_store
+        .get_user_by_id(user_id)
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "user not found"))?;
+    if target_user.role == UserRole::SuperAdmin && current_user.role != UserRole::SuperAdmin {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "only super admin can modify super admin accounts",
+        ));
+    }
+    if target_user.role == UserRole::Admin
+        && current_user.id != target_user.id
+        && current_user.role != UserRole::SuperAdmin
+    {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "only super admin can modify other admin accounts",
+        ));
+    }
+    Ok(target_user)
+}
+
 pub async fn list_billing_plans(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -281,6 +313,67 @@ pub async fn purchase_billing_plan(
         .map_err(map_plan_error)?
     {
         Ok(subscription) => Ok((StatusCode::CREATED, Json(subscription))),
+        Err(error) => Err(map_plan_error(error)),
+    }
+}
+
+pub async fn get_user_billing_plan_subscription(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let current_user =
+        crate::dashboard_handlers::session_helpers::require_admin(&headers, &state).await?;
+    require_manageable_user(&state, &current_user, &user_id).await?;
+    let subscription = state
+        .user_store
+        .get_active_billing_plan_subscription(&user_id)
+        .await
+        .map_err(map_plan_error)?;
+    Ok(Json(subscription))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AssignBillingPlanRequest {
+    pub plan_id: String,
+    pub price_id: String,
+}
+
+pub async fn assign_user_billing_plan_subscription(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+    Json(body): Json<AssignBillingPlanRequest>,
+) -> AppResult<impl IntoResponse> {
+    let current_user =
+        crate::dashboard_handlers::session_helpers::require_admin(&headers, &state).await?;
+    require_manageable_user(&state, &current_user, &user_id).await?;
+    match state
+        .user_store
+        .assign_billing_plan_subscription(&user_id, &body.plan_id, &body.price_id)
+        .await
+        .map_err(map_plan_error)?
+    {
+        Ok(subscription) => Ok((StatusCode::CREATED, Json(subscription))),
+        Err(error) => Err(map_plan_error(error)),
+    }
+}
+
+pub async fn revoke_user_billing_plan_subscription(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let current_user =
+        crate::dashboard_handlers::session_helpers::require_admin(&headers, &state).await?;
+    require_manageable_user(&state, &current_user, &user_id).await?;
+    match state
+        .user_store
+        .revoke_billing_plan_subscription(&user_id)
+        .await
+        .map_err(map_plan_error)?
+    {
+        Ok(()) => Ok(Json(json!({ "success": true }))),
         Err(error) => Err(map_plan_error(error)),
     }
 }

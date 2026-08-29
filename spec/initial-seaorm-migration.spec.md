@@ -377,3 +377,9 @@ ISM7.1. Migration `m20260911_000051_billing_plan_sliding_windows` MUST run after
 ISM7.2. The up migration MUST discard all legacy plan assignments and plan rows. It MUST drop `users.billing_plan_id` and `users.next_grant_at`. It MUST create the plan, price, subscription, and usage tables defined by `billing-plan-subscriptions.spec.md`.
 
 ISM7.3. The migration MUST NOT convert legacy plan rows into new plan rows or subscriptions.
+
+ISM7.4. Migration `m20260912_000052_billing_plan_subscription_revocation` MUST run after
+migration 51. It MUST add nullable TEXT column `revoked_at` to
+`billing_plan_subscriptions` on SQLite and PostgreSQL. Existing rows MUST remain active or
+expired according to their original timestamps because their `revoked_at` value is NULL.
+The down migration MUST remove this column.

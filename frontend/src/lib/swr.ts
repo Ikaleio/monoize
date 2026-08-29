@@ -125,6 +125,10 @@ export function ledgerSWRKey(
   return `${SWR_KEYS.LEDGER}?limit=${limit}&offset=${offset}&kinds=${kinds?.join(",") ?? ""}&u=${username ?? ""}`;
 }
 
+export function userBillingPlanSubscriptionSWRKey(userId: string) {
+  return `${SWR_KEYS.USERS}/${userId}/billing-plan-subscription`;
+}
+
 // Default SWR config
 const defaultConfig: SWRConfiguration = {
   revalidateOnFocus: true,
@@ -177,6 +181,20 @@ export function useBillingPlanSubscription(config?: SWRConfiguration) {
     SWR_KEYS.BILLING_PLAN_SUBSCRIPTION,
     fetchers.billingPlanSubscription,
     { ...defaultConfig, ...config },
+  );
+}
+
+export function useUserBillingPlanSubscription(
+  userId: string | null,
+  config?: SWRConfiguration,
+) {
+  return useSWR<BillingPlanSubscription | null>(
+    userId ? userBillingPlanSubscriptionSWRKey(userId) : null,
+    () => api.getUserBillingPlanSubscription(userId!),
+    {
+      ...defaultConfig,
+      ...config,
+    },
   );
 }
 
@@ -334,7 +352,7 @@ export function useRequestLogs(
 export function useWindowedRequestLogs(
   window: UsageWindow,
   limit = 200,
-  config?: SWRConfiguration
+  config?: SWRConfiguration,
 ) {
   return useSWR<RequestLogsResponse>(
     `${SWR_KEYS.REQUEST_LOGS}?window=${window}&limit=${limit}`,
@@ -345,7 +363,7 @@ export function useWindowedRequestLogs(
         time_to: now.toISOString(),
       });
     },
-    { ...defaultConfig, keepPreviousData: true, ...config }
+    { ...defaultConfig, keepPreviousData: true, ...config },
   );
 }
 
@@ -423,7 +441,11 @@ export function useRechargeOrders(
   return useSWR<RechargeOrdersResponse>(
     rechargeOrdersSWRKey(limit, offset, filters),
     () => api.listRechargeOrders(limit, offset, filters),
-    { ...defaultConfig, keepPreviousData: true, ...config },
+    {
+      ...defaultConfig,
+      keepPreviousData: true,
+      ...config,
+    },
   );
 }
 
@@ -437,7 +459,11 @@ export function useLedger(
   return useSWR<LedgerResponse>(
     ledgerSWRKey(limit, offset, kinds, username),
     () => api.listLedger(limit, offset, kinds, username),
-    { ...defaultConfig, keepPreviousData: true, ...config },
+    {
+      ...defaultConfig,
+      keepPreviousData: true,
+      ...config,
+    },
   );
 }
 
@@ -850,8 +876,15 @@ export async function purchaseBillingPlanOptimistic(
       try {
         const next = BigInt(current.balance_nano_usd) - BigInt(priceNanoUsd);
         if (next < 0n) return current;
-        const fraction = (next % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
-        return { ...current, balance_nano_usd: next.toString(), balance_usd: `${next / 1_000_000_000n}${fraction ? `.${fraction}` : ""}` };
+        const fraction = (next % 1_000_000_000n)
+          .toString()
+          .padStart(9, "0")
+          .replace(/0+$/, "");
+        return {
+          ...current,
+          balance_nano_usd: next.toString(),
+          balance_usd: `${next / 1_000_000_000n}${fraction ? `.${fraction}` : ""}`,
+        };
       } catch {
         return current;
       }
@@ -867,6 +900,99 @@ export async function purchaseBillingPlanOptimistic(
   } catch (error) {
     mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION);
     mutate(SWR_KEYS.ME, userSnapshot, false);
+    if (onError && error instanceof Error) onError(error);
+    throw error;
+  }
+}
+
+function emptyWindowUsage(limit: string | null) {
+  return limit
+    ? {
+        limit_nano_usd: limit,
+        used_nano_usd: "0",
+        remaining_nano_usd: limit,
+        next_reset_at: null,
+      }
+    : null;
+}
+
+export async function assignUserBillingPlanSubscriptionOptimistic(
+  userId: string,
+  plan: BillingPlan,
+  priceId: string,
+  currentSubscription: BillingPlanSubscription | null | undefined,
+  isCurrentUser: boolean,
+  onError?: (error: Error) => void,
+) {
+  const price = plan.prices.find((entry) => entry.id === priceId);
+  if (!price) throw new Error("Selected plan duration is unavailable");
+  const startsAt = new Date();
+  const optimistic: BillingPlanSubscription = {
+    id: `temp-${Date.now()}`,
+    user_id: userId,
+    plan_id: plan.id,
+    price_id: price.id,
+    plan_name: plan.name,
+    plan_description: plan.description,
+    group_ids: plan.group_ids,
+    multiplier: plan.multiplier,
+    price_nano_usd: price.price_nano_usd,
+    starts_at: startsAt.toISOString(),
+    expires_at: new Date(
+      startsAt.getTime() + price.duration_seconds * 1000,
+    ).toISOString(),
+    windows: {
+      five_hour: emptyWindowUsage(plan.limit_5h_nano_usd),
+      twenty_four_hour: emptyWindowUsage(plan.limit_24h_nano_usd),
+      seven_day: emptyWindowUsage(plan.limit_7d_nano_usd),
+      thirty_day: emptyWindowUsage(plan.limit_30d_nano_usd),
+    },
+  };
+  const key = userBillingPlanSubscriptionSWRKey(userId);
+  mutate(key, optimistic, false);
+  if (isCurrentUser)
+    mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION, optimistic, false);
+  try {
+    const subscription = await api.assignUserBillingPlanSubscription(
+      userId,
+      plan.id,
+      price.id,
+    );
+    mutate(key, subscription, false);
+    if (isCurrentUser) {
+      mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION, subscription, false);
+    }
+    void mutate(key);
+    if (isCurrentUser) void mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION);
+    return subscription;
+  } catch (error) {
+    mutate(key, currentSubscription, false);
+    if (isCurrentUser) {
+      mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION, currentSubscription, false);
+    }
+    if (onError && error instanceof Error) onError(error);
+    throw error;
+  }
+}
+
+export async function revokeUserBillingPlanSubscriptionOptimistic(
+  userId: string,
+  currentSubscription: BillingPlanSubscription | null | undefined,
+  isCurrentUser: boolean,
+  onError?: (error: Error) => void,
+) {
+  const key = userBillingPlanSubscriptionSWRKey(userId);
+  mutate(key, null, false);
+  if (isCurrentUser) mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION, null, false);
+  try {
+    await api.revokeUserBillingPlanSubscription(userId);
+    mutate(key);
+    if (isCurrentUser) mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION);
+  } catch (error) {
+    mutate(key, currentSubscription, false);
+    if (isCurrentUser) {
+      mutate(SWR_KEYS.BILLING_PLAN_SUBSCRIPTION, currentSubscription, false);
+    }
     if (onError && error instanceof Error) onError(error);
     throw error;
   }
@@ -1393,9 +1519,7 @@ export async function refundRechargeOrderOptimistic(
       return {
         ...current,
         orders: current.orders.map((row) =>
-          row.id === order.id
-            ? { ...row, status: "refunded" as const }
-            : row,
+          row.id === order.id ? { ...row, status: "refunded" as const } : row,
         ),
       };
     },

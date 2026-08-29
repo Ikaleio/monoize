@@ -32,9 +32,11 @@ pub use auth::{
     user_response_from_store,
 };
 pub use billing_plans::{
-    BillingPlanResponse, CreateBillingPlanRequest, UpdateBillingPlanRequest, create_billing_plan,
-    delete_billing_plan, get_billing_plan_subscription, list_billing_plan_marketplace,
-    list_billing_plans, purchase_billing_plan, update_billing_plan,
+    AssignBillingPlanRequest, BillingPlanResponse, CreateBillingPlanRequest,
+    UpdateBillingPlanRequest, assign_user_billing_plan_subscription, create_billing_plan,
+    delete_billing_plan, get_billing_plan_subscription, get_user_billing_plan_subscription,
+    list_billing_plan_marketplace, list_billing_plans, purchase_billing_plan,
+    revoke_user_billing_plan_subscription, update_billing_plan,
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use custom_transforms::{

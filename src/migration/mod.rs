@@ -58,6 +58,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260901_000049_model_prices_cutover::Migration),
             Box::new(m20260910_000050_recharge_system::Migration),
             Box::new(m20260911_000051_billing_plan_sliding_windows::Migration),
+            Box::new(m20260912_000052_billing_plan_subscription_revocation::Migration),
         ]
     }
 }
@@ -245,3 +246,4 @@ mod m20260826_000048_model_prices;
 mod m20260901_000049_model_prices_cutover;
 mod m20260910_000050_recharge_system;
 mod m20260911_000051_billing_plan_sliding_windows;
+mod m20260912_000052_billing_plan_subscription_revocation;

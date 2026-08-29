@@ -1663,6 +1663,12 @@ fn build_dashboard_api_router() -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::delete_user),
         )
         .route(
+            "/dashboard/users/{user_id}/billing-plan-subscription",
+            get(crate::dashboard_handlers::get_user_billing_plan_subscription)
+                .put(crate::dashboard_handlers::assign_user_billing_plan_subscription)
+                .delete(crate::dashboard_handlers::revoke_user_billing_plan_subscription),
+        )
+        .route(
             "/dashboard/billing-plans",
             get(crate::dashboard_handlers::list_billing_plans)
                 .post(crate::dashboard_handlers::create_billing_plan),

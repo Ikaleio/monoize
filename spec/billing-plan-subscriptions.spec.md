@@ -86,7 +86,7 @@ given prepaid amount and expires exactly `duration_seconds` after the purchase c
 
 ### 2.3 `billing_plan_subscriptions`
 
-Each row is an immutable purchase snapshot.
+Each row is a plan and price snapshot.
 
 | Column | Type |
 |---|---|
@@ -95,12 +95,16 @@ Each row is an immutable purchase snapshot.
 | the four `limit_*_nano_usd` fields | nullable TEXT |
 | `price_nano_usd` | TEXT |
 | `starts_at`, `expires_at`, `created_at` | RFC 3339 UTC TEXT |
+| `revoked_at` | nullable RFC 3339 UTC TEXT |
 
-BP-D6. A subscription is active at `T` when `starts_at <= T` and `expires_at > T`.
-A user MUST have at most one active subscription. Expired rows remain queryable.
+BP-D6. A subscription is active at `T` when `starts_at <= T`, `expires_at > T`, and
+`revoked_at IS NULL`. A user MUST have at most one active subscription. Expired and
+revoked rows remain queryable.
 
 BP-D7. Plan updates and plan deletion MUST NOT change a subscription snapshot. Plan
 deletion MUST delete the current price rows but MUST preserve subscriptions and usage.
+`revoked_at` is lifecycle state and is the only subscription field that MAY change after
+creation.
 
 ### 2.4 `billing_plan_usage`
 
@@ -138,6 +142,9 @@ All endpoints in this section require an admin session.
 - `POST /api/dashboard/billing-plans`
 - `PUT /api/dashboard/billing-plans/{plan_id}`
 - `DELETE /api/dashboard/billing-plans/{plan_id}`
+- `GET /api/dashboard/users/{user_id}/billing-plan-subscription`
+- `PUT /api/dashboard/users/{user_id}/billing-plan-subscription`
+- `DELETE /api/dashboard/users/{user_id}/billing-plan-subscription`
 
 BP-A1. Create and update bodies contain `name`, `description`, the four optional limits,
 `group_ids`, `multiplier`, `listed`, and `prices`. Each price contains either
@@ -153,6 +160,37 @@ return HTTP 400 `invalid_plan_groups`. Invalid multipliers return HTTP 400
 
 BP-A4. Updating or deleting an unknown plan returns HTTP 404 `not_found`. Deleting a plan
 with active subscriptions is allowed because subscriptions contain immutable snapshots.
+
+BP-A5. The three user-subscription endpoints MUST apply the same target-account permission
+rules as `PUT /api/dashboard/users/{user_id}`. An `admin` MUST NOT manage a
+`super_admin` account or another `admin` account. A `super_admin` MAY manage every account.
+
+BP-A6. The user-subscription GET endpoint returns the target user's active subscription,
+including window usage, or `null` when the user has no active subscription. An unknown
+target user returns HTTP 404 `not_found`.
+
+BP-A7. The user-subscription PUT body is `{ "plan_id": string, "price_id": string }`.
+The server MUST lock the target user row, validate that the plan exists, and validate that
+the price belongs to that plan. An administrator MAY assign a listed or unlisted plan.
+A missing plan or mismatched price returns HTTP 409 `plan_not_available` and changes no
+state.
+
+BP-A8. In the same transaction, PUT MUST set `revoked_at` to the current time on the
+target user's active subscription, if one exists. It MUST then create one subscription
+snapshot from the selected plan and price. `starts_at` is the current time and
+`expires_at = starts_at + duration_seconds`. The endpoint returns the new active
+subscription.
+
+BP-A9. An administrator assignment MUST NOT change prepaid balance. It MUST NOT append a
+`billing_ledger` row because no wallet amount moved. `price_nano_usd` in the subscription
+remains the selected catalog-price snapshot. Replacing a subscription starts with zero
+usage; usage rows for the revoked subscription remain unchanged.
+
+BP-A10. DELETE MUST lock the target user row and set `revoked_at` to the current time on
+the active subscription, if one exists. It MUST preserve every subscription and usage row,
+MUST NOT change prepaid balance, and MUST return `{ "success": true }`. Concurrent PUT,
+DELETE, purchase, and settlement operations for the same user MUST serialize through the
+target user and active-subscription locks.
 
 ## 5. Marketplace and purchase API
 
@@ -280,3 +318,20 @@ MUST revalidate the session user, active subscription, marketplace, and ledger c
 
 BP-UI5. An admin viewing `/dashboard/wallet` MUST request orders and ledger rows with the
 admin's own username filter. The personal wallet MUST NOT display other users' rows.
+
+BP-UI6. The `/dashboard/users` edit dialog MUST contain a compact subscription section.
+It MUST fetch the target user's active subscription only while the dialog is open and MUST
+show a skeleton while the subscription or plan list loads. It MUST show the active plan
+name and expiry, or a localized no-active-plan state.
+
+BP-UI7. The subscription section MUST let an administrator select one plan and one of that
+plan's price durations. Plans without price rows MUST be disabled or omitted. Assigning a
+plan when no active subscription exists MAY proceed directly. Replacing an active
+subscription MUST require confirmation that current capacity ends and the replacement
+starts with zero usage.
+
+BP-UI8. The subscription section MUST provide a separate remove action when a subscription
+is active. Removal MUST require confirmation. PUT and DELETE MUST optimistically update
+the target-subscription SWR cache, roll back on failure, keep the user dialog open, show a
+safe localized error, and revalidate the target subscription after success. When the
+target is the signed-in administrator, the personal subscription cache MUST also update.

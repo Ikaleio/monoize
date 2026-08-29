@@ -668,7 +668,7 @@ impl UserStore {
         };
         let row = connection
             .query_one(self.db.stmt(
-                &format!("SELECT {SUBSCRIPTION_COLUMNS} FROM billing_plan_subscriptions WHERE user_id = $1 AND starts_at <= $2 AND expires_at > $2 ORDER BY expires_at DESC, id ASC LIMIT 1{lock_suffix}"),
+                &format!("SELECT {SUBSCRIPTION_COLUMNS} FROM billing_plan_subscriptions WHERE user_id = $1 AND starts_at <= $2 AND expires_at > $2 AND revoked_at IS NULL ORDER BY expires_at DESC, id ASC LIMIT 1{lock_suffix}"),
                 vec![user_id.into(), now.to_rfc3339().into()],
             ))
             .await
@@ -978,6 +978,142 @@ impl UserStore {
             .await?
             .ok_or_else(|| "created subscription is not active".to_string())
             .map(Ok)
+    }
+
+    pub async fn assign_billing_plan_subscription(
+        &self,
+        user_id: &str,
+        plan_id: &str,
+        price_id: &str,
+    ) -> Result<Result<BillingPlanSubscription, String>, String> {
+        let now = Utc::now();
+        let now_raw = now.to_rfc3339();
+        let write = self.db.write().await;
+        let tx = write.begin().await.map_err(|error| error.to_string())?;
+        let user_lock = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        if tx
+            .query_one(self.db.stmt(
+                &format!("SELECT id FROM users WHERE id = $1{user_lock}"),
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Ok(Err("not_found".to_string()));
+        }
+
+        let plan_row = tx
+            .query_one(self.db.stmt(
+                &format!("SELECT {PLAN_COLUMNS} FROM billing_plans WHERE id = $1"),
+                vec![plan_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        let Some(plan_row) = plan_row else {
+            return Ok(Err("plan_not_available".to_string()));
+        };
+        let price_row = tx
+            .query_one(self.db.stmt(
+                "SELECT id, price_nano_usd, duration_seconds FROM billing_plan_prices WHERE id = $1 AND plan_id = $2",
+                vec![price_id.into(), plan_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        let Some(price_row) = price_row else {
+            return Ok(Err("plan_not_available".to_string()));
+        };
+        let price_raw: String = price_row.try_get("", "price_nano_usd").map_err(sql_err)?;
+        let price = parse_nano_usd(&price_raw).map_err(sql_err)?;
+        if price <= 0 || price.to_string() != price_raw {
+            return Err(sql_err("invalid stored plan price"));
+        }
+        let duration_seconds: i64 = price_row.try_get("", "duration_seconds").map_err(sql_err)?;
+        if duration_seconds <= 0 {
+            return Err(sql_err("invalid stored plan duration"));
+        }
+        let expires_at = now
+            .checked_add_signed(Duration::seconds(duration_seconds))
+            .ok_or_else(|| "plan expiry overflow".to_string())?;
+
+        if let Some(active) = self.active_subscription_on(&tx, user_id, now, true).await? {
+            tx.execute(self.db.stmt(
+                "UPDATE billing_plan_subscriptions SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
+                vec![now_raw.clone().into(), active.id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+
+        let subscription_id = uuid::Uuid::new_v4().to_string();
+        tx.execute(self.db.stmt(
+            "INSERT INTO billing_plan_subscriptions (id, user_id, plan_id, price_id, plan_name, plan_description, limit_5h_nano_usd, limit_24h_nano_usd, limit_7d_nano_usd, limit_30d_nano_usd, group_ids, multiplier, price_nano_usd, starts_at, expires_at, created_at, revoked_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $14, NULL)",
+            vec![
+                subscription_id.into(),
+                user_id.into(),
+                plan_id.into(),
+                price_id.into(),
+                plan_row.try_get::<String>("", "name").map_err(sql_err)?.into(),
+                plan_row.try_get::<String>("", "description").map_err(sql_err)?.into(),
+                plan_row.try_get::<Option<String>>("", "limit_5h_nano_usd").map_err(sql_err)?.into(),
+                plan_row.try_get::<Option<String>>("", "limit_24h_nano_usd").map_err(sql_err)?.into(),
+                plan_row.try_get::<Option<String>>("", "limit_7d_nano_usd").map_err(sql_err)?.into(),
+                plan_row.try_get::<Option<String>>("", "limit_30d_nano_usd").map_err(sql_err)?.into(),
+                plan_row.try_get::<String>("", "group_ids").map_err(sql_err)?.into(),
+                plan_row.try_get::<String>("", "multiplier").map_err(sql_err)?.into(),
+                price.to_string().into(),
+                now_raw.into(),
+                expires_at.to_rfc3339().into(),
+            ],
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+        tx.commit().await.map_err(|error| error.to_string())?;
+
+        self.get_active_billing_plan_subscription(user_id)
+            .await?
+            .ok_or_else(|| "created subscription is not active".to_string())
+            .map(Ok)
+    }
+
+    pub async fn revoke_billing_plan_subscription(
+        &self,
+        user_id: &str,
+    ) -> Result<Result<(), String>, String> {
+        let now = Utc::now();
+        let now_raw = now.to_rfc3339();
+        let write = self.db.write().await;
+        let tx = write.begin().await.map_err(|error| error.to_string())?;
+        let user_lock = if self.db.is_postgres() {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
+        if tx
+            .query_one(self.db.stmt(
+                &format!("SELECT id FROM users WHERE id = $1{user_lock}"),
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Ok(Err("not_found".to_string()));
+        }
+        if let Some(active) = self.active_subscription_on(&tx, user_id, now, true).await? {
+            tx.execute(self.db.stmt(
+                "UPDATE billing_plan_subscriptions SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
+                vec![now_raw.into(), active.id.into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        tx.commit().await.map_err(|error| error.to_string())?;
+        Ok(Ok(()))
     }
 
     pub async fn has_plan_capacity_for_groups(
