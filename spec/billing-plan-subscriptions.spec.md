@@ -86,14 +86,16 @@ given prepaid amount and expires exactly `duration_seconds` after the purchase c
 
 ### 2.3 `billing_plan_subscriptions`
 
-Each row is a plan and price snapshot.
+Each row is a plan snapshot. A purchased subscription also contains a price snapshot. An
+administrator-assigned subscription contains no price snapshot.
 
 | Column | Type |
 |---|---|
-| `id`, `user_id`, `plan_id`, `price_id` | TEXT |
+| `id`, `user_id`, `plan_id` | TEXT |
+| `price_id` | nullable TEXT |
 | `plan_name`, `plan_description`, `group_ids`, `multiplier` | TEXT |
 | the four `limit_*_nano_usd` fields | nullable TEXT |
-| `price_nano_usd` | TEXT |
+| `price_nano_usd` | nullable TEXT |
 | `starts_at`, `expires_at`, `created_at` | RFC 3339 UTC TEXT |
 | `revoked_at` | nullable RFC 3339 UTC TEXT |
 
@@ -105,6 +107,10 @@ BP-D7. Plan updates and plan deletion MUST NOT change a subscription snapshot. P
 deletion MUST delete the current price rows but MUST preserve subscriptions and usage.
 `revoked_at` is lifecycle state and is the only subscription field that MAY change after
 creation.
+
+BP-D7.1. A purchased subscription MUST contain non-null `price_id` and
+`price_nano_usd`. An administrator-assigned subscription MUST contain NULL in both
+columns. The subscription API MUST serialize both columns as nullable strings.
 
 ### 2.4 `billing_plan_usage`
 
@@ -169,22 +175,23 @@ BP-A6. The user-subscription GET endpoint returns the target user's active subsc
 including window usage, or `null` when the user has no active subscription. An unknown
 target user returns HTTP 404 `not_found`.
 
-BP-A7. The user-subscription PUT body is `{ "plan_id": string, "price_id": string }`.
-The server MUST lock the target user row, validate that the plan exists, and validate that
-the price belongs to that plan. An administrator MAY assign a listed or unlisted plan.
-A missing plan or mismatched price returns HTTP 409 `plan_not_available` and changes no
-state.
+BP-A7. The user-subscription PUT body is
+`{ "plan_id": string, "duration_seconds": integer }`. The server MUST lock the target
+user row and validate that the plan exists. An administrator MAY assign a listed or
+unlisted plan whether or not that plan has a price row. A missing plan returns HTTP 409
+`plan_not_available` and changes no state. `duration_seconds` MUST be greater than zero
+and MUST produce a representable UTC expiry time. An invalid duration returns HTTP 400
+`invalid_plan_duration` and changes no state.
 
 BP-A8. In the same transaction, PUT MUST set `revoked_at` to the current time on the
 target user's active subscription, if one exists. It MUST then create one subscription
-snapshot from the selected plan and price. `starts_at` is the current time and
-`expires_at = starts_at + duration_seconds`. The endpoint returns the new active
-subscription.
+snapshot from the selected plan. `starts_at` is the current time and
+`expires_at = starts_at + duration_seconds`. `price_id` and `price_nano_usd` MUST be NULL.
+The endpoint returns the new active subscription.
 
 BP-A9. An administrator assignment MUST NOT change prepaid balance. It MUST NOT append a
-`billing_ledger` row because no wallet amount moved. `price_nano_usd` in the subscription
-remains the selected catalog-price snapshot. Replacing a subscription starts with zero
-usage; usage rows for the revoked subscription remain unchanged.
+`billing_ledger` row because no wallet amount moved. Replacing a subscription starts with
+zero usage; usage rows for the revoked subscription remain unchanged.
 
 BP-A10. DELETE MUST lock the target user row and set `revoked_at` to the current time on
 the active subscription, if one exists. It MUST preserve every subscription and usage row,
@@ -324,11 +331,13 @@ It MUST fetch the target user's active subscription only while the dialog is ope
 show a skeleton while the subscription or plan list loads. It MUST show the active plan
 name and expiry, or a localized no-active-plan state.
 
-BP-UI7. The subscription section MUST let an administrator select one plan and one of that
-plan's price durations. Plans without price rows MUST be disabled or omitted. Assigning a
-plan when no active subscription exists MAY proceed directly. Replacing an active
-subscription MUST require confirmation that current capacity ends and the replacement
-starts with zero usage.
+BP-UI7. The subscription section MUST let an administrator select any plan and enter a
+positive whole-number validity period in minutes, hours, or days. It MUST include listed
+and unlisted plans, including plans without price rows. Each dialog open MUST default the
+validity period to 30 days. The client MUST reject zero, negative, fractional, empty, and
+overflowing durations before sending PUT. Assigning a plan when no active subscription
+exists MAY proceed directly. Replacing an active subscription MUST require confirmation
+that current capacity ends and the replacement starts with zero usage.
 
 BP-UI8. The subscription section MUST provide a separate remove action when a subscription
 is active. Removal MUST require confirmation. PUT and DELETE MUST optimistically update

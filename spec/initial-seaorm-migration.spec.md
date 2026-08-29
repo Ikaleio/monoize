@@ -383,3 +383,10 @@ migration 51. It MUST add nullable TEXT column `revoked_at` to
 `billing_plan_subscriptions` on SQLite and PostgreSQL. Existing rows MUST remain active or
 expired according to their original timestamps because their `revoked_at` value is NULL.
 The down migration MUST remove this column.
+
+ISM7.5. Migration `m20260913_000053_billing_plan_admin_grants` MUST run after migration
+52. It MUST make `billing_plan_subscriptions.price_id` and
+`billing_plan_subscriptions.price_nano_usd` nullable on SQLite and PostgreSQL. Existing
+rows MUST remain unchanged. The down migration MUST restore both NOT NULL constraints
+when no row contains NULL in either column. It MUST fail without schema or row changes
+when such a row exists.

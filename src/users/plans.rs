@@ -105,12 +105,12 @@ pub struct BillingPlanSubscription {
     pub id: String,
     pub user_id: String,
     pub plan_id: String,
-    pub price_id: String,
+    pub price_id: Option<String>,
     pub plan_name: String,
     pub plan_description: String,
     pub group_ids: Vec<String>,
     pub multiplier: String,
-    pub price_nano_usd: String,
+    pub price_nano_usd: Option<String>,
     pub starts_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub windows: BillingPlanUsageWindows,
@@ -164,13 +164,13 @@ struct SubscriptionSnapshot {
     id: String,
     user_id: String,
     plan_id: String,
-    price_id: String,
+    price_id: Option<String>,
     plan_name: String,
     plan_description: String,
     limits: PlanLimits,
     group_ids: Vec<String>,
     multiplier: Multiplier,
-    price_nano_usd: i128,
+    price_nano_usd: Option<i128>,
     starts_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
 }
@@ -324,11 +324,28 @@ fn row_to_subscription(row: &QueryResult) -> Result<SubscriptionSnapshot, String
     if !multiplier.is_positive() {
         return Err(sql_err("subscription multiplier must be positive"));
     }
+    let price_id = row
+        .try_get::<Option<String>>("", "price_id")
+        .map_err(sql_err)?;
+    let price_raw = row
+        .try_get::<Option<String>>("", "price_nano_usd")
+        .map_err(sql_err)?;
+    let price_nano_usd = match (&price_id, price_raw) {
+        (Some(_), Some(raw)) => {
+            let value = parse_nano_usd(&raw).map_err(sql_err)?;
+            if value <= 0 || value.to_string() != raw {
+                return Err(sql_err("invalid stored subscription price"));
+            }
+            Some(value)
+        }
+        (None, None) => None,
+        _ => return Err(sql_err("incomplete stored subscription price snapshot")),
+    };
     Ok(SubscriptionSnapshot {
         id: row.try_get("", "id").map_err(sql_err)?,
         user_id: row.try_get("", "user_id").map_err(sql_err)?,
         plan_id: row.try_get("", "plan_id").map_err(sql_err)?,
-        price_id: row.try_get("", "price_id").map_err(sql_err)?,
+        price_id,
         plan_name: row.try_get("", "plan_name").map_err(sql_err)?,
         plan_description: row.try_get("", "plan_description").map_err(sql_err)?,
         limits: PlanLimits {
@@ -350,11 +367,7 @@ fn row_to_subscription(row: &QueryResult) -> Result<SubscriptionSnapshot, String
             "billing_plan_subscriptions.group_ids",
         )?,
         multiplier,
-        price_nano_usd: parse_nano_usd(
-            &row.try_get::<String>("", "price_nano_usd")
-                .map_err(sql_err)?,
-        )
-        .map_err(sql_err)?,
+        price_nano_usd,
         starts_at: parse_time(row, "starts_at")?,
         expires_at: parse_time(row, "expires_at")?,
     })
@@ -791,7 +804,7 @@ impl UserStore {
             plan_description: subscription.plan_description,
             group_ids: subscription.group_ids,
             multiplier: subscription.multiplier.canonical(),
-            price_nano_usd: subscription.price_nano_usd.to_string(),
+            price_nano_usd: subscription.price_nano_usd.map(|price| price.to_string()),
             starts_at: subscription.starts_at,
             expires_at: subscription.expires_at,
             windows: BillingPlanUsageWindows {
@@ -984,9 +997,18 @@ impl UserStore {
         &self,
         user_id: &str,
         plan_id: &str,
-        price_id: &str,
+        duration_seconds: i64,
     ) -> Result<Result<BillingPlanSubscription, String>, String> {
         let now = Utc::now();
+        let Some(duration) = Duration::try_seconds(duration_seconds) else {
+            return Ok(Err("invalid_plan_duration".to_string()));
+        };
+        if duration_seconds <= 0 {
+            return Ok(Err("invalid_plan_duration".to_string()));
+        }
+        let Some(expires_at) = now.checked_add_signed(duration) else {
+            return Ok(Err("invalid_plan_duration".to_string()));
+        };
         let now_raw = now.to_rfc3339();
         let write = self.db.write().await;
         let tx = write.begin().await.map_err(|error| error.to_string())?;
@@ -1017,29 +1039,6 @@ impl UserStore {
         let Some(plan_row) = plan_row else {
             return Ok(Err("plan_not_available".to_string()));
         };
-        let price_row = tx
-            .query_one(self.db.stmt(
-                "SELECT id, price_nano_usd, duration_seconds FROM billing_plan_prices WHERE id = $1 AND plan_id = $2",
-                vec![price_id.into(), plan_id.into()],
-            ))
-            .await
-            .map_err(|error| error.to_string())?;
-        let Some(price_row) = price_row else {
-            return Ok(Err("plan_not_available".to_string()));
-        };
-        let price_raw: String = price_row.try_get("", "price_nano_usd").map_err(sql_err)?;
-        let price = parse_nano_usd(&price_raw).map_err(sql_err)?;
-        if price <= 0 || price.to_string() != price_raw {
-            return Err(sql_err("invalid stored plan price"));
-        }
-        let duration_seconds: i64 = price_row.try_get("", "duration_seconds").map_err(sql_err)?;
-        if duration_seconds <= 0 {
-            return Err(sql_err("invalid stored plan duration"));
-        }
-        let expires_at = now
-            .checked_add_signed(Duration::seconds(duration_seconds))
-            .ok_or_else(|| "plan expiry overflow".to_string())?;
-
         if let Some(active) = self.active_subscription_on(&tx, user_id, now, true).await? {
             tx.execute(self.db.stmt(
                 "UPDATE billing_plan_subscriptions SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
@@ -1056,7 +1055,7 @@ impl UserStore {
                 subscription_id.into(),
                 user_id.into(),
                 plan_id.into(),
-                price_id.into(),
+                Option::<String>::None.into(),
                 plan_row.try_get::<String>("", "name").map_err(sql_err)?.into(),
                 plan_row.try_get::<String>("", "description").map_err(sql_err)?.into(),
                 plan_row.try_get::<Option<String>>("", "limit_5h_nano_usd").map_err(sql_err)?.into(),
@@ -1065,7 +1064,7 @@ impl UserStore {
                 plan_row.try_get::<Option<String>>("", "limit_30d_nano_usd").map_err(sql_err)?.into(),
                 plan_row.try_get::<String>("", "group_ids").map_err(sql_err)?.into(),
                 plan_row.try_get::<String>("", "multiplier").map_err(sql_err)?.into(),
-                price.to_string().into(),
+                Option::<String>::None.into(),
                 now_raw.into(),
                 expires_at.to_rfc3339().into(),
             ],

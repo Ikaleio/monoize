@@ -103,6 +103,26 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 
 const NANO_PER_USD = 1_000_000_000n;
+const DURATION_UNIT_SECONDS = {
+  minutes: 60,
+  hours: 3_600,
+  days: 86_400,
+} as const;
+
+type DurationUnit = keyof typeof DURATION_UNIT_SECONDS;
+
+function parseDurationSeconds(
+  value: string,
+  unit: DurationUnit,
+): number | null {
+  const trimmed = value.trim();
+  if (!/^[1-9]\d*$/.test(trimmed)) return null;
+  const seconds = BigInt(trimmed) * BigInt(DURATION_UNIT_SECONDS[unit]);
+  if (seconds > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  const numericSeconds = Number(seconds);
+  const expiresAt = new Date(Date.now() + numericSeconds * 1000);
+  return Number.isNaN(expiresAt.getTime()) ? null : numericSeconds;
+}
 
 function parseUsdToNanoBigInt(usd: string): bigint | null {
   const trimmed = usd.trim();
@@ -192,7 +212,8 @@ export function UsersPage() {
   const [saving, setSaving] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState("");
-  const [selectedPriceId, setSelectedPriceId] = useState("");
+  const [durationValue, setDurationValue] = useState("30");
+  const [durationUnit, setDurationUnit] = useState<DurationUnit>("days");
   const [subscriptionSaving, setSubscriptionSaving] = useState(false);
   const [subscriptionConfirmation, setSubscriptionConfirmation] = useState<
     "replace" | "revoke" | null
@@ -203,13 +224,13 @@ export function UsersPage() {
     error: editSubscriptionError,
     mutate: revalidateEditSubscription,
   } = useUserBillingPlanSubscription(editUser?.id ?? null);
-  const assignablePlans = useMemo(
-    () => billingPlans.filter((plan) => plan.prices.length > 0),
-    [billingPlans],
-  );
   const selectedPlan = useMemo(
-    () => assignablePlans.find((plan) => plan.id === selectedPlanId) ?? null,
-    [assignablePlans, selectedPlanId],
+    () => billingPlans.find((plan) => plan.id === selectedPlanId) ?? null,
+    [billingPlans, selectedPlanId],
+  );
+  const selectedDurationSeconds = useMemo(
+    () => parseDurationSeconds(durationValue, durationUnit),
+    [durationUnit, durationValue],
   );
 
   const handleCreate = async () => {
@@ -339,7 +360,8 @@ export function UsersPage() {
     setBalanceMode("set");
     setBalanceAddAmount("");
     setSelectedPlanId("");
-    setSelectedPriceId("");
+    setDurationValue("30");
+    setDurationUnit("days");
     setSubscriptionConfirmation(null);
     setFormData({
       username: user.username,
@@ -350,19 +372,6 @@ export function UsersPage() {
       email: user.email ?? "",
       groupId: user.group_id,
     });
-  };
-
-  const formatPlanDuration = (seconds: number) => {
-    if (seconds % 86_400 === 0) {
-      return t("users.planDurationDays", { count: seconds / 86_400 });
-    }
-    if (seconds % 3_600 === 0) {
-      return t("users.planDurationHours", { count: seconds / 3_600 });
-    }
-    if (seconds % 60 === 0) {
-      return t("users.planDurationMinutes", { count: seconds / 60 });
-    }
-    return t("users.planDurationSeconds", { count: seconds });
   };
 
   const subscriptionErrorMessage = (error: unknown) => {
@@ -376,13 +385,13 @@ export function UsersPage() {
   };
 
   const assignSubscription = async () => {
-    if (!editUser || !selectedPlan || !selectedPriceId) return;
+    if (!editUser || !selectedPlan || selectedDurationSeconds === null) return;
     setSubscriptionSaving(true);
     try {
       await assignUserBillingPlanSubscriptionOptimistic(
         editUser.id,
         selectedPlan,
-        selectedPriceId,
+        selectedDurationSeconds,
         editSubscription,
         editUser.id === currentUser?.id,
       );
@@ -390,7 +399,8 @@ export function UsersPage() {
         t(editSubscription ? "users.planReplaced" : "users.planAssigned"),
       );
       setSelectedPlanId("");
-      setSelectedPriceId("");
+      setDurationValue("30");
+      setDurationUnit("days");
       setSubscriptionConfirmation(null);
     } catch (error) {
       toast.error(subscriptionErrorMessage(error));
@@ -881,15 +891,9 @@ export function UsersPage() {
                           </FieldLabel>
                           <Select
                             value={selectedPlanId}
-                            onValueChange={(planId) => {
-                              const plan = assignablePlans.find(
-                                (entry) => entry.id === planId,
-                              );
-                              setSelectedPlanId(planId);
-                              setSelectedPriceId(plan?.prices[0]?.id ?? "");
-                            }}
+                            onValueChange={setSelectedPlanId}
                             disabled={
-                              assignablePlans.length === 0 || subscriptionSaving
+                              billingPlans.length === 0 || subscriptionSaving
                             }
                           >
                             <SelectTrigger id="edit-subscription-plan">
@@ -899,7 +903,7 @@ export function UsersPage() {
                             </SelectTrigger>
                             <SelectContent>
                               <SelectGroup>
-                                {assignablePlans.map((plan) => (
+                                {billingPlans.map((plan) => (
                                   <SelectItem key={plan.id} value={plan.id}>
                                     {plan.name}
                                     {plan.listed
@@ -911,45 +915,62 @@ export function UsersPage() {
                             </SelectContent>
                           </Select>
                         </Field>
-                        <Field data-disabled={!selectedPlan}>
-                          <FieldLabel htmlFor="edit-subscription-price">
+                        <Field>
+                          <FieldLabel htmlFor="edit-subscription-duration">
                             {t("users.chooseDuration")}
                           </FieldLabel>
-                          <Select
-                            value={selectedPriceId}
-                            onValueChange={setSelectedPriceId}
-                            disabled={!selectedPlan || subscriptionSaving}
-                          >
-                            <SelectTrigger id="edit-subscription-price">
-                              <SelectValue
-                                placeholder={t(
-                                  "users.chooseDurationPlaceholder",
-                                )}
-                              />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectGroup>
-                                {selectedPlan?.prices.map((price) => (
-                                  <SelectItem key={price.id} value={price.id}>
-                                    {t("users.planDurationOption", {
-                                      duration: formatPlanDuration(
-                                        price.duration_seconds,
-                                      ),
-                                      price: formatUsdDecimal(
-                                        price.price_usd,
-                                        2,
-                                      ),
-                                    })}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
+                          <div className="grid grid-cols-[minmax(0,1fr)_7.5rem] gap-2">
+                            <Input
+                              id="edit-subscription-duration"
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              step="1"
+                              value={durationValue}
+                              onChange={(event) =>
+                                setDurationValue(event.target.value)
+                              }
+                              disabled={subscriptionSaving}
+                              aria-invalid={
+                                durationValue.length > 0 &&
+                                selectedDurationSeconds === null
+                              }
+                            />
+                            <Select
+                              value={durationUnit}
+                              onValueChange={(value) =>
+                                setDurationUnit(value as DurationUnit)
+                              }
+                              disabled={subscriptionSaving}
+                            >
+                              <SelectTrigger
+                                aria-label={t("users.durationUnit")}
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="minutes">
+                                  {t("users.durationMinutes")}
+                                </SelectItem>
+                                <SelectItem value="hours">
+                                  {t("users.durationHours")}
+                                </SelectItem>
+                                <SelectItem value="days">
+                                  {t("users.durationDays")}
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <FieldDescription>
+                            {selectedDurationSeconds === null
+                              ? t("users.durationInvalid")
+                              : t("users.durationHelp")}
+                          </FieldDescription>
                         </Field>
                       </FieldGroup>
-                      {assignablePlans.length === 0 && (
+                      {billingPlans.length === 0 && (
                         <FieldDescription>
-                          {t("users.noAssignablePlans")}
+                          {t("users.noPlansAvailable")}
                         </FieldDescription>
                       )}
                       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -971,7 +992,7 @@ export function UsersPage() {
                           variant="secondary"
                           disabled={
                             !selectedPlan ||
-                            !selectedPriceId ||
+                            selectedDurationSeconds === null ||
                             subscriptionSaving
                           }
                           onClick={() => {

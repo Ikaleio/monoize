@@ -919,27 +919,25 @@ function emptyWindowUsage(limit: string | null) {
 export async function assignUserBillingPlanSubscriptionOptimistic(
   userId: string,
   plan: BillingPlan,
-  priceId: string,
+  durationSeconds: number,
   currentSubscription: BillingPlanSubscription | null | undefined,
   isCurrentUser: boolean,
   onError?: (error: Error) => void,
 ) {
-  const price = plan.prices.find((entry) => entry.id === priceId);
-  if (!price) throw new Error("Selected plan duration is unavailable");
   const startsAt = new Date();
   const optimistic: BillingPlanSubscription = {
     id: `temp-${Date.now()}`,
     user_id: userId,
     plan_id: plan.id,
-    price_id: price.id,
+    price_id: null,
     plan_name: plan.name,
     plan_description: plan.description,
     group_ids: plan.group_ids,
     multiplier: plan.multiplier,
-    price_nano_usd: price.price_nano_usd,
+    price_nano_usd: null,
     starts_at: startsAt.toISOString(),
     expires_at: new Date(
-      startsAt.getTime() + price.duration_seconds * 1000,
+      startsAt.getTime() + durationSeconds * 1000,
     ).toISOString(),
     windows: {
       five_hour: emptyWindowUsage(plan.limit_5h_nano_usd),
@@ -956,7 +954,7 @@ export async function assignUserBillingPlanSubscriptionOptimistic(
     const subscription = await api.assignUserBillingPlanSubscription(
       userId,
       plan.id,
-      price.id,
+      durationSeconds,
     );
     mutate(key, subscription, false);
     if (isCurrentUser) {

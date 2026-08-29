@@ -139,7 +139,8 @@ fn map_plan_error(error: String) -> AppError {
         | "invalid_plan_limits"
         | "invalid_plan_groups"
         | "invalid_plan_multiplier"
-        | "invalid_plan_prices" => AppError::new(StatusCode::BAD_REQUEST, error.clone(), error),
+        | "invalid_plan_prices"
+        | "invalid_plan_duration" => AppError::new(StatusCode::BAD_REQUEST, error.clone(), error),
         "not_found" => AppError::new(StatusCode::NOT_FOUND, "not_found", "plan not found"),
         "plan_not_available" => AppError::new(
             StatusCode::CONFLICT,
@@ -336,7 +337,7 @@ pub async fn get_user_billing_plan_subscription(
 #[derive(Debug, Deserialize)]
 pub struct AssignBillingPlanRequest {
     pub plan_id: String,
-    pub price_id: String,
+    pub duration_seconds: i64,
 }
 
 pub async fn assign_user_billing_plan_subscription(
@@ -350,7 +351,7 @@ pub async fn assign_user_billing_plan_subscription(
     require_manageable_user(&state, &current_user, &user_id).await?;
     match state
         .user_store
-        .assign_billing_plan_subscription(&user_id, &body.plan_id, &body.price_id)
+        .assign_billing_plan_subscription(&user_id, &body.plan_id, body.duration_seconds)
         .await
         .map_err(map_plan_error)?
     {

@@ -129,12 +129,12 @@ export interface BillingPlanSubscription {
   id: string;
   user_id: string;
   plan_id: string;
-  price_id: string;
+  price_id: string | null;
   plan_name: string;
   plan_description: string;
   group_ids: string[];
   multiplier: string;
-  price_nano_usd: string;
+  price_nano_usd: string | null;
   starts_at: string;
   expires_at: string;
   windows: {
@@ -1256,11 +1256,14 @@ class ApiClient {
   async assignUserBillingPlanSubscription(
     userId: string,
     planId: string,
-    priceId: string,
+    durationSeconds: number,
   ): Promise<BillingPlanSubscription> {
     return this.request(`/users/${userId}/billing-plan-subscription`, {
       method: "PUT",
-      body: JSON.stringify({ plan_id: planId, price_id: priceId }),
+      body: JSON.stringify({
+        plan_id: planId,
+        duration_seconds: durationSeconds,
+      }),
     });
   }
 
