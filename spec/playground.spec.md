@@ -239,6 +239,9 @@ part with literal content `[image]` MUST be substituted; otherwise the assistant
 message MUST be removed from the outgoing conversation. User-message `file` parts MUST
 be preserved (they encode user image attachments).
 
+PG-CHAT4. The Dashboard document Content Security Policy MUST set `img-src * data:`.
+The policy MUST allow Playground images from every network origin and from data URLs.
+
 PG-CHAT7. Raw-reasoning SSE adapter. `@ai-sdk/openai@4` parses the reasoning-summary
 event family (`response.reasoning_summary_part.added`,
 `response.reasoning_summary_text.delta`, `response.reasoning_summary_part.done`) but
