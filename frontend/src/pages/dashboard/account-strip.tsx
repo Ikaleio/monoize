@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SlideUp } from "@/components/ui/motion";
-import { formatNanoUsd, formatUsdDecimal } from "@/lib/exact-decimal";
+import { formatNanoUsd } from "@/lib/exact-decimal";
 import type { DashboardAnalytics, User } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatCompactTokens } from "./utils";
@@ -132,7 +132,7 @@ export function AccountStrip({ user, analytics, loading }: AccountStripProps) {
 
   const balanceValue = user.balance_unlimited
     ? t("users.unlimited", "Unlimited")
-    : formatUsdDecimal(user.balance_usd, 2);
+    : formatNanoUsd(user.balance_nano_usd, 2);
   const balanceNote = user.balance_unlimited
     ? t("dashboard.account.balanceUnlimitedNote", "No account limit")
     : t("dashboard.account.balanceAvailableNote", "Available account balance");

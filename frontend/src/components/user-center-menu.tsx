@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { useBillingPlanSubscription, useLiveUsage } from "@/lib/swr";
-import { formatNanoUsd, formatUsdDecimal, isSignedIntegerString } from "@/lib/exact-decimal";
+import { formatNanoUsd, isSignedIntegerString } from "@/lib/exact-decimal";
 import { formatCacheHitRate } from "@/lib/live-usage";
 import { cn, getGravatarUrl } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -333,7 +333,7 @@ export function UserCenterMenu({
   const roleLabel = t(`roles.${user?.role || "user"}`);
   const balanceLabel = user?.balance_unlimited
     ? t("users.unlimited")
-    : formatUsdDecimal(user?.balance_usd, 2);
+    : formatNanoUsd(user?.balance_nano_usd, 2);
   const accountSummary = balanceLabel;
 
   return (

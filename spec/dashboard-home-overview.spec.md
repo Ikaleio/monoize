@@ -57,8 +57,10 @@ tabular numbers. Labels and supporting text MUST use muted semantic text tokens.
 DH-5b. Balance data MUST be sourced from the authenticated session user
 (`GET /api/dashboard/auth/me`), not from admin-only billing-plan endpoints. The value
 MUST be the localized unlimited label when `balance_unlimited` is true. Otherwise it
-MUST be `balance_usd` formatted as USD with 2 fractional digits via
-`formatUsdDecimal`.
+MUST be `balance_nano_usd` formatted as USD with 2 fractional digits via
+`formatNanoUsd`. The formatter MUST accept a negative signed nano-USD string. The
+Dashboard home MUST NOT parse `balance_usd` through JavaScript `Number` or depend on
+its runtime JSON type.
 
 DH-5c. The account overview MUST fetch
 `GET /api/dashboard/analytics?buckets=24&range_hours=24` through the shared SWR analytics
