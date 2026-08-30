@@ -33,7 +33,7 @@ DL3. User/account menu MUST be anchored at sidebar bottom.
 
 DL3a. The expanded sidebar account trigger MUST show the authenticated user's prepaid
 balance on the second line (localized unlimited label when `balance_unlimited` is true;
-otherwise `balance_usd` formatted as USD with 2 fractional digits). The collapsed
+otherwise `balance_nano_usd` formatted as USD with 2 fractional digits). The collapsed
 sidebar MUST expose the same summary through the account-trigger tooltip. This display
 MUST use the session user object and MUST NOT call `GET /api/dashboard/billing-plans`.
 
@@ -57,7 +57,9 @@ DL3d. The prepaid-balance block MUST be sourced from the session user object onl
 NOT call `GET /api/dashboard/billing-plans`. It MUST render:
 
 - a balance row: localized unlimited label when `balance_unlimited` is true, otherwise
-  `balance_usd` formatted as USD with 2 fractional digits via `formatUsdDecimal`.
+  `balance_nano_usd` formatted as USD with 2 fractional digits via `formatNanoUsd`.
+  The signed nano-USD formatter MUST render negative balances without throwing. The
+  sidebar MUST NOT depend on the runtime JSON type of `balance_usd`.
 
 While the session user object has not resolved, the block MUST render skeleton
 placeholders instead of empty rows.
