@@ -52,6 +52,14 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 对 OpenCode Zen 或 OpenCode Go 的存活探测：当 Channel 自定义请求头未设置这两个名称时，发送字面值 `mono-probe`。
 
+## 测试 Channel
+
+打开 Channel，运行顺序测试或并发测试。
+
+测试会发送一次短流式补全，输出上限为 16 个 token。仅 HTTP 2xx 不够。流必须到达协议终结事件。
+
+对 Responses Channel，`response.completed` 算通过。没有 error 对象的 `response.incomplete` 也算通过。推理模型可能打满 16 token 上限并返回 `incomplete`。该结果仍表示 Channel 可达。
+
 ## 映射模型
 
 每个 Channel 列出它服务的逻辑模型。模型条目包含：

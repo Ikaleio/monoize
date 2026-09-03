@@ -52,6 +52,14 @@ OpenCode Go は `x-opencode-session` でプロンプトキャッシュをセッ�
 
 OpenCode Zen または OpenCode Go への生存プローブでは、Channel の追加ヘッダーにこれらの名前がないとき、リテラル値 `mono-probe` を送ります。
 
+## Channel をテスト
+
+Channel を開き、順次テストまたは同時テストを実行します。
+
+テストは出力上限 16 token の短いストリーミング補完を送ります。HTTP 2xx だけでは不十分です。ストリームはプロトコルの終端イベントに到達する必要があります。
+
+Responses Channel では、`response.completed` は合格です。error オブジェクトがない `response.incomplete` も合格です。推論モデルは 16 token 上限に達して `incomplete` を返すことがあります。その結果でも Channel には到達できています。
+
 ## モデルを対応付け
 
 各 Channel は、提供する論理モデルを列挙します。モデルエントリの内容：
