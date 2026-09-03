@@ -86,6 +86,57 @@ impl AffinityFailbackMode {
     }
 }
 
+const OPENCODE_PROBE_SESSION_VALUE: &str = "mono-probe";
+const SESSION_CACHE_HEADER_NAMES: &[&str] = &["x-session-affinity", "x-opencode-session"];
+
+/// CM-AFF-0: null `session_affinity_auto` enables affinity for these URLs.
+pub(crate) fn default_session_affinity_auto(base_url: &str) -> bool {
+    is_direct_cloudflare_workers_ai_url(base_url) || is_direct_opencode_zen_url(base_url)
+}
+
+/// CM-AFF-0: `https://api.cloudflare.com/client/v4/accounts/{id}/ai` or `.../ai/v1`.
+fn is_direct_cloudflare_workers_ai_url(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || url.host_str() != Some("api.cloudflare.com")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+
+    let path = url.path().strip_suffix('/').unwrap_or(url.path());
+    let Some(account_and_suffix) = path.strip_prefix("/client/v4/accounts/") else {
+        return false;
+    };
+    let account_id = account_and_suffix
+        .strip_suffix("/ai/v1")
+        .or_else(|| account_and_suffix.strip_suffix("/ai"));
+    account_id.is_some_and(|account_id| !account_id.is_empty() && !account_id.contains('/'))
+}
+
+/// CM-AFF-0b: `https://opencode.ai/zen` and paths under `/zen/`.
+fn is_direct_opencode_zen_url(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || url.host_str() != Some("opencode.ai")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    let path = url.path().strip_suffix('/').unwrap_or(url.path());
+    path == "/zen" || path.starts_with("/zen/")
+}
+
+fn extra_headers_contain(headers: Option<&BTreeMap<String, String>>, name: &str) -> bool {
+    headers.is_some_and(|headers| headers.keys().any(|key| key.eq_ignore_ascii_case(name)))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiTypeOverride {
     pub pattern: String,
@@ -2761,6 +2812,14 @@ pub async fn probe_channel_completion(
     if let Some(channel_headers) = &channel.extra_headers {
         for (header_name, header_value) in channel_headers {
             request = request.header(header_name, header_value);
+        }
+    }
+    // CM-AFF-3: OpenCode Go may reject probes that omit x-opencode-session.
+    if is_direct_opencode_zen_url(&channel.base_url) {
+        for name in SESSION_CACHE_HEADER_NAMES {
+            if !extra_headers_contain(channel.extra_headers.as_ref(), name) {
+                request = request.header(*name, OPENCODE_PROBE_SESSION_VALUE);
+            }
         }
     }
     let result = request.json(&body).send().await;

@@ -699,31 +699,10 @@ pub(super) async fn collect_provider_attempts(
     }
 }
 
-/// CM-AFF-0: a null setting enables affinity only for the direct Workers AI URL.
+/// CM-AFF-0: a null setting enables affinity for Cloudflare Workers AI and
+/// OpenCode Zen/Go URLs.
 pub(super) fn effective_session_affinity_auto(base_url: &str, configured: Option<bool>) -> bool {
-    configured.unwrap_or_else(|| is_direct_cloudflare_workers_ai_url(base_url))
-}
-
-fn is_direct_cloudflare_workers_ai_url(base_url: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
-        return false;
-    };
-    if url.scheme() != "https"
-        || url.host_str() != Some("api.cloudflare.com")
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return false;
-    }
-
-    let path = url.path().strip_suffix('/').unwrap_or(url.path());
-    let Some(account_and_suffix) = path.strip_prefix("/client/v4/accounts/") else {
-        return false;
-    };
-    let account_id = account_and_suffix
-        .strip_suffix("/ai/v1")
-        .or_else(|| account_and_suffix.strip_suffix("/ai"));
-    account_id.is_some_and(|account_id| !account_id.is_empty() && !account_id.contains('/'))
+    configured.unwrap_or_else(|| crate::monoize_routing::default_session_affinity_auto(base_url))
 }
 
 /// CM-AFF-1a/1b/2: stamp every freshly built attempt with the client header,
@@ -900,9 +879,33 @@ pub(super) fn provider_extra_headers(
     }
 }
 
-/// CM-HDR-1 + CM-AFF-1/1a/2: protocol headers first, then the Channel's static
-/// `extra_headers`, then a client-supplied or derived `x-session-affinity`
-/// value when the Channel enables automatic session affinity.
+const SESSION_CACHE_HEADER_NAMES: &[&str] = &["x-session-affinity", "x-opencode-session"];
+
+fn header_list_contains(headers: &[(String, String)], name: &str) -> bool {
+    headers
+        .iter()
+        .any(|(existing, _)| existing.eq_ignore_ascii_case(name))
+}
+
+fn extra_session_cache_header_value(
+    extra_headers: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<&str> {
+    let headers = extra_headers?;
+    for name in SESSION_CACHE_HEADER_NAMES {
+        if let Some(value) = headers
+            .iter()
+            .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value.as_str()))
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// CM-HDR-1 + CM-AFF-1/1a/2/5: protocol headers first, then the Channel's
+/// static `extra_headers`, then the resolved session-cache identifier as
+/// `x-session-affinity` and `x-opencode-session` when automatic session
+/// affinity is enabled and those names are not already present.
 pub(super) fn attempt_extra_headers(
     attempt: &MonoizeAttempt,
     body: &serde_json::Value,
@@ -916,21 +919,21 @@ pub(super) fn attempt_extra_headers(
             out.push((name.clone(), value.clone()));
         }
     }
-    if !out
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("x-session-affinity"))
-        && let Some(value) = resolve_session_affinity_value(attempt, body)
-    {
-        out.push(("x-session-affinity".to_string(), value));
+    if let Some(value) = resolve_session_affinity_value(attempt, body) {
+        for name in SESSION_CACHE_HEADER_NAMES {
+            if !header_list_contains(&out, name) {
+                out.push(((*name).to_string(), value.clone()));
+            }
+        }
     }
     out
 }
 
-/// CM-AFF-1/1a/1b/2 + CM-AFF-4: the single effective `x-session-affinity`
-/// value for one attempt. Priority: explicit static `extra_headers` entry,
-/// then the client header or body conversation identifier, then
-/// `prompt_cache_key`, then the decoded-request digest, then encoded-body
-/// digest without tools.
+/// CM-AFF-1/1a/1b/2 + CM-AFF-4: the single effective session-cache identifier
+/// for one attempt. Priority: explicit static `extra_headers` entry
+/// (`x-session-affinity` then `x-opencode-session`), then the client header
+/// or body conversation identifier, then `prompt_cache_key`, then the
+/// decoded-request digest, then encoded-body digest without tools.
 pub(super) fn resolve_session_affinity_value(
     attempt: &MonoizeAttempt,
     body: &serde_json::Value,
@@ -938,12 +941,7 @@ pub(super) fn resolve_session_affinity_value(
     if !attempt.session_affinity_auto {
         return None;
     }
-    if let Some(value) = attempt.extra_headers.as_ref().and_then(|headers| {
-        headers.iter().find_map(|(name, value)| {
-            name.eq_ignore_ascii_case("x-session-affinity")
-                .then_some(value.as_str())
-        })
-    }) {
+    if let Some(value) = extra_session_cache_header_value(attempt.extra_headers.as_ref()) {
         return Some(value.to_string());
     }
     if let Some(client) = attempt.client_session_id.as_deref() {

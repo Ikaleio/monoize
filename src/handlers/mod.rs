@@ -924,8 +924,9 @@ struct MonoizeAttempt {
     /// input nodes, computed from the decoded request so tool lists cannot
     /// split one conversation across upstream instances.
     derived_session_affinity: Option<String>,
-    /// CM-AFF-4: the effective `x-session-affinity` value sent upstream, for
-    /// request-log persistence.
+    /// CM-AFF-4: the effective session-cache identifier sent upstream as
+    /// `x-session-affinity` and `x-opencode-session`, for request-log
+    /// persistence.
     session_affinity_value: Option<String>,
     /// RTA-6c: `scheme://host:port` from Channel `base_url`, when parseable.
     origin_key: Option<String>,

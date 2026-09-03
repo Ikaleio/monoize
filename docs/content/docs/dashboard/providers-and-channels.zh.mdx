@@ -32,6 +32,26 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 
 之后编辑 Channel 时，API 密钥留空则保持原有密钥不变。
 
+## 会话缓存请求头
+
+在 Channel 上设置**自动会话亲和**，即可在每个转发请求上发送稳定的会话标识。
+
+该设置为 `null` 时，Monoize 对以下 Base URL 自动开启：
+
+- Cloudflare Workers AI：`https://api.cloudflare.com/client/v4/accounts/{account_id}/ai`（可选 `/v1`）
+- OpenCode Zen 或 OpenCode Go：`https://opencode.ai/zen` 及其子路径
+
+开启后，Monoize 用同一值发送这两个请求头：
+
+- `x-session-affinity`
+- `x-opencode-session`
+
+取值顺序：Channel 自定义请求头中的上述任一名称、客户端请求头（`session_id`、`session-id`、`x-session-id`、`x-opencode-session` 或 `x-session-affinity`）、请求体中的会话标识、`prompt_cache_key`，最后是会话头部的哈希。
+
+OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该请求头的请求可能失败。
+
+对 OpenCode Zen 或 OpenCode Go 的存活探测：当 Channel 自定义请求头未设置这两个名称时，发送字面值 `mono-probe`。
+
 ## 映射模型
 
 每个 Channel 列出它服务的逻辑模型。模型条目包含：

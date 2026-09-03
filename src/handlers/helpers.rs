@@ -89,13 +89,15 @@ pub(super) fn extract_request_id(headers: &HeaderMap) -> Option<String> {
 
 /// CM-AFF-1a: read the client-supplied session-affinity value. Underscore and
 /// hyphenated aliases are both accepted because some reverse proxies drop
-/// header names that contain `_`. Values are sanitized per the shared affinity
-/// sanitizer; an empty result means "absent".
+/// header names that contain `_`. OpenCode clients send `x-opencode-session`.
+/// Values are sanitized per the shared affinity sanitizer; an empty result
+/// means "absent".
 pub(super) fn extract_client_session_id(headers: &HeaderMap) -> Option<String> {
     for name in [
         "session_id",
         "session-id",
         "x-session-id",
+        "x-opencode-session",
         "x-session-affinity",
     ] {
         if let Some(raw) = headers.get(name).and_then(|value| value.to_str().ok()) {

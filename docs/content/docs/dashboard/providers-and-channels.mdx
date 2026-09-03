@@ -32,6 +32,26 @@ A request first selects a Provider, then selects a Channel inside it. See [Routi
 
 When you edit a Channel later, leave the API key field empty to keep the stored key.
 
+## Session cache headers
+
+Set **Auto session affinity** on a Channel to send a stable session identifier on every proxied request.
+
+When this setting is `null`, Monoize enables it for these Base URLs:
+
+- Cloudflare Workers AI: `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai` (optional `/v1`)
+- OpenCode Zen or OpenCode Go: `https://opencode.ai/zen` and paths under it
+
+When it is enabled, Monoize sends both headers with the same value:
+
+- `x-session-affinity`
+- `x-opencode-session`
+
+The value comes from, in this order: a Channel extra header of either name, a client header (`session_id`, `session-id`, `x-session-id`, `x-opencode-session`, or `x-session-affinity`), a conversation id in the body, `prompt_cache_key`, then a hash of the conversation head.
+
+OpenCode Go uses `x-opencode-session` to bind prompt cache to one session. A request without this header can fail.
+
+A Channel liveness probe to OpenCode Zen or OpenCode Go sends the literal value `mono-probe` when the Channel extra headers do not already set these names.
+
 ## Map models
 
 Each Channel lists the logical models it serves. A model entry has:
