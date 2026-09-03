@@ -52,6 +52,14 @@ OpenCode Go uses `x-opencode-session` to bind prompt cache to one session. A req
 
 A Channel liveness probe to OpenCode Zen or OpenCode Go sends the literal value `mono-probe` when the Channel extra headers do not already set these names.
 
+## Test a Channel
+
+Open the Channel and run Sequential test or Concurrent test.
+
+The test sends a short streaming completion with a 16-token output cap. HTTP 2xx is not enough. The stream must reach a protocol terminal event.
+
+For a Responses Channel, `response.completed` is a pass. `response.incomplete` without an error object is also a pass. A reasoning model can hit the 16-token cap and return `incomplete`. That result still means the Channel is reachable.
+
 ## Map models
 
 Each Channel lists the logical models it serves. A model entry has:

@@ -360,6 +360,14 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
 - The effective API type is the first matching Provider `api_type_overrides[]` entry for the logical model, otherwise the Channel `provider_type`.
 - Replicate channels MUST be rejected for active completion probes.
 - If `stream = true`, Responses, Chat Completions, Messages, and Gemini tests MUST send their protocol's streaming request form. A streaming test MUST read the upstream stream until a protocol terminal event is observed. HTTP success without a valid terminal event MUST return `success = false` and `error_code = "upstream_stream_missing_terminal"`.
+- The Responses probe body MUST set `max_output_tokens` to `16`. The Chat Completions and Messages probe bodies MUST set `max_tokens` to `16`. The Gemini probe body MUST set `generationConfig.maxOutputTokens` to `16`.
+- For a Responses streaming probe, a protocol terminal event is classified as follows:
+  1. `response.completed` is success.
+  2. `response.incomplete` is success when the event has no non-null `error` object at the top level and no non-null `response.error` object.
+  3. `response.failed` is failure.
+  4. `response.cancelled` is failure.
+  5. An `error` event is failure.
+  A JSON `null` `error` field is absent. Purpose: a reasoning model can consume the 16-token probe cap and terminate as `incomplete` with `incomplete_details.reason = "max_output_tokens"`. That outcome still proves the Channel is reachable.
 - If `stream = true` for an OpenAI Image or Replicate Channel, return `400 invalid_request` because the liveness test does not define a streaming form for those Channel types.
 - If `per_model_circuit_break = true`, a successful test MUST reset only the `{channel_id}::{resolved logical model}` health key. It MUST NOT reset the base Channel key or any sibling model key. If this model key does not exist and capacity remains, insert and reset this model key.
 - If `per_model_circuit_break = false`, a successful test MUST reset only the base Channel health key. If this key does not exist and capacity remains, insert and reset it.

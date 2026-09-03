@@ -2584,20 +2584,35 @@ fn probe_error_metadata(body: &str) -> (Option<String>, Option<String>) {
     (code, error_type)
 }
 
+fn probe_event_error_object(value: &Value) -> Option<&Value> {
+    for candidate in [
+        value.get("error"),
+        value
+            .get("response")
+            .and_then(|response| response.get("error")),
+    ] {
+        match candidate {
+            Some(Value::Null) | None => {}
+            Some(error) => return Some(error),
+        }
+    }
+    None
+}
+
 fn probe_stream_error(
     value: &Value,
     sse_event: &str,
 ) -> Option<(Option<String>, Option<String>, String)> {
     let event_type = value.get("type").and_then(Value::as_str);
-    let error = value.get("error");
+    let error = probe_event_error_object(value);
     if error.is_none()
         && !matches!(
             event_type,
-            Some("error" | "response.failed" | "response.incomplete")
+            Some("error" | "response.failed" | "response.cancelled")
         )
         && !matches!(
             sse_event,
-            "error" | "response.failed" | "response.incomplete"
+            "error" | "response.failed" | "response.cancelled"
         )
     {
         return None;
@@ -2712,7 +2727,13 @@ async fn read_probe_stream(
         let event_type = value.get("type").and_then(Value::as_str);
         match effective_type {
             MonoizeProviderType::Responses => {
-                if event.event == "response.completed" || event_type == Some("response.completed") {
+                if matches!(
+                    event.event.as_str(),
+                    "response.completed" | "response.incomplete"
+                ) || matches!(
+                    event_type,
+                    Some("response.completed" | "response.incomplete")
+                ) {
                     return ChannelProbeOutcome {
                         ok: true,
                         usage,

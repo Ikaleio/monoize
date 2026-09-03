@@ -52,6 +52,14 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 
 對 OpenCode Zen 或 OpenCode Go 的存活探測：當 Channel 自訂標頭未設定這兩個名稱時，送出字面值 `mono-probe`。
 
+## 測試 Channel
+
+開啟 Channel，執行順序測試或並行測試。
+
+測試會送出一次短串流補全，輸出上限為 16 個 token。僅 HTTP 2xx 不夠。串流必須到達協定終結事件。
+
+對 Responses Channel，`response.completed` 算通過。沒有 error 物件的 `response.incomplete` 也算通過。推理模型可能打滿 16 token 上限並回傳 `incomplete`。該結果仍表示 Channel 可達。
+
 ## 對應模型
 
 每個 Channel 列出它服務的邏輯模型。模型條目包含：
