@@ -32,6 +32,26 @@ description: 用有序的 Provider 和帶權重的 Channel 定義上游路由。
 
 之後編輯 Channel 時，API 金鑰留空則保持原有金鑰不變。
 
+## 工作階段快取標頭
+
+在 Channel 上設定**自動工作階段親和**，即可在每個轉送請求上送出穩定的工作階段識別碼。
+
+該設定為 `null` 時，Monoize 對以下基底 URL 自動開啟：
+
+- Cloudflare Workers AI：`https://api.cloudflare.com/client/v4/accounts/{account_id}/ai`（可選 `/v1`）
+- OpenCode Zen 或 OpenCode Go：`https://opencode.ai/zen` 及其子路徑
+
+開啟後，Monoize 用同一值送出這兩個標頭：
+
+- `x-session-affinity`
+- `x-opencode-session`
+
+取值順序：Channel 自訂標頭中的上述任一名稱、用戶端標頭（`session_id`、`session-id`、`x-session-id`、`x-opencode-session` 或 `x-session-affinity`）、請求主體中的工作階段識別碼、`prompt_cache_key`，最後是工作階段開頭的雜湊。
+
+OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺少該標頭的請求可能失敗。
+
+對 OpenCode Zen 或 OpenCode Go 的存活探測：當 Channel 自訂標頭未設定這兩個名稱時，送出字面值 `mono-probe`。
+
 ## 對應模型
 
 每個 Channel 列出它服務的邏輯模型。模型條目包含：

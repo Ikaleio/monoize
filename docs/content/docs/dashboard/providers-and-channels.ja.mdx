@@ -32,6 +32,26 @@ description: 順序付きの Provider と重み付きの Channel で上流ルー
 
 後で Channel を編集するとき、API キー欄を空にすると保存済みのキーが維持されます。
 
+## セッションキャッシュヘッダー
+
+Channel で**自動セッションアフィニティ**を設定すると、転送する各リクエストに安定したセッション識別子を付けます。
+
+この設定が `null` のとき、Monoize は次のベース URL で自動的に有効にします。
+
+- Cloudflare Workers AI: `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai`（任意の `/v1`）
+- OpenCode Zen または OpenCode Go: `https://opencode.ai/zen` とその配下のパス
+
+有効なとき、Monoize は同じ値で次の 2 つのヘッダーを送ります。
+
+- `x-session-affinity`
+- `x-opencode-session`
+
+値の優先順位は次のとおりです。Channel の追加ヘッダーにある上記いずれかの名前、クライアントヘッダー（`session_id`、`session-id`、`x-session-id`、`x-opencode-session`、`x-session-affinity`）、本文の会話 ID、`prompt_cache_key`、最後に会話先頭のハッシュです。
+
+OpenCode Go は `x-opencode-session` でプロンプトキャッシュをセッションに結びます。このヘッダーがないリクエストは失敗することがあります。
+
+OpenCode Zen または OpenCode Go への生存プローブでは、Channel の追加ヘッダーにこれらの名前がないとき、リテラル値 `mono-probe` を送ります。
+
 ## モデルを対応付け
 
 各 Channel は、提供する論理モデルを列挙します。モデルエントリの内容：

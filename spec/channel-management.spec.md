@@ -136,7 +136,7 @@ Channel static upstream header map MAY be present:
 
 Channel automatic session affinity flag MAY be present:
 
-- `session_affinity_auto: boolean | null`. `true` enables automatic session affinity. `false` disables it. `null` or absent selects the URL-based default in CM-AFF-0. When effective automatic session affinity is enabled, every proxied upstream request issued for this Channel MUST carry an `x-session-affinity` header per CM-AFF-1 through CM-AFF-2.
+- `session_affinity_auto: boolean | null`. `true` enables automatic session affinity. `false` disables it. `null` or absent selects the URL-based default in CM-AFF-0. When effective automatic session affinity is enabled, every proxied upstream request issued for this Channel MUST carry the session-cache headers in CM-AFF-5, with values selected by CM-AFF-1 through CM-AFF-2.
 
 ## 2. Invariants
 
@@ -188,10 +188,18 @@ CM-AFF-0. A **direct Cloudflare Workers AI Channel** has a `base_url` that satis
 4. After removal of one optional trailing slash, the URL path is exactly `/client/v4/accounts/{account_id}/ai` or `/client/v4/accounts/{account_id}/ai/v1`, where `{account_id}` is non-empty.
 5. The URL has no query and no fragment.
 
+CM-AFF-0b. A **direct OpenCode Zen/Go Channel** has a `base_url` that satisfies all of these conditions:
+1. The URL parses successfully.
+2. The URL scheme is `https`.
+3. The URL host is exactly `opencode.ai`.
+4. After removal of one optional trailing slash, the URL path is exactly `/zen` or has prefix `/zen/`.
+5. The URL has no query and no fragment.
+This definition covers OpenCode Zen (`https://opencode.ai/zen/v1`) and OpenCode Go (`https://opencode.ai/zen/go/v1`) Channel base URLs.
+
 The Channel's effective automatic session affinity MUST use this order:
 1. If `session_affinity_auto` is `true`, enable it.
 2. If `session_affinity_auto` is `false`, disable it.
-3. If `session_affinity_auto` is `null` or absent, enable it only for a direct Cloudflare Workers AI Channel.
+3. If `session_affinity_auto` is `null` or absent, enable it only for a direct Cloudflare Workers AI Channel or a direct OpenCode Zen/Go Channel.
 
 CM-HDR-1. Every upstream request issued for a Channel (proxy traffic and the liveness probe of §3.8) MUST send the Channel's persisted `extra_headers` entries in addition to the authentication and protocol-specific headers. When an entry name collides with an authentication or protocol-specific header, the request MUST be rejected at configuration time by CP-INV-15 rather than silently overridden at runtime.
 
@@ -207,13 +215,14 @@ CM-USAGE-3. Server-native tool billing is fail-open per `model-pricing.spec.md` 
 an actually used usage class without a usable `tool_prices` entry settles with zero
 tool charge and is recorded in breakdown `unpriced_tool_classes`.
 
-CM-AFF-1. If the Channel `extra_headers` contains an explicit `x-session-affinity` entry, that value MUST be sent verbatim and client passthrough (CM-AFF-1a), request-body identifiers (CM-AFF-1b), and automatic derivation (CM-AFF-2) MUST NOT run.
+CM-AFF-1. If the Channel `extra_headers` contains an explicit `x-session-affinity` or `x-opencode-session` entry, that value is the session-cache identifier. Scan those two names in that order (case-insensitive). The first present entry wins. That value MUST be sent verbatim for that header name under CM-HDR-1. Client passthrough (CM-AFF-1a), request-body identifiers (CM-AFF-1b), and automatic derivation (CM-AFF-2) MUST NOT run.
 
-CM-AFF-1a. When effective automatic session affinity is enabled and CM-AFF-1 does not apply, and the incoming client request carries a session-affinity-style header, the gateway MUST pass that client value through as the upstream `x-session-affinity` header. The client headers are read in this order and the first present, non-empty one wins:
+CM-AFF-1a. When effective automatic session affinity is enabled and CM-AFF-1 does not apply, and the incoming client request carries a session-affinity-style header, the gateway MUST pass that client value through as the upstream session-cache identifier. The client headers are read in this order and the first present, non-empty one wins:
 1. `session_id` (codex-style header; matched case-insensitively);
 2. `session-id` (hyphenated alias; nginx default configs drop underscore header names);
 3. `x-session-id`;
-4. `x-session-affinity` (the header itself, sent by clients that already compute affinity).
+4. `x-opencode-session` (OpenCode Zen/Go prompt-cache session header);
+5. `x-session-affinity` (the Cloudflare-style header, sent by clients that already compute affinity).
 The value MUST be trimmed, restricted to printable ASCII characters (`0x20..=0x7E`), and truncated to 128 characters. If nothing remains after restriction, the header is treated as absent and the rules below continue.
 
 CM-AFF-1b. When effective automatic session affinity is enabled and neither CM-AFF-1 nor CM-AFF-1a produced a value, the gateway MUST use a stable conversation identifier from the decoded request. Scan the following sources in order and take the first present, non-empty value after the same printable-ASCII restriction and 128-character truncation as CM-AFF-1a:
@@ -231,9 +240,14 @@ CM-AFF-2. When effective automatic session affinity is enabled and none of CM-AF
 The derivation MUST NOT include `tools` or `functions`. It MUST be a pure function of `instructions` plus the first two input nodes: identical heads yield identical values; appending further input nodes MUST NOT change the value; adding, removing, or reordering tool definitions MUST NOT change the value.
 When a decoded request is not available, the gateway MUST apply the same hash to the encoded upstream body using `instructions` (string or absent), `system` (when present), and the first at most 2 entries of `messages` else `input`, and MUST still omit `tools` and `functions`.
 
-CM-AFF-3. Automatic session affinity applies only to proxied traffic. Liveness probes (§3.8) MUST NOT send derived values or client passthrough values; explicit static `extra_headers` entries continue to apply there under CM-HDR-1.
+CM-AFF-3. Automatic session affinity applies only to proxied traffic, except for the OpenCode probe rule in this paragraph. Liveness probes (§3.8) MUST NOT send derived values or client passthrough values; explicit static `extra_headers` entries continue to apply there under CM-HDR-1. For a direct OpenCode Zen/Go Channel, a liveness probe MUST send `x-opencode-session` and `x-session-affinity` with the literal value `mono-probe` when the corresponding name is absent from `extra_headers`. Purpose: OpenCode Go may reject requests that omit `x-opencode-session`.
 
 CM-AFF-4. When effective automatic session affinity is enabled and any of CM-AFF-1, CM-AFF-1a, CM-AFF-1b, or CM-AFF-2 produced a value for a proxied request, the gateway MUST record that exact value in `request_logs.session_affinity_value` on the request's terminal log row (`request-logs.spec.md` §1.1). Requests whose effective automatic session affinity is disabled, liveness probes, and requests that produced no value MUST store null.
+
+CM-AFF-5. When effective automatic session affinity is enabled and a value is produced for a proxied request, the gateway MUST send that value on both of these upstream headers:
+1. `x-session-affinity`
+2. `x-opencode-session`
+If `extra_headers` already contains one of these names (case-insensitive), that entry MUST be sent verbatim and MUST NOT be overwritten. The gateway MUST still send the other name with the resolved value when that name is absent from `extra_headers`. Purpose: Cloudflare Workers AI uses `x-session-affinity`; OpenCode Go/Zen prompt-cache routing requires `x-opencode-session`.
 
 Provider group routing semantics:
 

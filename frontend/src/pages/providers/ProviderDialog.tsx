@@ -624,8 +624,8 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 				<Field label={c('出口代理', 'Egress proxy')} hint={c('留空跟随节点全局代理；填写 http(s) 代理地址仅对本 Channel 生效', 'Empty follows the node-global proxy; an http(s) URL applies to this channel only')}>
 					<Input value={activeChannel.proxy_url} placeholder='http://proxy:port' onChange={event => updateChannel(selectedChannel, { proxy_url: event.target.value })} />
 				</Field>
-				<NullableBoolean label={c('自动会话亲和', 'Auto session affinity')} nullLabel={c('按 Base URL 自动判断', 'Auto-detect by Base URL')} value={activeChannel.session_affinity_auto} onChange={value => updateChannel(selectedChannel, { session_affinity_auto: value })} c={c} />
-				<Field label={c('自定义请求头', 'Extra headers')} hint={c('注入到该 Channel 的所有上游请求，例如 Cloudflare 缓存亲和 {"x-session-affinity":"ses_001"}', 'Injected into every upstream request of this channel, e.g. Cloudflare cache affinity {"x-session-affinity":"ses_001"}')} className='sm:col-span-2'>
+				<NullableBoolean label={c('自动会话亲和', 'Auto session affinity')} hint={c('null 时对 Cloudflare Workers AI 与 OpenCode Zen/Go 自动开启，并发送 x-session-affinity 与 x-opencode-session', 'When null, enables for Cloudflare Workers AI and OpenCode Zen/Go, and sends x-session-affinity and x-opencode-session')} nullLabel={c('按 Base URL 自动判断', 'Auto-detect by Base URL')} value={activeChannel.session_affinity_auto} onChange={value => updateChannel(selectedChannel, { session_affinity_auto: value })} c={c} />
+				<Field label={c('自定义请求头', 'Extra headers')} hint={c('注入到该 Channel 的所有上游请求，例如 {"x-session-affinity":"ses_001"} 或 {"x-opencode-session":"ses_001"}', 'Injected into every upstream request of this channel, e.g. {"x-session-affinity":"ses_001"} or {"x-opencode-session":"ses_001"}')} className='sm:col-span-2'>
 					<Textarea value={activeChannel.extra_headers} rows={3} placeholder={'{"x-session-affinity": "ses_001"}'} className='font-mono text-xs' onChange={event => updateChannel(selectedChannel, { extra_headers: event.target.value })} />
 				</Field>
 				<p className='text-xs leading-relaxed text-muted-foreground sm:col-span-2'>
@@ -652,8 +652,8 @@ function NumberOverride({ label, value, placeholder, min = 1, onChange }: { labe
 	return <Field label={label}><Input type='number' min={min} value={value} placeholder={placeholder == null ? undefined : String(placeholder)} onChange={event => onChange(event.target.value)} /></Field>
 }
 
-function NullableBoolean({ label, nullLabel, value, onChange, c }: { label: string; nullLabel?: string; value: boolean | null; onChange: (value: boolean | null) => void; c: (zh: string, en: string) => string }) {
-	return <Field label={label}><Select value={value == null ? 'inherit' : value ? 'enabled' : 'disabled'} onValueChange={next => onChange(next === 'inherit' ? null : next === 'enabled')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{nullLabel ?? c('继承全局', 'Inherit global')}</SelectItem><SelectItem value='enabled'>{c('启用', 'Enabled')}</SelectItem><SelectItem value='disabled'>{c('停用', 'Disabled')}</SelectItem></SelectGroup></SelectContent></Select></Field>
+function NullableBoolean({ label, hint, nullLabel, value, onChange, c }: { label: string; hint?: string; nullLabel?: string; value: boolean | null; onChange: (value: boolean | null) => void; c: (zh: string, en: string) => string }) {
+	return <Field label={label} hint={hint}><Select value={value == null ? 'inherit' : value ? 'enabled' : 'disabled'} onValueChange={next => onChange(next === 'inherit' ? null : next === 'enabled')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{nullLabel ?? c('继承全局', 'Inherit global')}</SelectItem><SelectItem value='enabled'>{c('启用', 'Enabled')}</SelectItem><SelectItem value='disabled'>{c('停用', 'Disabled')}</SelectItem></SelectGroup></SelectContent></Select></Field>
 }
 
 function AffinityModeOverride({ label, value, onChange, c }: { label: string; value: AffinityFailbackMode | null; onChange: (value: AffinityFailbackMode | null) => void; c: (zh: string, en: string) => string }) {

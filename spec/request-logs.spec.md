@@ -58,7 +58,7 @@ A request log row has:
 - `affinity_hit: boolean?` (true when request routing used an eligible affinity binding; false when affinity was evaluated but no binding was used; null when affinity did not run)
 - `affinity_key_hash: string?` (short hash of the affinity cache key; raw affinity key material MUST NOT be stored)
 - `affinity_target: string?` (`provider_id/channel_id` for the affinity target when present)
-- `session_affinity_value: string?` (the exact `x-session-affinity` header value sent to the upstream when per-channel automatic session affinity produced one, per `channel-management.spec.md` CM-AFF-4; null when disabled or no value was produced)
+- `session_affinity_value: string?` (the exact session-cache identifier sent upstream as `x-session-affinity` and `x-opencode-session` when per-channel automatic session affinity produced one, per `channel-management.spec.md` CM-AFF-4 and CM-AFF-5; null when disabled or no value was produced)
 - `created_at: RFC3339 string`
 - `created_at_unix_ms: integer?` (the same creation instant as Unix epoch milliseconds; nullable only for legacy rows whose text timestamp could not be backfilled)
 
