@@ -103,6 +103,8 @@ RA-S1. Each matrix row MUST upload its archive and checksum as one Actions artif
 
 RA-S2. One verification job MUST wait for every build row. The asset-publishing job MUST depend on that verification job. The verification and asset-publishing jobs MUST continue when one or more build rows fail, provided at least one row produced a valid artifact.
 
+RA-S2a. Each native build row MUST be an independent job. A container platform job MUST start after its matching Linux native row uploads a valid archive. It MUST NOT wait for another architecture's native row, the Windows native row, the verification job, or GitHub Release asset upload. Purpose: a Linux amd64 container MUST not wait for Windows or ARM compilation.
+
 RA-S3. The verification job and asset-publishing job MUST each download and merge every available `release-<target>` Actions artifact into one directory.
 
 RA-S4. `scripts/package_release.py verify` MUST require a non-empty subset of the three targets in RA-M1. For each present target, the merged directory MUST contain exactly its archive and checksum file. The command MUST reject an unknown file, an archive without its checksum, or a checksum without its archive.

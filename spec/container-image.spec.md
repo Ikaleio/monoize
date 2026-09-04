@@ -71,9 +71,9 @@ CI-P6. A manual container tag MUST match `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`.
 
 CI-P7. Concurrent workflow runs that target the same publication tag MUST execute sequentially. A newer run MUST NOT cancel an active run.
 
-CI-P8. For a GitHub Release, a container platform build MUST start only after the workflow uploads the available verified native Release assets successfully. A missing native archive MUST skip only the matching container platform.
+CI-P8. For a GitHub Release, a container platform build MUST start after its matching Linux native archive exists as an Actions artifact. The job MUST checksum that archive before copying the executable. It MUST NOT wait for other native rows, verification, or GitHub Release asset upload. A missing native archive MUST skip only the matching container platform.
 
-CI-P9. For a manual run with `publish_container = true`, the container build MUST start only after the available native artifacts pass checksum verification.
+CI-P9. For a manual run with `publish_container = true`, a container platform build MUST start after its matching Linux native archive exists as an Actions artifact and MUST checksum that archive. It MUST NOT wait for other native rows.
 
 ## 4. Platforms and tags
 
@@ -84,7 +84,7 @@ CI-M1. One publication MUST attempt exactly these platforms on native GitHub-hos
 | `linux/amd64` | `ubuntu-24.04` |
 | `linux/arm64` | `ubuntu-24.04-arm` |
 
-CI-M1a. The two platform container jobs MAY run in parallel. They MUST NOT compile Monoize; each job only packages the native linux executable for its architecture.
+CI-M1a. The two platform container jobs MAY run in parallel. They MUST NOT compile Monoize; each job only packages the native linux executable for its architecture. The amd64 container job MUST depend only on the `x86_64-unknown-linux-musl` native job. The arm64 container job MUST depend only on the `aarch64-unknown-linux-musl` native job.
 
 CI-M2. Each successful platform build MUST push a content-addressed image. The merge job MUST create one manifest list from the one or two available digests.
 
