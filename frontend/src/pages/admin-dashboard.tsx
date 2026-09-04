@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Activity,
@@ -8,6 +9,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useAdminOverview } from "@/lib/swr";
+import { DEFAULT_SPEND_WINDOW, type SpendWindow } from "@/lib/spend-window";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -30,7 +32,8 @@ export function AdminDashboardPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
-  const { data, error, isLoading, mutate } = useAdminOverview({
+  const [spendWindow, setSpendWindow] = useState<SpendWindow>(DEFAULT_SPEND_WINDOW);
+  const { data, error, isLoading, mutate } = useAdminOverview(spendWindow, {
     isPaused: () => !isAdmin,
   });
 
@@ -121,7 +124,13 @@ export function AdminDashboardPage() {
           </div>
           <div className="contents lg:col-span-7 lg:flex lg:flex-col lg:gap-4">
             <UsageRankingCard data={data} t={tt} />
-            <ChannelHealthCard data={data} t={tt} />
+            <ChannelHealthCard
+              data={data}
+              t={tt}
+              spendWindow={spendWindow}
+              onSpendWindowChange={setSpendWindow}
+              pending={data.spend?.window !== spendWindow}
+            />
           </div>
         </div>
       </main>

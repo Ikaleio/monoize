@@ -13,7 +13,7 @@ AD-1. `GET /api/dashboard/admin/overview` MUST require an authenticated
 dashboard admin session (`session_helpers::require_admin`). Non-admin requests
 MUST be rejected per the shared admin-session policy.
 
-AD-2. The response MUST be a JSON object with exactly these top-level fields (`node`, `replica`, `system`, `today`, `users_ranking`, `channel_health`):
+AD-2. The response MUST be a JSON object with exactly these top-level fields (`node`, `replica`, `system`, `spend`, `users_ranking`, `channel_health`):
 
 - `node`: object:
   - `role`: `"primary"` or `"replica"` (from the runtime node role);
@@ -53,12 +53,19 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
     - `spool_pending_bytes`: integer;
     - `stale`: boolean; true when `now - last_seen_at` is greater than
       `3 * MONOIZE_METERING_SHIP_INTERVAL_SECONDS`.
-- `today`: object:
+- `spend`: object:
+  - `window`: one of `"24h"`, `"3d"`, `"7d"`, `"14d"`, `"30d"`;
+  - `window_hours`: integer hours corresponding to `window`
+    (24, 72, 168, 336, 720);
+  - `time_from`: RFC 3339 inclusive lower bound (`now - window_hours`);
+  - `time_to`: RFC 3339 exclusive upper bound (`now`);
   - `calls`: integer COUNT of request-log rows with
-    `created_at_unix_ms >= UTC calendar-day start` (same instant as
-    `GET /api/dashboard/analytics` `today_calls`);
+    `created_at_unix_ms >= time_from` and `created_at_unix_ms < time_to`
+    and `created_at_unix_ms IS NOT NULL`;
   - `cost_nano_usd`: nano-dollar integer string SUM of canonical in-range
-    `charge_nano_usd` (same aggregation as analytics `today_cost_nano_usd`).
+    `charge_nano_usd` (same aggregation as analytics).
+    The window is a rolling interval ending at request time. It MUST NOT use
+    UTC calendar-day midnight as the start.
 - `system`: object:
   - `pending_request_logs`: integer count of in-memory pending request-log
     snapshots;
@@ -92,10 +99,17 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
   - `unhealthy_models`: array of model id strings whose per-model health key
     is unhealthy or in cooldown; empty when `per_model_circuit_break` is
     false or every model key is healthy;
-  - `today_calls`: integer COUNT of today's request-log rows for this
-    `channel_id` (UTC calendar-day start, same window as `today`);
-  - `today_cost_nano_usd`: nano-dollar integer string SUM of those rows'
+  - `window_calls`: integer COUNT of in-window request-log rows for this
+    `channel_id` (same rolling window as `spend`);
+  - `window_cost_nano_usd`: nano-dollar integer string SUM of those rows'
     canonical `charge_nano_usd`.
+
+AD-2a. `GET /api/dashboard/admin/overview` MUST accept an optional
+`spend_window` query parameter. Allowed values are exactly `24h`, `3d`,
+`7d`, `14d`, and `30d`. An omitted parameter MUST default to `24h`. An
+empty string or any other value MUST return HTTP 400, code
+`invalid_spend_window`, and `param = "spend_window"` before executing any
+usage-aggregation database query.
 
 AD-3. The endpoint MUST NOT expose credentials: no channel API keys, no
 provider API keys, no database passwords, no replica tokens.
@@ -144,17 +158,25 @@ pixels. The fixed header height MUST be 40 CSS pixels. Each data row height
 MUST be 44 CSS pixels.
 
 ADF-5. Model/channel health card MUST render one row per channel with six
-columns: Channel, Weight, Affinity, Status, Today's spend, and Last probe. The
+columns: Channel, Weight, Affinity, Status, Spend, and Last probe. The
 Channel column MUST show the channel name and provider name. The Affinity
 column MUST show `auto` when auto session affinity is enabled and `-` otherwise.
 The Status column MUST show disabled, healthy, unhealthy, or cooling-down. The
-Today's spend column MUST show today's cost formatted as USD with 2 fractional
-digits and today's call count. The Last probe column MUST show the probe time.
+Spend column MUST show the selected-window cost formatted as USD with 2
+fractional digits and the selected-window call count. The Last probe column
+MUST show the probe time.
 Health status MUST derive from `enabled`, `healthy`, and `cooldown_until`: a channel with
 `cooldown_until > now` renders as cooling-down regardless of `healthy`. When
 `unhealthy_models` is non-empty, the status cell MUST list those model ids.
-The card header MUST also show the process-wide `today.cost_nano_usd` and
-`today.calls` totals.
+The card header MUST show the process-wide `spend.cost_nano_usd` and
+`spend.calls` totals for the selected window. The title row MUST include a
+segmented spend-window control with the literal ASCII labels `24h`, `3d`,
+`7d`, `14d`, and `30d`, in that order, defaulting to `24h`. These labels are
+canonical product tokens and MUST NOT be translated. The selection MUST be
+held only in React component state. The header MUST also show a localized
+note that the window is rolling and ends now, and that it does not reset at
+midnight. The title row MUST wrap (`flex-wrap`) so the control remains usable
+on narrow widths.
 
 ADF-5a. The Model/channel health table MUST have a fixed header and a bounded
 data-row viewport. The viewport MUST virtualize its rows and MUST scroll
@@ -179,8 +201,14 @@ An enabled ingest with an empty `replicas` array MUST state that no replica
 has heartbeated yet.
 
 ADF-7. Data fetching MUST use SWR with a 10-second refresh interval, skeleton
-fallbacks while loading, and an error state with retry on failure. Mutations
-do not exist on this page.
+fallbacks on first load, and an error state with retry on failure. Mutations
+do not exist on this page. The SWR cache key MUST include the selected
+`spend_window`. The hook MUST set `keepPreviousData: true`. A spend-window
+switch MUST NOT show a skeleton. While a fetch for a newly selected window is
+in flight, only the Model/channel health card content MUST dim (`opacity-60`);
+the spend-window control MUST remain fully opaque. Dim MUST apply only when
+`data.spend.window` differs from the selected window so a same-window
+10-second refresh does not dim.
 
 ADF-8. The page MUST NOT throw when any optional field is missing; missing
 timestamps MUST render as `-`.

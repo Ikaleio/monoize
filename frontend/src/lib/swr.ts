@@ -2,6 +2,7 @@ import useSWR, { mutate } from "swr";
 import type { SWRConfiguration } from "swr";
 import { api } from "./api";
 import { usageWindowStartIso, type UsageWindow } from "./usage-window";
+import type { SpendWindow } from "./spend-window";
 import type {
   User,
   ApiKey,
@@ -355,12 +356,13 @@ export function useWindowedRequestLogs(
   config?: SWRConfiguration,
 ) {
   return useSWR<RequestLogsResponse>(
-    `${SWR_KEYS.REQUEST_LOGS}?window=${window}&limit=${limit}`,
+    `${SWR_KEYS.REQUEST_LOGS}?window=${window}&limit=${limit}&scope=self`,
     () => {
       const now = new Date();
       return api.listRequestLogs(limit, 0, {
         time_from: usageWindowStartIso(window, now),
         time_to: now.toISOString(),
+        scope: "self",
       });
     },
     { ...defaultConfig, keepPreviousData: true, ...config },
@@ -477,13 +479,17 @@ export function usePaymentChannels(config?: SWRConfiguration) {
 }
 
 // Admin overview hook (admin dashboard; AD-ADF-7: 10s refresh, skeleton, retry)
-export function useAdminOverview(config?: SWRConfiguration) {
+export function useAdminOverview(
+  spendWindow: SpendWindow,
+  config?: SWRConfiguration,
+) {
   return useSWR<AdminOverview>(
-    SWR_KEYS.ADMIN_OVERVIEW,
-    () => api.getAdminOverview(),
+    `${SWR_KEYS.ADMIN_OVERVIEW}?spend_window=${spendWindow}`,
+    () => api.getAdminOverview(spendWindow),
     {
       ...defaultConfig,
       refreshInterval: 10000,
+      keepPreviousData: true,
       ...config,
     },
   );

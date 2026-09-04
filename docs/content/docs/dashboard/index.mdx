@@ -20,13 +20,22 @@ Open the Monoize listen address in a browser. The default is `http://localhost:8
 
 | Area | Purpose |
 | --- | --- |
-| Dashboard | Traffic, cost, and health overview |
+| Dashboard | Traffic, cost, and health for the signed-in account |
+| System Dashboard | Admin-only system status, usage ranking, and Channel health |
 | Providers | Providers, Channels, model mapping, health, transforms |
 | Token Management | API keys, quotas, model restrictions, transforms |
 | Logs | Request logs and the capture viewer |
 | Models | Model prices, tool prices, upstream price sync, and group billing ratios |
 | Users | Accounts, balances, subscription assignment, and the billing ledger |
 | Settings | System settings, global transforms, request capture switch |
+
+## Home Dashboard and System Dashboard
+
+The Home Dashboard shows traffic, cost, and health for the signed-in account only.
+
+System Dashboard is an admin page. It shows system-wide health and spend.
+Spend uses a rolling window (`24h`, `3d`, `7d`, `14d`, `30d`).
+The window ends at the current time. The window does not reset at midnight.
 
 ## Language
 

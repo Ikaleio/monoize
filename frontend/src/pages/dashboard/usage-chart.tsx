@@ -127,7 +127,7 @@ export function UsageChartPanel({
             <CardDescription className="text-pretty leading-relaxed">
               {t(
                 "dashboard.usage.subtitle",
-                "Cumulative token usage for the selected time range",
+                "Token usage for the current account in the selected time range",
               )}
             </CardDescription>
           </div>
