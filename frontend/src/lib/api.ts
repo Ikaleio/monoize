@@ -950,7 +950,11 @@ export interface AdminOverviewReplica {
   replicas: AdminOverviewReplicaNode[];
 }
 
-export interface AdminOverviewToday {
+export interface AdminOverviewSpend {
+  window: string;
+  window_hours: number;
+  time_from: string;
+  time_to: string;
   calls: number;
   cost_nano_usd: string;
 }
@@ -985,15 +989,15 @@ export interface AdminOverviewChannelHealth {
   last_probe_at?: number | null;
   cooldown_active: boolean;
   unhealthy_models: string[];
-  today_calls: number;
-  today_cost_nano_usd: string;
+  window_calls: number;
+  window_cost_nano_usd: string;
 }
 
 export interface AdminOverview {
   node: AdminOverviewNode;
   replica: AdminOverviewReplica;
   system: AdminOverviewSystem;
-  today: AdminOverviewToday;
+  spend: AdminOverviewSpend;
   users_ranking: AdminOverviewUserRanking[];
   channel_health: AdminOverviewChannelHealth[];
 }
@@ -1067,6 +1071,7 @@ export interface RequestLogsFilter {
   search?: string;
   time_from?: string;
   time_to?: string;
+  scope?: "self";
 }
 
 export interface RequestLogsResponse {
@@ -1578,6 +1583,7 @@ class ApiClient {
     if (filters?.search) params.set("search", filters.search);
     if (filters?.time_from) params.set("time_from", filters.time_from);
     if (filters?.time_to) params.set("time_to", filters.time_to);
+    if (filters?.scope) params.set("scope", filters.scope);
     return this.request(`/request-logs?${params.toString()}`);
   }
 
@@ -1611,8 +1617,10 @@ class ApiClient {
     return this.request("/me/live-usage");
   }
 
-  async getAdminOverview(): Promise<AdminOverview> {
-    return this.request("/admin/overview");
+  async getAdminOverview(spendWindow = "24h"): Promise<AdminOverview> {
+    const params = new URLSearchParams();
+    params.set("spend_window", spendWindow);
+    return this.request(`/admin/overview?${params.toString()}`);
   }
 
   async testChannel(

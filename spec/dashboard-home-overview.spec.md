@@ -64,10 +64,14 @@ its runtime JSON type.
 
 DH-5c. The account overview MUST fetch
 `GET /api/dashboard/analytics?buckets=24&range_hours=24` through the shared SWR analytics
-hook, independent of the usage chart's selected window. It MUST derive:
+hook, independent of the usage chart's selected window. The payload MUST contain only
+the authenticated account's request-log rows, including when the caller is an admin.
+It MUST derive:
 
-- today's spend from `today_cost_nano_usd`, formatted as USD with 4 fractional digits;
-- today's requests from `today_calls`, formatted as a localized integer;
+- today's spend from `today_cost_nano_usd`, formatted as USD with 4 fractional digits
+  (UTC calendar-day start of this account's rows);
+- today's requests from `today_calls`, formatted as a localized integer
+  (UTC calendar-day start of this account's rows);
 - 24-hour Tokens as the sum of every positive `tokens_by_model` value in all returned
   buckets, formatted with the shared compact-token formatter;
 - active models as the count of distinct model ids whose 24-hour Token sum is greater
@@ -84,8 +88,8 @@ DH-5e. The account overview MUST NOT display `my_api_keys_count`.
 DH-6. The usage panel MUST occupy the full content width and MUST render:
 
 - title from `dashboard.usage.title` (default English: "Your Usage");
-- subtitle from `dashboard.usage.subtitle` (default English: "Cumulative token usage
-  for the selected time range");
+- subtitle from `dashboard.usage.subtitle` (default English: "Token usage for the
+  current account in the selected time range");
 - a time-window control at the top-right of the card header (DH-6i);
 - a horizontal stacked cumulative area chart;
 - a single-row paginated legend below the chart.
@@ -201,8 +205,9 @@ DH-6i. Its selection state is independent of the usage chart's selection; each p
 holds its own React state, both defaulting to `1h`.
 
 DH-7a. Table rows MUST be per-model aggregates computed from the authenticated user's
-own request logs (`GET /api/dashboard/request-logs` with the same user scoping the API
-already applies), fetched with these query parameters for the selected window `W`:
+own request logs (`GET /api/dashboard/request-logs?...&scope=self`). The `scope=self`
+parameter MUST force the current-account filter even when the caller is an admin.
+The request MUST be fetched with these query parameters for the selected window `W`:
 
 - `time_from = now − range_hours(W)` and `time_to = now`, both ISO-8601, where
   `range_hours(W)` uses the DH-6a mapping and `now` is evaluated at fetch time (so each
@@ -357,10 +362,14 @@ DH-10. `GET /api/dashboard/analytics` keeps the existing authorization, clamping
 math, cost, and call contracts from the previous revision of this spec, and MUST
 additionally:
 
+- always restrict aggregation to `user_id =` the authenticated caller, including when
+  the caller has admin or super_admin role. The endpoint MUST NOT accept a `user_id`
+  query parameter and MUST NOT return system-wide analytics;
 - select and group token sums per model bucket as defined in DH-6b;
 - include `tokens_by_model` on every bucket object in the JSON response;
 - continue to return `cost_by_model`, `calls_by_model`, `calls_by_provider`, totals, and
-  today fields unchanged in meaning.
+  today fields unchanged in meaning. The `today_*` fields remain the UTC calendar-day
+  aggregate of the caller's own rows.
 
 DH-10a. Cost fields remain signed base-10 integer strings in nano-USD with checked `i128`
 aggregation. Token and call counts are integers. The frontend MUST NOT narrow monetary

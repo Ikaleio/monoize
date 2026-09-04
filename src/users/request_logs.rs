@@ -1492,19 +1492,29 @@ impl UserStore {
             .collect()
     }
 
-    pub async fn get_channels_today_usage(
+    /// Admin dashboard channel spend (admin-dashboard.spec.md AD-2):
+    /// per-channel call count and charge aggregate over `[time_from, time_to)`.
+    pub async fn get_channels_window_usage(
         &self,
-        today_start: &str,
-    ) -> Result<Vec<super::ChannelTodayUsage>, String> {
+        time_from: &str,
+        time_to: &str,
+    ) -> Result<Vec<super::ChannelWindowUsage>, String> {
         let is_sqlite = self.db.is_sqlite();
-        let today_start_unix_ms = chrono::DateTime::parse_from_rfc3339(today_start)
+        let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
             .map_err(|e| e.to_string())?
             .timestamp_millis();
+        let time_to_unix_ms = chrono::DateTime::parse_from_rfc3339(time_to)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        if time_from_unix_ms >= time_to_unix_ms {
+            return Err("channel usage time range must be positive".to_string());
+        }
         let charge_columns = charge_aggregate_columns(!is_sqlite);
         let sql = format!(
             "SELECT rl.channel_id, {charge_columns}, COUNT(*) AS call_count \
              FROM request_logs rl \
              WHERE rl.created_at_unix_ms >= $1 \
+               AND rl.created_at_unix_ms < $2 \
                AND rl.created_at_unix_ms IS NOT NULL \
                AND rl.channel_id IS NOT NULL \
              GROUP BY rl.channel_id"
@@ -1512,7 +1522,10 @@ impl UserStore {
         let rows = self
             .db
             .read()
-            .query_all(self.db.stmt(&sql, vec![today_start_unix_ms.into()]))
+            .query_all(
+                self.db
+                    .stmt(&sql, vec![time_from_unix_ms.into(), time_to_unix_ms.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?;
 
@@ -1520,16 +1533,16 @@ impl UserStore {
             .map(|row| {
                 let channel_id: String =
                     row.try_get("", "channel_id").map_err(|e| e.to_string())?;
-                let today_calls: i64 = row.try_get("", "call_count").map_err(|e| e.to_string())?;
-                let today_cost_nano_usd = decode_charge_aggregate(&row, !is_sqlite)?
+                let window_calls: i64 = row.try_get("", "call_count").map_err(|e| e.to_string())?;
+                let window_cost_nano_usd = decode_charge_aggregate(&row, !is_sqlite)?
                     .parse::<i128>()
                     .map_err(|_| {
                         "request log charge is outside the signed i128 domain".to_string()
                     })?;
-                Ok(super::ChannelTodayUsage {
+                Ok(super::ChannelWindowUsage {
                     channel_id,
-                    today_calls,
-                    today_cost_nano_usd,
+                    window_calls,
+                    window_cost_nano_usd,
                 })
             })
             .collect()
@@ -1576,27 +1589,44 @@ impl UserStore {
         })
     }
 
-    pub async fn get_today_usage_totals(&self, today_start: &str) -> Result<(i64, i128), String> {
+    /// Admin dashboard spend totals (admin-dashboard.spec.md AD-2):
+    /// call count and charge aggregate over `[time_from, time_to)`.
+    pub async fn get_window_usage_totals(
+        &self,
+        time_from: &str,
+        time_to: &str,
+    ) -> Result<(i64, i128), String> {
         let is_sqlite = self.db.is_sqlite();
-        let today_start_unix_ms = chrono::DateTime::parse_from_rfc3339(today_start)
+        let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
             .map_err(|e| e.to_string())?
             .timestamp_millis();
+        let time_to_unix_ms = chrono::DateTime::parse_from_rfc3339(time_to)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        if time_from_unix_ms >= time_to_unix_ms {
+            return Err("usage totals time range must be positive".to_string());
+        }
         let sql = format!(
             "{}, COUNT(*) AS call_count FROM request_logs rl \
-             WHERE rl.created_at_unix_ms >= $1 AND rl.created_at_unix_ms IS NOT NULL",
+             WHERE rl.created_at_unix_ms >= $1 \
+               AND rl.created_at_unix_ms < $2 \
+               AND rl.created_at_unix_ms IS NOT NULL",
             charge_aggregate_select(!is_sqlite)
         );
         let row = self
             .db
             .read()
-            .query_one(self.db.stmt(&sql, vec![today_start_unix_ms.into()]))
+            .query_one(
+                self.db
+                    .stmt(&sql, vec![time_from_unix_ms.into(), time_to_unix_ms.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no today usage aggregate row".to_string())?;
-        let today_calls: i64 = row.try_get("", "call_count").map_err(|e| e.to_string())?;
-        let today_cost_nano_usd = decode_charge_aggregate(&row, !is_sqlite)?
+            .ok_or_else(|| "no window usage aggregate row".to_string())?;
+        let window_calls: i64 = row.try_get("", "call_count").map_err(|e| e.to_string())?;
+        let window_cost_nano_usd = decode_charge_aggregate(&row, !is_sqlite)?
             .parse::<i128>()
             .map_err(|_| "request log charge is outside the signed i128 domain".to_string())?;
-        Ok((today_calls, today_cost_nano_usd))
+        Ok((window_calls, window_cost_nano_usd))
     }
 }

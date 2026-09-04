@@ -138,7 +138,7 @@
 		},
 		"usage": {
 			"title": "你的用量",
-			"subtitle": "所選時間範圍內的累計 Token 用量",
+			"subtitle": "目前帳號在所選時間範圍內的累計 Token 用量",
 			"timeRange": "時間範圍",
 			"cumulativeTokens": "累計 Tokens",
 			"periodBreakdown": "區間明細",
@@ -153,7 +153,7 @@
 		},
 		"recentUsage": {
 			"title": "最近用量",
-			"subtitle": "依 Model 彙總的 Token 用量、快取命中率與費用",
+			"subtitle": "目前帳號依 Model 彙總的 Token 用量、快取命中率與費用",
 			"model": "Model",
 			"tokens": "Tokens",
 			"cacheHit": "快取命中",
@@ -1293,6 +1293,9 @@
 		"lastSeen": "最近心跳",
 		"todaySpend": "今日消耗",
 		"todayCalls": "今日呼叫",
+		"spend": "消耗",
+		"spendNote": "滾動時間範圍，截止目前時刻。不在午夜重設。",
+		"spendWindowAria": "消耗時間範圍",
 		"spoolPendingCount": "待傳送檔案數",
 		"spoolPendingBytes": "待傳送位元組數",
 		"usageRanking": "使用者用量排行（24 小時）",

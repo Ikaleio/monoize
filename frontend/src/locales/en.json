@@ -138,7 +138,7 @@
 		},
 		"usage": {
 			"title": "Your Usage",
-			"subtitle": "Cumulative token usage for the selected time range",
+			"subtitle": "Token usage for the current account in the selected time range",
 			"timeRange": "Time range",
 			"cumulativeTokens": "Cumulative Tokens",
 			"periodBreakdown": "Period breakdown",
@@ -153,7 +153,7 @@
 		},
 		"recentUsage": {
 			"title": "Recent Usage",
-			"subtitle": "Token usage, cache hit rate, and charges by model",
+			"subtitle": "This account's token usage, cache hit rate, and charges by model",
 			"model": "Model",
 			"tokens": "Tokens",
 			"cacheHit": "Cache hit",
@@ -1296,6 +1296,9 @@
 		"lastSeen": "Last seen",
 		"todaySpend": "Today's spend",
 		"todayCalls": "Today's calls",
+		"spend": "Spend",
+		"spendNote": "Rolling window ending now. Does not reset at midnight.",
+		"spendWindowAria": "Spend window",
 		"spoolPendingCount": "Spool pending files",
 		"spoolPendingBytes": "Spool pending bytes",
 		"usageRanking": "User Usage Ranking (24h)",

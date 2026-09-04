@@ -10,6 +10,8 @@ import type {
   AdminOverviewChannelHealth,
   AdminOverviewUserRanking,
 } from "@/lib/api";
+import type { SpendWindow } from "@/lib/spend-window";
+import { SpendWindowControl } from "@/pages/admin-dashboard/spend-window-control";
 import { formatNanoUsd } from "@/lib/exact-decimal";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -496,9 +498,15 @@ export function UsageRankingCard({
 export function ChannelHealthCard({
   data,
   t,
+  spendWindow,
+  onSpendWindowChange,
+  pending,
 }: {
   data: AdminOverview;
   t: Translate;
+  spendWindow: SpendWindow;
+  onSpendWindowChange: (window: SpendWindow) => void;
+  pending: boolean;
 }) {
   const rows = data.channel_health;
   const tableHeight = Math.min(
@@ -509,28 +517,44 @@ export function ChannelHealthCard({
   return (
     <Card className="order-3 h-fit overflow-hidden">
       <CardHeader className="p-5 pb-4">
-        <CardTitle className="flex items-center justify-between gap-3 text-base">
+        <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
           <span className="flex items-center gap-2">
             <HeartPulse className="size-4 text-primary" aria-hidden="true" />
             {t("adminDashboard.channelHealth", "Model / Channel Health")}
           </span>
-          <Badge variant="outline" className="font-mono">
-            {formatNumber(rows.length)}
-          </Badge>
-        </CardTitle>
-        <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-sm">
-          <span>
-            {t("adminDashboard.todaySpend", "Today's spend")}:{" "}
-            {formatNanoUsd(data.today?.cost_nano_usd ?? "0", 2)}
+          <span className="flex flex-wrap items-center gap-2">
+            <SpendWindowControl
+              value={spendWindow}
+              onChange={onSpendWindowChange}
+            />
+            <Badge variant="outline" className="font-mono">
+              {formatNumber(rows.length)}
+            </Badge>
           </span>
-          <span aria-hidden="true">·</span>
+        </CardTitle>
+        <CardDescription className="flex flex-col gap-1">
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-sm">
+            <span>
+              {t("adminDashboard.spend", "Spend")}:{" "}
+              {formatNanoUsd(data.spend?.cost_nano_usd ?? "0", 2)}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {t("adminDashboard.calls", "Calls")}:{" "}
+              {formatNumber(data.spend?.calls ?? 0)}
+            </span>
+          </span>
           <span>
-            {t("adminDashboard.todayCalls", "Today's calls")}:{" "}
-            {formatNumber(data.today?.calls ?? 0)}
+            {t(
+              "adminDashboard.spendNote",
+              "Rolling window ending now. Does not reset at midnight.",
+            )}
           </span>
         </CardDescription>
       </CardHeader>
-      <CardContent className="p-0">
+      <CardContent
+        className={cn("p-0 transition-opacity", pending && "opacity-60")}
+      >
         {rows.length === 0 ? (
           <EmptyState
             title={t("adminDashboard.noChannels", "No channels configured")}
@@ -560,7 +584,7 @@ export function ChannelHealthCard({
                   {t("adminDashboard.status", "Status")}
                 </TableHead>
                 <TableHead className="h-10 w-32 px-2 text-right">
-                  {t("adminDashboard.todaySpend", "Today")}
+                  {t("adminDashboard.spend", "Spend")}
                 </TableHead>
                 <TableHead className="h-10 w-44 px-5 text-right">
                   {t("adminDashboard.lastProbe", "Last probe")}
@@ -600,10 +624,10 @@ export function ChannelHealthCard({
                 </TableCell>
                 <TableCell className="h-16 border-b px-2 py-0 text-right font-mono">
                   <div>
-                    {formatNanoUsd(channel.today_cost_nano_usd ?? "0", 2)}
+                    {formatNanoUsd(channel.window_cost_nano_usd ?? "0", 2)}
                   </div>
                   <div className="text-sm text-muted-foreground">
-                    {formatNumber(channel.today_calls ?? 0)}{" "}
+                    {formatNumber(channel.window_calls ?? 0)}{" "}
                     {t("adminDashboard.calls", "Calls")}
                   </div>
                 </TableCell>

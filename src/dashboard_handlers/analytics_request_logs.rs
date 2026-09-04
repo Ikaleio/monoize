@@ -39,6 +39,8 @@ pub struct RequestLogsQuery {
     pub time_from: Option<String>,
     #[serde(default)]
     pub time_to: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 fn default_logs_limit() -> i64 {
@@ -56,6 +58,20 @@ fn validate_request_log_model_filter(query: &RequestLogsQuery) -> AppResult<()> 
             .with_param("model")
         },
     )
+}
+
+fn request_logs_scope_self(scope: Option<&str>) -> AppResult<bool> {
+    match scope {
+        None => Ok(false),
+        Some(value) if value.chars().all(char::is_whitespace) => Ok(false),
+        Some("self") => Ok(true),
+        Some(_) => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_scope",
+            "scope must be self when provided",
+        )
+        .with_param("scope")),
+    }
 }
 
 fn validate_request_log_time_filters(query: &RequestLogsQuery) -> AppResult<()> {
@@ -92,27 +108,14 @@ pub async fn list_my_request_logs(
     axum::extract::Query(query): axum::extract::Query<RequestLogsQuery>,
 ) -> AppResult<impl IntoResponse> {
     validate_request_log_model_filter(&query)?;
+    let scope_self = request_logs_scope_self(query.scope.as_deref())?;
     let user = get_current_user(&headers, &state).await?;
     validate_request_log_time_filters(&query)?;
     let is_admin = user.role.can_manage_users();
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
-    let (mut logs, total, total_charge_nano_usd) = if is_admin {
-        state
-            .user_store
-            .list_all_request_logs(
-                limit,
-                offset,
-                query.model.as_deref(),
-                query.status.as_deref(),
-                query.api_key_id.as_deref(),
-                query.username.as_deref(),
-                query.search.as_deref(),
-                query.time_from.as_deref(),
-                query.time_to.as_deref(),
-            )
-            .await
-    } else {
+    let restrict_to_self = scope_self || !is_admin;
+    let (mut logs, total, total_charge_nano_usd) = if restrict_to_self {
         state
             .user_store
             .list_request_logs_by_user(
@@ -122,6 +125,21 @@ pub async fn list_my_request_logs(
                 query.model.as_deref(),
                 query.status.as_deref(),
                 query.api_key_id.as_deref(),
+                query.search.as_deref(),
+                query.time_from.as_deref(),
+                query.time_to.as_deref(),
+            )
+            .await
+    } else {
+        state
+            .user_store
+            .list_all_request_logs(
+                limit,
+                offset,
+                query.model.as_deref(),
+                query.status.as_deref(),
+                query.api_key_id.as_deref(),
+                query.username.as_deref(),
                 query.search.as_deref(),
                 query.time_from.as_deref(),
                 query.time_to.as_deref(),
@@ -220,11 +238,7 @@ pub async fn get_dashboard_analytics(
         .and_utc()
         .to_rfc3339();
 
-    let user_id_filter: Option<String> = if user.role.can_manage_users() {
-        None
-    } else {
-        Some(user.id.clone())
-    };
+    let user_id_filter = Some(user.id.clone());
 
     let raw = state
         .user_store
