@@ -103,7 +103,7 @@ RA-S1. Each matrix row MUST upload its archive and checksum as one Actions artif
 
 RA-S2. One verification job MUST wait for every build row. The asset-publishing job MUST depend on that verification job. The verification and asset-publishing jobs MUST continue when one or more build rows fail, provided at least one row produced a valid artifact.
 
-RA-S2a. Each native build row MUST be an independent job. A container platform job MUST start after its matching Linux native row uploads a valid archive. It MUST NOT wait for another architecture's native row, the Windows native row, the verification job, or GitHub Release asset upload. Purpose: a Linux amd64 container MUST not wait for Windows or ARM compilation.
+RA-S2a. Each native build row MUST be an independent job. A container platform job MUST start after its matching Linux native row uploads a valid archive. It MUST NOT wait for another architecture's native row, the Windows native row, the verification job, or GitHub Release asset upload. Purpose: a Linux amd64 container MUST not wait for Windows or ARM compilation. A job that calls a reusable workflow MUST NOT set `continue-on-error`. Downstream jobs MUST use `if: always()` or a `needs.<job>.result` check so one failed native row does not block the other rows.
 
 RA-S3. The verification job and asset-publishing job MUST each download and merge every available `release-<target>` Actions artifact into one directory.
 
