@@ -137,8 +137,8 @@
 			"resetUnavailable": "未設定"
 		},
 		"usage": {
-			"title": "使用量",
-			"subtitle": "選択した期間の累計 Token 使用量",
+			"title": "あなたの使用量",
+			"subtitle": "このアカウントの選択期間の累計 Token 使用量",
 			"timeRange": "期間",
 			"cumulativeTokens": "累計 Tokens",
 			"periodBreakdown": "期間の内訳",
@@ -153,7 +153,7 @@
 		},
 		"recentUsage": {
 			"title": "最近の使用量",
-			"subtitle": "Model 別の Token 使用量、キャッシュヒット率、課金",
+			"subtitle": "このアカウントの Model 別 Token 使用量、キャッシュヒット率、課金",
 			"model": "Model",
 			"tokens": "Tokens",
 			"cacheHit": "キャッシュヒット",
@@ -1293,6 +1293,9 @@
 		"lastSeen": "最終ハートビート",
 		"todaySpend": "本日の消費",
 		"todayCalls": "本日の呼び出し",
+		"spend": "消費",
+		"spendNote": "現在時刻までのローリング期間です。深夜 0 時にはリセットされません。",
+		"spendWindowAria": "消費期間",
 		"spoolPendingCount": "未送信ファイル数",
 		"spoolPendingBytes": "未送信バイト数",
 		"usageRanking": "ユーザー使用ランキング（24時間）",

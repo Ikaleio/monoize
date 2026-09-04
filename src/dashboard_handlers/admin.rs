@@ -3,11 +3,33 @@ use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use chrono::{NaiveTime, Utc};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+
+#[derive(Debug, Deserialize)]
+pub struct AdminOverviewQuery {
+    pub spend_window: Option<String>,
+}
+
+fn parse_spend_window(raw: Option<&str>) -> AppResult<(&'static str, i64)> {
+    match raw {
+        None => Ok(("24h", 24)),
+        Some("24h") => Ok(("24h", 24)),
+        Some("3d") => Ok(("3d", 72)),
+        Some("7d") => Ok(("7d", 168)),
+        Some("14d") => Ok(("14d", 336)),
+        Some("30d") => Ok(("30d", 720)),
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_spend_window",
+            "spend_window must be one of 24h, 3d, 7d, 14d, 30d",
+        )
+        .with_param("spend_window")),
+    }
+}
 
 /// security-access-control.spec.md SAC-1..SAC-5: metrics expose runtime topology
 /// and therefore use the same authorization boundary as the admin dashboard.
@@ -24,8 +46,10 @@ pub async fn get_metrics(
 pub async fn get_admin_overview(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminOverviewQuery>,
 ) -> AppResult<Json<Value>> {
     require_admin(&headers, &state).await?;
+    let (spend_window, window_hours) = parse_spend_window(query.spend_window.as_deref())?;
 
     let now = chrono::Utc::now();
     let started_at = state.started_at;
@@ -78,19 +102,18 @@ pub async fn get_admin_overview(
         })
         .collect();
 
-    let today_start = Utc::now()
-        .date_naive()
-        .and_time(NaiveTime::MIN)
-        .and_utc()
-        .to_rfc3339();
-    let (today_calls, today_cost_nano_usd) = state
+    let spend_time_to = now;
+    let spend_time_from = now - chrono::Duration::hours(window_hours);
+    let spend_time_from_rfc = spend_time_from.to_rfc3339();
+    let spend_time_to_rfc = spend_time_to.to_rfc3339();
+    let (window_calls, window_cost_nano_usd) = state
         .user_store
-        .get_today_usage_totals(&today_start)
+        .get_window_usage_totals(&spend_time_from_rfc, &spend_time_to_rfc)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let channel_today: HashMap<String, crate::users::ChannelTodayUsage> = state
+    let channel_window: HashMap<String, crate::users::ChannelWindowUsage> = state
         .user_store
-        .get_channels_today_usage(&today_start)
+        .get_channels_window_usage(&spend_time_from_rfc, &spend_time_to_rfc)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
         .into_iter()
@@ -144,7 +167,7 @@ pub async fn get_admin_overview(
                 }
                 unhealthy_models.sort();
             }
-            let today = channel_today.get(&channel.id);
+            let window = channel_window.get(&channel.id);
             channel_health.push(json!({
                 "provider_id": provider.id,
                 "provider_name": provider.name,
@@ -160,9 +183,9 @@ pub async fn get_admin_overview(
                 "last_probe_at": last_probe_at,
                 "cooldown_active": cooldown_until.is_some_and(|until| until > now_ms),
                 "unhealthy_models": unhealthy_models,
-                "today_calls": today.map(|row| row.today_calls).unwrap_or(0),
-                "today_cost_nano_usd": today
-                    .map(|row| row.today_cost_nano_usd.to_string())
+                "window_calls": window.map(|row| row.window_calls).unwrap_or(0),
+                "window_cost_nano_usd": window
+                    .map(|row| row.window_cost_nano_usd.to_string())
                     .unwrap_or_else(|| "0".to_string()),
             }));
         }
@@ -232,9 +255,13 @@ pub async fn get_admin_overview(
                 .load(std::sync::atomic::Ordering::Relaxed)
                 .to_string(),
         },
-        "today": {
-            "calls": today_calls,
-            "cost_nano_usd": today_cost_nano_usd.to_string(),
+        "spend": {
+            "window": spend_window,
+            "window_hours": window_hours,
+            "time_from": spend_time_from_rfc,
+            "time_to": spend_time_to_rfc,
+            "calls": window_calls,
+            "cost_nano_usd": window_cost_nano_usd.to_string(),
         },
         "users_ranking": users_ranking,
         "channel_health": channel_health,

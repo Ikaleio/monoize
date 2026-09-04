@@ -261,6 +261,7 @@ Neither internal-source label may be exposed through the API-key management endp
   - `search: string?` (case-insensitive literal-substring search across model, upstream_model, request_id, request_ip; `%`, `_`, and `\` are ordinary characters)
   - `time_from: string?` (ISO 8601 / RFC 3339 timestamp; inclusive lower bound on `created_at`)
   - `time_to: string?` (ISO 8601 / RFC 3339 timestamp; exclusive upper bound on `created_at`)
+  - `scope: string?` (optional; exact value `self` forces the current-account filter per RL-API1a)
 - **Response:**
 
 ```json
@@ -280,6 +281,8 @@ RL-API14. Every `EnrichedRequestLogRow` MUST include `has_capture: boolean` comp
 RL-API6. `total_charge_nano_usd` MUST equal the SUM of `charge_nano_usd` across all rows matching the active filters (not just the current page). Rows with null `charge_nano_usd` MUST be treated as 0. The value MUST be a string representation of a non-negative integer (nano-dollar).
 
 RL-API1. When the authenticated user has role `super_admin` or `admin`, the endpoint MUST return logs for ALL users. Otherwise, it MUST return only logs belonging to the current authenticated user.
+
+RL-API1a. When the query parameter `scope` is the exact string `self`, the endpoint MUST return only logs belonging to the current authenticated user, including when the caller has admin or super_admin role. The `username` parameter MUST be ignored. An omitted, empty, or whitespace-only `scope` MUST follow RL-API1. Any other non-empty `scope` value MUST return HTTP 400, code `invalid_scope`, and `param = "scope"` before executing any database query.
 
 RL-API2. Results MUST be ordered newest first using the complete ordering in RL-API10.
 
@@ -680,7 +683,7 @@ FL52b. Monoize MUST NOT maintain full-table user, API-key, Provider, or Channel 
 
 ### 6.9 No server-side filtering on SSE
 
-FL53. The SSE endpoint `GET /api/dashboard/request-logs/stream` MUST NOT accept any filter query parameters (`model`, `status`, `api_key_id`, `username`, `search`, `time_from`, `time_to`). The server pushes all user-visible logs (per FL47 permission rules). The client MUST apply active UI filters locally to determine which SSE-delivered rows to display.
+FL53. The SSE endpoint `GET /api/dashboard/request-logs/stream` MUST NOT accept any filter query parameters (`model`, `status`, `api_key_id`, `username`, `search`, `time_from`, `time_to`, `scope`). The server pushes all user-visible logs (per FL47 permission rules). The client MUST apply active UI filters locally to determine which SSE-delivered rows to display.
 
 ### 6.10 Keep-alive
 
