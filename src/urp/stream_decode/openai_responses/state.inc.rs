@@ -311,8 +311,7 @@ fn merge_response_completed_outputs(
                 &terminal_entry,
                 &used_accumulated_indices,
             )
-        })
-        {
+        }) {
             let merged_nodes =
                 merge_output_node_lists(&merged_entries[index].nodes, &terminal_entry.nodes)?;
             merged_entries[index] = AccumulatedOutputEntry {
@@ -524,11 +523,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
         ) => Ok(Node::Reasoning {
             id: right_id.clone().or_else(|| left_id.clone()),
             content: merge_optional_string_field("reasoning.text", left_content, right_content)?,
-            encrypted: merge_optional_value_field(
-                "reasoning.encrypted_content",
-                left_encrypted,
-                right_encrypted,
-            )?,
+            encrypted: merge_terminal_reasoning_encrypted(left_encrypted, right_encrypted),
             summary: merge_terminal_reasoning_summary(left_summary, right_summary),
             source: right_source.clone().or_else(|| left_source.clone()),
             extra_body: merge_extra_body(left_extra, right_extra),
@@ -639,20 +634,20 @@ fn merge_terminal_reasoning_summary(
         .map(str::to_string)
 }
 
-fn merge_optional_value_field(
-    field: &str,
-    left: &Option<Value>,
-    right: &Option<Value>,
-) -> Result<Option<Value>, String> {
-    match (left, right) {
-        (Some(left), Some(right)) if left == right => Ok(Some(right.clone())),
-        (Some(left), Some(right)) if value_is_empty(left) => Ok(Some(right.clone())),
-        (Some(left), Some(right)) if value_is_empty(right) => Ok(Some(left.clone())),
-        (Some(_), Some(_)) => Err(format!("{field} differs from completed output")),
-        (Some(left), None) if !value_is_empty(left) => Ok(Some(left.clone())),
-        (_, Some(right)) if !value_is_empty(right) => Ok(Some(right.clone())),
-        _ => Ok(None),
-    }
+fn merge_terminal_reasoning_encrypted(
+    accumulated: &Option<Value>,
+    terminal: &Option<Value>,
+) -> Option<Value> {
+    terminal
+        .as_ref()
+        .filter(|value| !value_is_empty(value))
+        .cloned()
+        .or_else(|| {
+            accumulated
+                .as_ref()
+                .filter(|value| !value_is_empty(value))
+                .cloned()
+        })
 }
 
 fn value_is_empty(value: &Value) -> bool {
