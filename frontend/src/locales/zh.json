@@ -138,7 +138,7 @@
 		},
 		"usage": {
 			"title": "你的用量",
-			"subtitle": "所选时间范围内的累计 Token 用量",
+			"subtitle": "当前账号在所选时间范围内的累计 Token 用量",
 			"timeRange": "时间范围",
 			"cumulativeTokens": "累计 Tokens",
 			"periodBreakdown": "区间明细",
@@ -153,7 +153,7 @@
 		},
 		"recentUsage": {
 			"title": "最近用量",
-			"subtitle": "按 Model 汇总的 Token 用量、缓存命中率与费用",
+			"subtitle": "当前账号按 Model 汇总的 Token 用量、缓存命中率与费用",
 			"model": "Model",
 			"tokens": "Tokens",
 			"cacheHit": "缓存命中",
@@ -1296,6 +1296,9 @@
 		"lastSeen": "最近心跳",
 		"todaySpend": "今日消耗",
 		"todayCalls": "今日调用",
+		"spend": "消耗",
+		"spendNote": "滚动时间窗口，截止当前时刻。不在午夜重置。",
+		"spendWindowAria": "消耗时间范围",
 		"spoolPendingCount": "待发送文件数",
 		"spoolPendingBytes": "待发送字节数",
 		"usageRanking": "用户使用排名（24 小时）",

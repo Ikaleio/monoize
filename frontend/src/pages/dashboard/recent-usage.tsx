@@ -60,7 +60,7 @@ export function RecentUsagePanel({
             <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
               {t(
                 "dashboard.recentUsage.subtitle",
-                "Token usage, cache hit rate, and charges by model",
+                "This account's token usage, cache hit rate, and charges by model",
               )}
             </p>
           </div>

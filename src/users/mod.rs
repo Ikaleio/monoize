@@ -795,10 +795,10 @@ pub struct UserUsageRankingRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct ChannelTodayUsage {
+pub struct ChannelWindowUsage {
     pub channel_id: String,
-    pub today_calls: i64,
-    pub today_cost_nano_usd: i128,
+    pub window_calls: i64,
+    pub window_cost_nano_usd: i128,
 }
 
 /// Live-usage aggregate window (`user-live-usage.spec.md` LU-4).
