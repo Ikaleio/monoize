@@ -233,6 +233,10 @@ taller than the available card content area, only the table region MUST scroll
 vertically. The card header and time-window control MUST remain visible. Horizontal
 table overflow MUST remain available for narrow viewports.
 
+DH-7c. The Recent Usage and API Information cards MUST share a maximum height of
+28rem. At `lg` and above, both cards MUST stretch to the same grid-row height.
+API rows MUST scroll within their card when content exceeds the available height.
+
 ## API Information Panel
 
 DH-8. The API information panel MUST be visible to all authenticated dashboard users
@@ -240,8 +244,10 @@ DH-8. The API information panel MUST be visible to all authenticated dashboard u
 
 DH-8a. Data source: `api_base_url` from `GET /api/dashboard/settings/public`.
 
-DH-8b. If `api_base_url` is empty, show an explicit empty state directing the user to
-system settings. If non-empty, show:
+DH-8b. If a successfully loaded `api_base_url` is empty, show an explicit unavailable
+state. For `admin` and `super_admin`, show a configuration action linking to
+`/dashboard/admin-settings`. For `user`, state that the administrator has not configured
+the API base URL; do not instruct the user to open system settings. If non-empty, show:
 
 - the configured API base URL;
 - derived endpoint paths in this order: `/v1/chat/completions`, `/v1/responses`,
@@ -427,3 +433,15 @@ DH-15. All hardcoded fallback strings passed to the translation helper MUST be i
 (en). Chinese or other non-English fallbacks are forbidden in source code.
 DH-16. Corresponding translation keys MUST exist in `locales/en.json`, `locales/zh.json`,
 `locales/zh-TW.json`, and `locales/ja.json`.
+
+DH-17. Each analytics, recent usage, public settings, and performance panel MUST
+handle SWR errors independently. Without cached data, failure MUST replace empty or
+unconfigured content with DS54 feedback. It MUST NOT fabricate zero usage or an empty
+configuration. The account strip MUST retain the session balance and show em dashes
+for unavailable analytics values, with failure feedback in the same Card.
+
+DH-18. If cached data exists when a fetch fails, the panel MUST retain that data and
+show the DS54 refresh-failure notice. Every retry MUST revalidate only its own SWR
+key. During a retry without data, the error notice MUST remain visible. Pending retries
+MUST disable the retry action. These failure rules override DH-13's unresolved-data
+skeleton rule once a fetch has failed.

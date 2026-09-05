@@ -44,6 +44,7 @@ pub const REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY: &str =
 /// One source entry maps to one node so repeated entry types and entry order survive replay.
 pub const CHAT_REASONING_DETAIL_EXTRA_KEY: &str = "_monoize_chat_reasoning_detail";
 /// Scalar Chat reasoning surface that supplied a reasoning node when no structured detail existed.
+pub const CHAT_MESSAGE_ITEM_EXTRA_KEY: &str = "_monoize_chat_message_item";
 pub const CHAT_REASONING_SURFACE_EXTRA_KEY: &str = "_monoize_chat_reasoning_surface";
 pub const CHAT_REASONING_SURFACE_REASONING: &str = "reasoning";
 pub const CHAT_REASONING_SURFACE_REASONING_CONTENT: &str = "reasoning_content";
@@ -78,6 +79,7 @@ pub const RESPONSES_RESPONSE_SOURCE_EXTRA_KEY: &str = "_monoize_responses_respon
 /// Upstream Responses start object retained for same-protocol stream envelope reconstruction.
 pub const RESPONSES_STREAM_START_SOURCE_EXTRA_KEY: &str = "_monoize_responses_stream_start_source";
 pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
+pub const REASONING_ENVELOPE_ITEM_ID_EXTRA_KEY: &str = "_monoize_reasoning_envelope_item_id";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReasoningEnvelope {
@@ -583,6 +585,12 @@ pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
         if let Some(envelope) = encrypted.as_ref().and_then(parse_reasoning_envelope) {
             if enforce_match && !reasoning_envelope_matches(&envelope, provider_type, model) {
                 return false;
+            }
+            if let Some(item_id) = envelope.item_id.filter(|id| !id.is_empty()) {
+                extra_body.insert(
+                    REASONING_ENVELOPE_ITEM_ID_EXTRA_KEY.to_string(),
+                    Value::String(item_id),
+                );
             }
             *encrypted = Some(envelope.payload);
         }

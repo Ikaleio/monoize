@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { api, subscribeDashboardUnauthorized } from "@/lib/api";
 import type { User } from "@/lib/api";
-import { clearCache } from "@/lib/swr";
+import { clearAuthenticatedCache } from "@/lib/swr";
 
 interface AuthContextType {
   user: User | null;
@@ -26,14 +26,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(userData);
     } catch {
       setUser(null);
-      await clearCache();
+      await clearAuthenticatedCache();
     }
   };
 
   useEffect(() => {
     return subscribeDashboardUnauthorized(() => {
       setUser(null);
-      void clearCache();
+      void clearAuthenticatedCache();
     });
   }, []);
 
@@ -43,19 +43,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (username: string, password: string, captchaToken: string) => {
     const response = await api.login(username, password, captchaToken);
-    await clearCache();
+    await clearAuthenticatedCache();
     setUser(response.user);
   };
 
   const register = async (username: string, password: string, captchaToken: string) => {
     const response = await api.register(username, password, captchaToken);
-    await clearCache();
+    await clearAuthenticatedCache();
     setUser(response.user);
   };
 
   const changePassword = async (currentPassword: string, newPassword: string) => {
     const response = await api.changePassword(currentPassword, newPassword);
-    await clearCache();
+    await clearAuthenticatedCache();
     setUser(response.user);
   };
 
@@ -64,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await api.logout();
     } finally {
       setUser(null);
-      await clearCache();
+      await clearAuthenticatedCache();
     }
   };
 

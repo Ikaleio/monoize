@@ -1647,3 +1647,7 @@ export function revalidateAll() {
 export function clearCache() {
   return mutate(() => true, undefined, { revalidate: false });
 }
+
+export function clearAuthenticatedCache() {
+  return mutate((key) => key !== SWR_KEYS.PUBLIC_SETTINGS, undefined, { revalidate: false });
+}

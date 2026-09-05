@@ -4,9 +4,11 @@ use crate::urp::decode::{
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
-    ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, JsonSchemaDefinition, Node, OrdinaryRole, OutputDetails,
+    ProviderProtocol, ResponseFormat, StopControl, ToolChoice, ToolResultContent, UrpRequest,
+    UrpResponse, Usage,
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -164,6 +166,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
     }
 
+    let mut resolved_results = std::collections::HashSet::new();
     if let Some(contents) = obj.get("contents").and_then(|v| v.as_array()) {
         for content in contents {
             let Some(content_obj) = content.as_object() else {
@@ -182,45 +185,50 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 for part in parts {
                     match decode_input_part(part) {
                         DecodedInput::Parts(parts) => message_parts.extend(parts),
-                        DecodedInput::ToolResult(node) => {
+                        DecodedInput::ToolResult(mut node) => {
                             push_message_item(
                                 &mut input_nodes,
                                 role,
                                 &mut message_parts,
                                 message_extra.clone(),
                             );
+                            if let Node::ToolResult {
+                                id: None,
+                                call_id,
+                                extra_body,
+                                ..
+                            } = &mut node
+                            {
+                                if let Some(name) = extra_body.get("name").and_then(Value::as_str) {
+                                    if let Some(matching_id) = input_nodes
+                                        .iter()
+                                        .filter_map(|node| match node {
+                                            Node::ToolCall {
+                                                call_id,
+                                                name: call_name,
+                                                ..
+                                            } if call_name == name
+                                                && !resolved_results.contains(call_id) =>
+                                            {
+                                                Some(call_id.clone())
+                                            }
+                                            _ => None,
+                                        })
+                                        .next()
+                                    {
+                                        *call_id = matching_id;
+                                    }
+                                }
+                            }
+                            if let Node::ToolResult { call_id, .. } = &node {
+                                resolved_results.insert(call_id.clone());
+                            }
                             input_nodes.push(node);
                         }
                     }
                 }
             }
             push_message_item(&mut input_nodes, role, &mut message_parts, message_extra);
-        }
-    }
-
-    let mut reasoning = None;
-    if let Some(gen_cfg) = obj.get("generationConfig").and_then(|v| v.as_object()) {
-        if let Some(thinking) = gen_cfg.get("thinkingConfig").and_then(|v| v.as_object()) {
-            let budget = thinking
-                .get("thinkingBudget")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let effort = if budget == 0 {
-                None
-            } else if budget <= 512 {
-                Some("low".to_string())
-            } else if budget >= 2048 {
-                Some("high".to_string())
-            } else {
-                Some("medium".to_string())
-            };
-            reasoning = Some(ReasoningConfig {
-                effort,
-                extra_body: split_extra(
-                    thinking,
-                    &["thinkingBudget", "includeThoughts", "thinkingLevel"],
-                ),
-            });
         }
     }
 
@@ -254,13 +262,35 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .get("generationConfig")
             .and_then(|v| v.get("maxOutputTokens"))
             .and_then(|v| v.as_u64()),
-        reasoning,
+        reasoning: None,
         tools,
         tool_choice,
         parallel_tool_calls: None,
-        stop: None,
+        stop: obj
+            .get("generationConfig")
+            .and_then(|v| v.get("stopSequences"))
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .map(StopControl::Multiple),
         verbosity: None,
-        response_format: None,
+        response_format: obj.get("generationConfig").and_then(|cfg| {
+            if cfg.get("responseMimeType").and_then(Value::as_str) != Some("application/json") {
+                return None;
+            }
+            match cfg.get("responseJsonSchema") {
+                Some(schema) => Some(ResponseFormat::JsonSchema {
+                    json_schema: JsonSchemaDefinition {
+                        name: "gemini_response".to_string(),
+                        description: None,
+                        schema: schema.clone(),
+                        strict: None,
+                        extra_body: HashMap::new(),
+                    },
+                }),
+                None if cfg.get("responseSchema").is_none() => Some(ResponseFormat::JsonObject),
+                None => None,
+            }
+        }),
         user: None,
         extra_body: split_extra(
             obj,
@@ -268,7 +298,6 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "model",
                 "contents",
                 "systemInstruction",
-                "generationConfig",
                 "tools",
                 "toolConfig",
                 "stream",
@@ -285,22 +314,33 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
 
     let candidate = obj
         .get("candidates")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| "missing candidates[0]".to_string())?;
-
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(Value::as_object);
+    let blocked = prompt_block_reason(value);
+    if candidate.is_none() && blocked.is_none() {
+        return Err("missing candidates[0]".to_string());
+    }
     let content = candidate
-        .get("content")
-        .and_then(|v| v.as_object())
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-
-    let output_nodes = decode_response_nodes(&content);
-    let finish_reason = candidate
-        .get("finishReason")
-        .and_then(|v| v.as_str())
+    let mut output_nodes = decode_response_nodes(&content);
+    let mut finish_reason = candidate
+        .and_then(|candidate| candidate.get("finishReason"))
+        .and_then(Value::as_str)
         .map(parse_finish_reason);
+    if let Some(reason) = blocked {
+        output_nodes.push(prompt_refusal(reason));
+        finish_reason = Some(FinishReason::ContentFilter);
+    } else if finish_reason == Some(FinishReason::Stop)
+        && output_nodes
+            .iter()
+            .any(|node| matches!(node, Node::ToolCall { .. }))
+    {
+        finish_reason = Some(FinishReason::ToolCalls);
+    }
 
     let usage = match obj.get("usageMetadata").and_then(|v| v.as_object()) {
         Some(usage) => Some(parse_usage(usage)?),
@@ -328,7 +368,6 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             obj,
             &[
                 "candidates",
-                "promptFeedback",
                 "usageMetadata",
                 "modelVersion",
                 "responseId",
@@ -455,149 +494,177 @@ fn parts_to_nodes(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Valu
     nodes
 }
 
-fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
-    let mut out = Vec::new();
+pub(crate) const GEMINI_PART_EXTRA_KEY: &str = "_monoize_gemini_part";
+pub(crate) const GEMINI_SYNTHETIC_CALL_PREFIX: &str = "call_gemini_";
+const GEMINI_CALL_SIGNATURE_PREFIX: &str = "rs_gemini_call_";
 
-    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
-        if !text.is_empty() {
-            if obj.get("thought").and_then(|v| v.as_bool()) == Some(true) {
-                out.push(Part::Reasoning {
+pub(crate) fn signature_call_id(id: &str) -> Option<String> {
+    String::from_utf8(
+        URL_SAFE_NO_PAD
+            .decode(id.strip_prefix(GEMINI_CALL_SIGNATURE_PREFIX)?)
+            .ok()?,
+    )
+    .ok()
+}
+
+fn part_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, Value> {
+    let native = split_extra(obj, known);
+    let mut extra = HashMap::new();
+    if !native.is_empty() {
+        extra.insert(GEMINI_PART_EXTRA_KEY.to_string(), json!(native));
+    }
+    extra
+}
+
+fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
+    if let Some(text) = obj.get("text").and_then(Value::as_str) {
+        return vec![
+            if obj.get("thought").and_then(Value::as_bool) == Some(true) {
+                Part::Reasoning {
                     id: None,
                     content: Some(text.to_string()),
-                    encrypted: None,
+                    encrypted: obj.get("thoughtSignature").cloned(),
                     summary: None,
                     source: None,
-                    extra_body: split_extra(obj, &["text", "thought", "thoughtSignature"]),
-                });
+                    extra_body: part_extra(obj, &["text", "thought", "thoughtSignature"]),
+                }
             } else {
-                out.push(Part::Text {
+                Part::Text {
                     content: text.to_string(),
-                    extra_body: split_extra(obj, &["text", "thought", "thoughtSignature"]),
-                });
-            }
-        }
+                    extra_body: part_extra(obj, &["text"]),
+                }
+            },
+        ];
     }
-
-    if let Some(sig) = obj.get("thoughtSignature") {
-        out.push(Part::Reasoning {
-            id: None,
-            content: None,
-            encrypted: Some(sig.clone()),
-            summary: None,
-            source: None,
-            extra_body: HashMap::new(),
-        });
-    }
-
-    if let Some(fc) = obj.get("functionCall").and_then(|v| v.as_object()) {
-        let call_id = fc
-            .get("id")
-            .or_else(|| fc.get("name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let name = fc
+    if let Some(fc) = obj.get("functionCall").and_then(Value::as_object) {
+        if let Some(name) = fc
             .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let args = serde_json::to_string(&fc.get("args").cloned().unwrap_or(Value::Null))
-            .unwrap_or_else(|_| "{}".to_string());
-        if !name.is_empty() {
-            out.push(Part::ToolCall {
-                id: fc.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+        {
+            let call_id = fc
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    format!(
+                        "{GEMINI_SYNTHETIC_CALL_PREFIX}{}",
+                        uuid::Uuid::new_v4().simple()
+                    )
+                });
+            let mut extra = part_extra(obj, &["functionCall", "thoughtSignature"]);
+            extra.extend(split_extra(fc, &["id", "name", "args"]));
+            let mut parts = vec![Part::ToolCall {
+                id: fc.get("id").and_then(Value::as_str).map(str::to_string),
                 tool_type: crate::urp::ToolCallType::Function,
-                call_id,
-                name,
-                arguments: args,
-                extra_body: split_extra(fc, &["id", "name", "args"]),
-            });
+                call_id: call_id.clone(),
+                name: name.to_string(),
+                arguments: serde_json::to_string(fc.get("args").unwrap_or(&json!({})))
+                    .unwrap_or_default(),
+                extra_body: extra,
+            }];
+            if let Some(signature) = obj.get("thoughtSignature") {
+                parts.insert(
+                    0,
+                    Part::Reasoning {
+                        id: Some(format!(
+                            "{GEMINI_CALL_SIGNATURE_PREFIX}{}",
+                            URL_SAFE_NO_PAD.encode(call_id)
+                        )),
+                        content: None,
+                        encrypted: Some(signature.clone()),
+                        summary: None,
+                        source: None,
+                        extra_body: HashMap::new(),
+                    },
+                );
+            }
+            return parts;
         }
     }
-
-    if let Some(inline_data) = obj.get("inlineData").and_then(|v| v.as_object()) {
-        let mime = inline_data
+    if let Some(data) = obj.get("inlineData").and_then(Value::as_object) {
+        let mime = data
             .get("mimeType")
-            .and_then(|v| v.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("application/octet-stream")
             .to_string();
-        let data = inline_data
+        let bytes = data
             .get("data")
-            .and_then(|v| v.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        if mime.starts_with("image/") {
-            out.push(Part::Image {
+        let extra_body = part_extra(obj, &["inlineData"]);
+        return vec![if mime.starts_with("image/") {
+            Part::Image {
                 source: crate::urp::ImageSource::Base64 {
                     media_type: mime,
-                    data,
+                    data: bytes,
                 },
-                extra_body: split_extra(obj, &["inlineData"]),
-            });
+                extra_body,
+            }
         } else {
-            out.push(Part::File {
+            Part::File {
                 source: crate::urp::FileSource::Base64 {
                     filename: None,
                     media_type: mime,
-                    data,
+                    data: bytes,
                 },
-                extra_body: split_extra(obj, &["inlineData"]),
-            });
-        }
+                extra_body,
+            }
+        }];
     }
-
-    if let Some(file_data) = obj.get("fileData").and_then(|v| v.as_object()) {
-        let uri = file_data
+    if let Some(data) = obj.get("fileData").and_then(Value::as_object) {
+        let url = data
             .get("fileUri")
-            .and_then(|v| v.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let mime = file_data
+        let mime = data
             .get("mimeType")
-            .and_then(|v| v.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("application/octet-stream");
-        if mime.starts_with("image/") {
-            out.push(Part::Image {
-                source: crate::urp::ImageSource::Url {
-                    url: uri,
-                    detail: None,
-                },
-                extra_body: split_extra(obj, &["fileData"]),
-            });
+        let extra_body = part_extra(obj, &["fileData"]);
+        return vec![if mime.starts_with("image/") {
+            Part::Image {
+                source: crate::urp::ImageSource::Url { url, detail: None },
+                extra_body,
+            }
         } else {
-            out.push(Part::File {
-                source: crate::urp::FileSource::Url { url: uri },
-                extra_body: split_extra(obj, &["fileData"]),
-            });
-        }
+            Part::File {
+                source: crate::urp::FileSource::Url { url },
+                extra_body,
+            }
+        }];
     }
-
     if let Some(image) = parse_image_part_from_obj(obj) {
-        out.push(image);
+        return vec![image];
     }
     if let Some(file) = parse_file_part_from_obj(obj) {
-        out.push(file);
+        return vec![file];
     }
+    vec![Part::ProviderItem {
+        id: obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+        origin_protocol: ProviderProtocol::Gemini,
+        item_type: obj
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        body: Value::Object(obj.clone()),
+        extra_body: HashMap::new(),
+    }]
+}
 
-    if out.is_empty() {
-        out.push(Part::ProviderItem {
-            id: obj
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-            origin_protocol: ProviderProtocol::Gemini,
-            item_type: obj
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            body: Value::Object(obj.clone()),
-            extra_body: HashMap::new(),
-        });
+pub(crate) fn decode_stream_part(part: &Value) -> Vec<Node> {
+    match decode_output_part(part) {
+        DecodedOutput::Nodes(nodes) => nodes,
+        DecodedOutput::ToolResult(node) => vec![node],
     }
-
-    out
 }
 
 fn decode_function_response(fr: &Map<String, Value>) -> Node {
@@ -610,13 +677,24 @@ fn decode_function_response(fr: &Map<String, Value>) -> Node {
     Node::ToolResult {
         id: fr.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
         tool_type: crate::urp::ToolCallType::Function,
-        call_id: name.clone(),
+        call_id: fr
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or(&name)
+            .to_string(),
         is_error: false,
         content: vec![ToolResultContent::Text {
             text: serde_json::to_string(&response_value).unwrap_or_default(),
             extra_body: HashMap::new(),
         }],
-        extra_body: split_extra(fr, &["id", "name", "response"]),
+        extra_body: {
+            let mut extra = split_extra(fr, &["id", "response"]);
+            extra.insert(
+                "_monoize_gemini_function_response".to_string(),
+                Value::Bool(true),
+            );
+            extra
+        },
     }
 }
 
@@ -676,10 +754,17 @@ fn take_output_extra(
     }
 }
 
-fn parse_finish_reason(reason: &str) -> FinishReason {
+pub(crate) fn parse_finish_reason(reason: &str) -> FinishReason {
     match reason {
         "MAX_TOKENS" => FinishReason::Length,
-        "SAFETY" => FinishReason::ContentFilter,
+        "SAFETY"
+        | "RECITATION"
+        | "BLOCKLIST"
+        | "PROHIBITED_CONTENT"
+        | "SPII"
+        | "IMAGE_SAFETY"
+        | "IMAGE_PROHIBITED_CONTENT"
+        | "IMAGE_RECITATION" => FinishReason::ContentFilter,
         "STOP" => FinishReason::Stop,
         _ => FinishReason::Other,
     }
@@ -706,4 +791,20 @@ fn collect_content_text(value: &Value) -> String {
         }
     }
     out
+}
+
+pub(crate) fn prompt_block_reason(value: &Value) -> Option<&str> {
+    value
+        .get("promptFeedback")?
+        .get("blockReason")?
+        .as_str()
+        .filter(|reason| !reason.is_empty() && *reason != "BLOCK_REASON_UNSPECIFIED")
+}
+
+pub(crate) fn prompt_refusal(reason: &str) -> Node {
+    Node::Refusal {
+        id: None,
+        content: format!("Gemini blocked the prompt: {reason}"),
+        extra_body: HashMap::new(),
+    }
 }

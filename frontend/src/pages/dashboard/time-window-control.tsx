@@ -26,8 +26,8 @@ export function TimeWindowControl({ value, onChange }: TimeWindowControlProps) {
           aria-pressed={value === window}
           onClick={() => onChange(window)}
           className={cn(
-            "h-7 px-2.5 text-xs tabular-nums",
-            value === window && "bg-accent text-accent-foreground"
+            "h-9 px-2.5 text-sm tabular-nums",
+            value === window && "bg-accent text-accent-foreground",
           )}
         >
           {window}

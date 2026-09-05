@@ -1030,7 +1030,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         } else {
             FinishReason::Stop
         }),
-        Some("incomplete") => Some(FinishReason::Length),
+        Some("incomplete") => Some(incomplete_finish_reason(obj)),
         Some("failed") => Some(FinishReason::Other),
         _ => None,
     };
@@ -1196,4 +1196,13 @@ fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
         }
     }
     None
+}
+
+
+pub(crate) fn incomplete_finish_reason(obj: &Map<String, Value>) -> FinishReason {
+    match obj.get("incomplete_details").and_then(|value| value.get("reason")).and_then(Value::as_str) {
+        Some("content_filter") => FinishReason::ContentFilter,
+        Some("max_output_tokens" | "max_messages" | "model_context_window_exceeded") => FinishReason::Length,
+        _ => FinishReason::Other,
+    }
 }

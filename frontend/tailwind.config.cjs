@@ -32,6 +32,11 @@ module.exports = {
           DEFAULT: 'hsl(var(--destructive))',
           foreground: 'hsl(var(--destructive-foreground))'
         },
+        error: {
+          foreground: 'hsl(var(--error-foreground))',
+          soft: 'hsl(var(--error-soft))',
+          border: 'hsl(var(--error-border))'
+        },
         success: {
           DEFAULT: 'hsl(var(--success))',
           foreground: 'hsl(var(--success-foreground))',

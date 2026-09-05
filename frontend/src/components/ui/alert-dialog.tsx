@@ -1,3 +1,4 @@
+import { useReducedMotionPreference } from "@/hooks/use-reduced-motion"
 import * as React from "react"
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
@@ -35,7 +36,7 @@ const AlertDialog = ({
 }: AlertDialogProps) => {
   const isControlled = openProp !== undefined
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(
-    defaultOpen ?? false
+    defaultOpen ?? false,
   )
   const open = isControlled ? openProp : uncontrolledOpen
 
@@ -47,7 +48,7 @@ const AlertDialog = ({
 
       onOpenChange?.(nextOpen)
     },
-    [isControlled, onOpenChange]
+    [isControlled, onOpenChange],
   )
 
   return (
@@ -85,6 +86,7 @@ const AlertDialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => {
   const { open } = useAlertDialogState()
+  const reduced = useReducedMotionPreference()
   const touchScrollStyle: React.CSSProperties = {
     WebkitOverflowScrolling: "touch",
   }
@@ -102,11 +104,15 @@ const AlertDialogContent = React.forwardRef<
                 style={touchScrollStyle}
                 className={cn(
                   "relative z-50 flex w-full max-w-lg flex-col overflow-y-auto overscroll-contain border bg-background p-6 shadow-lg sm:rounded-lg",
-                  className
+                  className,
                 )}
               >
                 <motion.div
-                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  initial={
+                    reduced
+                      ? { opacity: 0 }
+                      : { opacity: 0, scale: 0.96, y: 12 }
+                  }
                   animate={{
                     opacity: 1,
                     scale: 1,
@@ -116,7 +122,7 @@ const AlertDialogContent = React.forwardRef<
                   className="flex min-h-0 flex-col gap-4"
                 >
                   <motion.div
-                    initial={{ opacity: 0, y: 8 }}
+                    initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
                     animate={{
                       opacity: 1,
                       y: 0,
@@ -148,7 +154,7 @@ const AlertDialogHeader = ({
   <div
     className={cn(
       "flex flex-col space-y-2 text-center sm:text-left",
-      className
+      className,
     )}
     {...props}
   />
@@ -162,7 +168,7 @@ const AlertDialogFooter = ({
   <div
     className={cn(
       "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
-      className
+      className,
     )}
     {...props}
   />
@@ -215,7 +221,7 @@ const AlertDialogCancel = React.forwardRef<
     className={cn(
       buttonVariants({ variant: "outline" }),
       "mt-2 sm:mt-0",
-      className
+      className,
     )}
     {...props}
   />

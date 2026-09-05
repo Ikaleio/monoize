@@ -140,8 +140,8 @@ fn encode_chat_file_part(
         {
             json!({ "file_id": file_id })
         }
-        FileSource::Base64 { filename, data, .. } => {
-            let mut file = json!({ "file_data": data });
+        FileSource::Base64 { filename, media_type, data } => {
+            let mut file = json!({ "file_data": format!("data:{media_type};base64,{data}") });
             if let Some(filename) = filename {
                 file["filename"] = json!(filename);
             }
@@ -285,6 +285,13 @@ fn push_part_into_pending_chat_message(
     extra_body: &HashMap<String, Value>,
     part: &Part,
 ) {
+    if let Part::ProviderItem { body, extra_body, origin_protocol: ProviderProtocol::ChatCompletion, .. } = part {
+        if extra_body.get(crate::urp::CHAT_MESSAGE_ITEM_EXTRA_KEY).and_then(Value::as_bool) == Some(true) {
+            flush_pending_chat_message(pending, out);
+            out.push(sanitize_provider_item_wire_body(body));
+            return;
+        }
+    }
     let should_flush = pending
         .as_ref()
         .is_some_and(|existing| should_split_chat_message(existing, part));
@@ -386,7 +393,6 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         obj.insert(key.to_string(), Value::from(max));
     }
     if let Some(reasoning) = &req.reasoning {
-        let deepseek_model = is_deepseek_model(upstream_model);
         let raw_reasoning = reasoning
             .extra_body
             .get(CHAT_REASONING_CONFIG_EXTRA_KEY)
@@ -405,27 +411,13 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                     Value::String(chat_wire_effort(effort).to_string()),
                 );
             }
-            if !(deepseek_model && reasoning.effort.is_some()) {
-                obj.insert("reasoning".to_string(), Value::Object(raw_reasoning));
-            }
+            obj.insert("reasoning".to_string(), Value::Object(raw_reasoning));
         }
         if let Some(raw_thinking) = raw_thinking {
             obj.insert("thinking".to_string(), raw_thinking);
         }
         if let Some(effort) = reasoning.effort.as_deref() {
-            if deepseek_model {
-                let wire_effort = deepseek_wire_effort(effort);
-                if effort == "none" {
-                    obj.insert("thinking".to_string(), json!({ "type": "disabled" }));
-                    obj.remove("reasoning_effort");
-                } else {
-                    obj.insert("thinking".to_string(), json!({ "type": "enabled" }));
-                    obj.insert(
-                        "reasoning_effort".to_string(),
-                        Value::String(wire_effort.to_string()),
-                    );
-                }
-            } else if !had_raw_reasoning && effort != "none" {
+            if !had_raw_reasoning {
                 obj.insert(
                     "reasoning_effort".to_string(),
                     Value::String(chat_wire_effort(effort).to_string()),
@@ -1176,14 +1168,6 @@ fn chat_wire_effort(effort: &str) -> &str {
         "minimal"
     } else {
         effort
-    }
-}
-
-fn deepseek_wire_effort(effort: &str) -> &str {
-    match effort {
-        "none" | "minimal" | "minimum" | "low" | "medium" => "high",
-        "xhigh" | "max" => "max",
-        _ => "high",
     }
 }
 

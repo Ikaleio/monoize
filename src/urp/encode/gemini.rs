@@ -1,9 +1,13 @@
+use crate::urp::decode::gemini::{
+    GEMINI_PART_EXTRA_KEY, GEMINI_SYNTHETIC_CALL_PREFIX, signature_call_id,
+};
 use crate::urp::encode::{
     merge_extra, sanitize_provider_item_wire_body, usage_input_details, usage_output_details,
 };
 use crate::urp::{
     AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Node, OrdinaryRole,
-    ProviderProtocol, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    ProviderProtocol, ResponseFormat, StopControl, ToolChoice, ToolDefinition, ToolResultContent,
+    UrpRequest, UrpResponse,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -13,6 +17,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut system_parts = Vec::new();
     let mut tool_names_by_call_id: Map<String, Value> = Map::new();
     let request_nodes = &req.input;
+    let call_signatures = collect_call_signatures(request_nodes);
 
     for node in request_nodes {
         if let Node::ToolCall { call_id, name, .. } = node {
@@ -24,6 +29,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 
     let mut pending_content: Option<GeminiMessageEnvelope> = None;
     for node in request_nodes {
+        if is_call_signature(node) {
+            continue;
+        }
         match node {
             Node::Text {
                 role: OrdinaryRole::System | OrdinaryRole::Developer,
@@ -57,7 +65,12 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             }
             | Node::Reasoning { .. }
             | Node::ToolCall { .. } => {
-                append_node_to_pending_gemini_message(&mut pending_content, &mut contents, node);
+                append_node_to_pending_gemini_message(
+                    &mut pending_content,
+                    &mut contents,
+                    node,
+                    &call_signatures,
+                );
             }
             Node::ToolResult {
                 id: _,
@@ -84,18 +97,38 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                     .and_then(|v| v.as_str())
                     .or_else(|| tool_names_by_call_id.get(call_id).and_then(|v| v.as_str()))
                     .unwrap_or(call_id);
-                contents.push(json!({
-                    "role": "user",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": function_name,
-                            "response": {
-                                "result": result,
-                                "is_error": is_error
-                            }
-                        }
-                    }]
-                }));
+                let response = if extra_body
+                    .get("_monoize_gemini_function_response")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                {
+                    serde_json::from_str::<Value>(&result)
+                        .ok()
+                        .filter(Value::is_object)
+                        .unwrap_or_else(|| json!({"result": result}))
+                } else {
+                    json!({"result": result, "is_error": is_error})
+                };
+                let mut function_response = json!({"name": function_name, "response": response});
+                if !call_id.is_empty() && !call_id.starts_with(GEMINI_SYNTHETIC_CALL_PREFIX) {
+                    function_response["id"] = json!(call_id);
+                }
+                let part = json!({"functionResponse": function_response});
+                if let Some(parts) = contents
+                    .last_mut()
+                    .filter(|content| content.get("role").and_then(Value::as_str) == Some("user"))
+                    .and_then(|content| content.get_mut("parts"))
+                    .and_then(Value::as_array_mut)
+                    .filter(|parts| {
+                        parts
+                            .iter()
+                            .all(|part| part.get("functionResponse").is_some())
+                    })
+                {
+                    parts.push(part);
+                } else {
+                    contents.push(json!({"role": "user", "parts": [part]}));
+                }
             }
             Node::NextDownstreamEnvelopeExtra { .. }
             | Node::Image {
@@ -133,7 +166,12 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         );
     }
 
-    let mut generation_config = Map::new();
+    let mut generation_config = req
+        .extra_body
+        .get("generationConfig")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     if let Some(temp) = req.temperature {
         generation_config.insert("temperature".to_string(), Value::from(temp));
     }
@@ -143,13 +181,45 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     if let Some(max_tokens) = req.max_output_tokens {
         generation_config.insert("maxOutputTokens".to_string(), Value::from(max_tokens));
     }
-    if let Some(reasoning) = &req.reasoning {
-        if let Some(effort) = &reasoning.effort {
-            generation_config.insert(
-                "thinkingConfig".to_string(),
-                json!({ "thinkingBudget": effort_to_budget(effort) }),
-            );
+    if let Some(stop) = &req.stop {
+        generation_config.insert(
+            "stopSequences".to_string(),
+            match stop {
+                StopControl::Single(stop) => json!([stop]),
+                StopControl::Multiple(stops) => json!(stops),
+            },
+        );
+    }
+    if let Some(format) = &req.response_format {
+        generation_config.remove("responseSchema");
+        generation_config.remove("responseJsonSchema");
+        generation_config.insert(
+            "responseMimeType".to_string(),
+            json!(if matches!(format, ResponseFormat::Text) {
+                "text/plain"
+            } else {
+                "application/json"
+            }),
+        );
+        if let ResponseFormat::JsonSchema { json_schema } = format {
+            generation_config.insert("responseJsonSchema".to_string(), json_schema.schema.clone());
         }
+    }
+    if let Some(effort) = req
+        .reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.effort.as_ref())
+    {
+        let mut thinking = generation_config
+            .remove("thinkingConfig")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        thinking.remove("thinkingLevel");
+        thinking.insert(
+            "thinkingBudget".to_string(),
+            json!(effort_to_budget(effort)),
+        );
+        generation_config.insert("thinkingConfig".to_string(), Value::Object(thinking));
     }
     if !generation_config.is_empty() {
         obj.insert(
@@ -187,78 +257,20 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let response_nodes = &resp.output;
-    let mut parts = Vec::new();
-    for node in response_nodes {
-        match node {
-            Node::Text {
-                role: OrdinaryRole::Assistant,
-                content,
-                ..
-            } => parts.push(json!({ "text": content })),
-            Node::Reasoning {
-                content: Some(content),
-                ..
-            } => parts.push(json!({ "text": content, "thought": true })),
-            Node::Reasoning {
-                encrypted: Some(data),
-                ..
-            } => parts.push(json!({ "thoughtSignature": data })),
-            Node::ToolCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } => {
-                let args = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
-                parts.push(json!({
-                    "functionCall": {
-                        "id": call_id,
-                        "name": name,
-                        "args": args
-                    }
-                }));
-            }
-            Node::Image {
-                role: OrdinaryRole::Assistant,
-                source,
-                ..
-            } => {
-                if let Some(part) = encode_image_part(source) {
-                    parts.push(part);
-                }
-            }
-            Node::File {
-                role: OrdinaryRole::Assistant,
-                source,
-                ..
-            } => {
-                if let Some(part) = encode_file_part(source) {
-                    parts.push(part);
-                }
-            }
-            Node::Audio {
-                role: OrdinaryRole::Assistant,
-                source,
-                ..
-            } => parts.push(encode_audio_part(source)),
-            Node::Refusal { content, .. } => parts.push(json!({ "text": content })),
-            Node::ProviderItem {
-                role: OrdinaryRole::Assistant,
-                origin_protocol: ProviderProtocol::Gemini,
-                body,
-                ..
-            } => parts.push(sanitize_provider_item_wire_body(body)),
-            Node::Reasoning { .. }
-            | Node::Text { .. }
-            | Node::Image { .. }
-            | Node::File { .. }
-            | Node::Audio { .. }
-            | Node::ProviderItem { .. }
-            | Node::ToolResult { .. }
-            | Node::NextDownstreamEnvelopeExtra { .. } => continue,
-        }
-    }
+    let call_signatures = collect_call_signatures(&resp.output);
+    let parts: Vec<Value> = resp
+        .output
+        .iter()
+        .filter(|node| !is_call_signature(node))
+        .filter_map(|node| {
+            encode_request_node_part(node)
+                .filter(|(role, _, _)| *role == OrdinaryRole::Assistant)
+                .map(|(_, mut part, _)| {
+                    attach_call_signature(node, &mut part, &call_signatures);
+                    part
+                })
+        })
+        .collect();
 
     let mut usage_metadata = json!({
         "promptTokenCount": 0,
@@ -419,6 +431,7 @@ fn encode_audio_part(source: &AudioSource) -> Value {
 
 fn effort_to_budget(effort: &str) -> u32 {
     match effort {
+        "none" => 0,
         "low" => 512,
         "high" => 2048,
         _ => 1024,
@@ -465,10 +478,12 @@ fn append_node_to_pending_gemini_message(
     pending: &mut Option<GeminiMessageEnvelope>,
     out: &mut Vec<Value>,
     node: &Node,
+    call_signatures: &HashMap<String, Value>,
 ) {
-    let Some((role, part, extra_body)) = encode_request_node_part(node) else {
+    let Some((role, mut part, extra_body)) = encode_request_node_part(node) else {
         return;
     };
+    attach_call_signature(node, &mut part, call_signatures);
     let should_flush = pending
         .as_ref()
         .is_some_and(|existing| existing.role != role || existing.extra_body != extra_body);
@@ -484,7 +499,7 @@ fn append_node_to_pending_gemini_message(
 }
 
 fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap<String, Value>)> {
-    match node {
+    let (role, mut part, mut extra) = match node {
         Node::Text {
             role,
             content,
@@ -519,23 +534,18 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
             extra_body.clone(),
         )),
         Node::Reasoning {
-            content: Some(content),
+            content,
+            encrypted,
+            summary,
             extra_body,
             ..
-        } => Some((
-            OrdinaryRole::Assistant,
-            json!({ "text": content, "thought": true }),
-            extra_body.clone(),
-        )),
-        Node::Reasoning {
-            encrypted: Some(data),
-            extra_body,
-            ..
-        } => Some((
-            OrdinaryRole::Assistant,
-            json!({ "thoughtSignature": data }),
-            extra_body.clone(),
-        )),
+        } if content.is_some() || summary.is_some() || encrypted.is_some() => {
+            let mut part = json!({"text": content.as_deref().or(summary.as_deref()).unwrap_or(""), "thought": true});
+            if let Some(signature) = encrypted {
+                part["thoughtSignature"] = signature.clone();
+            }
+            Some((OrdinaryRole::Assistant, part, extra_body.clone()))
+        }
         Node::ToolCall {
             id: _,
             tool_type,
@@ -574,5 +584,60 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
         )),
         Node::ProviderItem { .. } => None,
         Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
+    }?;
+    if let Some(Value::Object(native)) = extra.remove(GEMINI_PART_EXTRA_KEY) {
+        if let Some(obj) = part.as_object_mut() {
+            for (key, value) in native {
+                obj.entry(key).or_insert(value);
+            }
+        }
+    }
+    if let Node::ToolCall { call_id, .. } = node {
+        if call_id.starts_with(GEMINI_SYNTHETIC_CALL_PREFIX) {
+            if let Some(fc) = part.get_mut("functionCall").and_then(Value::as_object_mut) {
+                fc.remove("id");
+            }
+        }
+    }
+    Some((role, part, extra))
+}
+
+fn bound_signature_call_id(node: &Node) -> Option<String> {
+    let Node::Reasoning { id, extra_body, .. } = node else {
+        return None;
+    };
+    id.as_deref().and_then(signature_call_id).or_else(|| {
+        extra_body
+            .get(crate::urp::REASONING_ENVELOPE_ITEM_ID_EXTRA_KEY)
+            .and_then(Value::as_str)
+            .and_then(signature_call_id)
+    })
+}
+
+fn is_call_signature(node: &Node) -> bool {
+    bound_signature_call_id(node).is_some()
+}
+
+fn collect_call_signatures(nodes: &[Node]) -> HashMap<String, Value> {
+    nodes
+        .iter()
+        .filter_map(|node| {
+            let Node::Reasoning {
+                encrypted: Some(signature),
+                ..
+            } = node
+            else {
+                return None;
+            };
+            bound_signature_call_id(node).map(|call_id| (call_id, signature.clone()))
+        })
+        .collect()
+}
+
+fn attach_call_signature(node: &Node, part: &mut Value, signatures: &HashMap<String, Value>) {
+    if let Node::ToolCall { call_id, .. } = node {
+        if let Some(signature) = signatures.get(call_id) {
+            part["thoughtSignature"] = signature.clone();
+        }
     }
 }

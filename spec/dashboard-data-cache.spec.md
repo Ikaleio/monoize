@@ -8,11 +8,11 @@ DC2. An SWR key that contains authenticated data MUST be scoped to the currently
 
 ## 2. Authentication transitions
 
-DC3. After login or registration succeeds and before the new token becomes active, the client MUST delete every SWR cache entry without revalidation.
+DC3. After login or registration succeeds and before the new user becomes active, the client MUST delete every authenticated SWR cache entry without revalidation.
 
-DC4. After logout starts clearing authentication state, the client MUST delete every SWR cache entry without revalidation even when the logout HTTP request fails.
+DC4. After logout starts clearing authentication state, the client MUST delete every authenticated SWR cache entry without revalidation even when the logout HTTP request fails.
 
-DC5. When current-user refresh rejects the stored authentication state, the client MUST clear the token and every SWR cache entry. This deletion MUST include fixed keys, parameterized request-log and analytics keys, marketplace keys, and Provider-detail keys.
+DC5. When current-user refresh rejects the stored authentication state, the client MUST clear the authenticated user and every authenticated SWR cache entry. This deletion MUST include fixed keys, parameterized request-log and analytics keys, marketplace keys, and Provider-detail keys.
 
 ## 3. Mutation dependencies
 
@@ -37,3 +37,9 @@ DC12. Global revalidation MUST target every key currently present in the SWR cac
 DC13. Global cache deletion MUST target every key currently present in the SWR cache and MUST disable revalidation for that operation.
 
 DC14. Every dashboard consumer of one server resource MUST use that resource's exported canonical SWR key and hook. A page MUST NOT create an alias key for `MODEL_METADATA` or another exported resource because mutation invalidation would leave the alias stale.
+
+DC15. Authentication-transition invalidation MUST exclude only `PUBLIC_SETTINGS`.
+This resource contains no authenticated data. Its cached value and in-flight fetch
+MUST survive an initial unauthenticated `/auth/me` response. All other keys, including
+unknown and parameterized keys, MUST be invalidated. Generic global cache deletion
+in DC13 MUST continue to clear every key.

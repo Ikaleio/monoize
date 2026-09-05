@@ -643,6 +643,15 @@ fn handle_content_block_delta(
     );
 
     let stream_delta = match (&mut active_node.kind, delta_type) {
+        (ActiveNodeKind::Text { .. }, "citations_delta") => {
+            let Some(citation) = delta_value.get("citation").filter(|value| value.is_object()) else { return Vec::new() };
+            let citations = active_node.extra_body.entry("citations".to_string()).or_insert_with(|| Value::Array(Vec::new()));
+            if !citations.is_array() { *citations = Value::Array(Vec::new()); }
+            citations.as_array_mut().unwrap().push(citation.clone());
+            delta_extra.remove("citation");
+            delta_extra.insert("_monoize_messages_citation_delta".to_string(), citation.clone());
+            NodeDelta::Text { content: String::new() }
+        }
         (ActiveNodeKind::Text { content, .. }, "text_delta") => {
             let Some(text) = delta_value.get("text").and_then(|v| v.as_str()) else {
                 return Vec::new();

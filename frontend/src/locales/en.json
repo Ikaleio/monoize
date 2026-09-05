@@ -27,7 +27,10 @@
 		"deleting": "Deleting...",
 		"add": "Add",
 		"refresh": "Refresh",
-		"unavailable": "Unavailable"
+		"unavailable": "Unavailable",
+		"close": "Close",
+		"loadFailed": "Could not load this section. Try again.",
+		"refreshFailed": "Could not refresh this section. Previous data is still shown."
 	},
 	"auth": {
 		"signIn": "Sign In",
@@ -47,7 +50,17 @@
 		"accessDenied": "Access Denied",
 		"needAdminPrivileges": "You need admin privileges to view this page",
 		"captchaError": "Human verification failed. Try again.",
-		"captchaUnavailable": "Human verification is not configured or is unavailable."
+		"captchaUnavailable": "Human verification is not configured or is unavailable.",
+		"errors": {
+			"invalidCredentials": "The username or password is incorrect.",
+			"reservedUsername": "This username is reserved. Choose another username.",
+			"invalidPassword": "Use a password with at least 8 characters.",
+			"registrationDisabled": "Registration is currently unavailable.",
+			"usernameExists": "This username is already in use. Choose another username.",
+			"accountDisabled": "This account is disabled. Contact your administrator.",
+			"captchaRequired": "Complete human verification before submitting.",
+			"failed": "Could not complete the request. Try again."
+		}
 	},
 	"nav": {
 		"dashboard": "Dashboard",
@@ -209,7 +222,9 @@
 			"spendTrend": "Spend Trend",
 			"callDistribution": "Call Distribution",
 			"callRank": "Call Ranking"
-		}
+		},
+		"apiNotConfigured": "The administrator has not configured the API base URL.",
+		"configureApi": "Configure API base URL"
 	},
 	"users": {
 		"title": "Users",
@@ -901,7 +916,10 @@
 		"provider": "Provider",
 		"resultCount": "Showing {{filtered}} of {{total}} models",
 		"noModels": "No models available",
-		"noModelsDesc": "Model data will appear here once the administrator syncs the model database."
+		"noModelsDesc": "Model data will appear here once the administrator syncs the model database.",
+		"noMatches": "No matching models",
+		"noMatchesDesc": "No model matches your search. Clear the search to see available models.",
+		"clearSearch": "Clear search"
 	},
 	"requestLogs": {
 		"title": "Request Logs",

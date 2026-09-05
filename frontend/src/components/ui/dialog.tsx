@@ -1,3 +1,5 @@
+import { useReducedMotionPreference } from "@/hooks/use-reduced-motion"
+import { useTranslation } from "react-i18next"
 import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { AnimatePresence } from "framer-motion"
@@ -13,7 +15,7 @@ type DialogStateContextValue = {
 }
 
 const DialogStateContext = React.createContext<DialogStateContextValue | null>(
-  null
+  null,
 )
 
 const useDialogState = () => {
@@ -35,7 +37,7 @@ const Dialog = ({
 }: DialogProps) => {
   const isControlled = openProp !== undefined
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(
-    defaultOpen ?? false
+    defaultOpen ?? false,
   )
   const open = isControlled ? openProp : uncontrolledOpen
 
@@ -47,7 +49,7 @@ const Dialog = ({
 
       onOpenChange?.(nextOpen)
     },
-    [isControlled, onOpenChange]
+    [isControlled, onOpenChange],
   )
 
   return (
@@ -87,6 +89,8 @@ const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => {
   const { open } = useDialogState()
+  const reduced = useReducedMotionPreference()
+  const { t } = useTranslation()
   const touchScrollStyle: React.CSSProperties = {
     WebkitOverflowScrolling: "touch",
   }
@@ -121,7 +125,11 @@ const DialogContent = React.forwardRef<
                 <motion.div
                   key="dialog-content"
                   ref={ref}
-                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  initial={
+                    reduced
+                      ? { opacity: 0 }
+                      : { opacity: 0, scale: 0.96, y: 12 }
+                  }
                   animate={{
                     opacity: 1,
                     scale: 1,
@@ -130,18 +138,21 @@ const DialogContent = React.forwardRef<
                   }}
                   exit={{
                     opacity: 0,
-                    scale: 0.96,
-                    y: 12,
-                    transition: { duration: 0.18, ease: easings.easeInOutQuart },
+                    scale: reduced ? 1 : 0.96,
+                    y: reduced ? 0 : 12,
+                    transition: {
+                      duration: 0.18,
+                      ease: easings.easeInOutQuart,
+                    },
                   }}
                   style={touchScrollStyle}
                   className={cn(
                     "relative z-50 flex w-full max-w-lg flex-col overflow-y-auto overscroll-contain rounded-lg border bg-background p-6 shadow-lg [&_*]:ring-offset-background",
-                    className
+                    className,
                   )}
                 >
                   <motion.div
-                    initial={{ opacity: 0, y: 8 }}
+                    initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
                     animate={{
                       opacity: 1,
                       y: 0,
@@ -153,16 +164,19 @@ const DialogContent = React.forwardRef<
                     }}
                     exit={{
                       opacity: 0,
-                      y: 4,
-                      transition: { duration: 0.16, ease: easings.easeInOutQuart },
+                      y: reduced ? 0 : 4,
+                      transition: {
+                        duration: 0.16,
+                        ease: easings.easeInOutQuart,
+                      },
                     }}
                     className="flex min-h-0 flex-col gap-4"
                   >
                     {children}
                   </motion.div>
-                  <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+                  <DialogPrimitive.Close className="absolute right-2 top-2 inline-flex size-11 items-center justify-center rounded-sm sm:size-9 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
                     <X className="h-4 w-4" />
-                    <span className="sr-only">Close</span>
+                    <span className="sr-only">{t("common.close")}</span>
                   </DialogPrimitive.Close>
                 </motion.div>
               </DialogPrimitive.Content>
@@ -182,7 +196,7 @@ const DialogHeader = ({
   <div
     className={cn(
       "flex flex-col space-y-1.5 text-center sm:text-left",
-      className
+      className,
     )}
     {...props}
   />
@@ -196,7 +210,7 @@ const DialogFooter = ({
   <div
     className={cn(
       "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
-      className
+      className,
     )}
     {...props}
   />
@@ -210,8 +224,8 @@ const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={cn(
-      "text-lg font-semibold leading-none tracking-tight",
-      className
+      "pr-8 text-lg font-semibold leading-none tracking-tight",
+      className,
     )}
     {...props}
   />

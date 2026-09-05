@@ -22,3 +22,16 @@ FT5. If the injected web font fails to load, the stack MUST fall back to system 
 FT6. The frontend theme MUST expose a display font stack through `--font-display` and Tailwind `font-display`.
 
 FT7. Dashboard page titles rendered by the shared page header MUST use the display font stack.
+
+## 3. Control and Supporting Text Sizes
+
+FT8. Shared Button labels, including the `sm` variant, MUST use at least 0.875rem.
+Button size variants MUST NOT reduce the label below that size.
+
+FT9. Dashboard panel descriptions, API endpoint labels, API endpoint values, and
+usage-window controls MUST use at least 0.875rem. Supporting prose MUST use a
+line height of at least 1.5.
+
+FT10. Chart axis ticks, chart tooltips, and dense tabular metadata MAY use 0.75rem.
+This exception MUST NOT apply to ordinary form actions or explanatory prose.
+The root font size MUST NOT be reduced to implement density.

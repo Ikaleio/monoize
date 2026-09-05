@@ -462,6 +462,14 @@ pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     Some(Part::Image { source, extra_body })
 }
 
+fn file_base64_source(filename: Option<String>, media_type: &str, data: &str) -> FileSource {
+    let (media_type, data) = data.strip_prefix("data:")
+        .and_then(|value| value.split_once(','))
+        .and_then(|(metadata, data)| metadata.strip_suffix(";base64").map(|mime| (mime, data)))
+        .unwrap_or((media_type, data));
+    FileSource::Base64 { filename, media_type: media_type.to_string(), data: data.to_string() }
+}
+
 pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource> {
     let t = obj.get("type")?.as_str()?;
     match t {
@@ -478,14 +486,10 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
                     });
                 }
                 if let Some(data) = file.get("file_data").and_then(Value::as_str) {
-                    return Some(FileSource::Base64 {
-                        filename: file
-                            .get("filename")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        media_type: "application/octet-stream".to_string(),
-                        data: data.to_string(),
-                    });
+                    return Some(file_base64_source(
+                        file.get("filename").and_then(Value::as_str).map(str::to_string),
+                        "application/octet-stream", data,
+                    ));
                 }
             }
             if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
@@ -545,18 +549,10 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
                 .or_else(|| obj.get("data"))
                 .and_then(|v| v.as_str())
             {
-                return Some(FileSource::Base64 {
-                    filename: obj
-                        .get("filename")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    media_type: obj
-                        .get("media_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("application/octet-stream")
-                        .to_string(),
-                    data: data.to_string(),
-                });
+                return Some(file_base64_source(
+                    obj.get("filename").and_then(Value::as_str).map(str::to_string),
+                    obj.get("media_type").and_then(Value::as_str).unwrap_or("application/octet-stream"), data,
+                ));
             }
             None
         }

@@ -1,5 +1,6 @@
+import { useReducedMotionPreference } from "@/hooks/use-reduced-motion";
 /* eslint-disable react-refresh/only-export-components */
-import { motion, useReducedMotion, LayoutGroup, type Variants, type Transition, type HTMLMotionProps } from "framer-motion";
+import { motion, LayoutGroup, type Variants, type Transition, type HTMLMotionProps } from "framer-motion";
 import { forwardRef, type ReactNode, type ComponentProps } from "react";
 
 // Spring presets — Apple-style non-linear physics
@@ -98,7 +99,7 @@ interface PageWrapperProps {
 
 export const PageWrapper = forwardRef<HTMLDivElement, PageWrapperProps>(
   ({ children, className = "" }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -126,7 +127,7 @@ interface FadeInProps {
 
 export const FadeIn = forwardRef<HTMLDivElement, FadeInProps>(
   ({ children, className = "", delay = 0 }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -151,7 +152,7 @@ interface SlideUpProps {
 
 export const SlideUp = forwardRef<HTMLDivElement, SlideUpProps>(
   ({ children, className = "", delay = 0 }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -177,7 +178,7 @@ interface ScaleInProps {
 
 export const ScaleIn = forwardRef<HTMLDivElement, ScaleInProps>(
   ({ children, className = "", delay = 0 }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -201,7 +202,7 @@ interface StaggerListProps {
 
 export const StaggerList = forwardRef<HTMLDivElement, StaggerListProps>(
   ({ children, className = "" }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -226,7 +227,7 @@ interface StaggerItemProps {
 
 export const StaggerItem = forwardRef<HTMLDivElement, StaggerItemProps>(
   ({ children, className = "" }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -251,7 +252,7 @@ interface AnimatedCardProps extends ComponentProps<typeof motion.div> {
 
 export const AnimatedCard = forwardRef<HTMLDivElement, AnimatedCardProps>(
   ({ children, className = "", hoverScale = 1.02, ...props }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -276,7 +277,7 @@ type AnimatedButtonProps = HTMLMotionProps<"div">;
 
 export const AnimatedButton = forwardRef<HTMLDivElement, AnimatedButtonProps>(
   ({ children, className = "", ...rest }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
@@ -303,7 +304,7 @@ interface RevealOnScrollProps {
 
 export const RevealOnScroll = forwardRef<HTMLDivElement, RevealOnScrollProps>(
   ({ children, className = "", once = true }, ref) => {
-    const shouldReduceMotion = useReducedMotion();
+    const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div

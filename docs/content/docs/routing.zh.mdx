@@ -53,7 +53,7 @@ Monoize 按嵌套顺序尝试路由：先在一个 Provider 内遍历 Channel，
 
 ## 会话亲和
 
-Monoize 可以把一个会话绑定到服务它的 Channel，让携带服务端状态的后续请求（例如 Responses 的 `previous_response_id`）到达同一个上游。亲和可以全局配置，也可以按 Channel 配置。被亲和优先的 Channel 仍然遵守资格和健康规则。
+Monoize 可以优先选择此前服务该会话的 Channel。可在全局或 Channel 层配置亲和。优先 Channel 仍须满足资格和健康规则。Responses 的 `previous_response_id` 历史由 Monoize 在内部解析，不要求上游保存状态。
 
 ## 时间指标
 

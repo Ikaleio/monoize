@@ -17,6 +17,8 @@ x-api-key: sk-...
 
 どのエンドポイントも任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。
 
+Chat ルートは、空の内容を持つ OpenRouter の `configuration_update` メッセージも保持します。ファイルの data URI を Messages 文書に変換するときは MIME タイプを保持します。Messages ストリームは `citations_delta` の引用を保持します。Responses のコンテンツフィルターによる終了は未完了として扱い、長さの制限として報告しません。
+
 ## モデル一覧
 
 ```bash
@@ -56,12 +58,27 @@ curl http://localhost:8080/v1/responses \
 
 補足:
 
-- 上流がサーバー側状態を提供する場合、Monoize は `previous_response_id` チェーンをサポートします。セッションアフィニティを有効にすると、後続リクエストが同じ Channel に到達します。[ルーティングと信頼性](/ja/docs/routing)を参照してください。
-- `GET /v1/responses` は WebSocket トランスポートにアップグレードされます。
+- 返された Monoize id を `previous_response_id` に指定すると、任意の上流プロトコルで応答を継続できます。履歴は API Key ごとに分離されます。
+- HTTP 履歴の既定値は `store=true` です。現在のプロセスで最大 30 分間保持します。再起動やキャッシュの退避で記録は削除されます。
+- `store=false` を指定すると HTTP 履歴を保持しません。不明または期限切れの id は `400 previous_response_not_found` を返します。その場合は履歴全体を再送してください。
+- 毎回、現在の instructions と制御パラメーターを指定してください。前回のトップレベル `instructions` は継承されません。
+- `GET /v1/responses` は Codex WebSocket v1 と v2 に対応します。v1 は `response.done`、v2 は `response.completed` を送信します。`store=false` でも接続内の継続は利用できます。
 - `POST /v1/responses/compact` は会話をコンパクト化します。
 - Monoize はネイティブの compact ボディを上流の `POST /v1/responses/compact` に転送します。
 - Channel 選択後、その Channel が `{model}-openai-compact` をマップしていれば、Monoize はその兄弟モデルを回線モデルとして送ります。そうでなければ会話モデルを送ります。
 - 課金は会話モデルの価格を使います。兄弟モデル ID に別の価格行は不要です。
+
+## 推論を無効にする
+
+Chat Completions リクエストでは `"reasoning_effort": "none"` を設定してください。Responses リクエストでは `"reasoning": { "effort": "none" }` を設定してください。
+
+Monoize は明示的な `none` を OpenAI 互換の上流に送信します。Chat のネイティブ `reasoning` オブジェクトがある場合、その中に `effort: "none"` を設定し、最上位の短縮フィールドは送信しません。
+
+Messages の制御パラメーターが明示されていない場合、Monoize は Messages 上流に `thinking: { "type": "disabled" }` を送信します。Gemini 上流には `generationConfig.thinkingConfig.thinkingBudget: 0` を送信します。
+
+DeepSeek Chat リクエストでは推論努力の値をそのまま転送します。値の再マッピングや `thinking` 制御パラメーターの自動生成は行いません。
+
+推論の強度を省略すると、上流のデフォルト値が使われます。推論の無効化に対応するモデルを選択してください。推論が必須のモデルでは無効化できません。
 
 ## Anthropic Messages
 

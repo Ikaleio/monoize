@@ -27,7 +27,10 @@
 		"deleting": "削除中...",
 		"add": "追加",
 		"refresh": "更新",
-		"unavailable": "利用不可"
+		"unavailable": "利用不可",
+		"close": "閉じる",
+		"loadFailed": "このセクションを読み込めませんでした。再試行してください。",
+		"refreshFailed": "このセクションを更新できませんでした。前回のデータを表示しています。"
 	},
 	"auth": {
 		"signIn": "ログイン",
@@ -47,7 +50,17 @@
 		"accessDenied": "アクセス拒否",
 		"needAdminPrivileges": "このページを閲覧するには管理者権限が必要です",
 		"captchaError": "人間確認に失敗しました。もう一度お試しください。",
-		"captchaUnavailable": "人間確認が設定されていないか、一時的に利用できません。"
+		"captchaUnavailable": "人間確認が設定されていないか、一時的に利用できません。",
+		"errors": {
+			"invalidCredentials": "ユーザー名またはパスワードが正しくありません。",
+			"reservedUsername": "このユーザー名は予約されています。別の名前を指定してください。",
+			"invalidPassword": "パスワードは 8 文字以上にしてください。",
+			"registrationDisabled": "現在、新規登録を受け付けていません。",
+			"usernameExists": "このユーザー名は使用されています。別の名前を指定してください。",
+			"accountDisabled": "このアカウントは無効です。管理者に連絡してください。",
+			"captchaRequired": "先に人間による操作であることを確認してください。",
+			"failed": "リクエストを完了できませんでした。再試行してください。"
+		}
 	},
 	"nav": {
 		"dashboard": "ダッシュボード",
@@ -209,7 +222,9 @@
 			"spendTrend": "消費トレンド",
 			"callDistribution": "呼び出し分布",
 			"callRank": "呼び出しランキング"
-		}
+		},
+		"apiNotConfigured": "管理者が API ベース URL を設定していません。",
+		"configureApi": "API ベース URL を設定"
 	},
 	"users": {
 		"title": "ユーザー管理",
@@ -898,7 +913,10 @@
 		"provider": "プロバイダー",
 		"resultCount": "{{total}} 件中 {{filtered}} 件のモデルを表示",
 		"noModels": "利用可能なモデルがありません",
-		"noModelsDesc": "管理者がモデルデータベースを同期すると、モデルデータがここに表示されます。"
+		"noModelsDesc": "管理者がモデルデータベースを同期すると、モデルデータがここに表示されます。",
+		"noMatches": "一致するモデルがありません",
+		"noMatchesDesc": "検索条件に一致するモデルがありません。検索をクリアして利用可能なモデルを表示してください。",
+		"clearSearch": "検索をクリア"
 	},
 	"requestLogs": {
 		"title": "リクエストログ",

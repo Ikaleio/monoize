@@ -277,3 +277,25 @@ DS47. On coarse-pointer devices, shared tooltip triggers that do not contain an 
 DS48. On coarse-pointer devices, shared tooltip triggers that wrap a native interactive element (`button`, `a`, `input`, `textarea`, `select`, or `[role="button"]`) MUST preserve that element's native click activation. The wrapped element's primary action MUST run on the first tap.
 
 DS49. Icon-only dashboard action buttons intended for touch use MUST expose an accessible label and MUST provide a hit target of at least `44px` by `44px` below the `sm` breakpoint.
+
+## 16. Accessible Feedback and Controls
+
+DS53. Error notices MUST use the `error-foreground`, `error-soft`, and `error-border`
+semantic tokens. Error text on its soft surface MUST have contrast of at least 4.5:1
+in both themes. The destructive button palette MUST remain independent.
+
+DS54. Shared data-load failure notices MUST expose an alert and a localized retry
+button. While retry is pending, the button MUST be disabled. A notice for cached data
+MUST state that the refresh failed and previous data remains visible.
+
+DS55. Shared icon buttons, Dialog close buttons, and Sheet close buttons MUST have
+at least a 44 by 44 CSS pixel target below `sm`. Close buttons MUST have a localized
+accessible name. Their target MUST NOT overlap the popup title text.
+
+DS56. Every editable price-sheet field MUST have a unique id and an associated label.
+Repeated tier ids MUST include the component instance id, tier index, and field name.
+Input association MUST remain correct after a tier is removed.
+
+DS57. The application MUST apply the user's reduced-motion preference to direct
+Framer Motion elements as well as shared helpers. CSS button styles MUST NOT add
+scale transforms outside the reduced-motion-aware AnimatedButton wrapper.

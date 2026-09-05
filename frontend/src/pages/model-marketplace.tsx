@@ -1,3 +1,5 @@
+import { QueryError } from "@/components/ui/query-error";
+import { Button } from "@/components/ui/button";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Store } from "lucide-react";
@@ -13,7 +15,9 @@ import { PageHeader } from "@/components/ui/page-header";
 
 export function ModelMarketplacePage() {
   const { t } = useTranslation();
-  const { data: records = [], isLoading } = useMarketplaceModels();
+  const { data, error, isLoading, isValidating, mutate } =
+    useMarketplaceModels();
+  const records = useMemo(() => data ?? [], [data]);
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -24,7 +28,7 @@ export function ModelMarketplacePage() {
     );
   }, [records, search]);
 
-  if (isLoading) {
+  if (isLoading && !error && data === undefined) {
     return (
       <PageWrapper>
         <ModelMarketplaceSkeleton />
@@ -44,40 +48,66 @@ export function ModelMarketplacePage() {
           description={t("modelMarketplace.description")}
           className="[&_h1]:font-sans"
           actions={
-            <Badge variant="outline" className="text-sm font-normal">
-              {t("modelMarketplace.resultCount", {
-                filtered: filtered.length,
-                total: records.length,
-              })}
-            </Badge>
+            data !== undefined ? (
+              <Badge variant="outline" className="text-sm font-normal">
+                {t("modelMarketplace.resultCount", {
+                  filtered: filtered.length,
+                  total: records.length,
+                })}
+              </Badge>
+            ) : undefined
           }
         />
       </motion.div>
 
-      <Field className="max-w-xl">
-        <FieldLabel htmlFor="model-marketplace-search" className="sr-only">
-          {t("modelMarketplace.searchPlaceholder")}
-        </FieldLabel>
-        <Input
-          id="model-marketplace-search"
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder={t("modelMarketplace.searchPlaceholder")}
-          autoComplete="off"
+      {error && (
+        <QueryError
+          onRetry={mutate}
+          retrying={isValidating}
+          stale={data !== undefined}
         />
-      </Field>
+      )}
+      {data !== undefined && (
+        <Field className="max-w-xl">
+          <FieldLabel htmlFor="model-marketplace-search" className="sr-only">
+            {t("modelMarketplace.searchPlaceholder")}
+          </FieldLabel>
+          <Input
+            id="model-marketplace-search"
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={t("modelMarketplace.searchPlaceholder")}
+            autoComplete="off"
+          />
+        </Field>
+      )}
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, ...transitions.normal }}
       >
-        {filtered.length === 0 ? (
+        {data === undefined ? null : filtered.length === 0 ? (
           <EmptyState
             icon={<Store className="size-12" />}
-            title={t("modelMarketplace.noModels")}
-            description={t("modelMarketplace.noModelsDesc")}
+            title={t(
+              records.length > 0
+                ? "modelMarketplace.noMatches"
+                : "modelMarketplace.noModels",
+            )}
+            description={t(
+              records.length > 0
+                ? "modelMarketplace.noMatchesDesc"
+                : "modelMarketplace.noModelsDesc",
+            )}
+            action={
+              records.length > 0 ? (
+                <Button variant="outline" onClick={() => setSearch("")}>
+                  {t("modelMarketplace.clearSearch")}
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <section

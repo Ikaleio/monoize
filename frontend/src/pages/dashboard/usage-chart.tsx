@@ -1,3 +1,4 @@
+import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -35,7 +36,8 @@ import {
   modelToColor,
 } from "./utils";
 
-interface UsageChartPanelProps {
+interface UsageChartPanelProps extends QueryErrorProps {
+  failed?: boolean;
   analytics: DashboardAnalytics | undefined;
   /** First load with no data for the panel (DH-12a): show skeleton. */
   loading?: boolean;
@@ -54,6 +56,9 @@ export function UsageChartPanel({
   pending,
   window,
   onWindowChange,
+  failed,
+  onRetry,
+  retrying,
 }: UsageChartPanelProps) {
   const { t } = useTranslation();
   const [legendPage, setLegendPage] = useState(0);
@@ -140,7 +145,15 @@ export function UsageChartPanel({
             pending && "opacity-60",
           )}
         >
-          {loading ? (
+          {failed && (
+            <QueryError
+              onRetry={onRetry}
+              retrying={retrying}
+              stale={analytics !== undefined}
+            />
+          )}
+          {failed && analytics === undefined ? null : loading &&
+            analytics === undefined ? (
             <Skeleton className="h-72 w-full rounded-lg" />
           ) : series.rows.length === 0 || series.models.length === 0 ? (
             <EmptyState

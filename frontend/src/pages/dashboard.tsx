@@ -38,36 +38,71 @@ export function DashboardPage() {
 
   // Windows live in React state only (DH-6i): default 1h on every mount,
   // independent selections for the chart and the recent-usage table.
-  const [chartWindow, setChartWindow] = useState<UsageWindow>(DEFAULT_USAGE_WINDOW);
-  const [recentWindow, setRecentWindow] = useState<UsageWindow>(DEFAULT_USAGE_WINDOW);
+  const [chartWindow, setChartWindow] =
+    useState<UsageWindow>(DEFAULT_USAGE_WINDOW);
+  const [recentWindow, setRecentWindow] =
+    useState<UsageWindow>(DEFAULT_USAGE_WINDOW);
 
   const chartQuery = USAGE_WINDOW_QUERY[chartWindow];
   // keepPreviousData: a window switch keeps showing the previous chart until
   // the new payload resolves (DH-12b) instead of flashing a skeleton.
-  const { data: usageAnalytics, isLoading: usageLoading } = useDashboardAnalytics(
-    chartQuery.buckets,
-    chartQuery.rangeHours,
-    { keepPreviousData: true }
+  const {
+    data: usageAnalytics,
+    error: usageError,
+    isLoading: usageLoading,
+    isValidating: usageValidating,
+    mutate: retryUsage,
+  } = useDashboardAnalytics(chartQuery.buckets, chartQuery.rangeHours, {
+    keepPreviousData: true,
+  });
+  const {
+    data: accountAnalytics,
+    error: accountError,
+    isLoading: accountAnalyticsLoading,
+    isValidating: accountValidating,
+    mutate: retryAccount,
+  } = useDashboardAnalytics(
+    ACCOUNT_OVERVIEW_QUERY.buckets,
+    ACCOUNT_OVERVIEW_QUERY.rangeHours,
   );
-  const { data: accountAnalytics, isLoading: accountAnalyticsLoading } =
-    useDashboardAnalytics(
-      ACCOUNT_OVERVIEW_QUERY.buckets,
-      ACCOUNT_OVERVIEW_QUERY.rangeHours,
-    );
-  const { data: requestLogsResponse, isLoading: logsLoading } =
-    useWindowedRequestLogs(recentWindow, 200);
-  const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
-  const { data: performance, isLoading: performanceLoading } = useDashboardPerformance();
+  const {
+    data: requestLogsResponse,
+    error: logsError,
+    isLoading: logsLoading,
+    isValidating: logsValidating,
+    mutate: retryLogs,
+  } = useWindowedRequestLogs(recentWindow, 200);
+  const {
+    data: publicSettings,
+    error: settingsError,
+    isLoading: publicSettingsLoading,
+    isValidating: settingsValidating,
+    mutate: retrySettings,
+  } = usePublicSettings();
+  const {
+    data: performance,
+    error: performanceError,
+    isLoading: performanceLoading,
+    isValidating: performanceValidating,
+    mutate: retryPerformance,
+  } = useDashboardPerformance();
 
   const tt = useCallback(
-    (key: string, fallback: string, options?: Record<string, unknown>): string => {
-      const translated = t(key, { ...(options ?? {}), defaultValue: fallback } as never);
+    (
+      key: string,
+      fallback: string,
+      options?: Record<string, unknown>,
+    ): string => {
+      const translated = t(key, {
+        ...(options ?? {}),
+        defaultValue: fallback,
+      } as never);
       return typeof translated === "string" ? translated : fallback;
     },
-    [t]
+    [t],
   );
 
-  const logs = requestLogsResponse?.data ?? [];
+  const logs = requestLogsResponse?.data;
   const userLoading = !user;
 
   return (
@@ -87,7 +122,7 @@ export function DashboardPage() {
             })}
             description={tt(
               "dashboard.subtitle",
-              "Account, usage, API, and platform performance at a glance"
+              "Account, usage, API, and platform performance at a glance",
             )}
           />
         )}
@@ -96,6 +131,9 @@ export function DashboardPage() {
       <AccountStrip
         user={user}
         analytics={accountAnalytics}
+        failed={Boolean(accountError)}
+        onRetry={retryAccount}
+        retrying={accountValidating}
         loading={
           userLoading ||
           (accountAnalyticsLoading && accountAnalytics === undefined)
@@ -103,6 +141,9 @@ export function DashboardPage() {
       />
       <UsageChartPanel
         analytics={usageAnalytics}
+        failed={Boolean(usageError)}
+        onRetry={retryUsage}
+        retrying={usageValidating}
         loading={usageLoading && !usageAnalytics}
         pending={usageLoading && usageAnalytics !== undefined}
         window={chartWindow}
@@ -113,6 +154,9 @@ export function DashboardPage() {
         <div className="min-h-0 lg:col-span-2">
           <RecentUsagePanel
             logs={logs}
+            failed={Boolean(logsError)}
+            onRetry={retryLogs}
+            retrying={logsValidating}
             loading={logsLoading && !requestLogsResponse}
             pending={logsLoading && requestLogsResponse !== undefined}
             window={recentWindow}
@@ -120,11 +164,23 @@ export function DashboardPage() {
           />
         </div>
         <div className="min-h-0">
-          <ApiInfoPanel settings={publicSettings} loading={publicSettingsLoading} />
+          <ApiInfoPanel
+            settings={publicSettings}
+            loading={publicSettingsLoading}
+            failed={Boolean(settingsError)}
+            onRetry={retrySettings}
+            retrying={settingsValidating}
+          />
         </div>
       </section>
 
-      <PerformancePanel data={performance} loading={performanceLoading} />
+      <PerformancePanel
+        data={performance}
+        loading={performanceLoading}
+        failed={Boolean(performanceError)}
+        onRetry={retryPerformance}
+        retrying={performanceValidating}
+      />
     </PageWrapper>
   );
 }

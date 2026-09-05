@@ -90,3 +90,20 @@ CAP-S2. The policy MUST allow Cap solver workers from same-origin URLs and `blob
 CAP-S3. Each HTTP response MUST receive a fresh script nonce. Embedded SPA entry responses MUST expose that nonce through a non-script metadata element. The dashboard client MUST set `CAP_SCRIPT_NONCE` to that value before loading the Cap widget. The policy MUST NOT add `'unsafe-inline'` to `script-src`.
 
 CAP-S4. The policy MUST include `'wasm-unsafe-eval'` in `script-src` so the Cap solver can compile its bundled WASM module. The policy MUST NOT include `'unsafe-eval'`.
+
+## 7. Authentication Feedback and Reflow
+
+CAP-U9. The login page MUST own a viewport-height vertical scroll container. Its
+form MUST remain reachable when content exceeds the viewport, including at 200%
+browser zoom. The theme and language controls MUST occupy a separate layout row.
+
+CAP-U10. Login and registration errors MUST map recognized DashboardApiError codes
+to reviewed locale keys: `invalid_credentials`, `invalid_username`, `reserved_username`,
+`invalid_password`, `registration_disabled`, `username_exists`, `account_disabled`,
+`captcha_required`, `captcha_invalid`, and `captcha_unavailable`. Unknown codes,
+network errors, and response parsing errors MUST use a generic localized retry
+message. The page MUST NOT render the original exception message.
+
+CAP-U11. Authentication error notices MUST expose an alert and use DS53 error tokens.
+If public settings fail to load, the page MUST offer a retry that revalidates those
+settings. A retry MUST remain disabled while the request is pending.
