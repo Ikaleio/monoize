@@ -401,7 +401,15 @@ CMP1. `POST /v1/responses/compact` accepts a JSON object with a non-empty string
 
 CMP2. A compact request MUST be eligible only for an effective upstream provider of `type=responses`. Monoize MUST call upstream path `POST /v1/responses/compact`. It MUST NOT adapt the compact request to Chat Completions, Messages, Gemini, image, or Replicate request shapes.
 
-CMP3. For the selected Responses attempt, Monoize MUST preserve the native compact request object and its ordered `input` items. It MAY change only `model` to the selected upstream model, remove proxy-only `max_multiplier`, and remove keys whose names begin with `_monoize_`. It MUST NOT remove or reinterpret native `message`, `reasoning`, `function_call`, `function_call_output`, `program`, `program_output`, `tool_search_call`, `tool_search_output`, `additional_tools`, or `compaction` input items.
+CMP3. For the selected Responses attempt, Monoize MUST preserve the native compact request object and its ordered `input` items. It MAY change only `model` as defined by CMP3 and CMP3a, remove proxy-only `max_multiplier`, and remove keys whose names begin with `_monoize_`. It MUST NOT remove or reinterpret native `message`, `reasoning`, `function_call`, `function_call_output`, `program`, `program_output`, `tool_search_call`, `tool_search_output`, `additional_tools`, or `compaction` input items.
+
+CMP3a. After a Responses Channel is selected, Monoize MUST choose the compact wire `model` as follows:
+1. Let `logical` be the compact request model after API-key and global redirects.
+2. Let `upstream` be that Channel's selected upstream model for `logical` (the Channel `redirect` when non-empty, otherwise `logical`).
+3. Let candidate keys be `{logical}-openai-compact` and `{upstream}-openai-compact`, omitting a duplicate. If `logical` or `upstream` already ends with `-openai-compact`, that value is itself a candidate key.
+4. If the selected Channel `models` map contains the first existing candidate key, the compact wire `model` MUST be that key's `redirect` when non-empty, otherwise the key.
+5. Otherwise the compact wire `model` MUST be `upstream`.
+This rewrite MUST NOT change routing eligibility, the logical model, or the billing key.
 
 CMP4. On upstream success, Monoize MUST return the upstream JSON object without changing `id`, `object`, `created_at`, `output`, or `usage`. In particular, `object = "response.compaction"` and every opaque `type = "compaction"` output item MUST remain unchanged.
 

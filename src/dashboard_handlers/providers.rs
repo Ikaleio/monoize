@@ -644,22 +644,18 @@ pub async fn fetch_provider_models(
 
     let body = parse_discovery_json_response(resp).await?;
 
-    let models: Vec<String> = body
-        .get("data")
-        .and_then(|d| d.as_array())
-        .map(|arr| {
-            let mut seen = std::collections::HashSet::new();
-            arr.iter()
-                .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(String::from))
-                .filter(|id| seen.insert(id.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let models: Vec<String> = extract_model_ids(
+        crate::monoize_routing::MonoizeProviderType::ChatCompletion,
+        &body,
+    );
+    let (compact_scheme, compact_models) = crate::handlers::classify_openai_compact_scheme(&models);
 
     Ok(Json(json!({
         "provider_id": provider.id,
         "provider_name": provider.name,
-        "models": models
+        "models": models,
+        "compact_scheme": compact_scheme,
+        "compact_models": compact_models
     })))
 }
 
@@ -791,8 +787,13 @@ pub async fn fetch_channel_models(
     let resp_body = parse_discovery_json_response(resp).await?;
 
     let models: Vec<String> = extract_model_ids(body.provider_type, &resp_body);
+    let (compact_scheme, compact_models) = crate::handlers::classify_openai_compact_scheme(&models);
 
-    Ok(Json(json!({ "models": models })))
+    Ok(Json(json!({
+        "models": models,
+        "compact_scheme": compact_scheme,
+        "compact_models": compact_models
+    })))
 }
 
 #[derive(Debug, Deserialize)]
