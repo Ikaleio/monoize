@@ -182,6 +182,7 @@ TF-7. Built-ins that MUST exist are exactly:
 - `reasoning_strip_encrypted`
 - `reasoning_strip_input`
 - `reasoning_strip_output`
+- `reasoning_summary_heading`
 - `reasoning_summary_to_raw_cot`
 - `reasoning_to_think_xml`
 - `role_developer_to_system`
@@ -617,6 +618,72 @@ SER-7. The transform MUST be a no-op on `UrpData::Request`. Request-side strippi
 SER-8. The transform MUST behave identically whether the encrypted payload it observes is an `mz2.` envelope string or a raw upstream encrypted reasoning value. PIPE-1d guarantees that when `reasoning_envelope_enabled = true`, only the envelope form is observable; this transform MUST NOT depend on that guarantee for correctness.
 
 SER-9. The motivating use case for SER-1 through SER-8 is downstream SSE clients that cannot tolerate single SSE `data:` lines exceeding their per-line buffer. Removing `encrypted_content` shrinks the per-line payload of `response.output_item.done` and `response.completed` events without changing other observable response semantics.
+
+
+RSH-1. `reasoning_summary_heading` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
+
+RSH-2. Config MUST be an object whose allowed properties are exactly:
+1. `default_title`: string; default `"Thinking"`;
+2. `derive_title`: boolean; default `false`;
+3. `max_title_chars`: integer; default `64`; minimum `1`.
+A parsed `max_title_chars` value of `0` MUST be `InvalidConfig`. Additional properties MUST be rejected.
+
+RSH-3. Title sanitization MUST apply to `default_title` at config parse time and to any derived title at apply time, in this order:
+1. trim;
+2. replace each `\n` and each `\r` with a single space;
+3. remove every `*` character;
+4. if the Unicode scalar count exceeds `max_title_chars`, truncate to the first `max_title_chars` Unicode scalars; if that truncated span contains any whitespace, truncate instead at the last whitespace in the span;
+5. trim;
+6. if the result is empty, use `"Thinking"`.
+
+RSH-4. A summary string has a heading if and only if, after `trim()`, all of the following hold:
+1. the string starts with `**`;
+2. a later `**` closes a non-empty inner title;
+3. the character immediately after that closing `**` is `\n` or `\r`.
+Mid-string `**emphasis**` that is not followed by `\n` or `\r` MUST NOT count as a heading.
+
+RSH-5. When the transform inserts a heading, the resulting summary MUST equal `**` + sanitized title + `**` + `\n\n` + the original summary body. The original body MUST NOT be trimmed or otherwise rewritten.
+
+RSH-6. The transform MUST NOT insert a heading when `summary` is missing or equal to the empty string.
+
+RSH-7. Title selection MUST be:
+1. first non-empty reasoning `NodeDelta.summary` for a node: sanitized `default_title`; partial delta text MUST NOT be used as a title;
+2. complete `summary` text with no prior summary delta for that node (`UrpResponse`, `NodeDone` with no earlier summary delta, and `ResponseDone`): a derived title if `derive_title` is true, otherwise sanitized `default_title`;
+3. complete `summary` text after a live heading prefix was already applied to that node: sanitized `default_title`; a different derived title MUST NOT replace the live heading.
+
+RSH-8. When `derive_title` is true and RSH-7 selects a derived title, the candidate MUST be produced as follows from the original unprefixed complete summary:
+1. trim;
+2. if a `.`, `!`, `?`, `\n`, or `\r` occurs after the first Unicode scalar, take the prefix before the first such scalar;
+3. otherwise take the full trimmed string;
+4. sanitize that candidate with RSH-3.
+
+RSH-9. The transform MUST inspect only ordinary `Reasoning.summary` and reasoning `NodeDelta.summary`. It MUST NOT move `content`. It MUST NOT modify `encrypted` or `source`.
+
+RSH-10. Operators who need plaintext `content` copied into `summary` MUST enable `reasoning_content_to_summary` earlier in the same response-phase chain. This transform MUST NOT compose that move internally.
+
+RSH-11. On non-stream `UrpResponse`, the transform MUST apply RSH-4 through RSH-8 to every ordinary `Reasoning.summary` in `response.output`.
+
+RSH-12. The transform MUST keep per-stream state keyed by `node_index` with:
+1. `summary_delta_seen`: a non-empty reasoning `NodeDelta.summary` was observed for that node;
+2. `heading_prefixed`: that node already received a heading prefix, including the case where the first non-empty delta already satisfied RSH-4.
+
+RSH-13. On the first non-empty reasoning `NodeDelta.summary` for a node:
+1. if the delta has no heading under RSH-4, prefix sanitized `default_title` using RSH-5;
+2. mark `summary_delta_seen` and `heading_prefixed`.
+Later summary deltas for that node MUST remain unchanged.
+
+RSH-14. On a `NodeDone` whose `node.type = reasoning`:
+1. format `node.summary` with RSH-4 through RSH-8;
+2. if the formatted `summary` is non-empty and `summary_delta_seen` is false, `finalize_stream_event` MUST emit a `NodeDelta::Reasoning` whose `summary` is the formatted full text, then the mutated `NodeDone`;
+3. the injected delta MUST copy `source` from the node and MUST leave `content` and `encrypted` unset.
+The replacement vector MUST include both events. The pipeline MUST ignore the original event when replacement is `Some`.
+
+RSH-15. On `ResponseDone`, the transform MUST format every `Reasoning.summary` with RSH-4 through RSH-8. It MUST NOT inject events on `ResponseDone`.
+
+RSH-16. On `UrpData::Request`, the transform MUST be a no-op.
+
+RSH-17. Applying the transform to a summary that already satisfies RSH-4 MUST leave that summary unchanged. A second apply MUST NOT add a second heading.
+
 
 ### 4.8 Response image transforms on flat ordinary nodes and stream state
 

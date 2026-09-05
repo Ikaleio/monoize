@@ -13,7 +13,7 @@ Monoize 轉換協議語意，而不是替換 JSON 欄位名稱。它將每個請
 
 - **協議轉換：** 支援使用任意受支援的下游端點呼叫任意設定的上游 Channel 類型。Monoize 在串流與非串流模式下轉換 Responses、Chat Completions、Messages、Gemini 與圖像協議。
 - **路由與可靠性：** 一個邏輯模型可以匹配多個有序 Provider。每個 Provider 包含帶權重的 Channel。Monoize 重試可重試的失敗，前進到下一條路由，並在送出第一個回應位元組後停止備援。參見[路由與可靠性](/zh-TW/docs/routing)。
-- **Transform 變換：** 33 個內建 Transform 可依 Provider、API 金鑰或全域範圍修改請求和回應。參見[變換](/zh-TW/docs/transforms)。
+- **Transform 變換：** 34 個內建 Transform 可依 Provider、API 金鑰或全域範圍修改請求和回應。參見[變換](/zh-TW/docs/transforms)。
 - **請求擷取：** 擷取功能預設關閉。開啟後，Monoize 會記錄每次上游嘗試的封包。結構化檢視器展示每一跳。參見[請求日誌](/zh-TW/docs/request-logs)。
 - **儀表板：** 內嵌 Web 儀表板管理 Provider、Channel、模型、API 金鑰、使用者、計費與日誌。參見[儀表板](/zh-TW/docs/dashboard)。
 ## 支援的端點
