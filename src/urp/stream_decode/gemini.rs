@@ -5,9 +5,10 @@ use crate::handlers::usage::{
     record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
-use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol, UrpStreamEvent,
+use crate::urp::decode::gemini::{
+    decode_stream_part, parse_finish_reason, prompt_block_reason, prompt_refusal,
 };
+use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, UrpStreamEvent};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -15,40 +16,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-
-#[derive(Debug, Default)]
-struct GeminiStreamState {
-    node_order: Vec<u32>,
-    active_nodes: HashMap<u32, ActiveNodeState>,
-    completed_nodes: HashMap<u32, Node>,
-}
-
-#[derive(Debug, Clone)]
-struct ActiveNodeState {
-    kind: ActiveNodeKind,
-    extra_body: HashMap<String, Value>,
-}
-
-#[derive(Debug, Clone)]
-enum ActiveNodeKind {
-    Text {
-        content: String,
-    },
-    Reasoning {
-        content: String,
-        encrypted: String,
-    },
-    ToolCall {
-        call_id: String,
-        name: String,
-        arguments: String,
-    },
-    ProviderItem {
-        id: Option<String>,
-        item_type: String,
-        body: Value,
-    },
-}
 
 pub(crate) async fn stream_gemini_to_urp_events(
     urp: &HandlerUrpRequest,
@@ -58,14 +25,14 @@ pub(crate) async fn stream_gemini_to_urp_events(
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4());
+    let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut started_response = false;
-    let mut finish_reason: Option<FinishReason> = None;
-    let mut state = GeminiStreamState::default();
-
+    let mut finish_reason = None;
+    let mut output = Vec::<Node>::new();
+    let mut extra_body = HashMap::new();
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
+    while let Some(event) = tokio::time::timeout(idle_timeout, stream.next())
         .await
         .map_err(|_| {
             AppError::new(
@@ -75,402 +42,217 @@ pub(crate) async fn stream_gemini_to_urp_events(
             )
         })?
     {
-        let ev = ev.map_err(|err| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_stream_decode_failed",
-                err.to_string(),
-            )
-        })?;
+        let event =
+            event.map_err(|err| stream_error("upstream_stream_decode_failed", err.to_string()))?;
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
-
-        if ev.data.trim() == "[DONE]" {
+        if event.data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
-
-        let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
-        record_stream_usage_if_present(&runtime_metrics, parse_usage_from_gemini_object(&data_val))
+        let data: Value = serde_json::from_str(&event.data)
+            .map_err(|err| stream_error("upstream_stream_decode_failed", err.to_string()))?;
+        if let Some(error) = data.get("error") {
+            return Err(stream_error("upstream_error", error.to_string()));
+        }
+        let obj = data.as_object().ok_or_else(|| {
+            stream_error(
+                "upstream_stream_decode_failed",
+                "Gemini stream event must be an object".to_string(),
+            )
+        })?;
+        record_stream_usage_if_present(&runtime_metrics, parse_usage_from_gemini_object(&data))
             .await;
-
-        let Some(candidate) = data_val
-            .get("candidates")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-        else {
-            continue;
-        };
-
-        let Some(parts) = candidate
-            .get("content")
-            .and_then(|v| v.get("parts"))
-            .and_then(|v| v.as_array())
-        else {
-            continue;
-        };
-
+        extra_body.extend(crate::urp::decode::split_extra(
+            obj,
+            &["candidates", "usageMetadata", "responseId", "modelVersion"],
+        ));
         if !started_response {
+            if let Some(id) = data.get("responseId").and_then(Value::as_str) {
+                response_id = id.to_string();
+            }
             let _ = tx
                 .send(UrpStreamEvent::ResponseStart {
                     id: response_id.clone(),
                     model: urp.model.clone(),
-                    extra_body: HashMap::new(),
+                    extra_body: extra_body.clone(),
                 })
                 .await;
             started_response = true;
         }
-
-        let current_parts = parse_candidate_parts(parts);
-        for candidate_part in current_parts {
-            let node_index = candidate_part.node_index;
-            if !state.node_order.contains(&node_index) {
-                state.node_order.push(node_index);
+        let candidate = data
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|candidates| candidates.first());
+        let mut nodes = candidate
+            .and_then(|candidate| candidate.get("content"))
+            .and_then(|content| content.get("parts"))
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .flat_map(decode_stream_part)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if let Some(reason) = prompt_block_reason(&data) {
+            nodes.push(prompt_refusal(reason));
+            finish_reason = Some(FinishReason::ContentFilter);
+        }
+        for node in nodes {
+            let delta = initial_delta(&node);
+            let merged = output
+                .last_mut()
+                .is_some_and(|last| append_fragment(last, &node));
+            if !merged {
+                if let Some(last) = output.last() {
+                    let _ = tx
+                        .send(UrpStreamEvent::NodeDone {
+                            node_index: (output.len() - 1) as u32,
+                            node: last.clone(),
+                            usage: None,
+                            extra_body: node_extra(last).clone(),
+                        })
+                        .await;
+                }
+                let event = UrpStreamEvent::NodeStart {
+                    node_index: output.len() as u32,
+                    header: node_header_from_node(&node),
+                    extra_body: node_extra(&node).clone(),
+                };
+                record_visible_stream_event_delta(&runtime_metrics, &event).await;
+                let _ = tx.send(event).await;
+                output.push(node.clone());
             }
-
-            let next_active = candidate_part.active_node;
-            let next_node = node_from_active(&next_active);
-            let next_extra = next_active.extra_body.clone();
-
-            if let Some(existing_active) = state.active_nodes.get_mut(&node_index) {
-                let deltas = update_active_node(existing_active, &next_active);
-                for delta in deltas {
-                    let event = UrpStreamEvent::NodeDelta {
-                        node_index,
-                        delta,
-                        usage: None,
-                        extra_body: next_extra.clone(),
-                    };
-                    record_visible_stream_event_delta(&runtime_metrics, &event).await;
-                    let _ = tx.send(event).await;
-                }
-            } else {
-                state.active_nodes.insert(node_index, next_active.clone());
-                let mut events = vec![UrpStreamEvent::NodeStart {
-                    node_index,
-                    header: node_header_from_node(&next_node),
-                    extra_body: next_extra.clone(),
-                }];
-                for delta in initial_deltas_for_active_node(&next_active) {
-                    events.push(UrpStreamEvent::NodeDelta {
-                        node_index,
-                        delta,
-                        usage: None,
-                        extra_body: next_extra.clone(),
-                    });
-                }
-                for event in events {
-                    record_visible_stream_event_delta(&runtime_metrics, &event).await;
-                    let _ = tx.send(event).await;
-                }
+            if let Some(delta) = delta {
+                let event = UrpStreamEvent::NodeDelta {
+                    node_index: (output.len() - 1) as u32,
+                    delta,
+                    usage: None,
+                    extra_body: node_extra(&node).clone(),
+                };
+                record_visible_stream_event_delta(&runtime_metrics, &event).await;
+                let _ = tx.send(event).await;
             }
         }
-
-        if let Some(reason) = candidate.get("finishReason").and_then(|v| v.as_str()) {
-            finish_reason = Some(parse_finish_reason(reason));
+        if finish_reason.is_none() {
+            finish_reason = candidate
+                .and_then(|candidate| candidate.get("finishReason"))
+                .and_then(Value::as_str)
+                .filter(|reason| !reason.is_empty() && *reason != "FINISH_REASON_UNSPECIFIED")
+                .map(parse_finish_reason);
+        }
+        if finish_reason.is_some() {
             break;
         }
     }
-
-    let active_indices: Vec<u32> = state.node_order.clone();
-    for node_index in active_indices {
-        let Some(active_node) = state.active_nodes.remove(&node_index) else {
-            continue;
-        };
-        let node = node_from_active(&active_node);
-        let extra_body = active_node.extra_body.clone();
-        state.completed_nodes.insert(node_index, node.clone());
-
+    if finish_reason.is_none() {
+        return Err(stream_error(
+            "upstream_stream_missing_terminal",
+            "Gemini stream ended without a finishReason or prompt block".to_string(),
+        ));
+    }
+    if finish_reason == Some(FinishReason::Stop)
+        && output
+            .iter()
+            .any(|node| matches!(node, Node::ToolCall { .. }))
+    {
+        finish_reason = Some(FinishReason::ToolCalls);
+    }
+    if let Some(last) = output.last() {
         let _ = tx
             .send(UrpStreamEvent::NodeDone {
-                node_index,
-                node,
+                node_index: (output.len() - 1) as u32,
+                node: last.clone(),
                 usage: None,
-                extra_body,
+                extra_body: node_extra(last).clone(),
             })
             .await;
     }
-
-    let output_nodes = ordered_completed_nodes(&state);
     let usage = latest_stream_usage_snapshot(&runtime_metrics).await;
-
-    if started_response {
-        let _ = tx
-            .send(UrpStreamEvent::ResponseDone {
-                finish_reason,
-                usage,
-                output: output_nodes,
-                extra_body: HashMap::new(),
-            })
-            .await;
-    }
-
+    let _ = tx
+        .send(UrpStreamEvent::ResponseDone {
+            finish_reason,
+            usage,
+            output,
+            extra_body,
+        })
+        .await;
     record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct CandidatePartState {
-    node_index: u32,
-    active_node: ActiveNodeState,
+fn stream_error(code: &'static str, message: String) -> AppError {
+    AppError::new(StatusCode::BAD_GATEWAY, code, message)
 }
 
-fn parse_candidate_parts(parts: &[Value]) -> Vec<CandidatePartState> {
-    let mut parsed = Vec::new();
-    let mut next_tool_node_index: u32 = 2;
-
-    for (part_pos, part) in parts.iter().enumerate() {
-        let mut recognized = false;
-        if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-            recognized = true;
-            if part.get("thought").and_then(|v| v.as_bool()) == Some(true) {
-                let signature = part
-                    .get("thoughtSignature")
-                    .map(|sig| {
-                        sig.as_str()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| sig.to_string())
-                    })
-                    .unwrap_or_default();
-                parsed.push(CandidatePartState {
-                    node_index: 1,
-                    active_node: ActiveNodeState {
-                        kind: ActiveNodeKind::Reasoning {
-                            content: text.to_string(),
-                            encrypted: signature,
-                        },
-                        extra_body: HashMap::new(),
-                    },
-                });
-            } else {
-                parsed.push(CandidatePartState {
-                    node_index: 0,
-                    active_node: ActiveNodeState {
-                        kind: ActiveNodeKind::Text {
-                            content: text.to_string(),
-                        },
-                        extra_body: HashMap::new(),
-                    },
-                });
-            }
-        }
-
-        if let Some(fc) = part.get("functionCall").and_then(|v| v.as_object()) {
-            recognized = true;
-            let call_id = fc
-                .get("id")
-                .or_else(|| fc.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let name = fc
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let arguments = serde_json::to_string(&fc.get("args").cloned().unwrap_or(Value::Null))
-                .unwrap_or_else(|_| "{}".to_string());
-            if !name.is_empty() {
-                let canonical_call_id = if call_id.is_empty() {
-                    format!("call_{}", next_tool_node_index - 1)
-                } else {
-                    call_id
-                };
-                parsed.push(CandidatePartState {
-                    node_index: next_tool_node_index,
-                    active_node: ActiveNodeState {
-                        kind: ActiveNodeKind::ToolCall {
-                            call_id: canonical_call_id,
-                            name,
-                            arguments,
-                        },
-                        extra_body: HashMap::new(),
-                    },
-                });
-                next_tool_node_index += 1;
-            }
-        }
-        if !recognized {
-            parsed.push(CandidatePartState {
-                node_index: 10_000 + part_pos as u32,
-                active_node: ActiveNodeState {
-                    kind: ActiveNodeKind::ProviderItem {
-                        id: part
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-                        item_type: part
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        body: part.clone(),
-                    },
-                    extra_body: HashMap::new(),
-                },
-            });
-        }
+fn append_fragment(current: &mut Node, next: &Node) -> bool {
+    if !node_extra(current).is_empty() || !node_extra(next).is_empty() {
+        return false;
     }
-
-    parsed
-}
-
-fn update_active_node(current: &mut ActiveNodeState, next: &ActiveNodeState) -> Vec<NodeDelta> {
-    let mut deltas = Vec::new();
-
-    match (&mut current.kind, &next.kind) {
+    match (current, next) {
         (
-            ActiveNodeKind::Text { content },
-            ActiveNodeKind::Text {
-                content: next_content,
+            Node::Text { content, .. },
+            Node::Text {
+                content: fragment, ..
             },
         ) => {
-            if next_content.len() > content.len() {
-                let delta = next_content[content.len()..].to_string();
-                if !delta.is_empty() {
-                    deltas.push(NodeDelta::Text { content: delta });
-                }
-            }
-            *content = next_content.clone();
+            content.push_str(fragment);
+            true
         }
         (
-            ActiveNodeKind::Reasoning { content, encrypted },
-            ActiveNodeKind::Reasoning {
-                content: next_content,
-                encrypted: next_encrypted,
+            Node::Reasoning {
+                id: None,
+                content: Some(content),
+                encrypted: None,
+                ..
+            },
+            Node::Reasoning {
+                id: None,
+                content: Some(fragment),
+                encrypted: None,
+                ..
             },
         ) => {
-            let content_delta = if next_content.len() > content.len() {
-                Some(next_content[content.len()..].to_string())
-            } else {
-                None
-            };
-            let encrypted_delta = if next_encrypted.len() > encrypted.len() {
-                Some(Value::String(next_encrypted[encrypted.len()..].to_string()))
-            } else {
-                None
-            };
-            if content_delta
-                .as_ref()
-                .is_some_and(|delta| !delta.is_empty())
-                || encrypted_delta.is_some()
-            {
-                deltas.push(NodeDelta::Reasoning {
-                    content: content_delta.filter(|delta| !delta.is_empty()),
-                    encrypted: encrypted_delta,
-                    summary: None,
-                    source: None,
-                });
-            }
-            *content = next_content.clone();
-            *encrypted = next_encrypted.clone();
+            content.push_str(fragment);
+            true
         }
-        (
-            ActiveNodeKind::ToolCall {
-                call_id: _,
-                name,
-                arguments,
-            },
-            ActiveNodeKind::ToolCall {
-                call_id: _,
-                name: next_name,
-                arguments: next_arguments,
-            },
-        ) => {
-            if next_arguments.len() > arguments.len() {
-                let delta = next_arguments[arguments.len()..].to_string();
-                if !delta.is_empty() {
-                    deltas.push(NodeDelta::ToolCallArguments { arguments: delta });
-                }
-            }
-            *name = next_name.clone();
-            *arguments = next_arguments.clone();
-        }
-        (
-            ActiveNodeKind::ProviderItem { body, .. },
-            ActiveNodeKind::ProviderItem {
-                body: next_body, ..
-            },
-        ) => {
-            *body = next_body.clone();
-        }
-        _ => {
-            *current = next.clone();
-        }
+        _ => false,
     }
-
-    current.extra_body = next.extra_body.clone();
-    deltas
 }
 
-fn initial_deltas_for_active_node(active_node: &ActiveNodeState) -> Vec<NodeDelta> {
-    match &active_node.kind {
-        ActiveNodeKind::Text { content } if !content.is_empty() => vec![NodeDelta::Text {
+fn initial_delta(node: &Node) -> Option<NodeDelta> {
+    match node {
+        Node::Text { content, .. } => (!content.is_empty()).then(|| NodeDelta::Text {
             content: content.clone(),
-        }],
-        ActiveNodeKind::Reasoning { content, encrypted } => {
-            if content.is_empty() && encrypted.is_empty() {
-                Vec::new()
-            } else {
-                vec![NodeDelta::Reasoning {
-                    content: (!content.is_empty()).then(|| content.clone()),
-                    encrypted: (!encrypted.is_empty()).then(|| Value::String(encrypted.clone())),
-                    summary: None,
-                    source: None,
-                }]
-            }
-        }
-        ActiveNodeKind::ToolCall { arguments, .. } if !arguments.is_empty() => {
-            vec![NodeDelta::ToolCallArguments {
-                arguments: arguments.clone(),
-            }]
-        }
-        ActiveNodeKind::ProviderItem { .. } => Vec::new(),
-        _ => Vec::new(),
-    }
-}
-
-fn node_from_active(active_node: &ActiveNodeState) -> Node {
-    match &active_node.kind {
-        ActiveNodeKind::Text { content } => Node::Text {
-            id: None,
-            role: OrdinaryRole::Assistant,
+        }),
+        Node::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source,
+            ..
+        } => Some(NodeDelta::Reasoning {
             content: content.clone(),
-            phase: None,
-            extra_body: active_node.extra_body.clone(),
-        },
-        ActiveNodeKind::Reasoning { content, encrypted } => Node::Reasoning {
-            id: None,
-            content: (!content.is_empty()).then(|| content.clone()),
-            encrypted: (!encrypted.is_empty()).then(|| Value::String(encrypted.clone())),
-            summary: None,
-            source: None,
-            extra_body: active_node.extra_body.clone(),
-        },
-        ActiveNodeKind::ToolCall {
-            call_id,
-            name,
-            arguments,
-        } => Node::ToolCall {
-            id: Some(call_id.clone()),
-            tool_type: crate::urp::ToolCallType::Function,
-            call_id: call_id.clone(),
-            name: name.clone(),
+            encrypted: encrypted.clone(),
+            summary: summary.clone(),
+            source: source.clone(),
+        }),
+        Node::ToolCall { arguments, .. } => Some(NodeDelta::ToolCallArguments {
             arguments: arguments.clone(),
-            extra_body: active_node.extra_body.clone(),
-        },
-        ActiveNodeKind::ProviderItem {
-            id,
-            item_type,
-            body,
-        } => Node::ProviderItem {
-            id: id.clone(),
-            origin_protocol: ProviderProtocol::Gemini,
-            role: OrdinaryRole::Assistant,
-            item_type: item_type.clone(),
-            body: body.clone(),
-            extra_body: active_node.extra_body.clone(),
-        },
+        }),
+        Node::Image { source, .. } => Some(NodeDelta::Image {
+            source: source.clone(),
+        }),
+        Node::Audio { source, .. } => Some(NodeDelta::Audio {
+            source: source.clone(),
+        }),
+        Node::File { source, .. } => Some(NodeDelta::File {
+            source: source.clone(),
+        }),
+        Node::Refusal { content, .. } => Some(NodeDelta::Refusal {
+            content: content.clone(),
+        }),
+        _ => None,
     }
 }
 
@@ -532,19 +314,17 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
     }
 }
 
-fn ordered_completed_nodes(state: &GeminiStreamState) -> Vec<Node> {
-    state
-        .node_order
-        .iter()
-        .filter_map(|node_index| state.completed_nodes.get(node_index).cloned())
-        .collect()
-}
-
-fn parse_finish_reason(reason: &str) -> FinishReason {
-    match reason {
-        "MAX_TOKENS" => FinishReason::Length,
-        "SAFETY" => FinishReason::ContentFilter,
-        "STOP" => FinishReason::Stop,
-        _ => FinishReason::Other,
+fn node_extra(node: &Node) -> &HashMap<String, Value> {
+    match node {
+        Node::Text { extra_body, .. }
+        | Node::Image { extra_body, .. }
+        | Node::Audio { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::Refusal { extra_body, .. }
+        | Node::Reasoning { extra_body, .. }
+        | Node::ToolCall { extra_body, .. }
+        | Node::ProviderItem { extra_body, .. }
+        | Node::ToolResult { extra_body, .. }
+        | Node::NextDownstreamEnvelopeExtra { extra_body, .. } => extra_body,
     }
 }

@@ -53,7 +53,7 @@ Monoize 按巢狀順序嘗試路由：先在一個 Provider 內遍歷 Channel，
 
 ## 工作階段親和
 
-Monoize 可以把一個工作階段綁定到服務它的 Channel，讓攜帶伺服器端狀態的後續請求（例如 Responses 的 `previous_response_id`）到達同一個上游。親和可以全域設定，也可以按 Channel 設定。被親和優先的 Channel 仍然遵守資格和健康規則。
+Monoize 可以優先選擇先前服務該工作階段的 Channel。可在全域或 Channel 層設定親和。優先 Channel 仍須符合資格與健康規則。Responses 的 `previous_response_id` 歷史由 Monoize 在內部解析，不要求上游保存狀態。
 
 ## 時間指標
 

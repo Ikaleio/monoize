@@ -387,6 +387,17 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             Some(v) => v,
             None => continue,
         };
+        if msg_obj.get("configuration_update").is_some_and(Value::is_object) {
+            input_nodes.push(Node::ProviderItem {
+                id: None,
+                origin_protocol: ProviderProtocol::ChatCompletion,
+                role: OrdinaryRole::System,
+                item_type: "configuration_update".to_string(),
+                body: crate::urp::encode::sanitize_provider_item_wire_body(raw_msg),
+                extra_body: HashMap::from([(crate::urp::CHAT_MESSAGE_ITEM_EXTRA_KEY.to_string(), Value::Bool(true))]),
+            });
+            continue;
+        }
         let role_name = msg_obj
             .get("role")
             .and_then(|v| v.as_str())

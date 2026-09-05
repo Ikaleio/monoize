@@ -1,3 +1,4 @@
+import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -7,7 +8,8 @@ import type { DashboardAnalytics, User } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatCompactTokens } from "./utils";
 
-interface AccountStripProps {
+interface AccountStripProps extends QueryErrorProps {
+  failed?: boolean;
   user: User | null | undefined;
   analytics: DashboardAnalytics | undefined;
   loading?: boolean;
@@ -115,14 +117,21 @@ function AccountOverviewSkeleton({ title }: { title: string }) {
   );
 }
 
-export function AccountStrip({ user, analytics, loading }: AccountStripProps) {
+export function AccountStrip({
+  user,
+  analytics,
+  loading,
+  failed,
+  onRetry,
+  retrying,
+}: AccountStripProps) {
   const { t } = useTranslation();
   const overviewTitle = t(
     "dashboard.account.overviewTitle",
     "Account Overview",
   );
 
-  if (loading || !user) {
+  if ((loading && !failed && analytics === undefined) || !user) {
     return (
       <section aria-label={overviewTitle}>
         <AccountOverviewSkeleton title={overviewTitle} />
@@ -145,6 +154,15 @@ export function AccountStrip({ user, analytics, loading }: AccountStripProps) {
           <CardHeader className="sr-only">
             <CardTitle>{overviewTitle}</CardTitle>
           </CardHeader>
+          {failed && (
+            <div className="p-4 pb-0">
+              <QueryError
+                onRetry={onRetry}
+                retrying={retrying}
+                stale={analytics !== undefined}
+              />
+            </div>
+          )}
           <CardContent className="grid p-0 sm:grid-cols-2 lg:grid-cols-[1.35fr_repeat(4,minmax(0,1fr))]">
             <MetricCell
               primary
@@ -154,24 +172,33 @@ export function AccountStrip({ user, analytics, loading }: AccountStripProps) {
             />
             <MetricCell
               label={t("dashboard.account.todaySpend", "Today's Spend")}
-              value={formatNanoUsd(analytics?.today_cost_nano_usd, 4)}
+              value={
+                analytics
+                  ? formatNanoUsd(analytics.today_cost_nano_usd, 4)
+                  : "—"
+              }
               note={t("dashboard.account.todaySpendNote", "USD · so far today")}
             />
             <MetricCell
               mobileDivider
               label={t("dashboard.account.todayRequests", "Today's Requests")}
-              value={(analytics?.today_calls ?? 0).toLocaleString()}
+              value={analytics ? analytics.today_calls.toLocaleString() : "—"}
               note={t("dashboard.account.callsUnit", "calls")}
             />
             <MetricCell
               label={t("dashboard.account.tokens24h", "24h Tokens")}
-              value={formatCompactTokens(summary.tokens)}
+              value={analytics ? formatCompactTokens(summary.tokens) : "—"}
               note={t(
                 "dashboard.account.tokens24hNote",
                 "All token categories",
               )}
             />
-            <MetricCell mobileDivider label={t("dashboard.account.activeModels", "Active Models")} value={summary.activeModels.toLocaleString()} note={t("dashboard.account.activeModelsNote", "Past 24 hours")} />
+            <MetricCell
+              mobileDivider
+              label={t("dashboard.account.activeModels", "Active Models")}
+              value={analytics ? summary.activeModels.toLocaleString() : "—"}
+              note={t("dashboard.account.activeModelsNote", "Past 24 hours")}
+            />
           </CardContent>
         </Card>
       </section>

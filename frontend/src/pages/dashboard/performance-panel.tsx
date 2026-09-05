@@ -1,3 +1,4 @@
+import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
 import { useTranslation } from "react-i18next";
 import { useReducedMotion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,7 +27,8 @@ import type {
 import { formatPerformanceBrickRange } from "@/lib/performance-time";
 import { cn } from "@/lib/utils";
 
-interface PerformancePanelProps {
+interface PerformancePanelProps extends QueryErrorProps {
+  failed?: boolean;
   data: DashboardPerformance | undefined;
   loading?: boolean;
 }
@@ -177,7 +179,13 @@ function PerfRow({
   );
 }
 
-export function PerformancePanel({ data, loading }: PerformancePanelProps) {
+export function PerformancePanel({
+  data,
+  loading,
+  failed,
+  onRetry,
+  retrying,
+}: PerformancePanelProps) {
   const { t } = useTranslation();
   const groups = data?.groups ?? [];
   const models = data?.models ?? [];
@@ -197,7 +205,7 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
           <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
             {t("dashboard.performance.title", "Performance")}
           </CardTitle>
-          <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
+          <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
             {t(
               "dashboard.performance.subtitle",
               "Last 24 hours · uptime bricks, avgTTFT, and avgTPS",
@@ -205,7 +213,15 @@ export function PerformancePanel({ data, loading }: PerformancePanelProps) {
           </p>
         </CardHeader>
         <CardContent className="flex flex-col gap-2 p-4 pt-2">
-          {loading ? (
+          {failed && (
+            <QueryError
+              onRetry={onRetry}
+              retrying={retrying}
+              stale={data !== undefined}
+            />
+          )}
+          {failed && data === undefined ? null : loading &&
+            data === undefined ? (
             <div className="flex flex-col gap-2">
               {Array.from({ length: 3 }).map((_, i) => (
                 <Skeleton key={i} className="h-12 w-full" />

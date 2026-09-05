@@ -224,6 +224,7 @@ pub(super) async fn forward_stream_typed(
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 > {
+    let history_context = responses_history::HistoryContext::from_request(&state, &req);
     let started_at = std::time::Instant::now();
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
@@ -625,6 +626,7 @@ pub(super) async fn forward_stream_typed(
                         {
                             convert_assistant_images_to_markdown(&mut resp);
                         }
+                        if let Some(history) = &history_context { history.finish_response(&mut resp).await; }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -933,6 +935,7 @@ pub(super) async fn forward_stream_typed(
                     }));
                     let decoded_terminal_output = Arc::new(Mutex::new(Vec::<urp::Node>::new()));
                     let metrics_for_stream = runtime_metrics.clone();
+                    let history_for_stream = history_context.clone();
                     let state_for_log = state.clone();
                     let auth_for_log = auth.clone();
                     let attempt_for_log = attempt.clone();
@@ -1065,6 +1068,11 @@ pub(super) async fn forward_stream_typed(
                                     None => (transformed_rx, None),
                                 };
 
+                            let (encode_input_rx, history_handle) = if let Some(history) = history_for_stream {
+                                let (history_tx, history_rx) = mpsc::channel(64);
+                                let handle = tokio::spawn(history.forward_stream(encode_input_rx, history_tx));
+                                (history_rx, Some(handle))
+                            } else { (encode_input_rx, None) };
                             let encode_handle =
                                 crate::request_capture::spawn_with_sse_capture(async move {
                                     encode_urp_stream(
@@ -1095,6 +1103,7 @@ pub(super) async fn forward_stream_typed(
                             if let Some(handle) = reconstruct_handle {
                                 let _ = handle.await;
                             }
+                            if let Some(handle) = history_handle { let _ = handle.await; }
                             decode_result
                                 .unwrap_or_else(|e| {
                                     Err(AppError::new(
@@ -1147,7 +1156,6 @@ pub(super) async fn forward_stream_typed(
                             usage,
                             is_estimated,
                             terminal_diagnostics,
-                            response_id,
                             response_service_tier,
                         ) = {
                             let guard = runtime_metrics.lock().await;
@@ -1193,7 +1201,6 @@ pub(super) async fn forward_stream_typed(
                                 usage,
                                 is_estimated,
                                 guard.terminal.clone(),
-                                guard.response_id.clone(),
                                 guard.response_service_tier.clone(),
                             )
                         };
@@ -1438,19 +1445,6 @@ pub(super) async fn forward_stream_typed(
                         };
 
                         refresh_channel_affinity(&state_for_log, &attempt_for_log).await;
-                        if attempt_for_log.provider_type == ProviderType::Responses
-                            && let Some(response_id) = response_id.as_deref()
-                        {
-                            refresh_response_id_affinity(
-                                &state_for_log,
-                                &auth_for_log,
-                                &model_for_log,
-                                response_id,
-                                &attempt_for_log,
-                            )
-                            .await;
-                        }
-
                         spawn_request_log(
                             &state_for_log,
                             &auth_for_log,

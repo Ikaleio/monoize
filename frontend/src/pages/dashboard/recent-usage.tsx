@@ -1,3 +1,4 @@
+import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,8 +25,9 @@ import {
   modelToColor,
 } from "./utils";
 
-interface RecentUsagePanelProps {
-  logs: RequestLog[];
+interface RecentUsagePanelProps extends QueryErrorProps {
+  failed?: boolean;
+  logs: RequestLog[] | undefined;
   /** First load with no data for the panel (DH-12a): show skeleton. */
   loading?: boolean;
   /** Fetching another window while previous data is shown (DH-12b): dim only. */
@@ -40,9 +42,12 @@ export function RecentUsagePanel({
   pending,
   window,
   onWindowChange,
+  failed,
+  onRetry,
+  retrying,
 }: RecentUsagePanelProps) {
   const { t } = useTranslation();
-  const rows = useMemo(() => aggregateRecentUsage(logs), [logs]);
+  const rows = useMemo(() => aggregateRecentUsage(logs ?? []), [logs]);
 
   return (
     <motion.div
@@ -51,13 +56,13 @@ export function RecentUsagePanel({
       transition={{ delay: 0.18, ...transitions.normal }}
       className="h-full min-h-0"
     >
-      <Card className="flex h-full max-h-96 min-h-0 flex-col">
+      <Card className="flex h-full max-h-[28rem] min-h-0 flex-col">
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 p-4 pb-2">
           <div className="flex min-w-0 flex-col gap-1">
             <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
               {t("dashboard.recentUsage.title", "Recent Usage")}
             </CardTitle>
-            <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
+            <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
               {t(
                 "dashboard.recentUsage.subtitle",
                 "This account's token usage, cache hit rate, and charges by model",
@@ -72,7 +77,15 @@ export function RecentUsagePanel({
             pending && "opacity-60",
           )}
         >
-          {loading ? (
+          {failed && (
+            <QueryError
+              onRetry={onRetry}
+              retrying={retrying}
+              stale={logs !== undefined}
+            />
+          )}
+          {failed && logs === undefined ? null : loading &&
+            logs === undefined ? (
             <div className="flex flex-col gap-2">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-8 w-full" />

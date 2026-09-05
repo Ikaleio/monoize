@@ -158,6 +158,9 @@ async fn serve_responses_websocket(
     headers: HeaderMap,
     limits: ResponsesWebsocketLimits,
 ) {
+    let beta = headers.get("openai-beta").and_then(|value| value.to_str().ok()).unwrap_or("");
+    let mut legacy_terminal = beta.contains("responses_websockets=2026-02-04")
+        && !beta.contains("responses_websockets=2026-02-06");
     let mut session = ResponsesWebsocketSession::default();
     let mut accepted_turns = 0_usize;
     let mut inbound_bytes = 0_usize;
@@ -188,6 +191,7 @@ async fn serve_responses_websocket(
                     &headers,
                     text.as_str(),
                     limits,
+                    &mut legacy_terminal,
                 )
                 .await
                 {
@@ -222,6 +226,7 @@ async fn handle_client_text(
     headers: &HeaderMap,
     text: &str,
     limits: ResponsesWebsocketLimits,
+    legacy_terminal: &mut bool,
 ) -> bool {
     let value = match serde_json::from_str::<Value>(text) {
         Ok(value) => value,
@@ -250,6 +255,10 @@ async fn handle_client_text(
 
     let warmup = event_type == "response.create"
         && event.get("generate").and_then(Value::as_bool) == Some(false);
+    if event.get("type").and_then(Value::as_str) == Some("response.append")
+        && !headers.get("openai-beta").and_then(|value| value.to_str().ok()).unwrap_or("").contains("responses_websockets=2026-02-06") {
+        *legacy_terminal = true;
+    }
     let prepared = match event_type {
         "response.create" => prepare_response_create(&mut event, session, limits),
         "response.append" => prepare_response_append(&event, session, limits),
@@ -290,7 +299,7 @@ async fn handle_client_text(
         Err(err) => return send_app_error(socket, err).await,
     };
 
-    let completed = match forward_sse_body_as_websocket(socket, response, limits).await {
+    let completed = match forward_sse_body_as_websocket(socket, response, limits, *legacy_terminal).await {
         Ok(completed) => completed,
         Err(err) => return send_event_error(socket, err).await,
     };
@@ -424,7 +433,8 @@ fn input_items(input: Option<&Value>) -> Result<Vec<Value>, WebsocketEventError>
     match input {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(items)) => Ok(items.clone()),
-        Some(Value::String(_)) | Some(Value::Object(_)) => Ok(vec![input.cloned().unwrap()]),
+        Some(Value::String(text)) => Ok(vec![json!({"role":"user", "content":text})]),
+        Some(Value::Object(_)) => Ok(vec![input.cloned().unwrap()]),
         Some(_) => Err(WebsocketEventError::invalid(
             "Responses input must be a string, object, or array",
         )),
@@ -535,6 +545,7 @@ async fn forward_sse_body_as_websocket(
     socket: &mut WebSocket,
     response: Response,
     limits: ResponsesWebsocketLimits,
+    legacy_terminal: bool,
 ) -> Result<Option<CompletedResponse>, WebsocketEventError> {
     let mut stream = response.into_body().into_data_stream();
     let mut buffer = Vec::new();
@@ -556,7 +567,7 @@ async fn forward_sse_body_as_websocket(
             if let Some(terminal) = completed_response_from_event(&data, limits) {
                 completed = Some(terminal);
             }
-            if socket.send(Message::Text(data.into())).await.is_err() {
+            if socket.send(Message::Text(websocket_event_data(data, legacy_terminal).into())).await.is_err() {
                 return Err(WebsocketEventError::invalid("WebSocket send failed"));
             }
         }
@@ -569,11 +580,23 @@ async fn forward_sse_body_as_websocket(
         if let Some(terminal) = completed_response_from_event(&data, limits) {
             completed = Some(terminal);
         }
-        if socket.send(Message::Text(data.into())).await.is_err() {
+        if socket.send(Message::Text(websocket_event_data(data, legacy_terminal).into())).await.is_err() {
             return Err(WebsocketEventError::invalid("WebSocket send failed"));
         }
     }
     Ok(completed)
+}
+
+fn websocket_event_data(data: String, legacy_terminal: bool) -> String {
+    if legacy_terminal {
+        if let Ok(mut event) = serde_json::from_str::<Value>(&data) {
+            if event.get("type").and_then(Value::as_str) == Some("response.completed") {
+                event["type"] = json!("response.done");
+                return event.to_string();
+            }
+        }
+    }
+    data
 }
 
 fn drain_sse_data(

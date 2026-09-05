@@ -21,13 +21,16 @@ pub(crate) async fn emit_synthetic_responses_stream(
         .get("created_at")
         .and_then(|v| v.as_i64())
         .unwrap_or_else(now_ts);
-    let base_response = response_envelope_payload(
+    let mut base_response = response_envelope_payload(
         &response_id,
         created,
         logical_model,
         "in_progress",
         Value::Array(Vec::new()),
     );
+    for key in ["store", "previous_response_id"] {
+        if let Some(value) = encoded.get(key) { base_response["response"][key] = value.clone(); }
+    }
     send_responses_event(&tx, &mut seq, "response.created", base_response.clone()).await?;
     send_responses_event(&tx, &mut seq, "response.in_progress", base_response).await?;
 
@@ -292,11 +295,17 @@ pub(crate) async fn emit_synthetic_responses_stream(
             &response_with_reasoning_durations(encoded, synthetic_reasoning_duration_secs),
             sse_max_frame_length,
         ));
-    completed_response["completed_at"] = json!(now_ts());
+    let terminal_event = match completed_response.get("status").and_then(Value::as_str) {
+        Some("incomplete") => "response.incomplete",
+        Some("failed") => "response.failed",
+        Some("cancelled") => "response.cancelled",
+        _ => "response.completed",
+    };
+    if terminal_event == "response.completed" { completed_response["completed_at"] = json!(now_ts()); }
     send_responses_event(
         &tx,
         &mut seq,
-        "response.completed",
+        terminal_event,
         json!({ "response": completed_response }),
     )
     .await?;

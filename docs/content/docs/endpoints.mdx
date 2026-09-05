@@ -17,6 +17,8 @@ Every endpoint below also exists under the `/api` prefix, for example `/api/v1/c
 
 Any endpoint can reach any upstream type. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions.
 
+Monoize preserves OpenRouter `configuration_update` messages on Chat routes, including updates with empty content. File data URIs retain their MIME type during conversion to Messages documents. Messages streams retain `citations_delta` citations. Responses content-filter termination remains an incomplete response rather than a length limit.
+
 ## List models
 
 ```bash
@@ -56,12 +58,27 @@ curl http://localhost:8080/v1/responses \
 
 Notes:
 
-- Monoize supports `previous_response_id` chains when the upstream provides server-side state. Enable session affinity so follow-up requests reach the same Channel. See [Routing and Reliability](/en/docs/routing).
-- `GET /v1/responses` upgrades to a WebSocket transport for clients that use it.
+- Send the returned Monoize id as `previous_response_id` to continue a response through any upstream protocol. History is isolated by API key.
+- HTTP history defaults to `store=true`. It lasts up to 30 minutes in this process. Restart or cache eviction removes it.
+- Set `store=false` to disable HTTP history retention. Unknown or expired ids return `400 previous_response_not_found`. Resend complete history after this error.
+- Supply current instructions and request controls on each call. Previous top-level `instructions` are not inherited.
+- `GET /v1/responses` supports Codex WebSocket v1 and v2. V1 emits `response.done`; v2 emits `response.completed`. Connection-local continuation also works with `store=false`.
 - `POST /v1/responses/compact` compacts a conversation.
 - Monoize forwards the native compact body to upstream `POST /v1/responses/compact`.
 - After Channel selection, if that Channel maps `{model}-openai-compact`, Monoize sends that sibling as the wire model. Otherwise it sends the conversation model.
 - Billing uses the conversation model price. The sibling ID does not need its own price row.
+
+## Disable reasoning
+
+Set `"reasoning_effort": "none"` in Chat Completions requests. Set `"reasoning": { "effort": "none" }` in Responses requests.
+
+Monoize preserves explicit `none` for OpenAI-compatible upstreams. A preserved native Chat `reasoning` object receives `effort: "none"` instead of the top-level shorthand.
+
+Without explicit Messages controls, Monoize converts `none` to `thinking: { "type": "disabled" }` for Messages upstreams. Gemini upstreams receive `generationConfig.thinkingConfig.thinkingBudget: 0`.
+
+DeepSeek Chat requests pass reasoning effort values through without remapping or generated `thinking` controls.
+
+Omitting effort permits the upstream default. Use a model that supports disabled reasoning. Models with mandatory reasoning cannot honor this request.
 
 ## Anthropic Messages
 

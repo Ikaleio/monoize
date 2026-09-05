@@ -425,7 +425,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             obj.insert("output_config".to_string(), Value::Object(output_config));
         }
 
-        if !has_explicit_messages_config && model_supports_adaptive(upstream_model) {
+        if !has_explicit_messages_config && reasoning.effort.as_deref() == Some("none") {
+            obj.insert("thinking".to_string(), json!({ "type": "disabled" }));
+        } else if !has_explicit_messages_config && model_supports_adaptive(upstream_model) {
             obj.insert("thinking".to_string(), json!({ "type": "adaptive" }));
             if let Some(effort) = reasoning
                 .effort

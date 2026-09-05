@@ -28,6 +28,7 @@ enum MessagesSurfaceKind {
 enum AnthropicBlockPayload {
     Text {
         content: String,
+        citations: Vec<Value>,
     },
     Thinking {
         thinking: String,
@@ -125,7 +126,7 @@ impl PendingAnthropicBlock {
         send_named_messages_event(tx, start).await?;
 
         match &self.payload {
-            AnthropicBlockPayload::Text { content } => {
+            AnthropicBlockPayload::Text { content, citations } => {
                 if !content.is_empty() {
                     send_messages_delta_string(
                         tx,
@@ -140,6 +141,7 @@ impl PendingAnthropicBlock {
                     )
                     .await?;
                 }
+                for citation in citations { emit_citation(tx, self.block_index, citation).await?; }
             }
             AnthropicBlockPayload::Thinking {
                 thinking, extra, ..
@@ -432,8 +434,9 @@ fn messages_provider_block_from_node(node: &Node) -> Option<Value> {
 
 fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
     match node {
-        Node::Text { content, .. } | Node::Refusal { content, .. } => {
+        Node::Text { content, extra_body, .. } | Node::Refusal { content, extra_body, .. } => {
             Some(AnthropicBlockPayload::Text {
+                citations: text_citations(extra_body),
                 content: content.clone(),
             })
         }
@@ -504,6 +507,7 @@ fn anthropic_block_from_node_header(
 ) -> Option<AnthropicBlockPayload> {
     match header {
         NodeHeader::Text { .. } | NodeHeader::Refusal { .. } => Some(AnthropicBlockPayload::Text {
+            citations: text_citations(extra_body),
             content: String::new(),
         }),
         NodeHeader::Reasoning { .. } => Some(AnthropicBlockPayload::Thinking {
@@ -628,8 +632,8 @@ fn messages_stop_sequence(extra_body: &HashMap<String, Value>) -> Value {
 
 fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
     match (payload, delta) {
-        (AnthropicBlockPayload::Text { content }, NodeDelta::Text { content: delta })
-        | (AnthropicBlockPayload::Text { content }, NodeDelta::Refusal { content: delta }) => {
+        (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Text { content: delta })
+        | (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Refusal { content: delta }) => {
             content.push_str(delta);
         }
         (
@@ -682,8 +686,8 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
 
 fn apply_emitted_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
     match (payload, delta) {
-        (AnthropicBlockPayload::Text { content }, NodeDelta::Text { content: delta })
-        | (AnthropicBlockPayload::Text { content }, NodeDelta::Refusal { content: delta }) => {
+        (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Text { content: delta })
+        | (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Refusal { content: delta }) => {
             content.push_str(delta);
         }
         (
@@ -815,6 +819,9 @@ fn merge_provider_item_payload_with_terminal(
 }
 
 fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &Node) {
+    if let (AnthropicBlockPayload::Text { citations, .. }, Node::Text { extra_body, .. }) = (&mut *payload, node) {
+        *citations = text_citations(extra_body);
+    }
     match (payload, node) {
         (
             AnthropicBlockPayload::Thinking {
@@ -865,8 +872,8 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
                 }
             }
         }
-        (AnthropicBlockPayload::Text { content }, Node::Text { content: done, .. })
-        | (AnthropicBlockPayload::Text { content }, Node::Refusal { content: done, .. }) => {
+        (AnthropicBlockPayload::Text { content, .. }, Node::Text { content: done, .. })
+        | (AnthropicBlockPayload::Text { content, .. }, Node::Refusal { content: done, .. }) => {
             if !done.is_empty() {
                 *content = done.clone();
             }
@@ -919,6 +926,11 @@ async fn emit_live_delta_for_node_delta(
     _extra_body: &HashMap<String, Value>,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
+    if matches!(payload, AnthropicBlockPayload::Text { .. }) {
+        if let Some(citation) = _extra_body.get("_monoize_messages_citation_delta") {
+            emit_citation(tx, block_index, citation).await?;
+        }
+    }
     match (payload, delta) {
         (AnthropicBlockPayload::Text { .. }, NodeDelta::Text { content })
         | (AnthropicBlockPayload::Text { .. }, NodeDelta::Refusal { content }) => {
@@ -1029,7 +1041,7 @@ async fn emit_accumulated_payload_deltas(
     };
     let empty_extra_body = HashMap::new();
     match &block_state.payload {
-        AnthropicBlockPayload::Text { content } => {
+        AnthropicBlockPayload::Text { content, citations } => {
             emit_live_delta_for_node_delta(
                 tx,
                 block_index,
@@ -1041,6 +1053,7 @@ async fn emit_accumulated_payload_deltas(
                 sse_max_frame_length,
             )
             .await?;
+            for citation in citations { emit_citation(tx, block_index, citation).await?; }
         }
         AnthropicBlockPayload::Thinking {
             thinking,
@@ -1109,10 +1122,13 @@ async fn emit_terminal_suffix_before_stop(
     let Some(block_index) = block_state.block_index else {
         return Ok(());
     };
+    if let (AnthropicBlockPayload::Text { citations, .. }, Node::Text { extra_body, .. }) = (&block_state.payload, terminal_node) {
+        for citation in text_citations(extra_body).iter().skip(citations.len()) { emit_citation(tx, block_index, citation).await?; }
+    }
     let empty_extra_body = HashMap::new();
     match (&block_state.payload, terminal_node) {
         (
-            AnthropicBlockPayload::Text { content: current },
+            AnthropicBlockPayload::Text { content: current, .. },
             Node::Text {
                 content: terminal, ..
             }
@@ -1556,6 +1572,9 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 } else {
                     apply_node_delta_to_block(&mut block_state.payload, &delta);
                 }
+                if let AnthropicBlockPayload::Text { citations, .. } = &mut block_state.payload {
+                    if let Some(citation) = extra_body.get("_monoize_messages_citation_delta") { citations.push(citation.clone()); }
+                }
             }
             UrpStreamEvent::NodeDone {
                 node_index,
@@ -1948,4 +1967,13 @@ async fn send_named_messages_event(tx: &mpsc::Sender<Event>, payload: Value) -> 
             )
         })?;
     send_named_sse_json(tx, &event_name, payload).await
+}
+
+
+fn text_citations(extra: &HashMap<String, Value>) -> Vec<Value> {
+    extra.get("citations").and_then(Value::as_array).cloned().unwrap_or_default()
+}
+
+async fn emit_citation(tx: &mpsc::Sender<Event>, index: u32, citation: &Value) -> AppResult<()> {
+    send_named_messages_event(tx, json!({"type":"content_block_delta", "index":index, "delta":{"type":"citations_delta", "citation":citation}})).await
 }

@@ -259,7 +259,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .unwrap_or_else(now_ts),
                 );
 
-                let payload = if let Some(source) = extra_body
+                let mut payload = if let Some(source) = extra_body
                     .get(urp::RESPONSES_STREAM_START_SOURCE_EXTRA_KEY)
                     .and_then(Value::as_object)
                 {
@@ -283,6 +283,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         Value::Array(Vec::new()),
                     )
                 };
+                for key in ["store", "previous_response_id"] {
+                    if let Some(value) = extra_body.get(key) { payload["response"][key] = value.clone(); }
+                }
                 send_responses_event(&tx, &mut seq, "response.created", payload.clone()).await?;
                 send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
             }

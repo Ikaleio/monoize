@@ -853,3 +853,7 @@ not reconstructible.
 MP-M7. The settlement engine, routing preflight, dashboards, and request-log
 projection switch from `billing_rate_records` to `model_prices` in the same change
 that ships step 2.
+
+MP-UI-A11Y. Price-sheet inputs and Select triggers MUST satisfy DS56. Every tier field
+label MUST identify both its tier number and its price or threshold role to assistive
+technology. Removing a tier MUST preserve unique field ids and label associations.

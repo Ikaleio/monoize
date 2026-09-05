@@ -17,6 +17,8 @@ x-api-key: sk-...
 
 任何端点都可以到达任何上游类型。例如，客户端调用 `/v1/messages`，而路由通过 `chat_completion` 类型的 Channel 服务该模型。Monoize 在两个方向上转换协议。
 
+Chat 路由会保留 OpenRouter 的 `configuration_update` 消息，包括空内容更新。文件 data URI 转为 Messages 文档时会保留 MIME 类型。Messages 流会保留 `citations_delta` 引用。Responses 内容过滤终止会保留为未完成状态，不会误报为长度限制。
+
 ## 列出模型
 
 ```bash
@@ -56,12 +58,27 @@ curl http://localhost:8080/v1/responses \
 
 说明：
 
-- 当上游提供服务端状态时，Monoize 支持 `previous_response_id` 链。开启会话亲和可以让后续请求到达同一个 Channel。参见[路由与可靠性](/zh/docs/routing)。
-- `GET /v1/responses` 会升级为 WebSocket 传输，供使用该传输的客户端调用。
+- 将返回的 Monoize id 作为 `previous_response_id`，即可通过任意上游协议续接响应。历史记录按 API Key 隔离。
+- HTTP 历史默认使用 `store=true`，在当前进程中最多保留 30 分钟。重启或缓存淘汰会移除记录。
+- 设置 `store=false` 可关闭 HTTP 历史保留。未知或过期的 id 返回 `400 previous_response_not_found`。收到该错误后，请重新发送完整历史。
+- 每次请求都应提供当前 instructions 和控制参数。前一请求的顶层 `instructions` 不会自动继承。
+- `GET /v1/responses` 支持 Codex WebSocket v1 和 v2。v1 发送 `response.done`，v2 发送 `response.completed`。`store=false` 不影响连接内续接。
 - `POST /v1/responses/compact` 压缩一段会话。
 - Monoize 将原生 compact 请求体转发到上游 `POST /v1/responses/compact`。
 - 选定 Channel 后，如果该 Channel 映射了 `{model}-openai-compact`，Monoize 把线路模型改成这个兄弟模型。否则发送会话模型。
 - 计费使用会话模型的价格。兄弟模型 ID 不需要单独的价格记录。
+
+## 关闭推理
+
+在 Chat Completions 请求中设置 `"reasoning_effort": "none"`。在 Responses 请求中设置 `"reasoning": { "effort": "none" }`。
+
+Monoize 会向 OpenAI 兼容上游保留显式 `none`。如果 Chat 请求保留了原生 `reasoning` 对象，Monoize 会在该对象中写入 `effort: "none"`，不再发送顶层简写字段。
+
+如果没有显式 Messages 控制参数，Monoize 会向 Messages 上游发送 `thinking: { "type": "disabled" }`。Gemini 上游收到 `generationConfig.thinkingConfig.thinkingBudget: 0`。
+
+DeepSeek Chat 请求会直接透传推理努力值，不做数值映射，也不自动生成 `thinking` 控制参数。
+
+省略推理力度会允许上游使用默认值。请选择支持关闭推理的模型。强制推理的模型无法满足此请求。
 
 ## Anthropic Messages
 

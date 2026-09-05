@@ -126,3 +126,16 @@ Keys to add under `modelMarketplace`:
 | `noModelsDesc`      | Model data will appear here once the administrator syncs the model database. | 管理员同步模型数据库后，模型数据将显示在此处。 |
 
 Nav key `nav.marketplace`: en = `Models`, zh = `模型广场`
+
+## 7. Fetch Failure and Search States
+
+MM-ERR1. A fetch failure without cached records MUST render DS54 failure feedback.
+It MUST NOT render a zero result count or the no-models state. Hide catalog search
+until data exists. Retry MUST revalidate the marketplace SWR key.
+
+MM-ERR2. A refresh failure with cached records MUST preserve the searchable catalog
+and show DS54 refresh-failure feedback. A pending retry MUST disable its button.
+
+MM-ERR3. A successful empty catalog MUST use the no-models state. A non-empty catalog
+with zero search matches MUST instead show a no-matches message and an action that
+clears the query. Both states MUST use localized text.

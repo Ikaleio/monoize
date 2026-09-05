@@ -21,6 +21,8 @@ The palette is neutral gray plus one blue. Do not add new hues for chrome. Seman
 
 ### Semantic status tokens
 
+Error notices use `error-foreground`, `error-soft`, and `error-border`. Keep their text contrast at least 4.5:1 in both themes. Keep destructive button colors separate.
+
 Each status has four forms: base, `-foreground` (text), `-soft` (background), and `-border`.
 
 | Status | Light base | Dark base |
@@ -55,6 +57,9 @@ Rules:
 - Card titles render as `text-base font-semibold leading-none tracking-tight`.
 - Table cells in one table share one font size. Do not mix arbitrary smaller sizes between sibling cells.
 - Badge text uses `font-medium` and never wraps.
+- Button labels, including small buttons, use at least 0.875rem.
+- Dashboard descriptions and API information use at least 0.875rem.
+- Reserve 0.75rem text for chart ticks, chart tooltips, and dense table metadata.
 
 ## Surfaces
 

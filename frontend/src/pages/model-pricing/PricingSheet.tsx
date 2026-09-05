@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronRight, Lock, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -93,7 +93,10 @@ function emptyTier(): TierRow {
 
 function tierFromExpr(tier: BillingExprTier): TierRow {
   return {
-    lte: tier.when_input_tokens_lte != null ? String(tier.when_input_tokens_lte) : "",
+    lte:
+      tier.when_input_tokens_lte != null
+        ? String(tier.when_input_tokens_lte)
+        : "",
     input: tier.input_usd_per_1m ?? "",
     output: tier.output_usd_per_1m ?? "",
     cacheRead: tier.cache_read_usd_per_1m ?? "",
@@ -107,7 +110,7 @@ function formFromRecord(record: ModelPriceRecord | null): PriceForm {
   return {
     billingMode: record?.billing_mode ?? "per_token",
     prices: Object.fromEntries(
-      PER_TOKEN_PRICE_FIELDS.map((field) => [field, record?.[field] ?? ""])
+      PER_TOKEN_PRICE_FIELDS.map((field) => [field, record?.[field] ?? ""]),
     ) as Record<PerTokenPriceField, string>,
     perRequestUsd: record?.per_request_usd ?? "",
     tiers: record?.billing_expr?.tiers.map(tierFromExpr) ?? [emptyTier()],
@@ -116,7 +119,9 @@ function formFromRecord(record: ModelPriceRecord | null): PriceForm {
   };
 }
 
-function metadataFormFromRecord(record: ModelMetadataRecord | undefined): MetadataForm {
+function metadataFormFromRecord(
+  record: ModelMetadataRecord | undefined,
+): MetadataForm {
   return {
     mode: record?.mode ?? "",
     maxTokens: record?.max_tokens?.toString() ?? "",
@@ -136,7 +141,9 @@ interface ProviderVariant {
 
 // models.dev variant prices are USD-per-1M strings inside metadata raw_json
 // (model-metadata-dashboard.spec.md UI3); kept as strings end to end.
-function extractVariants(rawJson: Record<string, unknown> | undefined): ProviderVariant[] {
+function extractVariants(
+  rawJson: Record<string, unknown> | undefined,
+): ProviderVariant[] {
   const providers = rawJson?.providers;
   if (!providers || typeof providers !== "object") return [];
   const priceStr = (value: unknown): string =>
@@ -145,8 +152,7 @@ function extractVariants(rawJson: Record<string, unknown> | undefined): Provider
     .flatMap(([provider, value]) => {
       if (!value || typeof value !== "object") return [];
       const cost = (value as Record<string, unknown>).cost as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       return [
         {
           provider,
@@ -166,7 +172,10 @@ const PRICE_FIELD_LABEL_KEYS: Record<PerTokenPriceField, [string, string]> = {
   output_usd_per_1m: ["modelPricing.fieldOutput", "Output"],
   cache_read_usd_per_1m: ["modelPricing.fieldCacheRead", "Cache read"],
   cache_write_usd_per_1m: ["modelPricing.fieldCacheWrite", "Cache write 5m"],
-  cache_write_1h_usd_per_1m: ["modelPricing.fieldCacheWrite1h", "Cache write 1h"],
+  cache_write_1h_usd_per_1m: [
+    "modelPricing.fieldCacheWrite1h",
+    "Cache write 1h",
+  ],
   reasoning_usd_per_1m: ["modelPricing.fieldReasoning", "Reasoning"],
 };
 
@@ -180,11 +189,12 @@ export function PricingSheet({
   records: ModelPriceRecord[];
 }) {
   const { t } = useTranslation();
+  const formId = useId();
   const { data: metadataRecords = [] } = useModelMetadata();
   const [modelId, setModelId] = useState("");
   const [form, setForm] = useState<PriceForm>(() => formFromRecord(null));
   const [metaForm, setMetaForm] = useState<MetadataForm>(() =>
-    metadataFormFromRecord(undefined)
+    metadataFormFromRecord(undefined),
   );
   const [metaDirty, setMetaDirty] = useState(false);
   const [locksDirty, setLocksDirty] = useState(false);
@@ -193,11 +203,11 @@ export function PricingSheet({
 
   const metadataRecord = useMemo(
     () => metadataRecords.find((record) => record.model_id === modelId.trim()),
-    [metadataRecords, modelId]
+    [metadataRecords, modelId],
   );
   const variants = useMemo(
     () => extractVariants(metadataRecord?.raw_json),
-    [metadataRecord?.raw_json]
+    [metadataRecord?.raw_json],
   );
 
   useEffect(() => {
@@ -242,10 +252,11 @@ export function PricingSheet({
   };
 
   const validate = (): string | null => {
-    if (!modelId.trim()) return t("modelPricing.errorModelIdRequired", "Model ID is required");
+    if (!modelId.trim())
+      return t("modelPricing.errorModelIdRequired", "Model ID is required");
     const invalidDecimal = t(
       "modelPricing.errorInvalidDecimal",
-      "Prices must be non-negative decimals with at most 9 fractional digits"
+      "Prices must be non-negative decimals with at most 9 fractional digits",
     );
     if (form.billingMode === "per_token") {
       for (const field of PER_TOKEN_PRICE_FIELDS) {
@@ -257,22 +268,36 @@ export function PricingSheet({
       if (!value || !isValidUsdDecimal(value)) return invalidDecimal;
     } else {
       if (form.tiers.length === 0) {
-        return t("modelPricing.errorTierRequired", "Tiered pricing requires at least one tier");
+        return t(
+          "modelPricing.errorTierRequired",
+          "Tiered pricing requires at least one tier",
+        );
       }
       for (const [index, tier] of form.tiers.entries()) {
         if (!tier.input.trim() || !isValidUsdDecimal(tier.input.trim())) {
-          return t("modelPricing.errorTierInput", "Tier {{index}} requires a valid input price", {
-            index: index + 1,
-          });
+          return t(
+            "modelPricing.errorTierInput",
+            "Tier {{index}} requires a valid input price",
+            {
+              index: index + 1,
+            },
+          );
         }
-        for (const value of [tier.output, tier.cacheRead, tier.cacheWrite, tier.cacheWrite1h, tier.reasoning]) {
-          if (value.trim() && !isValidUsdDecimal(value.trim())) return invalidDecimal;
+        for (const value of [
+          tier.output,
+          tier.cacheRead,
+          tier.cacheWrite,
+          tier.cacheWrite1h,
+          tier.reasoning,
+        ]) {
+          if (value.trim() && !isValidUsdDecimal(value.trim()))
+            return invalidDecimal;
         }
         const isLast = index === form.tiers.length - 1;
         if (!isLast && (!tier.lte.trim() || !/^\d+$/.test(tier.lte.trim()))) {
           return t(
             "modelPricing.errorTierThreshold",
-            "Every tier except the last requires an integer token threshold"
+            "Every tier except the last requires an integer token threshold",
           );
         }
       }
@@ -324,16 +349,21 @@ export function PricingSheet({
     const id = modelId.trim();
     try {
       await upsertModelPriceOptimistic(id, buildInput(), records, (error) =>
-        toast.error(t("modelPricing.saveFailed", "Failed to save model price"), {
-          description: error.message,
-        })
+        toast.error(
+          t("modelPricing.saveFailed", "Failed to save model price"),
+          {
+            description: error.message,
+          },
+        ),
       );
       if (metaDirty) {
         await upsertModelMetadataOptimistic(
           id,
           {
             mode: metaForm.mode.trim() || null,
-            max_tokens: metaForm.maxTokens.trim() ? Number(metaForm.maxTokens) : null,
+            max_tokens: metaForm.maxTokens.trim()
+              ? Number(metaForm.maxTokens)
+              : null,
             max_input_tokens: metaForm.maxInputTokens.trim()
               ? Number(metaForm.maxInputTokens)
               : null,
@@ -343,9 +373,12 @@ export function PricingSheet({
           },
           metadataRecords,
           (error) =>
-            toast.error(t("modelPricing.metadataSaveFailed", "Failed to save metadata"), {
-              description: error.message,
-            })
+            toast.error(
+              t("modelPricing.metadataSaveFailed", "Failed to save metadata"),
+              {
+                description: error.message,
+              },
+            ),
         );
       }
       toast.success(t("modelPricing.saveSuccess", "Model price saved"));
@@ -360,10 +393,16 @@ export function PricingSheet({
   const confirmDelete = async () => {
     if (!target?.record) return;
     try {
-      await deleteModelPriceOptimistic(target.record.model_id, records, (error) =>
-        toast.error(t("modelPricing.deleteFailed", "Failed to delete model price"), {
-          description: error.message,
-        })
+      await deleteModelPriceOptimistic(
+        target.record.model_id,
+        records,
+        (error) =>
+          toast.error(
+            t("modelPricing.deleteFailed", "Failed to delete model price"),
+            {
+              description: error.message,
+            },
+          ),
       );
       toast.success(t("modelPricing.deleteSuccess", "Model price deleted"));
       onOpenChange(false);
@@ -388,7 +427,7 @@ export function PricingSheet({
               <SheetDescription>
                 {t(
                   "modelPricing.sheetDescription",
-                  "Prices are USD per 1M tokens. Values are exact decimal strings."
+                  "Prices are USD per 1M tokens. Values are exact decimal strings.",
                 )}
               </SheetDescription>
             </SheetHeader>
@@ -396,11 +435,11 @@ export function PricingSheet({
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
               {isCreate ? (
                 <div className="space-y-2">
-                  <Label htmlFor="price-model-id">
+                  <Label htmlFor={`${formId}-model-id`}>
                     {t("modelPricing.modelId", "Model ID")}
                   </Label>
                   <Input
-                    id="price-model-id"
+                    id={`${formId}-model-id`}
                     value={modelId}
                     onChange={(event) => setModelId(event.target.value)}
                     placeholder="gpt-4o"
@@ -412,12 +451,16 @@ export function PricingSheet({
 
               <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
                 <div className="flex items-center gap-2">
-                  <Label htmlFor="price-enabled">
+                  <Label htmlFor={`${formId}-enabled`}>
                     {t("modelPricing.enabled", "Enabled")}
                   </Label>
                   {target?.record ? (
                     <Badge
-                      variant={target.record.source === "manual" ? "default" : "secondary"}
+                      variant={
+                        target.record.source === "manual"
+                          ? "default"
+                          : "secondary"
+                      }
                       className="text-xs"
                     >
                       {target.record.source}
@@ -425,7 +468,7 @@ export function PricingSheet({
                   ) : null}
                 </div>
                 <Switch
-                  id="price-enabled"
+                  id={`${formId}-enabled`}
                   checked={form.enabled}
                   onCheckedChange={(enabled) =>
                     setForm((previous) => ({ ...previous, enabled }))
@@ -435,25 +478,34 @@ export function PricingSheet({
 
               {variants.length > 0 ? (
                 <div className="space-y-2">
-                  <Label>{t("modelPricing.variantSource", "models.dev variant")}</Label>
+                  <Label htmlFor={`${formId}-variant`}>
+                    {t("modelPricing.variantSource", "models.dev variant")}
+                  </Label>
                   <Select
                     onValueChange={(provider) => {
-                      const variant = variants.find((item) => item.provider === provider);
+                      const variant = variants.find(
+                        (item) => item.provider === provider,
+                      );
                       if (variant) applyVariant(variant);
                     }}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id={`${formId}-variant`}>
                       <SelectValue
                         placeholder={t(
                           "modelPricing.variantPlaceholder",
-                          "Apply prices from a provider variant"
+                          "Apply prices from a provider variant",
                         )}
                       />
                     </SelectTrigger>
                     <SelectContent>
                       {variants.map((variant) => (
-                        <SelectItem key={variant.provider} value={variant.provider}>
-                          <span className="font-medium">{variant.provider}</span>
+                        <SelectItem
+                          key={variant.provider}
+                          value={variant.provider}
+                        >
+                          <span className="font-medium">
+                            {variant.provider}
+                          </span>
                           {variant.input ? (
                             <span className="ml-2 text-xs text-muted-foreground">
                               In ${variant.input}
@@ -497,7 +549,10 @@ export function PricingSheet({
                 <div className="grid grid-cols-2 gap-3">
                   {PER_TOKEN_PRICE_FIELDS.map((field) => (
                     <div key={field} className="space-y-1">
-                      <Label className="flex items-center gap-1 text-xs">
+                      <Label
+                        htmlFor={`${formId}-${field}`}
+                        className="flex items-center gap-1"
+                      >
                         {t(...PRICE_FIELD_LABEL_KEYS[field])}
                         {form.lockedFields.includes(field) ? (
                           <Lock className="h-3 w-3 text-muted-foreground" />
@@ -505,8 +560,11 @@ export function PricingSheet({
                       </Label>
                       <Input
                         inputMode="decimal"
+                        id={`${formId}-${field}`}
                         value={form.prices[field]}
-                        onChange={(event) => setPrice(field, event.target.value)}
+                        onChange={(event) =>
+                          setPrice(field, event.target.value)
+                        }
                         placeholder="0"
                         className="font-mono"
                       />
@@ -515,17 +573,18 @@ export function PricingSheet({
                   <p className="col-span-2 text-xs text-muted-foreground">
                     {t(
                       "modelPricing.perTokenHint",
-                      "Empty fields clear the stored price. Missing cache prices fall back per spec."
+                      "Empty fields clear the stored price. Missing cache prices fall back per spec.",
                     )}
                   </p>
                 </div>
               ) : form.billingMode === "per_request" ? (
                 <div className="space-y-1">
-                  <Label className="text-xs">
+                  <Label htmlFor={`${formId}-per-request`}>
                     {t("modelPricing.fieldPerRequest", "USD per request")}
                   </Label>
                   <Input
                     inputMode="decimal"
+                    id={`${formId}-per-request`}
                     value={form.perRequestUsd}
                     onChange={(event) =>
                       setForm((previous) => ({
@@ -545,25 +604,38 @@ export function PricingSheet({
                       setForm((previous) => ({
                         ...previous,
                         tiers: previous.tiers.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, ...patch } : item
+                          itemIndex === index ? { ...item, ...patch } : item,
                         ),
                       }));
                     return (
-                      <div key={index} className="space-y-2 rounded-lg border p-3">
+                      <div
+                        key={index}
+                        className="space-y-2 rounded-lg border p-3"
+                      >
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-muted-foreground">
-                            {t("modelPricing.tierLabel", "Tier {{index}}", { index: index + 1 })}
+                          <span
+                            id={`${formId}-tier-${index}`}
+                            className="text-sm font-medium text-muted-foreground"
+                          >
+                            {t("modelPricing.tierLabel", "Tier {{index}}", {
+                              index: index + 1,
+                            })}
                           </span>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="size-8 text-destructive hover:text-destructive"
-                            aria-label={t("modelPricing.removeTier", "Remove tier")}
+                            className="size-8 text-error-foreground hover:text-error-foreground"
+                            aria-label={t(
+                              "modelPricing.removeTier",
+                              "Remove tier",
+                            )}
                             disabled={form.tiers.length === 1}
                             onClick={() =>
                               setForm((previous) => ({
                                 ...previous,
-                                tiers: previous.tiers.filter((_, i) => i !== index),
+                                tiers: previous.tiers.filter(
+                                  (_, i) => i !== index,
+                                ),
                               }))
                             }
                           >
@@ -572,72 +644,141 @@ export function PricingSheet({
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                           <div className="space-y-1">
-                            <Label className="text-xs">
+                            <Label htmlFor={`${formId}-tier-${index}-lte`}>
+                              <span className="sr-only">
+                                {t("modelPricing.tierLabel", "Tier {{index}}", {
+                                  index: index + 1,
+                                })}
+                                {" · "}
+                              </span>
                               {isLast
-                                ? t("modelPricing.tierUnbounded", "Input tokens ≤ (unbounded)")
-                                : t("modelPricing.tierThreshold", "Input tokens ≤")}
+                                ? t(
+                                    "modelPricing.tierUnbounded",
+                                    "Input tokens ≤ (unbounded)",
+                                  )
+                                : t(
+                                    "modelPricing.tierThreshold",
+                                    "Input tokens ≤",
+                                  )}
                             </Label>
                             <Input
                               inputMode="numeric"
+                              id={`${formId}-tier-${index}-lte`}
                               value={tier.lte}
                               disabled={isLast}
                               placeholder={isLast ? "∞" : "200000"}
-                              onChange={(event) => updateTier({ lte: event.target.value })}
+                              onChange={(event) =>
+                                updateTier({ lte: event.target.value })
+                              }
                               className="font-mono"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">
+                            <Label htmlFor={`${formId}-tier-${index}-input`}>
+                              <span className="sr-only">
+                                {t("modelPricing.tierLabel", "Tier {{index}}", {
+                                  index: index + 1,
+                                })}
+                                {" · "}
+                              </span>
                               {t("modelPricing.fieldInput", "Input")}
                             </Label>
                             <Input
                               inputMode="decimal"
+                              id={`${formId}-tier-${index}-input`}
                               value={tier.input}
-                              onChange={(event) => updateTier({ input: event.target.value })}
+                              onChange={(event) =>
+                                updateTier({ input: event.target.value })
+                              }
                               className="font-mono"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">
+                            <Label htmlFor={`${formId}-tier-${index}-output`}>
+                              <span className="sr-only">
+                                {t("modelPricing.tierLabel", "Tier {{index}}", {
+                                  index: index + 1,
+                                })}
+                                {" · "}
+                              </span>
                               {t("modelPricing.fieldOutput", "Output")}
                             </Label>
                             <Input
                               inputMode="decimal"
+                              id={`${formId}-tier-${index}-output`}
                               value={tier.output}
-                              onChange={(event) => updateTier({ output: event.target.value })}
+                              onChange={(event) =>
+                                updateTier({ output: event.target.value })
+                              }
                               className="font-mono"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">
+                            <Label
+                              htmlFor={`${formId}-tier-${index}-cacheRead`}
+                            >
+                              <span className="sr-only">
+                                {t("modelPricing.tierLabel", "Tier {{index}}", {
+                                  index: index + 1,
+                                })}
+                                {" · "}
+                              </span>
                               {t("modelPricing.fieldCacheRead", "Cache read")}
                             </Label>
                             <Input
                               inputMode="decimal"
+                              id={`${formId}-tier-${index}-cacheRead`}
                               value={tier.cacheRead}
-                              onChange={(event) => updateTier({ cacheRead: event.target.value })}
+                              onChange={(event) =>
+                                updateTier({ cacheRead: event.target.value })
+                              }
                               className="font-mono"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">
-                              {t("modelPricing.fieldCacheWrite", "Cache write 5m")}
+                            <Label
+                              htmlFor={`${formId}-tier-${index}-cacheWrite`}
+                            >
+                              <span className="sr-only">
+                                {t("modelPricing.tierLabel", "Tier {{index}}", {
+                                  index: index + 1,
+                                })}
+                                {" · "}
+                              </span>
+                              {t(
+                                "modelPricing.fieldCacheWrite",
+                                "Cache write 5m",
+                              )}
                             </Label>
                             <Input
                               inputMode="decimal"
+                              id={`${formId}-tier-${index}-cacheWrite`}
                               value={tier.cacheWrite}
-                              onChange={(event) => updateTier({ cacheWrite: event.target.value })}
+                              onChange={(event) =>
+                                updateTier({ cacheWrite: event.target.value })
+                              }
                               className="font-mono"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">
+                            <Label
+                              htmlFor={`${formId}-tier-${index}-reasoning`}
+                            >
+                              <span className="sr-only">
+                                {t("modelPricing.tierLabel", "Tier {{index}}", {
+                                  index: index + 1,
+                                })}
+                                {" · "}
+                              </span>
                               {t("modelPricing.fieldReasoning", "Reasoning")}
                             </Label>
                             <Input
                               inputMode="decimal"
+                              id={`${formId}-tier-${index}-reasoning`}
                               value={tier.reasoning}
-                              onChange={(event) => updateTier({ reasoning: event.target.value })}
+                              onChange={(event) =>
+                                updateTier({ reasoning: event.target.value })
+                              }
                               className="font-mono"
                             />
                           </div>
@@ -663,16 +804,26 @@ export function PricingSheet({
               {form.lockedFields.length > 0 ? (
                 <div className="space-y-2">
                   <Label className="text-xs text-muted-foreground">
-                    {t("modelPricing.lockedFields", "Locked fields (sync will not overwrite)")}
+                    {t(
+                      "modelPricing.lockedFields",
+                      "Locked fields (sync will not overwrite)",
+                    )}
                   </Label>
                   <div className="flex flex-wrap gap-1.5">
                     {form.lockedFields.map((field) => (
-                      <Badge key={field} variant="outline" className="gap-1 font-mono text-xs">
+                      <Badge
+                        key={field}
+                        variant="outline"
+                        className="gap-1 font-mono text-xs"
+                      >
                         <Lock className="h-3 w-3" />
                         {field}
                         <button
                           type="button"
-                          aria-label={t("modelPricing.removeLock", "Remove lock")}
+                          aria-label={t(
+                            "modelPricing.removeLock",
+                            "Remove lock",
+                          )}
                           onClick={() => removeLock(field)}
                           className="ml-0.5 rounded-sm opacity-70 hover:opacity-100"
                         >
@@ -687,38 +838,56 @@ export function PricingSheet({
               <details className="group rounded-lg border">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-3">
                   <span className="text-sm font-medium">
-                    {t("modelPricing.metadataSection", "Metadata (mode, token limits)")}
+                    {t(
+                      "modelPricing.metadataSection",
+                      "Metadata (mode, token limits)",
+                    )}
                   </span>
                   <ChevronRight className="h-4 w-4 transition-transform group-open:rotate-90" />
                 </summary>
                 <div className="grid grid-cols-2 gap-3 border-t p-3">
                   <div className="space-y-1">
-                    <Label className="text-xs">{t("modelPricing.metaMode", "Mode")}</Label>
+                    <Label htmlFor={`${formId}-meta-mode`}>
+                      {t("modelPricing.metaMode", "Mode")}
+                    </Label>
                     <Input
+                      id={`${formId}-meta-mode`}
                       value={metaForm.mode}
                       placeholder="chat"
                       onChange={(event) => {
-                        setMetaForm((previous) => ({ ...previous, mode: event.target.value }));
+                        setMetaForm((previous) => ({
+                          ...previous,
+                          mode: event.target.value,
+                        }));
                         setMetaDirty(true);
                       }}
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">{t("modelPricing.metaContext", "Context")}</Label>
+                    <Label htmlFor={`${formId}-meta-maxTokens`}>
+                      {t("modelPricing.metaContext", "Context")}
+                    </Label>
                     <Input
                       type="number"
+                      id={`${formId}-meta-maxTokens`}
                       value={metaForm.maxTokens}
                       placeholder="128000"
                       onChange={(event) => {
-                        setMetaForm((previous) => ({ ...previous, maxTokens: event.target.value }));
+                        setMetaForm((previous) => ({
+                          ...previous,
+                          maxTokens: event.target.value,
+                        }));
                         setMetaDirty(true);
                       }}
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">{t("modelPricing.metaMaxInput", "Max input")}</Label>
+                    <Label htmlFor={`${formId}-meta-maxInputTokens`}>
+                      {t("modelPricing.metaMaxInput", "Max input")}
+                    </Label>
                     <Input
                       type="number"
+                      id={`${formId}-meta-maxInputTokens`}
                       value={metaForm.maxInputTokens}
                       placeholder="128000"
                       onChange={(event) => {
@@ -731,11 +900,12 @@ export function PricingSheet({
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs">
+                    <Label htmlFor={`${formId}-meta-maxOutputTokens`}>
                       {t("modelPricing.metaMaxOutput", "Max output")}
                     </Label>
                     <Input
                       type="number"
+                      id={`${formId}-meta-maxOutputTokens`}
                       value={metaForm.maxOutputTokens}
                       placeholder="16384"
                       onChange={(event) => {
@@ -769,7 +939,9 @@ export function PricingSheet({
                   {t("common.cancel", "Cancel")}
                 </Button>
                 <Button onClick={() => void save()} disabled={saving}>
-                  {saving ? t("common.saving", "Saving...") : t("common.save", "Save")}
+                  {saving
+                    ? t("common.saving", "Saving...")
+                    : t("common.save", "Save")}
                 </Button>
               </div>
             </div>
@@ -786,12 +958,14 @@ export function PricingSheet({
             <AlertDialogDescription>
               {t(
                 "modelPricing.deleteConfirm",
-                "Requests for this model will fail closed unless free settlement is allowed."
+                "Requests for this model will fail closed unless free settlement is allowed.",
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel", "Cancel")}</AlertDialogCancel>
+            <AlertDialogCancel>
+              {t("common.cancel", "Cancel")}
+            </AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => void confirmDelete()}

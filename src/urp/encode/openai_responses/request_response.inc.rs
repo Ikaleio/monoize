@@ -234,12 +234,12 @@ fn encode_input_file(
         FileSource::FileId { .. } => None,
         FileSource::Base64 {
             filename,
-            media_type: _,
+            media_type,
             data,
         } => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), Value::String("input_file".to_string()));
-            obj.insert("file_data".to_string(), Value::String(data.clone()));
+            obj.insert("file_data".to_string(), Value::String(format!("data:{media_type};base64,{data}")));
             if let Some(name) = filename {
                 obj.insert("filename".to_string(), Value::String(name.clone()));
             }

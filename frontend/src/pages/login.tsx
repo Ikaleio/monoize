@@ -4,9 +4,18 @@ import { useTranslation } from "react-i18next";
 import { Languages, Sun, Moon } from "lucide-react";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DashboardApiError } from "@/lib/api";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CapCaptcha } from "@/components/CapCaptcha";
 import { useAuth } from "@/hooks/use-auth";
@@ -15,6 +24,19 @@ import { usePublicSettings } from "@/lib/swr";
 import { toggleLanguage } from "@/i18n";
 import { motion, AnimatePresence } from "framer-motion";
 import { AnimatedButton } from "@/components/ui/motion";
+
+const authErrorKeys: Record<string, string> = {
+  invalid_credentials: "auth.errors.invalidCredentials",
+  invalid_username: "auth.usernameRequirements",
+  reserved_username: "auth.errors.reservedUsername",
+  invalid_password: "auth.errors.invalidPassword",
+  registration_disabled: "auth.errors.registrationDisabled",
+  username_exists: "auth.errors.usernameExists",
+  account_disabled: "auth.errors.accountDisabled",
+  captcha_required: "auth.errors.captchaRequired",
+  captcha_invalid: "auth.captchaError",
+  captcha_unavailable: "auth.captchaUnavailable",
+};
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -47,16 +69,18 @@ export function LoginPage() {
     data: publicSettings,
     error: publicSettingsError,
     isLoading: publicSettingsLoading,
+    isValidating: publicSettingsValidating,
+    mutate: retryPublicSettings,
   } = usePublicSettings();
-  const registrationEnabled = publicSettings?.registration_enabled ?? true;
+  const registrationEnabled = publicSettings?.registration_enabled ?? false;
   const siteName = publicSettings?.site_name ?? "Monoize Dashboard";
 
   const { login, register, user } = useAuth();
   const navigate = useNavigate();
 
   const handleCaptchaError = useCallback(() => {
-    setError(t("auth.captchaError"));
-  }, [t]);
+    setError("auth.captchaError");
+  }, []);
 
   const resetCaptcha = useCallback(() => {
     setCaptchaToken("");
@@ -82,7 +106,12 @@ export function LoginPage() {
       }
       navigate("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      setError(
+        err instanceof DashboardApiError &&
+          Object.hasOwn(authErrorKeys, err.code)
+          ? authErrorKeys[err.code]
+          : "auth.errors.failed",
+      );
       resetCaptcha();
     } finally {
       setLoading(false);
@@ -90,210 +119,231 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center p-4">
-      <motion.div
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-        className="absolute right-4 top-4 flex gap-2"
-      >
-        <AnimatedButton>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 touch-manipulation sm:size-9"
-            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-            title={t("theme.toggle")}
-          >
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={resolvedTheme}
-                initial={{ rotate: -90, opacity: 0 }}
-                animate={{ rotate: 0, opacity: 1 }}
-                exit={{ rotate: 90, opacity: 0 }}
-                transition={{ duration: 0.15 }}
-              >
-                {resolvedTheme === "dark" ? (
-                  <Moon className="h-5 w-5" />
-                ) : (
-                  <Sun className="h-5 w-5" />
-                )}
-              </motion.div>
-            </AnimatePresence>
-          </Button>
-        </AnimatedButton>
-        <AnimatedButton>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 touch-manipulation sm:size-9"
-            onClick={toggleLanguage}
-            title={t("language.switchLanguage")}
-          >
-            <Languages className="h-5 w-5" />
-          </Button>
-        </AnimatedButton>
-      </motion.div>
-
-      <motion.div
-        initial="hidden"
-        animate="visible"
-        variants={containerVariants}
-        className="w-full max-w-md"
-      >
-        <Card className="overflow-hidden">
-          <CardHeader className="text-center">
-            <motion.div
-              variants={itemVariants}
-              className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border bg-background p-2 text-foreground"
+    <div className="h-dvh overflow-y-auto overscroll-contain p-4">
+      <div className="flex min-h-full flex-col gap-4">
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+          className="flex shrink-0 justify-end gap-2"
+        >
+          <AnimatedButton>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-11 touch-manipulation sm:size-9"
+              onClick={() =>
+                setTheme(resolvedTheme === "dark" ? "light" : "dark")
+              }
+              title={t("theme.toggle")}
             >
-              <MonoizeLogo className="h-full w-full" />
-            </motion.div>
-            <motion.div variants={itemVariants}>
-              <CardTitle className="text-2xl">{siteName}</CardTitle>
-            </motion.div>
-            <motion.div variants={itemVariants}>
-              <CardDescription>
-                {isLogin ? t("auth.signInToAccount") : t("auth.createAccount")}
-              </CardDescription>
-            </motion.div>
-          </CardHeader>
-          <CardContent>
-            <motion.form
-              variants={containerVariants}
-              onSubmit={handleSubmit}
-              className="space-y-4"
-            >
-              <motion.div variants={itemVariants} className="space-y-2">
-                <Label htmlFor="username">{t("auth.username")}</Label>
-                <Input
-                  id="username"
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder={t("auth.enterUsername")}
-                  required
-                  minLength={3}
-                  maxLength={22}
-                  pattern="[a-zA-Z0-9_]+"
-                  title={t("auth.usernameRequirements")}
-                  className="transition-all"
-                />
-              </motion.div>
-              <motion.div variants={itemVariants} className="space-y-2">
-                <Label htmlFor="password">{t("auth.password")}</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={t("auth.enterPassword")}
-                  required
-                  minLength={8}
-                  className="transition-all"
-                />
-              </motion.div>
-              <motion.div variants={itemVariants}>
-                {publicSettingsLoading ? (
-                  <Skeleton className="h-12 w-full rounded-md" />
-                ) : publicSettingsError ||
-                  (publicSettings?.captcha_enabled && !publicSettings.cap_api_endpoint) ? (
-                  <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                    {t("auth.captchaUnavailable")}
-                  </div>
-                ) : publicSettings?.captcha_enabled && publicSettings.cap_api_endpoint ? (
-                  <CapCaptcha
-                    key={i18n.language}
-                    apiEndpoint={publicSettings.cap_api_endpoint}
-                    language={i18n.language}
-                    resetKey={captchaResetKey}
-                    onTokenChange={setCaptchaToken}
-                    onError={handleCaptchaError}
-                  />
-                ) : null}
-              </motion.div>
               <AnimatePresence mode="wait">
-                {error && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -10, height: 0 }}
-                    animate={{ opacity: 1, y: 0, height: "auto" }}
-                    exit={{ opacity: 0, y: -10, height: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-                  >
-                    {error}
-                  </motion.div>
-                )}
+                <motion.div
+                  key={resolvedTheme}
+                  initial={{ rotate: -90, opacity: 0 }}
+                  animate={{ rotate: 0, opacity: 1 }}
+                  exit={{ rotate: 90, opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  {resolvedTheme === "dark" ? (
+                    <Moon className="h-5 w-5" />
+                  ) : (
+                    <Sun className="h-5 w-5" />
+                  )}
+                </motion.div>
               </AnimatePresence>
-              <motion.div variants={itemVariants}>
-                <AnimatedButton>
-                  <Button
-                    type="submit"
-                    className="w-full"
-                    disabled={
-                      loading ||
-                      publicSettingsLoading ||
-                      !publicSettings ||
-                      (publicSettings.captcha_enabled &&
-                        (!publicSettings.cap_api_endpoint || !captchaToken))
-                    }
-                  >
-                    {loading ? t("common.loading") : isLogin ? t("auth.signIn") : t("auth.signUp")}
-                  </Button>
-                </AnimatedButton>
-              </motion.div>
-            </motion.form>
-            {registrationEnabled && (
+            </Button>
+          </AnimatedButton>
+          <AnimatedButton>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-11 touch-manipulation sm:size-9"
+              onClick={toggleLanguage}
+              title={t("language.switchLanguage")}
+            >
+              <Languages className="h-5 w-5" />
+            </Button>
+          </AnimatedButton>
+        </motion.div>
+
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={containerVariants}
+          className="my-auto w-full max-w-md shrink-0 self-center"
+        >
+          <Card className="overflow-hidden">
+            <CardHeader className="text-center">
               <motion.div
                 variants={itemVariants}
-                className="mt-4 text-center text-sm text-muted-foreground"
+                className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border bg-background p-2 text-foreground"
               >
-                <AnimatePresence mode="wait">
-                  <motion.div
-                    key={isLogin ? "login" : "register"}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    {isLogin ? (
-                      <>
-                        {t("auth.noAccount")}{" "}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsLogin(false);
-                            setError("");
-                            resetCaptcha();
-                          }}
-                          className="text-primary underline-offset-4 hover:underline"
-                        >
-                          {t("auth.signUp")}
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        {t("auth.hasAccount")}{" "}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsLogin(true);
-                            setError("");
-                            resetCaptcha();
-                          }}
-                          className="text-primary underline-offset-4 hover:underline"
-                        >
-                          {t("auth.signIn")}
-                        </button>
-                      </>
-                    )}
-                  </motion.div>
-                </AnimatePresence>
+                <MonoizeLogo className="h-full w-full" />
               </motion.div>
-            )}
-          </CardContent>
-        </Card>
-      </motion.div>
+              <motion.div variants={itemVariants}>
+                <CardTitle className="text-2xl">{siteName}</CardTitle>
+              </motion.div>
+              <motion.div variants={itemVariants}>
+                <CardDescription>
+                  {isLogin
+                    ? t("auth.signInToAccount")
+                    : t("auth.createAccount")}
+                </CardDescription>
+              </motion.div>
+            </CardHeader>
+            <CardContent>
+              <motion.form
+                variants={containerVariants}
+                onSubmit={handleSubmit}
+                className="space-y-4"
+              >
+                <motion.div variants={itemVariants} className="space-y-2">
+                  <Label htmlFor="username">{t("auth.username")}</Label>
+                  <Input
+                    id="username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={t("auth.enterUsername")}
+                    required
+                    minLength={3}
+                    maxLength={22}
+                    pattern="[a-zA-Z0-9_]+"
+                    title={t("auth.usernameRequirements")}
+                    className="transition-all"
+                  />
+                </motion.div>
+                <motion.div variants={itemVariants} className="space-y-2">
+                  <Label htmlFor="password">{t("auth.password")}</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={t("auth.enterPassword")}
+                    required
+                    minLength={8}
+                    className="transition-all"
+                  />
+                </motion.div>
+                <motion.div variants={itemVariants}>
+                  {publicSettingsError ? (
+                    <QueryError
+                      onRetry={retryPublicSettings}
+                      retrying={publicSettingsValidating}
+                    />
+                  ) : publicSettingsLoading ? (
+                    <Skeleton className="h-12 w-full rounded-md" />
+                  ) : publicSettings?.captcha_enabled &&
+                    !publicSettings.cap_api_endpoint ? (
+                    <Alert variant="destructive">
+                      <AlertDescription>
+                        {t("auth.captchaUnavailable")}
+                      </AlertDescription>
+                    </Alert>
+                  ) : publicSettings?.captcha_enabled &&
+                    publicSettings.cap_api_endpoint ? (
+                    <CapCaptcha
+                      key={i18n.language}
+                      apiEndpoint={publicSettings.cap_api_endpoint}
+                      language={i18n.language}
+                      resetKey={captchaResetKey}
+                      onTokenChange={setCaptchaToken}
+                      onError={handleCaptchaError}
+                    />
+                  ) : null}
+                </motion.div>
+                <AnimatePresence mode="wait">
+                  {error && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10, height: 0 }}
+                      animate={{ opacity: 1, y: 0, height: "auto" }}
+                      exit={{ opacity: 0, y: -10, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <Alert variant="destructive">
+                        <AlertDescription>{t(error)}</AlertDescription>
+                      </Alert>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <motion.div variants={itemVariants}>
+                  <AnimatedButton>
+                    <Button
+                      type="submit"
+                      className="w-full"
+                      disabled={
+                        loading ||
+                        publicSettingsLoading ||
+                        !publicSettings ||
+                        (publicSettings.captcha_enabled &&
+                          (!publicSettings.cap_api_endpoint || !captchaToken))
+                      }
+                    >
+                      {loading
+                        ? t("common.loading")
+                        : isLogin
+                          ? t("auth.signIn")
+                          : t("auth.signUp")}
+                    </Button>
+                  </AnimatedButton>
+                </motion.div>
+              </motion.form>
+              {registrationEnabled && (
+                <motion.div
+                  initial={false}
+                  animate="visible"
+                  variants={itemVariants}
+                  className="mt-4 text-center text-sm text-muted-foreground"
+                >
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={isLogin ? "login" : "register"}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      {isLogin ? (
+                        <>
+                          {t("auth.noAccount")}{" "}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsLogin(false);
+                              setError("");
+                              resetCaptcha();
+                            }}
+                            className="text-primary underline-offset-4 hover:underline"
+                          >
+                            {t("auth.signUp")}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {t("auth.hasAccount")}{" "}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsLogin(true);
+                              setError("");
+                              resetCaptcha();
+                            }}
+                            className="text-primary underline-offset-4 hover:underline"
+                          >
+                            {t("auth.signIn")}
+                          </button>
+                        </>
+                      )}
+                    </motion.div>
+                  </AnimatePresence>
+                </motion.div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
     </div>
   );
 }

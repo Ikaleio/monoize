@@ -189,6 +189,7 @@ pub struct AppState {
     pub monoize_store: MonoizeRoutingStore,
     pub monoize_runtime: Arc<tokio::sync::RwLock<MonoizeRuntimeConfig>>,
     pub channel_health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
+    pub(crate) response_history: Arc<Mutex<crate::handlers::responses_history::ResponseHistoryStore>>,
     pub channel_affinity: Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
     pub routing_config_revision: Arc<AtomicU64>,
     pub settings_update_lock: Arc<Mutex<()>>,
@@ -432,6 +433,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let monoize_runtime = runtime_config_from_settings(&settings_snapshot);
     let channel_health = Arc::new(Mutex::new(HashMap::<String, ChannelHealthState>::new()));
     let channel_affinity = Arc::new(Mutex::new(HashMap::new()));
+    let response_history = Arc::new(Mutex::new(crate::handlers::responses_history::ResponseHistoryStore::default()));
     let routing_config_revision = Arc::new(AtomicU64::new(0));
     let settings_update_lock = Arc::new(Mutex::new(()));
     let transform_registry = Arc::new(crate::transforms::registry());
@@ -455,6 +457,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let background_shutdown = Arc::new(AtomicBool::new(false));
     {
         let affinity = channel_affinity.clone();
+        let history = response_history.clone();
         let shutdown = background_shutdown.clone();
         tokio::spawn(async move {
             let interval = crate::monoize_routing::channel_affinity_cleanup_interval();
@@ -466,6 +469,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 let now = chrono::Utc::now().timestamp();
                 let mut guard = affinity.lock().await;
                 crate::monoize_routing::cleanup_channel_affinity(&mut guard, now);
+                drop(guard);
+                history.lock().await.cleanup();
             }
         });
     }
@@ -957,6 +962,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         monoize_store,
         monoize_runtime,
         channel_health,
+        response_history,
         channel_affinity,
         routing_config_revision,
         settings_update_lock,

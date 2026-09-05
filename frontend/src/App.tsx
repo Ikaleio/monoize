@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { SWRConfig } from "swr";
+import { MotionConfig } from "framer-motion";
 import { AuthProvider } from "@/hooks/use-auth";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { Toaster } from "@/components/ui/sonner";
@@ -25,47 +26,52 @@ import "@/i18n";
 
 function App() {
   return (
-    <ThemeProvider>
-      <SWRConfig
-        value={{
-          revalidateOnFocus: true,
-          revalidateOnReconnect: true,
-          dedupingInterval: 2000,
-        }}
-      >
-        <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          {/* Dashboard routes - admin panel */}
-          <Route path="/dashboard" element={<DashboardLayout />}>
-            <Route index element={<DashboardPage />} />
-            <Route path="admin" element={<AdminDashboardPage />} />
-            <Route path="providers" element={<ProvidersPage />} />
-            <Route path="tokens" element={<ApiKeysPage />} />
-            <Route path="wallet" element={<WalletPage />} />
-            <Route path="logs" element={<RequestLogsPage />} />
-            <Route path="playground" element={<PlaygroundPage />} />
-            <Route path="marketplace" element={<ModelMarketplacePage />} />
-            <Route path="models" element={<ModelPricingPage />} />
-            <Route path="users" element={<UsersPage />} />
-            <Route path="groups" element={<GroupsPage />} />
-            <Route path="plans" element={<BillingPlansPage />} />
-            <Route path="payments" element={<PaymentsPage />} />
-            <Route path="custom-transforms" element={<CustomTransformsPage />} />
-            <Route path="admin-settings" element={<SettingsPage />} />
-          </Route>
-          {/* User settings routes */}
-          <Route path="/settings" element={<DashboardLayout />}>
-            <Route index element={<UserSettingsPage />} />
-          </Route>
-          {/* Redirect root to dashboard */}
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-        </AuthProvider>
-      </SWRConfig>
-      <Toaster />
-    </ThemeProvider>
+    <MotionConfig reducedMotion="user">
+      <ThemeProvider>
+        <SWRConfig
+          value={{
+            revalidateOnFocus: true,
+            revalidateOnReconnect: true,
+            dedupingInterval: 2000,
+          }}
+        >
+          <AuthProvider>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              {/* Dashboard routes - admin panel */}
+              <Route path="/dashboard" element={<DashboardLayout />}>
+                <Route index element={<DashboardPage />} />
+                <Route path="admin" element={<AdminDashboardPage />} />
+                <Route path="providers" element={<ProvidersPage />} />
+                <Route path="tokens" element={<ApiKeysPage />} />
+                <Route path="wallet" element={<WalletPage />} />
+                <Route path="logs" element={<RequestLogsPage />} />
+                <Route path="playground" element={<PlaygroundPage />} />
+                <Route path="marketplace" element={<ModelMarketplacePage />} />
+                <Route path="models" element={<ModelPricingPage />} />
+                <Route path="users" element={<UsersPage />} />
+                <Route path="groups" element={<GroupsPage />} />
+                <Route path="plans" element={<BillingPlansPage />} />
+                <Route path="payments" element={<PaymentsPage />} />
+                <Route
+                  path="custom-transforms"
+                  element={<CustomTransformsPage />}
+                />
+                <Route path="admin-settings" element={<SettingsPage />} />
+              </Route>
+              {/* User settings routes */}
+              <Route path="/settings" element={<DashboardLayout />}>
+                <Route index element={<UserSettingsPage />} />
+              </Route>
+              {/* Redirect root to dashboard */}
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </AuthProvider>
+        </SWRConfig>
+        <Toaster />
+      </ThemeProvider>
+    </MotionConfig>
   );
 }
 

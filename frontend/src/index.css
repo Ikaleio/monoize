@@ -26,6 +26,9 @@
 		--accent-foreground: 0 0% 9%;
 		--destructive: 0 84% 60%;
 		--destructive-foreground: 0 0% 98%;
+		--error-foreground: 0 72% 30%;
+		--error-soft: 0 50% 97%;
+		--error-border: 0 45% 80%;
 		--success: 142 76% 28%;
 		--success-foreground: 142 72% 20%;
 		--success-soft: 142 35% 94%;
@@ -96,6 +99,9 @@
 		--accent-foreground: 0 0% 93%;
 		--destructive: 0 63% 31%;
 		--destructive-foreground: 0 0% 98%;
+			--error-foreground: 0 85% 82%;
+			--error-soft: 0 30% 12%;
+			--error-border: 0 40% 35%;
 		--success: 142 69% 58%;
 		--success-foreground: 142 55% 72%;
 		--success-soft: 142 25% 12%;

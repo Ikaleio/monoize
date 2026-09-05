@@ -78,7 +78,7 @@ fn map_response_completed_with_accumulated(
         }
     };
     let finish_reason = match response_obj.get("status").and_then(Value::as_str) {
-        Some("incomplete") => Some(FinishReason::Length),
+        Some("incomplete") => Some(crate::urp::decode::openai_responses::incomplete_finish_reason(&response_obj)),
         Some("failed" | "cancelled") => Some(FinishReason::Other),
         Some("completed") if outputs_have_tool_calls(&outputs) => Some(FinishReason::ToolCalls),
         Some("completed") => decoded

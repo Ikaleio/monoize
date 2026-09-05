@@ -311,17 +311,6 @@ pub(super) fn affinity_key_for_request(
     Some((key, key_hash))
 }
 
-pub(super) fn response_id_affinity_key(
-    logical_model: &str,
-    response_id: &str,
-    auth: &crate::auth::AuthResult,
-) -> Option<String> {
-    let tenant = affinity_tenant(auth)?;
-    Some(format!(
-        "v1|{tenant}|model:{logical_model}|explicit:previous_response_id:{response_id}"
-    ))
-}
-
 pub(super) async fn apply_channel_affinity(
     state: &AppState,
     urp: &UrpRequest,
@@ -457,55 +446,6 @@ pub(super) async fn refresh_channel_affinity(state: &AppState, attempt: &Monoize
     insert_channel_affinity(
         &mut guard,
         key.clone(),
-        crate::monoize_routing::ChannelAffinityBinding {
-            provider_id: attempt.provider_id.clone(),
-            channel_id: attempt.channel_id.clone(),
-            bound_at,
-            last_used_at: now,
-            expires_at: channel_affinity_expires_at(now, attempt.affinity_idle_ttl_seconds),
-        },
-    );
-}
-
-pub(super) async fn refresh_response_id_affinity(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    logical_model: &str,
-    response_id: &str,
-    attempt: &MonoizeAttempt,
-) {
-    if !attempt.affinity_enabled {
-        return;
-    }
-    let response_id = response_id.trim();
-    if response_id.is_empty() {
-        return;
-    }
-    let Some(key) = response_id_affinity_key(logical_model, response_id, auth) else {
-        return;
-    };
-    let mut guard = state.channel_affinity.lock().await;
-    if state.routing_config_revision.load(Ordering::Acquire) != attempt.routing_config_revision {
-        return;
-    }
-    let now = now_ts();
-    let bound_at = if attempt.affinity_hit == Some(true) {
-        attempt
-            .affinity_key
-            .as_ref()
-            .and_then(|source_key| guard.get(source_key))
-            .filter(|binding| {
-                binding.provider_id == attempt.provider_id
-                    && binding.channel_id == attempt.channel_id
-            })
-            .map(|binding| binding.bound_at)
-            .unwrap_or(now)
-    } else {
-        now
-    };
-    insert_channel_affinity(
-        &mut guard,
-        key,
         crate::monoize_routing::ChannelAffinityBinding {
             provider_id: attempt.provider_id.clone(),
             channel_id: attempt.channel_id.clone(),

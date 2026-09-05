@@ -70,3 +70,8 @@ PM14. Page-level dialogs that contain long forms MAY place the scroll boundary o
 - header and footer remain reachable inside the visible viewport,
 - the form body can scroll independently when fields exceed available height,
 - no portion of the dialog becomes permanently unreachable below the viewport.
+
+PM15. When `prefers-reduced-motion: reduce` is active, Dialog, AlertDialog, and Sheet
+MUST suppress shell and content-layer translation, scaling, and rotation. They MAY
+fade opacity. This rule overrides the transform requirements in PM6, PM7, and PM12.
+The preference MUST be applied on the initial render and after a preference change.

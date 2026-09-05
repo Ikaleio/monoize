@@ -27,7 +27,10 @@
 		"deleting": "刪除中...",
 		"add": "新增",
 		"refresh": "重新整理",
-		"unavailable": "無法使用"
+		"unavailable": "無法使用",
+		"close": "關閉",
+		"loadFailed": "此區域載入失敗，請重試。",
+		"refreshFailed": "此區域重新整理失敗，目前仍顯示上次的資料。"
 	},
 	"auth": {
 		"signIn": "登入",
@@ -47,7 +50,17 @@
 		"accessDenied": "存取被拒絕",
 		"needAdminPrivileges": "您需要管理員權限才能檢視此頁面",
 		"captchaError": "人機驗證失敗，請重試。",
-		"captchaUnavailable": "人機驗證尚未設定或暫時無法使用。"
+		"captchaUnavailable": "人機驗證尚未設定或暫時無法使用。",
+		"errors": {
+			"invalidCredentials": "使用者名稱或密碼不正確。",
+			"reservedUsername": "此使用者名稱為保留名稱，請使用其他名稱。",
+			"invalidPassword": "密碼至少需要 8 個字元。",
+			"registrationDisabled": "目前暫不開放註冊。",
+			"usernameExists": "此使用者名稱已被使用，請使用其他名稱。",
+			"accountDisabled": "此帳戶已停用，請聯絡管理員。",
+			"captchaRequired": "請先完成人機驗證。",
+			"failed": "無法完成請求，請重試。"
+		}
 	},
 	"nav": {
 		"dashboard": "儀表板",
@@ -209,7 +222,9 @@
 			"spendTrend": "消耗趨勢",
 			"callDistribution": "呼叫次數分佈",
 			"callRank": "呼叫次數排行"
-		}
+		},
+		"apiNotConfigured": "管理員尚未設定 API 基底網址。",
+		"configureApi": "設定 API 基底網址"
 	},
 	"users": {
 		"title": "使用者管理",
@@ -898,7 +913,10 @@
 		"provider": "供應商",
 		"resultCount": "顯示 {{filtered}} / {{total}} 個模型",
 		"noModels": "尚無可用模型",
-		"noModelsDesc": "管理員同步模型資料庫後，模型資料將顯示在此處。"
+		"noModelsDesc": "管理員同步模型資料庫後，模型資料將顯示在此處。",
+		"noMatches": "沒有符合條件的模型",
+		"noMatchesDesc": "沒有模型符合搜尋條件。清除搜尋即可查看可用模型。",
+		"clearSearch": "清除搜尋"
 	},
 	"requestLogs": {
 		"title": "請求日誌",

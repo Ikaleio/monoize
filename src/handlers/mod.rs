@@ -5,6 +5,7 @@ pub(crate) mod helpers;
 pub(crate) mod image_api;
 mod nonstream;
 mod request_logging;
+pub(crate) mod responses_history;
 mod responses_websocket;
 pub(crate) mod routing;
 mod streaming;
@@ -290,6 +291,8 @@ pub async fn create_response(
             "background not supported",
         ));
     }
+
+    responses_history::prepare(&state, &auth, &mut req).await?;
 
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::Responses;

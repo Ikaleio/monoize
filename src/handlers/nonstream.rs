@@ -754,16 +754,6 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     }
                     mark_channel_success(state, &attempt).await;
                     refresh_channel_affinity(state, &attempt).await;
-                    if attempt.provider_type == ProviderType::Responses {
-                        refresh_response_id_affinity(
-                            state,
-                            auth,
-                            &logical_model,
-                            &resp.id,
-                            &attempt,
-                        )
-                        .await;
-                    }
                     // Wrap newly produced encrypted reasoning payloads in mz2
                     // envelopes BEFORE any response-phase transform observes
                     // the response. Per spec/urp-transform-system.spec.md
@@ -1185,7 +1175,8 @@ pub(super) async fn forward_nonstream_typed_with_task_state(
     capture: RequestCaptureContext,
     task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<Value> {
-    let (resp, logical_model) = execute_nonstream_typed_owned(
+    let history = responses_history::HistoryContext::from_request(state, &req);
+    let (mut resp, logical_model) = execute_nonstream_typed_owned(
         state,
         auth,
         req,
@@ -1198,6 +1189,7 @@ pub(super) async fn forward_nonstream_typed_with_task_state(
         task_state,
     )
     .await?;
+    if let Some(history) = history { history.finish_response(&mut resp).await; }
     Ok(encode_response_for_downstream(
         downstream,
         &resp,
@@ -1217,6 +1209,11 @@ pub(super) fn encode_request_for_provider(
         req.extra_body.remove("store");
         req.extra_body.remove("conversation");
         req.extra_body.remove("previous_response_id");
+    }
+    if responses_history::is_managed(req) {
+        req.extra_body.remove("previous_response_id");
+        if attempt.provider_type == ProviderType::Responses { req.extra_body.insert("store".to_string(), Value::Bool(false)); }
+        else { req.extra_body.remove("store"); }
     }
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
     filter_tools_for_provider(req, attempt.provider_type, downstream);

@@ -53,7 +53,7 @@ Provider の `circuit_breaker_enabled` を `false` にすると、その Provide
 
 ## セッションアフィニティ
 
-Monoize は会話をそれを処理した Channel に結び付けられます。サーバー側状態を持つ後続リクエスト（例: Responses の `previous_response_id`）は同じ上流に到達します。アフィニティはグローバルおよび Channel 単位で設定できます。アフィニティで優先された Channel も、適格性と健全性のルールに従います。
+Monoize は、そのセッションを処理した Channel を優先できます。アフィニティはグローバルまたは Channel 単位で設定します。優先 Channel にも適格性と健全性のルールが適用されます。Responses の `previous_response_id` 履歴は Monoize 内で解決するため、上流による状態保持は不要です。
 
 ## タイミング指標
 
