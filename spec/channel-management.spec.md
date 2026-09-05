@@ -343,7 +343,8 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
   - Read both successful and non-successful upstream response bodies through the bounded discovery reader defined by RRB-UD1 through RRB-UD6 in `spec/runtime-resource-bounds.spec.md`.
   - Parse a successful upstream response as JSON only after the bounded reader returns the complete body.
   - Return unique model ids sorted ascending.
-- Response: `{ "models": string[] }`
+  - Classify the compact scheme from the fetched ids. If any id equals `{base}-openai-compact` and `base` is also in the fetched ids, `compact_scheme` MUST be `openai_compact_sibling` and `compact_models` MUST list those sibling ids sorted ascending. Otherwise `compact_scheme` MUST be `same_model` and `compact_models` MUST be `[]`.
+- Response: `{ "models": string[], "compact_scheme": "same_model" | "openai_compact_sibling", "compact_models": string[] }`
 - Errors:
   - `502 upstream_discovery_response_too_large` when a declared or streamed upstream body exceeds `MONOIZE_UPSTREAM_DISCOVERY_MAX_BYTES`.
   - `502 upstream_fetch_failed` when the upstream request, bounded body read, upstream status, or JSON decode fails for another reason.

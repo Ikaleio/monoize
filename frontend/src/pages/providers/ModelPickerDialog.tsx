@@ -86,18 +86,16 @@ function ModelPickerDialogContent({
 				] as FetchModelsKey)
 			: null
 
-	const { data: fetchedModels = [], isLoading: loading } = useSWR(
+	const { data: fetched = { models: [] as string[] }, isLoading: loading } = useSWR(
 		fetchKey,
 		async (key: FetchModelsKey) => {
-			return (
-				await api.fetchChannelModels({
-					provider_type: key[1],
-					base_url: key[2],
-					api_key: key[3] || undefined,
-					provider_id: key[4] || undefined,
-					channel_id: key[5] || undefined
-				})
-			).models
+			return api.fetchChannelModels({
+				provider_type: key[1],
+				base_url: key[2],
+				api_key: key[3] || undefined,
+				provider_id: key[4] || undefined,
+				channel_id: key[5] || undefined
+			})
 		},
 		{
 			revalidateOnFocus: false,
@@ -112,6 +110,9 @@ function ModelPickerDialogContent({
 	)
 
 	const existingSet = useMemo(() => new Set(existingModels), [existingModels])
+
+	const fetchedModels = fetched.models ?? []
+	const compactScheme = fetched.compact_scheme
 
 	const newModels = useMemo(
 		() => fetchedModels.filter(model => !existingSet.has(model)),
@@ -194,7 +195,14 @@ function ModelPickerDialogContent({
 						</button>
 					</div>
 				</div>
-				<DialogDescription>{providerName}</DialogDescription>
+				<DialogDescription>
+					{providerName}
+					{compactScheme === 'openai_compact_sibling'
+						? ` — ${t('providers.compactSchemeSibling')}`
+						: compactScheme === 'same_model'
+							? ` — ${t('providers.compactSchemeSame')}`
+							: ''}
+				</DialogDescription>
 			</DialogHeader>
 
 			<div className='flex flex-col gap-4'>
