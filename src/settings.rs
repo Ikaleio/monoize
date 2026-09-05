@@ -96,6 +96,9 @@ pub const BUILTIN_REASONING_EFFORT_SUFFIXES: &[(&str, &str)] = &[
     ("-max", "max"),
 ];
 
+/// Compact sibling IDs bill as the conversation model (`model-pricing.spec.md` MP-R1).
+pub const OPENAI_COMPACT_PRICING_SUFFIX: &str = "-openai-compact";
+
 pub fn canonicalize_ordered_string_ids(ids: &mut Vec<String>) {
     let mut seen = HashSet::new();
     ids.retain_mut(|id| {
@@ -127,6 +130,7 @@ pub fn normalize_pricing_model_key(
             .iter()
             .map(|(suffix, _)| *suffix),
     );
+    suffixes.push(OPENAI_COMPACT_PRICING_SUFFIX);
     suffixes.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
     suffixes.dedup();
 

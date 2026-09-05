@@ -69,6 +69,15 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 
 只有當 Provider 內至少有一個已啟用的 Channel 對應了某個邏輯模型時，該模型才會路由到這個 Provider。
 
+## 遠端壓縮
+
+擷取模型會根據上游模型清單判定 Channel 的 compact 方案。
+
+- `openai_compact_sibling`：清單裡同時有基礎 ID 和 `{base}-openai-compact`。把這些兄弟模型留在 Channel 模型對應中。compact 請求會把線路模型改寫成兄弟模型。
+- `same_model`：清單裡沒有這樣的配對。compact 請求按會話模型原樣送出。
+
+不要編造上游清單中不存在的 compact 兄弟模型 ID。
+
 ## 設定計費覆寫項目
 
 在 Provider 上設定**未定價時允許免費**和**缺少 Usage 時允許免費**。每個設定都可以繼承全域值、強制開啟或強制關閉。

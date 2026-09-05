@@ -69,6 +69,15 @@ Responses Channel では、`response.completed` は合格です。error オブ�
 
 Provider 内の有効な Channel が論理モデルを対応付けている場合のみ、そのモデルはその Provider にルーティングされます。
 
+## リモート compact
+
+モデル取得は、上流モデル一覧から Channel の compact 方式を分類します。
+
+- `openai_compact_sibling`：一覧にベース ID と `{base}-openai-compact` の両方があります。それらの兄弟 ID を Channel のモデルマップに残してください。compact リクエストは回線モデルを兄弟モデルに書き換えます。
+- `same_model`：そのような組はありません。compact リクエストは会話モデルをそのまま送ります。
+
+上流一覧にない compact 兄弟 ID を作らないでください。
+
 ## 課金の上書きを設定
 
 Provider で**価格未設定時の無料精算**と**Usage 欠落時の無料精算**を設定します。各設定は、グローバル値の継承、強制有効、強制無効を選べます。

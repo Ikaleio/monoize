@@ -69,6 +69,15 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 只有当 Provider 内至少有一个已启用的 Channel 映射了某个逻辑模型时，该模型才会路由到这个 Provider。
 
+## 远程压缩
+
+拉取模型会根据上游模型列表判定 Channel 的 compact 方案。
+
+- `openai_compact_sibling`：列表里同时有基础 ID 和 `{base}-openai-compact`。把这些兄弟模型留在 Channel 模型映射中。compact 请求会把线路模型改写成兄弟模型。
+- `same_model`：列表里没有这样的配对。compact 请求按会话模型原样发送。
+
+不要编造上游列表中不存在的 compact 兄弟模型 ID。
+
 ## 设置计费覆盖项
 
 在 Provider 上设置**未定价时允许免费**和**缺少 Usage 时允许免费**。每个设置都可以继承全局值、强制开启或强制关闭。

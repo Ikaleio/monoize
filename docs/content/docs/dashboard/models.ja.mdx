@@ -38,6 +38,8 @@ Channel の `multiplier` が `0` の場合、その Channel のリクエスト�
 
 Monoize は、リダイレクト後の上流モデルを先に解決します。リダイレクトがあり、上流モデルに価格がない場合だけ論理モデルにフォールバックします。
 
+価格検索の前に、Monoize はモデル ID から認識済みサフィックスを最大 1 つ取り除きます。認識済みサフィックスは reasoning-effort サフィックスと `-openai-compact` です。ベースモデルに価格を付けてください。`{model}-openai-compact` 用の別行は不要です。
+
 Monoize は基本料金に Channel モデルの `multiplier` と実際のルーティンググループの `billing_ratio` を掛けます。最終料金を nano-USD で記録します。
 
 Monoize は既定で、価格未設定モデルと必要な Usage がない応答を拒否します。ゼロ料金での精算を許可する場合だけ、グローバル設定または Provider の上書きを有効にします。
