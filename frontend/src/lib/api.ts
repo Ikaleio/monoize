@@ -1553,6 +1553,8 @@ class ApiClient {
 
   async fetchChannelModels(input: FetchChannelModelsInput): Promise<{
     models: string[];
+    compact_scheme?: "same_model" | "openai_compact_sibling";
+    compact_models?: string[];
   }> {
     const body: FetchChannelModelsInput = {
       provider_type: input.provider_type,

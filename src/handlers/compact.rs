@@ -1,4 +1,51 @@
 use super::*;
+use crate::monoize_routing::MonoizeModelEntry;
+
+const OPENAI_COMPACT_SUFFIX: &str = "-openai-compact";
+
+pub(crate) fn classify_openai_compact_scheme(models: &[String]) -> (&'static str, Vec<String>) {
+    let set: HashSet<&str> = models.iter().map(String::as_str).collect();
+    let mut compact_models: Vec<String> = models
+        .iter()
+        .filter(|id| {
+            id.strip_suffix(OPENAI_COMPACT_SUFFIX)
+                .is_some_and(|base| !base.is_empty() && set.contains(base))
+        })
+        .cloned()
+        .collect();
+    compact_models.sort();
+    let scheme = if compact_models.is_empty() {
+        "same_model"
+    } else {
+        "openai_compact_sibling"
+    };
+    (scheme, compact_models)
+}
+
+fn compact_wire_model(
+    models: &HashMap<String, MonoizeModelEntry>,
+    logical_model: &str,
+    selected_upstream: &str,
+) -> String {
+    let mut bases = Vec::new();
+    if !logical_model.is_empty() {
+        bases.push(logical_model);
+    }
+    if selected_upstream != logical_model && !selected_upstream.is_empty() {
+        bases.push(selected_upstream);
+    }
+    for base in bases {
+        let sibling = if base.ends_with(OPENAI_COMPACT_SUFFIX) {
+            base.to_string()
+        } else {
+            format!("{base}{OPENAI_COMPACT_SUFFIX}")
+        };
+        if let Some(entry) = models.get(&sibling) {
+            return super::routing::resolve_upstream_model(&sibling, entry);
+        }
+    }
+    selected_upstream.to_string()
+}
 
 pub async fn compact_response(
     State(state): State<AppState>,
@@ -103,6 +150,8 @@ pub async fn compact_response(
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers = Vec::new();
     let mut execution_state = AttemptExecutionState::default();
+    let compact_channel_models =
+        load_compact_channel_models(&state, &logical_model, &attempts).await;
 
     for mut attempt in attempts {
         if execution_state.should_skip(&attempt) {
@@ -115,11 +164,12 @@ pub async fn compact_response(
             }
             let attempt_number = execution_state.record_upstream_attempt(&attempt);
             let mut upstream_body = crate::urp::encode::sanitize_provider_item_wire_body(&body);
+            let wire_model = compact_channel_models
+                .get(&attempt.channel_id)
+                .map(|models| compact_wire_model(models, &logical_model, &attempt.upstream_model))
+                .unwrap_or_else(|| attempt.upstream_model.clone());
             if let Some(obj) = upstream_body.as_object_mut() {
-                obj.insert(
-                    "model".to_string(),
-                    Value::String(attempt.upstream_model.clone()),
-                );
+                obj.insert("model".to_string(), Value::String(wire_model.clone()));
                 obj.remove("max_multiplier");
             }
             let provider = build_channel_provider_config(&attempt);
@@ -148,7 +198,7 @@ pub async fn compact_response(
                                 Some(&attempt.channel_id),
                                 attempt.provider_type,
                                 &logical_model,
-                                &attempt.upstream_model,
+                                &wire_model,
                                 "/v1/responses/compact",
                                 capture.raw_input.as_ref().clone(),
                                 &routing_request,
@@ -270,7 +320,7 @@ pub async fn compact_response(
                                 Some(&attempt.channel_id),
                                 attempt.provider_type,
                                 &logical_model,
-                                &attempt.upstream_model,
+                                &wire_model,
                                 "/v1/responses/compact",
                                 capture.raw_input.as_ref().clone(),
                                 &routing_request,
@@ -356,4 +406,42 @@ pub async fn compact_response(
         session.persist_with_result(None, true).await;
     }
     Err(final_err)
+}
+
+async fn load_compact_channel_models(
+    state: &AppState,
+    logical_model: &str,
+    attempts: &[MonoizeAttempt],
+) -> HashMap<String, HashMap<String, MonoizeModelEntry>> {
+    let mut out = HashMap::new();
+    if attempts.is_empty() {
+        return out;
+    }
+    let Ok(providers) = state
+        .monoize_store
+        .list_providers_for_model(logical_model)
+        .await
+    else {
+        return out;
+    };
+    for attempt in attempts {
+        if out.contains_key(&attempt.channel_id) {
+            continue;
+        }
+        let Some(provider) = providers
+            .iter()
+            .find(|provider| provider.id == attempt.provider_id)
+        else {
+            continue;
+        };
+        let Some(channel) = provider
+            .channels
+            .iter()
+            .find(|channel| channel.id == attempt.channel_id)
+        else {
+            continue;
+        };
+        out.insert(attempt.channel_id.clone(), channel.models.clone());
+    }
+    out
 }

@@ -303,7 +303,7 @@ UF2. For `responses`, `chat_completion`, `messages`, `openai_image`, and `replic
 
 UF3. For `gemini`, the endpoint MUST call the Gemini model-list API using `api_key` and parse model names as model IDs after removing a leading `models/` prefix.
 
-UF4. The response MUST be `{ models: string[] }` ordered lexicographically with duplicate IDs removed.
+UF4. The response MUST be `{ models: string[], compact_scheme: "same_model" | "openai_compact_sibling", compact_models: string[] }`. `models` MUST be ordered lexicographically with duplicate IDs removed. `compact_scheme` and `compact_models` MUST follow `spec/channel-management.spec.md` §3.7.
 
 UF5. On upstream fetch or parse failure, endpoint MUST return `502` with code `upstream_fetch_failed`.
 

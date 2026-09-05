@@ -544,6 +544,8 @@
 		"searchModels": "モデルを検索",
 		"selected": "{{count}} / {{total}} を選択",
 		"fetchModelsError": "上流からのモデル取得に失敗しました",
+		"compactSchemeSame": "リモート圧縮は同一モデルを使います",
+		"compactSchemeSibling": "リモート圧縮は *-openai-compact の独立モデルを使います",
 		"fetchModelsNeedChannel": "先にベース URL と API キーを持つ Channel を追加してください",
 		"modelsAdded": "{{count}} モデルを追加しました",
 		"modelsRemoved": "{{count}} モデルを削除しました",

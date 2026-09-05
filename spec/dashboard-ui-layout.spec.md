@@ -231,6 +231,7 @@ PL12a. Provider list card header metadata badges MUST render through a collapsed
 PL13. The selected Channel model section MUST include an explicit "Fetch upstream" action that opens a model-diff selection dialog before insertion.
 
 - Dialog MUST fetch upstream model list from `POST /api/dashboard/fetch-channel-models` with the current Channel `provider_type` and `base_url`.
+- Dialog MUST show the returned `compact_scheme`: `same_model` means remote compact uses the conversation model; `openai_compact_sibling` means remote compact uses `{model}-openai-compact` siblings present in the fetched list.
 - If the current Channel is an existing saved Channel and the API key input is empty, Dialog MUST pass `provider_id` and `channel_id` instead of requiring API key entry.
 - If the current Channel is new or has no saved `channel_id`, Dialog MUST require a non-empty API key before opening the picker.
 - If the API key input is non-empty, Dialog MUST pass that value so unsaved key edits are used for the fetch request.

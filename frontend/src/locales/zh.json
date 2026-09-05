@@ -547,6 +547,8 @@
 		"searchModels": "搜索模型",
 		"selected": "已选择 {{count}} / {{total}}",
 		"fetchModelsError": "从上游获取模型列表失败",
+		"compactSchemeSame": "远程压缩使用同一模型",
+		"compactSchemeSibling": "远程压缩使用 *-openai-compact 独立模型",
 		"fetchModelsNeedChannel": "请先添加一个包含 Base URL 和 API Key 的 Channel",
 		"modelsAdded": "已添加 {{count}} 个模型",
 		"modelsRemoved": "已移除 {{count}} 个模型",
