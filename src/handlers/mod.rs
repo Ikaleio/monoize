@@ -44,6 +44,7 @@ use streaming::*;
 use usage::*;
 
 pub use account_balance::{codex_usage, deepseek_user_balance};
+pub(crate) use compact::classify_openai_compact_scheme;
 pub use compact::compact_response;
 pub use responses_websocket::responses_websocket;
 

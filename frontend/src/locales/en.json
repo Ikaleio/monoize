@@ -547,6 +547,8 @@
 		"searchModels": "Search models",
 		"selected": "Selected {{count}} / {{total}}",
 		"fetchModelsError": "Failed to fetch models from upstream",
+		"compactSchemeSame": "Remote compact uses the same model",
+		"compactSchemeSibling": "Remote compact uses *-openai-compact sibling models",
 		"fetchModelsNeedChannel": "Please add a channel with base URL and API key first",
 		"modelsAdded": "{{count}} models added",
 		"modelsRemoved": "{{count}} models removed",
