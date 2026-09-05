@@ -69,6 +69,15 @@ Each Channel lists the logical models it serves. A model entry has:
 
 A logical model routes to a Provider only when at least one enabled Channel inside it maps that model.
 
+## Remote compact
+
+Fetch models classifies the Channel compact scheme from the upstream model list.
+
+- `openai_compact_sibling`: the list contains both a base ID and `{base}-openai-compact`. Keep those sibling IDs in the Channel model map. Compact requests rewrite the wire model to the sibling.
+- `same_model`: the list has no such pair. Compact requests send the conversation model unchanged.
+
+Do not invent compact sibling IDs that the upstream list does not return.
+
 ## Set billing overrides
 
 Set **Allow free when unpriced** and **Allow free when usage is missing** on the Provider. Each setting can inherit the global value, force on, or force off.

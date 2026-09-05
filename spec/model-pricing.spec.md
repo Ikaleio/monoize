@@ -156,9 +156,9 @@ state: missing prices and missing usage reject as defined in §7.
 
 MP-R1. The pricing key for a request attempt is resolved exactly as defined by
 `user-billing-and-model-metadata.spec.md` C1.1 and C1.2: normalize the served
-`upstream_model` (strip at most one recognized reasoning-tier suffix); when that key
-has no applicable price and the model was redirected, retry with the normalized
-requested logical model key.
+`upstream_model` (strip at most one recognized suffix, including
+`-openai-compact`); when that key has no applicable price and the model was
+redirected, retry with the normalized requested logical model key.
 
 MP-R2. A model has an applicable price if and only if a `model_prices` row exists with
 `model_id` equal to the pricing key and `enabled = 1` and the row is complete under
