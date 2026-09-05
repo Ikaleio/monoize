@@ -91,6 +91,7 @@ export const DEFAULT_REASONING_SUFFIX_MAP: Record<string, string> = {
 const BUILTIN_REASONING_SUFFIXES = [
 	'-none', '-minimum', '-low', '-medium', '-high', '-xhigh', '-max'
 ]
+const OPENAI_COMPACT_PRICING_SUFFIX = '-openai-compact'
 
 export function emptyModelRow(): ModelRow {
 	return { model: '', redirect: '', multiplier: '1' }
@@ -235,7 +236,7 @@ export function buildPricedModelIdSet(modelPrices: ModelPriceRecord[]): Set<stri
 export function normalizePricingModelId(model: string, reasoningSuffixMap: Record<string, string>): string {
 	const trimmed = model.trim()
 	if (!trimmed) return ''
-	const suffixes = Array.from(new Set([...Object.keys(reasoningSuffixMap), ...BUILTIN_REASONING_SUFFIXES]))
+	const suffixes = Array.from(new Set([...Object.keys(reasoningSuffixMap), ...BUILTIN_REASONING_SUFFIXES, OPENAI_COMPACT_PRICING_SUFFIX]))
 		.sort((a, b) => b.length - a.length || a.localeCompare(b))
 	for (const suffix of suffixes) {
 		if (trimmed.endsWith(suffix) && trimmed.length > suffix.length) {

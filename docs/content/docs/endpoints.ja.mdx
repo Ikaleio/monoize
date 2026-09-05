@@ -59,6 +59,9 @@ curl http://localhost:8080/v1/responses \
 - 上流がサーバー側状態を提供する場合、Monoize は `previous_response_id` チェーンをサポートします。セッションアフィニティを有効にすると、後続リクエストが同じ Channel に到達します。[ルーティングと信頼性](/ja/docs/routing)を参照してください。
 - `GET /v1/responses` は WebSocket トランスポートにアップグレードされます。
 - `POST /v1/responses/compact` は会話をコンパクト化します。
+- Monoize はネイティブの compact ボディを上流の `POST /v1/responses/compact` に転送します。
+- Channel 選択後、その Channel が `{model}-openai-compact` をマップしていれば、Monoize はその兄弟モデルを回線モデルとして送ります。そうでなければ会話モデルを送ります。
+- 課金は会話モデルの価格を使います。兄弟モデル ID に別の価格行は不要です。
 
 ## Anthropic Messages
 
