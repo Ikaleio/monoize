@@ -480,7 +480,7 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
         } => (*tool_type == urp::ToolCallType::Function).then(|| AnthropicBlockPayload::ToolUse {
             call_id: call_id.clone(),
             name: name.clone(),
-            arguments: arguments.clone(),
+            arguments: urp::tool_call_arguments_for_wire(arguments),
             extra: extra_body.clone(),
         }),
         Node::ProviderItem {
@@ -1089,7 +1089,7 @@ async fn emit_accumulated_payload_deltas(
                 block_index,
                 &block_state.payload,
                 &NodeDelta::ToolCallArguments {
-                    arguments: arguments.clone(),
+                    arguments: urp::tool_call_arguments_for_wire(arguments),
                 },
                 &empty_extra_body,
                 sse_max_frame_length,

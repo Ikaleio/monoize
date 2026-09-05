@@ -73,6 +73,10 @@ Some upstreams return reasoning in nonstandard fields. Use the reasoning transfo
 
 Cross-family conversion removes provider-specific nested fields with no safe target representation. Use the `field_set` transform to reinstate a field for one Provider.
 
+### A client rejects tool-call numbers such as `4338.0`
+
+Some upstreams emit whole numbers as JSON floats in tool-call arguments. Codex `write_stdin` parses `session_id` as an integer and rejects `4338.0`. Monoize rewrites integer-valued floats in tool-call arguments to JSON integers before the client receives them. You do not need a transform rule for this rewrite.
+
 ## Dashboard access
 
 ### Lost admin password

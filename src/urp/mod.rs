@@ -10,6 +10,12 @@ pub(crate) mod internal_legacy_bridge;
 pub mod stream_decode;
 pub mod stream_encode;
 pub mod stream_helpers;
+pub mod tool_call_json;
+
+pub use tool_call_json::{
+    integerize_json_floats, integerize_tool_call_arguments_json, integerize_tool_call_node,
+    integerize_tool_call_nodes, integerize_tool_call_stream_event, tool_call_arguments_for_wire,
+};
 
 pub fn synthetic_message_id() -> String {
     format!("msg_urp_{}", uuid::Uuid::new_v4().simple())

@@ -82,8 +82,9 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             if *tool_type == ToolCallType::Custom {
                 return None;
             }
-            let input = serde_json::from_str::<Value>(arguments)
+            let mut input = serde_json::from_str::<Value>(arguments)
                 .unwrap_or_else(|_| json!({ "_raw": arguments }));
+            crate::urp::integerize_json_floats(&mut input);
             let mut block = json!({
                 "type": "tool_use",
                 "id": call_id,
@@ -180,8 +181,9 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             if *tool_type == ToolCallType::Custom {
                 return None;
             }
-            let input = serde_json::from_str::<Value>(arguments)
+            let mut input = serde_json::from_str::<Value>(arguments)
                 .unwrap_or_else(|_| json!({ "_raw": arguments }));
+            crate::urp::integerize_json_floats(&mut input);
             let mut block = json!({
                 "type": "tool_use",
                 "id": call_id,

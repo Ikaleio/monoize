@@ -188,43 +188,44 @@ pub(super) async fn apply_transform_rules_response(
     model: &str,
     upstream_provider_type: Option<ProviderType>,
 ) -> AppResult<()> {
-    if rules.is_empty() {
-        return Ok(());
+    if !rules.is_empty() {
+        let custom_snapshot = state.custom_transform_store.snapshot();
+        let resolver = transforms::TransformResolver::new(
+            state.transform_registry.as_ref(),
+            custom_snapshot.as_ref(),
+        );
+        let mut states = transforms::build_states_for_rules(rules, resolver).map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transform_init_failed",
+                e.to_string(),
+            )
+        })?;
+        let context = transforms::TransformRuntimeContext {
+            image_transform_cache: state.image_transform_cache.clone(),
+            http_client: state.http.clone(),
+            upstream_provider_type,
+        };
+        transforms::apply_transforms(
+            transforms::UrpData::Response(resp),
+            rules,
+            &mut states,
+            model,
+            Phase::Response,
+            &context,
+            resolver,
+        )
+        .await
+        .map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transform_apply_failed",
+                e.to_string(),
+            )
+        })?;
     }
-    let custom_snapshot = state.custom_transform_store.snapshot();
-    let resolver = transforms::TransformResolver::new(
-        state.transform_registry.as_ref(),
-        custom_snapshot.as_ref(),
-    );
-    let mut states = transforms::build_states_for_rules(rules, resolver).map_err(|e| {
-        AppError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "transform_init_failed",
-            e.to_string(),
-        )
-    })?;
-    let context = transforms::TransformRuntimeContext {
-        image_transform_cache: state.image_transform_cache.clone(),
-        http_client: state.http.clone(),
-        upstream_provider_type,
-    };
-    transforms::apply_transforms(
-        transforms::UrpData::Response(resp),
-        rules,
-        &mut states,
-        model,
-        Phase::Response,
-        &context,
-        resolver,
-    )
-    .await
-    .map_err(|e| {
-        AppError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "transform_apply_failed",
-            e.to_string(),
-        )
-    })
+    urp::integerize_tool_call_nodes(&mut resp.output);
+    Ok(())
 }
 
 pub(super) async fn transform_urp_stream(
@@ -344,7 +345,8 @@ pub(super) async fn transform_urp_stream(
                         )
                     })?;
 
-                    for auth_event in auth_events {
+                    for mut auth_event in auth_events {
+                        urp::integerize_tool_call_stream_event(&mut auth_event);
                         tx.send(auth_event).await.map_err(|_| {
                             AppError::new(
                                 StatusCode::BAD_GATEWAY,

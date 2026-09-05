@@ -8,6 +8,7 @@ pub mod replicate;
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FILE_ID_ORIGIN_EXTRA_KEY, InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage,
+    tool_call_arguments_for_wire,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -288,7 +289,7 @@ pub fn extract_tool_calls(parts: &[Part]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": name,
-                    "arguments": arguments
+                    "arguments": tool_call_arguments_for_wire(arguments)
                 }
             }));
         }
@@ -338,7 +339,7 @@ pub fn extract_tool_calls_from_nodes(nodes: &[Node]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": name,
-                    "arguments": arguments
+                    "arguments": tool_call_arguments_for_wire(arguments)
                 }
             }));
         }
