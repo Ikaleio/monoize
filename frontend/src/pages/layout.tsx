@@ -22,21 +22,27 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
+} from "@/components/ui/sidebar";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
@@ -49,95 +55,71 @@ function NavLink({
   to,
   icon: Icon,
   label,
-  onClick,
-  layoutId = "nav-active",
-  disableLayoutAnimation = false,
-  collapsed = false,
   exact = false,
 }: {
   to: string;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
-  onClick?: () => void;
-  layoutId?: string;
-  disableLayoutAnimation?: boolean;
-  collapsed?: boolean;
   exact?: boolean;
 }) {
   const location = useLocation();
+  const { isMobile, state, setOpenMobile } = useSidebar();
   const isActive = exact
     ? location.pathname === to
     : location.pathname === to || location.pathname.startsWith(to + "/");
 
-  const link = (
-    <Link
-      to={to}
-      onClick={onClick}
-      className={cn(
-        "relative flex items-center rounded-md text-sm font-medium transition-colors duration-150",
-        collapsed ? "justify-center px-2 py-2" : "gap-3 px-2.5 py-1.5",
-        isActive
-          ? "text-foreground"
-          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-      )}
-    >
-      {isActive && (
-        disableLayoutAnimation ? (
-          <div className="absolute inset-0 rounded-md bg-accent" />
-        ) : (
-          <motion.div
-            layoutId={layoutId}
-            className="absolute inset-0 rounded-md bg-accent"
-            transition={navTransition}
-          />
-        )
-      )}
-      <span className={cn("relative z-10 flex items-center", collapsed ? "" : "gap-3")}>
-        <Icon className={cn("h-4 w-4 shrink-0", isActive && "text-primary")} />
-        {!collapsed && label}
-      </span>
-    </Link>
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        asChild
+        isActive={isActive}
+        tooltip={label}
+        className="relative"
+      >
+        <Link
+          to={to}
+          onClick={() => setOpenMobile(false)}
+          aria-current={isActive ? "page" : undefined}
+          aria-label={label}
+        >
+          {isActive && !isMobile && (
+            <motion.div
+              layoutId={`nav-active-${state}`}
+              className="absolute inset-0 rounded-md bg-sidebar-accent"
+              transition={navTransition}
+            />
+          )}
+          <Icon className={cn("relative", isActive && "text-primary")} />
+          <span className="relative">{label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
-
-  if (collapsed) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>{link}</TooltipTrigger>
-        <TooltipContent side="right" sideOffset={8}>
-          {label}
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
-
-  return link;
 }
 
-function Sidebar({
-  onNavigate,
-  onCollapse,
-  onExpand,
-  layoutId = "nav-active",
-  disableLayoutAnimation = false,
-  collapsed = false,
-}: {
-  onNavigate?: () => void;
-  onCollapse?: () => void;
-  onExpand?: () => void;
-  layoutId?: string;
-  disableLayoutAnimation?: boolean;
-  collapsed?: boolean;
-}) {
+function AppSidebar() {
   const { user } = useAuth();
   const { t } = useTranslation();
+  const { isMobile, state, setOpenMobile, toggleSidebar } = useSidebar();
+  const collapsed = !isMobile && state === "collapsed";
+  const onNavigate = () => setOpenMobile(false);
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
 
   const navItems = [
-    { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
+    {
+      to: "/dashboard",
+      icon: LayoutDashboard,
+      label: t("nav.dashboard"),
+      exact: true,
+    },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/wallet", icon: Wallet, label: t("nav.wallet") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
-    { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
+    {
+      to: "/dashboard/playground",
+      icon: MessageSquareCode,
+      label: t("nav.playground"),
+    },
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
   ];
 
@@ -145,22 +127,29 @@ function Sidebar({
     { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard") },
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
-    { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
+    {
+      to: "/dashboard/plans",
+      icon: CalendarClock,
+      label: t("nav.billingPlans"),
+    },
     { to: "/dashboard/payments", icon: CreditCard, label: t("nav.payments") },
     { to: "/dashboard/users", icon: Users, label: t("nav.users") },
     { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
-    { to: "/dashboard/custom-transforms", icon: Code2, label: t("nav.customTransforms") },
-    { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
+    {
+      to: "/dashboard/custom-transforms",
+      icon: Code2,
+      label: t("nav.customTransforms"),
+    },
+    {
+      to: "/dashboard/admin-settings",
+      icon: Settings,
+      label: t("nav.settings"),
+    },
   ];
 
   return (
-    <TooltipProvider delayDuration={0}>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.2 }}
-        className={cn("flex h-full flex-col p-3", collapsed ? "items-center" : "")}
-      >
+    <Sidebar variant="sidebar" collapsible="icon">
+      <SidebarHeader className="p-3 group-data-[collapsible=icon]:items-center">
         {collapsed ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -171,7 +160,7 @@ function Sidebar({
                 className="group size-10 p-1"
                 aria-label={t("nav.expandSidebar")}
                 aria-expanded={false}
-                onClick={onExpand}
+                onClick={toggleSidebar}
               >
                 <span className="relative flex size-8 items-center justify-center rounded-lg bg-foreground text-background shadow-sm">
                   <MonoizeLogo className="absolute inset-0 !size-full transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0" />
@@ -190,6 +179,7 @@ function Sidebar({
           <div className="flex items-center gap-2">
             <Link
               to="/dashboard"
+              onClick={onNavigate}
               className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2.5 py-2.5 transition-colors hover:bg-accent/50"
             >
               <motion.div
@@ -201,11 +191,15 @@ function Sidebar({
                 <MonoizeLogo className="size-full" />
               </motion.div>
               <div className="flex min-w-0 flex-col leading-none">
-                <span className="truncate font-display text-sm font-semibold tracking-tight">Monoize</span>
-                <span className="mt-0.5 truncate text-xs text-muted-foreground">Console</span>
+                <span className="truncate font-display text-sm font-semibold tracking-tight">
+                  Monoize
+                </span>
+                <span className="mt-0.5 truncate text-xs text-muted-foreground">
+                  Console
+                </span>
               </div>
             </Link>
-            {onCollapse && (
+            {!isMobile && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -215,7 +209,7 @@ function Sidebar({
                     className="shrink-0"
                     aria-label={t("nav.collapseSidebar")}
                     aria-expanded={true}
-                    onClick={onCollapse}
+                    onClick={toggleSidebar}
                   >
                     <PanelLeftClose data-icon="inline-start" />
                   </Button>
@@ -227,58 +221,47 @@ function Sidebar({
             )}
           </div>
         )}
-
-        <Separator className="my-3" />
-
-        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              {...item}
-              onClick={onNavigate}
-              layoutId={layoutId}
-              disableLayoutAnimation={disableLayoutAnimation}
-              collapsed={collapsed}
-            />
-          ))}
-
+      </SidebarHeader>
+      <SidebarSeparator className="mx-3" />
+      <SidebarContent>
+        <nav aria-label={t("nav.sidebarTitle")}>
+          <SidebarGroup className="p-3 group-data-[collapsible=icon]:px-4">
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {navItems.map((item) => (
+                  <NavLink key={item.to} {...item} />
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
           {isAdmin && (
             <>
-              <Separator className="my-2" />
-              {!collapsed && (
-                <p className="px-2.5 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  {t("nav.admin")}
-                </p>
-              )}
-              {adminNavItems.map((item) => (
-                <NavLink
-                  key={item.to}
-                  {...item}
-                  onClick={onNavigate}
-                  layoutId={layoutId}
-                  disableLayoutAnimation={disableLayoutAnimation}
-                  collapsed={collapsed}
-                />
-              ))}
+              <SidebarSeparator className="mx-3" />
+              <SidebarGroup className="p-3 group-data-[collapsible=icon]:px-4">
+                <SidebarGroupLabel>{t("nav.admin")}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {adminNavItems.map((item) => (
+                      <NavLink key={item.to} {...item} />
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
             </>
           )}
         </nav>
-
-        {/* Account menu (dashboard-ui-layout.spec.md DL3a-DL3g) */}
-        <div className="mt-auto pt-3">
-          <Separator className="mb-3" />
-          <UserCenterMenu collapsed={collapsed} onNavigate={onNavigate} />
-        </div>
-      </motion.div>
-    </TooltipProvider>
+      </SidebarContent>
+      <SidebarFooter className="gap-3 p-3">
+        <SidebarSeparator className="mx-0" />
+        <UserCenterMenu collapsed={collapsed} onNavigate={onNavigate} />
+      </SidebarFooter>
+    </Sidebar>
   );
 }
 
 export function DashboardLayout() {
   const { user, loading } = useAuth();
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
 
   if (loading) {
     return (
@@ -299,51 +282,21 @@ export function DashboardLayout() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
-      {/* Mobile: floating menu button + sheet */}
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetTrigger asChild>
-          <Button
-            variant="outline"
-            size="icon"
-            className="fixed left-4 top-4 z-50 lg:hidden"
-            aria-label={t("nav.openSidebar")}
-          >
-            <Menu className="h-5 w-5" aria-hidden="true" />
-          </Button>
-        </SheetTrigger>
-        <SheetContent side="left" className="w-64 border-r bg-background p-0 shadow-none">
-          <SheetTitle className="sr-only">{t("nav.sidebarTitle")}</SheetTitle>
-          <SheetDescription className="sr-only">
-            {t("nav.sidebarDescription")}
-          </SheetDescription>
-          <Sidebar onNavigate={() => setOpen(false)} disableLayoutAnimation />
-        </SheetContent>
-      </Sheet>
-
-      {/* Desktop sidebar: full-bleed, user-controlled collapse */}
-      <aside
-        className={cn(
-          "hidden h-dvh shrink-0 overflow-hidden border-r transition-[width] duration-200 ease-out lg:block",
-          desktopSidebarCollapsed ? "w-16" : "w-64"
-        )}
+    <SidebarProvider className="h-dvh overflow-hidden bg-background">
+      <AppSidebar />
+      <SidebarTrigger
+        variant="outline"
+        className="fixed left-4 top-4 z-10 size-11 lg:hidden"
+        aria-label={t("nav.openSidebar")}
       >
-        <div className="h-full">
-          <Sidebar
-            collapsed={desktopSidebarCollapsed}
-            onCollapse={() => setDesktopSidebarCollapsed(true)}
-            onExpand={() => setDesktopSidebarCollapsed(false)}
-            layoutId={desktopSidebarCollapsed ? "nav-active-collapsed" : "nav-active"}
-          />
-        </div>
-      </aside>
+        <Menu aria-hidden="true" />
+      </SidebarTrigger>
 
-      {/* Main content area */}
       <div className="min-h-0 min-w-0 flex flex-1 flex-col overflow-y-auto px-6 py-6 pt-16 lg:px-8 lg:pt-6">
         <main className="mx-auto min-w-0 w-full max-w-6xl flex-1">
           <Outlet />
         </main>
       </div>
-    </div>
+    </SidebarProvider>
   );
 }
