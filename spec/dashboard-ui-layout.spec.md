@@ -27,6 +27,18 @@ lucide expand-sidebar icon while the button remains in that state.
 DL1d. The collapse and expand buttons MUST expose localized accessible names. The
 mobile sheet behavior in DL4 MUST remain independent of the desktop collapse state.
 
+DL1e. The dashboard shell MUST use the shadcn/ui Radix `SidebarProvider` and
+`Sidebar` components with `variant="sidebar"` and `collapsible="icon"`.
+`SidebarHeader`, `SidebarContent`, `SidebarGroup`, `SidebarMenu`, and `SidebarFooter`
+MUST compose the sidebar. Navigation links MUST use `SidebarMenuButton` with
+`isActive` and `aria-current="page"` for the selected route.
+
+DL1f. `SidebarProvider` MUST own desktop and mobile visibility. The mobile breakpoint
+MUST equal `1024px`. Desktop state MUST start expanded on shell mount, without
+restoring a stored preference. Navigation within the shell MUST preserve desktop state.
+Ctrl+B or Meta+B MUST toggle the sidebar for the current viewport.
+Width transitions MUST take 200 ms and MUST stop when reduced motion is requested.
+
 DL2. Top header bar MUST NOT be rendered.
 
 DL3. User/account menu MUST be anchored at sidebar bottom.
@@ -103,6 +115,8 @@ so DL3b through DL3f hold on both desktop and mobile.
 DL4. Mobile (`< lg`) MUST render sidebar via left sheet menu. The menu trigger MUST expose
 a localized accessible name. The Sheet content MUST contain a localized accessible title
 and description even when both strings are visually hidden.
+Selecting a navigation link or the brand link MUST close the mobile sheet.
+The mobile sheet MUST use a `16rem` width and retain its visible close button.
 
 DL5. Sidebar main navigation (always visible to authenticated users) MUST include exactly:
 
@@ -111,6 +125,7 @@ DL5. Sidebar main navigation (always visible to authenticated users) MUST includ
 - `/dashboard/wallet`
 - `/dashboard/logs`
 - `/dashboard/playground`
+- `/dashboard/marketplace`
 
 The `/dashboard/wallet` page content is governed by
 `spec/recharge-system.spec.md` §10.

@@ -56,6 +56,10 @@ DOC-22. Each transform page MUST state: the transform `type_id`, the phase(s), t
 
 DOC-23. Content MUST describe observable behavior only. Statements about defaults, limits, environment variables, endpoints, and transform behavior MUST agree with the specs under `spec/` and the implementation under `src/`.
 
+DOC-24. The Dashboard overview MUST describe sidebar collapse, expansion, mobile navigation,
+and the Ctrl+B or Meta+B shortcut in all four locales. Its navigation section MUST include
+the current sidebar screenshot from the locale set defined by DOC-62.
+
 ## 4. Writing style
 
 DOC-30. All prose MUST follow Simplified Technical English conventions:
