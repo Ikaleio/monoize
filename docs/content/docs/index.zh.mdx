@@ -13,7 +13,7 @@ Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求
 
 - **协议转换：** 支持使用任意受支持的下游端点调用任意配置的上游 Channel 类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。
 - **路由与可靠性：** 一个逻辑模型可以匹配多个有序 Provider。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在发出第一个响应字节后停止回落。参见[路由与可靠性](/zh/docs/routing)。
-- **Transform 变换：** 33 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
+- **Transform 变换：** 34 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
 - **请求捕获：** 捕获功能默认关闭。开启后，Monoize 会记录每次上游尝试的报文。结构化查看器展示每一跳。参见[请求日志](/zh/docs/request-logs)。
 - **仪表盘：** 内嵌 Web 仪表盘管理 Provider、Channel、模型、API Key、用户、计费和日志。参见[仪表盘](/zh/docs/dashboard)。
 ## 支持的端点

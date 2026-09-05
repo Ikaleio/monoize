@@ -1,0 +1,49 @@
+---
+title: "推理：摘要標題"
+description: 為無標題的推理摘要加上標題，並在串流未傳送摘要增量時補發一條摘要增量。
+---
+
+## 行為
+
+此變換在推理摘要沒有標題時，為非空摘要加上 `**{title}**` 和兩個換行。如果推理節點結束時從未傳送過摘要增量，此變換還會在 `NodeDone` 之前補發一條推理摘要增量。
+
+此變換不移動 `content`。它不修改 `encrypted` 或 `source`。如果需要先把明文 `content` 複製到 `summary`，請在同一回應階段鏈中把 `reasoning_content_to_summary` 放在此規則之前。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `reasoning_summary_heading` |
+| 階段 | `response` |
+| 範圍 | Provider, 全域, API 金鑰 |
+
+## 適用場景
+
+- Responses 用戶端會隱藏無標題推理摘要，或只渲染即時 `response.reasoning_summary_text.delta`。
+- 同時啟用 `reasoning_content_to_summary` 時，把本規則放在它後面。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `default_title` | string | 否 | `"Thinking"` | 第一條即時摘要增量使用的標題。`derive_title` 為 false 時，完整摘要也使用該標題。空值變為 `"Thinking"`。 |
+| `derive_title` | boolean | 否 | `false` | 為 true 時，沒有先前即時標題的完整摘要使用從首句派生的標題。即時增量一律使用 `default_title`。 |
+| `max_title_chars` | integer | 否 | `64` | 清洗後標題的最大 Unicode 純量數量。該值必須至少為 `1`。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "reasoning_summary_heading",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "default_title": "Thinking",
+    "derive_title": false,
+    "max_title_chars": 64
+  }
+}
+```

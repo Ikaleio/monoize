@@ -1,0 +1,49 @@
+---
+title: "推論: サマリー見出し"
+description: 見出しのない推論サマリーに見出しを付け、ストリームがサマリーデルタを省略した場合はキャッチアップデルタを挿入します。
+---
+
+## 動作
+
+この変換は、推論サマリーに見出しがない場合、空でないサマリーの先頭に `**{title}**` と改行 2 つを付けます。推論ノードがサマリーデルタを一度も送らずに完了した場合は、`NodeDone` の前に推論サマリーデルタを挿入します。
+
+この変換は `content` を移動しません。`encrypted` と `source` も変更しません。プレーンテキストの `content` を先に `summary` へコピーする必要がある場合は、同じレスポンス段階チェーンで `reasoning_content_to_summary` をこのルールより前に置きます。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `reasoning_summary_heading` |
+| フェーズ | `response` |
+| スコープ | Provider, グローバル, API キー |
+
+## 使いどころ
+
+- Responses クライアントが見出しのない推論サマリーを隠す、またはライブの `response.reasoning_summary_text.delta` だけを描画する。
+- `reasoning_content_to_summary` も有効にする場合は、このルールをその後に置く。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `default_title` | string | いいえ | `"Thinking"` | 最初のライブサマリーデルタに使う見出し。`derive_title` が false のときは完了サマリーにも使う。空の値は `"Thinking"` になる。 |
+| `derive_title` | boolean | いいえ | `false` | true のとき、先行するライブ見出しがない完了サマリーは先頭文から見出しを作る。ライブデルタは常に `default_title` を使う。 |
+| `max_title_chars` | integer | いいえ | `64` | 正規化後の見出しの Unicode スカラ数の上限。値は `1` 以上でなければならない。 |
+
+### ルール例
+
+```json
+{
+  "transform": "reasoning_summary_heading",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "default_title": "Thinking",
+    "derive_title": false,
+    "max_title_chars": 64
+  }
+}
+```

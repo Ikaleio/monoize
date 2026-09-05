@@ -188,6 +188,7 @@ TM-TF-4. Allowed API-key response-phase transforms are exactly:
 - `reasoning_content_to_summary`
 - `reasoning_inject_content_field`
 - `reasoning_summary_to_raw_cot`
+- `reasoning_summary_heading`
 - `image_markdown_to_output`
 - `image_output_to_markdown`
 - `image_compress_output`

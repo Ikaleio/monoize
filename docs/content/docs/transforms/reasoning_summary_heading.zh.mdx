@@ -1,0 +1,49 @@
+---
+title: "推理：摘要标题"
+description: 为无标题的推理摘要添加标题，并在流未发送摘要增量时补发一条摘要增量。
+---
+
+## 行为
+
+此变换在推理摘要没有标题时，为非空摘要添加 `**{title}**` 和两个换行。如果推理节点结束时从未发送过摘要增量，此变换还会在 `NodeDone` 之前补发一条推理摘要增量。
+
+此变换不移动 `content`。它不修改 `encrypted` 或 `source`。如果需要先把明文 `content` 复制到 `summary`，请在同一响应阶段链中把 `reasoning_content_to_summary` 放在此规则之前。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `reasoning_summary_heading` |
+| 阶段 | `response` |
+| 范围 | Provider, 全局, API 密钥 |
+
+## 适用场景
+
+- Responses 客户端会隐藏无标题推理摘要，或只渲染实时 `response.reasoning_summary_text.delta`。
+- 同时启用 `reasoning_content_to_summary` 时，把本规则放在它后面。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `default_title` | string | 否 | `"Thinking"` | 第一条实时摘要增量使用的标题。`derive_title` 为 false 时，完整摘要也使用该标题。空值变为 `"Thinking"`。 |
+| `derive_title` | boolean | 否 | `false` | 为 true 时，没有先前实时标题的完整摘要使用从首句派生的标题。实时增量始终使用 `default_title`。 |
+| `max_title_chars` | integer | 否 | `64` | 清洗后标题的最大 Unicode 标量数量。该值必须至少为 `1`。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "reasoning_summary_heading",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "default_title": "Thinking",
+    "derive_title": false,
+    "max_title_chars": 64
+  }
+}
+```
