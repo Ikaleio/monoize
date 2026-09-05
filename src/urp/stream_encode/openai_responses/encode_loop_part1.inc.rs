@@ -63,7 +63,11 @@ fn materialize_deferred_message_state(
         .expect("deferred message state retains its header");
     let starts_new_shared_message = active_node_message_output.as_ref().is_none_or(|active| {
         active.zone != ResponsesOutputZone::Message
-            || active.item.get("phase").and_then(Value::as_str).map(str::to_string)
+            || active
+                .item
+                .get("phase")
+                .and_then(Value::as_str)
+                .map(str::to_string)
                 != node_state.phase
     });
     if starts_new_shared_message {
@@ -217,8 +221,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
         streamed_output_indices: &mut HashSet<usize>,
         stream_elapsed_secs: u64,
     ) -> AppResult<()> {
-        if node_state.zone != ResponsesOutputZone::Reasoning
-            || node_state.output_item_start_emitted
+        if node_state.zone != ResponsesOutputZone::Reasoning || node_state.output_item_start_emitted
         {
             return Ok(());
         }
@@ -284,7 +287,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     )
                 };
                 for key in ["store", "previous_response_id"] {
-                    if let Some(value) = extra_body.get(key) { payload["response"][key] = value.clone(); }
+                    if let Some(value) = extra_body.get(key) {
+                        payload["response"][key] = value.clone();
+                    }
                 }
                 send_responses_event(&tx, &mut seq, "response.created", payload.clone()).await?;
                 send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
@@ -308,7 +313,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let zone = zone_from_node_header(&header, &extra_body);
                 let phase = node_header_phase(&header);
                 if zone == ResponsesOutputZone::Message
-                    && matches!(header, urp::NodeHeader::Image { .. } | urp::NodeHeader::File { .. })
+                    && matches!(
+                        header,
+                        urp::NodeHeader::Image { .. } | urp::NodeHeader::File { .. }
+                    )
                 {
                     node_states.insert(
                         node_index,
@@ -480,7 +488,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     continue;
                 }
                 if let urp::NodeDelta::ProviderItem { data } = &delta
-                    && let Some(downstream_event) = image_generation_call_downstream_event(&extra_body)
+                    && let Some(downstream_event) =
+                        image_generation_call_downstream_event(&extra_body)
                 {
                     send_responses_event(
                         &tx,
@@ -692,6 +701,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         }
                     }
                     urp::NodeDelta::ToolCallArguments { arguments } => {
+                        let arguments = urp::tool_call_arguments_for_wire(arguments);
                         append_node_delta_to_completed_item(
                             node_state,
                             &urp::NodeDelta::ToolCallArguments {
@@ -910,6 +920,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         extra_body,
                         ..
                     } => {
+                        let arguments = urp::tool_call_arguments_for_wire(arguments);
                         append_node_delta_to_completed_item(
                             &mut node_state,
                             &urp::NodeDelta::ToolCallArguments {
@@ -1260,6 +1271,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             extra_body,
                             ..
                         } => {
+                            let arguments = urp::tool_call_arguments_for_wire(arguments);
                             append_node_delta_to_completed_item(
                                 &mut node_state,
                                 &urp::NodeDelta::ToolCallArguments {
@@ -1281,7 +1293,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                         "output_index": node_state.output_index,
                                     }),
                                     "delta",
-                                    arguments,
+                                    &arguments,
                                     sse_max_frame_length,
                                 )
                                 .await?;
@@ -1485,7 +1497,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &completed_output_items,
                     );
                 }
-                if terminal_status == "completed" && completed_response.get("completed_at").is_none()
+                if terminal_status == "completed"
+                    && completed_response.get("completed_at").is_none()
                 {
                     completed_response["completed_at"] = json!(now_ts());
                 }
@@ -1641,10 +1654,7 @@ fn image_generation_call_downstream_event(extra_body: &HashMap<String, Value>) -
     }
 }
 
-fn image_generation_call_event_payload(
-    data: &Value,
-    extra_body: &HashMap<String, Value>,
-) -> Value {
+fn image_generation_call_event_payload(data: &Value, extra_body: &HashMap<String, Value>) -> Value {
     let mut payload = match data {
         Value::Object(map) => map.clone(),
         Value::Null => Map::new(),
@@ -1803,11 +1813,7 @@ fn stream_output_item_start_stub_from_node_header(
                     name,
                     ..
                 } => (*tool_type, call_id.clone(), name.clone()),
-                _ => (
-                    urp::ToolCallType::Function,
-                    String::new(),
-                    String::new(),
-                ),
+                _ => (urp::ToolCallType::Function, String::new(), String::new()),
             };
             let mut obj = Map::new();
             obj.insert(
@@ -1857,7 +1863,12 @@ fn stream_output_item_start_stub_from_node_header(
             obj.insert("type".to_string(), json!(item_type));
             if let Some(id) = id
                 .clone()
-                .or_else(|| extra_body.get("id").and_then(Value::as_str).map(str::to_string))
+                .or_else(|| {
+                    extra_body
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
                 .or_else(|| {
                     envelope_extra
                         .get("id")
@@ -2111,7 +2122,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
                     "arguments"
                 }
                 .to_string(),
-                json!(arguments),
+                json!(urp::tool_call_arguments_for_wire(arguments)),
             );
             obj.insert(
                 "id".to_string(),
@@ -2149,10 +2160,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert(
-                "content".to_string(),
-                json!([part]),
-            );
+            obj.insert("content".to_string(), json!([part]));
             let id = extra_body
                 .get("id")
                 .and_then(Value::as_str)
@@ -2200,10 +2208,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert(
-                "content".to_string(),
-                json!([part]),
-            );
+            obj.insert("content".to_string(), json!([part]));
             let id = extra_body
                 .get("id")
                 .and_then(Value::as_str)
@@ -2841,14 +2846,18 @@ fn reconcile_completed_response_output_statuses(
                 responses_output_items_semantically_match(done_item, terminal_item)
             })
             .or_else(|| {
-                completed_output_items.iter().find(|(output_index, done_item)| {
-                    *output_index == terminal_position
-                        && done_item.get("type").and_then(Value::as_str)
-                            == terminal_item.get("type").and_then(Value::as_str)
-                })
+                completed_output_items
+                    .iter()
+                    .find(|(output_index, done_item)| {
+                        *output_index == terminal_position
+                            && done_item.get("type").and_then(Value::as_str)
+                                == terminal_item.get("type").and_then(Value::as_str)
+                    })
             })
             .map(|(_, item)| item);
-        let Some(done_status) = matching_done_item.and_then(|item| item.get("status")).cloned()
+        let Some(done_status) = matching_done_item
+            .and_then(|item| item.get("status"))
+            .cloned()
         else {
             continue;
         };
@@ -2863,7 +2872,9 @@ fn non_empty_string_field_matches(left: &Value, right: &Value, field: &str) -> b
         left.get(field).and_then(Value::as_str),
         right.get(field).and_then(Value::as_str),
     ) {
-        (Some(left_value), Some(right_value)) => !left_value.is_empty() && left_value == right_value,
+        (Some(left_value), Some(right_value)) => {
+            !left_value.is_empty() && left_value == right_value
+        }
         _ => false,
     }
 }
@@ -3067,10 +3078,7 @@ async fn emit_missing_terminal_message_child_lifecycles(
         if !matches!(part_type, "output_text" | "text") {
             continue;
         }
-        let text = part
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
         let mut added_part = part.clone();
         if let Some(obj) = added_part.as_object_mut() {
             obj.insert("text".to_string(), Value::String(String::new()));
@@ -3104,12 +3112,8 @@ async fn emit_missing_terminal_message_child_lifecycles(
             )
             .await?;
         }
-        let mut done_payload = responses_text_delta_payload(
-            phase,
-            item,
-            output_index as u64,
-            content_index as u64,
-        );
+        let mut done_payload =
+            responses_text_delta_payload(phase, item, output_index as u64, content_index as u64);
         if let Some(obj) = done_payload.as_object_mut() {
             obj.insert("text".to_string(), Value::String(text.to_string()));
         }
@@ -3328,12 +3332,13 @@ async fn emit_missing_terminal_sub_lifecycles(
                 }
             }
             "function_call" | "custom_tool_call" => {
-                let is_custom = item.get("type").and_then(Value::as_str)
-                    == Some("custom_tool_call");
-                let arguments = item
-                    .get(if is_custom { "input" } else { "arguments" })
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+                let is_custom =
+                    item.get("type").and_then(Value::as_str) == Some("custom_tool_call");
+                let arguments = urp::tool_call_arguments_for_wire(
+                    item.get(if is_custom { "input" } else { "arguments" })
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
                 if function_args_delta_indices.insert(*output_index) && !arguments.is_empty() {
                     send_responses_delta_string(
                         tx,
@@ -3348,7 +3353,7 @@ async fn emit_missing_terminal_sub_lifecycles(
                             "output_index": output_index,
                         }),
                         "delta",
-                        arguments,
+                        &arguments,
                         sse_max_frame_length,
                     )
                     .await?;
@@ -3363,7 +3368,7 @@ async fn emit_missing_terminal_sub_lifecycles(
                             "response.function_call_arguments.done"
                         },
                         json!({
-                            (if is_custom { "input" } else { "arguments" }): item.get(if is_custom { "input" } else { "arguments" }).cloned().unwrap_or(Value::String(String::new())),
+                            (if is_custom { "input" } else { "arguments" }): arguments,
                             "call_id": item.get("call_id").cloned().unwrap_or(Value::Null),
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "name": item.get("name").cloned().unwrap_or(Value::Null),

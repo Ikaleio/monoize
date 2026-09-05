@@ -62,6 +62,15 @@ ENC-6. Logical downstream envelope reconstruction belongs only to the encoder. A
 
 ENC-7. ProviderItem replay is same-protocol only. An encoder MUST replay `ProviderItem.body` only when `ProviderItem.origin_protocol` exactly equals the target provider protocol. On mismatch, the encoder MUST omit the ProviderItem and MUST NOT convert it to text or prompt content.
 
+ENC-8. When encoding a `ToolCall` node, Monoize MUST rewrite JSON numbers in `arguments` that are finite integer-valued floats and that equal an `i64` after conversion as JSON integers. Precondition: `arguments` parses as JSON. Postcondition: those numbers appear without a fractional part (`4338.0` becomes `4338`). Monoize MUST leave non-JSON `arguments`, non-finite numbers, non-integer-valued numbers, and numbers outside the `i64` range unchanged. This rewrite MUST apply to:
+
+1. non-stream downstream and upstream `arguments` / `input` / `args` fields;
+2. stream `response.function_call_arguments.done` and `response.custom_tool_call_input.done` payloads;
+3. stream `response.output_item.done` function-call items;
+4. a `NodeDelta::ToolCallArguments` payload that is itself a complete JSON document.
+
+The rewrite is unconditional. It does not require a transform rule.
+
 ### 2.1 Cross-family nested passthrough stripping
 
 XSTRIP-1. Protocol family names and cross-family hop semantics are defined by `spec/urp-v2-flat-structure.spec.md`.

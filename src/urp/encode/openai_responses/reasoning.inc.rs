@@ -254,7 +254,7 @@ fn encode_tool_call_item(part: &Part, output_item: bool) -> Option<Value> {
                     ToolCallType::Custom => "input",
                 }
                 .to_string(),
-                Value::String(arguments.clone()),
+                Value::String(crate::urp::tool_call_arguments_for_wire(arguments)),
             );
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))

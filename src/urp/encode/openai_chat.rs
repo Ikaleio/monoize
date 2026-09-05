@@ -11,7 +11,7 @@ use crate::urp::{
     CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING_CONTENT,
     CHAT_THINKING_CONFIG_EXTRA_KEY, FILE_ID_ORIGIN_OPENAI, FileSource, FinishReason, ImageSource,
     Node, OrdinaryRole, ProviderProtocol, ResponseFormat, StopControl, ToolCallType, ToolChoice,
-    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse, tool_call_arguments_for_wire,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -39,12 +39,12 @@ fn encode_chat_tool_call(
         ToolCallType::Function => json!({
             "id": call_id,
             "type": "function",
-            "function": { "name": name, "arguments": arguments }
+            "function": { "name": name, "arguments": tool_call_arguments_for_wire(arguments) }
         }),
         ToolCallType::Custom => json!({
             "id": call_id,
             "type": "custom",
-            "custom": { "name": name, "input": arguments }
+            "custom": { "name": name, "input": tool_call_arguments_for_wire(arguments) }
         }),
     }
 }
@@ -353,7 +353,7 @@ fn push_part_into_pending_chat_message(
                     .and_then(Value::as_bool)
                     == Some(true)
             {
-                let mut function_call = json!({ "name": name, "arguments": arguments });
+                let mut function_call = json!({ "name": name, "arguments": tool_call_arguments_for_wire(arguments) });
                 if let Some(obj) = function_call.as_object_mut() {
                     merge_chat_wire_extra(obj, extra_body);
                 }
@@ -706,7 +706,7 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                         .and_then(Value::as_bool)
                         == Some(true)
                 {
-                    let mut function_call = json!({ "name": name, "arguments": arguments });
+                    let mut function_call = json!({ "name": name, "arguments": tool_call_arguments_for_wire(arguments) });
                     if let Some(obj) = function_call.as_object_mut() {
                         merge_chat_wire_extra(obj, extra_body);
                     }

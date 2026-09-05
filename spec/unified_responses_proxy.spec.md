@@ -1679,6 +1679,8 @@ STR3g. For downstream `/v1/responses` message text streaming:
 
 STR3h. For downstream `/v1/responses` function-call streaming, after the last `response.function_call_arguments.delta` for a function-call item and before that item's `response.output_item.done`, Monoize MUST emit exactly one `response.function_call_arguments.done` containing the full aggregated `arguments` plus `call_id`, `item_id`, `name`, and `output_index`.
 
+STR3h.1. Full function-call `arguments` strings emitted to a downstream client MUST apply ENC-8 from `spec/urp-transform-system.spec.md`. Integer-valued floats in parsed JSON become JSON integers. A complete JSON document sent as one arguments delta MUST receive the same rewrite. A partial JSON fragment MUST remain unchanged.
+
 STR3i. For downstream `/v1/responses` reasoning-summary streaming, Monoize MUST emit `response.reasoning_summary_part.added` before the first `response.reasoning_summary_text.delta` for that summary part.
 
 STR3j. Downstream `/v1/responses` SSE MUST obey nested lifecycle ordering. For each `output_index`, every child lifecycle belonging to that output item MUST close before Monoize emits `response.output_item.done` for that same `output_index`. In particular:

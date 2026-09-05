@@ -1225,7 +1225,7 @@ async fn emit_tool_call_arguments_delta(
         created,
         logical_model,
         delta,
-        arguments,
+        &urp::tool_call_arguments_for_wire(arguments),
         if tool_call.legacy_function_call {
             chat_delta_path_function_call_arguments
         } else if tool_call.tool_type == urp::ToolCallType::Custom {

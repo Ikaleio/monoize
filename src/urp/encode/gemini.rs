@@ -557,7 +557,8 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
             if *tool_type == crate::urp::ToolCallType::Custom {
                 return None;
             }
-            let args = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
+            let mut args = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
+            crate::urp::integerize_json_floats(&mut args);
             Some((
                 OrdinaryRole::Assistant,
                 json!({
