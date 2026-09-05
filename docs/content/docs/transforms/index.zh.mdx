@@ -7,7 +7,7 @@ description: 按 Provider、API 密钥或全局范围修改请求和响应的有
 
 变换（Transform）是一条规则：在 Monoize 为上游编码之前修改请求，或在返回客户端之前修改响应。变换作用于类型化的内部表示，而不是原始 JSON 文本。因此同一个变换对任何协议组合的行为都一致。
 
-Monoize 内置 33 个变换。本节为每个变换提供独立页面。
+Monoize 内置 34 个变换。本节为每个变换提供独立页面。
 
 ## 变换挂载位置
 
@@ -51,7 +51,7 @@ Monoize 内置 33 个变换。本节为每个变换提供独立页面。
 | 字段 | 设置、删除或限制原始请求/响应字段 | `field_override_max_tokens`、`field_remove`、`field_set` |
 | 图像 | 压缩、转换或解析图像 | `image_compress_input`、`image_compress_output`、`image_enable_openai_generation_tool`、`image_markdown_to_output`、`image_output_to_markdown`、`image_resolve_urls` |
 | 提示词 | 调整消息列表 | `prompt_append_empty_user`、`prompt_inject_system`、`prompt_strip_anthropic_billing_header`、`prompt_strip_orphaned_tool_calls` |
-| 推理 | 移动、移除或重编码推理内容 | `reasoning_content_to_summary`、`reasoning_effort_to_budget`、`reasoning_effort_to_model_suffix`、`reasoning_from_think_xml`、`reasoning_inject_content_field`、`reasoning_strip_encrypted`、`reasoning_strip_input`、`reasoning_strip_output`、`reasoning_summary_to_raw_cot`、`reasoning_to_think_xml` |
+| 推理 | 移动、移除或重编码推理内容 | `reasoning_content_to_summary`、`reasoning_effort_to_budget`、`reasoning_effort_to_model_suffix`、`reasoning_from_think_xml`、`reasoning_inject_content_field`、`reasoning_strip_encrypted`、`reasoning_strip_input`、`reasoning_strip_output`、`reasoning_summary_heading`、`reasoning_summary_to_raw_cot`、`reasoning_to_think_xml` |
 | 角色 | 改写或合并消息角色 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
 | 流式 | 控制流式行为 | `stream_force`、`stream_split_sse_frames` |
 

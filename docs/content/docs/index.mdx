@@ -13,7 +13,7 @@ Monoize converts protocol semantics instead of renaming JSON fields. It decodes 
 
 - **Protocol conversion:** Call any supported endpoint with any configured upstream Channel type. Monoize converts between Responses, Chat Completions, Messages, Gemini, and image protocols in streaming and non-streaming modes.
 - **Routing and reliability:** A logical model can route to multiple ordered Providers. Each Provider contains weighted Channels. Monoize retries retryable failures, advances to the next route, and stops fallback after sending the first response byte. See [Routing and Reliability](/en/docs/routing).
-- **Transforms:** 33 built-in transforms adjust requests and responses per Provider, per API key, or globally. See [Transforms](/en/docs/transforms).
+- **Transforms:** 34 built-in transforms adjust requests and responses per Provider, per API key, or globally. See [Transforms](/en/docs/transforms).
 - **Request capture:** Capture is disabled by default. When enabled, Monoize records the payload of each upstream attempt. A structured viewer displays each attempt. See [Request Logs](/en/docs/request-logs).
 - **Dashboard:** An embedded web dashboard manages Providers, Channels, models, API keys, users, billing, and logs. See [Dashboard](/en/docs/dashboard).
 ## Supported endpoints
