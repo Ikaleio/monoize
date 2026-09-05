@@ -59,6 +59,9 @@ curl http://localhost:8080/v1/responses \
 - 当上游提供服务端状态时，Monoize 支持 `previous_response_id` 链。开启会话亲和可以让后续请求到达同一个 Channel。参见[路由与可靠性](/zh/docs/routing)。
 - `GET /v1/responses` 会升级为 WebSocket 传输，供使用该传输的客户端调用。
 - `POST /v1/responses/compact` 压缩一段会话。
+- Monoize 将原生 compact 请求体转发到上游 `POST /v1/responses/compact`。
+- 选定 Channel 后，如果该 Channel 映射了 `{model}-openai-compact`，Monoize 把线路模型改成这个兄弟模型。否则发送会话模型。
+- 计费使用会话模型的价格。兄弟模型 ID 不需要单独的价格记录。
 
 ## Anthropic Messages
 

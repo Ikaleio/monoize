@@ -59,6 +59,9 @@ Notes:
 - Monoize supports `previous_response_id` chains when the upstream provides server-side state. Enable session affinity so follow-up requests reach the same Channel. See [Routing and Reliability](/en/docs/routing).
 - `GET /v1/responses` upgrades to a WebSocket transport for clients that use it.
 - `POST /v1/responses/compact` compacts a conversation.
+- Monoize forwards the native compact body to upstream `POST /v1/responses/compact`.
+- After Channel selection, if that Channel maps `{model}-openai-compact`, Monoize sends that sibling as the wire model. Otherwise it sends the conversation model.
+- Billing uses the conversation model price. The sibling ID does not need its own price row.
 
 ## Anthropic Messages
 

@@ -38,6 +38,8 @@ A Channel `multiplier` of `0` makes requests on that Channel free.
 
 Monoize resolves the redirected upstream model first. It falls back to the logical model only for a redirect without an upstream price.
 
+Before each price lookup, Monoize strips at most one recognized suffix from the model ID. Recognized suffixes are reasoning-effort suffixes and `-openai-compact`. Price the base model. Do not add a separate row for `{model}-openai-compact`.
+
 Monoize multiplies the base charge by the Channel model `multiplier` and the routed group's `billing_ratio`. It records the final charge in nano-USD.
 
 By default, Monoize rejects an unpriced model or a response without required Usage. Set the global free-settlement flags or a Provider override only when zero settlement is acceptable.

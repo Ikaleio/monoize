@@ -228,7 +228,7 @@ RE7. When `collect_provider_attempts` looks up `urp.model` in each `channel.mode
 
 RE8. When a suffix match resolves to a base model, the resolved `reasoning_effort` value MUST be injected into the URP request's `reasoning.effort` field (typed flow) before the request is encoded for the upstream provider. If the user already specified `reasoning_effort` explicitly in the request body, the explicit value takes precedence over the suffix-derived value.
 
-RE9. Billing and any other model-pricing identification path use the **base model**'s pricing key. When a model ID ends with a recognized reasoning-tier suffix, Monoize MUST strip that suffix (longest suffix first, at most one suffix removed) before the `model_prices` lookup (`model-pricing.spec.md` MP-R1). The suffix model itself does not need a separate pricing entry.
+RE9. Billing and any other model-pricing identification path use the **base model**'s pricing key. When a model ID ends with a recognized reasoning-tier suffix or the compact sibling suffix `-openai-compact`, Monoize MUST strip that suffix (longest suffix first, at most one suffix removed) before the `model_prices` lookup (`model-pricing.spec.md` MP-R1). The suffix model itself does not need a separate pricing entry.
 
 ### 8.4 Billing: reasoning token pricing
 

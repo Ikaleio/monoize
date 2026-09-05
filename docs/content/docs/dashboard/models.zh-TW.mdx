@@ -38,6 +38,8 @@ Channel 的 `multiplier` 為 `0` 時，該 Channel 上的請求免費。
 
 Monoize 優先解析重新導向後的上游模型。僅在發生重新導向且上游模型沒有價格時，Monoize 才回退到邏輯模型。
 
+每次價格查找前，Monoize 會從模型 ID 去掉至多一個已識別後綴。已識別後綴包括推理力度後綴和 `-openai-compact`。請給基礎模型定價。不要為 `{model}-openai-compact` 單獨建立價格記錄。
+
 Monoize 將基礎費用乘以 Channel 模型的 `multiplier` 和實際路由群組的 `billing_ratio`。最終費用以奈米美元記錄。
 
 Monoize 預設拒絕未定價模型和缺少必要 Usage 的回應。僅在允許零費用結算時，啟用全域免費結算設定或 Provider 覆寫項目。
