@@ -36,7 +36,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: 'Transforms',
         description:
-          '33 built-in transforms adjust requests and responses per Provider, per API key, or globally. Model globs select where each rule applies.',
+          '34 built-in transforms adjust requests and responses per Provider, per API key, or globally. Model globs select where each rule applies.',
       },
       {
         title: 'Routing and reliability',
@@ -65,7 +65,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: 'Transform 变换',
         description:
-          '33 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。模型 glob 决定规则适用范围。',
+          '34 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。模型 glob 决定规则适用范围。',
       },
       {
         title: '路由与可靠性',
@@ -94,7 +94,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: 'Transform 變換',
         description:
-          '33 個內建 Transform 可依 Provider、API 金鑰或全域範圍修改請求和回應。模型 glob 決定規則適用範圍。',
+          '34 個內建 Transform 可依 Provider、API 金鑰或全域範圍修改請求和回應。模型 glob 決定規則適用範圍。',
       },
       {
         title: '路由與可靠性',
@@ -123,7 +123,7 @@ export const homeContent: Record<Locale, HomeContent> = {
       {
         title: 'Transform 変換',
         description:
-          '33 個の組み込み Transform が Provider、API キー、グローバルにリクエストとレスポンスを調整します。モデル glob で適用範囲を選択します。',
+          '34 個の組み込み Transform が Provider、API キー、グローバルにリクエストとレスポンスを調整します。モデル glob で適用範囲を選択します。',
       },
       {
         title: 'ルーティングと信頼性',

@@ -48,7 +48,7 @@ DOC-20. The navigation tree MUST contain exactly these top-level entries in this
 8. Transforms (`transforms/`)
 9. Troubleshooting (`troubleshooting.mdx`)
 
-DOC-21. The Transforms section MUST contain one overview page, one page per built-in transform, and one custom-transforms concept page (`custom-js`). The set of built-in transform pages MUST equal the canonical transform ID list in `spec/urp-transform-system.spec.md` TF-7 (33 transforms). Each built-in transform page filename MUST equal its canonical `type_id` plus the locale suffix.
+DOC-21. The Transforms section MUST contain one overview page, one page per built-in transform, and one custom-transforms concept page (`custom-js`). The set of built-in transform pages MUST equal the canonical transform ID list in `spec/urp-transform-system.spec.md` TF-7 (34 transforms). Each built-in transform page filename MUST equal its canonical `type_id` plus the locale suffix.
 
 DOC-21a. The `custom-js` page documents administrator-authored `js:` transforms per `spec/custom-js-transforms.spec.md`: the frontmatter format, the sandbox contract summary, resource bounds, and the admin management page. It exists in all four locales.
 

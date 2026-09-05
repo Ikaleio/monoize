@@ -33,6 +33,7 @@
     "reasoning_strip_encrypted",
     "reasoning_strip_input",
     "reasoning_strip_output",
+    "reasoning_summary_heading",
     "reasoning_summary_to_raw_cot",
     "reasoning_to_think_xml",
     "---ロール---",

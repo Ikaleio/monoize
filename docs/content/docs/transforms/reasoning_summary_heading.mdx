@@ -1,0 +1,49 @@
+---
+title: "Reasoning: summary heading"
+description: Prefix untitled reasoning summaries with a heading and inject a catch-up summary delta when the stream omitted one.
+---
+
+## What it does
+
+This transform prefixes a non-empty reasoning summary with `**{title}**` and two newlines when the summary has no heading. It also injects a reasoning summary delta before `NodeDone` when that node never streamed a summary delta.
+
+The transform does not move `content`. It does not change `encrypted` or `source`. Enable `reasoning_content_to_summary` earlier in the same response-phase chain if you need plaintext `content` copied into `summary` first.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_summary_heading` |
+| Phase | `response` |
+| Scopes | Provider, Global, API key |
+
+## When to use
+
+- A Responses client hides untitled reasoning summaries, or it only renders live `response.reasoning_summary_text.delta`.
+- Place this rule after `reasoning_content_to_summary` when both rules are enabled.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `default_title` | string | No | `"Thinking"` | Heading used for the first live summary delta, and for complete summaries when `derive_title` is false. Empty values become `"Thinking"`. |
+| `derive_title` | boolean | No | `false` | When true, complete summaries with no prior live heading use a title derived from the first sentence. Live deltas always use `default_title`. |
+| `max_title_chars` | integer | No | `64` | Maximum Unicode scalars in a sanitized title. The value must be at least `1`. |
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_summary_heading",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "default_title": "Thinking",
+    "derive_title": false,
+    "max_title_chars": 64
+  }
+}
+```
