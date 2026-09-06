@@ -111,7 +111,6 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
     merge_responses_text_config(obj, req.extra_body.get("text"));
     merge_extra(obj, &req.extra_body);
-    ensure_responses_encrypted_reasoning_include(obj);
     body
 }
 

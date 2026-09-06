@@ -68,6 +68,8 @@ curl http://localhost:8080/v1/responses \
 - Channel 選択後、その Channel が `{model}-openai-compact` をマップしていれば、Monoize はその兄弟モデルを回線モデルとして送ります。そうでなければ会話モデルを送ります。
 - 課金は会話モデルの価格を使います。兄弟モデル ID に別の価格行は不要です。
 
+Responses 上流へのリクエストでは、Monoize は明示された `include` と `reasoning.summary` の値を保持します。`reasoning.encrypted_content` や既定の要約設定は自動で追加しません。
+
 ## 推論を無効にする
 
 Chat Completions リクエストでは `"reasoning_effort": "none"` を設定してください。Responses リクエストでは `"reasoning": { "effort": "none" }` を設定してください。

@@ -124,31 +124,6 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     }
 }
 
-fn ensure_responses_encrypted_reasoning_include(obj: &mut Map<String, Value>) {
-    const INCLUDE_REASONING_ENCRYPTED_CONTENT: &str = "reasoning.encrypted_content";
-
-    match obj.get_mut("include") {
-        Some(Value::Array(include)) => {
-            if !include
-                .iter()
-                .any(|value| value.as_str() == Some(INCLUDE_REASONING_ENCRYPTED_CONTENT))
-            {
-                include.push(Value::String(
-                    INCLUDE_REASONING_ENCRYPTED_CONTENT.to_string(),
-                ));
-            }
-        }
-        _ => {
-            obj.insert(
-                "include".to_string(),
-                Value::Array(vec![Value::String(
-                    INCLUDE_REASONING_ENCRYPTED_CONTENT.to_string(),
-                )]),
-            );
-        }
-    }
-}
-
 fn sanitize_request_input_item(item: &mut Value) {
     let Some(obj) = item.as_object_mut() else {
         return;

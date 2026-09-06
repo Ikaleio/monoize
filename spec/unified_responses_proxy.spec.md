@@ -759,7 +759,7 @@ PR4c.1. When decoding downstream Responses `input[]`, Monoize MUST decode an ite
 
 If the downstream `input[]` reasoning item omits `id`, Monoize MUST leave `Reasoning.id` absent. Monoize MUST NOT synthesize an id while decoding request-side replay items.
 
-PR4c.2. OpenAI Responses returns `encrypted_content` by default for stateless or zero-data-retention requests. Monoize MAY include legacy value `reasoning.encrypted_content` in the top-level `include` array for providers that still require it. If Monoize appends that value to an existing array, it MUST append it only when the exact string is absent.
+PR4c.2. When encoding an upstream Responses request, Monoize MUST NOT synthesize the top-level `include` field or append `reasoning.encrypted_content` to it. If the request carries `include`, Monoize MUST preserve its value, including array order and duplicates. If `include` is absent, it MUST remain absent. Explicit request transforms MAY set `include` before encoding. This rule applies to both streaming and non-streaming requests.
 
 PR4c.2a. When encoding an upstream `POST /v1/responses` request whose replayed `input[]` history contains tool-calling nodes, Monoize MUST preserve plaintext RawCoT reasoning items from open-source reasoning models. A reasoning item MAY be dropped only when a decoder or transform has explicitly marked it as downstream-only presentation text with `Reasoning.extra_body["_monoize_reasoning_downstream_only_presentation"] = true`. The presence or absence of `encrypted_content` alone MUST NOT cause a raw `content[].reasoning_text` item to be dropped.
 
