@@ -68,6 +68,8 @@ Notes:
 - After Channel selection, if that Channel maps `{model}-openai-compact`, Monoize sends that sibling as the wire model. Otherwise it sends the conversation model.
 - Billing uses the conversation model price. The sibling ID does not need its own price row.
 
+For Responses upstreams, Monoize preserves explicit `include` and `reasoning.summary` values. It does not add `reasoning.encrypted_content` or a default summary setting.
+
 ## Disable reasoning
 
 Set `"reasoning_effort": "none"` in Chat Completions requests. Set `"reasoning": { "effort": "none" }` in Responses requests.

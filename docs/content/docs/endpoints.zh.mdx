@@ -68,6 +68,8 @@ curl http://localhost:8080/v1/responses \
 - 选定 Channel 后，如果该 Channel 映射了 `{model}-openai-compact`，Monoize 把线路模型改成这个兄弟模型。否则发送会话模型。
 - 计费使用会话模型的价格。兄弟模型 ID 不需要单独的价格记录。
 
+向 Responses 上游转发请求时，Monoize 保留显式传入的 `include` 和 `reasoning.summary`。它不会自动添加 `reasoning.encrypted_content` 或默认摘要设置。
+
 ## 关闭推理
 
 在 Chat Completions 请求中设置 `"reasoning_effort": "none"`。在 Responses 请求中设置 `"reasoning": { "effort": "none" }`。
