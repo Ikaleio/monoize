@@ -24,7 +24,7 @@ export function PaginationFooter({
 
   return (
     <div className="flex items-center justify-between gap-2 pt-3">
-      <span className="text-xs text-muted-foreground tabular-nums">
+      <span className="text-sm text-muted-foreground tabular-nums">
         {t("wallet.page", { page, pages })}
       </span>
       <div className="flex items-center gap-1">
@@ -33,7 +33,7 @@ export function PaginationFooter({
             type="button"
             variant="outline"
             size="icon"
-            className="size-11 sm:size-9"
+            className="size-11"
             aria-label={t("wallet.previousPage")}
             disabled={offset === 0}
             onClick={() => onOffsetChange(Math.max(0, offset - pageSize))}
@@ -46,7 +46,7 @@ export function PaginationFooter({
             type="button"
             variant="outline"
             size="icon"
-            className="size-11 sm:size-9"
+            className="size-11"
             aria-label={t("wallet.nextPage")}
             disabled={page >= pages}
             onClick={() => onOffsetChange(offset + pageSize)}

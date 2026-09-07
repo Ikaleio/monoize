@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, useReducedMotion } from "framer-motion";
-import { ArrowDownLeft, ArrowUpRight, BookOpenText, CalendarClock } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  BookOpenText,
+  CalendarClock,
+} from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   Select,
@@ -62,7 +67,7 @@ export function ActivityLedger({
           }}
         >
           <SelectTrigger
-            className="h-11 w-full sm:h-9 sm:w-64"
+            className="h-11 w-full sm:w-64"
             aria-label={t("wallet.kind")}
           >
             <SelectValue />
@@ -83,7 +88,7 @@ export function ActivityLedger({
       {isLoading ? (
         <div className="flex flex-col gap-2" aria-busy="true">
           {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-20 w-full md:h-14" />
+            <Skeleton key={index} className="h-20 w-full lg:h-14" />
           ))}
         </div>
       ) : error && !data ? (
@@ -97,7 +102,7 @@ export function ActivityLedger({
         />
       ) : (
         <div className="flex flex-col gap-3">
-          <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.6fr)_minmax(9rem,0.7fr)_minmax(10rem,0.75fr)] gap-4 border-b px-3 pb-2 text-xs font-medium text-muted-foreground md:grid">
+          <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.6fr)_minmax(9rem,0.7fr)_minmax(10rem,0.75fr)] gap-4 border-b px-3 pb-2 text-xs font-medium text-muted-foreground lg:grid">
             <span>{t("wallet.kind")}</span>
             <span className="text-right">{t("wallet.delta")}</span>
             <span className="text-right">{t("wallet.balanceAfter")}</span>
@@ -118,9 +123,12 @@ export function ActivityLedger({
                   transition={
                     reduced
                       ? { duration: 0 }
-                      : { ...springs.gentle, delay: Math.min(index * 0.03, 0.18) }
+                      : {
+                          ...springs.gentle,
+                          delay: Math.min(index * 0.03, 0.18),
+                        }
                   }
-                  className="grid gap-3 rounded-md px-3 py-3 transition-colors hover:bg-muted/50 md:grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.6fr)_minmax(9rem,0.7fr)_minmax(10rem,0.75fr)] md:items-center md:gap-4"
+                  className="grid gap-3 rounded-md px-3 py-3 transition-colors hover:bg-muted/50 lg:grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.6fr)_minmax(9rem,0.7fr)_minmax(10rem,0.75fr)] lg:items-center lg:gap-4"
                 >
                   <div className="flex min-w-0 items-center gap-3">
                     <span
@@ -138,8 +146,8 @@ export function ActivityLedger({
                     </span>
                   </div>
 
-                  <div className="flex items-baseline justify-between gap-3 md:block md:text-right">
-                    <span className="text-sm text-muted-foreground md:hidden">
+                  <div className="flex items-baseline justify-between gap-3 lg:block lg:text-right">
+                    <span className="text-sm text-muted-foreground lg:hidden">
                       {t("wallet.delta")}
                     </span>
                     <span
@@ -153,8 +161,8 @@ export function ActivityLedger({
                     </span>
                   </div>
 
-                  <div className="flex items-baseline justify-between gap-3 md:block md:text-right">
-                    <span className="text-sm text-muted-foreground md:hidden">
+                  <div className="flex items-baseline justify-between gap-3 lg:block lg:text-right">
+                    <span className="text-sm text-muted-foreground lg:hidden">
                       {t("wallet.balanceAfter")}
                     </span>
                     <span className="text-sm tabular-nums">

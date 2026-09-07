@@ -30,22 +30,28 @@ export function ActivityWorkspace({
       value={activeTab}
       onValueChange={(value) => setActiveTab(value as ActivityTab)}
     >
-      <Card aria-labelledby="wallet-activity-heading">
+      <Card role="region" aria-labelledby="wallet-activity-heading">
         <CardHeader className="grid gap-4 border-b p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
           <div className="flex min-w-0 flex-col gap-1">
-            <CardTitle id="wallet-activity-heading" className="font-display text-lg">
+            <CardTitle id="wallet-activity-heading" className="text-base">
               {t("wallet.activityTitle")}
             </CardTitle>
             <CardDescription className="text-pretty leading-relaxed">
               {t("wallet.activityDescription")}
             </CardDescription>
           </div>
-          <TabsList className="grid h-12 w-full grid-cols-2 sm:h-9 sm:w-auto">
-            <TabsTrigger value="orders" className="h-10 gap-2 sm:h-7">
+          <TabsList className="grid h-auto w-full grid-cols-2 sm:w-auto">
+            <TabsTrigger
+              value="orders"
+              className="h-11 gap-2 [&_svg]:size-4 [&_svg]:shrink-0"
+            >
               <ReceiptText aria-hidden="true" />
               {t("wallet.ordersTab")}
             </TabsTrigger>
-            <TabsTrigger value="ledger" className="h-10 gap-2 sm:h-7">
+            <TabsTrigger
+              value="ledger"
+              className="h-11 gap-2 [&_svg]:size-4 [&_svg]:shrink-0"
+            >
               <BookOpenText aria-hidden="true" />
               {t("wallet.ledgerTab")}
             </TabsTrigger>
@@ -71,7 +77,10 @@ export function ActivityWorkspace({
             value="ledger"
             className="mt-0 data-[state=inactive]:hidden"
           >
-            <ActivityLedger active={activeTab === "ledger"} username={username} />
+            <ActivityLedger
+              active={activeTab === "ledger"}
+              username={username}
+            />
           </TabsContent>
         </CardContent>
       </Card>

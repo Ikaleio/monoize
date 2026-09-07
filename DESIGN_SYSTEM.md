@@ -15,6 +15,8 @@ Use semantic tokens. Do not use raw Tailwind palette colors for repeated semanti
 | `card` | `hsl(0 0% 100%)` | `hsl(0 0% 7%)` | Card surfaces |
 | `border` | `hsl(0 0% 90%)` | `hsl(0 0% 15%)` | Borders, grid texture |
 | `primary` | `hsl(217 91% 53%)` | `hsl(217 91% 60%)` | Primary actions, links, focus rings |
+| `wallet-action` | `hsl(217 91% 48%)` | Same as light | Wallet primary buttons |
+| `wallet-action-foreground` | `hsl(0 0% 100%)` | Same as light | Wallet primary button labels |
 | `muted` | `hsl(0 0% 96%)` | `hsl(0 0% 10%)` | Subdued surfaces |
 
 The palette is neutral gray plus one blue. Do not add new hues for chrome. Semantic status colors are the only other hues.

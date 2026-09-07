@@ -599,25 +599,26 @@ HTTP `404`, code `not_found`.
 
 ## 10. Wallet page (`/dashboard/wallet`)
 
-RC-W1. `/dashboard/wallet` is a main-navigation page for every authenticated
-user (RC-S2 amendment 1). It renders, top to bottom: a page heading, one
-full-width balance band, one funding workspace, and one activity workspace.
-The funding workspace contains separate recharge and plan-capacity regions.
-The activity workspace contains `orders` and `ledger` tabs. `orders` is
-selected on first render. The page MUST NOT reuse the dashboard overview card
-grid or place any of these three regions inside an additional bordered stage.
+RC-W1. `/dashboard/wallet` is available to every authenticated user. It renders
+a page heading and three tabs, in order: account overview, recharge, and activity.
+The overview tab is selected on a normal entry. The `tab` query parameter accepts
+`overview`, `recharge`, or `activity`; an invalid value selects the overview.
+If `order_id` is present without `tab`, the activity tab is selected for the payment return.
+Tab changes preserve other query parameters and support browser back navigation.
+All three panels remain mounted. Inactive panels are hidden and contain no focusable visible controls.
+Recharge inputs, activity filters, pagination, and pending-order polling survive tab changes.
 
-RC-W2. The balance region reads the session user object (`balance_usd`,
-`balance_unlimited`) exactly like `dashboard-ui-layout.spec.md` DL3a/US2,
-without extra fetches. It labels this value as prepaid balance. A balance value
-change replaces the old value with the new value in the same bounded region.
-The balance band MUST use the wallet ink surface and wallet foreground tokens
-in both light and dark themes. The balance, currency label, unlimited status,
-recharge action, and prepaid-balance explanation MUST remain inside the same
-band. The recharge action MUST move focus to the recharge region without
-changing the URL.
+RC-W2. A persistent balance summary precedes the tabs. The overview contains plan capacity.
+The balance card reads `balance_usd` and `balance_unlimited` from the session user.
+It displays the prepaid balance, USD unit, unlimited status when applicable, an
+explanation of prepaid billing, and a recharge action. The balance region uses the standard light or dark theme surface.
+Balance updates replace the amount in the same region. Amounts MUST wrap rather
+than truncate when their complete value exceeds the available width.
+The recharge action selects the recharge tab and moves focus to its tab trigger.
+The balance summary remains visible on every tab without duplication.
+Prepaid balance and plan capacity MUST NOT be added together or presented as one balance.
 
-RC-W2a. The plan-capacity card MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price and allow purchase. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
+RC-W2a. The plan-capacity region MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price and allow purchase. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
 If either load fails, the card MUST render a localized compact error state with
 a retry action. The error state MUST NOT expose the raw error message. A failed
 revalidation that retains cached data MUST keep rendering the cached data.
@@ -633,11 +634,19 @@ RC-W3. The recharge card:
   cached channel data MUST keep rendering the cached data;
 - when zero enabled channels exist, renders a localized empty state and no
   amount controls;
-- renders a channel selector, preset amount buttons for `5`, `10`, `25`, `50`,
-  and `100` USD, and one custom-amount input. A preset outside the selected
-  channel's `[min_credit_usd, max_credit_usd]` MUST be disabled. The channel
-  field and amount field stack below the `sm` breakpoint and render as two
-  columns at or above `sm`;
+- renders preset amount buttons for `5`, `10`, `25`, `50`, and `100` USD,
+  one labeled custom-amount input, and a channel selector, in that order.
+  A preset outside the selected channel's bounds MUST be disabled;
+- shows a payment summary beside the form at or above `lg`, and below it otherwise.
+  The summary shows credit in USD, the selected channel rate and currency, the
+  exact payment preview, a submit button, and a payment-success explanation.
+  Credit preserves every non-zero input decimal place, up to nine places.
+  Invalid amounts show unavailable credit and payment previews and disable submission.
+  A non-empty invalid input also shows an associated localized validation message;
+- submits through a semantic form, including the Enter key. While submission
+  is pending, the inputs and submit button are disabled;
+- while channels load, renders form and summary skeletons. With no channels or
+  a blocking load error, omits both the form and the payment summary;
 - shows the computed `pay_amount` and `pay_currency` for the entered amount
   using RC-U6 with `BigInt`/exact-decimal arithmetic before submission;
 - on submit, POSTs RC-O2, optimistically inserts the returned `pending` order
@@ -677,16 +686,31 @@ row, updated sidebar balance via session-user revalidation) without a page
 close/reopen: the pending-order poll that observes the terminal status MUST
 also revalidate the ledger cache and the session user cache.
 
-RC-W7. The wallet page MUST use mobile-first layout. The balance and recharge
-regions MUST each span the available width below the `lg` breakpoint. At or
-above `lg`, the recharge region MUST occupy five of twelve funding-workspace
-columns and the plan-capacity region MUST occupy seven of twelve columns. Each
-region's height MUST be determined by its content; the grid MUST NOT stretch a
-shorter region to create empty space. Order and ledger items MUST use stacked
-mobile rows below `md` and aligned data columns at or above `md`. They MUST
-remain readable without horizontal page scrolling.
+RC-W7. The wallet workspace uses the shared maximum width of 72rem.
+The title precedes a horizontal balance summary, followed by tabs and their content.
+The balance amount and recharge action share a row when space permits and wrap on narrow screens.
+The overview plan section spans the workspace width.
+Configured allowance windows use four columns at `lg`, two at `sm`, and one below `sm`.
+Each window displays its remaining value, total limit, and progress bar in that order.
+All surfaces use content-dependent heights.
+With no subscription and no listed plans, show a compact unconfigured state.
+Administrators can navigate from that state to `/dashboard/plans`.
+With no payment channels, administrators can navigate to `/dashboard/payments`.
+Ordinary users MUST NOT see these administrator actions.
+At or above `lg`, the recharge form and summary use a 3:2 column ratio.
+At or above `sm`, custom amount and payment method share a row.
+Below `sm`, these fields stack in source order.
+Order and ledger rows stack below `lg` and use aligned columns at or above `lg`.
+At 390 CSS pixels, the page, tabs, and controls MUST fit without horizontal page scrolling.
+Tab triggers, recharge controls, purchase actions, and pagination buttons have a minimum height of 44 CSS pixels.
+The page uses the shared grid background, neutral surfaces, blue actions, and display title font.
+Wallet primary actions use `wallet-action` and `wallet-action-foreground`.
+These tokens are `hsl(217 91% 48%)` and white in both themes.
+Enabled action labels MUST maintain contrast of at least 4.5:1, including hover.
+Loading, empty, and error states have content-dependent height and never use fake values.
 
-RC-W8. Wallet page entry, balance replacement, amount selection, pay-preview
+RC-W8. Preset selection uses the shared toggle feedback.
+Wallet page entry, balance replacement, pay-preview
 replacement, plan-meter updates, activity-tab changes, and activity-item entry
 MUST use non-linear spring transitions. A tab change MUST move the entering
 content horizontally by at most 32 CSS pixels and MUST keep the activity workspace

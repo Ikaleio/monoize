@@ -75,14 +75,16 @@ export function ActivityOrders({
     <motion.section
       aria-label={t("wallet.ordersTitle")}
       initial={false}
-      animate={active || reduced ? { opacity: 1, x: 0 } : { opacity: 0, x: -20 }}
+      animate={
+        active || reduced ? { opacity: 1, x: 0 } : { opacity: 0, x: -20 }
+      }
       transition={reduced ? { duration: 0 } : springs.gentle}
       className="p-5"
     >
       {isLoading ? (
         <div className="flex flex-col gap-2" aria-busy="true">
           {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-20 w-full md:h-14" />
+            <Skeleton key={index} className="h-20 w-full lg:h-14" />
           ))}
         </div>
       ) : error && !data ? (
@@ -96,7 +98,7 @@ export function ActivityOrders({
         />
       ) : (
         <div className="flex flex-col gap-3">
-          <div className="hidden grid-cols-[minmax(0,1.35fr)_minmax(7rem,0.55fr)_minmax(7rem,0.55fr)_minmax(9rem,0.75fr)_5rem] gap-4 border-b px-3 pb-2 text-xs font-medium text-muted-foreground md:grid">
+          <div className="hidden grid-cols-[minmax(0,1.35fr)_minmax(7rem,0.55fr)_minmax(7rem,0.55fr)_minmax(9rem,0.75fr)_5rem] gap-4 border-b px-3 pb-2 text-xs font-medium text-muted-foreground lg:grid">
             <span>{t("wallet.payment")}</span>
             <span className="text-right">{t("wallet.credit")}</span>
             <span>{t("wallet.statusCol")}</span>
@@ -117,7 +119,7 @@ export function ActivityOrders({
                     : { ...springs.gentle, delay: Math.min(index * 0.03, 0.18) }
                 }
                 className={cn(
-                  "grid gap-3 rounded-md px-3 py-3 transition-colors hover:bg-muted/50 md:grid-cols-[minmax(0,1.35fr)_minmax(7rem,0.55fr)_minmax(7rem,0.55fr)_minmax(9rem,0.75fr)_5rem] md:items-center md:gap-4",
+                  "grid gap-3 rounded-md px-3 py-3 transition-colors hover:bg-muted/50 lg:grid-cols-[minmax(0,1.35fr)_minmax(7rem,0.55fr)_minmax(7rem,0.55fr)_minmax(9rem,0.75fr)_5rem] lg:items-center lg:gap-4",
                   order.id === highlightedOrderId && "bg-info-soft",
                 )}
               >
@@ -135,8 +137,8 @@ export function ActivityOrders({
                   </div>
                 </div>
 
-                <div className="flex items-baseline justify-between gap-3 md:block md:text-right">
-                  <span className="text-sm text-muted-foreground md:hidden">
+                <div className="flex items-baseline justify-between gap-3 lg:block lg:text-right">
+                  <span className="text-sm text-muted-foreground lg:hidden">
                     {t("wallet.credit")}
                   </span>
                   <span className="font-display text-lg font-semibold tabular-nums">
@@ -144,8 +146,8 @@ export function ActivityOrders({
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between gap-3 md:block">
-                  <span className="text-sm text-muted-foreground md:hidden">
+                <div className="flex items-center justify-between gap-3 lg:block">
+                  <span className="text-sm text-muted-foreground lg:hidden">
                     {t("wallet.statusCol")}
                   </span>
                   <OrderStatusBadge status={order.status} />
@@ -161,7 +163,7 @@ export function ActivityOrders({
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        className="inline-flex min-h-11 items-center font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
+                        className="inline-flex min-h-11 items-center font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:min-h-0"
                       >
                         {order.id.slice(0, 8)}
                       </button>
