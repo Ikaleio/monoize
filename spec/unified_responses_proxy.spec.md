@@ -451,7 +451,7 @@ TCI7d.1. A streaming Responses request that uses the Messages bridge MUST keep `
 
 TCI7d.2. Monoize MUST emit a Responses `response.custom_tool_call_input.delta` only for newly decoded `input` text. It MUST NOT emit the JSON object syntax, the `input` field name, JSON quotes, or JSON escape syntax. It MUST retain an incomplete JSON escape, `\uXXXX` escape, or UTF-16 surrogate pair until the subsequent fragment completes that character.
 
-TCI7d.3. The concatenation of all emitted custom-tool input deltas MUST equal the `input` value in `response.custom_tool_call_input.done`, `response.output_item.done`, and `response.completed`. If the streamed wrapper is invalid, has a different field, has a non-string `input`, or ends before the wrapper is complete, Monoize MUST emit a terminal upstream-protocol error. It MUST NOT convert the malformed wrapper into a function tool call.
+TCI7d.3. The concatenation of all emitted custom-tool input deltas MUST equal the `input` value in `response.custom_tool_call_input.done`, `response.output_item.done`, and `response.completed`. If the streamed wrapper is invalid, has a different field, has a non-string `input`, or ends before the wrapper is complete, Monoize MUST emit a terminal upstream-protocol error. It MUST NOT convert the malformed wrapper into a function tool call. A complete non-placeholder wrapper in `content_block_start.input` MUST emit its decoded text as an initial input delta. A terminal event with an unclosed bridged custom-tool content block MUST produce a terminal upstream-protocol error.
 
 TCI7e. Internal bridge markers MUST NOT be accepted from the downstream request and MUST NOT appear in the upstream or downstream wire body. Monoize MUST NOT execute a promoted or bridged tool.
 

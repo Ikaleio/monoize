@@ -854,6 +854,29 @@ pub(crate) async fn stream_messages_to_urp_events(
             .saw_terminal_delta
             .then_some("message_delta_stream_end")
     });
+    if terminal_event.is_some()
+        && !downstream_closed
+        && state.active_nodes.values().any(|node| {
+            matches!(
+                &node.kind,
+                ActiveNodeKind::ToolCall {
+                    custom_input_decoder: Some(_),
+                    ..
+                }
+            )
+        })
+    {
+        emit_messages_terminal_protocol_error(
+            &tx,
+            &runtime_metrics,
+            "messages_custom_tool_input_invalid",
+            "upstream Messages stream ended before the custom tool content block closed"
+                .to_string(),
+            HashMap::new(),
+        )
+        .await;
+        return Ok(());
+    }
     if let Some(terminal_event) = terminal_event {
         let output_nodes = ordered_completed_nodes(&state);
         crate::handlers::usage::increment_estimated_output_tokens(
@@ -954,11 +977,28 @@ fn handle_content_block_start(
     }
     state.active_nodes.insert(node_index, active_node);
 
-    Ok(vec![UrpStreamEvent::NodeStart {
+    let mut events = vec![UrpStreamEvent::NodeStart {
         node_index,
         header: node_header_from_node(&node),
         extra_body: start_extra_body,
-    }])
+    }];
+    if let Node::ToolCall {
+        tool_type: ToolCallType::Custom,
+        arguments,
+        ..
+    } = &node
+        && !arguments.is_empty()
+    {
+        events.push(UrpStreamEvent::NodeDelta {
+            node_index,
+            delta: NodeDelta::ToolCallArguments {
+                arguments: arguments.clone(),
+            },
+            usage: None,
+            extra_body,
+        });
+    }
+    Ok(events)
 }
 
 fn handle_content_block_delta(
@@ -981,13 +1021,28 @@ fn handle_content_block_delta(
 
     let stream_delta = match (&mut active_node.kind, delta_type) {
         (ActiveNodeKind::Text { .. }, "citations_delta") => {
-            let Some(citation) = delta_value.get("citation").filter(|value| value.is_object()) else { return Vec::new() };
-            let citations = active_node.extra_body.entry("citations".to_string()).or_insert_with(|| Value::Array(Vec::new()));
-            if !citations.is_array() { *citations = Value::Array(Vec::new()); }
+            let Some(citation) = delta_value
+                .get("citation")
+                .filter(|value| value.is_object())
+            else {
+                return Ok(Vec::new());
+            };
+            let citations = active_node
+                .extra_body
+                .entry("citations".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if !citations.is_array() {
+                *citations = Value::Array(Vec::new());
+            }
             citations.as_array_mut().unwrap().push(citation.clone());
             delta_extra.remove("citation");
-            delta_extra.insert("_monoize_messages_citation_delta".to_string(), citation.clone());
-            NodeDelta::Text { content: String::new() }
+            delta_extra.insert(
+                "_monoize_messages_citation_delta".to_string(),
+                citation.clone(),
+            );
+            NodeDelta::Text {
+                content: String::new(),
+            }
         }
         (ActiveNodeKind::Text { content, .. }, "text_delta") => {
             let Some(text) = delta_value.get("text").and_then(|v| v.as_str()) else {
