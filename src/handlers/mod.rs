@@ -863,6 +863,7 @@ pub(crate) struct UrpRequest {
     pub(crate) model: String,
     pub(crate) max_multiplier: Option<Multiplier>,
     pub(crate) server_tool_usage_classes: Vec<String>,
+    pub(crate) messages_custom_tool_names: HashSet<String>,
     pub(crate) affinity_explicit: Option<String>,
     pub(crate) affinity_prefix_hash: String,
 }
@@ -1531,5 +1532,6 @@ fn parse_urp_request(known: &Value, extra: Map<String, Value>) -> AppResult<UrpR
         model,
         max_multiplier,
         server_tool_usage_classes: Vec::new(),
+        messages_custom_tool_names: HashSet::new(),
     })
 }

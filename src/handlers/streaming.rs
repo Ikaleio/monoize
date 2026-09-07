@@ -270,10 +270,7 @@ pub(super) async fn forward_stream_typed(
             &auth.transforms,
             &logical_model,
             downstream,
-        ) || attempt.provider_type == ProviderType::Replicate
-            || (matches!(downstream, DownstreamProtocol::Responses)
-                && attempt.provider_type == ProviderType::Messages
-                && responses_additional_tools_require_messages_buffering(&original_req));
+        ) || attempt.provider_type == ProviderType::Replicate;
         let max_channel_attempts = same_channel_attempt_slots(&attempt);
 
         'channel_attempts: for channel_attempt in 0..max_channel_attempts {

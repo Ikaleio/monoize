@@ -293,10 +293,12 @@ enum ActiveNodeKind {
         encrypted: String,
     },
     ToolCall {
+        tool_type: ToolCallType,
         call_id: String,
         name: String,
         arguments: String,
         replace_on_next_delta: bool,
+        custom_input_decoder: Option<CustomToolInputDecoder>,
     },
     ProviderItem {
         id: Option<String>,
@@ -304,6 +306,291 @@ enum ActiveNodeKind {
         body: Value,
         input_json: ProviderItemInputJsonAccumulator,
     },
+}
+
+#[derive(Debug, Clone)]
+struct CustomToolInputDecoder {
+    phase: CustomToolInputPhase,
+    string_decoder: JsonStringDecoder,
+    key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CustomToolInputPhase {
+    Start,
+    KeyStart,
+    Key,
+    Colon,
+    ValueStart,
+    Value,
+    Tail,
+    Done,
+}
+
+#[derive(Debug, Clone, Default)]
+struct JsonStringDecoder {
+    escape: JsonStringEscape,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+enum JsonStringEscape {
+    #[default]
+    None,
+    Escape,
+    Unicode {
+        value: u16,
+        digits: u8,
+    },
+    HighSurrogateSlash {
+        high: u16,
+    },
+    HighSurrogateU {
+        high: u16,
+    },
+    LowSurrogate {
+        high: u16,
+        value: u16,
+        digits: u8,
+    },
+}
+
+enum JsonStringStep {
+    Continue,
+    Emit(char),
+    End,
+}
+
+impl JsonStringDecoder {
+    fn push(&mut self, character: char) -> Result<JsonStringStep, String> {
+        let escape = std::mem::take(&mut self.escape);
+        match escape {
+            JsonStringEscape::None => match character {
+                '"' => Ok(JsonStringStep::End),
+                '\\' => {
+                    self.escape = JsonStringEscape::Escape;
+                    Ok(JsonStringStep::Continue)
+                }
+                character if (character as u32) < 0x20 => {
+                    Err("custom tool input contains an unescaped control character".to_string())
+                }
+                character => Ok(JsonStringStep::Emit(character)),
+            },
+            JsonStringEscape::Escape => {
+                let decoded = match character {
+                    '"' => '"',
+                    '\\' => '\\',
+                    '/' => '/',
+                    'b' => '\u{0008}',
+                    'f' => '\u{000c}',
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    'u' => {
+                        self.escape = JsonStringEscape::Unicode {
+                            value: 0,
+                            digits: 0,
+                        };
+                        return Ok(JsonStringStep::Continue);
+                    }
+                    _ => {
+                        return Err("custom tool input contains an invalid JSON escape".to_string());
+                    }
+                };
+                Ok(JsonStringStep::Emit(decoded))
+            }
+            JsonStringEscape::Unicode { value, digits } => {
+                let digit = json_hex_digit(character)?;
+                let value = (value << 4) | digit;
+                let digits = digits + 1;
+                if digits < 4 {
+                    self.escape = JsonStringEscape::Unicode { value, digits };
+                    return Ok(JsonStringStep::Continue);
+                }
+                if (0xd800..=0xdbff).contains(&value) {
+                    self.escape = JsonStringEscape::HighSurrogateSlash { high: value };
+                    return Ok(JsonStringStep::Continue);
+                }
+                if (0xdc00..=0xdfff).contains(&value) {
+                    return Err("custom tool input contains an unmatched low surrogate".to_string());
+                }
+                char::from_u32(value as u32)
+                    .map(JsonStringStep::Emit)
+                    .ok_or_else(|| {
+                        "custom tool input contains an invalid Unicode escape".to_string()
+                    })
+            }
+            JsonStringEscape::HighSurrogateSlash { high } => {
+                if character != '\\' {
+                    return Err(
+                        "custom tool input high surrogate is not followed by a low surrogate"
+                            .to_string(),
+                    );
+                }
+                self.escape = JsonStringEscape::HighSurrogateU { high };
+                Ok(JsonStringStep::Continue)
+            }
+            JsonStringEscape::HighSurrogateU { high } => {
+                if character != 'u' {
+                    return Err(
+                        "custom tool input high surrogate is not followed by a low surrogate"
+                            .to_string(),
+                    );
+                }
+                self.escape = JsonStringEscape::LowSurrogate {
+                    high,
+                    value: 0,
+                    digits: 0,
+                };
+                Ok(JsonStringStep::Continue)
+            }
+            JsonStringEscape::LowSurrogate {
+                high,
+                value,
+                digits,
+            } => {
+                let digit = json_hex_digit(character)?;
+                let value = (value << 4) | digit;
+                let digits = digits + 1;
+                if digits < 4 {
+                    self.escape = JsonStringEscape::LowSurrogate {
+                        high,
+                        value,
+                        digits,
+                    };
+                    return Ok(JsonStringStep::Continue);
+                }
+                if !(0xdc00..=0xdfff).contains(&value) {
+                    return Err(
+                        "custom tool input high surrogate is not followed by a low surrogate"
+                            .to_string(),
+                    );
+                }
+                let scalar = 0x10000 + (((high as u32) - 0xd800) << 10) + ((value as u32) - 0xdc00);
+                char::from_u32(scalar)
+                    .map(JsonStringStep::Emit)
+                    .ok_or_else(|| {
+                        "custom tool input contains an invalid surrogate pair".to_string()
+                    })
+            }
+        }
+    }
+}
+
+fn json_hex_digit(character: char) -> Result<u16, String> {
+    character
+        .to_digit(16)
+        .map(|digit| digit as u16)
+        .ok_or_else(|| "custom tool input contains an invalid Unicode escape".to_string())
+}
+
+impl CustomToolInputDecoder {
+    fn new() -> Self {
+        Self {
+            phase: CustomToolInputPhase::Start,
+            string_decoder: JsonStringDecoder::default(),
+            key: String::new(),
+        }
+    }
+
+    fn push_fragment(&mut self, fragment: &str) -> Result<String, String> {
+        let mut decoded = String::new();
+        for character in fragment.chars() {
+            match self.phase {
+                CustomToolInputPhase::Start => {
+                    if json_whitespace(character) {
+                        continue;
+                    }
+                    if character != '{' {
+                        return Err("custom tool input wrapper must be a JSON object".to_string());
+                    }
+                    self.phase = CustomToolInputPhase::KeyStart;
+                }
+                CustomToolInputPhase::KeyStart => {
+                    if json_whitespace(character) {
+                        continue;
+                    }
+                    if character != '"' {
+                        return Err(
+                            "custom tool input wrapper must contain the input field".to_string()
+                        );
+                    }
+                    self.string_decoder = JsonStringDecoder::default();
+                    self.key.clear();
+                    self.phase = CustomToolInputPhase::Key;
+                }
+                CustomToolInputPhase::Key => match self.string_decoder.push(character)? {
+                    JsonStringStep::Continue => {}
+                    JsonStringStep::Emit(character) => self.key.push(character),
+                    JsonStringStep::End => {
+                        if self.key != "input" {
+                            return Err(
+                                "custom tool input wrapper field must be named input".to_string()
+                            );
+                        }
+                        self.phase = CustomToolInputPhase::Colon;
+                    }
+                },
+                CustomToolInputPhase::Colon => {
+                    if json_whitespace(character) {
+                        continue;
+                    }
+                    if character != ':' {
+                        return Err(
+                            "custom tool input wrapper is missing the input separator".to_string()
+                        );
+                    }
+                    self.phase = CustomToolInputPhase::ValueStart;
+                }
+                CustomToolInputPhase::ValueStart => {
+                    if json_whitespace(character) {
+                        continue;
+                    }
+                    if character != '"' {
+                        return Err("custom tool input must be a JSON string".to_string());
+                    }
+                    self.string_decoder = JsonStringDecoder::default();
+                    self.phase = CustomToolInputPhase::Value;
+                }
+                CustomToolInputPhase::Value => match self.string_decoder.push(character)? {
+                    JsonStringStep::Continue => {}
+                    JsonStringStep::Emit(character) => decoded.push(character),
+                    JsonStringStep::End => self.phase = CustomToolInputPhase::Tail,
+                },
+                CustomToolInputPhase::Tail => {
+                    if json_whitespace(character) {
+                        continue;
+                    }
+                    if character != '}' {
+                        return Err(
+                            "custom tool input wrapper must contain only the input field"
+                                .to_string(),
+                        );
+                    }
+                    self.phase = CustomToolInputPhase::Done;
+                }
+                CustomToolInputPhase::Done => {
+                    if !json_whitespace(character) {
+                        return Err(
+                            "custom tool input wrapper has data after the JSON object".to_string()
+                        );
+                    }
+                }
+            }
+        }
+        Ok(decoded)
+    }
+
+    fn finish(&self) -> Result<(), String> {
+        if self.phase == CustomToolInputPhase::Done {
+            Ok(())
+        } else {
+            Err("custom tool input wrapper ended before the JSON object was complete".to_string())
+        }
+    }
+}
+
+fn json_whitespace(character: char) -> bool {
+    matches!(character, ' ' | '\n' | '\r' | '\t')
 }
 
 #[derive(Debug, Clone)]
@@ -470,7 +757,26 @@ pub(crate) async fn stream_messages_to_urp_events(
                     .get("content_block")
                     .cloned()
                     .unwrap_or(Value::Null);
-                for event in handle_content_block_start(node_index, cb, &mut state) {
+                let events = match handle_content_block_start(
+                    node_index,
+                    cb,
+                    &urp.messages_custom_tool_names,
+                    &mut state,
+                ) {
+                    Ok(events) => events,
+                    Err(message) => {
+                        emit_messages_terminal_protocol_error(
+                            &tx,
+                            &runtime_metrics,
+                            "messages_custom_tool_input_invalid",
+                            message,
+                            HashMap::new(),
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                };
+                for event in events {
                     let _ = tx.send(event).await;
                 }
             }
@@ -480,7 +786,21 @@ pub(crate) async fn stream_messages_to_urp_events(
                     continue;
                 };
                 let delta = data_val.get("delta").cloned().unwrap_or(Value::Null);
-                for event in handle_content_block_delta(node_index, delta, &mut state) {
+                let events = match handle_content_block_delta(node_index, delta, &mut state) {
+                    Ok(events) => events,
+                    Err(message) => {
+                        emit_messages_terminal_protocol_error(
+                            &tx,
+                            &runtime_metrics,
+                            "messages_custom_tool_input_invalid",
+                            message,
+                            HashMap::new(),
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                };
+                for event in events {
                     record_visible_stream_event_delta(&runtime_metrics, &event).await;
                     let _ = tx.send(event).await;
                 }
@@ -490,7 +810,21 @@ pub(crate) async fn stream_messages_to_urp_events(
                 let Some(node_index) = state.wire_to_node_index.get(&wire_index).copied() else {
                     continue;
                 };
-                for event in handle_content_block_stop(node_index, &mut state) {
+                let events = match handle_content_block_stop(node_index, &mut state) {
+                    Ok(events) => events,
+                    Err(message) => {
+                        emit_messages_terminal_protocol_error(
+                            &tx,
+                            &runtime_metrics,
+                            "messages_custom_tool_input_invalid",
+                            message,
+                            HashMap::new(),
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                };
+                for event in events {
                     let _ = tx.send(event).await;
                 }
             }
@@ -597,10 +931,13 @@ async fn emit_messages_terminal_protocol_error(
 fn handle_content_block_start(
     node_index: u32,
     content_block: Value,
+    messages_custom_tool_names: &std::collections::HashSet<String>,
     state: &mut AnthropicMessagesStreamState,
-) -> Vec<UrpStreamEvent> {
-    let Some(active_node) = active_node_from_content_block(&content_block) else {
-        return Vec::new();
+) -> Result<Vec<UrpStreamEvent>, String> {
+    let Some(active_node) =
+        active_node_from_content_block(&content_block, messages_custom_tool_names)?
+    else {
+        return Ok(Vec::new());
     };
 
     if !state.node_order.contains(&node_index) {
@@ -617,20 +954,20 @@ fn handle_content_block_start(
     }
     state.active_nodes.insert(node_index, active_node);
 
-    vec![UrpStreamEvent::NodeStart {
+    Ok(vec![UrpStreamEvent::NodeStart {
         node_index,
         header: node_header_from_node(&node),
         extra_body: start_extra_body,
-    }]
+    }])
 }
 
 fn handle_content_block_delta(
     node_index: u32,
     delta_value: Value,
     state: &mut AnthropicMessagesStreamState,
-) -> Vec<UrpStreamEvent> {
+) -> Result<Vec<UrpStreamEvent>, String> {
     let Some(active_node) = state.active_nodes.get_mut(&node_index) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     let delta_type = delta_value
@@ -654,10 +991,10 @@ fn handle_content_block_delta(
         }
         (ActiveNodeKind::Text { content, .. }, "text_delta") => {
             let Some(text) = delta_value.get("text").and_then(|v| v.as_str()) else {
-                return Vec::new();
+                return Ok(Vec::new());
             };
             if text.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             content.push_str(text);
             NodeDelta::Text {
@@ -666,10 +1003,10 @@ fn handle_content_block_delta(
         }
         (ActiveNodeKind::Reasoning { summary, .. }, "thinking_delta") => {
             let Some(text) = delta_value.get("thinking").and_then(|v| v.as_str()) else {
-                return Vec::new();
+                return Ok(Vec::new());
             };
             if text.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             summary.push_str(text);
             delta_extra.insert(
@@ -685,10 +1022,10 @@ fn handle_content_block_delta(
         }
         (ActiveNodeKind::Reasoning { encrypted, .. }, "signature_delta") => {
             let Some(signature) = delta_value.get("signature").and_then(|v| v.as_str()) else {
-                return Vec::new();
+                return Ok(Vec::new());
             };
             if signature.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             encrypted.push_str(signature);
             NodeDelta::Reasoning {
@@ -700,18 +1037,36 @@ fn handle_content_block_delta(
         }
         (
             ActiveNodeKind::ToolCall {
+                tool_type,
                 arguments,
                 replace_on_next_delta,
+                custom_input_decoder,
                 ..
             },
             "input_json_delta",
         ) => {
             let Some(arguments_delta) = delta_value.get("partial_json").and_then(|v| v.as_str())
             else {
-                return Vec::new();
+                return Ok(Vec::new());
             };
             if arguments_delta.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
+            }
+            if *tool_type == ToolCallType::Custom {
+                let decoder = custom_input_decoder.as_mut().ok_or_else(|| {
+                    "custom tool input stream is missing its incremental decoder".to_string()
+                })?;
+                let decoded = decoder.push_fragment(arguments_delta)?;
+                if decoded.is_empty() {
+                    return Ok(Vec::new());
+                }
+                arguments.push_str(&decoded);
+                return Ok(vec![UrpStreamEvent::NodeDelta {
+                    node_index,
+                    delta: NodeDelta::ToolCallArguments { arguments: decoded },
+                    usage: None,
+                    extra_body: delta_extra,
+                }]);
             }
             if *replace_on_next_delta {
                 arguments.clear();
@@ -728,44 +1083,55 @@ fn handle_content_block_delta(
                 data: delta_value.clone(),
             }
         }
-        _ => return Vec::new(),
+        _ => return Ok(Vec::new()),
     };
 
-    vec![UrpStreamEvent::NodeDelta {
+    Ok(vec![UrpStreamEvent::NodeDelta {
         node_index,
         delta: stream_delta,
         usage: None,
         extra_body: delta_extra,
-    }]
+    }])
 }
 
 fn handle_content_block_stop(
     node_index: u32,
     state: &mut AnthropicMessagesStreamState,
-) -> Vec<UrpStreamEvent> {
+) -> Result<Vec<UrpStreamEvent>, String> {
     let Some(active_node) = state.active_nodes.remove(&node_index) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
+
+    if let ActiveNodeKind::ToolCall {
+        custom_input_decoder: Some(decoder),
+        ..
+    } = &active_node.kind
+    {
+        decoder.finish()?;
+    }
 
     let node = node_from_active(&active_node);
     let extra_body = active_node.extra_body.clone();
     state.completed_nodes.insert(node_index, node.clone());
 
-    vec![UrpStreamEvent::NodeDone {
+    Ok(vec![UrpStreamEvent::NodeDone {
         node_index,
         node,
         usage: None,
         extra_body,
-    }]
+    }])
 }
 
-fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeState> {
+fn active_node_from_content_block(
+    content_block: &Value,
+    messages_custom_tool_names: &std::collections::HashSet<String>,
+) -> Result<Option<ActiveNodeState>, String> {
     let content_type = content_block
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    match content_type {
+    Ok(match content_type {
         "text" => {
             let phase = content_block
                 .get("phase")
@@ -823,23 +1189,46 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
                 extra_body,
             })
         }
-        "tool_use" => Some(ActiveNodeState {
-            kind: ActiveNodeKind::ToolCall {
-                call_id: content_block
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                name: content_block
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                arguments: json_value_to_string(content_block.get("input")),
-                replace_on_next_delta: tool_use_input_is_placeholder(content_block.get("input")),
-            },
-            extra_body: object_without_keys(content_block, &["type", "id", "name", "input"]),
-        }),
+        "tool_use" => {
+            let name = content_block
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let input = content_block.get("input");
+            let placeholder = tool_use_input_is_placeholder(input);
+            let tool_type = if messages_custom_tool_names.contains(&name) {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            };
+            let (arguments, custom_input_decoder) = if tool_type == ToolCallType::Custom {
+                let mut decoder = CustomToolInputDecoder::new();
+                let arguments = if placeholder {
+                    String::new()
+                } else {
+                    decoder.push_fragment(&json_value_to_string(input))?
+                };
+                (arguments, Some(decoder))
+            } else {
+                (json_value_to_string(input), None)
+            };
+            Some(ActiveNodeState {
+                kind: ActiveNodeKind::ToolCall {
+                    tool_type,
+                    call_id: content_block
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    name,
+                    arguments,
+                    replace_on_next_delta: placeholder,
+                    custom_input_decoder,
+                },
+                extra_body: object_without_keys(content_block, &["type", "id", "name", "input"]),
+            })
+        }
         _ => Some(ActiveNodeState {
             kind: ActiveNodeKind::ProviderItem {
                 id: content_block
@@ -853,7 +1242,7 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
             },
             extra_body: HashMap::new(),
         }),
-    }
+    })
 }
 
 fn node_from_active(active_node: &ActiveNodeState) -> Node {
@@ -885,13 +1274,14 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             }
         }
         ActiveNodeKind::ToolCall {
+            tool_type,
             call_id,
             name,
             arguments,
             ..
         } => Node::ToolCall {
             id: Some(call_id.clone()),
-            tool_type: ToolCallType::Function,
+            tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),

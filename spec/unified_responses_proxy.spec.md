@@ -445,7 +445,13 @@ TCI7b. Monoize MUST append promoted tools after explicit top-level tools. A prom
 
 TCI7c. A Chat Completions attempt MUST encode each promoted function or custom tool with the matching Chat Completions tool type. A Messages attempt MUST encode each promoted function as a Messages client tool. For a promoted Responses custom tool that has no Messages `input_schema`, Monoize MUST encode a Messages client tool with the same name and description and this exact input schema: `{ "type": "object", "properties": { "input": { "type": "string" } }, "required": ["input"], "additionalProperties": false }`.
 
-TCI7d. For the Messages bridge in TCI7c, Monoize MUST wrap a replayed Responses custom tool-call input string as `{ "input": <string> }`. It MUST encode the correlated custom tool result as a Messages `tool_result`. When the Messages provider returns a `tool_use` for a bridged name, Monoize MUST change the downstream Responses item to a custom tool call and unwrap the `input` string. A streaming Responses request that contains such a bridge MUST use the existing buffered synthetic-stream path so that Monoize does not expose the wrapper JSON as custom input deltas.
+TCI7d. For the Messages bridge in TCI7c, Monoize MUST wrap a replayed Responses custom tool-call input string as `{ "input": <string> }`. It MUST encode the correlated custom tool result as a Messages `tool_result`. When the Messages provider returns a `tool_use` for a bridged name, Monoize MUST change the downstream Responses item to a custom tool call and unwrap the `input` string.
+
+TCI7d.1. A streaming Responses request that uses the Messages bridge MUST keep `stream = true` on the Messages upstream request. Monoize MUST decode each ordered Messages `input_json_delta.partial_json` fragment as one incremental JSON object with exactly one string field named `input`.
+
+TCI7d.2. Monoize MUST emit a Responses `response.custom_tool_call_input.delta` only for newly decoded `input` text. It MUST NOT emit the JSON object syntax, the `input` field name, JSON quotes, or JSON escape syntax. It MUST retain an incomplete JSON escape, `\uXXXX` escape, or UTF-16 surrogate pair until the subsequent fragment completes that character.
+
+TCI7d.3. The concatenation of all emitted custom-tool input deltas MUST equal the `input` value in `response.custom_tool_call_input.done`, `response.output_item.done`, and `response.completed`. If the streamed wrapper is invalid, has a different field, has a non-string `input`, or ends before the wrapper is complete, Monoize MUST emit a terminal upstream-protocol error. It MUST NOT convert the malformed wrapper into a function tool call.
 
 TCI7e. Internal bridge markers MUST NOT be accepted from the downstream request and MUST NOT appear in the upstream or downstream wire body. Monoize MUST NOT execute a promoted or bridged tool.
 
