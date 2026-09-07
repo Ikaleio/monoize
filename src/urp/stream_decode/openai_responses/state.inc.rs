@@ -550,7 +550,14 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
             Ok(Node::Text {
                 id: right_id.clone().or_else(|| left_id.clone()),
                 role: *right_role,
-                content: merge_string_field("message.text", left_content, right_content)?,
+                content: if !left_content.is_empty()
+                    && !right_content.is_empty()
+                    && left_content.trim() == right_content.trim()
+                {
+                    right_content.clone()
+                } else {
+                    merge_string_field("message.text", left_content, right_content)?
+                },
                 phase: merge_optional_string_field("message.phase", left_phase, right_phase)?,
                 extra_body: merge_extra_body(left_extra, right_extra),
             })
