@@ -376,7 +376,9 @@ pub(crate) fn typed_request_to_legacy(
             Value::String(limit.to_string()),
         );
     }
-    parse_urp_request(&encoded, extra)
+    let mut legacy = parse_urp_request(&encoded, extra)?;
+    legacy.messages_custom_tool_names = messages_custom_bridge_names(req);
+    Ok(legacy)
 }
 
 fn affinity_value_from_json(value: &Value) -> Option<String> {
@@ -858,6 +860,7 @@ pub(super) fn build_routing_stub(
         model: req.model.clone(),
         max_multiplier,
         server_tool_usage_classes: server_tool_usage_classes(req.tools.as_deref()),
+        messages_custom_tool_names: HashSet::new(),
         affinity_explicit: stable_affinity_field(req),
         affinity_prefix_hash: affinity_prefix_hash(req),
     }
@@ -871,6 +874,7 @@ pub(super) fn build_embeddings_routing_stub(
         model: model.to_string(),
         max_multiplier,
         server_tool_usage_classes: Vec::new(),
+        messages_custom_tool_names: HashSet::new(),
         affinity_explicit: None,
         affinity_prefix_hash: short_xxh3_hex(model),
     }
@@ -1390,13 +1394,6 @@ fn responses_additional_tool_leaves(req: &urp::UrpRequest) -> Vec<Value> {
         }
     }
     output
-}
-
-pub(super) fn responses_additional_tools_require_messages_buffering(req: &urp::UrpRequest) -> bool {
-    responses_additional_tool_leaves(req)
-        .iter()
-        .filter_map(urp::decode::parse_tool_definition)
-        .any(|tool| tool.tool_type == "custom" && !custom_tool_has_messages_input_schema(&tool))
 }
 
 fn custom_tool_has_messages_input_schema(tool: &urp::ToolDefinition) -> bool {
