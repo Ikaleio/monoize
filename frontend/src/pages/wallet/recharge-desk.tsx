@@ -1,4 +1,6 @@
-import { forwardRef, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { useAuth } from "@/hooks/use-auth";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, Landmark, LoaderCircle } from "lucide-react";
@@ -8,7 +10,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -28,256 +29,327 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { springs } from "@/components/ui/motion";
 import { DashboardApiError } from "@/lib/api";
+import { formatNanoUsd } from "@/lib/exact-decimal";
 import { parseUsdToNano, previewPayAmount } from "@/lib/recharge";
 import { createRechargeOrderOptimistic, useRechargeChannels } from "@/lib/swr";
-import { cn } from "@/lib/utils";
 import { WalletFeedback } from "./wallet-feedback";
 
 const PRESET_AMOUNTS = ["5", "10", "25", "50", "100"];
 
-interface RechargeDeskProps {
-  className?: string;
-  ordersFirstPageKey: string;
-}
-
 function RechargeDeskSkeleton() {
   return (
-    <div className="flex flex-col gap-5" aria-busy="true">
-      <div className="flex flex-col gap-2">
-        <Skeleton className="h-4 w-24" />
-        <Skeleton className="h-11 w-full" />
+    <div
+      className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"
+      aria-busy="true"
+    >
+      <div className="flex flex-col gap-5">
+        <Skeleton className="h-5 w-32" />
+        <div className="grid grid-cols-5 gap-2">
+          {PRESET_AMOUNTS.map((amount) => (
+            <Skeleton key={amount} className="h-11" />
+          ))}
+        </div>
+        <Skeleton className="h-11 w-full bg-wallet-action text-wallet-action-foreground hover:bg-wallet-action/90" />
+        <Skeleton className="h-11 w-full bg-wallet-action text-wallet-action-foreground hover:bg-wallet-action/90" />
       </div>
-      <div className="flex flex-col gap-3">
-        <Skeleton className="h-4 w-20" />
-        <Skeleton className="h-11 w-full" />
-        <Skeleton className="h-11 w-full" />
+      <div className="flex flex-col gap-5">
+        <Skeleton className="h-5 w-32" />
+        <Skeleton className="h-14 w-full" />
+        <Skeleton className="h-10 w-40" />
+        <Skeleton className="h-11 w-full bg-wallet-action text-wallet-action-foreground hover:bg-wallet-action/90" />
       </div>
-      <Skeleton className="h-16 w-full" />
     </div>
   );
 }
 
-export const RechargeDesk = forwardRef<HTMLElement, RechargeDeskProps>(
-  ({ className, ordersFirstPageKey }, ref) => {
-    const { t } = useTranslation();
-    const reduced = useReducedMotion();
-    const {
-      data: channels,
-      error,
-      isLoading,
-      mutate,
-    } = useRechargeChannels();
-    const [channelId, setChannelId] = useState<string | null>(null);
-    const [amount, setAmount] = useState("10");
-    const [submitting, setSubmitting] = useState(false);
-
-    const channel = useMemo(() => {
-      if (!channels?.length) return null;
-      return (
-        channels.find((candidate) => candidate.id === channelId) ?? channels[0]
-      );
-    }, [channels, channelId]);
-
-    const bounds = useMemo(() => {
-      if (!channel) return null;
-      const min = parseUsdToNano(channel.min_credit_usd);
-      const max = parseUsdToNano(channel.max_credit_usd);
-      return min !== null && max !== null ? { min, max } : null;
-    }, [channel]);
-
-    const amountNano = useMemo(() => parseUsdToNano(amount), [amount]);
-    const inRange =
-      amountNano !== null &&
-      bounds !== null &&
-      amountNano >= bounds.min &&
-      amountNano <= bounds.max;
-    const preview =
-      channel && inRange
-        ? previewPayAmount(amount, channel.usd_rate, channel.pay_scale)
-        : null;
-    const selectedPreset = PRESET_AMOUNTS.includes(amount) ? amount : "";
-
-    const presetDisabled = (preset: string) => {
-      if (!bounds) return true;
-      const nano = parseUsdToNano(preset);
-      return nano === null || nano < bounds.min || nano > bounds.max;
-    };
-
-    const handleSubmit = async () => {
-      if (!channel || amountNano === null || !inRange || submitting) return;
-      setSubmitting(true);
-      try {
-        const result = await createRechargeOrderOptimistic(
-          {
-            payment_channel_id: channel.id,
-            credit_nano_usd: amountNano.toString(),
-          },
-          ordersFirstPageKey,
-        );
-        window.location.assign(result.payment.url);
-      } catch (caught) {
-        setSubmitting(false);
-        const message =
-          caught instanceof DashboardApiError
-            ? t(`wallet.errors.${caught.code}`, {
-                defaultValue: t("wallet.errors.request_failed"),
-              })
-            : t("wallet.errors.request_failed");
-        toast.error(message);
-      }
-    };
-
-    const hasChannels = Boolean(channels?.length);
-
+export function RechargeDesk({
+  ordersFirstPageKey,
+}: {
+  ordersFirstPageKey: string;
+}) {
+  const { t } = useTranslation();
+  const reduced = useReducedMotion();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const { data: channels, error, isLoading, mutate } = useRechargeChannels();
+  const [channelId, setChannelId] = useState<string | null>(null);
+  const [amount, setAmount] = useState("10");
+  const [submitting, setSubmitting] = useState(false);
+  const channel = useMemo(() => {
+    if (!channels?.length) return null;
     return (
-      <section
-        ref={ref}
-        tabIndex={-1}
-        aria-labelledby="wallet-recharge-heading"
-        className={cn("scroll-mt-4 focus:outline-none", className)}
-      >
-        <Card>
-          <CardHeader className="border-b p-5">
-            <div className="flex items-start gap-3">
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                <Landmark className="size-5" aria-hidden="true" />
-              </span>
-              <div className="flex min-w-0 flex-col gap-1">
-                <CardTitle
-                  id="wallet-recharge-heading"
-                  className="font-display text-lg"
-                >
-                  {t("wallet.rechargeTitle")}
-                </CardTitle>
-                <CardDescription className="text-pretty leading-relaxed">
-                  {t("wallet.rechargeDescription")}
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
+      channels.find((candidate) => candidate.id === channelId) ?? channels[0]
+    );
+  }, [channels, channelId]);
+  const bounds = useMemo(() => {
+    if (!channel) return null;
+    const min = parseUsdToNano(channel.min_credit_usd);
+    const max = parseUsdToNano(channel.max_credit_usd);
+    return min !== null && max !== null ? { min, max } : null;
+  }, [channel]);
+  const amountNano = useMemo(() => parseUsdToNano(amount), [amount]);
+  const inRange =
+    amountNano !== null &&
+    bounds !== null &&
+    amountNano >= bounds.min &&
+    amountNano <= bounds.max;
+  const preview =
+    channel && inRange
+      ? previewPayAmount(amount, channel.usd_rate, channel.pay_scale)
+      : null;
+  const invalidAmount = amount !== "" && !inRange;
+  const validationMessage =
+    amountNano === null
+      ? t("wallet.errors.invalid_amount")
+      : t("wallet.errors.amount_out_of_range");
 
-          <CardContent className="p-5">
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!channel || amountNano === null || !inRange || submitting) return;
+    setSubmitting(true);
+    try {
+      const result = await createRechargeOrderOptimistic(
+        {
+          payment_channel_id: channel.id,
+          credit_nano_usd: amountNano.toString(),
+        },
+        ordersFirstPageKey,
+      );
+      window.location.assign(result.payment.url);
+    } catch (caught) {
+      setSubmitting(false);
+      toast.error(
+        caught instanceof DashboardApiError
+          ? t(`wallet.errors.${caught.code}`, {
+              defaultValue: t("wallet.errors.request_failed"),
+            })
+          : t("wallet.errors.request_failed"),
+      );
+    }
+  };
+
+  return (
+    <Card
+      role="region"
+      aria-labelledby="wallet-recharge-heading"
+      className="overflow-hidden"
+    >
+      {isLoading || (error && channels === undefined) || !channels?.length ? (
+        <>
+          <CardHeader className="p-5">
+            <CardTitle id="wallet-recharge-heading">
+              {t("wallet.rechargeHeading")}
+            </CardTitle>
+            <CardDescription className="leading-relaxed">
+              {t("wallet.rechargeDescription")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-5 pb-5">
             {isLoading ? (
               <RechargeDeskSkeleton />
             ) : error && channels === undefined ? (
               <WalletFeedback onRetry={mutate} />
-            ) : !hasChannels ? (
+            ) : (
               <EmptyState
                 variant="inline"
-                className="px-2 py-5"
+                className="px-0 py-3"
                 icon={<Landmark className="size-6" aria-hidden="true" />}
                 title={t("wallet.noChannelsTitle")}
                 description={t("wallet.noChannelsDescription")}
+                action={
+                  isAdmin ? (
+                    <Button asChild variant="outline" className="h-11">
+                      <Link to="/dashboard/payments">
+                        {t("wallet.configurePayments")}
+                      </Link>
+                    </Button>
+                  ) : undefined
+                }
               />
-            ) : (
-              <motion.div
-                initial={reduced ? { opacity: 0 } : { opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={reduced ? { duration: 0 } : springs.gentle}
-              >
-                <FieldGroup className="gap-5">
-                  <Field>
-                    <FieldLabel htmlFor="recharge-channel">
-                      {t("wallet.channel")}
-                    </FieldLabel>
-                    <Select
-                      value={channel?.id ?? ""}
-                      onValueChange={setChannelId}
-                    >
-                      <SelectTrigger id="recharge-channel" className="h-11 sm:h-9">
-                        <SelectValue placeholder={t("wallet.channelPlaceholder")} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {channels?.map((candidate) => (
-                            <SelectItem key={candidate.id} value={candidate.id}>
-                              {candidate.name}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-
-                  <Field data-invalid={amount !== "" && !inRange || undefined}>
-                    <FieldLabel htmlFor="recharge-amount">
-                      {t("wallet.amountUsd")}
-                    </FieldLabel>
-                    <ToggleGroup
-                      type="single"
-                      value={selectedPreset}
-                      onValueChange={(value) => value && setAmount(value)}
-                      variant="outline"
-                      className="grid grid-cols-5"
-                      aria-label={t("wallet.amountUsd")}
-                    >
-                      {PRESET_AMOUNTS.map((preset) => (
+            )}
+          </CardContent>
+        </>
+      ) : (
+        <form
+          onSubmit={handleSubmit}
+          className="grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"
+        >
+          <div className="min-w-0">
+            <CardHeader className="gap-2 space-y-0 p-5">
+              <CardTitle id="wallet-recharge-heading">
+                {t("wallet.rechargeHeading")}
+              </CardTitle>
+              <CardDescription className="leading-relaxed">
+                {t("wallet.rechargeDescription")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="px-5 pb-5">
+              <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                <Field className="sm:col-span-2">
+                  <FieldLabel id="recharge-presets-label">
+                    {t("wallet.amountUsd")}
+                  </FieldLabel>
+                  <ToggleGroup
+                    type="single"
+                    value={PRESET_AMOUNTS.includes(amount) ? amount : ""}
+                    onValueChange={(value) => value && setAmount(value)}
+                    variant="outline"
+                    disabled={submitting}
+                    className="grid grid-cols-5 gap-2"
+                    aria-labelledby="recharge-presets-label"
+                  >
+                    {PRESET_AMOUNTS.map((preset) => {
+                      const nano = parseUsdToNano(preset);
+                      return (
                         <ToggleGroupItem
                           key={preset}
                           value={preset}
-                          disabled={presetDisabled(preset)}
-                          className="h-11 w-full px-1 tabular-nums sm:h-9"
+                          disabled={
+                            submitting ||
+                            !bounds ||
+                            nano === null ||
+                            nano < bounds.min ||
+                            nano > bounds.max
+                          }
+                          className="h-11 w-full px-1 tabular-nums data-[state=on]:border-primary data-[state=on]:bg-primary/5 data-[state=on]:text-foreground"
                         >
                           ${preset}
                         </ToggleGroupItem>
-                      ))}
-                    </ToggleGroup>
-                    <Input
-                      id="recharge-amount"
-                      className="h-11 sm:h-9"
-                      inputMode="decimal"
-                      value={amount}
-                      onChange={(event) => setAmount(event.target.value)}
-                      placeholder={t("wallet.customAmount")}
-                      aria-invalid={amount !== "" && !inRange}
-                    />
-                    {channel ? (
-                      <FieldDescription>
-                        {t("wallet.amountRange", {
-                          min: channel.min_credit_usd,
-                          max: channel.max_credit_usd,
-                        })}
-                      </FieldDescription>
-                    ) : null}
-                  </Field>
-                </FieldGroup>
-              </motion.div>
-            )}
-          </CardContent>
-
-          {hasChannels ? (
-            <CardFooter className="grid gap-4 border-t bg-muted/35 p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="text-sm text-muted-foreground">
-                  {t("wallet.youPay")}
-                </span>
-                <div className="relative min-h-7 min-w-0 flex-1 overflow-hidden text-right">
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    <motion.span
-                      key={preview && channel ? `${preview}-${channel.currency}` : "empty"}
-                      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 14 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={reduced ? { opacity: 0 } : { opacity: 0, y: -14 }}
-                      transition={reduced ? { duration: 0 } : springs.snappy}
-                      className="block truncate font-display text-lg font-semibold tabular-nums"
+                      );
+                    })}
+                  </ToggleGroup>
+                </Field>
+                <Field data-invalid={invalidAmount || undefined}>
+                  <FieldLabel htmlFor="recharge-amount">
+                    {t("wallet.customAmount")}
+                  </FieldLabel>
+                  <Input
+                    id="recharge-amount"
+                    className="h-11 text-base tabular-nums"
+                    inputMode="decimal"
+                    disabled={submitting}
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    placeholder={t("wallet.amountUsd")}
+                    aria-invalid={invalidAmount}
+                    aria-describedby={
+                      invalidAmount
+                        ? "recharge-amount-range recharge-amount-error"
+                        : "recharge-amount-range"
+                    }
+                  />
+                  <FieldDescription id="recharge-amount-range">
+                    {t("wallet.amountRange", {
+                      min: channel?.min_credit_usd,
+                      max: channel?.max_credit_usd,
+                    })}
+                  </FieldDescription>
+                  {invalidAmount ? (
+                    <p
+                      id="recharge-amount-error"
+                      className="text-sm text-error-foreground"
+                      role="alert"
                     >
-                      {preview && channel
-                        ? `${preview} ${channel.currency}`
-                        : "—"}
-                    </motion.span>
-                  </AnimatePresence>
-                </div>
+                      {validationMessage}
+                    </p>
+                  ) : null}
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="recharge-channel">
+                    {t("wallet.channel")}
+                  </FieldLabel>
+                  <Select
+                    value={channel?.id ?? ""}
+                    onValueChange={setChannelId}
+                    disabled={submitting}
+                  >
+                    <SelectTrigger
+                      id="recharge-channel"
+                      className="h-11 min-w-0 text-base"
+                    >
+                      <SelectValue
+                        placeholder={t("wallet.channelPlaceholder")}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {channels.map((candidate) => (
+                          <SelectItem key={candidate.id} value={candidate.id}>
+                            {candidate.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </FieldGroup>
+            </CardContent>
+          </div>
+          <section
+            aria-labelledby="wallet-payment-summary"
+            className="flex min-w-0 flex-col gap-4 border-t bg-muted/35 p-5 lg:border-l lg:border-t-0"
+          >
+            <h2 id="wallet-payment-summary" className="text-base font-semibold">
+              {t("wallet.paymentSummary")}
+            </h2>
+            <dl className="flex flex-col gap-4 text-sm">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <dt className="text-muted-foreground">
+                  {t("wallet.creditAmount")}
+                </dt>
+                <dd className="min-w-0 break-all font-medium tabular-nums">
+                  {inRange && amountNano !== null
+                    ? `${formatNanoUsd(amountNano, Math.max(2, (amount.trim().split(".")[1] ?? "").replace(/0+$/, "").length))} USD`
+                    : "—"}
+                </dd>
               </div>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <dt className="text-muted-foreground">
+                  {t("wallet.exchangeRate")}
+                </dt>
+                <dd className="min-w-0 break-all tabular-nums">
+                  1 USD = {channel?.usd_rate} {channel?.currency}
+                </dd>
+              </div>
+            </dl>
+            <Separator />
+            <div
+              className="flex flex-col gap-3"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span className="text-sm text-muted-foreground">
+                {t("wallet.youPay")}
+              </span>
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={`${preview}-${channel?.currency}`}
+                  initial={reduced ? { opacity: 0 } : { opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={reduced ? { opacity: 0 } : { opacity: 0, y: -10 }}
+                  transition={reduced ? { duration: 0 } : springs.snappy}
+                  className="flex flex-wrap items-baseline gap-2"
+                >
+                  <span className="min-w-0 break-all text-3xl font-semibold tracking-tight tabular-nums">
+                    {preview ?? "—"}
+                  </span>
+                  <span className="text-sm text-muted-foreground">
+                    {channel?.currency}
+                  </span>
+                </motion.div>
+              </AnimatePresence>
+            </div>
+            <div className="flex flex-col gap-3">
               <Button
-                type="button"
+                type="submit"
                 variant="primary"
-                className="h-11 w-full sm:h-9 sm:w-auto"
+                className="h-11 w-full bg-wallet-action text-wallet-action-foreground hover:bg-wallet-action/90"
                 disabled={!channel || !inRange || submitting}
-                onClick={handleSubmit}
               >
                 {submitting ? (
                   <LoaderCircle
@@ -293,12 +365,13 @@ export const RechargeDesk = forwardRef<HTMLElement, RechargeDeskProps>(
                   <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
                 ) : null}
               </Button>
-            </CardFooter>
-          ) : null}
-        </Card>
-      </section>
-    );
-  },
-);
-
-RechargeDesk.displayName = "RechargeDesk";
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                {t("wallet.paymentHelp")}
+              </p>
+            </div>
+          </section>
+        </form>
+      )}
+    </Card>
+  );
+}

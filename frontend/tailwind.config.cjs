@@ -24,6 +24,10 @@ module.exports = {
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))'
         },
+        'wallet-action': {
+          DEFAULT: 'hsl(var(--wallet-action))',
+          foreground: 'hsl(var(--wallet-action-foreground))'
+        },
         secondary: {
           DEFAULT: 'hsl(var(--secondary))',
           foreground: 'hsl(var(--secondary-foreground))'
