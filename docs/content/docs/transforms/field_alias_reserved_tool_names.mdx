@@ -1,0 +1,45 @@
+---
+title: "Field: alias reserved tool names"
+description: Rename client function tools that collide with upstream reserved server-side names, then restore the original names on the response.
+---
+
+## What it does
+
+Some upstreams reserve function names for hosted tools. xAI Grok reserves `view_image` for Image Understanding. Codex also ships a client-side function named `view_image`. If Monoize forwards that function unchanged, the model treats it as the hosted tool, never returns a client `function_call`, and the Codex turn ends after reasoning.
+
+This transform rewrites matching **function** and **custom** tool names on the request, including history `ToolCall` nodes and `tool_choice`, then restores the original names on the response so the client still sees `view_image`.
+
+Native descriptors such as `type = "web_search"` are not renamed.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `field_alias_reserved_tool_names` |
+| Phase | `request`, `response` |
+| Scopes | Provider, Global, API key |
+
+## When to use
+
+- The Provider is Grok / xAI / a Responses adapter such as CPA, and Codex `view_image` never appears as a function call.
+- Add **two** rules with the same config: one `request` rule and one `response` rule.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `aliases` | object | No | `{ "view_image": "client_view_image" }` | Map of original function names to upstream-safe aliases. An empty object disables renaming. |
+
+### Example rule
+
+```json
+{
+  "transform": "field_alias_reserved_tool_names",
+  "enabled": true,
+  "phase": "request",
+  "models": ["grok-*"],
+  "config": {}
+}
+```
+
+Use the same config with `"phase": "response"` so aliases are mapped back before Codex receives the stream.

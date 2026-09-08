@@ -75,7 +75,22 @@ pub fn provider_presets() -> Value {
                     "grok-4": { "redirect": null, "multiplier": "1" },
                     "grok-3": { "redirect": null, "multiplier": "1" }
                 },
-                "transforms": []
+                "transforms": [
+                    {
+                        "transform": "field_alias_reserved_tool_names",
+                        "enabled": true,
+                        "models": ["grok-*"],
+                        "phase": "request",
+                        "config": {}
+                    },
+                    {
+                        "transform": "field_alias_reserved_tool_names",
+                        "enabled": true,
+                        "models": ["grok-*"],
+                        "phase": "response",
+                        "config": {}
+                    }
+                ]
             }
         }
     ])

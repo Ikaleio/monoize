@@ -1,0 +1,45 @@
+---
+title: "字段：为保留工具名创建别名"
+description: 将与上游服务端保留名冲突的客户端函数工具改名，并在响应中恢复原名。
+---
+
+## 行为
+
+部分上游把函数名保留给托管工具。xAI Grok 的 Image Understanding 就叫 `view_image`。Codex 本地读图函数也叫 `view_image`。若原样转发给上游，模型会把它当成托管工具，不会返回客户端 `function_call`，Codex 会在 reasoning 之后直接结束回合。
+
+此变换在请求阶段重写匹配的 **function** 和 **custom** 工具名（含历史 `ToolCall` 与 `tool_choice`），并在响应阶段恢复原名，客户端仍然看到 `view_image`。
+
+`type = "web_search"` 这类原生描述符不会改名。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `field_alias_reserved_tool_names` |
+| 阶段 | `request`, `response` |
+| 范围 | Provider、全局、API 密钥 |
+
+## 适用场景
+
+- Provider 是 Grok / xAI / CPA 这类 Responses 适配器，且 Codex `view_image` 从未以 function call 出现。
+- 使用**相同配置**添加两条规则：一条 `request`，一条 `response`。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `aliases` | object | 否 | `{ "view_image": "client_view_image" }` | 原函数名到上游安全别名的映射。空对象表示不改名。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "field_alias_reserved_tool_names",
+  "enabled": true,
+  "phase": "request",
+  "models": ["grok-*"],
+  "config": {}
+}
+```
+
+`response` 阶段使用同一配置，才能在返回 Codex 前把别名映射回去。

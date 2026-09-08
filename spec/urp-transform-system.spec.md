@@ -170,6 +170,7 @@ TF-7. Built-ins that MUST exist are exactly:
 - `cache_openai_prompt`
 - `cache_openai_tool_use`
 - `cache_user_id`
+- `field_alias_reserved_tool_names`
 - `field_override_max_tokens`
 - `field_remove`
 - `field_set`
@@ -416,6 +417,31 @@ SF-5. On a request, a path that starts with `reasoning.` MUST target `request.re
 SF-6. On a non-stream response, `path` MUST target `response.extra_body`. On a stream event, `path` MUST target the event `extra_body`.
 
 SF-7. A Provider request transform with config `{ "path": "service_tier", "when_equals": "priority", "value": "fast" }` MUST replace only the exact JSON string `"priority"`. The transform MUST preserve an absent value and every other JSON value.
+
+### 4.5c `field_alias_reserved_tool_names`
+
+ARTN-1. `field_alias_reserved_tool_names` MUST support request-phase and response-phase execution.
+
+ARTN-2. Config MAY contain `aliases` as a JSON object mapping original function names to alias names. If `aliases` is absent, the transform MUST use the default map `{ "view_image": "client_view_image" }`. If `aliases` is present, including an empty object, the transform MUST use that object and MUST NOT add the default map.
+
+ARTN-3. Every alias key and value MUST be a non-empty JSON string. A value that is not a string, an empty key, an empty value, a mapping from a name to itself, two keys that map to the same alias, or an alias that equals any original key MUST fail config parsing as `InvalidConfig`.
+
+ARTN-4. Request-phase application MUST replace each original name with its alias on:
+1. `request.tools[]` entries whose `type` is `function` or `custom`, including `name`, `function.name`, and `custom.name`;
+2. `request.input` `ToolCall` node `name` fields;
+3. `request.tool_choice` when it is a JSON object or array, by replacing any object member `name` whose string value is an original name.
+
+ARTN-5. Request-phase application MUST NOT rename tools whose `type` is neither `function` nor `custom`. Built-in descriptors such as `type = "web_search"` MUST keep their names.
+
+ARTN-6. Response-phase application MUST replace each alias with its original name on:
+1. non-stream `response.output` `ToolCall` node `name` fields;
+2. stream `NodeStart` headers of kind `ToolCall`;
+3. stream `NodeDone` nodes of kind `ToolCall`;
+4. stream `ResponseDone.output` `ToolCall` node `name` fields.
+
+ARTN-7. A `ToolCall` whose name is not in the active map MUST remain unchanged. A native upstream tool that still uses an original reserved name therefore MUST NOT be rewritten to the client name.
+
+ARTN-8. An empty alias map MUST be a no-op in both phases.
 
 ### 4.6 Image transforms on request ordinary nodes
 
