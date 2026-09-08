@@ -1,0 +1,45 @@
+---
+title: "フィールド: 予約ツール名のエイリアス"
+description: 上流のサーバー側予約名と衝突するクライアント関数ツールを改名し、レスポンスで元の名前に戻します。
+---
+
+## 動作
+
+一部の上流は関数名をホスト型ツール用に予約します。xAI Grok の Image Understanding は `view_image` です。Codex のローカル画像閲覧関数も `view_image` です。そのまま転送すると、モデルはホスト型ツールとして扱い、クライアントの `function_call` を返さず、Codex は reasoning のあとターンを終了します。
+
+この変換はリクエストで一致する **function** と **custom** のツール名（履歴の `ToolCall` と `tool_choice` を含む）を書き換え、レスポンスで元の名前に戻します。クライアントは引き続き `view_image` を見ます。
+
+`type = "web_search"` のようなネイティブ記述子は改名しません。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `field_alias_reserved_tool_names` |
+| フェーズ | `request`, `response` |
+| スコープ | Provider、グローバル、API キー |
+
+## 使いどころ
+
+- Provider が Grok / xAI / CPA などの Responses アダプタで、Codex の `view_image` が function call として現れない場合。
+- **同じ設定**で `request` と `response` の 2 ルールを追加する。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `aliases` | object | いいえ | `{ "view_image": "client_view_image" }` | 元の関数名から上流安全なエイリアスへの対応。空オブジェクトは改名しない。 |
+
+### ルール例
+
+```json
+{
+  "transform": "field_alias_reserved_tool_names",
+  "enabled": true,
+  "phase": "request",
+  "models": ["grok-*"],
+  "config": {}
+}
+```
+
+`response` フェーズでも同じ設定を使い、Codex に返す前にエイリアスを元に戻します。

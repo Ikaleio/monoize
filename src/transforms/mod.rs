@@ -11,6 +11,7 @@ pub mod cache_anthropic_tool_use;
 pub mod cache_openai_prompt;
 pub mod cache_openai_tool_use;
 pub mod cache_user_id;
+pub mod field_alias_reserved_tool_names;
 pub mod field_override_max_tokens;
 pub mod field_remove;
 pub mod field_set;
@@ -348,6 +349,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(cache_openai_prompt::CacheOpenAiPromptTransform),
         Box::new(cache_openai_tool_use::CacheOpenAiToolUseTransform),
         Box::new(cache_user_id::CacheUserIdTransform),
+        Box::new(field_alias_reserved_tool_names::FieldAliasReservedToolNamesTransform),
         Box::new(field_override_max_tokens::FieldOverrideMaxTokensTransform),
         Box::new(field_remove::FieldRemoveTransform),
         Box::new(field_set::FieldSetTransform),
