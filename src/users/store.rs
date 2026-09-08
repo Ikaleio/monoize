@@ -144,6 +144,7 @@ const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
     "cache_openai_tool_use",
     "cache_user_id",
     "cache_openai_prompt",
+    "field_custom_tools_to_function",
 ];
 
 const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
@@ -159,6 +160,7 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
     "image_markdown_to_output",
     "image_output_to_markdown",
     "image_compress_output",
+    "field_custom_tools_to_function",
 ];
 
 #[derive(Clone, Copy)]

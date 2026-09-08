@@ -9,6 +9,7 @@
     "cache_openai_tool_use",
     "cache_user_id",
     "---字段---",
+    "field_custom_tools_to_function",
     "field_override_max_tokens",
     "field_remove",
     "field_set",
