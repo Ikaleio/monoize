@@ -1,0 +1,48 @@
+---
+title: "Field: custom tools to function"
+description: Convert Codex freeform/custom tools such as apply_patch into JSON function tools for Grok/CPA-style upstreams, then restore custom calls on the response.
+---
+
+## What it does
+
+Codex 0.15x ships `apply_patch` only as a Responses **custom/freeform** tool (`type: custom` plus a Lark grammar). Grok and CPA-style adapters drop or ignore custom tools, so the model only sees JSON `function` tools such as `exec_command`.
+
+This transform rewrites matching custom tool descriptors to JSON functions on the request, including history `ToolCall` nodes and `tool_choice`, then restores `tool_type = custom` on the response so Codex still receives `custom_tool_call`.
+
+The function schema uses a single required string field `input` holding the full `*** Begin Patch` document. Lark grammar enforcement is not preserved.
+
+Grok often emits `*** Begin Patch ***` / `*** End Patch ***`. Codex requires the first line to be exactly `*** Begin Patch`. The response phase rewrites those headers (and strips `*** End of File ***` / `<invoke>` wrappers) before Codex parses the patch.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `field_custom_tools_to_function` |
+| Phase | `request`, `response` |
+| Scopes | Provider, Global, API key |
+
+## When to use
+
+- Codex talks to Grok through CPA or another adapter that strips `type: custom`.
+- Add **two** rules with the same config: one `request` rule and one `response` rule.
+- Place the request rule before the upstream encode. Place the response rule so it runs on the decoded Grok stream.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `names` | string[] | No | `["apply_patch"]` | Custom tool names to convert. An empty array disables conversion. Include `"*"` to convert every custom tool. |
+
+### Example rule
+
+```json
+{
+  "transform": "field_custom_tools_to_function",
+  "enabled": true,
+  "phase": "request",
+  "models": ["grok-*"],
+  "config": {}
+}
+```
+
+Use the same config with `"phase": "response"`.

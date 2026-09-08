@@ -1,0 +1,45 @@
+---
+title: "フィールド: カスタムツールを function に変換"
+description: Codex の apply_patch などの custom/freeform ツールを JSON function に変換し、Grok/CPA 上流向けに通したうえで、応答では custom 呼び出しに戻します。
+---
+
+## 動作
+
+Codex 0.15x の `apply_patch` は Responses の **custom/freeform** ツール（`type: custom` と Lark 文法）としてだけ送出されます。Grok や CPA 系アダプタは custom ツールを落とすか無視するため、モデル側には `exec_command` のような JSON `function` しか見えません。
+
+この変換はリクエストで一致する custom ツール記述子を JSON function に書き換え（履歴の `ToolCall` と `tool_choice` を含む）、応答では `tool_type = custom` に戻して Codex が `custom_tool_call` を受け取れるようにします。
+
+function のスキーマは必須文字列フィールド `input` のみで、値は `*** Begin Patch` 文書全体です。Lark 制約は保持しません。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `field_custom_tools_to_function` |
+| フェーズ | `request`、`response` |
+| スコープ | Provider、Global、API key |
+
+## 使うとき
+
+- Codex が CPA など `type: custom` を落とすアダプタ経由で Grok に接続している。
+- 同じ config で **2 件** のルールを追加する。`request` と `response`。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `names` | string[] | いいえ | `["apply_patch"]` | 変換する custom ツール名。空配列は無変換。`"*"` を含めるとすべての custom ツールを変換する。 |
+
+### ルール例
+
+```json
+{
+  "transform": "field_custom_tools_to_function",
+  "enabled": true,
+  "phase": "request",
+  "models": ["grok-*"],
+  "config": {}
+}
+```
+
+応答側は同じ config で `"phase": "response"` にする。

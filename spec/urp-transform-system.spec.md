@@ -171,6 +171,7 @@ TF-7. Built-ins that MUST exist are exactly:
 - `cache_openai_tool_use`
 - `cache_user_id`
 - `field_alias_reserved_tool_names`
+- `field_custom_tools_to_function`
 - `field_override_max_tokens`
 - `field_remove`
 - `field_set`
@@ -442,6 +443,44 @@ ARTN-6. Response-phase application MUST replace each alias with its original nam
 ARTN-7. A `ToolCall` whose name is not in the active map MUST remain unchanged. A native upstream tool that still uses an original reserved name therefore MUST NOT be rewritten to the client name.
 
 ARTN-8. An empty alias map MUST be a no-op in both phases.
+
+### 4.5d `field_custom_tools_to_function`
+
+CTF-1. `field_custom_tools_to_function` MUST support request-phase and response-phase execution. Supported scopes are `provider`, `global`, and `api_key`.
+
+CTF-2. Config MAY contain `names` as a JSON array of non-empty strings. If `names` is absent, the transform MUST use `["apply_patch"]`. If `names` is present, including an empty array, the transform MUST use that array and MUST NOT add the default. An empty-string entry MUST fail config parsing as `InvalidConfig`.
+
+CTF-3. If `names` contains the exact string `"*"`, the transform MUST convert every `type = "custom"` tool descriptor. Other `names` entries remain additional exact-name matches.
+
+CTF-4. An empty `names` array and no `"*"` MUST be a no-op in both phases.
+
+CTF-5. Request-phase application MUST convert each matching tool in `request.tools[]` whose `type` is `custom` into a `type = "function"` descriptor with:
+1. `function.name` equal to the custom tool name;
+2. `function.description` equal to the custom tool description when present, otherwise a non-empty apply_patch instruction string;
+3. `function.parameters` equal to a JSON object schema with required string property `input`;
+4. `custom` absent.
+
+CTF-6. Request-phase application MUST convert each matching `request.input` `ToolCall` node with `tool_type = custom` to `tool_type = function`. If `arguments` is not already a JSON object containing string key `input`, the transform MUST replace `arguments` with the JSON object `{"input": <original arguments string>}`.
+
+CTF-7. Request-phase application MUST rewrite `request.tool_choice` JSON so that an object member `type` whose string value is `custom` becomes `function` when the same object has `name` matching CTF-2/CTF-3.
+
+CTF-8. Response-phase application MUST convert each matching `ToolCall` with `tool_type = function` to `tool_type = custom` on:
+1. non-stream `response.output`;
+2. stream `NodeStart` headers of kind `ToolCall`;
+3. stream `NodeDone` nodes of kind `ToolCall`;
+4. stream `ResponseDone.output`.
+
+CTF-9. When converting a function `ToolCall` back to custom, if `arguments` parses as a JSON object with a string field `input`, `patch`, `command`, or `content`, the transform MUST replace `arguments` with that string. Prefer `input`. Prefer `patch`/`command`/`content` only when the string contains `Begin Patch` or the key is `input`. If `arguments` is not such a JSON object, the transform MUST keep the original string.
+
+CTF-10. On stream `NodeDelta::ToolCallArguments`, if the current `arguments` value unwraps under CTF-9 to a different string, the transform MUST replace that delta's `arguments` with the unwrapped string.
+
+CTF-11. Native descriptors whose `type` is neither `custom` nor `function` MUST remain unchanged.
+
+CTF-12. After CTF-8 and CTF-9, for a matching `apply_patch` `ToolCall` (whether originally custom or converted from function), the transform MUST rewrite `arguments` so that:
+1. a first line that starts with `*** Begin Patch` becomes exactly `*** Begin Patch`;
+2. a line that starts with `*** End Patch` becomes exactly `*** End Patch`;
+3. lines equal to `*** End of File` or `*** End of File ***` are removed;
+4. if the payload is wrapped in an `<invoke ...>...</invoke>` element, the inner text is used before rules 1–3.
 
 ### 4.6 Image transforms on request ordinary nodes
 

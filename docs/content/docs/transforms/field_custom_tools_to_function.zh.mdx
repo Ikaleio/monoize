@@ -1,0 +1,45 @@
+---
+title: "字段：自定义工具转函数"
+description: 将 Codex 的 apply_patch 等 custom/freeform 工具转成 JSON function，供 Grok/CPA 上游使用，并在响应中恢复为 custom 调用。
+---
+
+## 作用
+
+Codex 0.15x 的 `apply_patch` 只以 Responses **custom/freeform** 工具下发（`type: custom` 加 Lark 语法）。Grok 与 CPA 类适配器会丢弃或忽略 custom 工具，模型侧往往只能看到 `exec_command` 这类 JSON `function`。
+
+本变换在请求阶段把匹配的 custom 工具改写成 JSON function（含历史 `ToolCall` 与 `tool_choice`），再在响应阶段把 `tool_type` 恢复为 `custom`，让 Codex 仍收到 `custom_tool_call`。
+
+函数 schema 只有必填字符串字段 `input`，内容为完整的 `*** Begin Patch` 文档。Lark 语法约束不会保留。
+
+## 参考
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `field_custom_tools_to_function` |
+| 阶段 | `request`、`response` |
+| 作用域 | Provider、Global、API key |
+
+## 何时使用
+
+- Codex 经 CPA 或其他会剥掉 `type: custom` 的适配器访问 Grok。
+- 使用同一配置添加 **两条** 规则：一条 `request`，一条 `response`。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `names` | string[] | 否 | `["apply_patch"]` | 要转换的 custom 工具名。空数组表示不转换。包含 `"*"` 时转换全部 custom 工具。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "field_custom_tools_to_function",
+  "enabled": true,
+  "phase": "request",
+  "models": ["grok-*"],
+  "config": {}
+}
+```
+
+响应阶段使用相同配置，并把 `"phase"` 设为 `"response"`。
