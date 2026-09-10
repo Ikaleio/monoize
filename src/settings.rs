@@ -99,6 +99,12 @@ pub const BUILTIN_REASONING_EFFORT_SUFFIXES: &[(&str, &str)] = &[
 /// Compact sibling IDs bill as the conversation model (`model-pricing.spec.md` MP-R1).
 pub const OPENAI_COMPACT_PRICING_SUFFIX: &str = "-openai-compact";
 
+/// Model variants (`-fast`, `-1m`) route to the base model's Channel but keep
+/// their own ID on the wire and bill at their own `model_prices` row, so
+/// variants priced 2× the base (fast mode, 1M-token context) need no manual
+/// Channel model entry (`monoize-upstream-routing.spec.md` MV-1).
+pub const MODEL_VARIANT_SUFFIXES: &[&str] = &["-fast", "-1m"];
+
 pub fn canonicalize_ordered_string_ids(ids: &mut Vec<String>) {
     let mut seen = HashSet::new();
     ids.retain_mut(|id| {

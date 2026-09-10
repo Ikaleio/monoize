@@ -78,6 +78,16 @@ Fetch models classifies the Channel compact scheme from the upstream model list.
 
 Do not invent compact sibling IDs that the upstream list does not return.
 
+## Model variants
+
+A Channel that maps a base model also serves its priced variants. Variant IDs end with a recognized suffix (`-fast`, `-1m`); `gpt-5.6-sol-fast` and `gpt-5.6-sol-1m` therefore route to the same Channels as `gpt-5.6-sol`.
+
+- The variant ID is sent upstream verbatim — the base entry `redirect` does not apply.
+- The base entry `multiplier` applies to variant requests.
+- Billing resolves the variant ID's own price row (usually 2× the base). No Channel model entry is needed for the variant.
+
+An exact model entry always wins over variant matching. A variant without an applicable price follows the same rules as any unpriced model.
+
 ## Set billing overrides
 
 Set **Allow free when unpriced** and **Allow free when usage is missing** on the Provider. Each setting can inherit the global value, force on, or force off.

@@ -17,6 +17,8 @@ P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}
 
 因此權重為 `2` 的 Channel 獲得的流量是權重為 `1` 的 Channel 的兩倍。
 
+映射了基礎模型的 Channel 也會服務它的價格變體（`-fast`、`-1m`）。變體 ID 原樣發送給上游，並按變體自己的價格列計費 —— 通常是基礎價的 2 倍，無需額外的 Channel 條目。精確匹配的模型條目始終優先於變體匹配。
+
 ## 重試與備援
 
 Monoize 按巢狀順序嘗試路由：先在一個 Provider 內遍歷 Channel，再前進到下一個 Provider。

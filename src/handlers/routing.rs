@@ -480,17 +480,17 @@ pub(super) async fn collect_provider_attempts(
     if !crate::users::is_provider_group_eligible(&provider.group_ids, effective_groups) {
         return;
     }
-    let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> = provider
-        .channels
-        .iter()
-        .filter(|channel| {
-            channel.models.get(&urp.model).is_some_and(|entry| {
+    let supporting_channels: Vec<(crate::monoize_routing::MonoizeChannel, Option<String>)> =
+        provider
+            .channels
+            .iter()
+            .filter_map(|channel| {
+                let (entry, variant_base) = channel_model_entry(&channel.models, &urp.model)?;
                 urp.max_multiplier
                     .is_none_or(|maximum| entry.multiplier <= maximum)
+                    .then(|| (channel.clone(), variant_base))
             })
-        })
-        .cloned()
-        .collect();
+            .collect();
     let channels = filter_eligible_channels(
         state,
         &supporting_channels,
@@ -514,17 +514,31 @@ pub(super) async fn collect_provider_attempts(
         .unwrap_or(ordered.len())
         .min(ordered.len());
     let runtime = state.monoize_runtime.read().await;
-    for channel in ordered.into_iter().take(max_attempts) {
+    for (channel, variant_base) in ordered.into_iter().take(max_attempts) {
         let origin_key = channel_origin_key(&channel.base_url);
         let origin_peer_channel_ids = origin_key
             .as_deref()
             .map(|origin| origin_peer_channel_ids(&provider.channels, origin))
             .unwrap_or_default();
-        let model_entry = channel
-            .models
-            .get(&urp.model)
-            .expect("eligible channel must retain its model entry");
-        let upstream_model = resolve_upstream_model(&urp.model, model_entry);
+        // MV-2: a variant request keeps its own ID on the wire so upstream
+        // serves (and prices) it as its own model; the base entry only
+        // authorizes routing and supplies the multiplier.
+        let (model_entry, upstream_model) = match variant_base.as_deref() {
+            Some(base) => {
+                let entry = channel
+                    .models
+                    .get(base)
+                    .expect("variant channel must retain its base model entry");
+                (entry, urp.model.clone())
+            }
+            None => {
+                let entry = channel
+                    .models
+                    .get(&urp.model)
+                    .expect("eligible channel must retain its model entry");
+                (entry, resolve_upstream_model(&urp.model, entry))
+            }
+        };
         let effective_provider_type = crate::monoize_routing::resolve_effective_api_type(
             &provider.api_type_overrides,
             channel.provider_type,
@@ -678,21 +692,51 @@ pub(super) fn resolve_upstream_model(
         .unwrap_or_else(|| requested_model.to_string())
 }
 
+/// MV-1: a requested model may name a priced variant of a configured base
+/// model (`gpt-5.6-sol-fast` → base `gpt-5.6-sol`). Variants are exposed only
+/// when a Channel maps the base model; the variant ID itself is what goes
+/// upstream and what pricing resolves, so a 2×-priced variant bills at its
+/// own `model_prices` row (`model-pricing.spec.md` MP-R1).
+pub(super) fn variant_base_of(model: &str) -> Option<&str> {
+    for suffix in crate::settings::MODEL_VARIANT_SUFFIXES {
+        if let Some(base) = model.strip_suffix(suffix) {
+            if !base.is_empty() {
+                return Some(base);
+            }
+        }
+    }
+    None
+}
+
+/// Returns the Channel model entry serving `model` and, when the request
+/// names a variant, the base model id it resolved through.
+fn channel_model_entry<'a>(
+    models: &'a HashMap<String, crate::monoize_routing::MonoizeModelEntry>,
+    model: &str,
+) -> Option<(&'a crate::monoize_routing::MonoizeModelEntry, Option<String>)> {
+    if let Some(entry) = models.get(model) {
+        return Some((entry, None));
+    }
+    let base = variant_base_of(model)?;
+    let entry = models.get(base)?;
+    Some((entry, Some(base.to_string())))
+}
+
 pub(super) async fn filter_eligible_channels(
     state: &AppState,
-    channels: &[crate::monoize_routing::MonoizeChannel],
+    channels: &[(crate::monoize_routing::MonoizeChannel, Option<String>)],
     circuit_breaker_enabled: bool,
     model: Option<&str>,
-) -> Vec<crate::monoize_routing::MonoizeChannel> {
+) -> Vec<(crate::monoize_routing::MonoizeChannel, Option<String>)> {
     let now = now_ts();
     let health = state.channel_health.lock().await;
     let mut out = Vec::new();
-    for channel in channels {
+    for (channel, variant_base) in channels {
         if !channel.enabled || channel.weight <= 0 {
             continue;
         }
         if !circuit_breaker_enabled {
-            out.push(channel.clone());
+            out.push((channel.clone(), variant_base.clone()));
             continue;
         }
         let key = health_key(&channel.id, model);
@@ -712,7 +756,7 @@ pub(super) async fn filter_eligible_channels(
                 .unwrap_or(true)
         };
         if is_candidate {
-            out.push(channel.clone());
+            out.push((channel.clone(), variant_base.clone()));
         }
     }
     out
@@ -741,11 +785,11 @@ pub(super) async fn is_attempt_channel_healthy(state: &AppState, attempt: &Monoi
 }
 
 pub(super) fn weighted_shuffle_channels(
-    mut channels: Vec<crate::monoize_routing::MonoizeChannel>,
-) -> Vec<crate::monoize_routing::MonoizeChannel> {
+    mut channels: Vec<(crate::monoize_routing::MonoizeChannel, Option<String>)>,
+) -> Vec<(crate::monoize_routing::MonoizeChannel, Option<String>)> {
     let mut ordered = Vec::with_capacity(channels.len());
     while !channels.is_empty() {
-        let total_weight: u64 = channels.iter().map(|c| c.weight.max(1) as u64).sum();
+        let total_weight: u64 = channels.iter().map(|c| c.0.weight.max(1) as u64).sum();
         if total_weight == 0 {
             ordered.append(&mut channels);
             break;
@@ -753,7 +797,7 @@ pub(super) fn weighted_shuffle_channels(
         let target = random_u64(total_weight);
         let mut cumulative = 0u64;
         let mut chosen = 0usize;
-        for (idx, channel) in channels.iter().enumerate() {
+        for (idx, (channel, _)) in channels.iter().enumerate() {
             cumulative += channel.weight.max(1) as u64;
             if target < cumulative {
                 chosen = idx;

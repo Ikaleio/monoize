@@ -60,6 +60,27 @@ A Channel model entry MUST include:
 - `redirect: string | null`
 - `multiplier: string` containing a representable base-10 decimal with at most 9 fractional digits where `multiplier > 0`
 
+### 2.2a Model Variants
+
+A requested logical model MAY name a priced variant of a configured base
+model (`gpt-5.6-sol-fast` → base `gpt-5.6-sol`) when its id ends with one of
+the recognized variant suffixes (`-fast`, `-1m`):
+
+MV-1. Variant matching MUST only apply when the variant suffix is non-empty
+and the base model id is a non-empty string that has a Channel model entry.
+An exact model-entry match MUST take precedence over variant matching. The
+variant id is NOT a Channel model entry: it MUST NOT appear in `models`, MUST
+NOT be created by the server, and MUST NOT require a price row of its own when
+the variant's own `model_prices` row already exists.
+
+MV-2. A variant request MUST route to the base model's Channel with the
+variant id sent upstream verbatim (the base entry `redirect` MUST NOT apply to
+variant requests), and the base entry `multiplier` MUST apply to the variant.
+Pricing resolves the variant id (`model-pricing.spec.md` MP-R1); a variant
+without an applicable price behaves exactly like any other unpriced model
+(MP-F1/MP-F2), including the `model_pricing_required` rejection when free
+settlement is disabled.
+
 ### 2.3 Provider
 
 A provider record MUST include:
@@ -169,11 +190,11 @@ RTA-2. Static filter rules for each provider:
 
 - skip if `provider.enabled == false`
 - skip if provider is not group-eligible per RRP-1 through RRP-4
-- skip if no Channel has a model entry for the requested logical model that satisfies the request `max_multiplier`
+- skip if no Channel has a model entry for the requested logical model (or its variant base per MV-1) that satisfies the request `max_multiplier`
 
 RTA-3. Availability pre-check:
 
-- candidate channels are those where `enabled == true`, `weight > 0`, `models` contains the requested logical model, the Channel model multiplier does not exceed request `max_multiplier` when present, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
+- candidate channels are those where `enabled == true`, `weight > 0`, `models` contains the requested logical model or its variant base per MV-1, the Channel model multiplier does not exceed request `max_multiplier` when present, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
 - if `provider.circuit_breaker_enabled == false`, runtime health state MUST be ignored for normal routing eligibility. Disabled or zero-weight channels are still excluded.
 - if candidate channels are empty, skip provider.
 

@@ -17,6 +17,8 @@ P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}
 
 A Channel with weight `2` therefore receives twice the traffic of a Channel with weight `1`.
 
+A Channel that maps a base model also serves its priced variants (`-fast`, `-1m`). The variant ID travels upstream verbatim and bills at its own price row — usually 2× the base, with no extra Channel entry required. Exact model entries always win over variant matching.
+
 ## Retry and fallback
 
 Monoize tries routes in nested order: Channels inside a Provider first, then the next Provider.

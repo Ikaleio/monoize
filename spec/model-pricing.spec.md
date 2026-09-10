@@ -158,7 +158,11 @@ MP-R1. The pricing key for a request attempt is resolved exactly as defined by
 `user-billing-and-model-metadata.spec.md` C1.1 and C1.2: normalize the served
 `upstream_model` (strip at most one recognized suffix, including
 `-openai-compact`); when that key has no applicable price and the model was
-redirected, retry with the normalized requested logical model key.
+redirected, retry with the normalized requested logical model key. Model
+variants (`-fast`, `-1m` per `monoize-upstream-routing.spec.md` MV-1) are NOT
+stripped: a variant request keeps the variant id as its pricing key, so a
+2×-priced variant bills at its own `model_prices` row and MUST NOT be billed
+at the base price.
 
 MP-R2. A model has an applicable price if and only if a `model_prices` row exists with
 `model_id` equal to the pricing key and `enabled = 1` and the row is complete under
