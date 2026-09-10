@@ -37,8 +37,10 @@ async fn retain_decoded_terminal_output(
     mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
     tx: mpsc::Sender<urp::UrpStreamEvent>,
     terminal_output: Arc<Mutex<Vec<urp::Node>>>,
+    aliases: HashMap<String, Value>,
 ) -> AppResult<()> {
-    while let Some(event) = rx.recv().await {
+    while let Some(mut event) = rx.recv().await {
+        restore_tool_namespace_event(&mut event, &aliases);
         if let urp::UrpStreamEvent::ResponseDone { output, .. } = &event {
             *terminal_output.lock().await = output.clone();
         }
@@ -977,6 +979,7 @@ pub(super) async fn forward_stream_typed(
                                 req_attempt.model.clone(),
                             )
                         });
+                    let namespace_aliases = tool_namespace_aliases(&req_attempt);
                     let pending_request_log_guard_for_stream = pending_request_log_guard;
                     tokio::spawn(async move {
                         let _pending_request_log_guard = pending_request_log_guard_for_stream;
@@ -1019,6 +1022,7 @@ pub(super) async fn forward_stream_typed(
                                         decoded_rx,
                                         retained_tx,
                                         terminal_output,
+                                        namespace_aliases,
                                     )
                                     .await
                                 })

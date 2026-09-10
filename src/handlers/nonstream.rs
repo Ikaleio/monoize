@@ -1284,6 +1284,10 @@ pub(super) fn decode_response_from_provider(
     if provider_type == ProviderType::Messages {
         restore_messages_custom_tool_calls(request, &mut decoded);
     }
+    let aliases = tool_namespace_aliases(request);
+    for node in &mut decoded.output {
+        restore_tool_namespace_node(node, &aliases);
+    }
     Ok(decoded)
 }
 
