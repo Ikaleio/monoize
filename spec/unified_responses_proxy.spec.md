@@ -441,7 +441,15 @@ TCI7. For same-Responses tool search, Monoize MUST preserve `defer_loading` on f
 
 TCI7a. For a Responses request routed to Chat Completions or Messages, Monoize MUST read every ordered `additional_tools.tools` array before it removes cross-protocol ProviderItems. It MUST promote each direct `function` or `custom` descriptor and each direct `function` or `custom` child of a `namespace.tools` array into `UrpRequestV2.tools`. Monoize MUST preserve the leaf tool name, description, JSON Schema, `strict`, and custom `format` fields until target-specific adaptation. TCI7c defines the Messages adaptation for a custom tool without `input_schema`. Monoize MUST NOT send the `namespace` wrapper to the cross-family provider.
 
-TCI7b. Monoize MUST append promoted tools after explicit top-level tools. A promoted tool MUST NOT replace an earlier tool with the same final wire name. For duplicate promoted names, Monoize MUST keep the first descriptor. A same-Responses attempt MUST NOT promote `additional_tools`; it MUST preserve the native item according to TCI7.
+TCI7b. Monoize MUST append promoted tools after explicit top-level tools. A promoted tool MUST NOT replace an earlier tool with the same namespace and leaf name. For duplicate identities, Monoize MUST keep the first descriptor. A same-Responses attempt MUST NOT promote `additional_tools`; it MUST preserve the native item according to TCI7.
+
+TCI7b.1. Cross-family Chat and Messages attempts MUST also expand top-level `namespace.tools` arrays before provider filtering. Tool identity is the pair `(namespace, name)`. Distinct namespaces MUST NOT lose tools with equal leaf names. Explicit descriptors precede additional descriptors; the first descriptor for each identity wins.
+
+TCI7b.2. Each namespaced leaf MUST receive a unique upstream name of at most 64 ASCII letters, digits, or underscores. Generated names MUST avoid all unqualified tool names. Attempt-local metadata MUST retain the original namespace and leaf name. Same-Responses attempts MUST retain native namespaces without renaming. Named selectors MUST match the namespace and child name before provider filtering.
+
+TCI7b.3. Historical calls and named tool selectors, including allowed-tool entries, MUST use the corresponding upstream name. Cross-family history MUST omit the native namespace field. Non-stream output and every streaming tool-call start, completion, and terminal output MUST restore the original name and namespace before response transforms. Call IDs MUST remain unchanged.
+
+TCI7b.4. The Messages custom-input bridge MUST apply to explicit and promoted Responses custom tools without `input_schema`, including namespace children. It MUST restore custom input semantics before restoring namespace identity.
 
 TCI7c. A Chat Completions attempt MUST encode each promoted function or custom tool with the matching Chat Completions tool type. A Messages attempt MUST encode each promoted function as a Messages client tool. For a promoted Responses custom tool that has no Messages `input_schema`, Monoize MUST encode a Messages client tool with the same name and description and this exact input schema: `{ "type": "object", "properties": { "input": { "type": "string" } }, "required": ["input"], "additionalProperties": false }`.
 
