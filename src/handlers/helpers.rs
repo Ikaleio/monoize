@@ -118,21 +118,14 @@ pub(super) fn read_max_multiplier_from_extra(req: &urp::UrpRequest) -> Option<Mu
 }
 
 pub(super) fn inject_monoize_context(auth: &crate::auth::AuthResult, req: &mut urp::UrpRequest) {
-    if let Some(username) = &auth.username {
-        req.extra_body
-            .insert("__monoize_username".to_string(), json!(username.clone()));
-    }
-    if let Some(api_key_id) = &auth.api_key_id {
-        req.extra_body.insert(
-            "__monoize_api_key_id".to_string(),
-            json!(api_key_id.clone()),
-        );
-    }
+    req.context = urp::RequestContext {
+        username: auth.username.clone(),
+        api_key_id: auth.api_key_id.clone(),
+    };
 }
 
 pub(super) fn strip_monoize_context(req: &mut urp::UrpRequest) {
-    req.extra_body.remove("__monoize_username");
-    req.extra_body.remove("__monoize_api_key_id");
+    req.context = Default::default();
 }
 
 pub(super) async fn apply_transform_rules_request(
@@ -699,6 +692,8 @@ fn canonical_affinity_tool_result_content(
 fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
     match node {
         urp::Node::Text {
+            signature: _,
+            citations: _,
             id,
             role,
             content,
@@ -754,6 +749,7 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::Reasoning {
+            metadata: _,
             id,
             content,
             encrypted,
@@ -1042,6 +1038,8 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
         }
     } else {
         resp.output.push(urp::Node::Text {
+            signature: None,
+            citations: Vec::new(),
             id: None,
             role: urp::OrdinaryRole::Assistant,
             content: pending_markdown,

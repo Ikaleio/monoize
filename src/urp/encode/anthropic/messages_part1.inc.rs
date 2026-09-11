@@ -1,6 +1,7 @@
 fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> Option<Value> {
     match node {
         Node::Text {
+            citations,
             content,
             phase,
             extra_body,
@@ -10,6 +11,9 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
                 return None;
             }
             let mut block = json!({ "type": "text", "text": content });
+            if !citations.is_empty() {
+                block["citations"] = json!(citations);
+            }
             if let Some(obj) = block.as_object_mut() {
                 if let Some(phase) = phase {
                     obj.insert("phase".to_string(), Value::String(phase.clone()));
@@ -37,6 +41,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             Some(block)
         }
         Node::Reasoning {
+            metadata,
             id,
             content,
             summary,
@@ -46,7 +51,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
         } => {
             let wire_extra = reasoning_extra_for_wire(extra_body);
             let signature = encoded_signature_value(encrypted, id, sigil_mode);
-            if reasoning_is_redacted(extra_body) {
+            if metadata.redacted {
                 let data = signature?;
                 let mut block = json!({ "type": "redacted_thinking", "data": data });
                 let obj = block
@@ -113,6 +118,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
 fn encode_assistant_response_block(node: &Node) -> Option<Value> {
     match node {
         Node::Text {
+            citations,
             role: OrdinaryRole::Assistant,
             content,
             phase,
@@ -123,6 +129,9 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
                 return None;
             }
             let mut block = json!({ "type": "text", "text": content });
+            if !citations.is_empty() {
+                block["citations"] = json!(citations);
+            }
             if let Some(obj) = block.as_object_mut() {
                 if let Some(phase) = phase {
                     obj.insert("phase".to_string(), Value::String(phase.clone()));
@@ -132,6 +141,7 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             Some(block)
         }
         Node::Reasoning {
+            metadata,
             id,
             content,
             summary,
@@ -141,7 +151,7 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
         } => {
             let wire_extra = reasoning_extra_for_wire(extra_body);
             let signature = encoded_signature_value(encrypted, id, ReasoningSigilMode::EmbedSigil);
-            if reasoning_is_redacted(extra_body) {
+            if metadata.redacted {
                 let data = signature?;
                 let mut block = Map::new();
                 block.insert(

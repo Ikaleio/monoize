@@ -7,6 +7,8 @@ description: リクエストの推論 effort レベルを思考トークン予�
 
 この変換は、リクエストの推論 effort レベル（`low`、`medium`、`high`、任意で `xhigh` や `max`）を、effort ラベルではなく予算を受け取る上流向けの数値の思考トークン予算にマッピングします。
 
+変換結果は共通の推論予算に設定されます。Messages は思考が有効な場合に予算を出力し、Gemini は `thinkingBudget` として出力します。
+
 ## リファレンス
 
 | 項目 | 値 |

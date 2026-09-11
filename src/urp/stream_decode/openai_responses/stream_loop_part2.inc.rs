@@ -44,6 +44,8 @@ fn map_responses_event_to_urp_events_with_state(
                 emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
                 let item_id = stable_message_item_id_for_output(index_state, output_index);
                 let node = Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: Some(item_id),
                     role: output_state_for(index_state, output_index)
                         .role
@@ -67,6 +69,8 @@ fn map_responses_event_to_urp_events_with_state(
             events.push(UrpStreamEvent::NodeDelta {
                 node_index,
                 delta: NodeDelta::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     content: output_text_delta_content(&data_val).to_string(),
                 },
                 usage: None,
@@ -103,7 +107,7 @@ fn map_responses_event_to_urp_events_with_state(
                     )
                 })
                 .unwrap_or_default();
-            let mut extra_body = split_known_fields(
+            let extra_body = split_known_fields(
                 data_val.clone(),
                 &[
                     "delta",
@@ -114,12 +118,14 @@ fn map_responses_event_to_urp_events_with_state(
                     "summary_index",
                 ],
             );
-            if let Some(id) = reasoning_item_id {
-                extra_body.insert("reasoning_item_id".to_string(), Value::String(id));
+            let mut delta =
+                node_delta_from_reasoning_event(event_name, &data_val, reasoning_source);
+            if let NodeDelta::Reasoning { metadata, .. } = &mut delta {
+                metadata.item_id = reasoning_item_id;
             }
             vec![UrpStreamEvent::NodeDelta {
                 node_index: urp_node_index_from_delta(&data_val, index_state),
-                delta: node_delta_from_reasoning_event(event_name, &data_val, reasoning_source),
+                delta,
                 usage: None,
                 extra_body,
             }]
@@ -173,10 +179,9 @@ fn map_responses_event_to_urp_events_with_state(
         }
         "response.content_part.done" => map_content_part_done(data_val, index_state),
         "response.output_item.done" => map_output_item_done(data_val, index_state),
-        "response.completed"
-        | "response.incomplete"
-        | "response.failed"
-        | "response.cancelled" => map_response_completed(data_val, index_state),
+        "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled" => {
+            map_response_completed(data_val, index_state)
+        }
         "error" => vec![UrpStreamEvent::Error {
             code: data_val
                 .get("code")
@@ -317,7 +322,9 @@ fn responses_stream_error_parts(
         .and_then(|status| u16::try_from(status).ok())
         .unwrap_or(StatusCode::BAD_REQUEST.as_u16());
     let terminal_error = StreamTerminalError {
-        code: code.clone().unwrap_or_else(|| "upstream_stream_error".to_string()),
+        code: code
+            .clone()
+            .unwrap_or_else(|| "upstream_stream_error".to_string()),
         message: message.clone(),
         http_status,
         error_type: error_type.clone(),

@@ -937,6 +937,8 @@ async fn process_text_delta(
         text_node_index,
         next_node_index,
         NodeHeader::Text {
+            signature: None,
+            citations: Vec::new(),
             id: None,
             role: OrdinaryRole::Assistant,
             phase: phase.map(str::to_string),
@@ -950,6 +952,8 @@ async fn process_text_delta(
         tx,
         node_index,
         NodeDelta::Text {
+            signature: None,
+            citations: Vec::new(),
             content: text.to_string(),
         },
         chat_delta_event_extra(std::mem::take(delta_extra)),
@@ -1000,14 +1004,14 @@ fn chat_reasoning_node_from_detail(detail: &Map<String, Value>) -> Option<Node> 
         .flatten()
         .filter(|value| !value.is_null())
         .cloned();
-    let mut raw_detail = detail.clone();
-    raw_detail.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
+    let raw_detail = crate::urp::reasoning::detail_metadata(detail);
     let extra_body = HashMap::from([(
         CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
         Value::Object(raw_detail),
     )]);
 
     Some(Node::Reasoning {
+        metadata: Default::default(),
         id,
         content,
         encrypted,
@@ -1035,6 +1039,7 @@ async fn process_reasoning_detail_delta(
         return Ok(());
     };
     let Node::Reasoning {
+        metadata,
         id,
         content,
         encrypted,
@@ -1053,7 +1058,10 @@ async fn process_reasoning_detail_delta(
         tx,
         UrpStreamEvent::NodeStart {
             node_index,
-            header: NodeHeader::Reasoning { id: id.clone() },
+            header: NodeHeader::Reasoning {
+                metadata: metadata.clone(),
+                id: id.clone(),
+            },
             extra_body: extra_body.clone(),
         },
     )
@@ -1064,6 +1072,10 @@ async fn process_reasoning_detail_delta(
         tx,
         node_index,
         NodeDelta::Reasoning {
+            metadata: crate::urp::ReasoningMetadata {
+                item_id: id.clone(),
+                ..metadata.clone()
+            },
             content: content.clone(),
             encrypted: encrypted.clone(),
             summary: summary.clone(),
@@ -1104,7 +1116,10 @@ async fn process_reasoning_summary_delta(
         response_started,
         reasoning_node_index,
         next_node_index,
-        NodeHeader::Reasoning { id: None },
+        NodeHeader::Reasoning {
+            metadata: Default::default(),
+            id: None,
+        },
         HashMap::new(),
     )
     .await?;
@@ -1112,6 +1127,7 @@ async fn process_reasoning_summary_delta(
         tx,
         node_index,
         NodeDelta::Reasoning {
+            metadata: Default::default(),
             content: None,
             encrypted: None,
             summary: Some(summary.to_string()),
@@ -1150,7 +1166,10 @@ async fn process_reasoning_text_delta(
         response_started,
         reasoning_node_index,
         next_node_index,
-        NodeHeader::Reasoning { id: None },
+        NodeHeader::Reasoning {
+            metadata: Default::default(),
+            id: None,
+        },
         HashMap::new(),
     )
     .await?;
@@ -1159,6 +1178,7 @@ async fn process_reasoning_text_delta(
         tx,
         node_index,
         NodeDelta::Reasoning {
+            metadata: Default::default(),
             content: Some(content.to_string()),
             encrypted: None,
             summary: None,
@@ -1208,7 +1228,10 @@ async fn process_reasoning_encrypted_delta(
         response_started,
         reasoning_node_index,
         next_node_index,
-        NodeHeader::Reasoning { id: None },
+        NodeHeader::Reasoning {
+            metadata: Default::default(),
+            id: None,
+        },
         HashMap::new(),
     )
     .await?;
@@ -1217,6 +1240,7 @@ async fn process_reasoning_encrypted_delta(
         tx,
         node_index,
         NodeDelta::Reasoning {
+            metadata: Default::default(),
             content: None,
             encrypted: Some(encrypted.clone()),
             summary: None,
@@ -1245,13 +1269,34 @@ fn apply_terminal_opaque_snapshot(current: &mut String, snapshot: &str) -> Optio
     None
 }
 
-fn reasoning_detail_raw(node: &Node) -> Option<&Map<String, Value>> {
-    let Node::Reasoning { extra_body, .. } = node else {
+fn reasoning_detail_raw(node: &Node) -> Option<Map<String, Value>> {
+    let Node::Reasoning {
+        id,
+        content,
+        summary,
+        encrypted,
+        source,
+        extra_body,
+        ..
+    } = node
+    else {
         return None;
     };
-    extra_body
-        .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
-        .and_then(Value::as_object)
+    let native = extra_body
+        .get(CHAT_REASONING_DETAIL_EXTRA_KEY)?
+        .as_object()?;
+    crate::urp::reasoning::chat_details(
+        content.as_deref(),
+        summary.as_deref(),
+        encrypted.as_ref(),
+        id.as_deref(),
+        source.as_deref(),
+        Some(native),
+    )
+    .into_iter()
+    .next()?
+    .as_object()
+    .cloned()
 }
 
 fn reasoning_detail_payload_key(detail_type: &str) -> Option<&'static str> {
@@ -1267,7 +1312,7 @@ fn reasoning_detail_matches(existing: &Node, terminal: &Map<String, Value>) -> b
     let Some(existing) = reasoning_detail_raw(existing) else {
         return false;
     };
-    if existing == terminal {
+    if &existing == terminal {
         return true;
     }
     let existing_type = existing.get("type").and_then(Value::as_str);
@@ -1362,11 +1407,18 @@ fn reasoning_detail_completion(
     delta_detail.insert(payload_key.to_string(), payload_delta);
     let extra_body = HashMap::from([(
         CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
-        Value::Object(delta_detail),
+        Value::Object(crate::urp::reasoning::detail_metadata(&delta_detail)),
     )]);
     Some((
         merged_node,
         NodeDelta::Reasoning {
+            metadata: crate::urp::ReasoningMetadata {
+                item_id: terminal
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                ..Default::default()
+            },
             content,
             encrypted,
             summary,
@@ -1425,9 +1477,7 @@ async fn process_terminal_reasoning_details(
             send_node_delta(tx, *node_index, delta, event_extra).await?;
             *existing_node = merged_node;
         } else {
-            let mut merged_raw = reasoning_detail_raw(existing_node)
-                .cloned()
-                .unwrap_or_default();
+            let mut merged_raw = reasoning_detail_raw(existing_node).unwrap_or_default();
             for (key, value) in detail_obj {
                 if !crate::urp::decode::is_internal_extra_key(key) {
                     merged_raw.insert(key.clone(), value.clone());
@@ -2024,6 +2074,7 @@ async fn ensure_response_started_with_extra(
         send_event(
             tx,
             UrpStreamEvent::ResponseStart {
+                usage: None,
                 id: response_id.to_string(),
                 model: model.to_string(),
                 extra_body,
@@ -2135,6 +2186,7 @@ fn sorted_nodes(
         nodes.push((
             node_index,
             Node::Reasoning {
+                metadata: Default::default(),
                 id: Some(crate::urp::synthetic_reasoning_id()),
                 content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
                 encrypted: (!reasoning_sig.is_empty())
@@ -2152,6 +2204,8 @@ fn sorted_nodes(
         nodes.push((
             node_index,
             Node::Text {
+                signature: None,
+                citations: Vec::new(),
                 id: Some(crate::urp::synthetic_message_id()),
                 role: OrdinaryRole::Assistant,
                 content: output_text.to_string(),

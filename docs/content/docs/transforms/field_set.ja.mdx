@@ -9,6 +9,10 @@ description: 設定したパスに JSON 値を書き込みます。条件一致�
 
 プロトコル変換が運ばないプロバイダー固有フィールドの追加や置換に使います。
 
+リクエストの `reasoning.effort`、`reasoning.summary`、`reasoning.mode`、`reasoning.budget_tokens`、`reasoning.display` は共通の推論設定を操作します。他のパスは引き続き extra-body フィールドを操作します。
+
+GPT の推論要約を要求するには、`reasoning.summary` を `detailed` に設定します。上流が要約に対応し、実際に返す必要があります。
+
 ## リファレンス
 
 | 項目 | 値 |

@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState, UrpData, set_extra_path,
+    TransformRuntimeContext, TransformState, UrpData,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -110,11 +110,10 @@ impl Transform for ReasoningEffortToBudgetTransform {
             "max" => cfg.max.unwrap_or_else(|| cfg.xhigh.unwrap_or(cfg.high)),
             _ => return Ok(()),
         };
-        set_extra_path(
-            &mut req.extra_body,
-            "thinking.budget_tokens",
-            Value::Number(serde_json::Number::from(budget)),
-        );
+        req.reasoning
+            .as_mut()
+            .expect("reasoning checked above")
+            .budget_tokens = Some(u64::from(budget));
         Ok(())
     }
 }

@@ -22,6 +22,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(system_prompt) = input_obj.get("system_prompt").and_then(|v| v.as_str()) {
             if !system_prompt.is_empty() {
                 input_nodes.push(Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: None,
                     role: OrdinaryRole::System,
                     content: system_prompt.to_string(),
@@ -34,6 +36,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(prompt) = input_obj.get("prompt").and_then(|v| v.as_str()) {
             if !prompt.is_empty() {
                 input_nodes.push(Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: None,
                     role: OrdinaryRole::User,
                     content: prompt.to_string(),
@@ -68,6 +72,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let stream = obj.get("stream").and_then(|v| v.as_bool());
 
     Ok(UrpRequest {
+        context: Default::default(),
+        instructions_format: None,
         model,
         input: input_nodes,
         stream,
@@ -160,6 +166,8 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                 });
             } else {
                 nodes.push(Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: None,
                     role: OrdinaryRole::Assistant,
                     content: s.clone(),
@@ -197,6 +205,8 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                         .join("");
                     if !combined.is_empty() {
                         nodes.push(Node::Text {
+                            signature: None,
+                            citations: Vec::new(),
                             id: None,
                             role: OrdinaryRole::Assistant,
                             content: combined,
@@ -209,6 +219,8 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                 let serialized = serde_json::to_string(output).unwrap_or_default();
                 if !serialized.is_empty() {
                     nodes.push(Node::Text {
+                        signature: None,
+                        citations: Vec::new(),
                         id: None,
                         role: OrdinaryRole::Assistant,
                         content: serialized,
@@ -223,6 +235,8 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
             let serialized = serde_json::to_string(other).unwrap_or_default();
             if !serialized.is_empty() {
                 nodes.push(Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: None,
                     role: OrdinaryRole::Assistant,
                     content: serialized,

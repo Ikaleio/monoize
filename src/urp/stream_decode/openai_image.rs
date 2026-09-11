@@ -75,6 +75,7 @@ pub(crate) async fn stream_image_to_urp_events(
                 };
                 if !started_response {
                     tx.send(UrpStreamEvent::ResponseStart {
+                        usage: None,
                         id: response_id.clone(),
                         model: urp.model.clone(),
                         extra_body: HashMap::new(),
@@ -116,6 +117,7 @@ pub(crate) async fn stream_image_to_urp_events(
                 if let Some(node) = image_node_from_payload(&data_val) {
                     if !started_response {
                         tx.send(UrpStreamEvent::ResponseStart {
+                            usage: None,
                             id: response_id.clone(),
                             model: urp.model.clone(),
                             extra_body: HashMap::new(),

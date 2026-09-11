@@ -62,6 +62,8 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         output.insert(
             0,
             Node::Text {
+                signature: None,
+                citations: Vec::new(),
                 id: None,
                 role: OrdinaryRole::Assistant,
                 content: rp,

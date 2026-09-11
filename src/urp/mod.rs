@@ -7,6 +7,7 @@ pub mod decode;
 pub mod encode;
 pub mod greedy;
 pub(crate) mod internal_legacy_bridge;
+pub mod reasoning;
 pub mod stream_decode;
 pub mod stream_encode;
 pub mod stream_helpers;
@@ -39,14 +40,7 @@ pub fn synthetic_tool_call_id() -> String {
 /// `spec/unified_responses_proxy.spec.md` DM5.2 / PM5b.
 pub const REASONING_SIGNATURE_SIGIL_PREFIX: &str = "mz1.";
 
-/// Marker stored in `Node::Reasoning.extra_body` to record that the node originated from an
-/// Anthropic `redacted_thinking` block, so that the Anthropic encoder can reconstruct the
-/// original block type. See `spec/unified_responses_proxy.spec.md` PM5 / DM5.1.
-pub const REASONING_KIND_EXTRA_KEY: &str = "_monoize_reasoning_kind";
-pub const REASONING_KIND_REDACTED_THINKING: &str = "redacted_thinking";
-pub const REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY: &str =
-    "_monoize_reasoning_downstream_only_presentation";
-/// Full OpenRouter `reasoning_details[]` entry retained on one reasoning node.
+/// Unknown entry fields and shape for one Chat reasoning detail, without semantic payload copies.
 /// One source entry maps to one node so repeated entry types and entry order survive replay.
 pub const CHAT_REASONING_DETAIL_EXTRA_KEY: &str = "_monoize_chat_reasoning_detail";
 /// Scalar Chat reasoning surface that supplied a reasoning node when no structured detail existed.
@@ -54,7 +48,7 @@ pub const CHAT_MESSAGE_ITEM_EXTRA_KEY: &str = "_monoize_chat_message_item";
 pub const CHAT_REASONING_SURFACE_EXTRA_KEY: &str = "_monoize_chat_reasoning_surface";
 pub const CHAT_REASONING_SURFACE_REASONING: &str = "reasoning";
 pub const CHAT_REASONING_SURFACE_REASONING_CONTENT: &str = "reasoning_content";
-/// Exact provider-specific request controls kept out of cross-family generic reasoning fields.
+/// Unknown provider-specific request controls and native configuration placement.
 pub const CHAT_REASONING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_reasoning_config";
 pub const CHAT_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_thinking_config";
 pub const CHAT_MESSAGE_AUDIO_EXTRA_KEY: &str = "_monoize_chat_message_audio";
@@ -68,24 +62,16 @@ pub const MESSAGES_OUTPUT_CONFIG_EXTRA_KEY: &str = "_monoize_messages_output_con
 pub const FILE_ID_ORIGIN_EXTRA_KEY: &str = "_monoize_file_id_origin";
 pub const FILE_ID_ORIGIN_OPENAI: &str = "openai";
 pub const FILE_ID_ORIGIN_MESSAGES: &str = "messages";
-/// Typed usage observed on an upstream Messages `message_start`, retained until the
-/// downstream Messages encoder emits its own `message_start` envelope.
-pub const MESSAGES_STREAM_START_USAGE_EXTRA_KEY: &str = "_monoize_messages_stream_start_usage";
-pub const RESPONSES_REASONING_SUMMARY_EXTRA_KEY: &str = "_monoize_responses_reasoning_summary";
-pub const RESPONSES_REASONING_CONTENT_EXTRA_KEY: &str = "_monoize_responses_reasoning_content";
 /// Complete native Responses `image_generation_call` item retained on a semantic Image node.
 pub const RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY: &str =
     "_monoize_responses_image_generation_call";
-/// Exact top-level Responses `instructions` value retained for same-protocol request replay.
-pub const RESPONSES_INSTRUCTIONS_EXTRA_KEY: &str = "_monoize_responses_instructions";
 /// Marks semantic nodes decoded from top-level Responses `instructions`.
 pub const RESPONSES_INSTRUCTION_NODE_EXTRA_KEY: &str = "_monoize_responses_instruction_node";
-/// Complete non-stream Responses object retained so absent optional fields remain absent.
+/// Unmodeled Responses fields retained without a second copy of canonical fields.
 pub const RESPONSES_RESPONSE_SOURCE_EXTRA_KEY: &str = "_monoize_responses_response_source";
 /// Upstream Responses start object retained for same-protocol stream envelope reconstruction.
 pub const RESPONSES_STREAM_START_SOURCE_EXTRA_KEY: &str = "_monoize_responses_stream_start_source";
 pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
-pub const REASONING_ENVELOPE_ITEM_ID_EXTRA_KEY: &str = "_monoize_reasoning_envelope_item_id";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReasoningEnvelope {
@@ -213,45 +199,6 @@ fn wrap_reasoning_extra_body_encrypted_content(
     }
 }
 
-fn chat_encrypted_reasoning_detail_mut(
-    extra_body: &mut HashMap<String, Value>,
-) -> Option<&mut serde_json::Map<String, Value>> {
-    let detail = extra_body
-        .get_mut(CHAT_REASONING_DETAIL_EXTRA_KEY)?
-        .as_object_mut()?;
-    (detail.get("type").and_then(Value::as_str) == Some("reasoning.encrypted")).then_some(detail)
-}
-
-fn wrap_chat_reasoning_detail_envelope(
-    extra_body: &mut HashMap<String, Value>,
-    canonical_encrypted: Option<&Value>,
-    fallback_item_id: Option<&str>,
-    provider_type: &str,
-    model: &str,
-) {
-    let Some(detail) = chat_encrypted_reasoning_detail_mut(extra_body) else {
-        return;
-    };
-    if let Some(canonical_encrypted) = canonical_encrypted {
-        detail.insert("data".to_string(), canonical_encrypted.clone());
-        return;
-    }
-    let item_id = detail
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .or_else(|| fallback_item_id.map(str::to_string));
-    let Some(payload) = detail.remove("data") else {
-        return;
-    };
-    let mut encrypted = Some(payload);
-    wrap_reasoning_payload(&mut encrypted, item_id.as_deref(), provider_type, model);
-    if let Some(encrypted) = encrypted {
-        detail.insert("data".to_string(), encrypted);
-    }
-}
-
 fn extra_body_is_reasoning_item(extra_body: &HashMap<String, Value>) -> bool {
     extra_body.contains_key("encrypted_content")
         || extra_body.get("type").and_then(Value::as_str) == Some("reasoning")
@@ -266,13 +213,7 @@ fn wrap_reasoning_node_envelope(node: &mut Node, provider_type: &str, model: &st
     } = node
     {
         wrap_reasoning_payload(encrypted, id.as_deref(), provider_type, model);
-        wrap_chat_reasoning_detail_envelope(
-            extra_body,
-            encrypted.as_ref(),
-            id.as_deref(),
-            provider_type,
-            model,
-        );
+
         wrap_reasoning_extra_body_encrypted_content(
             extra_body,
             id.as_deref(),
@@ -299,19 +240,12 @@ pub fn wrap_reasoning_envelope_in_stream_event(
 ) {
     match event {
         UrpStreamEvent::NodeStart {
-            header: NodeHeader::Reasoning { id },
+            header: NodeHeader::Reasoning { metadata: _, id },
             extra_body,
             ..
         } => {
             wrap_reasoning_extra_body_encrypted_content(
                 extra_body,
-                id.as_deref(),
-                provider_type,
-                model,
-            );
-            wrap_chat_reasoning_detail_envelope(
-                extra_body,
-                None,
                 id.as_deref(),
                 provider_type,
                 model,
@@ -325,7 +259,6 @@ pub fn wrap_reasoning_envelope_in_stream_event(
             let item_id = extra_body
                 .get("id")
                 .and_then(Value::as_str)
-                .or_else(|| extra_body.get("reasoning_item_id").and_then(Value::as_str))
                 .or_else(|| extra_body.get("item_id").and_then(Value::as_str))
                 .map(str::to_string);
             wrap_reasoning_extra_body_encrypted_content(
@@ -336,30 +269,17 @@ pub fn wrap_reasoning_envelope_in_stream_event(
             );
         }
         UrpStreamEvent::NodeDelta {
-            delta: NodeDelta::Reasoning { encrypted, .. },
-            extra_body,
+            delta:
+                NodeDelta::Reasoning {
+                    encrypted,
+                    metadata,
+                    ..
+                },
+            extra_body: _,
             ..
         } => {
-            let item_id = extra_body
-                .get("reasoning_item_id")
-                .and_then(Value::as_str)
-                .or_else(|| extra_body.get("item_id").and_then(Value::as_str))
-                .or_else(|| {
-                    extra_body
-                        .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
-                        .and_then(Value::as_object)
-                        .and_then(|detail| detail.get("id"))
-                        .and_then(Value::as_str)
-                })
-                .map(str::to_string);
+            let item_id = metadata.item_id.clone();
             wrap_reasoning_payload(encrypted, item_id.as_deref(), provider_type, model);
-            wrap_chat_reasoning_detail_envelope(
-                extra_body,
-                encrypted.as_ref(),
-                item_id.as_deref(),
-                provider_type,
-                model,
-            );
         }
         UrpStreamEvent::NodeDone { node, .. } => {
             wrap_reasoning_node_envelope(node, provider_type, model);
@@ -401,19 +321,19 @@ struct PendingReasoningEnvelopeFragments {
 }
 
 impl PendingReasoningEnvelopeFragments {
-    fn push(&mut self, value: Value, source: Option<&String>, extra_body: &HashMap<String, Value>) {
+    fn push(
+        &mut self,
+        value: Value,
+        source: Option<&String>,
+        metadata: &ReasoningMetadata,
+        extra_body: &HashMap<String, Value>,
+    ) {
         self.values.push(value);
         if let Some(source) = source.filter(|source| !source.is_empty()) {
             self.source = Some(source.clone());
         }
-        if let Some(item_id) = extra_body
-            .get("reasoning_item_id")
-            .or_else(|| extra_body.get("item_id"))
-            .or_else(|| extra_body.get("id"))
-            .and_then(Value::as_str)
-            .filter(|item_id| !item_id.is_empty())
-        {
-            self.item_id = Some(item_id.to_string());
+        if let Some(item_id) = &metadata.item_id {
+            self.item_id = Some(item_id.clone());
         }
         self.extra_body.extend(extra_body.clone());
     }
@@ -470,6 +390,7 @@ impl ReasoningEnvelopeStreamState {
             node_index,
             delta:
                 NodeDelta::Reasoning {
+                    metadata,
                     content,
                     encrypted,
                     summary,
@@ -490,6 +411,7 @@ impl ReasoningEnvelopeStreamState {
             self.pending_fragments.entry(*node_index).or_default().push(
                 value,
                 source.as_ref(),
+                metadata,
                 extra_body,
             );
             if !has_non_encrypted_payload && usage.is_none() {
@@ -525,29 +447,22 @@ impl ReasoningEnvelopeStreamState {
                 if let Some(wrapped) = wrapped {
                     if let Node::Reasoning {
                         encrypted,
-                        extra_body,
+                        extra_body: _,
                         ..
                     } = node
                     {
                         *encrypted = Some(wrapped.clone());
-                        wrap_chat_reasoning_detail_envelope(
-                            extra_body,
-                            Some(&wrapped),
-                            item_id.as_deref(),
-                            provider_type,
-                            model,
-                        );
                     }
-                    let mut delta_extra = pending.extra_body;
-                    if let Some(item_id) = item_id {
-                        delta_extra
-                            .entry("reasoning_item_id".to_string())
-                            .or_insert(Value::String(item_id));
-                    }
+                    let delta_extra = pending.extra_body;
                     return vec![
                         UrpStreamEvent::NodeDelta {
                             node_index: *node_index,
                             delta: NodeDelta::Reasoning {
+                                metadata: ReasoningMetadata {
+                                    item_id,
+                                    ..Default::default()
+                                },
+
                                 content: None,
                                 encrypted: Some(wrapped),
                                 summary: None,
@@ -582,6 +497,7 @@ pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
     nodes.retain_mut(|node| {
         let Node::Reasoning {
             encrypted,
+            metadata,
             extra_body,
             ..
         } = node
@@ -593,10 +509,7 @@ pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
                 return false;
             }
             if let Some(item_id) = envelope.item_id.filter(|id| !id.is_empty()) {
-                extra_body.insert(
-                    REASONING_ENVELOPE_ITEM_ID_EXTRA_KEY.to_string(),
-                    Value::String(item_id),
-                );
+                metadata.item_id = Some(item_id);
             }
             *encrypted = Some(envelope.payload);
         }
@@ -655,6 +568,10 @@ pub enum StopControl {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpRequest {
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_format: Option<InstructionsFormat>,
+    #[serde(default, skip_serializing)]
+    pub context: RequestContext,
     #[serde(alias = "inputs")]
     pub input: Vec<Node>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -689,6 +606,10 @@ pub struct UrpRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Node {
     Text {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        citations: Vec<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
@@ -730,6 +651,8 @@ pub enum Node {
         extra_body: HashMap<String, Value>,
     },
     Reasoning {
+        #[serde(default)]
+        metadata: ReasoningMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -886,12 +809,103 @@ impl ToolResultContent {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReasoningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
     #[serde(flatten)]
     pub extra_body: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstructionsFormat {
+    Text,
+    Items,
+    Null,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReasoningMetadata {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub downstream_only: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chat_content: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub summary_as_thinking: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_parts: Option<Vec<ReasoningTextPart>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_parts: Option<Vec<ReasoningTextPart>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReasoningTextPart {
+    pub byte_length: usize,
+    #[serde(flatten)]
+    pub extra_body: HashMap<String, Value>,
+}
+
+impl ReasoningConfig {
+    pub fn is_control(field: &str) -> bool {
+        matches!(
+            field,
+            "effort" | "summary" | "mode" | "budget_tokens" | "display"
+        )
+    }
+
+    pub fn disabled(&self) -> bool {
+        self.effort.as_deref() == Some("none") || self.mode.as_deref() == Some("disabled")
+    }
+
+    pub fn control(&self, field: &str) -> Option<Value> {
+        match field {
+            "effort" => self.effort.clone().map(Value::String),
+            "summary" => self.summary.clone().map(Value::String),
+            "mode" => self.mode.clone().map(Value::String),
+            "display" => self.display.clone().map(Value::String),
+            "budget_tokens" => self.budget_tokens.map(Value::from),
+            _ => None,
+        }
+    }
+
+    pub fn set_control(&mut self, field: &str, value: Option<Value>) -> Result<bool, String> {
+        if field == "budget_tokens" {
+            self.budget_tokens = match value.filter(|v| !v.is_null()) {
+                None => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .ok_or("reasoning.budget_tokens must be an unsigned integer")?,
+                ),
+            };
+            return Ok(true);
+        }
+        let target = match field {
+            "effort" => &mut self.effort,
+            "summary" => &mut self.summary,
+            "mode" => &mut self.mode,
+            "display" => &mut self.display,
+            _ => return Ok(false),
+        };
+        *target = match value.filter(|v| !v.is_null()) {
+            None => None,
+            Some(Value::String(v)) => Some(v),
+            Some(_) => return Err(format!("reasoning.{field} must be a string")),
+        };
+        Ok(true)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1073,6 +1087,8 @@ impl Usage {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum UrpStreamEvent {
     ResponseStart {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
         id: String,
         model: String,
         #[serde(flatten)]
@@ -1129,6 +1145,10 @@ pub enum UrpStreamEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NodeHeader {
     Text {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        citations: Vec<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
@@ -1155,6 +1175,8 @@ pub enum NodeHeader {
         id: Option<String>,
     },
     Reasoning {
+        #[serde(default)]
+        metadata: ReasoningMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
@@ -1187,9 +1209,15 @@ pub enum NodeHeader {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NodeDelta {
     Text {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        citations: Vec<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
         content: String,
     },
     Reasoning {
+        #[serde(default)]
+        metadata: ReasoningMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1219,9 +1247,17 @@ pub enum NodeDelta {
     },
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RequestContext {
+    pub username: Option<String>,
+    pub api_key_id: Option<String>,
+}
+
 impl Node {
     pub fn text(role: OrdinaryRole, content: impl Into<String>) -> Self {
         Node::Text {
+            signature: None,
+            citations: Vec::new(),
             id: None,
             role,
             content: content.into(),
@@ -1294,7 +1330,7 @@ impl Node {
 }
 
 pub fn node_is_empty_text(node: &Node) -> bool {
-    matches!(node, Node::Text { content, .. } if content.is_empty())
+    matches!(node, Node::Text { content, citations, signature, .. } if content.is_empty() && citations.is_empty() && signature.is_none())
 }
 
 pub fn nodes_semantically_match(left: &Node, right: &Node) -> bool {
@@ -1351,6 +1387,7 @@ pub fn nodes_semantically_match(left: &Node, right: &Node) -> bool {
         ) => left_origin == right_origin && left_id.is_some() && left_id == right_id,
         (
             Node::Reasoning {
+                metadata: _,
                 id: left_id,
                 content: left_content,
                 encrypted: left_encrypted,
@@ -1359,6 +1396,7 @@ pub fn nodes_semantically_match(left: &Node, right: &Node) -> bool {
                 extra_body: left_extra_body,
             },
             Node::Reasoning {
+                metadata: _,
                 id: right_id,
                 content: right_content,
                 encrypted: right_encrypted,
@@ -1476,11 +1514,7 @@ pub fn remove_downstream_only_reasoning_for_responses(nodes: &mut Vec<Node>) {
     nodes.retain(|node| {
         !matches!(
             node,
-            Node::Reasoning { extra_body, .. }
-                if extra_body
-                    .get(REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY)
-                    .and_then(Value::as_bool)
-                    == Some(true)
+            Node::Reasoning { metadata, .. } if metadata.downstream_only
         )
     });
 }

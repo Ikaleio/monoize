@@ -24,6 +24,18 @@
 
 ## 2. Canonical non-stream objects
 
+URPV2-S1. Typed URP fields are the sole authority for represented semantics. Decoders MUST extract recognized semantics before preserving unknown fields. Internal metadata MUST NOT provide an alternative value for a represented semantic field.
+
+URPV2-S2. Encoders MUST honor changes and deletions made by transforms. Native replay metadata MAY preserve unknown fields, field placement, and array boundaries. It MUST NOT restore deleted text, controls, identifiers, or payloads. A semantic change MUST invalidate incompatible replay shape.
+
+URPV2-S3. `ReasoningConfig` MUST represent `effort`, `summary`, thinking mode, exact token budget, and thinking display as typed optional fields. Omission differs from an explicit disabled mode. Summary modes remain separate from response summary text. Unknown native configuration members MAY remain protocol-scoped metadata after recognized fields are removed.
+
+URPV2-S4. `Reasoning` nodes and deltas MUST use typed presentation and transport metadata for redaction kind, replay eligibility, text presentation, and late item identity. Presentation metadata MUST reference the current typed text rather than contain another text copy. It MUST NOT be encoded as an unknown wire field.
+
+URPV2-S5. Stream start usage and citation updates MUST use typed URP fields. Gemini signatures attached to ordinary text MUST have a typed association with that text. Runtime authentication context MUST remain separate from provider request extras.
+
+URPV2-S6. The rules URPV2-S1 through URPV2-S5 take precedence over historical native-replay precedence requirements. They apply to non-stream, streamed, synthetic-stream, and assistant-history encoders.
+
 URPV2-1. The canonical internal request object MUST be:
 
 ```text
@@ -234,7 +246,7 @@ ORD-6. A decoder MUST emit one ordinary node for each source-order semantic unit
 
 ORD-7. Ordinary node `extra_body` stores unknown fields that belong to exactly that ordinary node's protocol object.
 
-ORD-8. If a key exists in both an ordinary node typed field and that node's `extra_body`, the typed field value MUST win.
+ORD-8. Typed fields are authoritative, including absence. An extra field or replay snapshot MUST NOT restore a removed typed value.
 
 ORD-9. `ProviderItem.origin_protocol` MUST be one of the Provider protocol names from §1. It records the exact protocol that supplied `ProviderItem.body`.
 
@@ -341,7 +353,7 @@ XTRA-8. The same-family passthrough rules in XTRA-4 through XTRA-7 do not author
 
 XTRA-9. Before request-phase transforms run for one upstream attempt, the runtime MUST remove every downstream-origin `ProviderItem` whose `origin_protocol` differs from the selected upstream provider protocol. Later transforms MAY insert a `ProviderItem` only when they set `origin_protocol` to the intended target provider protocol.
 
-XTRA-10. A key whose name starts with `_monoize_` is internal metadata, not wire passthrough. A wire decoder MUST treat that prefix as reserved and MUST NOT copy an incoming `_monoize_` member into an `extra_body`; only decoder or transform logic MAY create internal metadata after parsing semantic wire fields. An envelope reconstruction helper or protocol encoder MUST NOT emit such a key as a provider request field. A same-family encoder MAY consume an internal key to reconstruct the native field represented by its value, then MUST discard the internal key. For Chat `reasoning_details`, the raw detail object stored under `_monoize_chat_reasoning_detail` remains authoritative replay data; only the wrapper key is internal. An opaque same-protocol `ProviderItem.body` or `ProviderControl.data` MUST be cloned at its wire boundary. The clone MUST recursively remove object members whose keys start with `_monoize_`, including members below arrays, while preserving every other member. This sanitization MUST NOT mutate the canonical URP body or control data and MUST NOT apply to arbitrary typed or user payloads.
+XTRA-10. A key whose name starts with `_monoize_` is internal metadata, not wire passthrough. A wire decoder MUST treat that prefix as reserved and MUST NOT copy an incoming `_monoize_` member into an `extra_body`; only decoder or transform logic MAY create internal metadata after parsing semantic wire fields. An envelope reconstruction helper or protocol encoder MUST NOT emit such a key as a provider request field. A same-family encoder MAY consume an internal key to reconstruct the native field represented by its value, then MUST discard the internal key. For Chat `reasoning_details`, `_monoize_chat_reasoning_detail` MUST contain only shape and unknown entry metadata. It MUST NOT contain text, summary, encrypted data, id, or format copies. The encoder MUST derive these values from the current typed node. An opaque same-protocol `ProviderItem.body` or `ProviderControl.data` MUST be cloned at its wire boundary. The clone MUST recursively remove object members whose keys start with `_monoize_`, including members below arrays, while preserving every other member. This sanitization MUST NOT mutate the canonical URP body or control data and MUST NOT apply to arbitrary typed or user payloads.
 
 ## 5. Canonical flat streaming events
 
@@ -596,3 +608,16 @@ VALID-3. `ToolResult` remains a distinct top-level node variant and MUST NOT be 
 VALID-4. Terminal stream state is authoritative. `ResponseDone.output` is the final flat node sequence.
 
 VALID-5. Decoder complexity is minimized by emitting flat nodes only. Encoder complexity owns all logical envelope reconstruction.
+
+## Typed control mapping
+
+CTRL-1. Request reasoning controls MUST use `ReasoningConfig` fields: `effort`, `summary`, `mode`, `budget_tokens`, and `display`.
+CTRL-2. `mode` represents enabled, disabled, or adaptive execution. `budget_tokens` is an unsigned integer. Decoders MUST NOT derive effort from an explicit budget.
+CTRL-3. Disabled mode or effort `none` disables thinking. Otherwise an explicit budget takes precedence over an effort-to-budget fallback.
+CTRL-4. Messages emits a budget only for enabled thinking. Adaptive thinking uses effort when present.
+CTRL-5. Gemini maps thinkingLevel to effort, nonnegative thinkingBudget to budget_tokens, and budget -1 to adaptive mode.
+CTRL-6. Gemini includeThoughts maps to summary auto or none. Non-none summary modes request includeThoughts on output.
+CTRL-7. Removing a control removes that control only. Other explicit typed controls remain active. An empty reasoning configuration MUST NOT enable thinking.
+CTRL-8. Text citations and thought signatures MUST survive unchanged node conversion. A signature MUST stay associated with its original text node.
+CTRL-9. Responses source snapshots MUST exclude typed id, model, output, usage, status, and terminal details. Start events use typed usage.
+CTRL-10. Session affinity MUST derive instruction content from current instruction nodes. Historical instruction text MUST NOT affect the affinity key.

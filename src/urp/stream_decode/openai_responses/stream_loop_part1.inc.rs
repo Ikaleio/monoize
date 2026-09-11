@@ -88,7 +88,10 @@ pub(crate) async fn stream_responses_to_urp_events(
             response_id = native_response_id.to_string();
             record_stream_response_id(&runtime_metrics, native_response_id).await;
         }
-        let native_start_event = matches!(ev.event.as_str(), "response.created" | "response.in_progress");
+        let native_start_event = matches!(
+            ev.event.as_str(),
+            "response.created" | "response.in_progress"
+        );
         let terminal_response_event = matches!(
             ev.event.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
@@ -100,16 +103,20 @@ pub(crate) async fn stream_responses_to_urp_events(
             || ev.event.starts_with("response.image_generation")
             || ev.event.starts_with("image_generation.");
         if !response_start_sent && (native_start_event || terminal_response_event || output_event) {
-            let source_response = data_val
-                .get("response")
-                .and_then(Value::as_object)
-                .cloned();
-            let sanitized_source_response = source_response
-                .as_ref()
-                .map(|source| crate::urp::decode::split_extra(source, &[]));
+            let source_response = data_val.get("response").and_then(Value::as_object).cloned();
+            let sanitized_source_response = source_response.as_ref().map(|source| {
+                crate::urp::decode::split_extra(
+                    source,
+                    &["id", "model", "output", "usage", "status"],
+                )
+            });
             let mut start_model = urp.model.clone();
             if let Some(source) = source_response.as_ref() {
-                if let Some(id) = source.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+                if let Some(id) = source
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                {
                     response_id = id.to_string();
                 }
                 if let Some(source_created) = source
@@ -128,9 +135,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
             let mut start_extra = if native_start_event {
-                sanitized_source_response
-                    .clone()
-                    .unwrap_or_default()
+                sanitized_source_response.clone().unwrap_or_default()
             } else {
                 HashMap::from([
                     ("object".to_string(), json!("response")),
@@ -139,9 +144,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                     ("output".to_string(), json!([])),
                 ])
             };
-            if native_start_event
-                && let Some(source) = sanitized_source_response
-            {
+            if native_start_event && let Some(source) = sanitized_source_response {
                 start_extra.insert(
                     RESPONSES_STREAM_START_SOURCE_EXTRA_KEY.to_string(),
                     Value::Object(source.into_iter().collect()),
@@ -149,6 +152,11 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
             let _ = tx
                 .send(UrpStreamEvent::ResponseStart {
+                    usage: source_response
+                        .as_ref()
+                        .and_then(|source| source.get("usage"))
+                        .and_then(Value::as_object)
+                        .map(crate::urp::decode::openai_responses::parse_usage_from_responses),
                     id: response_id.clone(),
                     model: start_model,
                     extra_body: start_extra,
@@ -299,9 +307,9 @@ pub(crate) async fn stream_responses_to_urp_events(
                                 } else {
                                     "arguments"
                                 })
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
                             ),
                         );
                     }
@@ -481,10 +489,7 @@ pub(crate) async fn stream_responses_to_urp_events(
         }
         let is_terminal_response_event = matches!(
             ev.event.as_str(),
-            "response.completed"
-                | "response.incomplete"
-                | "response.failed"
-                | "response.cancelled"
+            "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
         );
         let stream_events = if is_terminal_response_event {
             for (output_index, output_state) in &index_state.output_state_by_index {
@@ -530,7 +535,9 @@ pub(crate) async fn stream_responses_to_urp_events(
                 && code.as_deref() == Some("responses_terminal_conflict")
             {
                 let terminal_error = StreamTerminalError {
-                    code: code.clone().unwrap_or_else(|| "responses_terminal_conflict".to_string()),
+                    code: code
+                        .clone()
+                        .unwrap_or_else(|| "responses_terminal_conflict".to_string()),
                     message: message.clone(),
                     http_status: StatusCode::BAD_GATEWAY.as_u16(),
                     error_type: Some("upstream_protocol_error".to_string()),
@@ -589,7 +596,9 @@ pub(crate) async fn stream_responses_to_urp_events(
     }
     record_stream_terminal_event(
         &runtime_metrics,
-        terminal_event_name.as_deref().unwrap_or("responses.terminal"),
+        terminal_event_name
+            .as_deref()
+            .unwrap_or("responses.terminal"),
         None,
     )
     .await;

@@ -9,6 +9,7 @@ fn encode_reasoning_request_item(part: &Part) -> Option<Value> {
 fn encode_reasoning_item_inner(part: &Part, request_item: bool) -> Option<Value> {
     match part {
         Part::Reasoning {
+            metadata,
             id,
             content,
             encrypted,
@@ -16,26 +17,14 @@ fn encode_reasoning_item_inner(part: &Part, request_item: bool) -> Option<Value>
             source,
             extra_body,
         } => {
-            if request_item
-                && extra_body
-                    .get(REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY)
-                    .and_then(Value::as_bool)
-                    == Some(true)
-            {
+            if request_item && metadata.downstream_only {
                 return None;
             }
-            if !request_item
-                && !reasoning_payload_is_meaningful(content, summary, encrypted)
-            {
+            if !request_item && !reasoning_payload_is_meaningful(content, summary, encrypted) {
                 return None;
             }
             let mut obj = Map::new();
-            let stable_id = id.clone().or_else(|| {
-                extra_body
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(|s| s.to_string())
-            });
+            let stable_id = id.clone();
             if let Some(id) = stable_id {
                 obj.insert("id".to_string(), Value::String(id));
             } else if !request_item {
@@ -45,28 +34,23 @@ fn encode_reasoning_item_inner(part: &Part, request_item: bool) -> Option<Value>
                 );
             }
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
-            let summary_value = if let Some(raw_summary) =
-                extra_body.get(RESPONSES_REASONING_SUMMARY_EXTRA_KEY)
-            {
-                raw_summary.clone()
-            } else if let Some(summary) = summary.as_ref() {
-                Value::Array(vec![json!({ "type": "summary_text", "text": summary })])
-            } else {
-                Value::Array(Vec::new())
-            };
-            obj.insert("summary".to_string(), summary_value);
-            if let Some(raw_content) = extra_body.get(RESPONSES_REASONING_CONTENT_EXTRA_KEY) {
-                obj.insert("content".to_string(), raw_content.clone());
-            } else if let Some(content) = content {
+            obj.insert(
+                "summary".into(),
+                crate::urp::reasoning::encode_text_parts(
+                    summary.as_deref(),
+                    metadata.summary_parts.as_deref(),
+                    "summary_text",
+                ),
+            );
+            if content.is_some() || !request_item {
                 obj.insert(
-                    "content".to_string(),
-                    Value::Array(vec![json!({
-                        "type": "reasoning_text",
-                        "text": content
-                    })]),
+                    "content".into(),
+                    crate::urp::reasoning::encode_text_parts(
+                        content.as_deref(),
+                        metadata.content_parts.as_deref(),
+                        "reasoning_text",
+                    ),
                 );
-            } else if !request_item {
-                obj.insert("content".to_string(), Value::Array(Vec::new()));
             }
             if let Some(encrypted) = encrypted {
                 obj.insert("encrypted_content".to_string(), encrypted.clone());
@@ -77,7 +61,17 @@ fn encode_reasoning_item_inner(part: &Part, request_item: bool) -> Option<Value>
                 obj.insert("source".to_string(), Value::String(source.clone()));
             }
             for (key, value) in extra_body {
-                if !key.starts_with("_monoize_") {
+                if !key.starts_with("_monoize_")
+                    && !matches!(
+                        key.as_str(),
+                        "id" | "type"
+                            | "text"
+                            | "content"
+                            | "summary"
+                            | "encrypted_content"
+                            | "source"
+                    )
+                {
                     obj.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }

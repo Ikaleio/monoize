@@ -116,19 +116,16 @@ fn extract_reasoning_content(content: &Option<String>, summary: &Option<String>)
 }
 
 fn mark_node(node: &mut Node) {
-    let Node::Reasoning {
+    if let Node::Reasoning {
         content,
-        encrypted,
         summary,
-        extra_body,
+        metadata,
         ..
     } = node
-    else {
-        return;
-    };
-    let _ = encrypted;
-    if let Some(value) = extract_reasoning_content(content, summary) {
-        extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
+    {
+        if extract_reasoning_content(content, summary).is_some() {
+            metadata.chat_content = true;
+        }
     }
 }
 
@@ -138,34 +135,17 @@ fn mark_stream(event: &mut UrpStreamEvent) {
             delta:
                 NodeDelta::Reasoning {
                     content,
-                    encrypted,
                     summary,
+                    metadata,
                     ..
                 },
-            extra_body,
             ..
         } => {
-            let _ = encrypted;
-            if let Some(value) = extract_reasoning_content(content, summary) {
-                extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
+            if extract_reasoning_content(content, summary).is_some() {
+                metadata.chat_content = true;
             }
         }
-        UrpStreamEvent::NodeDone { node, .. } => {
-            let Node::Reasoning {
-                content,
-                encrypted,
-                summary,
-                extra_body,
-                ..
-            } = node
-            else {
-                return;
-            };
-            let _ = encrypted;
-            if let Some(value) = extract_reasoning_content(content, summary) {
-                extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
-            }
-        }
+        UrpStreamEvent::NodeDone { node, .. } => mark_node(node),
         UrpStreamEvent::ResponseDone { output, .. } => {
             for node in output {
                 mark_node(node);

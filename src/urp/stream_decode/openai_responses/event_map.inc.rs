@@ -60,6 +60,8 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
         Node::Text {
             id, role, phase, ..
         } => NodeHeader::Text {
+            signature: None,
+            citations: Vec::new(),
             id: id.clone(),
             role: *role,
             phase: phase.clone(),
@@ -77,7 +79,10 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role: *role,
         },
         Node::Refusal { id, .. } => NodeHeader::Refusal { id: id.clone() },
-        Node::Reasoning { id, .. } => NodeHeader::Reasoning { id: id.clone() },
+        Node::Reasoning { id, metadata, .. } => NodeHeader::Reasoning {
+            metadata: metadata.clone(),
+            id: id.clone(),
+        },
         Node::ToolCall {
             id,
             tool_type,
@@ -122,6 +127,7 @@ fn node_delta_from_reasoning_event(
     source: Option<String>,
 ) -> NodeDelta {
     NodeDelta::Reasoning {
+        metadata: Default::default(),
         content: if event_name == "response.reasoning_summary_text.delta" {
             None
         } else {
@@ -232,6 +238,7 @@ fn map_output_item_added(
     match item_type {
         "reasoning" => {
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::Reasoning {
+                metadata: Default::default(),
                 id: item
                     .get("id")
                     .and_then(Value::as_str)
@@ -333,10 +340,7 @@ fn map_output_item_added(
             events.push(UrpStreamEvent::NodeStart {
                 node_index,
                 header: NodeHeader::Image {
-                    id: item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    id: item.get("id").and_then(Value::as_str).map(str::to_string),
                     role: OrdinaryRole::Assistant,
                 },
                 extra_body: item_extra_body,

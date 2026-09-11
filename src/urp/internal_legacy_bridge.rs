@@ -43,6 +43,10 @@ impl Role {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
     Text {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        citations: Vec<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
         content: String,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
@@ -63,6 +67,8 @@ pub enum Part {
         extra_body: HashMap<String, Value>,
     },
     Reasoning {
+        #[serde(default)]
+        metadata: super::ReasoningMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -132,9 +138,13 @@ impl Part {
     pub fn into_node(self, role: OrdinaryRole) -> Node {
         match self {
             Part::Text {
+                signature,
+                citations,
                 content,
                 extra_body,
             } => Node::Text {
+                signature,
+                citations,
                 id: None,
                 role,
                 phase: extra_body
@@ -163,6 +173,7 @@ impl Part {
                 extra_body,
             },
             Part::Reasoning {
+                metadata,
                 id,
                 content,
                 encrypted,
@@ -170,6 +181,7 @@ impl Part {
                 source,
                 extra_body,
             } => Node::Reasoning {
+                metadata: metadata.clone(),
                 id,
                 content,
                 encrypted,
@@ -371,6 +383,8 @@ fn bridge_zone_should_flush(current: Option<BridgeZone>, next: BridgeZone) -> bo
 fn node_to_part(node: &Node) -> Part {
     match node {
         Node::Text {
+            signature,
+            citations,
             content,
             phase,
             extra_body,
@@ -381,6 +395,8 @@ fn node_to_part(node: &Node) -> Part {
                 extra_body.insert("phase".to_string(), Value::String(phase.clone()));
             }
             Part::Text {
+                signature: signature.clone(),
+                citations: citations.clone(),
                 content: content.clone(),
                 extra_body,
             }
@@ -404,6 +420,7 @@ fn node_to_part(node: &Node) -> Part {
             extra_body: extra_body.clone(),
         },
         Node::Reasoning {
+            metadata,
             id,
             content,
             encrypted,
@@ -411,6 +428,7 @@ fn node_to_part(node: &Node) -> Part {
             source,
             extra_body,
         } => Part::Reasoning {
+            metadata: metadata.clone(),
             id: id.clone(),
             content: content.clone(),
             encrypted: encrypted.clone(),
@@ -456,6 +474,8 @@ fn node_to_part(node: &Node) -> Part {
             extra_body: extra_body.clone(),
         },
         Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => Part::Text {
+            signature: None,
+            citations: Vec::new(),
             content: String::new(),
             extra_body: HashMap::new(),
         },

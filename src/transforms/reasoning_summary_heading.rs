@@ -224,7 +224,11 @@ fn inject_nodedone_summary_delta(
     state: &mut StreamState,
 ) -> Option<UrpStreamEvent> {
     let Node::Reasoning {
-        summary, source, ..
+        summary,
+        source,
+        metadata,
+        id,
+        ..
     } = node
     else {
         return None;
@@ -240,6 +244,11 @@ fn inject_nodedone_summary_delta(
     Some(UrpStreamEvent::NodeDelta {
         node_index,
         delta: NodeDelta::Reasoning {
+            metadata: {
+                let mut metadata = metadata.clone();
+                metadata.item_id = id.clone().or(metadata.item_id);
+                metadata
+            },
             content: None,
             encrypted: None,
             summary: Some(text.clone()),

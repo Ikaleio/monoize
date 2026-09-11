@@ -71,21 +71,19 @@ fn terminal_output_node_matches_state(node: &urp::Node, state: &StreamedNodeStat
         urp::Node::Text { id, .. }
         | urp::Node::Audio { id, .. }
         | urp::Node::File { id, .. }
-        | urp::Node::Refusal { id, .. }
-        => {
+        | urp::Node::Refusal { id, .. } => {
             state.zone == ResponsesOutputZone::Message
                 && ((!state.item_id.is_empty() && id.as_deref() == Some(state.item_id.as_str()))
                     || (header_family_matches && id.is_none())
                     || (state.item_id.is_empty() && header_family_matches))
         }
         urp::Node::Image { id, extra_body, .. } => {
-            let expected_zone = if extra_body
-                .contains_key(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)
-            {
-                ResponsesOutputZone::ImageGenerationCall
-            } else {
-                ResponsesOutputZone::Message
-            };
+            let expected_zone =
+                if extra_body.contains_key(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY) {
+                    ResponsesOutputZone::ImageGenerationCall
+                } else {
+                    ResponsesOutputZone::Message
+                };
             state.zone == expected_zone
                 && ((!state.item_id.is_empty() && id.as_deref() == Some(state.item_id.as_str()))
                     || (header_family_matches && id.is_none())
@@ -150,7 +148,7 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
     let completed_item = state.completed_item.as_ref();
 
     match header {
-        urp::NodeHeader::Reasoning { id } => {
+        urp::NodeHeader::Reasoning { metadata, id } => {
             let content = completed_item
                 .and_then(|item| item.get("text"))
                 .and_then(Value::as_str)
@@ -179,6 +177,7 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
                 return None;
             }
             Some(urp::Node::Reasoning {
+                metadata: metadata.clone(),
                 id: id
                     .clone()
                     .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),

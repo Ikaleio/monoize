@@ -110,9 +110,11 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
         UrpStreamEvent::NodeStart {
             node_index, header, ..
         } => {
-            if let NodeHeader::Reasoning { id } = header {
+            if let NodeHeader::Reasoning { metadata: _, id } = header {
                 strip_state.stripped_indices.insert(*node_index);
                 *header = NodeHeader::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: id.take(),
                     role: OrdinaryRole::Assistant,
                     phase: None,
@@ -126,6 +128,8 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
                 && matches!(delta, NodeDelta::Reasoning { .. })
             {
                 *delta = NodeDelta::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     content: String::new(),
                 };
             }
@@ -141,6 +145,8 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
                     _ => (None, Default::default()),
                 };
                 *node = Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id,
                     role: OrdinaryRole::Assistant,
                     content: String::new(),

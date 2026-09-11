@@ -6,8 +6,8 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
-    FinishReason, InputDetails, MESSAGES_STREAM_START_USAGE_EXTRA_KEY, Node, NodeDelta, NodeHeader,
-    OrdinaryRole, OutputDetails, ProviderProtocol, ToolCallType, UrpStreamEvent, Usage,
+    FinishReason, InputDetails, Node, NodeDelta, NodeHeader, OrdinaryRole, OutputDetails,
+    ProviderProtocol, ToolCallType, UrpStreamEvent, Usage,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -285,10 +285,12 @@ struct ActiveNodeState {
 #[derive(Debug, Clone)]
 enum ActiveNodeKind {
     Text {
+        citations: Vec<Value>,
         content: String,
         phase: Option<String>,
     },
     Reasoning {
+        metadata: crate::urp::ReasoningMetadata,
         summary: String,
         encrypted: String,
     },
@@ -733,17 +735,10 @@ pub(crate) async fn stream_messages_to_urp_events(
                         "usage",
                     ],
                 );
-                let mut response_start_extra = response_extra.clone();
-                if let Some(usage) = state.usage.snapshot()
-                    && let Ok(usage_value) = serde_json::to_value(usage)
-                {
-                    response_start_extra.insert(
-                        MESSAGES_STREAM_START_USAGE_EXTRA_KEY.to_string(),
-                        usage_value,
-                    );
-                }
+                let response_start_extra = response_extra.clone();
                 let _ = tx
                     .send(UrpStreamEvent::ResponseStart {
+                        usage: state.usage.snapshot(),
                         id: response_id.clone(),
                         model: response_model.clone(),
                         extra_body: response_start_extra,
@@ -1020,27 +1015,18 @@ fn handle_content_block_delta(
     );
 
     let stream_delta = match (&mut active_node.kind, delta_type) {
-        (ActiveNodeKind::Text { .. }, "citations_delta") => {
+        (ActiveNodeKind::Text { citations, .. }, "citations_delta") => {
             let Some(citation) = delta_value
                 .get("citation")
                 .filter(|value| value.is_object())
             else {
                 return Ok(Vec::new());
             };
-            let citations = active_node
-                .extra_body
-                .entry("citations".to_string())
-                .or_insert_with(|| Value::Array(Vec::new()));
-            if !citations.is_array() {
-                *citations = Value::Array(Vec::new());
-            }
-            citations.as_array_mut().unwrap().push(citation.clone());
+            citations.push(citation.clone());
             delta_extra.remove("citation");
-            delta_extra.insert(
-                "_monoize_messages_citation_delta".to_string(),
-                citation.clone(),
-            );
             NodeDelta::Text {
+                signature: None,
+                citations: vec![citation.clone()],
                 content: String::new(),
             }
         }
@@ -1053,6 +1039,8 @@ fn handle_content_block_delta(
             }
             content.push_str(text);
             NodeDelta::Text {
+                signature: None,
+                citations: Vec::new(),
                 content: text.to_string(),
             }
         }
@@ -1064,18 +1052,25 @@ fn handle_content_block_delta(
                 return Ok(Vec::new());
             }
             summary.push_str(text);
-            delta_extra.insert(
-                "_monoize_summary_from_messages_thinking".to_string(),
-                Value::Bool(true),
-            );
             NodeDelta::Reasoning {
+                metadata: crate::urp::ReasoningMetadata {
+                    summary_as_thinking: true,
+                    ..Default::default()
+                },
                 content: None,
                 encrypted: None,
                 summary: Some(text.to_string()),
                 source: None,
             }
         }
-        (ActiveNodeKind::Reasoning { encrypted, .. }, "signature_delta") => {
+        (
+            ActiveNodeKind::Reasoning {
+                metadata,
+                encrypted,
+                ..
+            },
+            "signature_delta",
+        ) => {
             let Some(signature) = delta_value.get("signature").and_then(|v| v.as_str()) else {
                 return Ok(Vec::new());
             };
@@ -1084,6 +1079,7 @@ fn handle_content_block_delta(
             }
             encrypted.push_str(signature);
             NodeDelta::Reasoning {
+                metadata: metadata.clone(),
                 content: None,
                 encrypted: Some(Value::String(signature.to_string())),
                 summary: None,
@@ -1192,12 +1188,18 @@ fn active_node_from_content_block(
                 .get("phase")
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
-            let mut extra_body = object_without_keys(content_block, &["type", "text", "phase"]);
+            let mut extra_body =
+                object_without_keys(content_block, &["type", "text", "phase", "citations"]);
             if let Some(phase) = phase.as_ref() {
                 extra_body.insert("phase".to_string(), Value::String(phase.clone()));
             }
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Text {
+                    citations: content_block
+                        .get("citations")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default(),
                     content: content_block
                         .get("text")
                         .and_then(|v| v.as_str())
@@ -1212,6 +1214,10 @@ fn active_node_from_content_block(
             let extra_body = object_without_keys(content_block, &["type", "thinking", "signature"]);
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Reasoning {
+                    metadata: crate::urp::ReasoningMetadata {
+                        summary_as_thinking: true,
+                        ..Default::default()
+                    },
                     summary: content_block
                         .get("thinking")
                         .and_then(|v| v.as_str())
@@ -1227,13 +1233,13 @@ fn active_node_from_content_block(
             })
         }
         "redacted_thinking" => {
-            let mut extra_body = object_without_keys(content_block, &["type", "data"]);
-            extra_body.insert(
-                crate::urp::REASONING_KIND_EXTRA_KEY.to_string(),
-                Value::String(crate::urp::REASONING_KIND_REDACTED_THINKING.to_string()),
-            );
+            let extra_body = object_without_keys(content_block, &["type", "data"]);
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Reasoning {
+                    metadata: crate::urp::ReasoningMetadata {
+                        redacted: true,
+                        ..Default::default()
+                    },
                     summary: String::new(),
                     encrypted: content_block
                         .get("data")
@@ -1302,14 +1308,24 @@ fn active_node_from_content_block(
 
 fn node_from_active(active_node: &ActiveNodeState) -> Node {
     match &active_node.kind {
-        ActiveNodeKind::Text { content, phase } => Node::Text {
+        ActiveNodeKind::Text {
+            citations,
+            content,
+            phase,
+        } => Node::Text {
+            signature: None,
+            citations: citations.clone(),
             id: None,
             role: OrdinaryRole::Assistant,
             content: content.clone(),
             phase: phase.clone(),
             extra_body: active_node.extra_body.clone(),
         },
-        ActiveNodeKind::Reasoning { summary, encrypted } => {
+        ActiveNodeKind::Reasoning {
+            metadata,
+            summary,
+            encrypted,
+        } => {
             let extra_body = active_node.extra_body.clone();
             let (id, encrypted_value) = if encrypted.is_empty() {
                 (None, None)
@@ -1320,6 +1336,12 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
                 }
             };
             Node::Reasoning {
+                metadata: crate::urp::ReasoningMetadata {
+                    downstream_only: !summary.is_empty()
+                        && id.is_none()
+                        && encrypted_value.is_none(),
+                    ..metadata.clone()
+                },
                 id,
                 content: None,
                 encrypted: encrypted_value,
@@ -1360,12 +1382,21 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
 
 fn node_header_from_node(node: &Node) -> NodeHeader {
     match node {
-        Node::Text { role, phase, .. } => NodeHeader::Text {
+        Node::Text {
+            signature,
+            citations,
+            role,
+            phase,
+            ..
+        } => NodeHeader::Text {
+            signature: signature.clone(),
+            citations: citations.clone(),
             id: node.id().cloned(),
             role: *role,
             phase: phase.clone(),
         },
-        Node::Reasoning { .. } => NodeHeader::Reasoning {
+        Node::Reasoning { metadata, .. } => NodeHeader::Reasoning {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
         },
         Node::ToolCall {

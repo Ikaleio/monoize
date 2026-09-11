@@ -3,9 +3,8 @@ use crate::urp::encode::anthropic::anthropic_native_usage_json;
 use crate::urp::encode::sanitize_provider_item_wire_body;
 use crate::urp::stream_helpers::*;
 use crate::urp::{
-    self, FinishReason, MESSAGES_STREAM_START_USAGE_EXTRA_KEY, Node, NodeDelta, NodeHeader,
-    REASONING_ENVELOPE_PREFIX, REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
-    UrpStreamEvent, Usage, wrap_reasoning_signature_with_item_id,
+    self, FinishReason, Node, NodeDelta, NodeHeader, REASONING_ENVELOPE_PREFIX, UrpStreamEvent,
+    Usage, wrap_reasoning_signature_with_item_id,
 };
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
@@ -31,6 +30,7 @@ enum AnthropicBlockPayload {
         citations: Vec<Value>,
     },
     Thinking {
+        metadata: urp::ReasoningMetadata,
         thinking: String,
         signature: Option<String>,
         item_id: Option<String>,
@@ -77,9 +77,11 @@ impl PendingAnthropicBlock {
     fn content_block(&self, saw_tool_use: &mut bool) -> Value {
         match &self.payload {
             AnthropicBlockPayload::Text { .. } => json!({ "type": "text", "text": "" }),
-            AnthropicBlockPayload::Thinking { extra, .. } => {
+            AnthropicBlockPayload::Thinking {
+                metadata, extra: _, ..
+            } => {
                 let sig_for_start = self.effective_signature().unwrap_or_default();
-                if payload_is_redacted(extra) {
+                if metadata.redacted {
                     json!({
                         "type": "redacted_thinking",
                         "data": sig_for_start
@@ -141,15 +143,20 @@ impl PendingAnthropicBlock {
                     )
                     .await?;
                 }
-                for citation in citations { emit_citation(tx, self.block_index, citation).await?; }
+                for citation in citations {
+                    emit_citation(tx, self.block_index, citation).await?;
+                }
             }
             AnthropicBlockPayload::Thinking {
-                thinking, extra, ..
+                metadata,
+                thinking,
+                extra: _,
+                ..
             } => {
                 // `redacted_thinking` blocks carry their opaque payload in the initial
                 // `content_block_start.content_block.data` field, per Anthropic wire contract.
                 // No `thinking_delta` or `signature_delta` events exist for this block type.
-                if !payload_is_redacted(extra) {
+                if !metadata.redacted {
                     if !thinking.is_empty() {
                         send_messages_delta_string(
                             tx,
@@ -258,11 +265,6 @@ async fn emit_messages_provider_item_delta(
     .await
 }
 
-fn payload_is_redacted(extra: &HashMap<String, Value>) -> bool {
-    extra.get(REASONING_KIND_EXTRA_KEY).and_then(Value::as_str)
-        == Some(REASONING_KIND_REDACTED_THINKING)
-}
-
 #[derive(Debug, Clone)]
 struct LiveNodeBlockState {
     payload: AnthropicBlockPayload,
@@ -274,6 +276,7 @@ fn can_absorb_signature_only_reasoning(
     following: &AnthropicBlockPayload,
 ) -> bool {
     let AnthropicBlockPayload::Thinking {
+        metadata: current_metadata,
         thinking: current_thinking,
         signature: current_signature,
         extra: current_extra,
@@ -283,6 +286,7 @@ fn can_absorb_signature_only_reasoning(
         return false;
     };
     let AnthropicBlockPayload::Thinking {
+        metadata: following_metadata,
         thinking: following_thinking,
         signature: following_signature,
         extra: following_extra,
@@ -308,8 +312,8 @@ fn can_absorb_signature_only_reasoning(
         && following_signature
             .as_deref()
             .is_some_and(|signature| !signature.is_empty())
-        && !payload_is_redacted(current_extra)
-        && !payload_is_redacted(following_extra)
+        && !current_metadata.redacted
+        && !following_metadata.redacted
 }
 
 async fn absorb_signature_only_reasoning(
@@ -352,26 +356,17 @@ async fn absorb_signature_only_reasoning(
 
 fn reasoning_signature_value(
     encrypted: Option<&Value>,
-    extra_body: &HashMap<String, Value>,
+    _extra_body: &HashMap<String, Value>,
 ) -> Option<String> {
     encrypted
+        .filter(|value| !value.is_null())
         .map(|value| {
             value
                 .as_str()
                 .map(str::to_owned)
                 .unwrap_or_else(|| value.to_string())
         })
-        .or_else(|| {
-            extra_body
-                .get("signature")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
         .filter(|signature| !signature.is_empty())
-}
-
-fn reasoning_is_redacted_extra(extra_body: &HashMap<String, Value>) -> bool {
-    payload_is_redacted(extra_body)
 }
 
 fn reasoning_item_id(id: Option<&str>) -> Option<String> {
@@ -380,12 +375,6 @@ fn reasoning_item_id(id: Option<&str>) -> Option<String> {
 
 fn reasoning_kind_marker(extra_body: &HashMap<String, Value>) -> HashMap<String, Value> {
     let mut extra = HashMap::new();
-    if payload_is_redacted(extra_body) {
-        extra.insert(
-            REASONING_KIND_EXTRA_KEY.to_string(),
-            Value::String(REASONING_KIND_REDACTED_THINKING.to_string()),
-        );
-    }
     if let Some(detail_type) = extra_body
         .get(urp::CHAT_REASONING_DETAIL_EXTRA_KEY)
         .and_then(Value::as_object)
@@ -434,13 +423,18 @@ fn messages_provider_block_from_node(node: &Node) -> Option<Value> {
 
 fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
     match node {
-        Node::Text { content, extra_body, .. } | Node::Refusal { content, extra_body, .. } => {
-            Some(AnthropicBlockPayload::Text {
-                citations: text_citations(extra_body),
-                content: content.clone(),
-            })
-        }
+        Node::Text {
+            content, citations, ..
+        } => Some(AnthropicBlockPayload::Text {
+            citations: citations.clone(),
+            content: content.clone(),
+        }),
+        Node::Refusal { content, .. } => Some(AnthropicBlockPayload::Text {
+            citations: Vec::new(),
+            content: content.clone(),
+        }),
         Node::Reasoning {
+            metadata,
             id,
             content,
             summary,
@@ -455,7 +449,7 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
                 .unwrap_or_default()
                 .to_string();
             let raw_signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
-            let is_redacted = reasoning_is_redacted_extra(extra_body);
+            let is_redacted = metadata.redacted;
             if thinking.is_empty() && !is_redacted && raw_signature.is_none() {
                 return None;
             }
@@ -464,6 +458,7 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
             }
             let extra = reasoning_kind_marker(extra_body);
             Some(AnthropicBlockPayload::Thinking {
+                metadata: metadata.clone(),
                 thinking,
                 signature: raw_signature,
                 item_id: reasoning_item_id(id.as_deref()),
@@ -506,11 +501,16 @@ fn anthropic_block_from_node_header(
     extra_body: &HashMap<String, Value>,
 ) -> Option<AnthropicBlockPayload> {
     match header {
-        NodeHeader::Text { .. } | NodeHeader::Refusal { .. } => Some(AnthropicBlockPayload::Text {
-            citations: text_citations(extra_body),
+        NodeHeader::Text { citations, .. } => Some(AnthropicBlockPayload::Text {
+            citations: citations.clone(),
             content: String::new(),
         }),
-        NodeHeader::Reasoning { .. } => Some(AnthropicBlockPayload::Thinking {
+        NodeHeader::Refusal { .. } => Some(AnthropicBlockPayload::Text {
+            citations: Vec::new(),
+            content: String::new(),
+        }),
+        NodeHeader::Reasoning { metadata, .. } => Some(AnthropicBlockPayload::Thinking {
+            metadata: metadata.clone(),
             thinking: String::new(),
             signature: reasoning_signature_value(None, extra_body),
             item_id: None,
@@ -632,23 +632,33 @@ fn messages_stop_sequence(extra_body: &HashMap<String, Value>) -> Value {
 
 fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
     match (payload, delta) {
-        (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Text { content: delta })
+        (
+            AnthropicBlockPayload::Text { content, .. },
+            NodeDelta::Text {
+                signature: _,
+                citations: _,
+                content: delta,
+            },
+        )
         | (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Refusal { content: delta }) => {
             content.push_str(delta);
         }
         (
             AnthropicBlockPayload::Thinking {
+                metadata,
                 thinking,
                 signature,
                 ..
             },
             NodeDelta::Reasoning {
+                metadata: delta_metadata,
                 content,
                 encrypted,
                 summary,
                 ..
             },
         ) => {
+            metadata.merge(delta_metadata);
             if let Some(delta) = content.as_deref().filter(|content| !content.is_empty()) {
                 thinking.push_str(delta);
             } else if thinking.is_empty()
@@ -686,23 +696,33 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
 
 fn apply_emitted_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
     match (payload, delta) {
-        (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Text { content: delta })
+        (
+            AnthropicBlockPayload::Text { content, .. },
+            NodeDelta::Text {
+                signature: _,
+                citations: _,
+                content: delta,
+            },
+        )
         | (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Refusal { content: delta }) => {
             content.push_str(delta);
         }
         (
             AnthropicBlockPayload::Thinking {
+                metadata,
                 thinking,
                 signature,
                 ..
             },
             NodeDelta::Reasoning {
+                metadata: delta_metadata,
                 content,
                 encrypted,
                 summary,
                 ..
             },
         ) => {
+            metadata.merge(delta_metadata);
             if let Some(delta) = content.as_deref().filter(|content| !content.is_empty()) {
                 thinking.push_str(delta);
             } else if let Some(delta) = summary.as_deref().filter(|summary| !summary.is_empty()) {
@@ -736,32 +756,22 @@ fn apply_emitted_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta:
     }
 }
 
-fn summary_delta_is_messages_thinking(extra_body: &HashMap<String, Value>) -> bool {
-    extra_body
-        .get("_monoize_summary_from_messages_thinking")
-        .and_then(Value::as_bool)
-        == Some(true)
-        || extra_body
-            .get("_monoize_summary_from_plaintext_reasoning")
-            .and_then(Value::as_bool)
-            == Some(true)
-}
-
-fn maybe_override_reasoning_item_id(
-    payload: &mut AnthropicBlockPayload,
-    extra_body: &HashMap<String, Value>,
-) {
-    let AnthropicBlockPayload::Thinking { item_id, .. } = payload else {
-        return;
-    };
-    let Some(reasoning_item_id) = extra_body
-        .get("reasoning_item_id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-    else {
-        return;
-    };
-    *item_id = Some(reasoning_item_id.to_string());
+fn maybe_override_reasoning_item_id(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
+    if let (
+        AnthropicBlockPayload::Thinking {
+            item_id, metadata, ..
+        },
+        NodeDelta::Reasoning {
+            metadata: delta_metadata,
+            ..
+        },
+    ) = (payload, delta)
+    {
+        metadata.merge(delta_metadata);
+        if let Some(id) = &delta_metadata.item_id {
+            *item_id = Some(id.clone());
+        }
+    }
 }
 
 fn provider_item_input_json(body: &Value, deltas: &[Value]) -> Option<String> {
@@ -819,8 +829,15 @@ fn merge_provider_item_payload_with_terminal(
 }
 
 fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &Node) {
-    if let (AnthropicBlockPayload::Text { citations, .. }, Node::Text { extra_body, .. }) = (&mut *payload, node) {
-        *citations = text_citations(extra_body);
+    if let (
+        AnthropicBlockPayload::Text { citations, .. },
+        Node::Text {
+            citations: terminal_citations,
+            ..
+        },
+    ) = (&mut *payload, node)
+    {
+        *citations = terminal_citations.clone();
     }
     match (payload, node) {
         (
@@ -926,13 +943,22 @@ async fn emit_live_delta_for_node_delta(
     _extra_body: &HashMap<String, Value>,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    if matches!(payload, AnthropicBlockPayload::Text { .. }) {
-        if let Some(citation) = _extra_body.get("_monoize_messages_citation_delta") {
+    if let (AnthropicBlockPayload::Text { .. }, NodeDelta::Text { citations, .. }) =
+        (payload, delta)
+    {
+        for citation in citations {
             emit_citation(tx, block_index, citation).await?;
         }
     }
     match (payload, delta) {
-        (AnthropicBlockPayload::Text { .. }, NodeDelta::Text { content })
+        (
+            AnthropicBlockPayload::Text { .. },
+            NodeDelta::Text {
+                signature: _,
+                citations: _,
+                content,
+            },
+        )
         | (AnthropicBlockPayload::Text { .. }, NodeDelta::Refusal { content }) => {
             if !content.is_empty() {
                 send_messages_delta_string(
@@ -950,22 +976,26 @@ async fn emit_live_delta_for_node_delta(
             }
         }
         (
-            AnthropicBlockPayload::Thinking { extra, .. },
+            AnthropicBlockPayload::Thinking {
+                metadata, extra: _, ..
+            },
             NodeDelta::Reasoning {
+                metadata: delta_metadata,
                 content,
                 encrypted,
                 summary,
                 ..
             },
         ) => {
-            if payload_is_redacted(extra) {
+            if metadata.redacted {
                 return Ok(());
             }
             let text = content
                 .as_deref()
                 .filter(|content| !content.is_empty())
                 .or_else(|| {
-                    summary_delta_is_messages_thinking(_extra_body)
+                    delta_metadata
+                        .summary_as_thinking
                         .then(|| summary.as_deref().filter(|summary| !summary.is_empty()))
                         .flatten()
                 });
@@ -1047,24 +1077,30 @@ async fn emit_accumulated_payload_deltas(
                 block_index,
                 &block_state.payload,
                 &NodeDelta::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     content: content.clone(),
                 },
                 &empty_extra_body,
                 sse_max_frame_length,
             )
             .await?;
-            for citation in citations { emit_citation(tx, block_index, citation).await?; }
+            for citation in citations {
+                emit_citation(tx, block_index, citation).await?;
+            }
         }
         AnthropicBlockPayload::Thinking {
+            metadata,
             thinking,
             signature,
-            extra,
+            extra: _,
             ..
         } => {
-            if payload_is_redacted(extra) {
+            if metadata.redacted {
                 return Ok(());
             }
             let delta = NodeDelta::Reasoning {
+                metadata: metadata.clone(),
                 content: (!thinking.is_empty()).then(|| thinking.clone()),
                 encrypted: signature
                     .as_ref()
@@ -1122,13 +1158,24 @@ async fn emit_terminal_suffix_before_stop(
     let Some(block_index) = block_state.block_index else {
         return Ok(());
     };
-    if let (AnthropicBlockPayload::Text { citations, .. }, Node::Text { extra_body, .. }) = (&block_state.payload, terminal_node) {
-        for citation in text_citations(extra_body).iter().skip(citations.len()) { emit_citation(tx, block_index, citation).await?; }
+    if let (
+        AnthropicBlockPayload::Text { citations, .. },
+        Node::Text {
+            citations: terminal_citations,
+            ..
+        },
+    ) = (&block_state.payload, terminal_node)
+    {
+        for citation in terminal_citations.iter().skip(citations.len()) {
+            emit_citation(tx, block_index, citation).await?;
+        }
     }
     let empty_extra_body = HashMap::new();
     match (&block_state.payload, terminal_node) {
         (
-            AnthropicBlockPayload::Text { content: current, .. },
+            AnthropicBlockPayload::Text {
+                content: current, ..
+            },
             Node::Text {
                 content: terminal, ..
             }
@@ -1142,6 +1189,8 @@ async fn emit_terminal_suffix_before_stop(
                     block_index,
                     &block_state.payload,
                     &NodeDelta::Text {
+                        signature: None,
+                        citations: Vec::new(),
                         content: suffix.to_string(),
                     },
                     &empty_extra_body,
@@ -1152,6 +1201,7 @@ async fn emit_terminal_suffix_before_stop(
         }
         (
             AnthropicBlockPayload::Thinking {
+                metadata,
                 thinking: current,
                 signature: current_signature,
                 ..
@@ -1180,6 +1230,7 @@ async fn emit_terminal_suffix_before_stop(
                     block_index,
                     &block_state.payload,
                     &NodeDelta::Reasoning {
+                        metadata: metadata.clone(),
                         content: text_suffix.map(str::to_string),
                         encrypted: signature_suffix
                             .filter(|signature| !signature.is_empty())
@@ -1487,12 +1538,14 @@ pub(crate) async fn encode_urp_stream_as_messages(
 
     while let Some(event) = rx.recv().await {
         match event {
-            UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
+            UrpStreamEvent::ResponseStart {
+                usage,
+                id,
+                extra_body,
+                ..
+            } => {
                 response_id = Some(id);
-                if let Some(usage) = extra_body
-                    .get(MESSAGES_STREAM_START_USAGE_EXTRA_KEY)
-                    .and_then(|value| serde_json::from_value::<Usage>(value.clone()).ok())
-                {
+                if let Some(usage) = usage {
                     response_usage = Some(usage);
                 }
                 merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
@@ -1557,7 +1610,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 let Some(block_state) = live_node_blocks.get_mut(&node_index) else {
                     continue;
                 };
-                maybe_override_reasoning_item_id(&mut block_state.payload, &extra_body);
+                maybe_override_reasoning_item_id(&mut block_state.payload, &delta);
                 if let Some(block_index) = block_state.block_index {
                     emit_live_delta_for_node_delta(
                         &tx,
@@ -1573,7 +1626,13 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     apply_node_delta_to_block(&mut block_state.payload, &delta);
                 }
                 if let AnthropicBlockPayload::Text { citations, .. } = &mut block_state.payload {
-                    if let Some(citation) = extra_body.get("_monoize_messages_citation_delta") { citations.push(citation.clone()); }
+                    if let NodeDelta::Text {
+                        citations: delta_citations,
+                        ..
+                    } = &delta
+                    {
+                        citations.extend(delta_citations.iter().cloned());
+                    }
                 }
             }
             UrpStreamEvent::NodeDone {
@@ -1967,11 +2026,6 @@ async fn send_named_messages_event(tx: &mpsc::Sender<Event>, payload: Value) -> 
             )
         })?;
     send_named_sse_json(tx, &event_name, payload).await
-}
-
-
-fn text_citations(extra: &HashMap<String, Value>) -> Vec<Value> {
-    extra.get("citations").and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
 async fn emit_citation(tx: &mpsc::Sender<Event>, index: u32, citation: &Value) -> AppResult<()> {

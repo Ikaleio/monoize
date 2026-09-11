@@ -1,4 +1,3 @@
-
 fn outputs_have_tool_calls(items: &[Node]) -> bool {
     items
         .iter()
@@ -241,6 +240,8 @@ fn build_accumulated_output_entries(
                 entries.push(AccumulatedOutputEntry {
                     output_index,
                     nodes: vec![Node::Reasoning {
+                        metadata: Default::default(),
+
                         id,
                         content: (!slot.content.is_empty()).then(|| slot.content.clone()),
                         summary: slot.summary_text(),
@@ -283,6 +284,9 @@ fn build_accumulated_output_entries(
                             extra_body: item_extra_body,
                         },
                         Node::Text {
+                            citations: Vec::new(),
+                            signature: None,
+
                             id: message_id,
                             role: OrdinaryRole::Assistant,
                             content: output_text.clone(),
@@ -317,7 +321,6 @@ fn build_accumulated_output_entries(
 }
 
 #[allow(clippy::too_many_arguments)]
-
 #[allow(clippy::too_many_arguments)]
 
 fn output_index_for_call_id(

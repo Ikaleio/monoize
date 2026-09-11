@@ -55,6 +55,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
                 if !started_response {
                     let _ = tx
                         .send(UrpStreamEvent::ResponseStart {
+                            usage: None,
                             id: response_id.clone(),
                             model: urp.model.clone(),
                             extra_body: HashMap::new(),
@@ -68,6 +69,8 @@ pub(crate) async fn stream_replicate_to_urp_events(
                         .send(UrpStreamEvent::NodeStart {
                             node_index: 0,
                             header: NodeHeader::Text {
+                                signature: None,
+                                citations: Vec::new(),
                                 id: None,
                                 role: OrdinaryRole::Assistant,
                                 phase: None,
@@ -81,6 +84,8 @@ pub(crate) async fn stream_replicate_to_urp_events(
                 output_text.push_str(&ev.data);
                 record_visible_output_delta(&runtime_metrics, &ev.data).await;
                 let delta = NodeDelta::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     content: ev.data.clone(),
                 };
                 let _ = tx
@@ -117,6 +122,9 @@ pub(crate) async fn stream_replicate_to_urp_events(
 
     let completed_nodes = if text_started {
         vec![Node::Text {
+            citations: Vec::new(),
+            signature: None,
+
             id: None,
             role: OrdinaryRole::Assistant,
             content: output_text.clone(),

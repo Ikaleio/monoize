@@ -88,6 +88,9 @@ pub async fn create_image_generation(
     let extra_body = build_extra_body(obj, &["prompt", "model", "n", "max_multiplier", "stream"]);
 
     let inputs = vec![urp::Node::Text {
+        citations: Vec::new(),
+        signature: None,
+
         id: None,
         role: urp::OrdinaryRole::User,
         content: prompt,
@@ -360,6 +363,8 @@ pub async fn create_image_edit(
 
     let mut inputs = Vec::new();
     inputs.push(urp::Node::Text {
+        signature: None,
+        citations: Vec::new(),
         id: None,
         role: urp::OrdinaryRole::User,
         content: prompt,
@@ -600,6 +605,8 @@ async fn run_image_stream_downstream(
     family: ImageStreamEventFamily,
 ) -> AppResult<Response> {
     let req = urp::UrpRequest {
+        context: Default::default(),
+        instructions_format: None,
         model,
         input: inputs,
         stream: Some(true),
@@ -786,6 +793,8 @@ async fn fan_out_subrequests(
         let state = state.clone();
         let auth = auth.clone();
         let req = urp::UrpRequest {
+            context: Default::default(),
+            instructions_format: None,
             model: model.to_string(),
             input: input.to_vec(),
             stream: Some(false),

@@ -43,17 +43,10 @@ pub enum ReasoningSigilMode {
     StripSigil,
 }
 
-fn reasoning_is_redacted(extra_body: &HashMap<String, Value>) -> bool {
-    extra_body
-        .get(REASONING_KIND_EXTRA_KEY)
-        .and_then(Value::as_str)
-        == Some(REASONING_KIND_REDACTED_THINKING)
-}
-
 fn reasoning_extra_for_wire(extra_body: &HashMap<String, Value>) -> HashMap<String, Value> {
     extra_body
         .iter()
-        .filter(|(key, _)| key.as_str() != REASONING_KIND_EXTRA_KEY)
+        .filter(|(key, _)| !crate::urp::decode::is_internal_extra_key(key))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
@@ -116,6 +109,7 @@ fn merge_adjacent_chat_reasoning_for_messages(
     encrypted_node: &Node,
 ) -> Option<Node> {
     let Node::Reasoning {
+        metadata: plaintext_metadata,
         id: plaintext_id,
         content: plaintext_content,
         encrypted: plaintext_encrypted,
@@ -127,6 +121,7 @@ fn merge_adjacent_chat_reasoning_for_messages(
         return None;
     };
     let Node::Reasoning {
+        metadata: encrypted_metadata,
         id: encrypted_id,
         content: encrypted_content,
         encrypted,
@@ -142,20 +137,31 @@ fn merge_adjacent_chat_reasoning_for_messages(
         || chat_reasoning_detail_type(encrypted_extra) != Some("reasoning.encrypted")
         || plaintext_content.as_deref().is_none_or(str::is_empty)
         || encrypted_reasoning_is_nonempty(plaintext_encrypted)
-        || encrypted_content.as_deref().is_some_and(|value| !value.is_empty())
-        || encrypted_summary.as_deref().is_some_and(|value| !value.is_empty())
+        || encrypted_content
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+        || encrypted_summary
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
         || !encrypted_reasoning_is_nonempty(encrypted)
-        || reasoning_is_redacted(plaintext_extra)
-        || reasoning_is_redacted(encrypted_extra)
+        || plaintext_metadata.redacted
+        || encrypted_metadata.redacted
     {
         return None;
     }
 
     let mut extra_body = plaintext_extra.clone();
     for (key, value) in encrypted_extra {
-        extra_body.entry(key.clone()).or_insert_with(|| value.clone());
+        extra_body
+            .entry(key.clone())
+            .or_insert_with(|| value.clone());
     }
     Some(Node::Reasoning {
+        metadata: {
+            let mut metadata = plaintext_metadata.clone();
+            metadata.merge(encrypted_metadata);
+            metadata
+        },
         id: encrypted_id.clone().or_else(|| plaintext_id.clone()),
         content: plaintext_content.clone(),
         encrypted: encrypted.clone(),
@@ -247,9 +253,7 @@ pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
     );
 
     usage_object.remove("cache_creation");
-    if input_details.cache_creation_5m_tokens > 0
-        || input_details.cache_creation_1h_tokens > 0
-    {
+    if input_details.cache_creation_5m_tokens > 0 || input_details.cache_creation_1h_tokens > 0 {
         usage_object.insert(
             "cache_creation".to_string(),
             json!({
@@ -405,46 +409,72 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         );
     }
     if let Some(reasoning) = &req.reasoning {
-        let explicit_thinking = reasoning
+        let native_thinking = reasoning
             .extra_body
             .get(MESSAGES_THINKING_CONFIG_EXTRA_KEY)
-            .and_then(Value::as_object)
-            .cloned();
-        let explicit_output_config = reasoning
+            .and_then(Value::as_object);
+        let native_output = reasoning
             .extra_body
             .get(MESSAGES_OUTPUT_CONFIG_EXTRA_KEY)
-            .and_then(Value::as_object)
-            .cloned();
-        let has_explicit_messages_config =
-            explicit_thinking.is_some() || explicit_output_config.is_some();
-
-        if let Some(thinking) = explicit_thinking {
-            obj.insert("thinking".to_string(), Value::Object(thinking));
+            .and_then(Value::as_object);
+        let mut thinking = native_thinking.cloned().unwrap_or_default();
+        let mut output = native_output.cloned().unwrap_or_default();
+        thinking.retain(|key, _| !matches!(key.as_str(), "type" | "budget_tokens" | "display"));
+        output.remove("effort");
+        if output
+            .get("format")
+            .and_then(|v| v.get("type"))
+            .and_then(Value::as_str)
+            == Some("json_schema")
+        {
+            output.remove("format");
         }
-        if let Some(output_config) = explicit_output_config {
-            obj.insert("output_config".to_string(), Value::Object(output_config));
+        let mode = if reasoning.disabled() {
+            Some("disabled")
+        } else if let Some(mode) = reasoning.mode.as_deref() {
+            Some(mode)
+        } else if reasoning.budget_tokens.is_none() && reasoning.effort.is_none() {
+            None
+        } else if native_output.is_some()
+            && native_thinking.is_none()
+            && reasoning.budget_tokens.is_none()
+        {
+            None
+        } else if model_supports_adaptive(upstream_model) {
+            Some("adaptive")
+        } else {
+            Some("enabled")
+        };
+        if let Some(mode) = mode {
+            thinking.insert("type".into(), json!(mode));
         }
-
-        if !has_explicit_messages_config && reasoning.effort.as_deref() == Some("none") {
-            obj.insert("thinking".to_string(), json!({ "type": "disabled" }));
-        } else if !has_explicit_messages_config && model_supports_adaptive(upstream_model) {
-            obj.insert("thinking".to_string(), json!({ "type": "adaptive" }));
-            if let Some(effort) = reasoning
-                .effort
-                .as_deref()
-                .filter(|effort| !matches!(*effort, "none" | "minimal" | "minimum"))
-            {
-                obj.insert("output_config".to_string(), json!({ "effort": effort }));
-            }
-        } else if !has_explicit_messages_config {
-            let effort = reasoning.effort.as_deref().unwrap_or("medium");
-            obj.insert(
-                "thinking".to_string(),
-                json!({
-                    "type": "enabled",
-                    "budget_tokens": effort_to_budget(effort)
-                }),
+        if let Some(budget) = reasoning.budget_tokens.filter(|_| mode == Some("enabled")) {
+            thinking.insert("budget_tokens".into(), json!(budget));
+        } else if mode == Some("enabled") {
+            thinking.insert(
+                "budget_tokens".into(),
+                json!(effort_to_budget(
+                    reasoning.effort.as_deref().unwrap_or("medium")
+                )),
             );
+        }
+        if let Some(display) = &reasoning.display {
+            thinking.insert("display".into(), json!(display));
+        }
+        if let Some(effort) = reasoning
+            .effort
+            .as_deref()
+            .filter(|v| !matches!(*v, "none" | "minimal" | "minimum"))
+        {
+            if mode == Some("adaptive") || native_output.is_some() {
+                output.insert("effort".into(), json!(effort));
+            }
+        }
+        if !thinking.is_empty() || native_thinking.is_some() {
+            obj.insert("thinking".into(), Value::Object(thinking));
+        }
+        if !output.is_empty() || native_output.is_some() {
+            obj.insert("output_config".into(), Value::Object(output));
         }
     }
     if let Some(stop) = &req.stop {

@@ -37,8 +37,8 @@ fn map_response_completed_with_accumulated(
                         .get(&output_index)
                         .and_then(|state| state.item_type.as_deref())
                         .and_then(response_output_item_type_kind);
-                    let position_has_compatible_kind = terminal_item_kind.is_some()
-                        && terminal_item_kind == streamed_item_kind;
+                    let position_has_compatible_kind =
+                        terminal_item_kind.is_some() && terminal_item_kind == streamed_item_kind;
                     let mut borrowed_streamed_id = false;
                     if terminal_id_missing
                         && position_has_compatible_kind
@@ -71,14 +71,18 @@ fn map_response_completed_with_accumulated(
         Err(reason) => {
             events.push(UrpStreamEvent::Error {
                 code: Some("responses_terminal_conflict".to_string()),
-                message: format!("Responses stream terminal output conflicts with streamed state: {reason}"),
+                message: format!(
+                    "Responses stream terminal output conflicts with streamed state: {reason}"
+                ),
                 extra_body: HashMap::from([("conflict_reason".to_string(), Value::String(reason))]),
             });
             return events;
         }
     };
     let finish_reason = match response_obj.get("status").and_then(Value::as_str) {
-        Some("incomplete") => Some(crate::urp::decode::openai_responses::incomplete_finish_reason(&response_obj)),
+        Some("incomplete") => {
+            Some(crate::urp::decode::openai_responses::incomplete_finish_reason(&response_obj))
+        }
         Some("failed" | "cancelled") => Some(FinishReason::Other),
         Some("completed") if outputs_have_tool_calls(&outputs) => Some(FinishReason::ToolCalls),
         Some("completed") => decoded
@@ -286,6 +290,8 @@ fn decode_part_from_value(part: &Value) -> Part {
     let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match part_type {
         "output_text" | "text" => Part::Text {
+            signature: None,
+            citations: Vec::new(),
             content: part
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -294,6 +300,7 @@ fn decode_part_from_value(part: &Value) -> Part {
             extra_body: part_extra_body_from_value(part),
         },
         "reasoning" => Part::Reasoning {
+            metadata: Default::default(),
             id: part
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -326,6 +333,7 @@ fn decode_part_from_value(part: &Value) -> Part {
             extra_body: part_extra_body_from_value(part),
         },
         "reasoning_text" => Part::Reasoning {
+            metadata: Default::default(),
             id: None,
             content: part
                 .get("text")

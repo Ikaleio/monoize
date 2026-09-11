@@ -130,25 +130,25 @@ fn map_output_item_done(
                         .is_some_and(|summary| !summary.is_empty())
                     || fallback_encrypted.is_some()
                 {
-                    let mut delta_extra = HashMap::new();
-                    if let Some(id) = item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| state.item_id.clone())
-                    {
-                        delta_extra.insert("reasoning_item_id".to_string(), Value::String(id));
-                    }
+                    let metadata = crate::urp::ReasoningMetadata {
+                        item_id: item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .or_else(|| state.item_id.clone()),
+                        ..Default::default()
+                    };
                     events.push(UrpStreamEvent::NodeDelta {
                         node_index,
                         delta: NodeDelta::Reasoning {
+                            metadata,
                             content: fallback_content,
                             encrypted: fallback_encrypted,
                             summary: fallback_summary,
                             source: source.clone(),
                         },
                         usage: None,
-                        extra_body: delta_extra,
+                        extra_body: HashMap::new(),
                     });
                 }
             } else if let Node::ToolCall { arguments, .. } = &node
@@ -215,6 +215,8 @@ fn map_output_item_done(
                             events.push(UrpStreamEvent::NodeDelta {
                                 node_index,
                                 delta: NodeDelta::Text {
+                                    signature: None,
+                                    citations: Vec::new(),
                                     content: content.clone(),
                                 },
                                 usage: None,
@@ -505,6 +507,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
     match (accumulated, terminal) {
         (
             Node::Reasoning {
+                metadata: left_metadata,
                 id: left_id,
                 content: left_content,
                 encrypted: left_encrypted,
@@ -513,6 +516,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 extra_body: left_extra,
             },
             Node::Reasoning {
+                metadata: right_metadata,
                 id: right_id,
                 content: right_content,
                 encrypted: right_encrypted,
@@ -521,6 +525,11 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 extra_body: right_extra,
             },
         ) => Ok(Node::Reasoning {
+            metadata: {
+                let mut metadata = left_metadata.clone();
+                metadata.merge(right_metadata);
+                metadata
+            },
             id: right_id.clone().or_else(|| left_id.clone()),
             content: merge_optional_string_field("reasoning.text", left_content, right_content)?,
             encrypted: merge_terminal_reasoning_encrypted(left_encrypted, right_encrypted),
@@ -530,6 +539,8 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
         }),
         (
             Node::Text {
+                signature: left_signature,
+                citations: left_citations,
                 id: left_id,
                 role: left_role,
                 content: left_content,
@@ -537,6 +548,8 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 extra_body: left_extra,
             },
             Node::Text {
+                signature: right_signature,
+                citations: right_citations,
                 id: right_id,
                 role: right_role,
                 content: right_content,
@@ -548,6 +561,12 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 return Err("message role differs from completed output".to_string());
             }
             Ok(Node::Text {
+                signature: right_signature.clone().or_else(|| left_signature.clone()),
+                citations: if right_citations.is_empty() {
+                    left_citations.clone()
+                } else {
+                    right_citations.clone()
+                },
                 id: right_id.clone().or_else(|| left_id.clone()),
                 role: *right_role,
                 content: if !left_content.is_empty()

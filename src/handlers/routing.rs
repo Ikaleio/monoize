@@ -140,6 +140,7 @@ pub(super) async fn resolve_model_suffix(
                         req.reasoning = Some(urp::ReasoningConfig {
                             effort: Some(effort.to_string()),
                             extra_body: std::collections::HashMap::new(),
+                            ..Default::default()
                         });
                     }
                 }
@@ -988,15 +989,7 @@ fn canonical_session_head_node(node: &urp::Node) -> Value {
 }
 
 fn session_affinity_instructions(req: &urp::UrpRequest) -> Value {
-    req.extra_body
-        .get("instructions")
-        .cloned()
-        .or_else(|| {
-            req.extra_body
-                .get(urp::RESPONSES_INSTRUCTIONS_EXTRA_KEY)
-                .cloned()
-        })
-        .unwrap_or(Value::Null)
+    Value::Array(req.input.iter().filter(|node| matches!(node, urp::Node::Text { extra_body, .. } if extra_body.get(urp::RESPONSES_INSTRUCTION_NODE_EXTRA_KEY).and_then(Value::as_bool) == Some(true))).map(canonical_session_head_node).collect())
 }
 
 /// CM-AFF-2 rule 2 over the decoded request: instructions plus the first two

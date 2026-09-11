@@ -157,6 +157,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         let text = collect_content_text(system_instruction);
         if !text.is_empty() {
             input_nodes.push(Node::Text {
+                signature: None,
+                citations: Vec::new(),
                 id: None,
                 role: OrdinaryRole::System,
                 content: text,
@@ -243,7 +245,34 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .cloned()
         .and_then(parse_tool_choice);
 
+    let mut request_extra = split_extra(
+        obj,
+        &[
+            "model",
+            "contents",
+            "systemInstruction",
+            "tools",
+            "toolConfig",
+            "stream",
+            "streamGenerateContent",
+        ],
+    );
+    if let Some(cfg) = request_extra
+        .get_mut("generationConfig")
+        .and_then(Value::as_object_mut)
+    {
+        for key in ["temperature", "topP", "maxOutputTokens", "stopSequences"] {
+            cfg.remove(key);
+        }
+        if let Some(thinking) = cfg.get_mut("thinkingConfig").and_then(Value::as_object_mut) {
+            for key in ["thinkingLevel", "thinkingBudget", "includeThoughts"] {
+                thinking.remove(key);
+            }
+        }
+    }
     Ok(UrpRequest {
+        context: Default::default(),
+        instructions_format: None,
         model,
         input: input_nodes,
         stream: obj
@@ -262,7 +291,36 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .get("generationConfig")
             .and_then(|v| v.get("maxOutputTokens"))
             .and_then(|v| v.as_u64()),
-        reasoning: None,
+        reasoning: obj
+            .get("generationConfig")
+            .and_then(|v| v.get("thinkingConfig"))
+            .and_then(Value::as_object)
+            .map(|cfg| crate::urp::ReasoningConfig {
+                effort: cfg
+                    .get("thinkingLevel")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                budget_tokens: cfg.get("thinkingBudget").and_then(Value::as_u64),
+                mode: cfg
+                    .get("thinkingBudget")
+                    .and_then(Value::as_i64)
+                    .and_then(|n| match n {
+                        0 => Some("disabled".into()),
+                        -1 => Some("adaptive".into()),
+                        _ => None,
+                    }),
+                summary: cfg
+                    .get("includeThoughts")
+                    .and_then(Value::as_bool)
+                    .map(|enabled| {
+                        if enabled {
+                            "auto".into()
+                        } else {
+                            "none".into()
+                        }
+                    }),
+                ..Default::default()
+            }),
         tools,
         tool_choice,
         parallel_tool_calls: None,
@@ -292,18 +350,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             }
         }),
         user: None,
-        extra_body: split_extra(
-            obj,
-            &[
-                "model",
-                "contents",
-                "systemInstruction",
-                "tools",
-                "toolConfig",
-                "stream",
-                "streamGenerateContent",
-            ],
-        ),
+        extra_body: request_extra,
     })
 }
 
@@ -521,6 +568,8 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
         return vec![
             if obj.get("thought").and_then(Value::as_bool) == Some(true) {
                 Part::Reasoning {
+                    metadata: Default::default(),
+
                     id: None,
                     content: Some(text.to_string()),
                     encrypted: obj.get("thoughtSignature").cloned(),
@@ -530,8 +579,11 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
                 }
             } else {
                 Part::Text {
+                    citations: Vec::new(),
+                    signature: obj.get("thoughtSignature").cloned(),
+
                     content: text.to_string(),
-                    extra_body: part_extra(obj, &["text"]),
+                    extra_body: part_extra(obj, &["text", "thoughtSignature"]),
                 }
             },
         ];
@@ -568,6 +620,7 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
                 parts.insert(
                     0,
                     Part::Reasoning {
+                        metadata: Default::default(),
                         id: Some(format!(
                             "{GEMINI_CALL_SIGNATURE_PREFIX}{}",
                             URL_SAFE_NO_PAD.encode(call_id)

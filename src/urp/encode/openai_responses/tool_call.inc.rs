@@ -18,19 +18,40 @@ fn is_retained_responses_instruction_node(node: &Node) -> bool {
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    let retained_instructions = req
-        .extra_body
-        .get(RESPONSES_INSTRUCTIONS_EXTRA_KEY)
-        .cloned();
-    let request_input = if retained_instructions.is_some() {
-        req.input
-            .iter()
-            .filter(|node| !is_retained_responses_instruction_node(node))
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        req.input.clone()
-    };
+    let instruction_nodes = req
+        .input
+        .iter()
+        .filter(|node| is_retained_responses_instruction_node(node))
+        .cloned()
+        .collect::<Vec<_>>();
+    let retained_instructions = req.instructions_format.map(|format| match format {
+        crate::urp::InstructionsFormat::Null if instruction_nodes.is_empty() => Value::Null,
+        crate::urp::InstructionsFormat::Items => {
+            let mut items = Vec::new();
+            for item in nodes_to_items(&instruction_nodes) {
+                encode_message_to_input_items(&item, &mut items);
+            }
+            Value::Array(items)
+        }
+        _ => Value::String(
+            instruction_nodes
+                .iter()
+                .filter_map(|node| match node {
+                    Node::Text { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+    });
+    let request_input = req
+        .input
+        .iter()
+        .filter(|node| {
+            req.instructions_format.is_none() || !is_retained_responses_instruction_node(node)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let request_items = nodes_to_items(&request_input);
     let mut input_items = Vec::new();
     let mut instructions = retained_instructions;
@@ -72,10 +93,21 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
     if let Some(reasoning) = &req.reasoning {
         let mut reasoning_obj = Map::new();
-        if let Some(effort) = &reasoning.effort {
+        if reasoning.disabled() {
+            reasoning_obj.insert("effort".to_string(), json!("none"));
+        } else if let Some(effort) = &reasoning.effort {
             reasoning_obj.insert("effort".to_string(), Value::String(effort.clone()));
         }
-        merge_extra(&mut reasoning_obj, &reasoning.extra_body);
+        if let Some(summary) = &reasoning.summary {
+            reasoning_obj.insert("summary".to_string(), json!(summary));
+        }
+        let unknown = reasoning
+            .extra_body
+            .iter()
+            .filter(|(key, _)| !crate::urp::ReasoningConfig::is_control(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        merge_extra(&mut reasoning_obj, &unknown);
         if !reasoning_obj.is_empty() {
             obj.insert("reasoning".to_string(), Value::Object(reasoning_obj));
         }
@@ -99,9 +131,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         apply_response_format(obj, format);
     }
     if let Some(verbosity) = &req.verbosity {
-        let text = obj
-            .entry("text".to_string())
-            .or_insert_with(|| json!({}));
+        let text = obj.entry("text".to_string()).or_insert_with(|| json!({}));
         if !text.is_object() {
             *text = json!({});
         }
@@ -257,30 +287,15 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         obj.insert("id".to_string(), Value::String(resp.id.clone()));
         obj.insert("object".to_string(), Value::String("response".to_string()));
         obj.insert("created_at".to_string(), json!(created_at));
-        obj.insert("model".to_string(), Value::String(logical_model.to_string()));
+        obj.insert(
+            "model".to_string(),
+            Value::String(logical_model.to_string()),
+        );
         obj.insert("output".to_string(), Value::Array(output));
     }
 
     if let Some(usage) = &resp.usage {
-        let input_details = usage_input_details(usage);
-        let output_details = usage_output_details(usage);
-        let mut usage_value = json!({
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "total_tokens": usage.total_tokens(),
-            "output_tokens_details": {
-                "reasoning_tokens": output_details.reasoning_tokens,
-                "accepted_prediction_tokens": output_details.accepted_prediction_tokens,
-                "rejected_prediction_tokens": output_details.rejected_prediction_tokens
-            },
-            "input_tokens_details": {
-                "cached_tokens": input_details.cache_read_tokens,
-                "cache_write_tokens": input_details.cache_creation_tokens,
-                "cache_creation_tokens": input_details.cache_creation_tokens,
-                "tool_prompt_tokens": input_details.tool_prompt_tokens
-            }
-        });
-        merge_responses_usage_extra(&mut usage_value, &usage.extra_body);
+        let usage_value = encode_usage(usage);
         body["usage"] = usage_value;
     }
 
@@ -288,13 +303,21 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         for (key, value) in &resp.extra_body {
             if !key.starts_with("_monoize_")
                 && !matches!(
-                key.as_str(),
-                "id" | "object" | "created" | "created_at" | "model" | "output" | "usage"
-            )
+                    key.as_str(),
+                    "id" | "object" | "created" | "created_at" | "model" | "output" | "usage"
+                )
             {
                 obj.insert(key.clone(), value.clone());
             }
         }
+    }
+    body["status"] = json!(status);
+    if let Some(reason) = resp.finish_reason {
+        body["incomplete_details"] = match reason {
+            FinishReason::Length => json!({"reason": "max_output_tokens"}),
+            FinishReason::ContentFilter => json!({"reason": "content_filter"}),
+            _ => Value::Null,
+        };
     }
     body
 }
@@ -383,4 +406,27 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             out,
         ),
     }
+}
+
+pub(crate) fn encode_usage(usage: &crate::urp::Usage) -> Value {
+    let input_details = usage_input_details(usage);
+    let output_details = usage_output_details(usage);
+    let mut usage_value = json!({
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens(),
+        "output_tokens_details": {
+            "reasoning_tokens": output_details.reasoning_tokens,
+            "accepted_prediction_tokens": output_details.accepted_prediction_tokens,
+            "rejected_prediction_tokens": output_details.rejected_prediction_tokens
+        },
+        "input_tokens_details": {
+            "cached_tokens": input_details.cache_read_tokens,
+            "cache_write_tokens": input_details.cache_creation_tokens,
+            "cache_creation_tokens": input_details.cache_creation_tokens,
+            "tool_prompt_tokens": input_details.tool_prompt_tokens
+        }
+    });
+    merge_responses_usage_extra(&mut usage_value, &usage.extra_body);
+    usage_value
 }

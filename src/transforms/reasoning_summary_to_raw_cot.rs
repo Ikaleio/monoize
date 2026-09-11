@@ -103,9 +103,7 @@ impl Transform for ReasoningSummaryToRawCotTransform {
 
 fn mark_node(node: &mut Node) {
     let Node::Reasoning {
-        summary,
-        extra_body,
-        ..
+        summary, metadata, ..
     } = node
     else {
         return;
@@ -114,21 +112,21 @@ fn mark_node(node: &mut Node) {
         .as_deref()
         .is_some_and(|summary| !summary.is_empty())
     {
-        extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
+        metadata.chat_content = true;
     }
 }
 
 fn mark_stream(event: &mut UrpStreamEvent) {
     match event {
-        UrpStreamEvent::NodeDelta {
-            delta, extra_body, ..
-        } => {
-            if let NodeDelta::Reasoning { summary, .. } = delta
+        UrpStreamEvent::NodeDelta { delta, .. } => {
+            if let NodeDelta::Reasoning {
+                summary, metadata, ..
+            } = delta
                 && summary
                     .as_deref()
                     .is_some_and(|summary| !summary.is_empty())
             {
-                extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
+                metadata.chat_content = true;
             }
         }
         UrpStreamEvent::NodeDone { node, .. } => mark_node(node),

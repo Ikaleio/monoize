@@ -140,7 +140,11 @@ fn encode_chat_file_part(
         {
             json!({ "file_id": file_id })
         }
-        FileSource::Base64 { filename, media_type, data } => {
+        FileSource::Base64 {
+            filename,
+            media_type,
+            data,
+        } => {
             let mut file = json!({ "file_data": format!("data:{media_type};base64,{data}") });
             if let Some(filename) = filename {
                 file["filename"] = json!(filename);
@@ -285,8 +289,18 @@ fn push_part_into_pending_chat_message(
     extra_body: &HashMap<String, Value>,
     part: &Part,
 ) {
-    if let Part::ProviderItem { body, extra_body, origin_protocol: ProviderProtocol::ChatCompletion, .. } = part {
-        if extra_body.get(crate::urp::CHAT_MESSAGE_ITEM_EXTRA_KEY).and_then(Value::as_bool) == Some(true) {
+    if let Part::ProviderItem {
+        body,
+        extra_body,
+        origin_protocol: ProviderProtocol::ChatCompletion,
+        ..
+    } = part
+    {
+        if extra_body
+            .get(crate::urp::CHAT_MESSAGE_ITEM_EXTRA_KEY)
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
             flush_pending_chat_message(pending, out);
             out.push(sanitize_provider_item_wire_body(body));
             return;
@@ -353,7 +367,8 @@ fn push_part_into_pending_chat_message(
                     .and_then(Value::as_bool)
                     == Some(true)
             {
-                let mut function_call = json!({ "name": name, "arguments": tool_call_arguments_for_wire(arguments) });
+                let mut function_call =
+                    json!({ "name": name, "arguments": tool_call_arguments_for_wire(arguments) });
                 if let Some(obj) = function_call.as_object_mut() {
                     merge_chat_wire_extra(obj, extra_body);
                 }
@@ -393,36 +408,60 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         obj.insert(key.to_string(), Value::from(max));
     }
     if let Some(reasoning) = &req.reasoning {
-        let raw_reasoning = reasoning
+        let native_reasoning = reasoning
             .extra_body
             .get(CHAT_REASONING_CONFIG_EXTRA_KEY)
-            .and_then(Value::as_object)
-            .cloned();
-        let raw_thinking = reasoning
+            .and_then(Value::as_object);
+        let native_thinking = reasoning
             .extra_body
             .get(CHAT_THINKING_CONFIG_EXTRA_KEY)
-            .cloned();
-        let had_raw_reasoning = raw_reasoning.is_some();
-        if let Some(mut raw_reasoning) = raw_reasoning {
-            if let Some(effort) = reasoning.effort.as_deref() {
-                raw_reasoning.remove("max_tokens");
-                raw_reasoning.insert(
-                    "effort".to_string(),
-                    Value::String(chat_wire_effort(effort).to_string()),
-                );
-            }
-            obj.insert("reasoning".to_string(), Value::Object(raw_reasoning));
+            .and_then(Value::as_object);
+        let mut controls = native_reasoning.cloned().unwrap_or_default();
+        controls.retain(|key, _| {
+            !matches!(
+                key.as_str(),
+                "effort" | "summary" | "max_tokens" | "enabled"
+            )
+        });
+        let effort = if reasoning.disabled() {
+            Some("none")
+        } else {
+            reasoning.effort.as_deref()
+        };
+        if let Some(summary) = &reasoning.summary {
+            controls.insert("summary".into(), json!(summary));
         }
-        if let Some(raw_thinking) = raw_thinking {
-            obj.insert("thinking".to_string(), raw_thinking);
-        }
-        if let Some(effort) = reasoning.effort.as_deref() {
-            if !had_raw_reasoning {
-                obj.insert(
-                    "reasoning_effort".to_string(),
-                    Value::String(chat_wire_effort(effort).to_string()),
-                );
+        if native_thinking.is_none() {
+            if let Some(budget) = reasoning.budget_tokens {
+                controls.insert("max_tokens".into(), json!(budget));
             }
+            if let Some(mode) = &reasoning.mode {
+                controls.insert("enabled".into(), json!(mode != "disabled"));
+            }
+        }
+        if native_reasoning.is_some() || !controls.is_empty() {
+            if let Some(effort) = effort {
+                controls.insert("effort".into(), json!(chat_wire_effort(effort)));
+            }
+            obj.insert("reasoning".into(), Value::Object(controls));
+        } else if let Some(effort) = effort {
+            obj.insert("reasoning_effort".into(), json!(chat_wire_effort(effort)));
+        }
+        if let Some(native) = native_thinking {
+            let mut thinking = native.clone();
+            thinking.retain(|key, _| !matches!(key.as_str(), "type" | "budget_tokens" | "display"));
+            if reasoning.disabled() {
+                thinking.insert("type".into(), json!("disabled"));
+            } else if let Some(mode) = &reasoning.mode {
+                thinking.insert("type".into(), json!(mode));
+            }
+            if let Some(budget) = reasoning.budget_tokens {
+                thinking.insert("budget_tokens".into(), json!(budget));
+            }
+            if let Some(display) = &reasoning.display {
+                thinking.insert("display".into(), json!(display));
+            }
+            obj.insert("thinking".into(), Value::Object(thinking));
         }
     }
     if let Some(tools) = &req.tools {
@@ -670,7 +709,8 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
             }
             Node::Reasoning { .. } => {
                 if let Node::Reasoning {
-                    id: _,
+                    metadata,
+                    id,
                     content,
                     encrypted,
                     summary,
@@ -679,7 +719,8 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                 } = node
                 {
                     reasoning_parts.push(Part::Reasoning {
-                        id: None,
+                        metadata: metadata.clone(),
+                        id: id.clone(),
                         content: content.clone(),
                         encrypted: encrypted.clone(),
                         summary: summary.clone(),
@@ -1019,6 +1060,7 @@ fn insert_openrouter_reasoning_fields(
 
     for part in parts {
         let Part::Reasoning {
+            metadata,
             id,
             content,
             encrypted,
@@ -1030,49 +1072,33 @@ fn insert_openrouter_reasoning_fields(
             continue;
         };
         let format = source.as_deref().filter(|format| !format.is_empty());
+        if metadata.chat_content && reasoning_content_value.is_none() {
+            reasoning_content_value = content.clone().or_else(|| summary.clone());
+        }
 
         if let Some(raw_detail) = extra_body
             .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
             .and_then(Value::as_object)
         {
-            let mut detail = raw_detail.clone();
-            if let Some(id) = id.as_deref().filter(|id| !id.is_empty()) {
-                detail.insert("id".to_string(), Value::String(id.to_string()));
-            }
-            if let Some(format) = format {
-                detail.insert("format".to_string(), Value::String(format.to_string()));
-            }
-            match detail.get("type").and_then(Value::as_str) {
-                Some("reasoning.summary") => {
-                    if let Some(summary) = summary {
-                        if derive_scalar_aliases_from_raw_details
-                            && reasoning_summary_value.is_none()
-                            && !summary.is_empty()
-                        {
-                            reasoning_summary_value = Some(summary.clone());
-                        }
-                        detail.insert("summary".to_string(), Value::String(summary.clone()));
-                    }
+            details.extend(crate::urp::reasoning::chat_details(
+                content.as_deref(),
+                summary.as_deref(),
+                encrypted.as_ref(),
+                id.as_deref(),
+                format,
+                Some(raw_detail),
+            ));
+            if derive_scalar_aliases_from_raw_details {
+                if reasoning_value.is_none() {
+                    reasoning_value = content.clone();
                 }
-                Some("reasoning.text") => {
-                    if let Some(content) = content {
-                        if derive_scalar_aliases_from_raw_details
-                            && reasoning_value.is_none()
-                            && !content.is_empty()
-                        {
-                            reasoning_value = Some(content.clone());
-                        }
-                        detail.insert("text".to_string(), Value::String(content.clone()));
-                    }
+                if reasoning_summary_value.is_none() {
+                    reasoning_summary_value = summary.clone();
                 }
-                Some("reasoning.encrypted") => {
-                    if let Some(encrypted) = encrypted {
-                        detail.insert("data".to_string(), encrypted.clone());
-                    }
-                }
-                _ => {}
             }
-            details.push(Value::Object(detail));
+            if metadata.chat_content && reasoning_content_value.is_none() {
+                reasoning_content_value = content.clone().or_else(|| summary.clone());
+            }
             continue;
         }
 
@@ -1095,12 +1121,7 @@ fn insert_openrouter_reasoning_fields(
             if reasoning_summary_value.is_none() {
                 reasoning_summary_value = Some(summary.to_string());
             }
-            if (extra_body
-                .get("openwebui_reasoning_content")
-                .and_then(Value::as_bool)
-                == Some(true))
-                && reasoning_content_value.is_none()
-            {
+            if metadata.chat_content && reasoning_content_value.is_none() {
                 reasoning_content_value = Some(summary.to_string());
             }
             details.push(json!({

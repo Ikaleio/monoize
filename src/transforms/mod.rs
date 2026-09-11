@@ -561,6 +561,8 @@ pub fn model_glob_match(pattern: &str, model: &str) -> bool {
 
 pub fn text_node(role: OrdinaryRole, content: impl Into<String>) -> Node {
     Node::Text {
+        signature: None,
+        citations: Vec::new(),
         id: None,
         role,
         content: content.into(),

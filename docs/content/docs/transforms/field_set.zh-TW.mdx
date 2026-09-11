@@ -9,6 +9,10 @@ description: 在設定路徑寫入 JSON 值，可選擇僅在滿足條件時寫�
 
 用它新增或取代協議轉換不攜帶的廠商私有欄位。
 
+請求路徑 `reasoning.effort`、`reasoning.summary`、`reasoning.mode`、`reasoning.budget_tokens` 和 `reasoning.display` 操作統一推理設定。其他路徑仍操作 extra-body 欄位。
+
+將 `reasoning.summary` 設為 `detailed` 可請求 GPT 推理摘要。上游必須支援並實際傳回摘要。
+
 ## 參考資訊
 
 | 屬性 | 值 |

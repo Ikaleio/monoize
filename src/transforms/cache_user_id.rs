@@ -21,7 +21,7 @@ pub struct CacheUserIdTransform;
 
 /// When cache fields exist in the request but no user_id is set,
 /// auto-fill metadata.user_id (Anthropic) and req.user (OpenAI)
-/// with the Monoize username injected via __monoize_username.
+/// with the Monoize username provided by the typed request context.
 #[async_trait]
 impl Transform for CacheUserIdTransform {
     fn type_id(&self) -> &'static str {
@@ -86,11 +86,7 @@ impl Transform for CacheUserIdTransform {
             return Ok(());
         };
 
-        let username = match req
-            .extra_body
-            .get("__monoize_username")
-            .and_then(|v| v.as_str())
-        {
+        let username = match req.context.username.as_deref() {
             Some(u) => u.to_string(),
             None => return Ok(()),
         };
