@@ -9,6 +9,10 @@ description: 在配置路径写入 JSON 值，可选择仅在满足条件时写�
 
 用它添加或替换协议转换不携带的厂商私有字段。
 
+请求路径 `reasoning.effort`、`reasoning.summary`、`reasoning.mode`、`reasoning.budget_tokens` 和 `reasoning.display` 操作统一推理设置。其他路径仍操作 extra-body 字段。
+
+将 `reasoning.summary` 设为 `detailed` 可请求 GPT 推理概要。上游必须支持并实际返回概要。
+
 ## 参考信息
 
 | 属性 | 值 |

@@ -128,9 +128,11 @@ impl DynTransform for CustomTransformEntry {
 
         match (data, outcome.data) {
             (UrpData::Request(request), sandbox::SandboxData::Single(value)) => {
+                let context = request.context.clone();
                 *request = serde_json::from_value(value).map_err(|error| {
                     apply_error(format!("result is not a valid UrpRequest: {error}"))
                 })?;
+                request.context = context;
             }
             (UrpData::Response(response), sandbox::SandboxData::Single(value)) => {
                 *response = serde_json::from_value(value).map_err(|error| {

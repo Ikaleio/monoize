@@ -9,6 +9,10 @@ This transform writes a JSON value at the configured extra-body path. With `when
 
 Use it to add or replace provider-specific fields that the protocol conversion does not carry.
 
+Request paths `reasoning.effort`, `reasoning.summary`, `reasoning.mode`, `reasoning.budget_tokens`, and `reasoning.display` control normalized reasoning settings. Other paths keep their extra-body behavior.
+
+Set `reasoning.summary` to `detailed` for GPT summary requests. The upstream must support and return summaries.
+
 ## Reference
 
 | Property | Value |

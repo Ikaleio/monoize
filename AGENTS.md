@@ -195,3 +195,12 @@ that the documentation describes.
 - `cd docs && bun install && bun run build` must pass before a docs change merges.
 - Update README links when documentation URLs change.
 - Follow the visual identity in `DESIGN_SYSTEM.md` for any docs-site UI work.
+
+## Canonical URP ownership
+
+Use typed URP fields whenever URP can represent the value.
+Do not use internal fields or native replay snapshots to bypass typed URP.
+Add a typed URP field when shared protocol semantics need a new representation.
+Keep only unknown fields, source provenance, and native shape metadata in adapter extras.
+Typed values, including deletion and absence, take precedence over replay metadata.
+Do not retain a second text, summary, instruction, or request-control copy in internal fields.

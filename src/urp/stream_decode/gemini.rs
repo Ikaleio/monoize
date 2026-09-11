@@ -72,6 +72,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
             }
             let _ = tx
                 .send(UrpStreamEvent::ResponseStart {
+                    usage: None,
                     id: response_id.clone(),
                     model: urp.model.clone(),
                     extra_body: extra_body.clone(),
@@ -186,6 +187,7 @@ fn stream_error(code: &'static str, message: String) -> AppError {
 }
 
 fn append_fragment(current: &mut Node, next: &Node) -> bool {
+    if [ &*current, next ].iter().any(|node| matches!(node, Node::Text { signature, citations, .. } if signature.is_some() || !citations.is_empty())) { return false; }
     if !node_extra(current).is_empty() || !node_extra(next).is_empty() {
         return false;
     }
@@ -222,16 +224,27 @@ fn append_fragment(current: &mut Node, next: &Node) -> bool {
 
 fn initial_delta(node: &Node) -> Option<NodeDelta> {
     match node {
-        Node::Text { content, .. } => (!content.is_empty()).then(|| NodeDelta::Text {
-            content: content.clone(),
+        Node::Text {
+            signature,
+            citations,
+            content,
+            ..
+        } => (!content.is_empty() || signature.is_some() || !citations.is_empty()).then(|| {
+            NodeDelta::Text {
+                signature: signature.clone(),
+                citations: citations.clone(),
+                content: content.clone(),
+            }
         }),
         Node::Reasoning {
             content,
             encrypted,
             summary,
             source,
+            metadata,
             ..
         } => Some(NodeDelta::Reasoning {
+            metadata: metadata.clone(),
             content: content.clone(),
             encrypted: encrypted.clone(),
             summary: summary.clone(),
@@ -258,12 +271,21 @@ fn initial_delta(node: &Node) -> Option<NodeDelta> {
 
 fn node_header_from_node(node: &Node) -> NodeHeader {
     match node {
-        Node::Text { role, phase, .. } => NodeHeader::Text {
+        Node::Text {
+            signature,
+            citations,
+            role,
+            phase,
+            ..
+        } => NodeHeader::Text {
+            signature: signature.clone(),
+            citations: citations.clone(),
             id: node.id().cloned(),
             role: *role,
             phase: phase.clone(),
         },
-        Node::Reasoning { .. } => NodeHeader::Reasoning {
+        Node::Reasoning { metadata, .. } => NodeHeader::Reasoning {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
         },
         Node::ToolCall {

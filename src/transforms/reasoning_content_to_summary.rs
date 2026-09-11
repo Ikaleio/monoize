@@ -9,8 +9,6 @@ use serde_json::{Value, json};
 use std::any::Any;
 use std::collections::HashSet;
 
-const SUMMARY_FROM_PLAINTEXT_REASONING_KEY: &str = "_monoize_summary_from_plaintext_reasoning";
-
 #[derive(Debug, Deserialize)]
 struct Config {}
 
@@ -113,13 +111,14 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
         UrpStreamEvent::NodeDelta {
             node_index,
             delta,
-            extra_body,
+            extra_body: _,
             ..
         } => {
             let NodeDelta::Reasoning {
                 content,
                 encrypted,
                 summary,
+                metadata,
                 ..
             } = delta
             else {
@@ -130,10 +129,7 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
             }
             if let Some(text) = content.take().filter(|text| !text.is_empty()) {
                 *summary = Some(text);
-                extra_body.insert(
-                    SUMMARY_FROM_PLAINTEXT_REASONING_KEY.to_string(),
-                    Value::Bool(true),
-                );
+                metadata.summary_as_thinking = true;
             }
         }
         UrpStreamEvent::NodeDone {
@@ -157,7 +153,10 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
 
 fn rewrite_reasoning_node(node: &mut Node) {
     let Node::Reasoning {
-        content, summary, ..
+        content,
+        summary,
+        metadata,
+        ..
     } = node
     else {
         return;
@@ -169,6 +168,7 @@ fn rewrite_reasoning_node(node: &mut Node) {
         return;
     }
     *summary = Some(text);
+    metadata.summary_as_thinking = true;
 }
 
 inventory::submit!(TransformEntry {

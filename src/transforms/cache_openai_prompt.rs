@@ -234,11 +234,7 @@ fn build_prefix_key_material(
     if cfg.include_user_in_key {
         if let Some(user) = &req.user {
             material.insert("user".to_string(), Value::String(user.clone()));
-        } else if let Some(username) = req
-            .extra_body
-            .get("__monoize_username")
-            .and_then(Value::as_str)
-        {
+        } else if let Some(username) = req.context.username.as_deref() {
             material.insert("user".to_string(), Value::String(username.to_string()));
         }
     }
@@ -249,16 +245,16 @@ fn build_prefix_key_material(
 fn build_identity_key_material(req: &UrpRequest, material: &mut Map<String, Value>) {
     material.insert(
         "username".to_string(),
-        req.extra_body
-            .get("__monoize_username")
-            .and_then(Value::as_str)
+        req.context
+            .username
+            .as_deref()
             .map_or(Value::Null, |v| Value::String(v.to_string())),
     );
     material.insert(
         "api_key_id".to_string(),
-        req.extra_body
-            .get("__monoize_api_key_id")
-            .and_then(Value::as_str)
+        req.context
+            .api_key_id
+            .as_deref()
             .map_or(Value::Null, |v| Value::String(v.to_string())),
     );
 }

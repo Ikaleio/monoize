@@ -7,9 +7,8 @@ use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
     RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_INSTRUCTION_NODE_EXTRA_KEY,
-    RESPONSES_INSTRUCTIONS_EXTRA_KEY, RESPONSES_REASONING_CONTENT_EXTRA_KEY,
-    RESPONSES_REASONING_SUMMARY_EXTRA_KEY, RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ReasoningConfig,
-    ToolCallType, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ReasoningConfig, ToolCallType, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -237,6 +236,8 @@ fn text_part_with_phase(
         extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
     }
     Part::Text {
+        signature: None,
+        citations: Vec::new(),
         content: content.into(),
         extra_body,
     }
@@ -384,7 +385,12 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .map(normalize_reasoning_effort);
             (!reasoning_obj.is_empty()).then(|| ReasoningConfig {
                 effort,
-                extra_body: split_extra(reasoning_obj, &["effort"]),
+                summary: reasoning_obj
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                extra_body: split_extra(reasoning_obj, &["effort", "summary"]),
+                ..Default::default()
             })
         });
 
@@ -394,7 +400,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .collect::<Vec<_>>()
     });
 
-    let mut extra_body = split_extra(
+    let extra_body = split_extra(
         obj,
         &[
             "model",
@@ -412,14 +418,18 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             "user",
         ],
     );
-    if let Some(instructions) = obj.get("instructions") {
-        extra_body.insert(
-            RESPONSES_INSTRUCTIONS_EXTRA_KEY.to_string(),
-            instructions.clone(),
-        );
-    }
 
     Ok(UrpRequest {
+        context: Default::default(),
+        instructions_format: obj.get("instructions").map(|v| {
+            if v.is_null() {
+                crate::urp::InstructionsFormat::Null
+            } else if v.is_array() {
+                crate::urp::InstructionsFormat::Items
+            } else {
+                crate::urp::InstructionsFormat::Text
+            }
+        }),
         model,
         input: input_nodes,
         stream: obj.get("stream").and_then(|v| v.as_bool()),
@@ -782,7 +792,7 @@ fn decode_reasoning_node(
     item_obj: &Map<String, Value>,
     synthesize_missing_id: bool,
 ) -> Option<Node> {
-    let mut shared_extra = split_extra(
+    let shared_extra = split_extra(
         item_obj,
         &[
             "type",
@@ -793,18 +803,15 @@ fn decode_reasoning_node(
             "source",
         ],
     );
-    if let Some(summary) = item_obj.get("summary") {
-        shared_extra.insert(
-            RESPONSES_REASONING_SUMMARY_EXTRA_KEY.to_string(),
-            sanitized_reasoning_replay_value(summary),
-        );
-    }
-    if let Some(content) = item_obj.get("content") {
-        shared_extra.insert(
-            RESPONSES_REASONING_CONTENT_EXTRA_KEY.to_string(),
-            sanitized_reasoning_replay_value(content),
-        );
-    }
+    let metadata = crate::urp::ReasoningMetadata {
+        summary_parts: item_obj
+            .get("summary")
+            .and_then(crate::urp::reasoning::text_part_shapes),
+        content_parts: item_obj
+            .get("content")
+            .and_then(crate::urp::reasoning::text_part_shapes),
+        ..Default::default()
+    };
     let encrypted = item_obj.get("encrypted_content").map(|value| match value {
         Value::String(text) => Value::String(text.clone()),
         _ => value.clone(),
@@ -836,6 +843,7 @@ fn decode_reasoning_node(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         Node::Reasoning {
+            metadata,
             id: id.or_else(|| synthesize_missing_id.then(crate::urp::synthetic_reasoning_id)),
             content: text,
             encrypted,
@@ -844,24 +852,6 @@ fn decode_reasoning_node(
             extra_body: shared_extra,
         }
     })
-}
-
-fn sanitized_reasoning_replay_value(value: &Value) -> Value {
-    let mut value = value.clone();
-    match &mut value {
-        Value::Object(object) => {
-            object.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
-        }
-        Value::Array(items) => {
-            for item in items {
-                if let Some(object) = item.as_object_mut() {
-                    object.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
-                }
-            }
-        }
-        _ => {}
-    }
-    value
 }
 
 fn reasoning_content_to_text(item_obj: &Map<String, Value>) -> Option<String> {
@@ -1054,7 +1044,24 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     );
     extra_body.insert(
         RESPONSES_RESPONSE_SOURCE_EXTRA_KEY.to_string(),
-        Value::Object(split_extra(obj, &[]).into_iter().collect()),
+        Value::Object(
+            split_extra(
+                obj,
+                &[
+                    "id",
+                    "object",
+                    "created",
+                    "created_at",
+                    "model",
+                    "output",
+                    "usage",
+                    "status",
+                    "incomplete_details",
+                ],
+            )
+            .into_iter()
+            .collect(),
+        ),
     );
 
     Ok(UrpResponse {
@@ -1090,7 +1097,7 @@ fn summary_to_text(item_obj: &Map<String, Value>) -> Option<String> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
+pub(crate) fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
     serde_json::from_value::<OpenAiResponsesUsage>(Value::Object(obj.clone()))
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
@@ -1198,11 +1205,16 @@ fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
     None
 }
 
-
 pub(crate) fn incomplete_finish_reason(obj: &Map<String, Value>) -> FinishReason {
-    match obj.get("incomplete_details").and_then(|value| value.get("reason")).and_then(Value::as_str) {
+    match obj
+        .get("incomplete_details")
+        .and_then(|value| value.get("reason"))
+        .and_then(Value::as_str)
+    {
         Some("content_filter") => FinishReason::ContentFilter,
-        Some("max_output_tokens" | "max_messages" | "model_context_window_exceeded") => FinishReason::Length,
+        Some("max_output_tokens" | "max_messages" | "model_context_window_exceeded") => {
+            FinishReason::Length
+        }
         _ => FinishReason::Other,
     }
 }

@@ -413,7 +413,7 @@ SF-3a. JSON `null` is a present `when_equals` value. It MUST NOT be treated as a
 
 SF-4. If `when_equals` is present, `field_set` MUST write `value` only when the current value at `path` is exactly equal to `when_equals` under JSON structural equality. A missing path or a different value MUST be a no-op and MUST NOT create intermediate objects.
 
-SF-5. On a request, a path that starts with `reasoning.` MUST target `request.reasoning.extra_body`. Every other path MUST target `request.extra_body`.
+SF-5. On a request, a recognized `reasoning.*` path MUST target the corresponding typed `ReasoningConfig` field. Supported typed controls include effort, summary, mode, budget_tokens, and display. Unknown reasoning paths target `request.reasoning.extra_body`. Every other path targets `request.extra_body`. Setting or removing a typed field MUST NOT leave a stale native override. Conditional equality MUST compare the typed value for recognized paths.
 
 SF-6. On a non-stream response, `path` MUST target `response.extra_body`. On a stream event, `path` MUST target the event `extra_body`.
 
@@ -630,7 +630,7 @@ PRTS-7. The transform MUST preserve `encrypted`, `source`, and node-local `extra
 
 PRTS-8. Empty plaintext content MUST NOT create a non-empty summary.
 
-PRTS-9. On streams, if the transform moves non-empty `NodeDelta.delta.content` into `NodeDelta.delta.summary`, it MUST set `NodeDelta.extra_body["_monoize_summary_from_plaintext_reasoning"] = true` on that same stream event. The marker means the summary delta was originally raw plaintext reasoning and MAY be emitted by a downstream Messages encoder as incremental `thinking_delta`.
+PRTS-9. On streams, if the transform moves non-empty `NodeDelta.delta.content` into `NodeDelta.delta.summary`, it MUST set `NodeDelta::Reasoning.metadata.summary_as_thinking = true` on that same stream event. The marker means the summary delta was originally raw plaintext reasoning and MAY be emitted by a downstream Messages encoder as incremental `thinking_delta`.
 
 PRTS-10. PRTS-9 MUST NOT be applied to terminal `NodeDone.node.extra_body` or `ResponseDone.output[].extra_body`. Terminal correctness is defined by `NodeDone.node` and `ResponseDone.output` after applying PRTS-4 through PRTS-8 to `Reasoning` nodes.
 
@@ -640,13 +640,13 @@ RSRC-2. Config MUST be an empty object.
 
 RSRC-3. On non-stream responses, the transform MUST inspect only ordinary `Reasoning` nodes.
 
-RSRC-4. If a `Reasoning` node carries non-empty `summary`, the transform MUST mark that node for OpenWebUI-compatible raw chain-of-thought emission by setting node-local `extra_body.openwebui_reasoning_content = true`.
+RSRC-4. If a `Reasoning` node carries non-empty `summary`, the transform MUST select the typed reasoning presentation option for the Chat reasoning_content alias. It MUST NOT create an unknown wire field or copy the summary string.
 
 RSRC-5. The transform MUST NOT modify `content`, `summary`, or `encrypted`.
 
 RSRC-6. On streams, the transform MAY annotate reasoning `NodeDelta` event `extra_body` for downstream encoders, but terminal correctness is defined by marking the final `Reasoning` nodes in `NodeDone.node` and `ResponseDone.output`.
 
-RSRC-7. When a downstream Chat Completions encoder sees `openwebui_reasoning_content = true` on a reasoning summary node, it MUST emit that summary through OpenWebUI-compatible raw-CoT fields for non-streaming and streaming encodings.
+RSRC-7. A downstream Chat encoder MUST honor the typed reasoning_content presentation option using the current typed summary or content. The option MUST NOT relabel a summary as raw CoT in canonical storage.
 
 RCD-1. `reasoning_inject_content_field` is response-phase only.
 
@@ -659,15 +659,15 @@ RCD-3. For each ordinary `Reasoning` node or reasoning `NodeDelta`, the transfor
 
 RCD-4. `encrypted` MUST NOT contribute to the resolved value.
 
-RCD-5. If a resolved value exists on a terminal `Reasoning` node, the transform MUST set node-local `extra_body.inject_reasoning_content` to that string.
+RCD-5. If a resolved value exists on a terminal `Reasoning` node, the transform MUST select a typed reasoning_content alias option. It MUST NOT retain a second text copy.
 
-RCD-6. If a resolved value exists on a reasoning `NodeDelta`, the transform MAY set event-local `extra_body.inject_reasoning_content` to that string.
+RCD-6. If a resolved value exists on a reasoning `NodeDelta`, the transform MAY select the corresponding typed presentation option on the delta.
 
 RCD-7. If a reasoning node or delta carries only encrypted reasoning and no plaintext `content` or `summary`, the transform MUST inject nothing.
 
 RCD-8. The transform MUST be independent of `reasoning_summary_to_raw_cot`. Both transforms MAY be enabled simultaneously.
 
-RCD-9. When a downstream Chat Completions encoder sees non-empty `inject_reasoning_content`, it MUST emit the additional OpenRouter-compatible or DeepSeek-compatible downstream reasoning-content field without removing normal reasoning fields.
+RCD-9. A downstream Chat encoder MUST emit a selected reasoning_content alias from current typed text without removing normal reasoning fields. Internal presentation controls MUST NOT appear on the wire.
 
 SER-1. `reasoning_strip_encrypted` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
 

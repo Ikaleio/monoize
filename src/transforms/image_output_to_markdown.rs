@@ -147,6 +147,8 @@ fn append_images_as_markdown_nodes(output: &mut Vec<crate::urp::Node>, config: &
             }
         } else {
             output.push(crate::urp::Node::Text {
+                signature: None,
+                citations: Vec::new(),
                 id: None,
                 role: crate::urp::OrdinaryRole::Assistant,
                 content: pending_appended,

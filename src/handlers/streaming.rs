@@ -625,7 +625,9 @@ pub(super) async fn forward_stream_typed(
                         {
                             convert_assistant_images_to_markdown(&mut resp);
                         }
-                        if let Some(history) = &history_context { history.finish_response(&mut resp).await; }
+                        if let Some(history) = &history_context {
+                            history.finish_response(&mut resp).await;
+                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -1069,11 +1071,16 @@ pub(super) async fn forward_stream_typed(
                                     None => (transformed_rx, None),
                                 };
 
-                            let (encode_input_rx, history_handle) = if let Some(history) = history_for_stream {
-                                let (history_tx, history_rx) = mpsc::channel(64);
-                                let handle = tokio::spawn(history.forward_stream(encode_input_rx, history_tx));
-                                (history_rx, Some(handle))
-                            } else { (encode_input_rx, None) };
+                            let (encode_input_rx, history_handle) =
+                                if let Some(history) = history_for_stream {
+                                    let (history_tx, history_rx) = mpsc::channel(64);
+                                    let handle = tokio::spawn(
+                                        history.forward_stream(encode_input_rx, history_tx),
+                                    );
+                                    (history_rx, Some(handle))
+                                } else {
+                                    (encode_input_rx, None)
+                                };
                             let encode_handle =
                                 crate::request_capture::spawn_with_sse_capture(async move {
                                     encode_urp_stream(
@@ -1104,7 +1111,9 @@ pub(super) async fn forward_stream_typed(
                             if let Some(handle) = reconstruct_handle {
                                 let _ = handle.await;
                             }
-                            if let Some(handle) = history_handle { let _ = handle.await; }
+                            if let Some(handle) = history_handle {
+                                let _ = handle.await;
+                            }
                             decode_result
                                 .unwrap_or_else(|e| {
                                     Err(AppError::new(

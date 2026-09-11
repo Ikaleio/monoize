@@ -146,7 +146,12 @@ pub(crate) async fn record_visible_stream_event_delta(
 ) {
     let content = match event {
         urp::UrpStreamEvent::NodeDelta {
-            delta: urp::NodeDelta::Text { content },
+            delta:
+                urp::NodeDelta::Text {
+                    signature: _,
+                    citations: _,
+                    content,
+                },
             ..
         }
         | urp::UrpStreamEvent::NodeDelta {

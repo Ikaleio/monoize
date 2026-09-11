@@ -9,6 +9,10 @@ This transform removes the JSON value at the configured extra-body path. In the 
 
 When the path does not exist, the transform changes nothing.
 
+Request paths `reasoning.effort`, `reasoning.summary`, `reasoning.mode`, `reasoning.budget_tokens`, and `reasoning.display` control normalized reasoning settings. Other paths keep their extra-body behavior.
+
+Removing a reasoning setting also removes its native value. Protocol conversion cannot restore it from an earlier request.
+
 ## Reference
 
 | Property | Value |

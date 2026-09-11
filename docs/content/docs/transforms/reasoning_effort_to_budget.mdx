@@ -7,6 +7,8 @@ description: Map the request reasoning effort level to a thinking-token budget.
 
 This transform maps the request reasoning effort level (`low`, `medium`, `high`, and optionally `xhigh` or `max`) to a numeric thinking-token budget for upstreams that take budgets instead of effort labels.
 
+The mapped budget becomes the normalized reasoning budget. Messages emits it for enabled thinking; Gemini emits it as `thinkingBudget`.
+
 ## Reference
 
 | Property | Value |

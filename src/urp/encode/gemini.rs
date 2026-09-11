@@ -205,21 +205,29 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             generation_config.insert("responseJsonSchema".to_string(), json_schema.schema.clone());
         }
     }
-    if let Some(effort) = req
-        .reasoning
-        .as_ref()
-        .and_then(|reasoning| reasoning.effort.as_ref())
-    {
-        let mut thinking = generation_config
-            .remove("thinkingConfig")
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        thinking.remove("thinkingLevel");
-        thinking.insert(
-            "thinkingBudget".to_string(),
-            json!(effort_to_budget(effort)),
-        );
-        generation_config.insert("thinkingConfig".to_string(), Value::Object(thinking));
+    let mut thinking = generation_config
+        .remove("thinkingConfig")
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    for key in ["thinkingLevel", "thinkingBudget", "includeThoughts"] {
+        thinking.remove(key);
+    }
+    if let Some(reasoning) = &req.reasoning {
+        if reasoning.disabled() {
+            thinking.insert("thinkingBudget".into(), json!(0));
+        } else if let Some(budget) = reasoning.budget_tokens {
+            thinking.insert("thinkingBudget".into(), json!(budget));
+        } else if let Some(effort) = &reasoning.effort {
+            thinking.insert("thinkingLevel".into(), json!(effort));
+        } else if reasoning.mode.as_deref() == Some("adaptive") {
+            thinking.insert("thinkingBudget".into(), json!(-1));
+        }
+        if let Some(summary) = &reasoning.summary {
+            thinking.insert("includeThoughts".into(), json!(summary != "none"));
+        }
+    }
+    if !thinking.is_empty() {
+        generation_config.insert("thinkingConfig".into(), Value::Object(thinking));
     }
     if !generation_config.is_empty() {
         obj.insert(
@@ -429,15 +437,6 @@ fn encode_audio_part(source: &AudioSource) -> Value {
     }
 }
 
-fn effort_to_budget(effort: &str) -> u32 {
-    match effort {
-        "none" => 0,
-        "low" => 512,
-        "high" => 2048,
-        _ => 1024,
-    }
-}
-
 fn finish_reason_to_gemini(finish_reason: Option<FinishReason>) -> &'static str {
     match finish_reason {
         Some(FinishReason::Length) => "MAX_TOKENS",
@@ -501,11 +500,19 @@ fn append_node_to_pending_gemini_message(
 fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap<String, Value>)> {
     let (role, mut part, mut extra) = match node {
         Node::Text {
+            signature,
+
             role,
             content,
             extra_body,
             ..
-        } => Some((*role, json!({ "text": content }), extra_body.clone())),
+        } => {
+            let mut part = json!({"text":content});
+            if let Some(signature) = signature {
+                part["thoughtSignature"] = signature.clone();
+            }
+            Some((*role, part, extra_body.clone()))
+        }
         Node::Image {
             role,
             source,
@@ -589,6 +596,11 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
     if let Some(Value::Object(native)) = extra.remove(GEMINI_PART_EXTRA_KEY) {
         if let Some(obj) = part.as_object_mut() {
             for (key, value) in native {
+                if matches!(node, Node::Text { .. } | Node::Reasoning { .. })
+                    && matches!(key.as_str(), "text" | "thought" | "thoughtSignature")
+                {
+                    continue;
+                }
                 obj.entry(key).or_insert(value);
             }
         }
@@ -604,15 +616,12 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
 }
 
 fn bound_signature_call_id(node: &Node) -> Option<String> {
-    let Node::Reasoning { id, extra_body, .. } = node else {
+    let Node::Reasoning { id, metadata, .. } = node else {
         return None;
     };
-    id.as_deref().and_then(signature_call_id).or_else(|| {
-        extra_body
-            .get(crate::urp::REASONING_ENVELOPE_ITEM_ID_EXTRA_KEY)
-            .and_then(Value::as_str)
-            .and_then(signature_call_id)
-    })
+    id.as_deref()
+        .and_then(signature_call_id)
+        .or_else(|| metadata.item_id.as_deref().and_then(signature_call_id))
 }
 
 fn is_call_signature(node: &Node) -> bool {

@@ -9,6 +9,10 @@ description: 設定したパスの JSON 値をリクエストまたはレスポ�
 
 パスが存在しない場合、この変換は何も変更しません。
 
+リクエストの `reasoning.effort`、`reasoning.summary`、`reasoning.mode`、`reasoning.budget_tokens`、`reasoning.display` は共通の推論設定を操作します。他のパスは引き続き extra-body フィールドを操作します。
+
+推論設定を削除すると、対応するネイティブ値も削除されます。プロトコル変換は過去のリクエストから値を復元しません。
+
 ## リファレンス
 
 | 項目 | 値 |

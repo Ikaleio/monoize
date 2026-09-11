@@ -9,6 +9,10 @@ description: 從請求或回應中刪除設定路徑上的 JSON 值。
 
 路徑不存在時，此變換不做任何修改。
 
+請求路徑 `reasoning.effort`、`reasoning.summary`、`reasoning.mode`、`reasoning.budget_tokens` 和 `reasoning.display` 操作統一推理設定。其他路徑仍操作 extra-body 欄位。
+
+刪除推理設定時會同時移除其原生值。協定轉換不會從舊請求中恢復已刪除的設定。
+
 ## 參考資訊
 
 | 屬性 | 值 |

@@ -79,7 +79,20 @@ impl Transform for FieldRemoveTransform {
             .downcast_ref::<Config>()
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
-            UrpData::Request(req) => remove_extra_path(&mut req.extra_body, &cfg.path),
+            UrpData::Request(req) => {
+                if let Some(path) = cfg.path.strip_prefix("reasoning.") {
+                    if let Some(reasoning) = req.reasoning.as_mut() {
+                        if !reasoning
+                            .set_control(path, None)
+                            .map_err(TransformError::Apply)?
+                        {
+                            remove_extra_path(&mut reasoning.extra_body, path);
+                        }
+                    }
+                } else {
+                    remove_extra_path(&mut req.extra_body, &cfg.path);
+                }
+            }
             UrpData::Response(resp) => remove_extra_path(&mut resp.extra_body, &cfg.path),
             UrpData::Stream(event) => match event {
                 crate::urp::UrpStreamEvent::ResponseStart { extra_body, .. }

@@ -137,6 +137,8 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
         let Some(start) = rest.find(&open) else {
             if !rest.is_empty() {
                 nodes.push(Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: None,
                     role: OrdinaryRole::Assistant,
                     content: rest.to_string(),
@@ -149,6 +151,8 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
         let before = &rest[..start];
         if !before.is_empty() {
             nodes.push(Node::Text {
+                signature: None,
+                citations: Vec::new(),
                 id: None,
                 role: OrdinaryRole::Assistant,
                 content: before.to_string(),
@@ -160,6 +164,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
         let Some(end) = after_open.find(&close) else {
             if !after_open.is_empty() {
                 nodes.push(Node::Reasoning {
+                    metadata: Default::default(),
                     id: None,
                     content: Some(after_open.to_string()),
                     encrypted: None,
@@ -173,6 +178,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
         let reasoning = &after_open[..end];
         if !reasoning.is_empty() {
             nodes.push(Node::Reasoning {
+                metadata: Default::default(),
                 id: None,
                 content: Some(reasoning.to_string()),
                 encrypted: None,
@@ -207,7 +213,12 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
             let Some(in_reasoning) = state.in_reasoning.get_mut(node_index) else {
                 return;
             };
-            if let NodeDelta::Text { content } = delta {
+            if let NodeDelta::Text {
+                signature: _,
+                citations: _,
+                content,
+            } = delta
+            {
                 if content.contains(&open) || *in_reasoning {
                     let mut s = content.clone();
                     if let Some(pos) = s.find(&open) {
@@ -219,6 +230,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                         *in_reasoning = false;
                     }
                     *delta = NodeDelta::Reasoning {
+                        metadata: Default::default(),
                         content: Some(s),
                         encrypted: None,
                         summary: None,

@@ -252,7 +252,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
         }
 
         match event {
-            UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
+            UrpStreamEvent::ResponseStart {
+                usage,
+                id,
+                extra_body,
+                ..
+            } => {
                 response_id = id.clone();
                 created = Some(
                     extra_body
@@ -286,6 +291,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         Value::Array(Vec::new()),
                     )
                 };
+                payload["response"]["status"] = json!("in_progress");
+                payload["response"]["output"] = json!([]);
+                payload["response"].as_object_mut().unwrap().remove("usage");
+                if let Some(usage) = usage {
+                    payload["response"]["usage"] =
+                        crate::urp::encode::openai_responses::encode_usage(&usage);
+                }
                 for key in ["store", "previous_response_id"] {
                     if let Some(value) = extra_body.get(key) {
                         payload["response"][key] = value.clone();
@@ -566,10 +578,16 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     .await?;
                 }
                 match delta {
-                    urp::NodeDelta::Text { content } => {
+                    urp::NodeDelta::Text {
+                        signature: _,
+                        citations: _,
+                        content,
+                    } => {
                         append_node_delta_to_completed_item(
                             node_state,
                             &urp::NodeDelta::Text {
+                                signature: None,
+                                citations: Vec::new(),
                                 content: content.clone(),
                             },
                             None,
@@ -616,6 +634,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .await?;
                     }
                     urp::NodeDelta::Reasoning {
+                        metadata,
                         content,
                         encrypted,
                         summary,
@@ -624,6 +643,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         append_node_delta_to_completed_item(
                             node_state,
                             &urp::NodeDelta::Reasoning {
+                                metadata: metadata.clone(),
                                 content: content.clone(),
                                 encrypted: encrypted.clone(),
                                 summary: summary.clone(),
@@ -832,6 +852,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         append_node_delta_to_completed_item(
                             &mut node_state,
                             &urp::NodeDelta::Reasoning {
+                                metadata: Default::default(),
                                 content: content.clone(),
                                 encrypted: encrypted.clone(),
                                 summary: summary.clone(),
@@ -1085,6 +1106,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             append_node_delta_to_completed_item(
                                 &mut node_state,
                                 &urp::NodeDelta::Text {
+                                    signature: None,
+                                    citations: Vec::new(),
                                     content: content.clone(),
                                 },
                                 None,
@@ -1126,6 +1149,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             append_node_delta_to_completed_item(
                                 &mut node_state,
                                 &urp::NodeDelta::Reasoning {
+                                    metadata: Default::default(),
                                     content: content.clone(),
                                     encrypted: encrypted.clone(),
                                     summary: summary.clone(),
@@ -1597,7 +1621,7 @@ fn node_header_id(header: &urp::NodeHeader) -> Option<String> {
         | urp::NodeHeader::Audio { id, .. }
         | urp::NodeHeader::File { id, .. }
         | urp::NodeHeader::Refusal { id }
-        | urp::NodeHeader::Reasoning { id }
+        | urp::NodeHeader::Reasoning { metadata: _, id }
         | urp::NodeHeader::ToolCall { id, .. }
         | urp::NodeHeader::ProviderItem { id, .. }
         | urp::NodeHeader::ToolResult { id, .. } => id.clone(),
@@ -2050,6 +2074,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             Value::Object(obj)
         }
         urp::Node::Reasoning {
+            metadata: _,
             id,
             content,
             encrypted,
@@ -2359,7 +2384,14 @@ fn append_node_delta_to_completed_item(
         return;
     };
     match (node_state.zone, delta) {
-        (ResponsesOutputZone::Message, urp::NodeDelta::Text { content }) => {
+        (
+            ResponsesOutputZone::Message,
+            urp::NodeDelta::Text {
+                signature: _,
+                citations: _,
+                content,
+            },
+        ) => {
             append_string_field_to_message_content(&mut item, "output_text", "text", content);
         }
         (ResponsesOutputZone::Message, urp::NodeDelta::Refusal { content }) => {
@@ -2368,6 +2400,7 @@ fn append_node_delta_to_completed_item(
         (
             ResponsesOutputZone::Reasoning,
             urp::NodeDelta::Reasoning {
+                metadata: _,
                 content,
                 encrypted,
                 summary,

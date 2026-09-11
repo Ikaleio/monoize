@@ -7,6 +7,8 @@ description: 把请求的推理力度等级映射为思考 token 预算。
 
 此变换把请求的推理力度等级（`low`、`medium`、`high`，可选 `xhigh` 或 `max`）映射为数值型思考 token 预算，用于接受预算而非力度标签的上游。
 
+映射结果写入统一推理预算。Messages 在启用思考时输出该预算；Gemini 将其输出为 `thinkingBudget`。
+
 ## 参考信息
 
 | 属性 | 值 |

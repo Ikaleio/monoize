@@ -200,6 +200,8 @@ fn text_part_with_phase(
         extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
     }
     Part::Text {
+        signature: None,
+        citations: Vec::new(),
         content: content.into(),
         extra_body,
     }
@@ -387,14 +389,20 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             Some(v) => v,
             None => continue,
         };
-        if msg_obj.get("configuration_update").is_some_and(Value::is_object) {
+        if msg_obj
+            .get("configuration_update")
+            .is_some_and(Value::is_object)
+        {
             input_nodes.push(Node::ProviderItem {
                 id: None,
                 origin_protocol: ProviderProtocol::ChatCompletion,
                 role: OrdinaryRole::System,
                 item_type: "configuration_update".to_string(),
                 body: crate::urp::encode::sanitize_provider_item_wire_body(raw_msg),
-                extra_body: HashMap::from([(crate::urp::CHAT_MESSAGE_ITEM_EXTRA_KEY.to_string(), Value::Bool(true))]),
+                extra_body: HashMap::from([(
+                    crate::urp::CHAT_MESSAGE_ITEM_EXTRA_KEY.to_string(),
+                    Value::Bool(true),
+                )]),
             });
             continue;
         }
@@ -627,6 +635,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
 
     Ok(UrpRequest {
+        context: Default::default(),
+        instructions_format: None,
         model,
         input: input_nodes,
         stream: obj.get("stream").and_then(|v| v.as_bool()),
@@ -860,7 +870,13 @@ fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
     let mut extra_body = HashMap::new();
     if let Some(reasoning) = reasoning_obj {
         let mut reasoning = reasoning.clone();
-        reasoning.retain(|key, _| !is_internal_extra_key(key));
+        reasoning.retain(|key, _| {
+            !is_internal_extra_key(key)
+                && !matches!(
+                    key.as_str(),
+                    "effort" | "summary" | "max_tokens" | "enabled"
+                )
+        });
         extra_body.insert(
             CHAT_REASONING_CONFIG_EXTRA_KEY.to_string(),
             Value::Object(reasoning),
@@ -868,13 +884,41 @@ fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
     }
     if let Some(thinking) = thinking_obj {
         let mut thinking = thinking.clone();
-        thinking.retain(|key, _| !is_internal_extra_key(key));
+        thinking.retain(|key, _| {
+            !is_internal_extra_key(key)
+                && !matches!(key.as_str(), "type" | "budget_tokens" | "display")
+        });
         extra_body.insert(
             CHAT_THINKING_CONFIG_EXTRA_KEY.to_string(),
             Value::Object(thinking),
         );
     }
-    Some(ReasoningConfig { effort, extra_body })
+    Some(ReasoningConfig {
+        effort,
+        summary: reasoning_obj
+            .and_then(|v| v.get("summary"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        mode: thinking_obj
+            .and_then(|v| v.get("type"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                reasoning_obj
+                    .and_then(|v| v.get("enabled"))
+                    .and_then(Value::as_bool)
+                    .map(|v| if v { "enabled" } else { "disabled" }.to_string())
+            }),
+        budget_tokens: thinking_obj
+            .and_then(|v| v.get("budget_tokens"))
+            .or_else(|| reasoning_obj.and_then(|v| v.get("max_tokens")))
+            .and_then(Value::as_u64),
+        display: thinking_obj
+            .and_then(|v| v.get("display"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        extra_body,
+    })
 }
 
 fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Part>) {
@@ -910,14 +954,14 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                 .flatten()
                 .filter(|value| !value.is_null())
                 .cloned();
-            let mut raw_detail = detail_obj.clone();
-            raw_detail.retain(|key, _| !is_internal_extra_key(key));
+            let raw_detail = crate::urp::reasoning::detail_metadata(detail_obj);
             let mut extra_body = HashMap::new();
             extra_body.insert(
                 CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
                 Value::Object(raw_detail),
             );
             parts.push(Part::Reasoning {
+                metadata: Default::default(),
                 id,
                 content,
                 encrypted,
@@ -945,6 +989,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
         });
     if let Some((content, surface)) = scalar {
         parts.push(Part::Reasoning {
+            metadata: Default::default(),
             id: None,
             content: Some(content.to_string()),
             encrypted: None,
@@ -962,6 +1007,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
         .filter(|value| !value.is_empty())
     {
         parts.push(Part::Reasoning {
+            metadata: Default::default(),
             id: None,
             content: None,
             encrypted: Some(Value::String(opaque.to_string())),

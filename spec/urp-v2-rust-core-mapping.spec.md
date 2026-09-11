@@ -45,6 +45,8 @@ RTYPE-4. If the Rust item names remain unsuffixed, they MUST still use these exa
 UrpRequest {
   model: String,
   input: Vec<Node>,
+  instructions_format: Option<InstructionsFormat>,
+  context: RequestContext,
   stream: Option<bool>,
   temperature: Option<f64>,
   top_p: Option<f64>,
@@ -244,7 +246,7 @@ RTYPE-9. The Rust core layer MUST define exactly one canonical streaming enum fa
 
 ```text
 UrpStreamEvent =
-  | ResponseStart { id: String, model: String, extra_body: HashMap<String, JsonValue> }
+  | ResponseStart { id: String, model: String, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
   | NodeStart { node_index: u32, header: NodeHeader, extra_body: HashMap<String, JsonValue> }
   | NodeDelta { node_index: u32, delta: NodeDelta, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
   | NodeDone { node_index: u32, node: Node, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
@@ -545,3 +547,14 @@ TASK-3. Task 8 target: shared decode helpers in `src/urp/decode/*` MUST emit fla
 TASK-4. Task 9 target: stream helpers in `src/urp/stream_decode/*`, `src/urp/stream_encode/*`, and `src/urp/stream_helpers.rs` MUST use canonical node lifecycle events from RTYPE-9 through RTYPE-10 plus SHELP-1 through SHELP-18, with `ResponseDone.output` as final authority.
 
 TASK-5. Tasks 6 through 9 are not complete if any helper still depends on a hidden canonical grouped-message assumption, including any helper whose core inputs are grouped `parts`, grouped `items`, or cached merged message wrappers.
+
+## Typed semantic metadata
+
+RTYPE-NEW-1. `ReasoningConfig` MUST expose optional effort, summary, mode, budget_tokens, and display fields. Unknown configuration members remain in extra_body.
+RTYPE-NEW-2. Reasoning nodes, headers, and deltas MUST carry `ReasoningMetadata`. It includes redacted, downstream_only, chat_content, summary_as_thinking, and optional item_id.
+RTYPE-NEW-3. Optional summary_parts and content_parts describe UTF-8 byte lengths and unknown part members. They MUST NOT retain text copies.
+RTYPE-NEW-4. A text-part encoder MUST use current text. Invalid lengths or UTF-8 boundaries MUST produce one rebuilt part without old text.
+RTYPE-NEW-5. Text nodes, headers, deltas, and temporary bridge parts MUST carry citations and an optional signature.
+RTYPE-NEW-6. `ResponseStart.usage` MUST use `Option<Usage>`. No JSON serialization round trip is permitted for internal start usage.
+RTYPE-NEW-7. `UrpRequest.context` MUST hold runtime identities independently of extra_body. Serialization and JavaScript transform round trips MUST NOT expose or replace trusted context.
+RTYPE-NEW-8. The typed additions in this section extend the type listings above. Absence remains authoritative at every adapter boundary.

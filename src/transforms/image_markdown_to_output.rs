@@ -137,6 +137,8 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
     for node in nodes.drain(..) {
         match node {
             Node::Text {
+                signature: _,
+                citations: _,
                 id,
                 role: OrdinaryRole::Assistant,
                 content,
@@ -146,6 +148,8 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
                 let (cleaned, images) = extract_markdown_images_from_text(&content);
                 if !cleaned.is_empty() {
                     rewritten.push(Node::Text {
+                        signature: None,
+                        citations: Vec::new(),
                         id,
                         role: OrdinaryRole::Assistant,
                         content: cleaned,
@@ -314,6 +318,8 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             node_index,
             header:
                 NodeHeader::Text {
+                    signature: _,
+                    citations: _,
                     id,
                     role: OrdinaryRole::Assistant,
                     phase,
@@ -337,7 +343,12 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
         }
         UrpStreamEvent::NodeDelta {
             node_index,
-            delta: NodeDelta::Text { content },
+            delta:
+                NodeDelta::Text {
+                    signature: _,
+                    citations: _,
+                    content,
+                },
             usage,
             extra_body,
         } => {
@@ -366,6 +377,8 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             node_index,
             node:
                 Node::Text {
+                    signature: _,
+                    citations: _,
                     id,
                     role: OrdinaryRole::Assistant,
                     content,
@@ -406,6 +419,8 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                 emitted.push(UrpStreamEvent::NodeDone {
                     node_index: *node_index,
                     node: Node::Text {
+                        signature: None,
+                        citations: Vec::new(),
                         id: id.clone(),
                         role: OrdinaryRole::Assistant,
                         content: std::mem::take(&mut node_state.cleaned_content),
@@ -441,6 +456,8 @@ fn ensure_text_node_start(
     emitted.push(UrpStreamEvent::NodeStart {
         node_index,
         header: NodeHeader::Text {
+            signature: None,
+            citations: Vec::new(),
             id: node_state.header_id.clone(),
             role: OrdinaryRole::Assistant,
             phase: node_state.header_phase.clone(),
@@ -495,7 +512,11 @@ fn emit_node_segments(
                 node_state.cleaned_content.push_str(&text);
                 emitted.push(UrpStreamEvent::NodeDelta {
                     node_index,
-                    delta: NodeDelta::Text { content: text },
+                    delta: NodeDelta::Text {
+                        signature: None,
+                        citations: Vec::new(),
+                        content: text,
+                    },
                     usage: None,
                     extra_body: delta_extra_body.clone(),
                 });

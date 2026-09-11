@@ -8,9 +8,8 @@ use crate::urp::{
     FILE_ID_ORIGIN_EXTRA_KEY, FILE_ID_ORIGIN_MESSAGES, FileSource, FinishReason, ImageSource,
     InputDetails, JsonSchemaDefinition, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
     MESSAGES_THINKING_CONFIG_EXTRA_KEY, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
-    REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ResponseFormat, StopControl, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage, unwrap_reasoning_signature_sigil,
+    ReasoningConfig, ResponseFormat, StopControl, ToolChoice, ToolResultContent, UrpRequest,
+    UrpResponse, Usage, unwrap_reasoning_signature_sigil,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -36,17 +35,14 @@ fn decode_anthropic_thinking_block(bobj: &Map<String, Value>) -> Option<Node> {
         },
         None => (None, None),
     };
-    let mut extra_body = split_extra(bobj, &["type", "thinking", "signature"]);
-    // Mark as downstream-only when we have a summary but no encrypted content to pass back.
-    // When signature IS present (even without mz sigil), it's encrypted reasoning that can
-    // be round-tripped — not a mere presentation artifact.
-    if thinking.is_some() && id.is_none() && encrypted.is_none() {
-        extra_body.insert(
-            REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY.to_string(),
-            Value::Bool(true),
-        );
-    }
+    let extra_body = split_extra(bobj, &["type", "thinking", "signature"]);
+    let metadata = crate::urp::ReasoningMetadata {
+        downstream_only: thinking.is_some() && id.is_none() && encrypted.is_none(),
+        summary_as_thinking: true,
+        ..Default::default()
+    };
     Some(Node::Reasoning {
+        metadata,
         id,
         content: None,
         encrypted,
@@ -69,12 +65,12 @@ fn decode_anthropic_redacted_thinking_block(bobj: &Map<String, Value>) -> Option
         },
         None => (None, raw_data.clone()),
     };
-    let mut extra_body = split_extra(bobj, &["type", "data"]);
-    extra_body.insert(
-        REASONING_KIND_EXTRA_KEY.to_string(),
-        Value::String(REASONING_KIND_REDACTED_THINKING.to_string()),
-    );
+    let extra_body = split_extra(bobj, &["type", "data"]);
     Some(Node::Reasoning {
+        metadata: crate::urp::ReasoningMetadata {
+            redacted: true,
+            ..Default::default()
+        },
         id,
         content: None,
         encrypted: Some(encrypted),
@@ -82,16 +78,6 @@ fn decode_anthropic_redacted_thinking_block(bobj: &Map<String, Value>) -> Option
         source: None,
         extra_body,
     })
-}
-
-fn effort_from_anthropic_budget(budget: u64) -> Option<String> {
-    match budget {
-        0 => None,
-        1..=1024 => Some("low".to_string()),
-        1025..=4096 => Some("medium".to_string()),
-        4097..=16384 => Some("high".to_string()),
-        _ => Some("xhigh".to_string()),
-    }
 }
 
 fn decode_anthropic_reasoning_config(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
@@ -111,33 +97,53 @@ fn decode_anthropic_reasoning_config(obj: &Map<String, Value>) -> Option<Reasoni
         .as_ref()
         .and_then(|config| config.get("effort"))
         .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| {
-            let thinking = thinking.as_ref()?;
-            match thinking.get("type").and_then(Value::as_str) {
-                Some("disabled") => Some("none".to_string()),
-                Some("enabled") => thinking
-                    .get("budget_tokens")
-                    .and_then(Value::as_u64)
-                    .and_then(effort_from_anthropic_budget),
-                _ => None,
-            }
-        });
+        .map(str::to_string);
 
+    let mode = thinking
+        .as_ref()
+        .and_then(|v| v.get("type"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let budget_tokens = thinking
+        .as_ref()
+        .and_then(|v| v.get("budget_tokens"))
+        .and_then(Value::as_u64);
+    let display = thinking
+        .as_ref()
+        .and_then(|v| v.get("display"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let mut extra_body = HashMap::new();
-    if let Some(thinking) = thinking {
+    if let Some(mut thinking) = thinking {
+        thinking.retain(|key, _| !matches!(key.as_str(), "type" | "budget_tokens" | "display"));
         extra_body.insert(
             MESSAGES_THINKING_CONFIG_EXTRA_KEY.to_string(),
             Value::Object(thinking),
         );
     }
-    if let Some(output_config) = output_config {
+    if let Some(mut output_config) = output_config {
+        output_config.remove("effort");
+        if output_config
+            .get("format")
+            .and_then(|v| v.get("type"))
+            .and_then(Value::as_str)
+            == Some("json_schema")
+        {
+            output_config.remove("format");
+        }
         extra_body.insert(
             MESSAGES_OUTPUT_CONFIG_EXTRA_KEY.to_string(),
             Value::Object(output_config),
         );
     }
-    Some(ReasoningConfig { effort, extra_body })
+    Some(ReasoningConfig {
+        effort,
+        mode,
+        budget_tokens,
+        display,
+        extra_body,
+        ..Default::default()
+    })
 }
 
 fn decode_anthropic_response_format(obj: &Map<String, Value>) -> Option<ResponseFormat> {
@@ -316,6 +322,11 @@ fn text_node_with_phase(
         extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
     }
     Node::Text {
+        signature: None,
+        citations: extra_body
+            .remove("citations")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default(),
         id: None,
         role,
         content: content.into(),
@@ -350,6 +361,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(text) = system.as_str() {
             if !text.is_empty() {
                 input_nodes.push(Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: None,
                     role: OrdinaryRole::System,
                     content: text.to_string(),
@@ -406,6 +419,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(s) = content.as_str() {
             if !s.is_empty() {
                 message_nodes.push(Node::Text {
+                    signature: None,
+                    citations: Vec::new(),
                     id: None,
                     role: base_role,
                     content: s.to_string(),
@@ -559,6 +574,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
 
     Ok(UrpRequest {
+        context: Default::default(),
+        instructions_format: None,
         model,
         input: input_nodes,
         stream: obj.get("stream").and_then(|v| v.as_bool()),
