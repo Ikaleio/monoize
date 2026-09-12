@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::time::timeout;
 
 fn discovery_body_error(error: crate::bounded_response::BoundedResponseError) -> AppError {
     let code = if error.is_limit_exceeded() {
@@ -825,7 +827,10 @@ pub async fn probe_channel_websocket(
         channel_id: body.channel_id.clone(),
     };
     let api_key = resolve_fetch_channel_api_key(&state, &fetch_key_body).await?;
-    let stored = resolve_stored_channel(&state, &body.provider_id, &body.channel_id).await?;
+    let stored =
+        resolve_stored_provider_channel(&state, &body.provider_id, &body.channel_id).await?;
+    let stored_provider = stored.as_ref().map(|(provider, _)| provider);
+    let stored_channel = stored.as_ref().map(|(_, channel)| channel);
     if body.provider_type != crate::monoize_routing::MonoizeProviderType::Responses {
         return Ok(Json(json!({
             "supported": false,
@@ -836,18 +841,21 @@ pub async fn probe_channel_websocket(
     }
     let request_timeout_ms = {
         let runtime = state.monoize_runtime.read().await;
-        runtime.request_timeout_ms.max(1)
+        stored_provider
+            .and_then(|provider| provider.request_timeout_ms_override)
+            .unwrap_or(runtime.request_timeout_ms)
+            .max(1)
     };
     let proxy = stored
         .as_ref()
-        .and_then(|channel| channel.proxy_url.as_deref())
+        .and_then(|(_, channel)| channel.proxy_url.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or(state.node.upstream_proxy_url.as_deref());
     let mut ws_headers = vec![crate::upstream_websocket::responses_authorization_header(
         &api_key,
     )];
-    if let Some(channel) = stored.as_ref() {
+    if let Some(channel) = stored_channel {
         if let Some(extras) = &channel.extra_headers {
             for (name, value) in extras {
                 ws_headers.push((name.clone(), value.clone()));
@@ -873,11 +881,17 @@ pub async fn probe_channel_websocket(
             }
         }
     }
+    let started = std::time::Instant::now();
+    let remaining_ms = || {
+        request_timeout_ms
+            .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX))
+            .max(1)
+    };
     match crate::upstream_websocket::connect_responses_websocket(
         body.base_url.trim(),
         &ws_headers,
         proxy,
-        request_timeout_ms,
+        remaining_ms(),
     )
     .await
     {
@@ -900,12 +914,14 @@ pub async fn probe_channel_websocket(
                     "model": model,
                     "generate": false
                 });
-                match session.send_text(payload.to_string()).await {
-                    Err(_) => "protocol_error",
-                    Ok(()) => match session.next_text().await {
-                        Ok(Some(_)) => "ok",
-                        _ => "protocol_error",
-                    },
+                let warmup_result = timeout(Duration::from_millis(remaining_ms()), async {
+                    session.send_text(payload.to_string()).await?;
+                    session.next_text().await
+                })
+                .await;
+                match warmup_result {
+                    Ok(Ok(Some(_))) => "ok",
+                    _ => "protocol_error",
                 }
             } else {
                 "skipped"
@@ -921,11 +937,11 @@ pub async fn probe_channel_websocket(
     }
 }
 
-async fn resolve_stored_channel(
+async fn resolve_stored_provider_channel(
     state: &AppState,
     provider_id: &Option<String>,
     channel_id: &Option<String>,
-) -> AppResult<Option<MonoizeChannel>> {
+) -> AppResult<Option<(MonoizeProvider, MonoizeChannel)>> {
     let provider_id = provider_id
         .as_deref()
         .map(str::trim)
@@ -942,12 +958,18 @@ async fn resolve_stored_channel(
         .get_provider(provider_id)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    Ok(provider.and_then(|provider| {
-        provider
-            .channels
-            .into_iter()
-            .find(|channel| channel.id == channel_id)
-    }))
+    let Some(provider) = provider else {
+        return Ok(None);
+    };
+    let Some(index) = provider
+        .channels
+        .iter()
+        .position(|channel| channel.id == channel_id)
+    else {
+        return Ok(None);
+    };
+    let channel = provider.channels[index].clone();
+    Ok(Some((provider, channel)))
 }
 
 #[derive(Debug, Deserialize)]

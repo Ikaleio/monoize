@@ -315,6 +315,7 @@ function warmupResponsesEvents(model: string): Record<string, unknown>[] {
 }
 
 function simpleResponsesWsEvents(model: string, text: string): Record<string, unknown>[] {
+  // MU9c: MU8 JSON object, then response.completed as the WS terminal (no [DONE]).
   const id = `resp_mock_${Date.now()}`;
   const createdAt = Math.floor(Date.now() / 1000);
   const response = {
@@ -333,7 +334,6 @@ function simpleResponsesWsEvents(model: string, text: string): Record<string, un
     usage: { input_tokens: 8, output_tokens: 16, total_tokens: 24 },
   };
   return [
-    { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
     { type: "response.output_text.delta", text },
     { type: "response.completed", response },
   ];

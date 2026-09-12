@@ -54,7 +54,7 @@ OpenCode Zen または OpenCode Go への生存プローブでは、Channel の�
 
 ## 上流 WebSocket
 
-Responses Channel で **上流 WebSocket** を設定します。値は次のとおりです。
+**接続** の **API type** の直後に **上流 WebSocket** を置きます。Routing affinity の下に置かないでください。値は次のとおりです。
 
 - `null`（不明）: Responses WebSocket クライアントは先に Upgrade を試します。ハンドシェイク失敗時は、同じ attempt で HTTP SSE を使います。保存値が `null` のときだけ、成功または失敗の結果を書き込めます。
 - `true`（対応）: Upgrade を優先します。ハンドシェイク失敗時も HTTP SSE を使います。保存値は変わりません。

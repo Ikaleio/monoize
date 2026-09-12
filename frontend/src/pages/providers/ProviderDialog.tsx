@@ -601,34 +601,6 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 			<div className='grid gap-4 sm:grid-cols-2'>
 				<Field label={c('Channel 名称', 'Channel name')}><Input value={activeChannel.name} onChange={event => updateChannel(selectedChannel, { name: event.target.value })} /></Field>
 				<Field label={c('接口类型', 'API type')}><Select value={activeChannel.provider_type} onValueChange={(provider_type: ProviderType) => updateChannel(selectedChannel, { provider_type })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
-				<Field label='Base URL' className='sm:col-span-2'><Input value={activeChannel.base_url} onChange={event => updateChannel(selectedChannel, { base_url: event.target.value })} onBlur={onBaseUrlBlur} placeholder='https://api.openai.com' className='font-mono' /></Field>
-				<Field label='API Key' hint={form.id && activeChannel.id ? c('留空保留现有密钥。', 'Leave blank to preserve the stored key.') : undefined}><Input type='password' autoComplete='new-password' value={activeChannel.api_key} onChange={event => updateChannel(selectedChannel, { api_key: event.target.value })} placeholder={form.id && activeChannel.id ? '••••••••••••' : 'sk-…'} className='font-mono' /></Field>
-				<Field label={c('流量权重', 'Traffic weight')}><Input type='number' min='0' value={activeChannel.weight} onChange={event => updateChannel(selectedChannel, { weight: event.target.value })} /></Field>
-			</div>
-		</section>
-
-		<ChannelModelEditor
-			key={activeChannel.id || `channel-${selectedChannel}`}
-			models={activeChannel.models}
-			onChange={models => updateChannel(selectedChannel, { models })}
-			onOpenPicker={openPicker}
-			pricedModels={pricedModels}
-			metadataProvider={metadataProvider}
-			reasoningSuffixMap={reasoningSuffixMap}
-			c={c}
-		/>
-
-		<details className='group rounded-xl border bg-card'>
-			<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'><div className='flex items-center gap-3'><GitBranch className='size-4 text-muted-foreground' /><div><h4 className='font-medium'>{c('路由亲和', 'Routing affinity')}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{c('默认继承全局设置', 'Inherits global settings by default')}</p></div></div><ChevronRight className='size-4 transition-transform group-open:rotate-90' /></summary>
-			<div className='grid gap-4 border-t p-4 sm:grid-cols-2 sm:p-5'>
-				<NullableBoolean label={c('启用亲和', 'Affinity enabled')} value={activeChannel.affinity_enabled_override} onChange={value => updateChannel(selectedChannel, { affinity_enabled_override: value })} c={c} />
-				<AffinityModeOverride label={c('恢复策略', 'Recovery policy')} value={activeChannel.affinity_failback_mode_override} onChange={value => updateChannel(selectedChannel, { affinity_failback_mode_override: value })} c={c} />
-				<NumberOverride label={c('空闲过期（秒）', 'Idle expiry (seconds)')} value={activeChannel.affinity_idle_ttl_seconds_override} placeholder={settings?.monoize_affinity_idle_ttl_seconds} onChange={value => updateChannel(selectedChannel, { affinity_idle_ttl_seconds_override: value })} />
-				<NumberOverride min={0} label={c('回切延迟（秒）', 'Failback delay (seconds)')} value={activeChannel.affinity_failback_delay_seconds_override} placeholder={settings?.monoize_affinity_failback_delay_seconds} onChange={value => updateChannel(selectedChannel, { affinity_failback_delay_seconds_override: value })} />
-				<Field label={c('出口代理', 'Egress proxy')} hint={c('留空跟随节点全局代理；填写 http(s) 代理地址仅对本 Channel 生效', 'Empty follows the node-global proxy; an http(s) URL applies to this channel only')}>
-					<Input value={activeChannel.proxy_url} placeholder='http://proxy:port' onChange={event => updateChannel(selectedChannel, { proxy_url: event.target.value })} />
-				</Field>
-				<NullableBoolean label={c('自动会话亲和', 'Auto session affinity')} hint={c('null 时对 Cloudflare Workers AI 与 OpenCode Zen/Go 自动开启，并发送 x-session-affinity 与 x-opencode-session', 'When null, enables for Cloudflare Workers AI and OpenCode Zen/Go, and sends x-session-affinity and x-opencode-session')} nullLabel={c('按 Base URL 自动判断', 'Auto-detect by Base URL')} value={activeChannel.session_affinity_auto} onChange={value => updateChannel(selectedChannel, { session_affinity_auto: value })} c={c} />
 				{activeChannel.provider_type === 'responses' ? (
 					<div className='grid gap-2 sm:col-span-2 sm:grid-cols-[1fr_auto] sm:items-end'>
 						<NullableBoolean
@@ -665,9 +637,10 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 									if (result.supported) {
 										toast.success(t('providers.detectWebsocketSuccess'))
 									} else {
-										toast.error(result.error || t('providers.detectWebsocketFailure'))
+										toast.error(t('providers.detectWebsocketFailure'))
 									}
 								} catch (error) {
+									updateChannel(selectedChannel, { websocket_supported: false })
 									toast.error(error instanceof Error ? error.message : t('providers.detectWebsocketFailure'))
 								} finally {
 									setProbingWebsocket(false)
@@ -678,6 +651,34 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 						</Button>
 					</div>
 				) : null}
+				<Field label='Base URL' className='sm:col-span-2'><Input value={activeChannel.base_url} onChange={event => updateChannel(selectedChannel, { base_url: event.target.value })} onBlur={onBaseUrlBlur} placeholder='https://api.openai.com' className='font-mono' /></Field>
+				<Field label='API Key' hint={form.id && activeChannel.id ? c('留空保留现有密钥。', 'Leave blank to preserve the stored key.') : undefined}><Input type='password' autoComplete='new-password' value={activeChannel.api_key} onChange={event => updateChannel(selectedChannel, { api_key: event.target.value })} placeholder={form.id && activeChannel.id ? '••••••••••••' : 'sk-…'} className='font-mono' /></Field>
+				<Field label={c('流量权重', 'Traffic weight')}><Input type='number' min='0' value={activeChannel.weight} onChange={event => updateChannel(selectedChannel, { weight: event.target.value })} /></Field>
+			</div>
+		</section>
+
+		<ChannelModelEditor
+			key={activeChannel.id || `channel-${selectedChannel}`}
+			models={activeChannel.models}
+			onChange={models => updateChannel(selectedChannel, { models })}
+			onOpenPicker={openPicker}
+			pricedModels={pricedModels}
+			metadataProvider={metadataProvider}
+			reasoningSuffixMap={reasoningSuffixMap}
+			c={c}
+		/>
+
+		<details className='group rounded-xl border bg-card'>
+			<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'><div className='flex items-center gap-3'><GitBranch className='size-4 text-muted-foreground' /><div><h4 className='font-medium'>{c('路由亲和', 'Routing affinity')}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{c('默认继承全局设置', 'Inherits global settings by default')}</p></div></div><ChevronRight className='size-4 transition-transform group-open:rotate-90' /></summary>
+			<div className='grid gap-4 border-t p-4 sm:grid-cols-2 sm:p-5'>
+				<NullableBoolean label={c('启用亲和', 'Affinity enabled')} value={activeChannel.affinity_enabled_override} onChange={value => updateChannel(selectedChannel, { affinity_enabled_override: value })} c={c} />
+				<AffinityModeOverride label={c('恢复策略', 'Recovery policy')} value={activeChannel.affinity_failback_mode_override} onChange={value => updateChannel(selectedChannel, { affinity_failback_mode_override: value })} c={c} />
+				<NumberOverride label={c('空闲过期（秒）', 'Idle expiry (seconds)')} value={activeChannel.affinity_idle_ttl_seconds_override} placeholder={settings?.monoize_affinity_idle_ttl_seconds} onChange={value => updateChannel(selectedChannel, { affinity_idle_ttl_seconds_override: value })} />
+				<NumberOverride min={0} label={c('回切延迟（秒）', 'Failback delay (seconds)')} value={activeChannel.affinity_failback_delay_seconds_override} placeholder={settings?.monoize_affinity_failback_delay_seconds} onChange={value => updateChannel(selectedChannel, { affinity_failback_delay_seconds_override: value })} />
+				<Field label={c('出口代理', 'Egress proxy')} hint={c('留空跟随节点全局代理；填写 http(s) 代理地址仅对本 Channel 生效', 'Empty follows the node-global proxy; an http(s) URL applies to this channel only')}>
+					<Input value={activeChannel.proxy_url} placeholder='http://proxy:port' onChange={event => updateChannel(selectedChannel, { proxy_url: event.target.value })} />
+				</Field>
+				<NullableBoolean label={c('自动会话亲和', 'Auto session affinity')} hint={c('null 时对 Cloudflare Workers AI 与 OpenCode Zen/Go 自动开启，并发送 x-session-affinity 与 x-opencode-session', 'When null, enables for Cloudflare Workers AI and OpenCode Zen/Go, and sends x-session-affinity and x-opencode-session')} nullLabel={c('按 Base URL 自动判断', 'Auto-detect by Base URL')} value={activeChannel.session_affinity_auto} onChange={value => updateChannel(selectedChannel, { session_affinity_auto: value })} c={c} />
 				<Field label={c('自定义请求头', 'Extra headers')} hint={c('注入到该 Channel 的所有上游请求，例如 {"x-session-affinity":"ses_001"} 或 {"x-opencode-session":"ses_001"}', 'Injected into every upstream request of this channel, e.g. {"x-session-affinity":"ses_001"} or {"x-opencode-session":"ses_001"}')} className='sm:col-span-2'>
 					<Textarea value={activeChannel.extra_headers} rows={3} placeholder={'{"x-session-affinity": "ses_001"}'} className='font-mono text-xs' onChange={event => updateChannel(selectedChannel, { extra_headers: event.target.value })} />
 				</Field>

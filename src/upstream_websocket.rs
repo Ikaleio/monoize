@@ -4,20 +4,26 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use futures_util::{SinkExt, StreamExt};
 use rustls::pki_types::ServerName;
+use std::io;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Request};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, client_async, client_async_tls_with_config,
+    MaybeTlsStream, WebSocketStream, client_async_tls_with_config, client_async_with_config,
+    connect_async_with_config,
 };
 
 const RESPONSES_WS_BETA: &str = "responses_websockets=2026-02-06";
 
+#[derive(Debug)]
 pub struct HandshakeError {
     pub message: String,
     pub http_status: Option<u16>,
@@ -168,9 +174,10 @@ async fn connect_responses_websocket_inner(
         if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
             connect_via_proxy(&target, request, proxy_url, use_tls).await?
         } else {
-            let (stream, response) = tokio_tungstenite::connect_async(request)
-                .await
-                .map_err(classify_connect_error)?;
+            let (stream, response) =
+                connect_async_with_config(request, Some(upstream_ws_config()), false)
+                    .await
+                    .map_err(classify_connect_error)?;
             ensure_switching_protocols(response.status().as_u16())?;
             TungsteniteResponsesWs {
                 inner: InnerWs::Direct(stream),
@@ -243,17 +250,19 @@ async fn connect_via_proxy(
     };
 
     if use_tls {
-        let (stream, response) = client_async_tls_with_config(request, tunneled, None, None)
-            .await
-            .map_err(classify_connect_error)?;
+        let (stream, response) =
+            client_async_tls_with_config(request, tunneled, Some(upstream_ws_config()), None)
+                .await
+                .map_err(classify_connect_error)?;
         ensure_switching_protocols(response.status().as_u16())?;
         Ok(TungsteniteResponsesWs {
             inner: InnerWs::NestedTls(stream),
         })
     } else {
-        let (stream, response) = client_async(request, tunneled)
-            .await
-            .map_err(classify_connect_error)?;
+        let (stream, response) =
+            client_async_with_config(request, tunneled, Some(upstream_ws_config()))
+                .await
+                .map_err(classify_connect_error)?;
         ensure_switching_protocols(response.status().as_u16())?;
         Ok(TungsteniteResponsesWs {
             inner: InnerWs::Plain(stream),
@@ -270,7 +279,8 @@ async fn http_connect<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let mut request = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n");
+    let authority = connect_authority(host, port);
+    let mut request = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
     if let Some(auth) = proxy_auth {
         request.push_str("Proxy-Authorization: Basic ");
         request.push_str(auth);
@@ -299,16 +309,65 @@ where
             return Err(HandshakeError::new("proxy CONNECT response is too large"));
         }
     }
-    let header_text = String::from_utf8_lossy(&buf);
-    let status_line = header_text.lines().next().unwrap_or_default();
-    let status = parse_http_status_line(status_line).unwrap_or(0);
-    if status != 200 {
-        return Err(HandshakeError::with_status(
-            format!("proxy CONNECT failed: {status_line}"),
-            status,
-        ));
+    let header_end = connect_header_end(&buf)?;
+    let leftover = buf[header_end..].to_vec();
+    if leftover.is_empty() {
+        Ok(Box::new(stream))
+    } else {
+        Ok(Box::new(PrefixedIo {
+            prefix: leftover,
+            offset: 0,
+            inner: stream,
+        }))
     }
-    Ok(Box::new(stream))
+}
+
+struct PrefixedIo<S> {
+    prefix: Vec<u8>,
+    offset: usize,
+    inner: S,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for PrefixedIo<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.offset < self.prefix.len() {
+            let remaining = &self.prefix[self.offset..];
+            let n = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..n]);
+            self.offset += n;
+            if self.offset == self.prefix.len() {
+                self.prefix.clear();
+                self.offset = 0;
+            }
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedIo<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 async fn tls_connect(stream: TcpStream, host: &str) -> Result<BoxedIo, HandshakeError> {
@@ -371,6 +430,45 @@ fn http_url_to_ws(http_url: &str) -> Result<String, HandshakeError> {
     Ok(converted.to_string())
 }
 
+fn upstream_ws_config() -> WebSocketConfig {
+    let max = std::env::var("MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &usize| *value > 0)
+        .unwrap_or(50 * 1024 * 1024);
+    WebSocketConfig::default()
+        .max_message_size(Some(max))
+        .max_frame_size(Some(max))
+}
+
+fn connect_authority(host: &str, port: u16) -> String {
+    let host = host.trim_matches(|c| c == '[' || c == ']');
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+fn connect_header_end(buf: &[u8]) -> Result<usize, HandshakeError> {
+    let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return Err(HandshakeError::new(
+            "proxy CONNECT response is missing a header terminator",
+        ));
+    };
+    let header_end = pos + 4;
+    let header_text = String::from_utf8_lossy(&buf[..header_end]);
+    let status_line = header_text.lines().next().unwrap_or_default();
+    let status = parse_http_status_line(status_line).unwrap_or(0);
+    if status != 200 {
+        return Err(HandshakeError::with_status(
+            format!("proxy CONNECT failed: {status_line}"),
+            status,
+        ));
+    }
+    Ok(header_end)
+}
+
 fn parse_http_status_line(line: &str) -> Option<u16> {
     line.split_whitespace().nth(1)?.parse().ok()
 }
@@ -405,4 +503,56 @@ pub fn handshake_app_error(err: HandshakeError) -> AppError {
         "upstream_websocket_handshake_failed",
         err.message,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_authority_brackets_ipv6() {
+        assert_eq!(connect_authority("::1", 443), "[::1]:443");
+        assert_eq!(connect_authority("[::1]", 8080), "[::1]:8080");
+        assert_eq!(
+            connect_authority("proxy.example", 3128),
+            "proxy.example:3128"
+        );
+    }
+
+    #[test]
+    fn connect_header_end_keeps_leftover_offset() {
+        let mut buf = b"HTTP/1.1 200 Connection Established\r\n\r\nABC".to_vec();
+        let end = connect_header_end(&buf).expect("200");
+        assert_eq!(&buf[end..], b"ABC");
+        buf = b"HTTP/1.1 502 Bad Gateway\r\n\r\n".to_vec();
+        let err = connect_header_end(&buf).expect_err("502");
+        assert_eq!(err.http_status, Some(502));
+    }
+
+    #[test]
+    fn responses_ws_create_payload_strips_transport_fields() {
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "stream": true,
+            "background": false,
+            "generate": true,
+            "previous_response_id": "resp_old",
+            "type": "response.create",
+            "input": []
+        });
+        let payload = responses_ws_create_payload(body);
+        let object = payload.as_object().unwrap();
+        assert_eq!(
+            object.get("type").and_then(serde_json::Value::as_str),
+            Some("response.create")
+        );
+        assert!(!object.contains_key("stream"));
+        assert!(!object.contains_key("background"));
+        assert!(!object.contains_key("generate"));
+        assert!(!object.contains_key("previous_response_id"));
+        assert_eq!(
+            object.get("model").and_then(serde_json::Value::as_str),
+            Some("gpt-5")
+        );
+    }
 }

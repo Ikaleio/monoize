@@ -661,33 +661,42 @@ pub(super) fn effective_websocket_supported(
 
 pub(super) async fn remember_websocket_supported(
     state: &AppState,
-    channel_id: &str,
+    attempt: &mut MonoizeAttempt,
     supported: bool,
 ) {
+    if attempt.websocket_supported.is_some() {
+        return;
+    }
     if state.node.is_replica() {
-        state
+        let remembered = *state
             .websocket_supported_overlay
-            .entry(channel_id.to_string())
+            .entry(attempt.channel_id.clone())
             .or_insert(supported);
+        attempt.websocket_supported = Some(remembered);
         return;
     }
     match state
         .monoize_store
-        .remember_channel_websocket_supported(channel_id, supported)
+        .remember_channel_websocket_supported(&attempt.channel_id, supported)
         .await
     {
         Ok(true) => {
-            state
+            let previous = state
                 .routing_config_revision
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            attempt.routing_config_revision = previous + 1;
+            attempt.websocket_supported = Some(supported);
         }
-        Ok(false) => {}
+        Ok(false) => {
+            attempt.websocket_supported = Some(supported);
+        }
         Err(err) => {
             tracing::warn!(
-                channel_id,
+                channel_id = %attempt.channel_id,
                 error = %err,
                 "failed to persist channel websocket_supported"
             );
+            attempt.websocket_supported = Some(supported);
         }
     }
 }

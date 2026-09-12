@@ -54,7 +54,7 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 
 ## 上游 WebSocket
 
-在 Responses Channel 上設定 **上游 WebSocket**。取值如下：
+在 **連線** 中、**介面類型** 之後設定 **上游 WebSocket**。不要把該控制項放在路由親和下。取值如下：
 
 - `null`（未知）：Responses WebSocket 用戶端先嘗試 Upgrade。握手失敗時，同一 attempt 使用 HTTP SSE。僅當儲存值仍為 `null` 時，成功或失敗的握手可以寫入結果。
 - `true`（支援）：優先 Upgrade。握手失敗仍使用 HTTP SSE。儲存值不變。

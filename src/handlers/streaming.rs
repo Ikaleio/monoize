@@ -937,8 +937,7 @@ pub(super) async fn forward_stream_typed(
                 .await
                 {
                     Ok(mut ws) => {
-                        remember_websocket_supported(&state, &attempt.channel_id, true).await;
-                        attempt.websocket_supported = Some(true);
+                        remember_websocket_supported(&state, &mut attempt, true).await;
                         let payload = crate::upstream_websocket::responses_ws_create_payload(
                             upstream_body.clone(),
                         );
@@ -948,8 +947,7 @@ pub(super) async fn forward_stream_typed(
                         }
                     }
                     Err(_) => {
-                        remember_websocket_supported(&state, &attempt.channel_id, false).await;
-                        attempt.websocket_supported = Some(false);
+                        remember_websocket_supported(&state, &mut attempt, false).await;
                     }
                 }
             }

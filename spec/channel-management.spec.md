@@ -364,9 +364,10 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
   - If `provider_id` and `channel_id` identify a stored Channel, the probe MUST use that Channel `proxy_url` and `extra_headers`. Otherwise the probe MUST use the process upstream proxy and no Channel extra headers.
   - The probe MUST NOT write `monoize_channels` or create a request log or charge a tenant.
   - When `provider_type` is not `responses`, return `{ "supported": false, "http_status": null, "warmup": "skipped", "error": "provider_type is not responses" }`.
-  - Otherwise GET-upgrade `{base}/v1/responses` with `Authorization`, `OpenAI-Beta: responses_websockets=2026-02-06`, stored extra headers when resolved, and session-affinity headers when the stored Channel enables them. Timeout is Channel/Provider/global `request_timeout_ms`.
+  - Otherwise GET-upgrade `{base}/v1/responses` with `Authorization`, `OpenAI-Beta: responses_websockets=2026-02-06`, stored extra headers when resolved, and session-affinity headers when the stored Channel enables them. Timeout is Provider `request_timeout_ms_override` when set, otherwise global `request_timeout_ms`.
   - Non-101 or transport failure MUST return `supported=false`.
-  - Status 101 MUST return `supported=true`. If `model` is a non-empty string after trim, the probe MUST send `response.create` with `generate=false` and that model. A warmup protocol error MUST still return `supported=true` and `warmup="protocol_error"`. A successful warmup MUST return `warmup="ok"`. Missing model MUST return `warmup="skipped"`.
+  - Status 101 MUST return `supported=true`. If `model` is a non-empty string after trim, the probe MUST send `response.create` with `generate=false` and that model. Handshake plus warmup send and the first warmup frame MUST consume one timeout budget of that `request_timeout_ms`. A warmup protocol error or warmup timeout MUST still return `supported=true` and `warmup="protocol_error"`. A successful warmup MUST return `warmup="ok"`. Missing model MUST return `warmup="skipped"`.
+  - The dashboard HTTP status MUST be `200` for every probe outcome, including handshake failure, transport failure, and warmup timeout. The probe MUST NOT return dashboard HTTP `502`.
 - Response: `{ "supported": boolean, "http_status": integer | null, "warmup": "skipped" | "ok" | "protocol_error", "error": string | null }`
 
 ### 3.8 Test channel liveness
@@ -427,7 +428,7 @@ CP-FE-6. Saving from the provider unsaved-changes confirmation MUST invoke the p
 
 CP-FE-7. The null choice for `session_affinity_auto` MUST use a label that identifies URL-based automatic selection. It MUST NOT use the global-inheritance label used by unrelated nullable settings.
 
-CP-FE-7a. The Channel editor MUST expose `websocket_supported` as a three-state control: unknown (`null`), supported (`true`), not supported (`false`). When Channel `provider_type` is `responses`, the editor MUST expose a "Detect WebSocket" action that calls `POST /api/dashboard/probe-channel-websocket` and writes `supported` into the draft `websocket_supported` field. The action MUST NOT persist until the Provider save. The action MUST be disabled when `base_url` is empty, or when the Channel has no draft API key and no stored `channel_id`.
+CP-FE-7a. The Channel editor MUST expose `websocket_supported` as a three-state control: unknown (`null`), supported (`true`), not supported (`false`). The control MUST appear in the Connection section immediately after Channel `provider_type`. The control MUST NOT appear under routing affinity. When Channel `provider_type` is `responses`, the editor MUST expose a "Detect WebSocket" action that calls `POST /api/dashboard/probe-channel-websocket` and writes `supported` into the draft `websocket_supported` field. The action MUST NOT persist until the Provider save. The action MUST be disabled when `base_url` is empty, or when the Channel has no draft API key and no stored `channel_id`.
 
 CP-FE-8. The Channel liveness-test dialog MUST contain a `Stream response` checkbox. The checkbox MUST be checked whenever a stream-capable Channel test dialog opens. It MUST be disabled and unchecked for a Channel type whose liveness test does not define streaming.
 

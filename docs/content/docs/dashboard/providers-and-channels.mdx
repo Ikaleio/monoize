@@ -54,7 +54,7 @@ A Channel liveness probe to OpenCode Zen or OpenCode Go sends the literal value 
 
 ## Upstream WebSocket
 
-Set **Upstream WebSocket** on a Responses Channel. The values are:
+Set **Upstream WebSocket** in Connection, immediately after **API type**. Do not put this control under Routing affinity. The values are:
 
 - `null` (Unknown): a Responses WebSocket client tries Upgrade first. Handshake failure uses HTTP SSE on the same attempt. A successful or failed handshake may store the result only when the stored value is still `null`.
 - `true` (Supported): prefer Upgrade. Handshake failure still uses HTTP SSE. The stored value does not change.
