@@ -1,4 +1,4 @@
-use crate::urp::{Node, NodeDelta, UrpStreamEvent};
+use crate::urp::{Node, ToolCallType, UrpStreamEvent};
 use serde_json::{Number, Value};
 use std::borrow::Cow;
 
@@ -69,7 +69,11 @@ pub fn tool_call_arguments_for_wire(arguments: impl AsRef<str>) -> String {
 }
 
 pub fn integerize_tool_call_node(node: &mut Node) {
-    if let Node::ToolCall { arguments, .. } = node
+    if let Node::ToolCall {
+        tool_type: ToolCallType::Function,
+        arguments,
+        ..
+    } = node
         && let Cow::Owned(next) = integerize_tool_call_arguments_json(arguments)
     {
         *arguments = next;
@@ -86,14 +90,6 @@ pub fn integerize_tool_call_stream_event(event: &mut UrpStreamEvent) {
     match event {
         UrpStreamEvent::NodeDone { node, .. } => integerize_tool_call_node(node),
         UrpStreamEvent::ResponseDone { output, .. } => integerize_tool_call_nodes(output),
-        UrpStreamEvent::NodeDelta {
-            delta: NodeDelta::ToolCallArguments { arguments },
-            ..
-        } => {
-            if let Cow::Owned(next) = integerize_tool_call_arguments_json(arguments) {
-                *arguments = next;
-            }
-        }
         _ => {}
     }
 }

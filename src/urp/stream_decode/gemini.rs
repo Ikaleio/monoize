@@ -1,12 +1,13 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
-    latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_gemini_object,
-    record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
+    mark_stream_ttfb_if_needed, parse_usage_from_gemini_object, record_stream_done_sentinel,
+    record_stream_terminal_event, record_stream_usage_if_present,
     record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::gemini::{
-    decode_stream_part, parse_finish_reason, prompt_block_reason, prompt_refusal,
+    GEMINI_CANDIDATE_EXTRA_KEY, attach_candidate_citations, candidate_extra, content_parts,
+    decode_stream_part, parse_finish_reason, parse_usage, prompt_block_reason, prompt_refusal,
 };
 use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, UrpStreamEvent};
 use axum::http::StatusCode;
@@ -28,6 +29,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
     let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut started_response = false;
     let mut finish_reason = None;
+    let mut usage = None;
     let mut output = Vec::<Node>::new();
     let mut extra_body = HashMap::new();
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
@@ -60,6 +62,12 @@ pub(crate) async fn stream_gemini_to_urp_events(
                 "Gemini stream event must be an object".to_string(),
             )
         })?;
+        if let Some(native) = data.get("usageMetadata").and_then(Value::as_object) {
+            usage = Some(
+                parse_usage(native)
+                    .map_err(|error| stream_error("upstream_stream_decode_failed", error))?,
+            );
+        }
         record_stream_usage_if_present(&runtime_metrics, parse_usage_from_gemini_object(&data))
             .await;
         extra_body.extend(crate::urp::decode::split_extra(
@@ -72,9 +80,13 @@ pub(crate) async fn stream_gemini_to_urp_events(
             }
             let _ = tx
                 .send(UrpStreamEvent::ResponseStart {
-                    usage: None,
+                    usage: usage.clone(),
                     id: response_id.clone(),
-                    model: urp.model.clone(),
+                    model: data
+                        .get("modelVersion")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&urp.model)
+                        .to_string(),
                     extra_body: extra_body.clone(),
                 })
                 .await;
@@ -84,17 +96,62 @@ pub(crate) async fn stream_gemini_to_urp_events(
             .get("candidates")
             .and_then(Value::as_array)
             .and_then(|candidates| candidates.first());
-        let mut nodes = candidate
+        let mut nodes = Vec::new();
+        if let Some(parts) = candidate
             .and_then(|candidate| candidate.get("content"))
             .and_then(|content| content.get("parts"))
-            .and_then(Value::as_array)
-            .map(|parts| {
-                parts
-                    .iter()
-                    .flat_map(decode_stream_part)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        {
+            for part in content_parts(parts) {
+                nodes.extend(
+                    decode_stream_part(part)
+                        .map_err(|error| stream_error("upstream_stream_decode_failed", error))?,
+                );
+            }
+        }
+        if let Some(candidate) = candidate.and_then(Value::as_object) {
+            let metadata = candidate_extra(candidate);
+            if !metadata.is_empty() {
+                let stored = extra_body
+                    .entry(GEMINI_CANDIDATE_EXTRA_KEY.into())
+                    .or_insert_with(|| serde_json::json!({}));
+                stored.as_object_mut().unwrap().extend(metadata);
+            }
+            if nodes.iter().any(|node| matches!(node, Node::Text { .. })) {
+                attach_candidate_citations(candidate, &mut nodes);
+            } else if let Some(sources) = candidate
+                .get("citationMetadata")
+                .and_then(|metadata| metadata.get("citationSources"))
+                .and_then(Value::as_array)
+            {
+                if let Some((index, Node::Text { citations, .. })) = output
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(_, node)| matches!(node, Node::Text { .. }))
+                {
+                    let mut added = Vec::new();
+                    for source in sources {
+                        if !citations.contains(source) {
+                            citations.push(source.clone());
+                            added.push(source.clone());
+                        }
+                    }
+                    if !added.is_empty() {
+                        let _ = tx
+                            .send(UrpStreamEvent::NodeDelta {
+                                node_index: index as u32,
+                                delta: NodeDelta::Text {
+                                    content: String::new(),
+                                    signature: None,
+                                    citations: added,
+                                },
+                                usage: None,
+                                extra_body: HashMap::new(),
+                            })
+                            .await;
+                    }
+                }
+            }
+        }
         if let Some(reason) = prompt_block_reason(&data) {
             nodes.push(prompt_refusal(reason));
             finish_reason = Some(FinishReason::ContentFilter);
@@ -142,9 +199,6 @@ pub(crate) async fn stream_gemini_to_urp_events(
                 .filter(|reason| !reason.is_empty() && *reason != "FINISH_REASON_UNSPECIFIED")
                 .map(parse_finish_reason);
         }
-        if finish_reason.is_some() {
-            break;
-        }
     }
     if finish_reason.is_none() {
         return Err(stream_error(
@@ -169,7 +223,6 @@ pub(crate) async fn stream_gemini_to_urp_events(
             })
             .await;
     }
-    let usage = latest_stream_usage_snapshot(&runtime_metrics).await;
     let _ = tx
         .send(UrpStreamEvent::ResponseDone {
             finish_reason,
@@ -289,25 +342,32 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             id: node.id().cloned(),
         },
         Node::ToolCall {
+            namespace,
+            signature,
             tool_type,
             call_id,
             name,
             ..
         } => NodeHeader::ToolCall {
+            namespace: namespace.clone(),
+            signature: signature.clone(),
             id: node.id().cloned(),
             tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
         },
-        Node::Image { role, .. } => NodeHeader::Image {
+        Node::Image { role, metadata, .. } => NodeHeader::Image {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
             role: *role,
         },
-        Node::Audio { role, .. } => NodeHeader::Audio {
+        Node::Audio { role, metadata, .. } => NodeHeader::Audio {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
             role: *role,
         },
-        Node::File { role, .. } => NodeHeader::File {
+        Node::File { role, metadata, .. } => NodeHeader::File {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
             role: *role,
         },
@@ -318,16 +378,26 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role,
             origin_protocol,
             item_type,
+            body,
             ..
         } => NodeHeader::ProviderItem {
+            body: Some(body.clone()),
             id: node.id().cloned(),
             origin_protocol: *origin_protocol,
             role: *role,
             item_type: item_type.clone(),
         },
         Node::ToolResult {
-            tool_type, call_id, ..
+            signature,
+            namespace,
+            name,
+            tool_type,
+            call_id,
+            ..
         } => NodeHeader::ToolResult {
+            signature: signature.clone(),
+            namespace: namespace.clone(),
+            name: name.clone(),
             id: node.id().cloned(),
             tool_type: *tool_type,
             call_id: call_id.clone(),

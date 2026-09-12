@@ -13,6 +13,7 @@ fn apply_messages_response_format(obj: &mut Map<String, Value>, format: &Respons
                 .unwrap_or_default();
             messages_format.insert("type".to_string(), json!("json_schema"));
             messages_format.insert("schema".to_string(), json_schema.schema.clone());
+            merge_extra(&mut messages_format, &json_schema.extra_body);
             output_config.insert("format".to_string(), Value::Object(messages_format));
             obj.insert("output_config".to_string(), Value::Object(output_config));
         }
@@ -267,6 +268,13 @@ pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+    match crate::urp::media::prepare_request(req, ProviderProtocol::Messages) {
+        Ok(prepared) => encode_prepared_request(&prepared, upstream_model),
+        Err(message) => messages_media_error_body(&message),
+    }
+}
+
+fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut system_blocks: Vec<Value> = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
     let request_nodes = &req.input;
@@ -290,7 +298,10 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 }
             }
             Node::ToolResult {
+                signature: _,
                 id: _,
+                namespace,
+                name: _,
                 tool_type,
                 call_id,
                 content,
@@ -306,6 +317,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                     &mut messages,
                     &mut pending_envelope_extra,
                     call_id,
+                    namespace.as_deref(),
                     content,
                     *is_error,
                     extra_body,
@@ -433,7 +445,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             Some("disabled")
         } else if let Some(mode) = reasoning.mode.as_deref() {
             Some(mode)
-        } else if reasoning.budget_tokens.is_none() && reasoning.effort.is_none() {
+        } else if native_thinking.is_some()
+            || (reasoning.budget_tokens.is_none() && reasoning.effort.is_none())
+        {
             None
         } else if native_output.is_some()
             && native_thinking.is_none()
@@ -450,7 +464,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         }
         if let Some(budget) = reasoning.budget_tokens.filter(|_| mode == Some("enabled")) {
             thinking.insert("budget_tokens".into(), json!(budget));
-        } else if mode == Some("enabled") {
+        } else if mode == Some("enabled") && native_thinking.is_none() {
             thinking.insert(
                 "budget_tokens".into(),
                 json!(effort_to_budget(

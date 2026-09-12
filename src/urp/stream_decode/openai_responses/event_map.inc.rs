@@ -1,52 +1,9 @@
 fn nodes_from_item_value(item: &Value) -> Vec<Node> {
-    match decode_item_from_value(item) {
-        Item::Message {
-            id,
-            role,
-            parts,
-            extra_body,
-        } => {
-            let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
-            let mut nodes = Vec::new();
-            for part in parts {
-                if matches!(&part, Part::Text { content, .. } if content.is_empty()) {
-                    continue;
-                }
-                let mut node = part.into_node(ordinary_role);
-                if nodes.is_empty() && !extra_body.is_empty() {
-                    if let Node::Text { phase, .. } = &mut node
-                        && phase.is_none()
-                    {
-                        *phase = extra_body
-                            .get("phase")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                    }
-                    node.extra_body_mut().extend(extra_body.clone());
-                }
-                if nodes.is_empty() {
-                    node.set_id(id.clone());
-                }
-                nodes.push(node);
-            }
-            nodes
-        }
-        Item::ToolResult {
-            id,
-            tool_type,
-            call_id,
-            is_error,
-            content,
-            extra_body,
-        } => vec![Node::ToolResult {
-            id,
-            tool_type,
-            call_id,
-            is_error,
-            content,
-            extra_body,
-        }],
-    }
+    crate::urp::decode::openai_responses::decode_response(&json!({"output": [item]}))
+        .map(|response| response.output.into_iter().filter(|node| {
+            !matches!(node, Node::NextDownstreamEnvelopeExtra { .. })
+        }).collect())
+        .unwrap_or_default()
 }
 
 fn node_from_part_value(part: &Value, role: Role, item_id: Option<String>) -> Node {
@@ -58,23 +15,26 @@ fn node_from_part_value(part: &Value, role: Role, item_id: Option<String>) -> No
 fn node_header_from_node(node: &Node) -> NodeHeader {
     match node {
         Node::Text {
-            id, role, phase, ..
+            id, role, phase, signature, citations, ..
         } => NodeHeader::Text {
-            signature: None,
-            citations: Vec::new(),
+            signature: signature.clone(),
+            citations: citations.clone(),
             id: id.clone(),
             role: *role,
             phase: phase.clone(),
         },
-        Node::Image { id, role, .. } => NodeHeader::Image {
+        Node::Image { id, role, metadata, .. } => NodeHeader::Image {
+            metadata: metadata.clone(),
             id: id.clone(),
             role: *role,
         },
-        Node::Audio { id, role, .. } => NodeHeader::Audio {
+        Node::Audio { id, role, metadata, .. } => NodeHeader::Audio {
+            metadata: metadata.clone(),
             id: id.clone(),
             role: *role,
         },
-        Node::File { id, role, .. } => NodeHeader::File {
+        Node::File { id, role, metadata, .. } => NodeHeader::File {
+            metadata: metadata.clone(),
             id: id.clone(),
             role: *role,
         },
@@ -84,35 +44,42 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             id: id.clone(),
         },
         Node::ToolCall {
+            namespace, signature,
             id,
             tool_type,
             call_id,
             name,
             ..
         } => NodeHeader::ToolCall {
+            namespace: namespace.clone(), signature: signature.clone(),
             id: id.clone(),
             tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
         },
         Node::ProviderItem {
+            body,
             id,
             origin_protocol,
             role,
             item_type,
             ..
         } => NodeHeader::ProviderItem {
+            body: Some(body.clone()),
             id: id.clone(),
             origin_protocol: *origin_protocol,
             role: *role,
             item_type: item_type.clone(),
         },
         Node::ToolResult {
+            signature, namespace, name,
             id,
             tool_type,
             call_id,
             ..
         } => NodeHeader::ToolResult {
+            signature: signature.clone(),
+            namespace: namespace.clone(), name: name.clone(),
             id: id.clone(),
             tool_type: *tool_type,
             call_id: call_id.clone(),
@@ -215,6 +182,7 @@ fn map_output_item_added(
             .or_default();
         output_state.item_type = Some(item_type.to_string());
         output_state.role = Some(role);
+        output_state.message_phase = extract_responses_message_phase(item);
         if let Some(id) = item.get("id").and_then(Value::as_str) {
             output_state.item_id = Some(id.to_string());
         } else if item_type == "message" && output_state.item_id.is_none() {
@@ -266,6 +234,8 @@ fn map_output_item_added(
                 ToolCallType::Function
             };
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolCall {
+                namespace: item.get("namespace").and_then(Value::as_str).map(str::to_string),
+                signature: None,
                 id: item
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -309,6 +279,9 @@ fn map_output_item_added(
                 ToolCallType::Function
             };
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolResult {
+                signature: None,
+                namespace: item.get("namespace").and_then(Value::as_str).map(str::to_string),
+                name: item.get("name").and_then(Value::as_str).map(str::to_string),
                 id: item
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -340,6 +313,7 @@ fn map_output_item_added(
             events.push(UrpStreamEvent::NodeStart {
                 node_index,
                 header: NodeHeader::Image {
+                    metadata: Default::default(),
                     id: item.get("id").and_then(Value::as_str).map(str::to_string),
                     role: OrdinaryRole::Assistant,
                 },
@@ -419,12 +393,26 @@ fn map_content_part_added(
     } else {
         Some(stable_message_item_id_for_output(index_state, output_index))
     };
-    let node = node_from_part_value(part, role, item_id);
+    let mut node = node_from_part_value(part, role, item_id);
+    if let Node::ProviderItem {id,extra_body,..} = &mut node {
+        *id = part.get("id").and_then(Value::as_str).map(str::to_owned);
+        extra_body.insert(crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY.into(), Value::Bool(true));
+    }
+    if let Node::Text { phase, citations, .. } = &mut node {
+        let state = output_state_for(index_state, output_index);
+        *phase = state.message_phase.clone();
+        *citations = state.text_citations.iter()
+            .filter(|((index, _), _)| *index == content_index)
+            .map(|(_, value)| value.clone()).collect();
+    }
+    if !is_reasoning_part {
+        output_state_for(index_state, output_index).content_nodes.insert(content_index, node.clone());
+    }
     emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
     events.push(UrpStreamEvent::NodeStart {
         node_index,
         header: node_header_from_node(&node),
-        extra_body: part_extra_body_from_value(part),
+        extra_body: node.extra_body_mut().clone(),
     });
     output_state_for(index_state, output_index).emitted_any_node = true;
     events
@@ -465,17 +453,29 @@ fn map_content_part_done(
     } else {
         Some(stable_message_item_id_for_output(index_state, output_index))
     };
-    let node = node_from_part_value(part, role, item_id);
+    let mut node = node_from_part_value(part, role, item_id);
+    if let Node::ProviderItem {id,extra_body,..} = &mut node {
+        *id = part.get("id").and_then(Value::as_str).map(str::to_owned);
+        extra_body.insert(crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY.into(), Value::Bool(true));
+    }
+    if let Node::Text { phase, citations, .. } = &mut node {
+        let state = output_state_for(index_state, output_index);
+        *phase = state.message_phase.clone();
+        *citations = state.text_citations.iter()
+            .filter(|((index, _), _)| *index == content_index)
+            .map(|(_, value)| value.clone()).collect();
+    }
     if let Some(output_state) = index_state.output_state_by_index.get_mut(&output_index) {
         output_state.part_done_seen = true;
+        if !is_reasoning_part { output_state.content_nodes.insert(content_index, node.clone()); }
     }
     if is_reasoning_part {
         return Vec::new();
     }
     vec![UrpStreamEvent::NodeDone {
         node_index,
+        extra_body: node.extra_body_mut().clone(),
         node,
         usage: None,
-        extra_body: part_extra_body_from_value(part),
     }]
 }

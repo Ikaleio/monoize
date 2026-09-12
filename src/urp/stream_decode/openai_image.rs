@@ -239,6 +239,8 @@ fn image_source_from_payload(payload: &Value) -> Option<ImageSource> {
 fn image_node_from_payload(payload: &Value) -> Option<Node> {
     let source = image_source_from_payload(payload)?;
     Some(Node::Image {
+        metadata: Default::default(),
+
         id: payload
             .get("id")
             .and_then(Value::as_str)
@@ -301,10 +303,14 @@ fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String
 fn node_header(node: &Node) -> NodeHeader {
     match node {
         Node::Image { id, role, .. } => NodeHeader::Image {
+            metadata: Default::default(),
+
             id: id.clone(),
             role: *role,
         },
         _ => NodeHeader::ProviderItem {
+            body: None,
+
             id: None,
             origin_protocol: ProviderProtocol::OpenaiImage,
             role: OrdinaryRole::Assistant,

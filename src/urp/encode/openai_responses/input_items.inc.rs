@@ -1,6 +1,11 @@
 fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
     let mut out = Vec::new();
     for tool in tools {
+        if tool.origin_protocol.is_some_and(|origin| origin != ProviderProtocol::Responses)
+            && tool.function.is_none() && tool.custom.is_none() && tool.tools.is_none()
+        {
+            continue;
+        }
         if tool.tool_type == "function" {
             let Some(function) = &tool.function else {
                 continue;
@@ -28,6 +33,7 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
             }
             merge_extra(&mut item, &function.extra_body);
             merge_extra(&mut item, &tool.extra_body);
+            encode_tool_namespace(&mut item, tool.namespace.as_deref());
             out.push(Value::Object(item));
         } else if tool.tool_type == "custom" {
             let Some(custom) = &tool.custom else {
@@ -48,6 +54,7 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
             }
             merge_extra(&mut item, &custom.extra_body);
             merge_extra(&mut item, &tool.extra_body);
+            encode_tool_namespace(&mut item, tool.namespace.as_deref());
             out.push(Value::Object(item));
         } else {
             let mut item = Map::new();
@@ -61,11 +68,27 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
                     Value::String(description.clone()),
                 );
             }
+            if let Some(tools) = &tool.tools {
+                item.insert("tools".to_string(), Value::Array(encode_tools(tools)));
+            }
+            if let Some(config) = tool.config.as_ref().and_then(Value::as_object) {
+                for (key, value) in config {
+                    item.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
             merge_extra(&mut item, &tool.extra_body);
+            encode_tool_namespace(&mut item, tool.namespace.as_deref());
             out.push(Value::Object(item));
         }
     }
     out
+}
+
+fn encode_tool_namespace(item: &mut Map<String, Value>, namespace: Option<&str>) {
+    item.remove("namespace");
+    if let Some(namespace) = namespace {
+        item.insert("namespace".to_string(), json!(namespace));
+    }
 }
 
 fn apply_response_format(obj: &mut Map<String, Value>, format: &ResponseFormat) {
@@ -102,7 +125,7 @@ fn merge_responses_text_config(obj: &mut Map<String, Value>, raw_text: Option<&V
     };
     let generated = obj.get("text").and_then(Value::as_object);
     let mut merged = raw_text.clone();
-    merged.retain(|key, _| !key.starts_with("_monoize_"));
+    merged.retain(|key, _| !key.starts_with("_monoize_") && !matches!(key.as_str(), "format" | "verbosity"));
     if let Some(generated) = generated {
         for (key, value) in generated {
             merged.insert(key.clone(), value.clone());

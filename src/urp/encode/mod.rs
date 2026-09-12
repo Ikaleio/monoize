@@ -7,7 +7,7 @@ pub mod replicate;
 
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
-    FILE_ID_ORIGIN_EXTRA_KEY, InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage,
+    InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage,
     tool_call_arguments_for_wire,
 };
 use serde_json::{Map, Value, json};
@@ -22,16 +22,6 @@ pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>)
             obj.insert(k.clone(), v.clone());
         }
     }
-}
-
-pub(crate) fn file_id_origin_matches(
-    extra_body: &HashMap<String, Value>,
-    target_origin: &str,
-) -> bool {
-    extra_body
-        .get(FILE_ID_ORIGIN_EXTRA_KEY)
-        .and_then(Value::as_str)
-        == Some(target_origin)
 }
 
 /// Returns a wire-only clone of an opaque ProviderItem body with internal adapter keys removed.

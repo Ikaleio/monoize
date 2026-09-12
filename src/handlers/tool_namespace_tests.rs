@@ -95,6 +95,9 @@ fn namespace_stream_start_done_and_terminal_restore() {
         .unwrap()
         .0;
     let node = urp::Node::ToolCall {
+        namespace: None,
+        signature: None,
+
         id: None,
         tool_type: urp::ToolCallType::Custom,
         call_id: "patch1".into(),
@@ -106,6 +109,9 @@ fn namespace_stream_start_done_and_terminal_restore() {
         urp::UrpStreamEvent::NodeStart {
             node_index: 0,
             header: urp::NodeHeader::ToolCall {
+                namespace: None,
+                signature: None,
+
                 id: None,
                 tool_type: urp::ToolCallType::Custom,
                 call_id: "patch1".into(),
@@ -133,7 +139,7 @@ fn namespace_stream_start_done_and_terminal_restore() {
         let value = serde_json::to_value(event).unwrap();
         let item = match value["event"].as_str().unwrap() {
             "node_start" => {
-                assert_eq!(value["namespace"], "functions");
+                assert_eq!(value["header"]["namespace"], "functions");
                 value["header"].clone()
             }
             "node_done" => {
@@ -165,4 +171,82 @@ fn namespace_native_responses_retains_named_choice() {
     assert_eq!(wire["tools"][1]["type"], "namespace");
     assert_eq!(wire["tool_choice"]["namespace"], "functions");
     assert_eq!(wire["tool_choice"]["name"], "apply_patch");
+}
+
+#[test]
+fn promotion_preserves_native_config_and_toolset_namespace() {
+    let mut request=urp::decode::anthropic::decode_request(&json!({"model":"claude","max_tokens":100,"tools":[{"type":"computer_20251124","name":"computer","display_width_px":1440,"display_height_px":900}],"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"screenshot","toolset_name":"computer","input":{}}]}]})).unwrap();
+    let before = serde_json::to_value(&request).unwrap();
+    promote_responses_additional_tools(&mut request, ProviderType::Messages);
+    assert_eq!(serde_json::to_value(&request).unwrap(), before);
+}
+#[test]
+fn canonical_allowed_tools_namespace_selector_is_bridged() {
+    let mut request = request();
+    request.tool_choice = Some(urp::ToolChoice::Specific(
+        json!({"type":"allowed_tools","mode":"required","tools":[{"type":"custom","namespace":"functions","name":"apply_patch"}]}),
+    ));
+    promote_responses_additional_tools(&mut request, ProviderType::ChatCompletion);
+    let aliases = tool_namespace_aliases(&request);
+    let alias = aliases
+        .iter()
+        .find(|(_, identity)| identity["namespace"] == "functions")
+        .unwrap()
+        .0;
+    assert_eq!(
+        serde_json::to_value(request.tool_choice).unwrap()["tools"][0]["custom"]["name"],
+        *alias
+    );
+}
+
+#[test]
+fn gemini_function_namespaces_use_collision_free_aliases() {
+    let mut request=urp::decode::openai_responses::decode_request(&json!({"model":"gemini","input":[{"type":"function_call","call_id":"c","namespace":"one","name":"f","arguments":"{}"}],"tools":[{"type":"namespace","name":"one","tools":[{"type":"function","name":"f","parameters":{"type":"object"}}]},{"type":"namespace","name":"two","tools":[{"type":"function","name":"f","parameters":{"type":"object"}}]}]})).unwrap();
+    promote_responses_additional_tools(&mut request, ProviderType::Gemini);
+    filter_tools_for_provider(
+        &mut request,
+        ProviderType::Gemini,
+        DownstreamProtocol::Responses,
+    );
+    let aliases = tool_namespace_aliases(&request);
+    assert_eq!(aliases.len(), 2);
+    let encoded = urp::encode::gemini::encode_request(&request, "gemini");
+    let declarations = encoded["tools"][0]["functionDeclarations"]
+        .as_array()
+        .unwrap();
+    assert_eq!(declarations.len(), 2);
+    assert_ne!(declarations[0]["name"], declarations[1]["name"]);
+    let mut response=urp::decode::gemini::decode_response(&json!({"candidates":[{"content":{"parts":[{"functionCall":{"id":"c","name":declarations[0]["name"],"args":{}}}]},"finishReason":"STOP"}]})).unwrap();
+    restore_tool_namespace_node(&mut response.output[0], &aliases);
+    assert!(
+        matches!(&response.output[0],urp::Node::ToolCall {namespace:Some(namespace),name,..} if namespace=="one" && name=="f")
+    );
+}
+
+#[test]
+fn gemini_namespaced_result_names_follow_call_aliases() {
+    for namespace in [Some("one"), None] {
+        let mut request: urp::UrpRequest = serde_json::from_value(json!({"model":"gemini","input":[
+            {"type":"tool_call","call_id":"c","namespace":"one","name":"f","arguments":"{}"},
+            {"type":"tool_result","call_id":"c","namespace":namespace,"name":"f","content":[{"type":"text","text":"done"}]}
+        ],"tools":[{"type":"namespace","name":"one","tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}]})).unwrap();
+        promote_responses_additional_tools(&mut request, ProviderType::Gemini);
+        let encoded = urp::encode::gemini::encode_request(&request, "gemini");
+        let name = &encoded["tools"][0]["functionDeclarations"][0]["name"];
+        assert_ne!(name, "f");
+        assert_eq!(
+            &encoded["contents"][0]["parts"][0]["functionCall"]["name"],
+            name
+        );
+        assert_eq!(
+            &encoded["contents"][1]["parts"][0]["functionResponse"]["name"],
+            name
+        );
+    }
+    let mut request: urp::UrpRequest = serde_json::from_value(json!({"model":"m","input":[],"tools":[{
+        "type":"native_future_tool","name":"native","namespace":"native_space","origin_protocol":"messages","config":{"future":true}
+    }]})).unwrap();
+    let before = serde_json::to_value(&request).unwrap();
+    promote_responses_additional_tools(&mut request, ProviderType::Messages);
+    assert_eq!(serde_json::to_value(request).unwrap(), before);
 }

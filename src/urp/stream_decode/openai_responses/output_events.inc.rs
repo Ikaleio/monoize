@@ -151,12 +151,9 @@ fn output_text_delta_content(data_val: &Value) -> &str {
         .unwrap_or_default()
 }
 
-fn delta_extra_body_with_phase(
-    data_val: Value,
-    message_phases_by_output_index: &HashMap<u64, String>,
-) -> HashMap<String, Value> {
-    let mut extra = split_known_fields(
-        data_val.clone(),
+fn text_delta_extra_body(data_val: Value) -> HashMap<String, Value> {
+    split_known_fields(
+        data_val,
         &[
             "delta",
             "text",
@@ -167,15 +164,7 @@ fn delta_extra_body_with_phase(
             "logprobs",
             "phase",
         ],
-    );
-    if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
-        if let Some(phase) = message_phases_by_output_index.get(&idx) {
-            extra
-                .entry("phase".to_string())
-                .or_insert_with(|| json!(phase));
-        }
-    }
-    extra
+    )
 }
 
 fn role_from_item(item: &Value) -> Role {
@@ -192,106 +181,15 @@ fn role_from_item(item: &Value) -> Role {
     }
 }
 
-fn decode_item_from_value(item: &Value) -> Item {
-    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    match item_type {
-        "message" => {
-            let parts = item
-                .get("content")
-                .and_then(|v| v.as_array())
-                .map(|parts| parts.iter().map(decode_part_from_value).collect())
-                .unwrap_or_default();
-            Item::Message {
-                id: item
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| Some(crate::urp::synthetic_message_id())),
-                role: role_from_item(item),
-                parts,
-                extra_body: item_extra_body_from_value(item),
-            }
-        }
-        "function_call_output" | "custom_tool_call_output" => Item::ToolResult {
-            id: item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some(crate::urp::synthetic_tool_result_id())),
-            tool_type: if item_type == "custom_tool_call_output" {
-                ToolCallType::Custom
-            } else {
-                ToolCallType::Function
-            },
-            call_id: item
-                .get("call_id")
-                .or_else(|| item.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            is_error: false,
-            content: Vec::new(),
-            extra_body: item_extra_body_from_value(item),
-        },
-        "reasoning" => Item::Message {
-            id: item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some(crate::urp::synthetic_reasoning_id())),
-            role: Role::Assistant,
-            parts: vec![decode_part_from_value(item)],
-            extra_body: HashMap::new(),
-        },
-        "function_call" | "custom_tool_call" => Item::Message {
-            id: item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some(crate::urp::synthetic_tool_call_id())),
-            role: Role::Assistant,
-            parts: vec![decode_part_from_value(item)],
-            extra_body: HashMap::new(),
-        },
-        "image_generation_call" => Item::Message {
-            id: item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-            role: Role::Assistant,
-            parts: vec![decode_part_from_value(item)],
-            extra_body: item_extra_body_from_value(item),
-        },
-        other => Item::Message {
-            id: item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-            role: Role::Assistant,
-            parts: vec![Part::ProviderItem {
-                id: item
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-                origin_protocol: ProviderProtocol::Responses,
-                item_type: other.to_string(),
-                body: item.clone(),
-                extra_body: HashMap::new(),
-            }],
-            extra_body: HashMap::new(),
-        },
-    }
-}
-
 fn decode_part_from_value(part: &Value) -> Part {
+    if let Some(obj) = part.as_object() {
+        if let Ok(Some(media)) = crate::urp::decode::parse_compatible_media_part(obj) { return media; }
+    }
     let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match part_type {
-        "output_text" | "text" => Part::Text {
+        "input_text" | "output_text" | "text" => Part::Text {
             signature: None,
-            citations: Vec::new(),
+            citations: part.get("annotations").and_then(Value::as_array).cloned().unwrap_or_default(),
             content: part
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -359,6 +257,8 @@ fn decode_part_from_value(part: &Value) -> Part {
             extra_body: part_extra_body_from_value(part),
         },
         "function_call" | "tool_call" | "custom_tool_call" => Part::ToolCall {
+            namespace: part.get("namespace").and_then(Value::as_str).map(str::to_string),
+            signature: None,
             id: part
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -393,8 +293,8 @@ fn decode_part_from_value(part: &Value) -> Part {
         "image_generation_call" => image_node_from_image_generation_payload(part)
             .map(|node| match node {
                 Node::Image {
-                    source, extra_body, ..
-                } => Part::Image { source, extra_body },
+                    source, metadata, extra_body, ..
+                } => Part::Image { source, metadata, extra_body },
                 _ => unreachable!(),
             })
             .unwrap_or_else(|| Part::ProviderItem {

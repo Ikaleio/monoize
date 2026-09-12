@@ -213,9 +213,9 @@ ACOTU-9. Starting from `last_node`, scan backwards through the contiguous traili
 ACOTU-10. A **tool-result run** is a maximal contiguous sequence of one or more `Node::ToolResult` entries whose immediately preceding node is `Node::ToolCall`. Scan all tool-result runs in reverse request order. Within each run, scan its result nodes and their `content` entries in reverse order. The first content entry in each run that satisfies one of the following conditions is that run's candidate content block:
 1. every `ToolResultContent::Text`;
 2. `ToolResultContent::Image` with `ImageSource::Url` or `ImageSource::Base64`;
-3. `ToolResultContent::Image` with `ImageSource::FileId` whose `extra_body["_monoize_file_id_origin"]` equals `"openai"`;
+3. `ToolResultContent::Image` with `ImageSource::FileId` whose typed `metadata.resource.protocol` is `ChatCompletion` or `Responses`;
 4. `ToolResultContent::File` with `FileSource::Url` or `FileSource::Base64`; or
-5. `ToolResultContent::File` with `FileSource::FileId` whose `extra_body["_monoize_file_id_origin"]` equals `"openai"`.
+5. `ToolResultContent::File` with `FileSource::FileId` whose typed `metadata.resource.protocol` is `ChatCompletion` or `Responses`.
 
 `ToolResultContent::File` with `FileSource::Text` or `FileSource::Content` and every `ToolResultContent::ProviderItem` are not eligible. A run with no eligible content block produces no candidate. If no run produces a candidate, the transform is a no-op.
 

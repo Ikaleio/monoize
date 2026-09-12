@@ -36,12 +36,43 @@ URPV2-S5. Stream start usage and citation updates MUST use typed URP fields. Gem
 
 URPV2-S6. The rules URPV2-S1 through URPV2-S5 take precedence over historical native-replay precedence requirements. They apply to non-stream, streamed, synthetic-stream, and assistant-history encoders.
 
+URPV2-S7. Tool calls and tool results MUST expose an optional typed `namespace`. Calls MUST also expose an optional typed `signature`.
+Responses `namespace` and Messages `toolset_name` map to this namespace. Gemini function-call signatures map to the typed signature.
+Tool results MUST expose an optional typed `name` for protocols that identify the executed function by name.
+Headers and temporary adapter forms MUST preserve these fields. Absence MUST prevent replay metadata from restoring a removed value.
+
+URPV2-S8. Tool definitions MUST expose optional typed `namespace`, `tools`, `origin_protocol`, and `config` fields.
+Namespace children reside only in `tools`. Provider-native built-in configuration resides in `config`, with its exact protocol in `origin_protocol`.
+Encoders MUST emit provider-native configuration only for the recorded protocol. Function and custom definitions retain their existing typed semantics.
+Provider-executed calls and results without shared execution semantics remain origin-scoped `ProviderItem` nodes. They MUST NOT become client function calls.
+
+URPV2-S9. Image, audio, and file nodes MUST carry typed `MediaMetadata`, including optional `signature` and `media_type`.
+Media headers and temporary adapter forms MUST preserve it. Gemini Part signatures and fileData MIME types map to these fields.
+Chat generated audio data maps to an Audio node. Its reference identifier, transcript, and expiry reside in optional typed media metadata fields.
+An audio reference without media data MAY remain an origin-scoped ProviderItem.
+
+URPV2-S10. `NodeHeader::ProviderItem.body` MUST carry an optional initial native body. A decoder MUST NOT duplicate it in internal extras.
+Shared stream accumulation MUST initialize the provider node from this body and apply later provider deltas to it.
+
+URPV2-S11. Each special codec feature MUST have non-stream and streaming protocol-to-URP-to-protocol fixtures and URP-to-protocol-to-URP assertions.
+Fixtures MUST assert canonical ownership, semantic values, terminal state, and protocol-scoped passthrough where applicable.
+Request-only features MUST run with both stream values. Unsupported native features MUST have explicit omission or origin-scoped preservation assertions.
+Mutation fixtures MUST prove that typed changes and deletions win over retained wire shape and unknown fields.
+
+URPV2-S12. Affinity fingerprints MUST include typed namespaces, signatures, media metadata, citations, and reasoning metadata that change request semantics.
+Provider tool filtering MUST retain a native tool only for its recorded origin protocol. Gemini allowed-function lists MUST survive filtering.
+Native non-stream error envelopes MUST fail decoding. A valid Responses response with terminal error state follows PR2h in `unified_responses_proxy.spec.md`.
+Native streaming errors MUST produce an Error event and MUST NOT produce successful terminal output.
+Error replay metadata MUST NOT restore an obsolete typed error code or message.
+
 URPV2-1. The canonical internal request object MUST be:
 
 ```text
 UrpRequestV2 {
   model: String,
   input: Vec<Node>,
+  instructions_format?: InstructionsFormat,
+  context: RequestContext,
   stream?: bool,
   temperature?: number,
   top_p?: number,
@@ -49,6 +80,7 @@ UrpRequestV2 {
   reasoning?: ReasoningConfig,
   tools?: Vec<ToolDefinition>,
   tool_choice?: ToolChoice,
+  parallel_tool_calls?: bool,
   stop?: StopControl,
   verbosity?: String,
   response_format?: ResponseFormat,
@@ -57,12 +89,15 @@ UrpRequestV2 {
 }
 ```
 
+`context` contains runtime identities and MUST NOT serialize into canonical JSON. `instructions_format` records native instruction placement without instruction content.
+
 URPV2-2. The canonical internal response object MUST be:
 
 ```text
 UrpResponseV2 {
   id: String,
   model: String,
+  created_at?: integer,
   output: Vec<Node>,
   finish_reason?: FinishReason,
   usage?: Usage,
@@ -105,6 +140,8 @@ Node =
       role: OrdinaryRole,
       content: String,
       phase?: String,
+      signature?: JsonValue,
+      citations: Vec<JsonValue>,
       ...extra_body
     }
   | Image {
@@ -112,6 +149,7 @@ Node =
       id?: String,
       role: OrdinaryRole,
       source: ImageSource,
+      metadata: MediaMetadata,
       ...extra_body
     }
   | Audio {
@@ -119,6 +157,7 @@ Node =
       id?: String,
       role: OrdinaryRole,
       source: AudioSource,
+      metadata: MediaMetadata,
       ...extra_body
     }
   | File {
@@ -126,33 +165,34 @@ Node =
       id?: String,
       role: OrdinaryRole,
       source: FileSource,
+      metadata: MediaMetadata,
       ...extra_body
     }
   | Refusal {
       type: "refusal",
       id?: String,
-      role: "assistant",
       content: String,
       ...extra_body
     }
   | Reasoning {
       type: "reasoning",
       id?: String,
-      role: "assistant",
       content?: String,
       summary?: String,
       encrypted?: JsonValue,
       source?: String,
+      metadata: ReasoningMetadata,
       ...extra_body
     }
   | ToolCall {
       type: "tool_call",
       id?: String,
-      role: "assistant",
       tool_type: "function" | "custom",
       call_id: String,
       name: String,
       arguments: String,
+      namespace?: String,
+      signature?: JsonValue,
       ...extra_body
     }
   | ProviderItem {
@@ -166,10 +206,13 @@ Node =
     }
   | ToolResult {
       type: "tool_result",
+      signature?: JsonValue,
       id?: String,
       tool_type: "function" | "custom",
       call_id: String,
-      is_error?: bool,
+      namespace?: String,
+      name?: String,
+      is_error: bool,
       content: Vec<ToolResultContent>,
       ...extra_body
     }
@@ -178,6 +221,8 @@ Node =
       ...extra_body
     }
 ```
+
+Refusal, Reasoning, and ToolCall nodes have an implicit assistant role. These variants MUST NOT store a separate `role` field.
 
 URPV2-10. `OrdinaryRole` MUST be one of `system`, `developer`, `user`, or `assistant`.
 
@@ -218,17 +263,19 @@ FileSource =
   | Content { type: "content", content: Vec<JsonValue> }
   | Base64 {
       type: "base64",
-      filename?: String,
       media_type: String,
       data: String
     }
 ```
 
-URPV2-13a. A decoder that creates an `ImageSource::FileId` or `FileSource::FileId` MUST write the file-identifier namespace into the owning node or `ToolResultContent` extra body under internal key `_monoize_file_id_origin`. The value MUST be `openai` for Chat Completions or Responses file identifiers and `messages` for Anthropic Files API identifiers.
+URPV2-13a. A file-ID decoder MUST set `MediaMetadata.resource.protocol`. OpenAI file IDs use the Responses/Chat namespace; Anthropic file IDs use Messages.
 
-URPV2-13b. Provider file identifiers are provider-scoped opaque capabilities, not universally portable file references. A Chat Completions or Responses encoder MAY emit a typed file identifier only when `_monoize_file_id_origin = "openai"`. A Messages encoder MAY emit one only when `_monoize_file_id_origin = "messages"`. If the marker is absent or names the other namespace, the encoder MUST omit that image or file part. Chat Completions and Responses MAY translate file-id syntax between their two endpoint families because both use the OpenAI Files namespace. No adapter may infer portability from the identifier prefix or copy an OpenAI file identifier into Anthropic Files API syntax, or vice versa.
+URPV2-13b. File references MUST satisfy the protocol and resource-scope checks in media-transport.spec.md. Unsupported or ambiguous references MUST produce explicit errors. Encoders MUST NOT infer portability from prefixes.
 
-URPV2-13c. `_monoize_file_id_origin` is internal metadata under XTRA-10. Cross-family passthrough stripping MUST retain it until target encoding so URPV2-13b can be enforced. It MUST NOT appear on any wire object.
+URPV2-13c. File provenance MUST use typed MediaResource, not `_monoize_file_id_origin`. Cross-family stripping MUST preserve typed provenance. Native wire objects MUST NOT expose it.
+
+URPV2-13d. MediaMetadata MUST own optional filename, detail, document_title, document_context, document_citations, and resource fields. ToolResultContent media MUST carry this metadata.
+URPV2-13e. ToolResult nodes and headers MUST carry an optional typed signature. File transport MUST satisfy media-transport.spec.md.
 
 ### 3.1 Ordinary node invariants
 
@@ -276,7 +323,7 @@ RSN-8. Distinct `Reasoning` nodes are order-significant. URP MUST preserve their
 
 TCL-1. `ToolCall.call_id` MUST be non-empty.
 
-TCL-2. `ToolCall.arguments` MUST be a JSON-encoded string. If a source protocol delivers structured arguments as a JSON object or array, the decoder MUST serialize that structured value to JSON text before storing it in `arguments`.
+TCL-2. Function ToolCall.arguments MUST contain JSON text. A decoder MUST serialize structured arguments to JSON text. Custom ToolCall.arguments MUST preserve freeform input byte-for-byte, including JSON-looking input. Numeric normalization MUST apply only to complete function arguments. A stateless stream helper MUST NOT rewrite argument fragments.
 
 TCL-3. `ToolCall.tool_type` MUST be `function` for JSON-schema function calls and `custom` for freeform custom-tool calls. Missing `tool_type` in legacy internal data defaults to `function`.
 
@@ -364,6 +411,7 @@ UrpStreamEventV2 =
   | ResponseStart {
       id: String,
       model: String,
+      usage?: Usage,
       ...extra_body
     }
   | NodeStart {
@@ -406,15 +454,27 @@ STR-2. `NodeHeader` MUST be the discriminated union below.
 
 ```text
 NodeHeader =
-  | Text { role: OrdinaryRole, phase?: String }
-  | Image { role: OrdinaryRole }
-  | Audio { role: OrdinaryRole }
-  | File { role: OrdinaryRole }
-  | Refusal { role: "assistant" }
-  | Reasoning { role: "assistant" }
-  | ToolCall { role: "assistant", call_id: String, name: String }
-  | ProviderItem { origin_protocol: ProviderProtocol, role: OrdinaryRole, item_type: String }
-  | ToolResult { call_id: String }
+  | Text {
+      id?: String, role: OrdinaryRole, phase?: String,
+      signature?: JsonValue, citations: Vec<JsonValue>
+    }
+  | Image { id?: String, role: OrdinaryRole, metadata: MediaMetadata }
+  | Audio { id?: String, role: OrdinaryRole, metadata: MediaMetadata }
+  | File { id?: String, role: OrdinaryRole, metadata: MediaMetadata }
+  | Refusal { id?: String }
+  | Reasoning { id?: String, metadata: ReasoningMetadata }
+  | ToolCall {
+      id?: String, tool_type: "function" | "custom", call_id: String,
+      name: String, namespace?: String, signature?: JsonValue
+    }
+  | ProviderItem {
+      id?: String, origin_protocol: ProviderProtocol, role: OrdinaryRole,
+      item_type: String, body?: JsonValue
+    }
+  | ToolResult {
+      id?: String, tool_type: "function" | "custom", call_id: String,
+      namespace?: String, name?: String, signature?: JsonValue
+    }
   | NextDownstreamEnvelopeExtra
 ```
 
@@ -422,8 +482,9 @@ STR-3. `NodeDelta` MUST be the discriminated union below.
 
 ```text
 NodeDelta =
-  | Text { content: String }
+  | Text { content: String, signature?: JsonValue, citations: Vec<JsonValue> }
   | Reasoning {
+      metadata: ReasoningMetadata,
       content?: String,
       summary?: String,
       encrypted?: JsonValue,
@@ -513,7 +574,7 @@ RESP-3. Each `ToolCall(tool_type = "function")` node MUST encode as one top-leve
 
 RESP-3a. `ToolResult(tool_type = "function")` MUST encode as `function_call_output`. `ToolResult(tool_type = "custom")` MUST encode as `custom_tool_call_output`.
 
-RESP-3b. If `ToolResult.content` contains only one extra-free `Text` entry, the Responses encoder MUST emit `output` as that text string. If `ToolResult.content` contains an `Image` or `File` entry, or more than one content entry, the encoder MUST emit `output` as an array of `input_text`, `input_image`, and `input_file` blocks in content order. The encoder MUST NOT stringify that array and MUST NOT move those image or file blocks into a later user message.
+RESP-3b. Mixed ToolResult content MUST encode as an ordered array of input_text, input_image, and input_file blocks. It MUST NOT become JSON text or a later user message.
 
 RESP-4. Each maximal run of adjacent ordinary nodes that are not `Reasoning` and not `ToolCall`, and that share the same `role`, MAY encode as one Responses `message` item.
 
@@ -595,7 +656,7 @@ CHAT-7. If streamed chat output emits tool-call deltas, terminal `finish_reason`
 
 CHAT-7a. A Chat encoder MUST emit `ToolCall(tool_type = "function")` as `{type:"function",function:{name,arguments}}` and `ToolCall(tool_type = "custom")` as `{type:"custom",custom:{name,input}}`. A Chat decoder MUST accept both shapes in request history, non-stream output, and stream deltas. Chat tool-role results inherit the correlated call type so a later Responses encoder can choose `function_call_output` versus `custom_tool_call_output`.
 
-CHAT-7b. A Chat decoder MUST parse `role="tool"` and `role="function"` `content` as a string or as a content-part array. It MUST map `text`/`input_text`/`output_text` parts to `ToolResultContent::Text`, image parts to `ToolResultContent::Image`, and file parts to `ToolResultContent::File`. It MUST NOT drop image or file parts by concatenating only text fields. A later Responses encoder MUST place those image and file parts in `function_call_output.output` or `custom_tool_call_output.output` under RESP-3b.
+CHAT-7b. Chat tool and legacy function content MUST decode compatible text, image, file, and audio blocks under DC4c and MT41-MT46. Decoder capability MUST NOT depend on the selected target.
 
 CHAT-8. If cumulative usage is available when a successful Chat Completions stream terminates, the encoder MUST emit exactly one usage chunk after the empty-delta finish chunk and immediately before `[DONE]`. The usage chunk MUST use the same `id`, `object`, `created`, and `model` envelope values as the finish chunk, MUST set `choices` to an empty array, and MUST contain the cumulative `usage` object. The finish chunk MUST NOT contain a non-null `usage` object. If cumulative usage is unavailable, the encoder MUST omit the usage chunk.
 

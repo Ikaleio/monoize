@@ -1,5 +1,5 @@
 use crate::urp::encode::{
-    file_id_origin_matches, role_to_str, sanitize_provider_item_wire_body, text_parts,
+    role_to_str, sanitize_provider_item_wire_body, text_parts,
     tool_choice_to_chat_value, usage_input_details, usage_output_details,
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
@@ -9,7 +9,7 @@ use crate::urp::{
     CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY, CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY,
     CHAT_MESSAGE_AUDIO_EXTRA_KEY, CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
     CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING_CONTENT,
-    CHAT_THINKING_CONFIG_EXTRA_KEY, FILE_ID_ORIGIN_OPENAI, FileSource, FinishReason, ImageSource,
+    CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource, FinishReason, ImageSource,
     Node, OrdinaryRole, ProviderProtocol, ResponseFormat, StopControl, ToolCallType, ToolChoice,
     ToolDefinition, ToolResultContent, UrpRequest, UrpResponse, tool_call_arguments_for_wire,
 };
@@ -44,7 +44,7 @@ fn encode_chat_tool_call(
         ToolCallType::Custom => json!({
             "id": call_id,
             "type": "custom",
-            "custom": { "name": name, "input": tool_call_arguments_for_wire(arguments) }
+            "custom": { "name": name, "input": arguments }
         }),
     }
 }
@@ -97,7 +97,7 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
             Some(block)
         }
         Part::Image {
-            source, extra_body, ..
+            metadata, source, extra_body,
         } => {
             let mut image = match source {
                 ImageSource::Url { url, detail } => {
@@ -111,42 +111,55 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
             };
             if let Some(obj) = image.as_object_mut() {
                 merge_chat_wire_extra(obj, extra_body);
+                for key in ["detail", "filename", "media_type", "source"] { obj.remove(key); }
+                let mut image_url = Map::new();
+                let detail = match source {
+                    ImageSource::Url { url, detail } => { image_url.insert("url".into(), json!(url)); detail.as_ref() }
+                    ImageSource::Base64 { media_type, data } => {
+                        image_url.insert("url".into(), json!(format!("data:{media_type};base64,{data}")));
+                        metadata.detail.as_ref()
+                    }
+                    ImageSource::FileId { .. } => return None,
+                };
+                if let Some(detail) = detail { image_url.insert("detail".into(), json!(detail)); }
+                obj.insert("image_url".into(), Value::Object(image_url));
+                obj.insert("type".into(), json!("image_url"));
             }
             Some(image)
         }
         Part::File {
-            source, extra_body, ..
-        } => encode_chat_file_part(source, extra_body),
+            metadata, source, extra_body,
+        } => encode_chat_file_part(source, metadata, extra_body),
         Part::Audio {
             source, extra_body, ..
         } => encode_chat_audio_part(source, extra_body),
         Part::ProviderItem {
+            id,
+            item_type,
             origin_protocol,
             body,
             extra_body,
-            ..
-        } => encode_chat_provider_part(*origin_protocol, body, extra_body),
+        } => {
+            encode_chat_provider_part(*origin_protocol, id.as_deref(), item_type, body, extra_body)
+        }
         _ => None,
     }
 }
 
 fn encode_chat_file_part(
     source: &FileSource,
+    metadata: &crate::urp::MediaMetadata,
     extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
     let file = match source {
         FileSource::FileId { file_id }
-            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_OPENAI) =>
+            if crate::urp::media::resource_matches(metadata, ProviderProtocol::ChatCompletion) =>
         {
             json!({ "file_id": file_id })
         }
-        FileSource::Base64 {
-            filename,
-            media_type,
-            data,
-        } => {
+        FileSource::Base64 { media_type, data } => {
             let mut file = json!({ "file_data": format!("data:{media_type};base64,{data}") });
-            if let Some(filename) = filename {
+            if let Some(filename) = &metadata.filename {
                 file["filename"] = json!(filename);
             }
             file
@@ -156,9 +169,14 @@ fn encode_chat_file_part(
         | FileSource::Text { .. }
         | FileSource::Content { .. } => return None,
     };
-    let mut block = json!({ "type": "file", "file": file });
-    merge_chat_wire_extra(block.as_object_mut()?, extra_body);
-    Some(block)
+    let mut file = file;
+    if let Some(filename) = &metadata.filename { file["filename"] = json!(filename); }
+    let mut block = Map::new();
+    merge_chat_wire_extra(&mut block, extra_body);
+    for key in ["filename", "detail", "media_type", "source", "file_url", "url", "file_id", "file_data"] { block.remove(key); }
+    block.insert("type".into(), json!("file"));
+    block.insert("file".into(), file);
+    Some(Value::Object(block))
 }
 
 fn encode_chat_audio_part(
@@ -183,17 +201,41 @@ fn encode_chat_audio_part(
 
 fn encode_chat_provider_part(
     origin_protocol: ProviderProtocol,
+    id: Option<&str>,
+    item_type: &str,
     body: &Value,
     extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
     if origin_protocol != ProviderProtocol::ChatCompletion {
         return None;
     }
+    Some(chat_provider_item_wire_body(
+        id, item_type, body, extra_body,
+    ))
+}
+
+fn chat_provider_item_wire_body(
+    id: Option<&str>,
+    item_type: &str,
+    body: &Value,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
     let mut part = sanitize_provider_item_wire_body(body);
     if let Some(obj) = part.as_object_mut() {
         merge_chat_wire_extra(obj, extra_body);
+        obj.remove("id");
+        obj.remove("type");
+        // Synthetic identities must not add fields absent from the native envelope.
+        if body.get("id").is_some()
+            && let Some(id) = id
+        {
+            obj.insert("id".into(), json!(id));
+        }
+        if body.get("type").is_some() && !item_type.is_empty() {
+            obj.insert("type".into(), json!(item_type));
+        }
     }
-    Some(part)
+    part
 }
 
 fn finalize_chat_message_content(m: &mut Map<String, Value>, content_parts: Vec<Value>) {
@@ -290,6 +332,8 @@ fn push_part_into_pending_chat_message(
     part: &Part,
 ) {
     if let Part::ProviderItem {
+        id,
+        item_type,
         body,
         extra_body,
         origin_protocol: ProviderProtocol::ChatCompletion,
@@ -302,7 +346,12 @@ fn push_part_into_pending_chat_message(
             == Some(true)
         {
             flush_pending_chat_message(pending, out);
-            out.push(sanitize_provider_item_wire_body(body));
+            out.push(chat_provider_item_wire_body(
+                id.as_deref(),
+                item_type,
+                body,
+                extra_body,
+            ));
             return;
         }
     }
@@ -324,7 +373,22 @@ fn push_part_into_pending_chat_message(
     });
 
     match part {
+        Part::Audio {
+            metadata,
+            source: _,
+            extra_body,
+        } if extra_body
+            .get(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+            .and_then(Value::as_bool)
+            == Some(true) =>
+        {
+            if let Some(id) = &metadata.reference_id {
+                entry.message_extra.insert("audio".into(), json!({ "id": id }));
+            }
+        }
         Part::ProviderItem {
+            id,
+            item_type,
             origin_protocol: ProviderProtocol::ChatCompletion,
             body,
             extra_body,
@@ -334,15 +398,26 @@ fn push_part_into_pending_chat_message(
             .and_then(Value::as_bool)
             == Some(true) =>
         {
-            entry
-                .message_extra
-                .insert("audio".to_string(), sanitize_provider_item_wire_body(body));
+            entry.message_extra.insert(
+                "audio".to_string(),
+                chat_provider_item_wire_body(id.as_deref(), item_type, body, extra_body),
+            );
         }
-        Part::Text { .. }
-        | Part::Image { .. }
-        | Part::Audio { .. }
-        | Part::File { .. }
-        | Part::ProviderItem { .. } => {
+        Part::Text { citations, .. } => {
+            if !citations.is_empty() {
+                entry
+                    .message_extra
+                    .entry("annotations".into())
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                    .expect("canonical annotations array")
+                    .extend(citations.iter().cloned());
+            }
+            if let Some(content) = encode_chat_content_part(part) {
+                entry.content_parts.push(content);
+            }
+        }
+        Part::Image { .. } | Part::Audio { .. } | Part::File { .. } | Part::ProviderItem { .. } => {
             if let Some(content) = encode_chat_content_part(part) {
                 entry.content_parts.push(content);
             }
@@ -383,6 +458,16 @@ fn push_part_into_pending_chat_message(
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+    encode_request_checked(req, upstream_model)
+        .unwrap_or_else(|error| crate::urp::media::error_body(&error))
+}
+
+pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
+    let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::ChatCompletion)?;
+    Ok(encode_request_prepared(&prepared, upstream_model))
+}
+
+fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
     let request_items = nodes_to_items(&req.input);
     let mut body = json!({
         "model": upstream_model,
@@ -531,6 +616,44 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    encode_response_checked(resp, logical_model)
+        .unwrap_or_else(|error| crate::urp::media::error_body(&error))
+}
+
+pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Result<Value, String> {
+    validate_response_nodes(&resp.output)?;
+    Ok(encode_response_validated(resp, logical_model))
+}
+
+pub(crate) fn validate_response_nodes(nodes: &[Node]) -> Result<(), String> {
+    for node in nodes {
+        match node {
+            Node::Image { .. } | Node::File { .. } => {
+                return Err("Chat Completions responses cannot represent ordinary image or file output".into());
+            }
+            Node::Audio { role: OrdinaryRole::Assistant, source, extra_body, .. }
+                if extra_body.get(CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true)
+                    && matches!(source, AudioSource::Base64 { .. }) => {}
+            Node::Audio { .. } => {
+                return Err("Chat Completions responses require native message.audio for audio output".into());
+            }
+            Node::ToolResult { content, .. }
+                if content.iter().any(|part| matches!(part, ToolResultContent::Image { .. } | ToolResultContent::File { .. })) => {
+                return Err("Chat Completions responses cannot represent tool-result media".into());
+            }
+            Node::ProviderItem { item_type, .. }
+                if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio") => {
+                return Err("Native response content cannot contain input-only media items".into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
+    let projected = crate::urp::tool_signature::project_response(resp);
+    let resp = &projected;
     let message = encode_assistant_chat_message_from_nodes(&resp.output);
     let has_legacy_function_call = resp.output.iter().any(|node| {
         matches!(
@@ -634,7 +757,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     result
 }
 
-fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value> {
+pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value> {
     let mut message = Map::new();
     message.insert("role".to_string(), Value::String("assistant".to_string()));
 
@@ -660,9 +783,18 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
             Node::Text {
                 role: OrdinaryRole::Assistant,
                 content,
+                citations,
                 extra_body,
                 ..
             } => {
+                if !citations.is_empty() {
+                    message
+                        .entry("annotations".to_string())
+                        .or_insert_with(|| json!([]))
+                        .as_array_mut()
+                        .unwrap()
+                        .extend(citations.iter().cloned());
+                }
                 let mut block = json!({ "type": "text", "text": content });
                 if let Some(obj) = block.as_object_mut() {
                     merge_chat_wire_extra(obj, extra_body);
@@ -673,36 +805,19 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                 );
                 content_parts.push(block);
             }
-            Node::Image {
-                role: OrdinaryRole::Assistant,
+            Node::Audio {
+                metadata,
                 source,
                 extra_body,
                 ..
-            } => {
-                let mut image = match source {
-                    ImageSource::Url { url, detail } => {
-                        json!({ "type": "image_url", "image_url": { "url": url, "detail": detail } })
-                    }
-                    ImageSource::Base64 { media_type, data } => json!({
-                        "type": "image_url",
-                        "image_url": { "url": format!("data:{};base64,{}", media_type, data) }
-                    }),
-                    ImageSource::FileId { .. } => continue,
-                };
-                if let Some(obj) = image.as_object_mut() {
-                    merge_chat_wire_extra(obj, extra_body);
+            } if extra_body
+                .get(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+                .and_then(Value::as_bool)
+                == Some(true) =>
+            {
+                if let Some(audio) = encode_chat_generated_audio(metadata, source, extra_body) {
+                    message_extra.insert("audio".into(), audio);
                 }
-                merge_extra_preserving_existing(
-                    &mut message_extra,
-                    assistant_message_extra_from_node(node),
-                );
-                content_parts.push(image);
-            }
-            Node::File {
-                role: OrdinaryRole::Assistant,
-                ..
-            } => {
-                continue;
             }
             Node::Refusal { content, .. } => {
                 refusal.get_or_insert_with(|| content.clone());
@@ -757,6 +872,8 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                 }
             }
             Node::ProviderItem {
+                id,
+                item_type,
                 role: OrdinaryRole::Assistant,
                 origin_protocol: ProviderProtocol::ChatCompletion,
                 body,
@@ -767,16 +884,27 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                 .and_then(Value::as_bool)
                 == Some(true) =>
             {
-                message_extra.insert("audio".to_string(), sanitize_provider_item_wire_body(body));
+                message_extra.insert(
+                    "audio".to_string(),
+                    chat_provider_item_wire_body(id.as_deref(), item_type, body, extra_body),
+                );
             }
             Node::ProviderItem {
+                id,
+                item_type,
                 role: OrdinaryRole::Assistant,
                 origin_protocol,
                 body,
                 extra_body,
                 ..
             } => {
-                if let Some(part) = encode_chat_provider_part(*origin_protocol, body, extra_body) {
+                if let Some(part) = encode_chat_provider_part(
+                    *origin_protocol,
+                    id.as_deref(),
+                    item_type,
+                    body,
+                    extra_body,
+                ) {
                     merge_extra_preserving_existing(
                         &mut message_extra,
                         assistant_message_extra_from_node(node),
@@ -802,7 +930,10 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
     insert_openrouter_reasoning_fields(&mut message, &reasoning_parts, true);
     merge_chat_wire_extra(&mut message, &message_extra);
     if !had_content_parts
-        && (message.contains_key("audio") || message.contains_key("function_call"))
+        && (message.contains_key("audio")
+            || message.contains_key("function_call")
+            || message.contains_key("tool_calls")
+            || message.contains_key("refusal"))
     {
         message.insert("content".to_string(), Value::Null);
     }
@@ -852,7 +983,9 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
     for item in messages {
         match item {
             Item::ToolResult {
+                id,
                 call_id,
+                name,
                 content,
                 extra_body,
                 ..
@@ -866,12 +999,8 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                     .collect::<Vec<_>>()
                     .join("");
                 let mut m = Map::new();
-                if let Some(name) = extra_body
-                    .get(CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY)
-                    .and_then(Value::as_str)
-                {
+                if extra_body.contains_key(CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY) {
                     m.insert("role".to_string(), Value::String("function".to_string()));
-                    m.insert("name".to_string(), Value::String(name.to_string()));
                     m.insert("content".to_string(), Value::String(text));
                 } else {
                     m.insert("role".to_string(), Value::String("tool".to_string()));
@@ -879,6 +1008,14 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                     m.insert("tool_call_id".to_string(), Value::String(call_id.clone()));
                 }
                 merge_chat_wire_extra(&mut m, extra_body);
+                m.remove("id");
+                m.remove("name");
+                if let Some(id) = id {
+                    m.insert("id".to_string(), Value::String(id.clone()));
+                }
+                if let Some(name) = name {
+                    m.insert("name".to_string(), Value::String(name.clone()));
+                }
                 out.push(Value::Object(m));
             }
             Item::Message {
@@ -1200,4 +1337,33 @@ fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
         FinishReason::ContentFilter => "content_filter",
         FinishReason::Other => "error",
     }
+}
+
+pub(crate) fn encode_chat_generated_audio(
+    metadata: &crate::urp::MediaMetadata,
+    source: &AudioSource,
+    extra_body: &HashMap<String, Value>,
+) -> Option<Value> {
+    let AudioSource::Base64 { data, .. } = source else {
+        return None;
+    };
+    let mut audio = Map::new();
+    for (key, value) in extra_body {
+        if !key.starts_with("_monoize_")
+            && !matches!(key.as_str(), "id" | "data" | "transcript" | "expires_at")
+        {
+            audio.insert(key.clone(), value.clone());
+        }
+    }
+    audio.insert("data".into(), json!(data));
+    if let Some(id) = &metadata.reference_id {
+        audio.insert("id".into(), json!(id));
+    }
+    if let Some(transcript) = &metadata.transcript {
+        audio.insert("transcript".into(), json!(transcript));
+    }
+    if let Some(expires_at) = metadata.expires_at {
+        audio.insert("expires_at".into(), json!(expires_at));
+    }
+    Some(Value::Object(audio))
 }

@@ -6,7 +6,11 @@ pub(crate) async fn emit_synthetic_responses_stream(
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
     let mut seq = 1u64;
-    let encoded = urp::encode::openai_responses::encode_response(resp, logical_model);
+    let encoded = match urp::encode::openai_responses::encode_response_checked(resp, logical_model) {
+        Ok(encoded) => encoded,
+        Err(error) => return emit_responses_media_error(&tx, &mut seq, &resp.id,
+            resp.created_at.unwrap_or_else(now_ts), logical_model, &error).await,
+    };
     let encoded_output = encoded
         .get("output")
         .and_then(|v| v.as_array())
@@ -35,9 +39,19 @@ pub(crate) async fn emit_synthetic_responses_stream(
     send_responses_event(&tx, &mut seq, "response.in_progress", base_response).await?;
 
     for (output_index, item) in encoded_output.iter().enumerate() {
+        let mut added_item = item.clone();
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => added_item["arguments"] = json!(""),
+            Some("custom_tool_call") => added_item["input"] = json!(""),
+            Some("message") => added_item["content"] = json!([]),
+            _ => {}
+        }
+        if added_item.get("status").is_some() {
+            added_item["status"] = json!("in_progress");
+        }
         let item_payload = json!({
             "output_index": output_index,
-            "item": item.clone()
+            "item": added_item
         });
         send_responses_event(&tx, &mut seq, "response.output_item.added", item_payload).await?;
 
@@ -216,61 +230,9 @@ pub(crate) async fn emit_synthetic_responses_stream(
                 }
             }
             "message" => {
-                let text = extract_responses_message_text(item);
-                let phase = extract_responses_message_phase(item);
-                send_responses_event(
-                    &tx,
-                    &mut seq,
-                    "response.content_part.added",
-                    json!({
-                        "output_index": output_index,
-                        "content_index": 0,
-                        "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                                    "part": { "type": "output_text", "text": "", "annotations": [], "logprobs": [] },
-                    }),
-                )
-                .await?;
-                if !text.is_empty() {
-                    send_responses_delta_string(
-                        &tx,
-                        &mut seq,
-                        "response.output_text.delta",
-                        responses_text_delta_payload(
-                            phase.as_deref(),
-                            item,
-                            output_index as u64,
-                            0,
-                        ),
-                        "delta",
-                        &text,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
-                let mut done_payload =
-                    responses_text_delta_payload(phase.as_deref(), item, output_index as u64, 0);
-                if let Some(obj) = done_payload.as_object_mut() {
-                    obj.insert("text".to_string(), json!(text));
-                }
-                send_responses_event(&tx, &mut seq, "response.output_text.done", done_payload)
-                    .await?;
-                send_responses_event(
-                    &tx,
-                    &mut seq,
-                    "response.content_part.done",
-                    json!({
-                        "output_index": output_index,
-                        "content_index": 0,
-                        "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                        "part": {
-                            "type": "output_text",
-                            "text": text,
-                            "annotations": [],
-                            "logprobs": [],
-                        },
-                    }),
-                )
-                .await?;
+                emit_missing_terminal_message_child_lifecycles(
+                    &tx, &mut seq, output_index, item, sse_max_frame_length,
+                ).await?;
             }
             _ => {}
         }

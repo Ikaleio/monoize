@@ -78,6 +78,23 @@ pub(crate) async fn stream_responses_to_urp_events(
                 return Ok(());
             }
         };
+        let content_validation = match ev.event.as_str() {
+            "response.content_part.added" | "response.content_part.done" => data_val.get("part")
+                .map(crate::urp::decode::openai_responses::validate_compatible_content),
+            "response.output_item.added" | "response.output_item.done" => data_val.get("item")
+                .map(crate::urp::decode::openai_responses::validate_responses_items),
+            "response.completed" | "response.failed" | "response.incomplete" => data_val.get("response").and_then(|response| response.get("output"))
+                .map(crate::urp::decode::openai_responses::validate_responses_items),
+            _ => None,
+        };
+        if let Some(Err(message)) = content_validation {
+            let (code, message, extra_body, terminal_error) = responses_stream_error_parts("error", json!({
+                "error": { "code":"malformed_media", "type":"upstream_protocol_error", "message":message }
+            }));
+            let _ = tx.send(UrpStreamEvent::Error { code, message, extra_body }).await;
+            record_stream_terminal_error(&runtime_metrics, "malformed_media", terminal_error).await;
+            return Ok(());
+        }
         record_stream_response_service_tier(&runtime_metrics, &data_val).await;
         if let Some(native_response_id) = data_val
             .get("response")
@@ -107,7 +124,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             let sanitized_source_response = source_response.as_ref().map(|source| {
                 crate::urp::decode::split_extra(
                     source,
-                    &["id", "model", "output", "usage", "status"],
+                    &["id", "model", "output", "usage", "status", "incomplete_details", "error"],
                 )
             });
             let mut start_model = urp.model.clone();
@@ -144,10 +161,10 @@ pub(crate) async fn stream_responses_to_urp_events(
                     ("output".to_string(), json!([])),
                 ])
             };
-            if native_start_event && let Some(source) = sanitized_source_response {
+            if native_start_event {
                 start_extra.insert(
                     RESPONSES_STREAM_START_SOURCE_EXTRA_KEY.to_string(),
-                    Value::Object(source.into_iter().collect()),
+                    json!({}),
                 );
             }
             let _ = tx
@@ -170,7 +187,9 @@ pub(crate) async fn stream_responses_to_urp_events(
         )
         .await;
 
-        if matches!(ev.event.as_str(), "error" | "response.failed") {
+        let bare_error = data_val.get("error").is_some_and(|error| !error.is_null())
+            && data_val.get("response").is_none();
+        if matches!(ev.event.as_str(), "error" | "response.failed") || bare_error {
             let (code, message, extra_body, terminal_error) =
                 responses_stream_error_parts(&ev.event, data_val);
             let _ = tx
@@ -184,6 +203,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             return Ok(());
         }
 
+        accumulate_text_annotations(&ev.event, &data_val, &mut index_state);
         if ev.event == "response.output_text.delta" {
             if let Some(text) = data_val.get("delta").and_then(|v| v.as_str()) {
                 let output_index = data_val
@@ -512,6 +532,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 &call_order,
                 &calls,
                 &call_ids_by_output_index,
+                &index_state,
             );
             map_response_completed_with_accumulated(
                 data_val,

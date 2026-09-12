@@ -1,7 +1,6 @@
 use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
 use crate::handlers::usage::usage_to_chat_usage_json;
-use crate::urp::encode::sanitize_provider_item_wire_body;
 use crate::urp::stream_helpers::*;
 use crate::urp::{self, FinishReason, Node, NodeDelta, NodeHeader, UrpStreamEvent};
 use axum::response::sse::Event;
@@ -103,17 +102,10 @@ fn materialize_chat_error_fields(
     message: &str,
     extra_body: &HashMap<String, Value>,
 ) {
-    if error
-        .get("message")
-        .and_then(Value::as_str)
-        .is_none_or(|value| value.is_empty())
-    {
-        error.insert("message".to_string(), Value::String(message.to_string()));
-    }
-    if !nonempty_json_scalar(error.get("code")) {
-        if let Some(code) = code {
-            error.insert("code".to_string(), Value::String(code.to_string()));
-        }
+    error.insert("message".to_string(), Value::String(message.to_string()));
+    error.remove("code");
+    if let Some(code) = code {
+        error.insert("code".to_string(), Value::String(code.to_string()));
     }
     if !nonempty_json_scalar(error.get("type")) {
         let error_type = extra_body
@@ -234,12 +226,46 @@ fn merge_pending_envelope_extra(
     }
 }
 
+fn validate_chat_media_event(event: &UrpStreamEvent) -> Result<(), String> {
+    match event {
+        UrpStreamEvent::NodeStart { header: NodeHeader::ProviderItem { item_type, .. }, .. }
+            if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio") =>
+            Err("Native response content cannot contain input-only media items".into()),
+        UrpStreamEvent::NodeStart { header: NodeHeader::Audio { role: urp::OrdinaryRole::Assistant, .. }, extra_body, .. }
+            if extra_body.get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true) => Ok(()),
+        UrpStreamEvent::NodeStart { header: NodeHeader::Image { .. } | NodeHeader::File { .. } | NodeHeader::Audio { .. }, .. }
+        | UrpStreamEvent::NodeDelta { delta: NodeDelta::Image { .. } | NodeDelta::File { .. } | NodeDelta::Audio { source: urp::AudioSource::Url { .. } }, .. } =>
+            Err("Chat Completions responses cannot represent ordinary media content".into()),
+        UrpStreamEvent::NodeDone { node, .. } =>
+            urp::encode::openai_chat::validate_response_nodes(std::slice::from_ref(node)),
+        UrpStreamEvent::ResponseDone { output, .. } =>
+            urp::encode::openai_chat::validate_response_nodes(output),
+        _ => Ok(()),
+    }
+}
+
+async fn emit_chat_media_error(tx: &mpsc::Sender<Event>, message: &str) -> AppResult<()> {
+    send_plain_sse_data(tx, urp::media::error_body(message).to_string()).await?;
+    send_plain_sse_data(tx, "[DONE]".into()).await?;
+    Err(crate::error::AppError::new(
+        axum::http::StatusCode::BAD_GATEWAY,
+        "unsupported_media",
+        message,
+    )
+    .with_downstream_stream_terminal_sent(!tx.is_closed()))
+}
+
 pub(crate) async fn emit_synthetic_chat_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
     sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
+    if let Err(error) = urp::encode::openai_chat::validate_response_nodes(&resp.output) {
+        return emit_chat_media_error(&tx, &error).await;
+    }
+    let projected = crate::urp::tool_signature::project_response(resp);
+    let resp = &projected;
     let id = format!("chatcmpl_{}", uuid::Uuid::new_v4());
     let created = now_ts();
     let mut saw_tool = false;
@@ -422,22 +448,28 @@ pub(crate) async fn emit_synthetic_chat_stream(
             }
             | Node::Refusal { content, .. } => {
                 if !content.is_empty() {
-                    send_chat_chunk_string(
+                    send_chat_text_chunk(
                         &tx,
                         &id,
                         created,
                         logical_model,
-                        json!({ "content": "" }),
+                        chat_text_node_delta(node),
                         content,
-                        chat_delta_path_content,
+                        if matches!(node, Node::Refusal { .. }) {
+                            chat_delta_path_refusal
+                        } else {
+                            chat_delta_path_content
+                        },
                         sse_max_frame_length,
                     )
                     .await?;
                 }
             }
+            Node::Image { .. } | Node::File { .. } | Node::Audio { .. } => {
+                emit_chat_semantic_node(&tx, &id, created, logical_model, node).await?;
+            }
             Node::ProviderItem {
                 origin_protocol: urp::ProviderProtocol::ChatCompletion,
-                body,
                 ..
             } => {
                 let mut pending_extra = HashMap::new();
@@ -446,7 +478,7 @@ pub(crate) async fn emit_synthetic_chat_stream(
                     &id,
                     created,
                     logical_model,
-                    body,
+                    node,
                     &HashMap::new(),
                     &mut pending_extra,
                 )
@@ -463,6 +495,10 @@ pub(crate) async fn emit_synthetic_chat_stream(
         .filter(|reason| !reason.is_empty());
     let finish_reason = if resp.finish_reason == Some(urp::FinishReason::Other) {
         native_finish_reason.unwrap_or("error")
+    } else if resp.finish_reason == Some(FinishReason::ToolCalls) && saw_legacy_function_call {
+        "function_call"
+    } else if let Some(reason) = resp.finish_reason {
+        finish_reason_to_chat(reason)
     } else if saw_tool {
         "tool_calls"
     } else if saw_legacy_function_call {
@@ -547,6 +583,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
     sse_max_frame_length: Option<usize>,
     mask_sensitive_info: bool,
 ) -> AppResult<()> {
+    let mut signature_projection = crate::urp::tool_signature::SignatureProjection::default();
     let mut chat_id = String::new();
     let mut created = 0i64;
     let mut tool_idx = 0usize;
@@ -556,10 +593,22 @@ pub(crate) async fn encode_urp_stream_as_chat(
     let mut finished = false;
     let mut emitted_node_indices: HashSet<u32> = HashSet::new();
     let mut pending_envelope_extra = HashMap::new();
+    let mut native_audio_nodes = HashSet::new();
 
-    while let Some(event) = rx.recv().await {
+    while let Some(event) = signature_projection.recv(&mut rx).await {
         if finished {
             continue;
+        }
+        if let UrpStreamEvent::NodeStart { node_index, header: NodeHeader::Audio { .. }, extra_body, .. } = &event
+            && extra_body.get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true) {
+            native_audio_nodes.insert(*node_index);
+        }
+        if let UrpStreamEvent::NodeDelta { node_index, delta: NodeDelta::Audio { .. }, .. } = &event
+            && !native_audio_nodes.contains(node_index) {
+            return emit_chat_media_error(&tx, "Chat audio fragments require a native message.audio lifecycle").await;
+        }
+        if let Err(error) = validate_chat_media_event(&event) {
+            return emit_chat_media_error(&tx, &error).await;
         }
         if let UrpStreamEvent::NodeDelta { extra_body, .. } = &event {
             emit_chat_choice_extra_chunk(&tx, &chat_id, created, logical_model, extra_body).await?;
@@ -647,6 +696,16 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     },
                 );
             }
+            UrpStreamEvent::NodeStart {
+                node_index,
+                header: NodeHeader::Text { phase, .. },
+                ..
+            } => {
+                if let Some(phase) = phase {
+                    pending_envelope_extra.insert("phase".into(), json!(phase));
+                }
+                node_states.entry(node_index).or_default().saw_node_start = true;
+            }
             UrpStreamEvent::NodeStart { node_index, .. } => {
                 node_states.entry(node_index).or_default().saw_node_start = true;
             }
@@ -655,20 +714,39 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 delta:
                     NodeDelta::Text {
                         signature: _,
-                        citations: _,
+                        citations,
                         content,
                     },
                 extra_body,
                 ..
+            } => {
+                let mut native_delta = json!({"content":""});
+                if !citations.is_empty() {
+                    native_delta["annotations"] = json!(citations);
+                }
+                let delta =
+                    chat_delta_with_extras(native_delta, &extra_body, &mut pending_envelope_extra);
+                send_chat_text_chunk(
+                    &tx,
+                    &chat_id,
+                    created,
+                    logical_model,
+                    delta,
+                    &content,
+                    chat_delta_path_content,
+                    sse_max_frame_length,
+                )
+                .await?;
+                emitted_node_indices.insert(node_index);
             }
-            | UrpStreamEvent::NodeDelta {
+            UrpStreamEvent::NodeDelta {
                 node_index,
                 delta: NodeDelta::Refusal { content },
                 extra_body,
                 ..
             } => {
                 let delta = chat_delta_with_extras(
-                    json!({ "content": "" }),
+                    json!({"refusal":""}),
                     &extra_body,
                     &mut pending_envelope_extra,
                 );
@@ -679,7 +757,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     logical_model,
                     delta,
                     &content,
-                    chat_delta_path_content,
+                    chat_delta_path_refusal,
                     sse_max_frame_length,
                 )
                 .await?;
@@ -847,18 +925,23 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         tool_call.arguments_streamed = true;
                     }
                     emitted_node_indices.insert(node_index);
+                } else if matches!(
+                    &node,
+                    Node::Image { .. } | Node::File { .. } | Node::Audio { .. }
+                ) {
+                    emit_chat_semantic_node(&tx, &chat_id, created, logical_model, &node).await?;
+                    emitted_node_indices.insert(node_index);
                 } else if let Node::ProviderItem {
                     origin_protocol: urp::ProviderProtocol::ChatCompletion,
-                    body,
                     ..
-                } = node
+                } = &node
                 {
                     emit_chat_provider_content_part(
                         &tx,
                         &chat_id,
                         created,
                         logical_model,
-                        &body,
+                        &node,
                         &HashMap::new(),
                         &mut pending_envelope_extra,
                     )
@@ -974,26 +1057,33 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         | Node::Refusal { content, .. } => {
                             if !content.is_empty() {
                                 let delta = chat_delta_with_extras(
-                                    json!({ "content": "" }),
+                                    chat_text_node_delta(node),
                                     &HashMap::new(),
                                     &mut pending_envelope_extra,
                                 );
-                                send_chat_chunk_string(
+                                send_chat_text_chunk(
                                     &tx,
                                     &chat_id,
                                     created,
                                     logical_model,
                                     delta,
                                     content,
-                                    chat_delta_path_content,
+                                    if matches!(node, Node::Refusal { .. }) {
+                                        chat_delta_path_refusal
+                                    } else {
+                                        chat_delta_path_content
+                                    },
                                     sse_max_frame_length,
                                 )
                                 .await?;
                             }
                         }
+                        Node::Image { .. } | Node::File { .. } | Node::Audio { .. } => {
+                            emit_chat_semantic_node(&tx, &chat_id, created, logical_model, node)
+                                .await?;
+                        }
                         Node::ProviderItem {
                             origin_protocol: urp::ProviderProtocol::ChatCompletion,
-                            body,
                             ..
                         } => {
                             emit_chat_provider_content_part(
@@ -1001,7 +1091,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                 &chat_id,
                                 created,
                                 logical_model,
-                                body,
+                                node,
                                 &HashMap::new(),
                                 &mut pending_envelope_extra,
                             )
@@ -1038,6 +1128,11 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     .filter(|reason| !reason.is_empty());
                 let finish_reason = if finish_reason == Some(FinishReason::Other) {
                     native_finish_reason.unwrap_or("error")
+                } else if finish_reason == Some(FinishReason::ToolCalls) && saw_legacy_function_call
+                {
+                    "function_call"
+                } else if let Some(reason) = finish_reason {
+                    finish_reason_to_chat(reason)
                 } else if saw_tool {
                     "tool_calls"
                 } else if saw_legacy_function_call {
@@ -1103,12 +1198,16 @@ async fn emit_chat_provider_content_part(
     chat_id: &str,
     created: i64,
     logical_model: &str,
-    body: &Value,
+    node: &Node,
     event_extra: &HashMap<String, Value>,
     pending_envelope_extra: &mut HashMap<String, Value>,
 ) -> AppResult<()> {
     let delta = chat_delta_with_extras(
-        json!({ "content": [sanitize_provider_item_wire_body(body)] }),
+        Value::Object(
+            crate::urp::encode::openai_chat::encode_assistant_chat_message_from_nodes(
+                std::slice::from_ref(node),
+            ),
+        ),
         event_extra,
         pending_envelope_extra,
     );
@@ -1226,7 +1325,7 @@ async fn emit_tool_call_arguments_delta(
         created,
         logical_model,
         delta,
-        &urp::tool_call_arguments_for_wire(arguments),
+        arguments,
         if tool_call.legacy_function_call {
             chat_delta_path_function_call_arguments
         } else if tool_call.tool_type == urp::ToolCallType::Custom {
@@ -1395,6 +1494,75 @@ async fn emit_reasoning_delta(
             }]
         });
         send_plain_sse_data(tx, chunk.to_string()).await?;
+    }
+    Ok(())
+}
+
+fn chat_delta_path_refusal(value: &mut Value, content: &str) {
+    value["choices"][0]["delta"]["refusal"] = json!(content);
+}
+
+fn chat_text_node_delta(node: &Node) -> Value {
+    match node {
+        Node::Refusal { .. } => json!({"refusal":""}),
+        Node::Text {
+            citations, phase, ..
+        } => {
+            let mut delta = json!({"content":""});
+            if !citations.is_empty() {
+                delta["annotations"] = json!(citations);
+            }
+            if let Some(phase) = phase {
+                delta["phase"] = json!(phase);
+            }
+            delta
+        }
+        _ => json!({}),
+    }
+}
+
+async fn emit_chat_semantic_node(
+    tx: &mpsc::Sender<Event>,
+    id: &str,
+    created: i64,
+    model: &str,
+    node: &Node,
+) -> AppResult<()> {
+    let delta = crate::urp::encode::openai_chat::encode_assistant_chat_message_from_nodes(
+        std::slice::from_ref(node),
+    );
+    send_plain_sse_data(tx,json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]}).to_string()).await
+}
+
+async fn send_chat_text_chunk(
+    tx: &mpsc::Sender<Event>,
+    id: &str,
+    created: i64,
+    model: &str,
+    mut delta: Value,
+    content: &str,
+    patch: fn(&mut Value, &str),
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let annotations = delta
+        .as_object_mut()
+        .and_then(|object| object.remove("annotations"));
+    send_chat_chunk_string(
+        tx,
+        id,
+        created,
+        model,
+        delta,
+        content,
+        patch,
+        max_frame_length,
+    )
+    .await?;
+    if let Some(annotations) = annotations
+        .and_then(|value| value.as_array().cloned())
+        .filter(|values| !values.is_empty())
+    {
+        send_plain_sse_data(tx,json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":{"annotations":annotations},"finish_reason":null}]}).to_string()).await?;
     }
     Ok(())
 }

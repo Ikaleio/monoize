@@ -1,6 +1,6 @@
 //! `reasoning_strip_encrypted` response-phase transform.
 //!
-//! Drops opaque `encrypted` reasoning payloads from `Reasoning` nodes,
+//! Drops opaque `encrypted` reasoning payloads and typed tool-call signatures,
 //! reasoning deltas, and reasoning-bearing envelope-extra control events.
 //! Plaintext reasoning surfaces (`content`, `summary`, `source`) and node-local
 //! `extra_body` keys other than `encrypted_content` are preserved.
@@ -122,6 +122,9 @@ impl Transform for ReasoningStripEncryptedTransform {
 
 fn strip_encrypted_in_node(node: &mut Node) {
     match node {
+        Node::ToolCall { signature, .. } => {
+            *signature = None;
+        }
         Node::Reasoning {
             encrypted,
             extra_body,
@@ -139,6 +142,12 @@ fn strip_encrypted_in_node(node: &mut Node) {
 
 fn strip_encrypted_in_stream_event(event: &mut UrpStreamEvent) {
     match event {
+        UrpStreamEvent::NodeStart {
+            header: NodeHeader::ToolCall { signature, .. },
+            ..
+        } => {
+            *signature = None;
+        }
         UrpStreamEvent::NodeStart {
             header: NodeHeader::Reasoning { .. },
             extra_body,
@@ -178,6 +187,36 @@ fn strip_encrypted_in_stream_event(event: &mut UrpStreamEvent) {
 fn envelope_is_reasoning(extra_body: &HashMap<String, Value>) -> bool {
     extra_body.contains_key("encrypted_content")
         || extra_body.get("type").and_then(Value::as_str) == Some("reasoning")
+}
+
+#[cfg(test)]
+mod tool_signature_tests {
+    use super::*;
+
+    #[test]
+    fn stripping_call_signature_prevents_wire_transport_for_node_and_header() {
+        let mut node: Node=serde_json::from_value(json!({"type":"tool_call","call_id":"c","name":"run","arguments":"{}","signature":"secret"})).unwrap();
+        strip_encrypted_in_node(&mut node);
+        assert!(matches!(
+            node,
+            Node::ToolCall {
+                signature: None,
+                ..
+            }
+        ));
+        let mut event:UrpStreamEvent=serde_json::from_value(json!({"event":"node_start","node_index":0,"header":{"type":"tool_call","call_id":"c","name":"run","signature":"secret"}})).unwrap();
+        strip_encrypted_in_stream_event(&mut event);
+        assert!(matches!(
+            event,
+            UrpStreamEvent::NodeStart {
+                header: NodeHeader::ToolCall {
+                    signature: None,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
 }
 
 inventory::submit!(TransformEntry {

@@ -47,6 +47,9 @@ fn map_output_item_done(
                 ToolCallType::Function
             };
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolResult {
+                signature: None,
+                namespace: item.get("namespace").and_then(Value::as_str).map(str::to_string),
+                name: item.get("name").and_then(Value::as_str).map(str::to_string),
                 id: item
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -176,16 +179,19 @@ fn map_output_item_done(
             output_state_for(index_state, output_index).node_done_seen = true;
         }
         "message" => {
+            let completed_nodes = nodes_from_item_value(item);
+            if !completed_nodes.is_empty() {
+                output_state_for(index_state, output_index).content_nodes = completed_nodes.into_iter().enumerate().map(|(index,node)|(index as u64,node)).collect();
+            }
             let (part_done_seen, emitted_any_node) = index_state
                 .output_state_by_index
                 .get(&output_index)
                 .map(|state| (state.part_done_seen, state.emitted_any_node))
                 .unwrap_or((false, false));
             if !part_done_seen && !emitted_any_node {
-                let decoded_item = decode_item_from_value(item);
-                if let Item::Message { .. } = decoded_item {
+                {
                     let nodes = nodes_from_item_value(item);
-                    for node in nodes {
+                    for mut node in nodes {
                         let node_index = index_state.allocate_fresh_node_index();
                         emit_pending_envelope_control_if_needed(
                             output_index,
@@ -195,32 +201,27 @@ fn map_output_item_done(
                         events.push(UrpStreamEvent::NodeStart {
                             node_index,
                             header: node_header_from_node(&node),
-                            extra_body: item_extra_body_from_value(item),
+                            extra_body: node.extra_body_mut().clone(),
                         });
                         output_state_for(index_state, output_index).emitted_any_node = true;
                         if let Node::Text {
                             content,
-                            phase,
+                            citations,
+                            signature,
                             extra_body,
                             ..
                         } = &node
                             && !content.is_empty()
                         {
-                            let mut delta_extra_body = extra_body.clone();
-                            if let Some(phase) = phase {
-                                delta_extra_body
-                                    .entry("phase".to_string())
-                                    .or_insert_with(|| json!(phase));
-                            }
                             events.push(UrpStreamEvent::NodeDelta {
                                 node_index,
                                 delta: NodeDelta::Text {
-                                    signature: None,
-                                    citations: Vec::new(),
+                                    signature: signature.clone(),
+                                    citations: citations.clone(),
                                     content: content.clone(),
                                 },
                                 usage: None,
-                                extra_body: delta_extra_body,
+                                extra_body: extra_body.clone(),
                             });
                         }
                         events.push(UrpStreamEvent::NodeDone {
@@ -321,7 +322,7 @@ fn merge_response_completed_outputs(
                 nodes: merged_nodes,
             };
             used_accumulated_indices.push(index);
-        } else if !terminal_entry.nodes.iter().all(node_is_empty_text) {
+        } else if !terminal_entry.nodes.is_empty() {
             merged_entries.push(terminal_entry);
         }
     }
@@ -447,7 +448,6 @@ fn entry_output_kind(entry: &AccumulatedOutputEntry) -> Option<OutputEntryKind> 
         .nodes
         .iter()
         .filter(|node| !matches!(node, Node::NextDownstreamEnvelopeExtra { .. }))
-        .filter(|node| !node_is_empty_text(node))
         .filter_map(node_output_kind);
     let first = observed.next()?;
     observed.all(|kind| kind == first).then_some(first)
@@ -463,6 +463,7 @@ fn node_output_kind(node: &Node) -> Option<OutputEntryKind> {
         | Node::Refusal { .. } => Some(OutputEntryKind::Message),
         Node::ToolCall { .. } => Some(OutputEntryKind::ToolCall),
         Node::ToolResult { .. } => Some(OutputEntryKind::ToolResult),
+        Node::ProviderItem {extra_body,..} if extra_body.contains_key(crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY) => Some(OutputEntryKind::Message),
         Node::ProviderItem { .. } => Some(OutputEntryKind::ProviderItem),
         Node::NextDownstreamEnvelopeExtra { .. } => None,
     }
@@ -472,13 +473,11 @@ fn merge_output_node_lists(accumulated: &[Node], terminal: &[Node]) -> Result<Ve
     let accumulated_typed = accumulated
         .iter()
         .filter(|node| !matches!(node, Node::NextDownstreamEnvelopeExtra { .. }))
-        .filter(|node| !node_is_empty_text(node))
         .cloned()
         .collect::<Vec<_>>();
     let terminal_typed = terminal
         .iter()
         .filter(|node| !matches!(node, Node::NextDownstreamEnvelopeExtra { .. }))
-        .filter(|node| !node_is_empty_text(node))
         .cloned()
         .collect::<Vec<_>>();
 
@@ -583,6 +582,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
         }
         (
             Node::ToolCall {
+                namespace: left_namespace, signature: left_signature,
                 id: left_id,
                 tool_type: left_tool_type,
                 call_id: left_call_id,
@@ -591,6 +591,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 extra_body: left_extra,
             },
             Node::ToolCall {
+                namespace: right_namespace, signature: right_signature,
                 id: right_id,
                 tool_type: right_tool_type,
                 call_id: right_call_id,
@@ -599,6 +600,8 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 extra_body: right_extra,
             },
         ) => Ok(Node::ToolCall {
+            namespace: right_namespace.clone().or_else(|| left_namespace.clone()),
+            signature: right_signature.clone().or_else(|| left_signature.clone()),
             id: right_id.clone().or_else(|| left_id.clone()),
             tool_type: if *left_tool_type == ToolCallType::Custom
                 || *right_tool_type == ToolCallType::Custom
@@ -616,7 +619,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
             )?,
             extra_body: merge_extra_body(left_extra, right_extra),
         }),
-        (left, right) if nodes_semantically_match(left, right) => Ok(right.clone()),
+        (left, right) if left == right || nodes_semantically_match(left, right) => Ok(right.clone()),
         (left, right)
             if std::mem::discriminant(left) == std::mem::discriminant(right)
                 && node_is_empty_text(left) =>

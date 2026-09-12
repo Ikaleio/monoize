@@ -17,9 +17,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
-const MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY: &str =
-    "_monoize_messages_provider_item_start_body";
-
 #[derive(Debug, Default)]
 struct AnthropicMessagesStreamState {
     node_order: Vec<u32>,
@@ -284,6 +281,7 @@ struct ActiveNodeState {
 
 #[derive(Debug, Clone)]
 enum ActiveNodeKind {
+    Complete(Node),
     Text {
         citations: Vec<Value>,
         content: String,
@@ -295,6 +293,7 @@ enum ActiveNodeKind {
         encrypted: String,
     },
     ToolCall {
+        namespace: Option<String>,
         tool_type: ToolCallType,
         call_id: String,
         name: String,
@@ -752,6 +751,15 @@ pub(crate) async fn stream_messages_to_urp_events(
                     .get("content_block")
                     .cloned()
                     .unwrap_or(Value::Null);
+                let error_code = match cb.get("type").and_then(Value::as_str) {
+                    Some(
+                        "image" | "image_url" | "input_image" | "output_image" | "document"
+                        | "file" | "input_file" | "output_file" | "audio" | "input_audio"
+                        | "output_audio",
+                    ) => "messages_media_content_invalid",
+                    Some("tool_result") => "messages_tool_result_content_invalid",
+                    _ => "messages_custom_tool_input_invalid",
+                };
                 let events = match handle_content_block_start(
                     node_index,
                     cb,
@@ -763,7 +771,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                         emit_messages_terminal_protocol_error(
                             &tx,
                             &runtime_metrics,
-                            "messages_custom_tool_input_invalid",
+                            error_code,
                             message,
                             HashMap::new(),
                         )
@@ -963,19 +971,12 @@ fn handle_content_block_start(
     }
     let node = node_from_active(&active_node);
     let extra_body = active_node.extra_body.clone();
-    let mut start_extra_body = extra_body.clone();
-    if let ActiveNodeKind::ProviderItem { body, .. } = &active_node.kind {
-        start_extra_body.insert(
-            MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY.to_string(),
-            body.clone(),
-        );
-    }
     state.active_nodes.insert(node_index, active_node);
 
     let mut events = vec![UrpStreamEvent::NodeStart {
         node_index,
         header: node_header_from_node(&node),
-        extra_body: start_extra_body,
+        extra_body: extra_body.clone(),
     }];
     if let Node::ToolCall {
         tool_type: ToolCallType::Custom,
@@ -991,6 +992,26 @@ fn handle_content_block_start(
             },
             usage: None,
             extra_body,
+        });
+    }
+    let media_delta = match &node {
+        Node::Image { source, .. } => Some(NodeDelta::Image {
+            source: source.clone(),
+        }),
+        Node::File { source, .. } => Some(NodeDelta::File {
+            source: source.clone(),
+        }),
+        Node::Audio { source, .. } => Some(NodeDelta::Audio {
+            source: source.clone(),
+        }),
+        _ => None,
+    };
+    if let Some(delta) = media_delta {
+        events.push(UrpStreamEvent::NodeDelta {
+            node_index,
+            delta,
+            usage: None,
+            extra_body: HashMap::new(),
         });
     }
     Ok(events)
@@ -1177,22 +1198,29 @@ fn active_node_from_content_block(
     content_block: &Value,
     messages_custom_tool_names: &std::collections::HashSet<String>,
 ) -> Result<Option<ActiveNodeState>, String> {
+    if let Some(text) = content_block.as_str() {
+        return Ok(Some(ActiveNodeState {
+            kind: ActiveNodeKind::Text {
+                citations: Vec::new(),
+                content: text.to_string(),
+                phase: None,
+            },
+            extra_body: HashMap::new(),
+        }));
+    }
     let content_type = content_block
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
     Ok(match content_type {
-        "text" => {
+        "text" | "input_text" | "output_text" => {
             let phase = content_block
                 .get("phase")
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
-            let mut extra_body =
+            let extra_body =
                 object_without_keys(content_block, &["type", "text", "phase", "citations"]);
-            if let Some(phase) = phase.as_ref() {
-                extra_body.insert("phase".to_string(), Value::String(phase.clone()));
-            }
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Text {
                     citations: content_block
@@ -1258,7 +1286,12 @@ fn active_node_from_content_block(
                 .to_string();
             let input = content_block.get("input");
             let placeholder = tool_use_input_is_placeholder(input);
-            let tool_type = if messages_custom_tool_names.contains(&name) {
+            let tool_type = if content_block
+                .get("toolset_name")
+                .and_then(Value::as_str)
+                .is_none()
+                && messages_custom_tool_names.contains(&name)
+            {
                 ToolCallType::Custom
             } else {
                 ToolCallType::Function
@@ -1276,6 +1309,10 @@ fn active_node_from_content_block(
             };
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::ToolCall {
+                    namespace: content_block
+                        .get("toolset_name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     tool_type,
                     call_id: content_block
                         .get("id")
@@ -1287,9 +1324,22 @@ fn active_node_from_content_block(
                     replace_on_next_delta: placeholder,
                     custom_input_decoder,
                 },
-                extra_body: object_without_keys(content_block, &["type", "id", "name", "input"]),
+                extra_body: object_without_keys(
+                    content_block,
+                    &["type", "id", "name", "input", "toolset_name"],
+                ),
             })
         }
+        "image" | "image_url" | "input_image" | "output_image" | "document" | "file"
+        | "input_file" | "output_file" | "audio" | "input_audio" | "output_audio"
+        | "tool_result" => crate::urp::decode::anthropic::decode_content_block(
+            content_block,
+            OrdinaryRole::Assistant,
+        )?
+        .map(|mut node| ActiveNodeState {
+            extra_body: node.extra_body_mut().clone(),
+            kind: ActiveNodeKind::Complete(node),
+        }),
         _ => Some(ActiveNodeState {
             kind: ActiveNodeKind::ProviderItem {
                 id: content_block
@@ -1308,6 +1358,7 @@ fn active_node_from_content_block(
 
 fn node_from_active(active_node: &ActiveNodeState) -> Node {
     match &active_node.kind {
+        ActiveNodeKind::Complete(node) => node.clone(),
         ActiveNodeKind::Text {
             citations,
             content,
@@ -1351,12 +1402,15 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             }
         }
         ActiveNodeKind::ToolCall {
+            namespace,
             tool_type,
             call_id,
             name,
             arguments,
             ..
         } => Node::ToolCall {
+            namespace: namespace.clone(),
+            signature: None,
             id: Some(call_id.clone()),
             tool_type: *tool_type,
             call_id: call_id.clone(),
@@ -1400,25 +1454,32 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             id: node.id().cloned(),
         },
         Node::ToolCall {
+            namespace,
+            signature,
             tool_type,
             call_id,
             name,
             ..
         } => NodeHeader::ToolCall {
+            namespace: namespace.clone(),
+            signature: signature.clone(),
             id: node.id().cloned(),
             tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
         },
-        Node::Image { role, .. } => NodeHeader::Image {
+        Node::Image { role, metadata, .. } => NodeHeader::Image {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
             role: *role,
         },
-        Node::Audio { role, .. } => NodeHeader::Audio {
+        Node::Audio { role, metadata, .. } => NodeHeader::Audio {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
             role: *role,
         },
-        Node::File { role, .. } => NodeHeader::File {
+        Node::File { role, metadata, .. } => NodeHeader::File {
+            metadata: metadata.clone(),
             id: node.id().cloned(),
             role: *role,
         },
@@ -1429,16 +1490,26 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role,
             origin_protocol,
             item_type,
+            body,
             ..
         } => NodeHeader::ProviderItem {
+            body: Some(body.clone()),
             id: node.id().cloned(),
             origin_protocol: *origin_protocol,
             role: *role,
             item_type: item_type.clone(),
         },
         Node::ToolResult {
-            tool_type, call_id, ..
+            signature,
+            namespace,
+            name,
+            tool_type,
+            call_id,
+            ..
         } => NodeHeader::ToolResult {
+            signature: signature.clone(),
+            namespace: namespace.clone(),
+            name: name.clone(),
             id: node.id().cloned(),
             tool_type: *tool_type,
             call_id: call_id.clone(),
@@ -1581,6 +1652,9 @@ fn messages_stream_error_parts(
         data_val,
         &["type", "error", "code", "message", "param"],
     ));
+    if let Some(value) = error_value.get("param").or_else(|| data_val.get("param")) {
+        extra_body.insert("param".into(), value.clone());
+    }
     let terminal_error = StreamTerminalError {
         code: code
             .clone()

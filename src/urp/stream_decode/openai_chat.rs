@@ -5,7 +5,7 @@ use crate::handlers::usage::{
     record_stream_terminal_event, record_stream_usage_if_present, record_visible_output_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
-use crate::urp::decode::parse_tool_call_arguments_value;
+use crate::urp::decode::{parse_compatible_media_part, parse_tool_call_arguments_value};
 use crate::urp::stream_helpers::{
     extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks,
 };
@@ -16,7 +16,7 @@ use crate::urp::{
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -44,8 +44,14 @@ pub(crate) async fn stream_chat_to_urp_events(
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4());
+    let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut output_text = String::new();
+    let mut citations = Vec::new();
+    let mut refusal_text = String::new();
+    let mut refusal_node_index = None;
+    let mut audio_fields = Map::new();
+    let mut audio_node_index = None;
+    let mut latest_usage = None;
     let mut assistant_message_phase: Option<String> = None;
     let mut reasoning_text = String::new();
     let mut reasoning_sig = String::new();
@@ -127,6 +133,12 @@ pub(crate) async fn stream_chat_to_urp_events(
                 return Ok(());
             }
         };
+        if !response_started && let Some(id) = data_val.get("id").and_then(Value::as_str) {
+            response_id = id.into();
+        }
+        if let Some(usage) = parse_usage_from_chat_object(&data_val) {
+            latest_usage = Some(usage);
+        }
         record_stream_response_service_tier(&runtime_metrics, &data_val).await;
         record_stream_usage_if_present(&runtime_metrics, parse_usage_from_chat_object(&data_val))
             .await;
@@ -177,10 +189,12 @@ pub(crate) async fn stream_chat_to_urp_events(
             }
             protocol_terminal_seen = true;
             finish_reason = Some(parse_finish_reason(reason));
-            terminal_extra_body.insert(
-                CHAT_NATIVE_FINISH_REASON_EXTRA_KEY.to_string(),
-                Value::String(reason.to_string()),
-            );
+            if parse_finish_reason(reason) == FinishReason::Other {
+                terminal_extra_body.insert(
+                    CHAT_NATIVE_FINISH_REASON_EXTRA_KEY.to_string(),
+                    Value::String(reason.to_string()),
+                );
+            }
             if let Some(choice) = choice {
                 let choice_extra = chat_choice_extra(choice);
                 if !choice_extra.is_empty() {
@@ -201,6 +215,28 @@ pub(crate) async fn stream_chat_to_urp_events(
             .and_then(|c| c.get("delta"))
             .cloned()
             .unwrap_or(Value::Null);
+        for content in [
+            delta.get("content"),
+            choice
+                .and_then(|choice| choice.get("message"))
+                .and_then(|message| message.get("content")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Err(message) = validate_chat_content_media(content) {
+                emit_chat_terminal_error(
+                    &tx,
+                    &runtime_metrics,
+                    "malformed_media",
+                    &message,
+                    None,
+                    None,
+                )
+                .await?;
+                return Ok(());
+            }
+        }
         let mut delta_extra = std::mem::take(&mut pending_delta_extra);
         for (key, value) in chat_delta_extra(&delta) {
             delta_extra.insert(key, value);
@@ -265,7 +301,101 @@ pub(crate) async fn stream_chat_to_urp_events(
             .await?;
         }
 
-        if let Some(content_blocks) = delta.get("content").and_then(|v| v.as_array()) {
+        if let Some(annotations) = delta.get("annotations").and_then(Value::as_array) {
+            let node_index = ensure_node_started(
+                &tx,
+                &response_id,
+                &urp.model,
+                &mut response_started,
+                &mut text_node_index,
+                &mut next_node_index,
+                NodeHeader::Text {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
+                    phase: assistant_message_phase.clone(),
+                    citations: vec![],
+                    signature: None,
+                },
+                HashMap::new(),
+            )
+            .await?;
+            citations.extend(annotations.iter().cloned());
+            send_node_delta(
+                &tx,
+                node_index,
+                NodeDelta::Text {
+                    content: String::new(),
+                    citations: annotations.clone(),
+                    signature: None,
+                },
+                HashMap::new(),
+            )
+            .await?;
+        }
+        if let Some(refusal) = delta.get("refusal").and_then(Value::as_str) {
+            let node_index = ensure_node_started(
+                &tx,
+                &response_id,
+                &urp.model,
+                &mut response_started,
+                &mut refusal_node_index,
+                &mut next_node_index,
+                NodeHeader::Refusal { id: None },
+                HashMap::new(),
+            )
+            .await?;
+            refusal_text.push_str(refusal);
+            send_node_delta(
+                &tx,
+                node_index,
+                NodeDelta::Refusal {
+                    content: refusal.into(),
+                },
+                chat_delta_event_extra(std::mem::take(&mut delta_extra)),
+            )
+            .await?;
+        }
+        if let Some(audio) = delta.get("audio").and_then(Value::as_object) {
+            for (key, value) in audio {
+                if matches!(key.as_str(), "data" | "transcript") && value.is_string() {
+                    let joined = format!(
+                        "{}{}",
+                        audio_fields
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        value.as_str().unwrap()
+                    );
+                    audio_fields.insert(key.clone(), json!(joined));
+                } else if !key.starts_with("_monoize_") {
+                    audio_fields.insert(key.clone(), value.clone());
+                }
+            }
+            ensure_node_started(
+                &tx,
+                &response_id,
+                &urp.model,
+                &mut response_started,
+                &mut audio_node_index,
+                &mut next_node_index,
+                NodeHeader::Audio {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
+                    metadata: crate::urp::MediaMetadata {
+                        media_type: urp
+                            .audio_output_format
+                            .as_deref()
+                            .and_then(crate::urp::media::audio_mime_for_format)
+                            .map(str::to_string),
+                        ..Default::default()
+                    },
+                },
+                HashMap::from([(crate::urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY.into(), json!(true))]),
+            )
+            .await?;
+        }
+
+        if let Some(content_blocks) = delta.get("content").and_then(chat_content_blocks) {
             for (content_pos, block) in content_blocks.iter().enumerate() {
                 if let Some(text) = block.as_str() {
                     process_text_delta(
@@ -338,7 +468,7 @@ pub(crate) async fn stream_chat_to_urp_events(
                 let mut recognized = false;
                 if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
                     let item_type = block_obj.get("type").and_then(|v| v.as_str());
-                    if matches!(item_type, Some("text" | "output_text")) {
+                    if matches!(item_type, Some("input_text" | "text" | "output_text")) {
                         process_text_delta(
                             &tx,
                             &response_id,
@@ -581,7 +711,7 @@ pub(crate) async fn stream_chat_to_urp_events(
         ensure_response_started(&tx, &response_id, &urp.model, &mut response_started).await?;
     }
 
-    let usage = latest_stream_usage_snapshot(&runtime_metrics).await;
+    let usage = latest_usage.or(latest_stream_usage_snapshot(&runtime_metrics).await);
     {
         let total_output_chars = (output_text.len()
             + reasoning_text.len()
@@ -594,7 +724,7 @@ pub(crate) async fn stream_chat_to_urp_events(
         )
         .await;
     }
-    let output_nodes = sorted_nodes(
+    let mut output_nodes = sorted_nodes(
         assistant_message_phase.as_deref(),
         text_node_index,
         &output_text,
@@ -610,6 +740,45 @@ pub(crate) async fn stream_chat_to_urp_events(
         &provider_items,
     );
 
+    if let Some(index) = refusal_node_index {
+        output_nodes.push((
+            index,
+            Node::Refusal {
+                id: None,
+                content: refusal_text,
+                extra_body: HashMap::new(),
+            },
+        ));
+    }
+    if let Some(index) = audio_node_index
+        && let Some(part) = crate::urp::decode::openai_chat::parse_chat_message_audio_part(
+            &Value::Object(audio_fields),
+        )
+    {
+        let mut node = part.into_node(OrdinaryRole::Assistant);
+        if let Node::Audio {
+            source: crate::urp::AudioSource::Base64 { media_type, .. },
+            ..
+        } = &mut node
+            && let Some(mime) = urp
+                .audio_output_format
+                .as_deref()
+                .and_then(crate::urp::media::audio_mime_for_format)
+        {
+            *media_type = mime.into();
+        }
+        output_nodes.push((index, node));
+    }
+    for (_, node) in &mut output_nodes {
+        if let Node::Text {
+            citations: target, ..
+        } = node
+        {
+            *target = std::mem::take(&mut citations);
+            break;
+        }
+    }
+    output_nodes.sort_by_key(|(index, _)| *index);
     for (node_index, node) in &output_nodes {
         send_event(
             &tx,
@@ -670,6 +839,8 @@ fn chat_delta_extra(delta: &Value) -> Map<String, Value> {
                         | "tool_calls"
                         | "function_call"
                         | "refusal"
+                        | "audio"
+                        | "annotations"
                         | "phase"
                 )
         })
@@ -812,10 +983,23 @@ async fn emit_chat_terminal_error(
         .unwrap_or(StatusCode::BAD_GATEWAY.as_u16());
 
     let mut extra_body = HashMap::new();
-    if let Some(original_event) = original_event {
+    if let Some(mut original_event) = original_event {
+        if let Some(root) = original_event.as_object_mut() {
+            if let Some(error) = root.get_mut("error") {
+                strip_error_semantics(error);
+            }
+            if let Some(choices) = root.get_mut("choices").and_then(Value::as_array_mut) {
+                for choice in choices {
+                    if let Some(error) = choice.get_mut("error") {
+                        strip_error_semantics(error);
+                    }
+                }
+            }
+        }
+        crate::urp::decode::remove_untrusted_internal_keys(&mut original_event);
         extra_body.insert(CHAT_ERROR_EVENT_EXTRA_KEY.to_string(), original_event);
-    }
-    if let Some(error) = error_value {
+    } else if let Some(mut error) = error_value {
+        strip_error_semantics(&mut error);
         extra_body.insert("error".to_string(), error);
     }
     if let Some(error_type) = &error_type {
@@ -863,40 +1047,107 @@ async fn process_provider_item_block(
     ensure_response_started(tx, response_id, model, response_started).await?;
     let node_index = *next_node_index;
     *next_node_index += 1;
-    let node = Node::ProviderItem {
-        id: block_obj
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-        origin_protocol: ProviderProtocol::ChatCompletion,
-        role: OrdinaryRole::Assistant,
-        item_type: block_obj
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        body: Value::Object(block_obj.clone()),
-        extra_body: HashMap::new(),
+    let parsed_media = parse_compatible_media_part(block_obj).ok().flatten();
+    let mut node = parsed_media
+        .map(|part| part.into_node(OrdinaryRole::Assistant))
+        .unwrap_or_else(|| Node::ProviderItem {
+            id: block_obj
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+            origin_protocol: ProviderProtocol::ChatCompletion,
+            role: OrdinaryRole::Assistant,
+            item_type: block_obj
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            body: Value::Object(block_obj.clone()),
+            extra_body: HashMap::new(),
+        });
+    let (header, delta) = match &node {
+        Node::Image {
+            id,
+            role,
+            metadata,
+            source,
+            ..
+        } => (
+            NodeHeader::Image {
+                id: id.clone(),
+                role: *role,
+                metadata: metadata.clone(),
+            },
+            Some(NodeDelta::Image {
+                source: source.clone(),
+            }),
+        ),
+        Node::File {
+            id,
+            role,
+            metadata,
+            source,
+            ..
+        } => (
+            NodeHeader::File {
+                id: id.clone(),
+                role: *role,
+                metadata: metadata.clone(),
+            },
+            Some(NodeDelta::File {
+                source: source.clone(),
+            }),
+        ),
+        Node::Audio {
+            id,
+            role,
+            metadata,
+            source,
+            ..
+        } => (
+            NodeHeader::Audio {
+                id: id.clone(),
+                role: *role,
+                metadata: metadata.clone(),
+            },
+            Some(NodeDelta::Audio {
+                source: source.clone(),
+            }),
+        ),
+        Node::ProviderItem {
+            id,
+            origin_protocol,
+            role,
+            item_type,
+            body,
+            ..
+        } => (
+            NodeHeader::ProviderItem {
+                id: id.clone(),
+                origin_protocol: *origin_protocol,
+                role: *role,
+                item_type: item_type.clone(),
+                body: Some(body.clone()),
+            },
+            None,
+        ),
+        _ => unreachable!("media parser returned a non-media node"),
     };
+    let mut extra_body = node.extra_body_mut().clone();
+    extra_body.extend(chat_delta_event_extra(std::mem::take(delta_extra)));
     send_event(
         tx,
         UrpStreamEvent::NodeStart {
             node_index,
-            header: NodeHeader::ProviderItem {
-                id: node.id().cloned(),
-                origin_protocol: ProviderProtocol::ChatCompletion,
-                role: OrdinaryRole::Assistant,
-                item_type: block_obj
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            },
-            extra_body: chat_delta_event_extra(std::mem::take(delta_extra)),
+            header,
+            extra_body,
         },
     )
     .await?;
+    if let Some(delta) = delta {
+        send_node_delta(tx, node_index, delta, HashMap::new()).await?;
+    }
     provider_items.push((node_index, node));
     Ok(())
 }
@@ -1751,7 +2002,7 @@ async fn process_terminal_message_snapshot(
                 )
                 .await?;
             }
-        } else if let Some(blocks) = content.as_array() {
+        } else if let Some(blocks) = chat_content_blocks(content) {
             for (block_pos, block) in blocks.iter().enumerate() {
                 if let Some(text) = block.as_str() {
                     snapshot_text.push_str(text);
@@ -1779,7 +2030,7 @@ async fn process_terminal_message_snapshot(
                 if let Some(text) = block_obj.get("text").and_then(Value::as_str)
                     && matches!(
                         block_obj.get("type").and_then(Value::as_str),
-                        Some("text" | "output_text")
+                        Some("input_text" | "text" | "output_text")
                     )
                 {
                     snapshot_text.push_str(text);
@@ -1987,6 +2238,9 @@ async fn process_tool_call_delta(
             UrpStreamEvent::NodeStart {
                 node_index,
                 header: NodeHeader::ToolCall {
+                    namespace: None,
+                    signature: None,
+
                     id: None,
                     tool_type,
                     call_id: call_id.clone(),
@@ -2233,6 +2487,9 @@ fn sorted_nodes(
         nodes.push((
             node_index,
             Node::ToolCall {
+                namespace: None,
+                signature: None,
+
                 id: Some(crate::urp::synthetic_tool_call_id()),
                 tool_type: *tool_type,
                 call_id: call_id.clone(),
@@ -2246,4 +2503,35 @@ fn sorted_nodes(
     nodes.extend(provider_items.iter().cloned());
     nodes.sort_by_key(|(node_index, _)| *node_index);
     nodes
+}
+
+fn strip_error_semantics(error: &mut Value) {
+    let Some(object) = error.as_object_mut() else {
+        *error = json!({});
+        return;
+    };
+    for key in ["message", "code", "type", "param"] {
+        object.remove(key);
+    }
+    if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
+        metadata.remove("provider_code");
+        metadata.remove("error_type");
+    }
+}
+
+fn chat_content_blocks(value: &Value) -> Option<&[Value]> {
+    match value {
+        Value::Array(parts) => Some(parts),
+        Value::Object(_) => Some(std::slice::from_ref(value)),
+        _ => None,
+    }
+}
+
+fn validate_chat_content_media(value: &Value) -> Result<(), String> {
+    for part in chat_content_blocks(value).into_iter().flatten() {
+        if let Some(obj) = part.as_object() {
+            parse_compatible_media_part(obj)?;
+        }
+    }
+    Ok(())
 }

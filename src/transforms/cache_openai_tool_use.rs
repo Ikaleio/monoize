@@ -3,10 +3,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{
-    FILE_ID_ORIGIN_EXTRA_KEY, FILE_ID_ORIGIN_OPENAI, FileSource, ImageSource, Node,
-    ToolResultContent, UrpRequest,
-};
+use crate::urp::{FileSource, ImageSource, Node, ProviderProtocol, ToolResultContent, UrpRequest};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -241,27 +238,24 @@ fn is_eligible_responses_tool_result_content(content: &ToolResultContent) -> boo
     match content {
         ToolResultContent::Text { .. } => true,
         ToolResultContent::Image {
-            source, extra_body, ..
+            source, metadata, ..
         } => match source {
             ImageSource::Url { .. } | ImageSource::Base64 { .. } => true,
-            ImageSource::FileId { .. } => file_id_origin_is_openai(extra_body),
+            ImageSource::FileId { .. } => {
+                crate::urp::media::resource_matches(metadata, ProviderProtocol::Responses)
+            }
         },
         ToolResultContent::File {
-            source, extra_body, ..
+            source, metadata, ..
         } => match source {
             FileSource::Url { .. } | FileSource::Base64 { .. } => true,
-            FileSource::FileId { .. } => file_id_origin_is_openai(extra_body),
+            FileSource::FileId { .. } => {
+                crate::urp::media::resource_matches(metadata, ProviderProtocol::Responses)
+            }
             FileSource::Text { .. } | FileSource::Content { .. } => false,
         },
         ToolResultContent::ProviderItem { .. } => false,
     }
-}
-
-fn file_id_origin_is_openai(extra_body: &HashMap<String, Value>) -> bool {
-    extra_body
-        .get(FILE_ID_ORIGIN_EXTRA_KEY)
-        .and_then(Value::as_str)
-        == Some(FILE_ID_ORIGIN_OPENAI)
 }
 
 fn node_extra_body(node: &Node) -> &HashMap<String, Value> {

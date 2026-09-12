@@ -372,6 +372,8 @@ pub async fn create_image_edit(
         extra_body: HashMap::new(),
     });
     inputs.push(urp::Node::Image {
+        metadata: Default::default(),
+
         id: None,
         role: urp::OrdinaryRole::User,
         source: urp::ImageSource::Base64 {
@@ -382,6 +384,8 @@ pub async fn create_image_edit(
     });
     for (extra_media_type, extra_b64) in extra_images {
         inputs.push(urp::Node::Image {
+            metadata: Default::default(),
+
             id: None,
             role: urp::OrdinaryRole::User,
             source: urp::ImageSource::Base64 {
@@ -393,6 +397,8 @@ pub async fn create_image_edit(
     }
     if let Some((mask_media_type, mask_b64)) = mask_data {
         inputs.push(urp::Node::Image {
+            metadata: Default::default(),
+
             id: Some("__monoize_image_api_mask".to_string()),
             role: urp::OrdinaryRole::User,
             source: urp::ImageSource::Base64 {
