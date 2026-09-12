@@ -179,6 +179,10 @@ IR7. `data` MUST be a JSON array. Each element corresponds to one extracted imag
 
 IR8. If `n = 1` and the single sub-request produces multiple assistant `Node::Image` outputs, all images MUST appear as separate entries in `data[]`.
 
+IR8a. Generated image metadata MUST use typed `MediaMetadata.image_generation` fields: `quality`, `size`, `background`, `output_format`, and `model`. Each field is an optional upstream-reported string. The non-streaming response MUST emit a field at the top level only when every returned image reports the same non-absent value. Missing or conflicting values MUST be omitted. Request parameters, routing aliases, and MIME defaults MUST NOT supply missing response metadata.
+
+IR8b. Completed downstream image SSE events MUST emit the corresponding image's typed generation metadata. Decoding a streaming upstream for a non-streaming downstream MUST preserve the same metadata as direct non-streaming decoding. Changes or deletions to typed metadata MUST override adapter extras.
+
 IR9. When a `Node::Image` has `ImageSource::Url`, the data item MUST use field `url` instead of `b64_json`:
 
 ```json

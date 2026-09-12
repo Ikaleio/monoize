@@ -134,6 +134,8 @@ curl http://localhost:8080/v1/images/edits \
   -F image[]=@input.png
 ```
 
+Image responses preserve upstream-reported `quality`, `size`, `background`, `output_format`, and image `model`. Missing values remain absent; request values are not proof of upstream execution. For multiple images, a top-level field appears only when every image reports the same value. Completed image stream events report metadata for their own image.
+
 ## Use official SDKs
 
 Point an official SDK at Monoize by setting its base URL:

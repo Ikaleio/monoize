@@ -800,6 +800,8 @@ pub enum InstructionsFormat {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MediaMetadata {
+    #[serde(default, skip_serializing_if = "ImageGenerationMetadata::is_empty")]
+    pub image_generation: ImageGenerationMetadata,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -822,6 +824,85 @@ pub struct MediaMetadata {
     pub transcript: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImageGenerationMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl ImageGenerationMetadata {
+    pub const KEYS: [&'static str; 5] = ["quality", "size", "background", "output_format", "model"];
+
+    pub fn from_object(obj: &serde_json::Map<String, Value>) -> Self {
+        let string = |key| obj.get(key).and_then(Value::as_str).map(str::to_owned);
+        Self {
+            quality: string("quality"),
+            size: string("size"),
+            background: string("background"),
+            output_format: string("output_format"),
+            model: string("model"),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.quality.is_none()
+            && self.size.is_none()
+            && self.background.is_none()
+            && self.output_format.is_none()
+            && self.model.is_none()
+    }
+
+    pub fn to_object(&self) -> serde_json::Map<String, Value> {
+        [
+            ("quality", &self.quality),
+            ("size", &self.size),
+            ("background", &self.background),
+            ("output_format", &self.output_format),
+            ("model", &self.model),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| {
+            value
+                .as_ref()
+                .map(|value| (key.to_owned(), Value::String(value.clone())))
+        })
+        .collect()
+    }
+
+    pub fn apply_to(&self, obj: &mut serde_json::Map<String, Value>) {
+        for key in Self::KEYS {
+            obj.remove(key);
+        }
+        obj.extend(self.to_object());
+    }
+
+    pub fn for_source(&self, source: &ImageSource) -> Self {
+        let mut generation = self.clone();
+        if generation.output_format.is_some()
+            && let ImageSource::Base64 { media_type, .. } = source
+        {
+            let format = match media_type.as_str() {
+                "image/png" => Some("png"),
+                "image/jpeg" => Some("jpeg"),
+                "image/webp" => Some("webp"),
+                _ => None,
+            };
+            if let Some(format) = format {
+                generation.output_format = Some(format.to_owned());
+            }
+        }
+        generation
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

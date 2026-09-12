@@ -233,6 +233,7 @@ The metadata types MUST use these fields:
 
 ```text
 MediaMetadata {
+  image_generation: ImageGenerationMetadata,
   filename: Option<String>,
   detail: Option<String>,
   document_title: Option<String>,
@@ -251,6 +252,14 @@ MediaResource {
   provider_id: Option<String>,
   channel_id: Option<String>,
   credential_scope: Option<String>
+}
+
+ImageGenerationMetadata {
+  quality: Option<String>,
+  size: Option<String>,
+  background: Option<String>,
+  output_format: Option<String>,
+  model: Option<String>
 }
 
 ReasoningMetadata {

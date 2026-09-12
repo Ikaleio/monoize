@@ -134,6 +134,8 @@ curl http://localhost:8080/v1/images/edits \
   -F image[]=@input.png
 ```
 
+圖像回應保留上游回傳的 `quality`、`size`、`background`、`output_format` 和圖像 `model`。上游未回傳的值保持缺省；請求參數不能證明上游的實際執行結果。回傳多張圖像時，只有所有圖像都報告相同值，回應才會包含對應的頂層欄位。圖像串流的完成事件攜帶各自圖像的中繼資料。
+
 ## 使用官方 SDK
 
 將官方 SDK 的基礎 URL 指向 Monoize：

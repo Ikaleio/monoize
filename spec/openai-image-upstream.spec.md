@@ -73,7 +73,7 @@ OIU-D1. Monoize MUST parse the upstream response as the OpenAI Image API respons
 ```
 
 OIU-D2. For each entry in `data[]`:
-- If `b64_json` is present: create a `Node::Image` with `role: Assistant` and `ImageSource::Base64 { media_type: "image/png", data: <b64_json> }`.
+- If `b64_json` is present: create a `Node::Image` with `role: Assistant` and `ImageSource::Base64 { media_type: <MIME per OIU-D8>, data: <b64_json> }`.
 - If `url` is present (and `b64_json` is absent): create a `Node::Image` with `role: Assistant` and `ImageSource::Url { url: <url>, detail: None }`.
 
 OIU-D3. If `revised_prompt` is present in any `data[]` entry, Monoize MUST create a `Node::Text` with `role: Assistant` and the `revised_prompt` content, placed before image nodes in source order.
@@ -90,6 +90,10 @@ OIU-D5. The decoded `UrpResponse` MUST have:
 OIU-D6. If the upstream response contains a top-level `usage` object, Monoize MUST parse it into URP `Usage` using the same field mapping as the existing image API response handler.
 
 OIU-D7. For `gpt-image-2`, decoded usage MUST preserve text input tokens, image input tokens, cached input tokens, and image output tokens as structured URP usage fields when upstream provides them.
+
+OIU-D8. Decoders MUST copy upstream-reported `quality`, `size`, `background`, `output_format`, and `model` strings into each generated image's typed `MediaMetadata.image_generation`. Non-streaming Images responses use top-level fields. Completed Images SSE events and Responses `image_generation_call` items use their own fields. These recognized fields MUST NOT remain duplicate semantic values in adapter extras. Base64 image MIME MUST follow an explicit `output_format` (`png`, `jpeg`, or `webp`); absent format retains the existing PNG fallback without inventing response metadata.
+
+OIU-D9. Non-streaming and streaming Responses encoders MUST project generated-image metadata from the current typed fields. Native replay extras MUST NOT restore deleted metadata. The response envelope's text-model identifier MUST NOT be used as the generated image's model.
 
 ## 5. Downstream Rendering
 
