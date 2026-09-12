@@ -361,6 +361,98 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
     }
 }
 
+fn decode_chat_tool_result_content(content: &Value) -> Vec<ToolResultContent> {
+    let mut out = Vec::new();
+    match content {
+        Value::Null => {}
+        Value::String(text) => {
+            if !text.is_empty() {
+                out.push(ToolResultContent::Text {
+                    text: text.clone(),
+                    extra_body: HashMap::new(),
+                });
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                decode_chat_tool_result_item(item, &mut out);
+            }
+        }
+        Value::Object(_) => decode_chat_tool_result_item(content, &mut out),
+        other => {
+            let text = value_to_text(other);
+            if !text.is_empty() {
+                out.push(ToolResultContent::Text {
+                    text,
+                    extra_body: HashMap::new(),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn decode_chat_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) {
+    if let Some(text) = value.as_str() {
+        if !text.is_empty() {
+            content.push(ToolResultContent::Text {
+                text: text.to_string(),
+                extra_body: HashMap::new(),
+            });
+        }
+        return;
+    }
+    let Some(obj) = value.as_object() else {
+        let text = value_to_text(value);
+        if !text.is_empty() {
+            content.push(ToolResultContent::Text {
+                text,
+                extra_body: HashMap::new(),
+            });
+        }
+        return;
+    };
+
+    let ptype = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match ptype {
+        "input_text" | "output_text" | "text" => {
+            if let Some(text) = obj
+                .get("text")
+                .and_then(|v| v.as_str())
+                .or_else(|| obj.get("content").and_then(|v| v.as_str()))
+            {
+                content.push(ToolResultContent::Text {
+                    text: text.to_string(),
+                    extra_body: split_extra(obj, &["type", "text", "content"]),
+                });
+            }
+        }
+        _ => {
+            if let Some(image) = parse_image_part_from_obj(obj) {
+                let Part::Image { source, extra_body } = image else {
+                    unreachable!();
+                };
+                content.push(ToolResultContent::Image { source, extra_body });
+                return;
+            }
+            if let Some(file) = parse_file_part_from_obj(obj) {
+                let Part::File { source, extra_body } = file else {
+                    unreachable!();
+                };
+                content.push(ToolResultContent::File { source, extra_body });
+                return;
+            }
+            let text = value_to_text(value);
+            if !text.is_empty() {
+                content.push(ToolResultContent::Text {
+                    text,
+                    extra_body: HashMap::new(),
+                });
+            }
+        }
+    }
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -417,7 +509,6 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .unwrap_or_default()
                 .to_string();
             let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
-            let text = value_to_text(&content);
             let mut result_extra = split_extra(msg_obj, &["role", "name", "content"]);
             result_extra.insert(
                 CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY.to_string(),
@@ -431,13 +522,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 tool_type: ToolCallType::Function,
                 call_id: legacy_function_call_id(&name),
                 is_error: false,
-                content: (!text.is_empty())
-                    .then(|| ToolResultContent::Text {
-                        text,
-                        extra_body: HashMap::new(),
-                    })
-                    .into_iter()
-                    .collect(),
+                content: decode_chat_tool_result_content(&content),
                 extra_body: result_extra,
             });
             continue;
@@ -457,14 +542,6 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .unwrap_or("")
                 .to_string();
             let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
-            let text = value_to_text(&content);
-            let mut tool_result_content = Vec::new();
-            if !text.is_empty() {
-                tool_result_content.push(ToolResultContent::Text {
-                    text,
-                    extra_body: HashMap::new(),
-                });
-            }
             input_nodes.push(Node::ToolResult {
                 id: msg_obj
                     .get("id")
@@ -476,7 +553,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     .unwrap_or(ToolCallType::Function),
                 call_id,
                 is_error: false,
-                content: tool_result_content,
+                content: decode_chat_tool_result_content(&content),
                 extra_body: split_extra(msg_obj, &["role", "tool_call_id", "content"]),
             });
             continue;

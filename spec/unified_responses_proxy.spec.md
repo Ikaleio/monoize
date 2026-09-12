@@ -1420,6 +1420,22 @@ DC4a. Non-stream Chat reconstruction:
 
 DC4b. A same-Chat non-streaming response MUST preserve the upstream integer `created` timestamp through `UrpResponseV2.created_at`. The Chat encoder MUST generate a new timestamp only when `created_at` is absent.
 
+DC4c. Chat tool-result content decode:
+
+- A downstream Chat `role="tool"` or `role="function"` message `content` value MUST decode as `ToolResult.content` as follows:
+  - a JSON string becomes one `ToolResultContent::Text` entry with that string;
+  - a JSON array is decoded item by item in array order;
+  - a JSON object is decoded as one content item;
+  - `null` yields an empty content list.
+- For each array or object item:
+  - `{type:"text"|"input_text"|"output_text"}` becomes `ToolResultContent::Text`;
+  - `{type:"image_url"|"input_image"|"output_image"|"image"}` becomes `ToolResultContent::Image`;
+  - a recognized file content part becomes `ToolResultContent::File`.
+- Monoize MUST NOT reduce a tool-result content array to concatenated text when that array contains image or file parts.
+- If an item is not a recognized text, image, or file part, Monoize MUST keep it as `ToolResultContent::Text` whose text is the JSON serialization of that item. Monoize MUST NOT drop that item.
+- When encoding that `ToolResult` to an upstream Responses request, Monoize MUST emit official `function_call_output.output` or `custom_tool_call_output.output` under PR7: a string when the content is one extra-free text entry, otherwise an array of `input_text`, `input_image`, and `input_file` blocks. Monoize MUST NOT lift those image or file parts into a following user `input_image` message on the official Responses path.
+- A later Chat `role="user"` image part remains a user `Image` node. Monoize MUST NOT merge it into the preceding `ToolResult`.
+
 DC5. Reasoning:
 
 - If `UrpResponseV2.output` contains `Reasoning` nodes, Monoize MUST:
