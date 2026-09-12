@@ -52,6 +52,16 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 对 OpenCode Zen 或 OpenCode Go 的存活探测：当 Channel 自定义请求头未设置这两个名称时，发送字面值 `mono-probe`。
 
+## 上游 WebSocket
+
+在 Responses Channel 上设置 **上游 WebSocket**。取值如下：
+
+- `null`（未知）：Responses WebSocket 客户端先尝试 Upgrade。握手失败时，同一 attempt 使用 HTTP SSE。仅当存储值仍为 `null` 时，成功或失败的握手可以写入结果。
+- `true`（支持）：优先 Upgrade。握手失败仍使用 HTTP SSE。存储值不变。
+- `false`（不支持）：永不 Upgrade。
+
+点击 **检测 WebSocket** 以探测 `GET {base}/v1/responses`。结果写入草稿。保存 Provider 后才会持久化。HTTP POST 客户端、健康探测和 Channel 存活测试仍走 HTTP。
+
 ## 测试 Channel
 
 打开 Channel，运行顺序测试或并发测试。

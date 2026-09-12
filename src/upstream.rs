@@ -332,7 +332,7 @@ fn apply_auth(
     }
 }
 
-fn join_url(base: &str, path: &str) -> String {
+pub(crate) fn join_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let mut path = path.trim_start_matches('/');
     if base.ends_with("/v1") {

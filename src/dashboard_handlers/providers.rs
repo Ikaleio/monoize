@@ -797,6 +797,160 @@ pub async fn fetch_channel_models(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeChannelWebsocketRequest {
+    pub provider_type: crate::monoize_routing::MonoizeProviderType,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+pub async fn probe_channel_websocket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ProbeChannelWebsocketRequest>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+    let fetch_key_body = FetchChannelModelsRequest {
+        provider_type: body.provider_type,
+        base_url: body.base_url.clone(),
+        api_key: body.api_key.clone(),
+        provider_id: body.provider_id.clone(),
+        channel_id: body.channel_id.clone(),
+    };
+    let api_key = resolve_fetch_channel_api_key(&state, &fetch_key_body).await?;
+    let stored = resolve_stored_channel(&state, &body.provider_id, &body.channel_id).await?;
+    if body.provider_type != crate::monoize_routing::MonoizeProviderType::Responses {
+        return Ok(Json(json!({
+            "supported": false,
+            "http_status": serde_json::Value::Null,
+            "warmup": "skipped",
+            "error": "provider_type is not responses"
+        })));
+    }
+    let request_timeout_ms = {
+        let runtime = state.monoize_runtime.read().await;
+        runtime.request_timeout_ms.max(1)
+    };
+    let proxy = stored
+        .as_ref()
+        .and_then(|channel| channel.proxy_url.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(state.node.upstream_proxy_url.as_deref());
+    let mut ws_headers = vec![crate::upstream_websocket::responses_authorization_header(
+        &api_key,
+    )];
+    if let Some(channel) = stored.as_ref() {
+        if let Some(extras) = &channel.extra_headers {
+            for (name, value) in extras {
+                ws_headers.push((name.clone(), value.clone()));
+            }
+        }
+        let affinity_enabled = channel.session_affinity_auto.unwrap_or_else(|| {
+            crate::monoize_routing::default_session_affinity_auto(&channel.base_url)
+        });
+        if affinity_enabled {
+            let has_session = ws_headers.iter().any(|(name, _)| {
+                name.eq_ignore_ascii_case("x-session-affinity")
+                    || name.eq_ignore_ascii_case("x-opencode-session")
+            });
+            if !has_session {
+                ws_headers.push((
+                    "x-session-affinity".to_string(),
+                    "mono-ws-probe".to_string(),
+                ));
+                ws_headers.push((
+                    "x-opencode-session".to_string(),
+                    "mono-ws-probe".to_string(),
+                ));
+            }
+        }
+    }
+    match crate::upstream_websocket::connect_responses_websocket(
+        body.base_url.trim(),
+        &ws_headers,
+        proxy,
+        request_timeout_ms,
+    )
+    .await
+    {
+        Err(err) => Ok(Json(json!({
+            "supported": false,
+            "http_status": err.http_status,
+            "warmup": "skipped",
+            "error": err.message
+        }))),
+        Ok(mut session) => {
+            let model = body
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let warmup = if let Some(model) = model {
+                let payload = serde_json::json!({
+                    "type": "response.create",
+                    "model": model,
+                    "generate": false
+                });
+                match session.send_text(payload.to_string()).await {
+                    Err(_) => "protocol_error",
+                    Ok(()) => match session.next_text().await {
+                        Ok(Some(_)) => "ok",
+                        _ => "protocol_error",
+                    },
+                }
+            } else {
+                "skipped"
+            };
+            session.close().await;
+            Ok(Json(json!({
+                "supported": true,
+                "http_status": 101,
+                "warmup": warmup,
+                "error": serde_json::Value::Null
+            })))
+        }
+    }
+}
+
+async fn resolve_stored_channel(
+    state: &AppState,
+    provider_id: &Option<String>,
+    channel_id: &Option<String>,
+) -> AppResult<Option<MonoizeChannel>> {
+    let provider_id = provider_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let channel_id = channel_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let (Some(provider_id), Some(channel_id)) = (provider_id, channel_id) else {
+        return Ok(None);
+    };
+    let provider = state
+        .monoize_store
+        .get_provider(provider_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    Ok(provider.and_then(|provider| {
+        provider
+            .channels
+            .into_iter()
+            .find(|channel| channel.id == channel_id)
+    }))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TestChannelRequest {
     pub model: Option<String>,
     pub stream: Option<bool>,

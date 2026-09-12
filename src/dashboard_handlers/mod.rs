@@ -62,7 +62,8 @@ pub use request_captures::{RequestCaptureQuery, get_request_capture};
 pub use providers::{
     FetchChannelModelsRequest, TestChannelRequest, create_provider, delete_provider,
     fetch_channel_models, fetch_provider_models, get_provider, get_provider_presets,
-    get_transform_registry, list_providers, reorder_providers, test_channel, update_provider,
+    get_transform_registry, list_providers, probe_channel_websocket, reorder_providers,
+    test_channel, update_provider,
 };
 pub use settings::{
     UpdateSettingsRequest, get_config_overview, get_dashboard_stats, get_public_settings,

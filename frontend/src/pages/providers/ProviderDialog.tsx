@@ -62,6 +62,7 @@ import type {
 	SystemSettings,
 	TransformRegistryItem
 } from '@/lib/api'
+import { api } from '@/lib/api'
 import {
 	createProviderOptimistic,
 	useDashboardGroups,
@@ -144,7 +145,8 @@ function channelInput(channel: ChannelRow, c: (zhText: string, enText: string) =
 		affinity_failback_delay_seconds_override: optionalPositiveInteger(channel.affinity_failback_delay_seconds_override),
 		proxy_url: channel.proxy_url.trim() || null,
 		extra_headers: parseExtraHeaders(channel.extra_headers, c),
-		session_affinity_auto: channel.session_affinity_auto
+		session_affinity_auto: channel.session_affinity_auto,
+		websocket_supported: channel.websocket_supported
 	}
 }
 
@@ -585,6 +587,8 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 }
 
 function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, duplicateChannel, removeChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
+	const { t } = useTranslation()
+	const [probingWebsocket, setProbingWebsocket] = useState(false)
 	if (!activeChannel) return null
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
 		<div className='flex items-start justify-between gap-3'>
@@ -625,6 +629,55 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 					<Input value={activeChannel.proxy_url} placeholder='http://proxy:port' onChange={event => updateChannel(selectedChannel, { proxy_url: event.target.value })} />
 				</Field>
 				<NullableBoolean label={c('自动会话亲和', 'Auto session affinity')} hint={c('null 时对 Cloudflare Workers AI 与 OpenCode Zen/Go 自动开启，并发送 x-session-affinity 与 x-opencode-session', 'When null, enables for Cloudflare Workers AI and OpenCode Zen/Go, and sends x-session-affinity and x-opencode-session')} nullLabel={c('按 Base URL 自动判断', 'Auto-detect by Base URL')} value={activeChannel.session_affinity_auto} onChange={value => updateChannel(selectedChannel, { session_affinity_auto: value })} c={c} />
+				{activeChannel.provider_type === 'responses' ? (
+					<div className='grid gap-2 sm:col-span-2 sm:grid-cols-[1fr_auto] sm:items-end'>
+						<NullableBoolean
+							label={t('providers.websocketSupported')}
+							hint={t('providers.websocketSupportedHint')}
+							nullLabel={t('providers.websocketUnknown')}
+							value={activeChannel.websocket_supported}
+							onChange={value => updateChannel(selectedChannel, { websocket_supported: value })}
+							enabledLabel={t('providers.websocketSupportedYes')}
+							disabledLabel={t('providers.websocketSupportedNo')}
+							c={c}
+						/>
+						<Button
+							type='button'
+							variant='outline'
+							disabled={
+								probingWebsocket
+								|| !activeChannel.base_url.trim()
+								|| (!activeChannel.api_key.trim() && !activeChannel.id)
+							}
+							onClick={async () => {
+								setProbingWebsocket(true)
+								try {
+									const result = await api.probeChannelWebsocket({
+										provider_type: activeChannel.provider_type,
+										base_url: activeChannel.base_url.trim(),
+										api_key: activeChannel.api_key.trim() || undefined,
+										provider_id: form.id || undefined,
+										channel_id: activeChannel.id || undefined,
+										model: activeChannel.active_probe_model_override.trim()
+											|| activeChannel.models.find(model => model.model.trim())?.model.trim()
+									})
+									updateChannel(selectedChannel, { websocket_supported: result.supported })
+									if (result.supported) {
+										toast.success(t('providers.detectWebsocketSuccess'))
+									} else {
+										toast.error(result.error || t('providers.detectWebsocketFailure'))
+									}
+								} catch (error) {
+									toast.error(error instanceof Error ? error.message : t('providers.detectWebsocketFailure'))
+								} finally {
+									setProbingWebsocket(false)
+								}
+							}}
+						>
+							{probingWebsocket ? t('providers.detectWebsocketRunning') : t('providers.detectWebsocket')}
+						</Button>
+					</div>
+				) : null}
 				<Field label={c('自定义请求头', 'Extra headers')} hint={c('注入到该 Channel 的所有上游请求，例如 {"x-session-affinity":"ses_001"} 或 {"x-opencode-session":"ses_001"}', 'Injected into every upstream request of this channel, e.g. {"x-session-affinity":"ses_001"} or {"x-opencode-session":"ses_001"}')} className='sm:col-span-2'>
 					<Textarea value={activeChannel.extra_headers} rows={3} placeholder={'{"x-session-affinity": "ses_001"}'} className='font-mono text-xs' onChange={event => updateChannel(selectedChannel, { extra_headers: event.target.value })} />
 				</Field>
@@ -652,8 +705,8 @@ function NumberOverride({ label, value, placeholder, min = 1, onChange }: { labe
 	return <Field label={label}><Input type='number' min={min} value={value} placeholder={placeholder == null ? undefined : String(placeholder)} onChange={event => onChange(event.target.value)} /></Field>
 }
 
-function NullableBoolean({ label, hint, nullLabel, value, onChange, c }: { label: string; hint?: string; nullLabel?: string; value: boolean | null; onChange: (value: boolean | null) => void; c: (zh: string, en: string) => string }) {
-	return <Field label={label} hint={hint}><Select value={value == null ? 'inherit' : value ? 'enabled' : 'disabled'} onValueChange={next => onChange(next === 'inherit' ? null : next === 'enabled')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{nullLabel ?? c('继承全局', 'Inherit global')}</SelectItem><SelectItem value='enabled'>{c('启用', 'Enabled')}</SelectItem><SelectItem value='disabled'>{c('停用', 'Disabled')}</SelectItem></SelectGroup></SelectContent></Select></Field>
+function NullableBoolean({ label, hint, nullLabel, enabledLabel, disabledLabel, value, onChange, c }: { label: string; hint?: string; nullLabel?: string; enabledLabel?: string; disabledLabel?: string; value: boolean | null; onChange: (value: boolean | null) => void; c: (zh: string, en: string) => string }) {
+	return <Field label={label} hint={hint}><Select value={value == null ? 'inherit' : value ? 'enabled' : 'disabled'} onValueChange={next => onChange(next === 'inherit' ? null : next === 'enabled')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{nullLabel ?? c('继承全局', 'Inherit global')}</SelectItem><SelectItem value='enabled'>{enabledLabel ?? c('启用', 'Enabled')}</SelectItem><SelectItem value='disabled'>{disabledLabel ?? c('停用', 'Disabled')}</SelectItem></SelectGroup></SelectContent></Select></Field>
 }
 
 function AffinityModeOverride({ label, value, onChange, c }: { label: string; value: AffinityFailbackMode | null; onChange: (value: AffinityFailbackMode | null) => void; c: (zh: string, en: string) => string }) {

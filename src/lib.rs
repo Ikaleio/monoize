@@ -31,5 +31,6 @@ pub mod settings;
 pub mod settlement;
 pub mod transforms;
 pub mod upstream;
+pub mod upstream_websocket;
 pub mod urp;
 pub mod users;

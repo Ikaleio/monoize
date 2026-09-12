@@ -195,6 +195,9 @@ pub struct MonoizeChannel {
     /// CM-AFF-0: explicit override for URL-based automatic session affinity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_affinity_auto: Option<bool>,
+    /// WS2e: null = unknown, true = prefer WS, false = HTTP only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_supported: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _healthy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,6 +290,9 @@ pub struct CreateMonoizeChannelInput {
     /// CM-AFF-2: enable derived per-request session affinity.
     #[serde(default)]
     pub session_affinity_auto: Option<bool>,
+    /// WS2e: explicit Responses upstream WebSocket memory.
+    #[serde(default)]
+    pub websocket_supported: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -947,6 +953,11 @@ fn decode_channel_row(
             .map_err(|e| e.to_string())?
             .map(|value| decode_database_bool("channel", &id, "session_affinity_auto", value))
             .transpose()?,
+        websocket_supported: row
+            .try_get::<Option<i32>>("", "websocket_supported")
+            .map_err(|e| e.to_string())?
+            .map(|value| decode_database_bool("channel", &id, "websocket_supported", value))
+            .transpose()?,
         _healthy: None,
         _last_success_at: None,
         _health_status: None,
@@ -1278,7 +1289,7 @@ impl MonoizeRoutingStore {
                             active_probe_success_threshold_override, active_probe_model_override,
                             affinity_enabled_override, affinity_idle_ttl_seconds_override,
                             affinity_failback_mode_override, affinity_failback_delay_seconds_override,
-                            proxy_url, extra_headers, session_affinity_auto
+                            proxy_url, extra_headers, session_affinity_auto, websocket_supported
                      FROM monoize_channels{provider_filter}
                      ORDER BY created_at ASC"
                 ),
@@ -1488,7 +1499,7 @@ impl MonoizeRoutingStore {
                           c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
                           c.proxy_url,
                           c.extra_headers,
-                          c.session_affinity_auto,
+                          c.session_affinity_auto, c.websocket_supported,
                           cm.redirect, cm.multiplier
                    FROM monoize_channels c
                    JOIN monoize_providers p ON p.id = c.provider_id
@@ -1565,7 +1576,7 @@ impl MonoizeRoutingStore {
                           c.active_probe_success_threshold_override, c.active_probe_model_override,
                           c.affinity_enabled_override, c.affinity_idle_ttl_seconds_override,
                           c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
-                          c.proxy_url, c.extra_headers, c.session_affinity_auto,
+                          c.proxy_url, c.extra_headers, c.session_affinity_auto, c.websocket_supported,
                           cm.model_name, cm.redirect, cm.multiplier
                    FROM monoize_channels c
                    JOIN monoize_providers p ON p.id = c.provider_id
@@ -1648,6 +1659,31 @@ impl MonoizeRoutingStore {
             }
         }
         Ok(group_ids)
+    }
+
+    /// WS2e: write Channel WebSocket memory only when the stored value is NULL.
+    /// Returns true when this statement changed a row.
+    pub async fn remember_channel_websocket_supported(
+        &self,
+        channel_id: &str,
+        supported: bool,
+    ) -> Result<bool, String> {
+        let tx = self.db.begin_write().await.map_err(|e| e.to_string())?;
+        let result = tx
+            .execute(self.db.stmt(
+                "UPDATE monoize_channels
+                 SET websocket_supported = $1, updated_at = $2
+                 WHERE id = $3 AND websocket_supported IS NULL",
+                vec![
+                    opt_bool_to_value(Some(supported)),
+                    Utc::now().to_rfc3339().into(),
+                    channel_id.into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn get_provider(&self, id: &str) -> Result<Option<MonoizeProvider>, String> {
@@ -2164,7 +2200,7 @@ impl MonoizeRoutingStore {
         const CHANNEL_INSERT_CHUNK_SIZE: usize = 18;
         let now = Utc::now().to_rfc3339();
         for chunk in prepared.chunks(CHANNEL_INSERT_CHUNK_SIZE) {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 25);
+            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 26);
             let mut rows = Vec::with_capacity(chunk.len());
             for channel in chunk {
                 let start = values.len() + 1;
@@ -2204,12 +2240,13 @@ impl MonoizeRoutingStore {
                     normalized_proxy_url(input.proxy_url.as_deref()).into(),
                     normalized_extra_headers_json(input.extra_headers.as_ref()).into(),
                     opt_bool_to_value(input.session_affinity_auto),
+                    opt_bool_to_value(input.websocket_supported),
                     now.clone().into(),
                     now.clone().into(),
                 ]);
                 rows.push(format!(
                     "({})",
-                    (start..start + 25)
+                    (start..start + 26)
                         .map(|index| format!("${index}"))
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -2228,6 +2265,7 @@ impl MonoizeRoutingStore {
                       proxy_url,
                       extra_headers,
                       session_affinity_auto,
+                      websocket_supported,
                       created_at, updated_at)
                      VALUES {}",
                     rows.join(", ")

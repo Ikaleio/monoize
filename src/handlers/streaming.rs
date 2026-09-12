@@ -3,6 +3,11 @@ use crate::urp::stream_decode::stream_upstream_to_urp_events;
 use crate::urp::stream_encode::encode_urp_stream;
 use futures_util::StreamExt;
 
+enum StreamUpstreamSource {
+    Http(reqwest::Response),
+    ResponsesWebSocket(Box<dyn crate::upstream_websocket::ResponsesWsSession>),
+}
+
 type ForwardEventStream = futures_util::stream::Map<
     tokio_stream::wrappers::ReceiverStream<Event>,
     fn(Event) -> Result<Event, std::convert::Infallible>,
@@ -286,6 +291,7 @@ pub(super) async fn forward_stream_typed(
     request_ip: Option<String>,
     client_session_id: Option<String>,
     capture: RequestCaptureContext,
+    prefer_upstream_websocket: bool,
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 > {
@@ -904,47 +910,152 @@ pub(super) async fn forward_stream_typed(
             let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
                 u64::try_from(upstream_body.to_string().len()).unwrap_or(u64::MAX),
             );
-            let http = client_http_for_attempt(&state, &attempt)?;
-            // OIU-S7: openai_image edits stream through multipart
-            // `/v1/images/edits`; every other attempt posts the JSON body.
-            let stream_call = match call_streaming_image_capable_upstream(
-                &http,
-                &attempt,
-                &req_attempt,
-                &upstream_body,
-                attempt.request_timeout_ms.saturating_mul(10).max(600_000),
-                &attempt_extra_headers(&attempt, &upstream_body),
-                capture.session.is_some(),
-            )
-            .await
+            let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
+            let mut websocket_source = None;
+            let mut websocket_send_error = None;
+            if prefer_upstream_websocket
+                && attempt.provider_type == ProviderType::Responses
+                && attempt.websocket_supported != Some(false)
             {
-                Ok(stream_call) => stream_call,
-                Err(err) => {
-                    spawn_stream_attempt_error(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        started_at,
-                        request_id.clone(),
-                        request_ip.clone(),
-                        None,
-                        &err,
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                        tried_providers.clone(),
-                    );
-                    return Err(err);
+                let mut ws_headers =
+                    vec![crate::upstream_websocket::responses_authorization_header(
+                        &attempt.api_key,
+                    )];
+                ws_headers.extend(extra_headers.iter().cloned());
+                let proxy = attempt
+                    .proxy_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or(state.node.upstream_proxy_url.as_deref());
+                match crate::upstream_websocket::connect_responses_websocket(
+                    &attempt.base_url,
+                    &ws_headers,
+                    proxy,
+                    attempt.request_timeout_ms,
+                )
+                .await
+                {
+                    Ok(mut ws) => {
+                        remember_websocket_supported(&state, &attempt.channel_id, true).await;
+                        attempt.websocket_supported = Some(true);
+                        let payload = crate::upstream_websocket::responses_ws_create_payload(
+                            upstream_body.clone(),
+                        );
+                        match ws.send_text(payload.to_string()).await {
+                            Ok(()) => websocket_source = Some(ws),
+                            Err(err) => websocket_send_error = Some(err),
+                        }
+                    }
+                    Err(_) => {
+                        remember_websocket_supported(&state, &attempt.channel_id, false).await;
+                        attempt.websocket_supported = Some(false);
+                    }
                 }
+            }
+            if let Some(err) = websocket_send_error {
+                let app_err = AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_websocket_send_failed",
+                    err,
+                );
+                spawn_stream_attempt_error(
+                    &state,
+                    &auth,
+                    &attempt,
+                    &logical_model,
+                    started_at,
+                    request_id.clone(),
+                    request_ip.clone(),
+                    None,
+                    &app_err,
+                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    tried_providers.clone(),
+                );
+                let same_channel_retryable = is_same_channel_retryable_app_error(&app_err);
+                let passive_failure_class =
+                    same_channel_retryable.then(|| classify_retryable_app_failure(&app_err));
+                record_upstream_attempt_failure(
+                    &state,
+                    &attempt,
+                    attempt_number,
+                    &app_err,
+                    passive_failure_class,
+                    &mut tried_providers,
+                    &mut execution_state,
+                )
+                .await;
+                last_failed_attempt = Some(attempt.clone());
+                if allow_same_channel_retry(
+                    &state,
+                    &attempt,
+                    &execution_state,
+                    channel_attempt + 1,
+                    passive_failure_class,
+                )
+                .await
+                {
+                    maybe_sleep_before_channel_retry(&attempt).await;
+                    continue;
+                }
+                break;
+            }
+            let (path, capture_upstream_request, call) = if let Some(ws) = websocket_source {
+                (
+                    "/v1/responses".to_string(),
+                    upstream_body.clone(),
+                    Ok(StreamUpstreamSource::ResponsesWebSocket(ws)),
+                )
+            } else {
+                let http = client_http_for_attempt(&state, &attempt)?;
+                // OIU-S7: openai_image edits stream through multipart
+                // `/v1/images/edits`; every other attempt posts the JSON body.
+                let stream_call = match call_streaming_image_capable_upstream(
+                    &http,
+                    &attempt,
+                    &req_attempt,
+                    &upstream_body,
+                    attempt.request_timeout_ms.saturating_mul(10).max(600_000),
+                    &extra_headers,
+                    capture.session.is_some(),
+                )
+                .await
+                {
+                    Ok(stream_call) => stream_call,
+                    Err(err) => {
+                        spawn_stream_attempt_error(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            None,
+                            &err,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers.clone(),
+                        );
+                        return Err(err);
+                    }
+                };
+                let path = stream_call.path;
+                // RCD-D6a/OIU-E5g: a multipart edit attempt records the sent form
+                // as `upstream_request` instead of the unused JSON encoding.
+                let capture_upstream_request = stream_call
+                    .capture_multipart_request
+                    .unwrap_or_else(|| upstream_body.clone());
+                (
+                    path,
+                    capture_upstream_request,
+                    stream_call
+                        .result
+                        .map(StreamUpstreamSource::Http)
+                        .map_err(|err| err),
+                )
             };
-            let path = stream_call.path;
-            // RCD-D6a/OIU-E5g: a multipart edit attempt records the sent form
-            // as `upstream_request` instead of the unused JSON encoding.
-            let capture_upstream_request = stream_call
-                .capture_multipart_request
-                .unwrap_or_else(|| upstream_body.clone());
-            let call = stream_call.result;
             match call {
-                Ok(upstream_resp) => {
+                Ok(upstream_source) => {
                     update_pending_channel_info(
                         &state,
                         &auth,
@@ -1071,17 +1182,33 @@ pub(super) async fn forward_stream_typed(
                             let decode_handle = {
                                 let metrics = metrics_for_stream.clone();
                                 crate::request_capture::spawn_with_sse_capture(async move {
-                                    stream_upstream_to_urp_events(
-                                        &legacy,
-                                        pending_request_envelope_extra,
-                                        provider_type,
-                                        upstream_resp,
-                                        decoded_tx,
-                                        Some(started_at),
-                                        Some(metrics),
-                                        stream_idle_timeout_ms,
-                                    )
-                                    .await
+                                    match upstream_source {
+                                        StreamUpstreamSource::Http(upstream_resp) => {
+                                            stream_upstream_to_urp_events(
+                                                &legacy,
+                                                pending_request_envelope_extra,
+                                                provider_type,
+                                                upstream_resp,
+                                                decoded_tx,
+                                                Some(started_at),
+                                                Some(metrics),
+                                                stream_idle_timeout_ms,
+                                            )
+                                            .await
+                                        }
+                                        StreamUpstreamSource::ResponsesWebSocket(session) => {
+                                            crate::urp::stream_decode::openai_responses::stream_responses_websocket_to_urp_events(
+                                                &legacy,
+                                                pending_request_envelope_extra,
+                                                session,
+                                                decoded_tx,
+                                                Some(started_at),
+                                                Some(metrics),
+                                                stream_idle_timeout_ms,
+                                            )
+                                            .await
+                                        }
+                                    }
                                 })
                             };
 

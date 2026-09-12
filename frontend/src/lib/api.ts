@@ -590,6 +590,7 @@ export interface MonoizeChannel {
   proxy_url?: string | null;
   extra_headers?: Record<string, string> | null;
   session_affinity_auto?: boolean | null;
+  websocket_supported?: boolean | null;
   _healthy?: boolean;
   _last_success_at?: string;
   _health_status?: "healthy" | "probing" | "unhealthy";
@@ -1101,6 +1102,22 @@ export interface FetchChannelModelsInput {
   channel_id?: string;
 }
 
+export interface ProbeChannelWebsocketInput {
+  provider_type: ProviderType;
+  base_url: string;
+  api_key?: string;
+  provider_id?: string;
+  channel_id?: string;
+  model?: string;
+}
+
+export interface ProbeChannelWebsocketResult {
+  supported: boolean;
+  http_status: number | null;
+  warmup: "skipped" | "ok" | "protocol_error";
+  error: string | null;
+}
+
 class ApiClient {
   private async request<T>(
     path: string,
@@ -1565,6 +1582,23 @@ class ApiClient {
     if (input.channel_id?.trim()) body.channel_id = input.channel_id.trim();
 
     return this.request("/fetch-channel-models", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async probeChannelWebsocket(
+    input: ProbeChannelWebsocketInput,
+  ): Promise<ProbeChannelWebsocketResult> {
+    const body: ProbeChannelWebsocketInput = {
+      provider_type: input.provider_type,
+      base_url: input.base_url,
+    };
+    if (input.api_key?.trim()) body.api_key = input.api_key.trim();
+    if (input.provider_id?.trim()) body.provider_id = input.provider_id.trim();
+    if (input.channel_id?.trim()) body.channel_id = input.channel_id.trim();
+    if (input.model?.trim()) body.model = input.model.trim();
+    return this.request("/probe-channel-websocket", {
       method: "POST",
       body: JSON.stringify(body),
     });

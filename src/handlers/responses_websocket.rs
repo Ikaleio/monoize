@@ -158,7 +158,10 @@ async fn serve_responses_websocket(
     headers: HeaderMap,
     limits: ResponsesWebsocketLimits,
 ) {
-    let beta = headers.get("openai-beta").and_then(|value| value.to_str().ok()).unwrap_or("");
+    let beta = headers
+        .get("openai-beta")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
     let mut legacy_terminal = beta.contains("responses_websockets=2026-02-04")
         && !beta.contains("responses_websockets=2026-02-06");
     let mut session = ResponsesWebsocketSession::default();
@@ -256,7 +259,12 @@ async fn handle_client_text(
     let warmup = event_type == "response.create"
         && event.get("generate").and_then(Value::as_bool) == Some(false);
     if event.get("type").and_then(Value::as_str) == Some("response.append")
-        && !headers.get("openai-beta").and_then(|value| value.to_str().ok()).unwrap_or("").contains("responses_websockets=2026-02-06") {
+        && !headers
+            .get("openai-beta")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .contains("responses_websockets=2026-02-06")
+    {
         *legacy_terminal = true;
     }
     let prepared = match event_type {
@@ -288,10 +296,10 @@ async fn handle_client_text(
         return send_warmup(socket, session, request, limits).await;
     }
 
-    let response = match super::create_response(
-        State(state.clone()),
+    let response = match super::create_response_prefer_websocket(
+        state.clone(),
         headers.clone(),
-        axum::Json(Value::Object(request.clone())),
+        Value::Object(request.clone()),
     )
     .await
     {
@@ -299,10 +307,11 @@ async fn handle_client_text(
         Err(err) => return send_app_error(socket, err).await,
     };
 
-    let completed = match forward_sse_body_as_websocket(socket, response, limits, *legacy_terminal).await {
-        Ok(completed) => completed,
-        Err(err) => return send_event_error(socket, err).await,
-    };
+    let completed =
+        match forward_sse_body_as_websocket(socket, response, limits, *legacy_terminal).await {
+            Ok(completed) => completed,
+            Err(err) => return send_event_error(socket, err).await,
+        };
     if let Some(completed) = completed {
         if completed.retainable && request_with_output_fits(&request, &completed.output, limits) {
             session.last_request = Some(request);
@@ -567,7 +576,13 @@ async fn forward_sse_body_as_websocket(
             if let Some(terminal) = completed_response_from_event(&data, limits) {
                 completed = Some(terminal);
             }
-            if socket.send(Message::Text(websocket_event_data(data, legacy_terminal).into())).await.is_err() {
+            if socket
+                .send(Message::Text(
+                    websocket_event_data(data, legacy_terminal).into(),
+                ))
+                .await
+                .is_err()
+            {
                 return Err(WebsocketEventError::invalid("WebSocket send failed"));
             }
         }
@@ -580,7 +595,13 @@ async fn forward_sse_body_as_websocket(
         if let Some(terminal) = completed_response_from_event(&data, limits) {
             completed = Some(terminal);
         }
-        if socket.send(Message::Text(websocket_event_data(data, legacy_terminal).into())).await.is_err() {
+        if socket
+            .send(Message::Text(
+                websocket_event_data(data, legacy_terminal).into(),
+            ))
+            .await
+            .is_err()
+        {
             return Err(WebsocketEventError::invalid("WebSocket send failed"));
         }
     }

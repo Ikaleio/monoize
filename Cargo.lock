@@ -2397,6 +2397,8 @@ dependencies = [
  "reqwest",
  "rquickjs",
  "rust_decimal",
+ "rustls",
+ "rustls-native-certs",
  "sea-orm",
  "sea-orm-migration",
  "sea-query",
@@ -2407,6 +2409,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tiktoken-rs",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
  "tower-http",
@@ -3577,6 +3580,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c665f33d38cea657d9614f766881e4d510e0eda4239891eea56b4cadcf01801b"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -4613,7 +4617,11 @@ checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
 ]
 
@@ -4808,6 +4816,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.2",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.17",
  "utf-8",

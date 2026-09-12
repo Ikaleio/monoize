@@ -52,6 +52,16 @@ OpenCode Go uses `x-opencode-session` to bind prompt cache to one session. A req
 
 A Channel liveness probe to OpenCode Zen or OpenCode Go sends the literal value `mono-probe` when the Channel extra headers do not already set these names.
 
+## Upstream WebSocket
+
+Set **Upstream WebSocket** on a Responses Channel. The values are:
+
+- `null` (Unknown): a Responses WebSocket client tries Upgrade first. Handshake failure uses HTTP SSE on the same attempt. A successful or failed handshake may store the result only when the stored value is still `null`.
+- `true` (Supported): prefer Upgrade. Handshake failure still uses HTTP SSE. The stored value does not change.
+- `false` (Not supported): never Upgrade.
+
+Click **Detect WebSocket** to probe `GET {base}/v1/responses`. The result writes the draft field. Save the Provider to persist it. HTTP POST clients, health probes, and Channel liveness tests stay on HTTP.
+
 ## Test a Channel
 
 Open the Channel and run Sequential test or Concurrent test.

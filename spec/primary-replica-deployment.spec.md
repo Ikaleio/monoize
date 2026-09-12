@@ -215,6 +215,8 @@ SC2. `state_records` gains no schema change; the config epoch row (E1) is create
 
 SC3. Migration `m20260823_000034_channel_egress_proxy` MUST add nullable TEXT column `proxy_url` to `monoize_channels`, defaulting to NULL (follow-global) for all existing rows, identically on SQLite and PostgreSQL. The down migration MUST drop the column.
 
+SC4. Lazy writes of `monoize_channels.websocket_supported` (`unified_responses_proxy.spec.md` WS2e) are primary-only. A replica MUST NOT execute that UPDATE. A replica MAY keep a process-local overlay map from `channel_id` to the probed boolean and MUST drop it on restart. Overlay applies only when the stored column is NULL.
+
 ## 9. Manual failover
 
 F1. Promotion = stop the replica process, set `MONOIZE_NODE_ROLE=primary`, start. PRP9 drains leftover deltas before the listener accepts requests; the node then operates as the sole writer.

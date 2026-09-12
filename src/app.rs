@@ -189,9 +189,12 @@ pub struct AppState {
     pub monoize_store: MonoizeRoutingStore,
     pub monoize_runtime: Arc<tokio::sync::RwLock<MonoizeRuntimeConfig>>,
     pub channel_health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
-    pub(crate) response_history: Arc<Mutex<crate::handlers::responses_history::ResponseHistoryStore>>,
+    pub(crate) response_history:
+        Arc<Mutex<crate::handlers::responses_history::ResponseHistoryStore>>,
     pub channel_affinity: Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
     pub routing_config_revision: Arc<AtomicU64>,
+    /// Replica-only overlay for Channel `websocket_supported` when the DB value is NULL.
+    pub websocket_supported_overlay: Arc<DashMap<String, bool>>,
     pub settings_update_lock: Arc<Mutex<()>>,
     pub model_registry_store: ModelRegistryStore,
     pub model_price_store: crate::model_price_store::ModelPriceStore,
@@ -433,7 +436,9 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let monoize_runtime = runtime_config_from_settings(&settings_snapshot);
     let channel_health = Arc::new(Mutex::new(HashMap::<String, ChannelHealthState>::new()));
     let channel_affinity = Arc::new(Mutex::new(HashMap::new()));
-    let response_history = Arc::new(Mutex::new(crate::handlers::responses_history::ResponseHistoryStore::default()));
+    let response_history = Arc::new(Mutex::new(
+        crate::handlers::responses_history::ResponseHistoryStore::default(),
+    ));
     let routing_config_revision = Arc::new(AtomicU64::new(0));
     let settings_update_lock = Arc::new(Mutex::new(()));
     let transform_registry = Arc::new(crate::transforms::registry());
@@ -965,6 +970,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         response_history,
         channel_affinity,
         routing_config_revision,
+        websocket_supported_overlay: Arc::new(DashMap::new()),
         settings_update_lock,
         model_registry_store,
         model_price_store,
@@ -1873,6 +1879,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/fetch-channel-models",
             post(crate::dashboard_handlers::fetch_channel_models),
+        )
+        .route(
+            "/dashboard/probe-channel-websocket",
+            post(crate::dashboard_handlers::probe_channel_websocket),
         )
         .route(
             "/dashboard/request-logs/stream",

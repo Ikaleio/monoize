@@ -1,7 +1,122 @@
 pub(crate) async fn stream_responses_to_urp_events(
     urp: &HandlerUrpRequest,
-    mut pending_request_envelope_extra: Option<HashMap<String, Value>>,
+    pending_request_envelope_extra: Option<HashMap<String, Value>>,
     upstream_resp: reqwest::Response,
+    tx: mpsc::Sender<UrpStreamEvent>,
+    started_at: Option<std::time::Instant>,
+    runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
+) -> AppResult<()> {
+    let (frame_tx, frame_rx) = mpsc::channel(32);
+    let feeder = tokio::spawn(async move {
+        feed_responses_sse_frames(upstream_resp, frame_tx).await;
+    });
+    let result = consume_responses_json_frames(
+        urp,
+        pending_request_envelope_extra,
+        frame_rx,
+        tx,
+        started_at,
+        runtime_metrics,
+        idle_timeout_ms,
+    )
+    .await;
+    feeder.abort();
+    result
+}
+
+pub(crate) async fn stream_responses_websocket_to_urp_events(
+    urp: &HandlerUrpRequest,
+    pending_request_envelope_extra: Option<HashMap<String, Value>>,
+    session: Box<dyn ResponsesWsSession>,
+    tx: mpsc::Sender<UrpStreamEvent>,
+    started_at: Option<std::time::Instant>,
+    runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
+) -> AppResult<()> {
+    let (frame_tx, frame_rx) = mpsc::channel(32);
+    let feeder = tokio::spawn(async move {
+        feed_responses_ws_frames(session, frame_tx).await;
+    });
+    let result = consume_responses_json_frames(
+        urp,
+        pending_request_envelope_extra,
+        frame_rx,
+        tx,
+        started_at,
+        runtime_metrics,
+        idle_timeout_ms,
+    )
+    .await;
+    feeder.abort();
+    result
+}
+
+async fn feed_responses_sse_frames(
+    upstream_resp: reqwest::Response,
+    frame_tx: mpsc::Sender<AppResult<(String, String)>>,
+) {
+    let mut stream = upstream_resp.bytes_stream().eventsource();
+    while let Some(ev) = stream.next().await {
+        let ev = match ev {
+            Ok(ev) => ev,
+            Err(err) => {
+                let _ = frame_tx
+                    .send(Err(AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_stream_decode_failed",
+                        err.to_string(),
+                    )))
+                    .await;
+                break;
+            }
+        };
+        if frame_tx.send(Ok((ev.event, ev.data))).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn feed_responses_ws_frames(
+    mut session: Box<dyn ResponsesWsSession>,
+    frame_tx: mpsc::Sender<AppResult<(String, String)>>,
+) {
+    loop {
+        match session.next_text().await {
+            Ok(None) => break,
+            Ok(Some(text)) => {
+                let event_name = serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
+                if frame_tx.send(Ok((event_name, text))).await.is_err() {
+                    break;
+                }
+            }
+            Err(err) => {
+                let _ = frame_tx
+                    .send(Err(AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_stream_decode_failed",
+                        err,
+                    )))
+                    .await;
+                break;
+            }
+        }
+    }
+    session.close().await;
+}
+
+async fn consume_responses_json_frames(
+    urp: &HandlerUrpRequest,
+    mut pending_request_envelope_extra: Option<HashMap<String, Value>>,
+    mut frames: mpsc::Receiver<AppResult<(String, String)>>,
     tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
@@ -25,8 +140,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut index_state = ResponsesStreamIndexState::default();
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
+    while let Some(frame) = tokio::time::timeout(idle_timeout, frames.recv())
         .await
         .map_err(|_| {
             AppError::new(
@@ -36,19 +150,13 @@ pub(crate) async fn stream_responses_to_urp_events(
             )
         })?
     {
-        let ev = ev.map_err(|err| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_stream_decode_failed",
-                err.to_string(),
-            )
-        })?;
+        let (event_name, data) = frame?;
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
-        if ev.data.trim() == "[DONE]" {
+        if data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
-        let data_val: Value = match serde_json::from_str(&ev.data) {
+        let data_val: Value = match serde_json::from_str(&data) {
             Ok(value) => value,
             Err(error) => {
                 let code = "responses_invalid_sse_json".to_string();
@@ -58,8 +166,8 @@ pub(crate) async fn stream_responses_to_urp_events(
                         code: Some(code.clone()),
                         message: message.clone(),
                         extra_body: HashMap::from([
-                            ("event_name".to_string(), json!(ev.event)),
-                            ("raw_data".to_string(), json!(ev.data)),
+                            ("event_name".to_string(), json!(event_name)),
+                            ("raw_data".to_string(), json!(data)),
                         ]),
                     })
                     .await;
@@ -78,7 +186,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 return Ok(());
             }
         };
-        let content_validation = match ev.event.as_str() {
+        let content_validation = match event_name.as_str() {
             "response.content_part.added" | "response.content_part.done" => data_val.get("part")
                 .map(crate::urp::decode::openai_responses::validate_compatible_content),
             "response.output_item.added" | "response.output_item.done" => data_val.get("item")
@@ -106,19 +214,19 @@ pub(crate) async fn stream_responses_to_urp_events(
             record_stream_response_id(&runtime_metrics, native_response_id).await;
         }
         let native_start_event = matches!(
-            ev.event.as_str(),
+            event_name.as_str(),
             "response.created" | "response.in_progress"
         );
         let terminal_response_event = matches!(
-            ev.event.as_str(),
+            event_name.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
         );
-        let output_event = ev.event.starts_with("response.output_")
-            || ev.event.starts_with("response.content_part.")
-            || ev.event.starts_with("response.reasoning_")
-            || ev.event.starts_with("response.function_call_")
-            || ev.event.starts_with("response.image_generation")
-            || ev.event.starts_with("image_generation.");
+        let output_event = event_name.starts_with("response.output_")
+            || event_name.starts_with("response.content_part.")
+            || event_name.starts_with("response.reasoning_")
+            || event_name.starts_with("response.function_call_")
+            || event_name.starts_with("response.image_generation")
+            || event_name.starts_with("image_generation.");
         if !response_start_sent && (native_start_event || terminal_response_event || output_event) {
             let source_response = data_val.get("response").and_then(Value::as_object).cloned();
             let sanitized_source_response = source_response.as_ref().map(|source| {
@@ -189,9 +297,9 @@ pub(crate) async fn stream_responses_to_urp_events(
 
         let bare_error = data_val.get("error").is_some_and(|error| !error.is_null())
             && data_val.get("response").is_none();
-        if matches!(ev.event.as_str(), "error" | "response.failed") || bare_error {
+        if matches!(event_name.as_str(), "error" | "response.failed") || bare_error {
             let (code, message, extra_body, terminal_error) =
-                responses_stream_error_parts(&ev.event, data_val);
+                responses_stream_error_parts(&event_name, data_val);
             let _ = tx
                 .send(UrpStreamEvent::Error {
                     code,
@@ -199,12 +307,12 @@ pub(crate) async fn stream_responses_to_urp_events(
                     extra_body,
                 })
                 .await;
-            record_stream_terminal_error(&runtime_metrics, &ev.event, terminal_error).await;
+            record_stream_terminal_error(&runtime_metrics, &event_name, terminal_error).await;
             return Ok(());
         }
 
-        accumulate_text_annotations(&ev.event, &data_val, &mut index_state);
-        if ev.event == "response.output_text.delta" {
+        accumulate_text_annotations(&event_name, &data_val, &mut index_state);
+        if event_name == "response.output_text.delta" {
             if let Some(text) = data_val.get("delta").and_then(|v| v.as_str()) {
                 let output_index = data_val
                     .get("output_index")
@@ -224,7 +332,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 saw_text_delta = true;
             }
         }
-        if ev.event == "response.reasoning_text.delta" {
+        if event_name == "response.reasoning_text.delta" {
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -236,7 +344,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 );
             }
         }
-        if ev.event == "response.reasoning_text.done" {
+        if event_name == "response.reasoning_text.done" {
             if let Some(text) = data_val
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -248,7 +356,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 );
             }
         }
-        if ev.event == "response.reasoning_summary_text.delta" {
+        if event_name == "response.reasoning_summary_text.delta" {
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -269,7 +377,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
-        if ev.event == "response.reasoning_summary_text.done" {
+        if event_name == "response.reasoning_summary_text.done" {
             if let Some(summary) = data_val
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -282,7 +390,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 );
             }
         }
-        if ev.event == "response.reasoning_summary_part.done"
+        if event_name == "response.reasoning_summary_part.done"
             && let Some(part) = data_val.get("part")
             && let Some(summary) = part.get("text").and_then(Value::as_str)
         {
@@ -292,7 +400,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 summary,
             );
         }
-        if ev.event == "response.output_item.added" {
+        if event_name == "response.output_item.added" {
             let item = data_val.get("item").unwrap_or(&data_val);
             if let (Some(idx), Some(id)) = (
                 data_val.get("output_index").and_then(|v| v.as_u64()),
@@ -362,10 +470,10 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if matches!(
-            ev.event.as_str(),
+            event_name.as_str(),
             "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta"
         ) {
-            let tool_type = if ev.event == "response.custom_tool_call_input.delta" {
+            let tool_type = if event_name == "response.custom_tool_call_input.delta" {
                 ToolCallType::Custom
             } else {
                 ToolCallType::Function
@@ -402,7 +510,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if matches!(
-            ev.event.as_str(),
+            event_name.as_str(),
             "response.function_call_arguments.done" | "response.custom_tool_call_input.done"
         ) {
             let call_id_opt = data_val
@@ -417,7 +525,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 });
             if let Some(call_id) = call_id_opt {
                 let args = data_val
-                    .get(if ev.event == "response.custom_tool_call_input.done" {
+                    .get(if event_name == "response.custom_tool_call_input.done" {
                         "input"
                     } else {
                         "arguments"
@@ -426,7 +534,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if let Some(entry) = calls.get_mut(call_id.as_str()) {
-                    if ev.event == "response.custom_tool_call_input.done" {
+                    if event_name == "response.custom_tool_call_input.done" {
                         entry.0 = ToolCallType::Custom;
                     }
                     if entry.2.is_empty() && !args.is_empty() {
@@ -435,7 +543,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
-        if ev.event == "response.output_item.done" {
+        if event_name == "response.output_item.done" {
             let item = data_val.get("item").unwrap_or(&data_val);
             if let (Some(idx), Some(id)) = (
                 data_val.get("output_index").and_then(|v| v.as_u64()),
@@ -508,7 +616,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         let is_terminal_response_event = matches!(
-            ev.event.as_str(),
+            event_name.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
         );
         let stream_events = if is_terminal_response_event {
@@ -541,7 +649,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             )
         } else {
             map_responses_event_to_urp_events_with_state(
-                &ev.event,
+                &event_name,
                 data_val,
                 &message_phases_by_output_index,
                 &mut index_state,
@@ -578,7 +686,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             let _ = tx.send(stream_event).await;
         }
         if response_done_sent && is_terminal_response_event {
-            terminal_event_name = Some(ev.event);
+            terminal_event_name = Some(event_name);
             break;
         }
     }
