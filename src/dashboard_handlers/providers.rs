@@ -11,9 +11,11 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -887,21 +889,28 @@ pub async fn probe_channel_websocket(
             .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX))
             .max(1)
     };
-    match crate::upstream_websocket::connect_responses_websocket(
+    match AssertUnwindSafe(crate::upstream_websocket::connect_responses_websocket(
         body.base_url.trim(),
         &ws_headers,
         proxy,
         remaining_ms(),
-    )
+    ))
+    .catch_unwind()
     .await
     {
-        Err(err) => Ok(Json(json!({
+        Err(_) => Ok(Json(json!({
+            "supported": false,
+            "http_status": serde_json::Value::Null,
+            "warmup": "skipped",
+            "error": "upstream WebSocket TLS initialization failed"
+        }))),
+        Ok(Err(err)) => Ok(Json(json!({
             "supported": false,
             "http_status": err.http_status,
             "warmup": "skipped",
             "error": err.message
         }))),
-        Ok(mut session) => {
+        Ok(Ok(mut session)) => {
             let model = body
                 .model
                 .as_deref()
