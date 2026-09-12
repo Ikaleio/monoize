@@ -513,6 +513,8 @@ RESP-3. Each `ToolCall(tool_type = "function")` node MUST encode as one top-leve
 
 RESP-3a. `ToolResult(tool_type = "function")` MUST encode as `function_call_output`. `ToolResult(tool_type = "custom")` MUST encode as `custom_tool_call_output`.
 
+RESP-3b. If `ToolResult.content` contains only one extra-free `Text` entry, the Responses encoder MUST emit `output` as that text string. If `ToolResult.content` contains an `Image` or `File` entry, or more than one content entry, the encoder MUST emit `output` as an array of `input_text`, `input_image`, and `input_file` blocks in content order. The encoder MUST NOT stringify that array and MUST NOT move those image or file blocks into a later user message.
+
 RESP-4. Each maximal run of adjacent ordinary nodes that are not `Reasoning` and not `ToolCall`, and that share the same `role`, MAY encode as one Responses `message` item.
 
 RESP-5. A change in `Text.phase` value inside a Responses `message` run MUST force a new Responses `message` item boundary.
@@ -592,6 +594,8 @@ CHAT-6. Streaming chat output remains data-only SSE and terminates with exactly 
 CHAT-7. If streamed chat output emits tool-call deltas, terminal `finish_reason` semantics for that downstream stream remain `tool_calls`.
 
 CHAT-7a. A Chat encoder MUST emit `ToolCall(tool_type = "function")` as `{type:"function",function:{name,arguments}}` and `ToolCall(tool_type = "custom")` as `{type:"custom",custom:{name,input}}`. A Chat decoder MUST accept both shapes in request history, non-stream output, and stream deltas. Chat tool-role results inherit the correlated call type so a later Responses encoder can choose `function_call_output` versus `custom_tool_call_output`.
+
+CHAT-7b. A Chat decoder MUST parse `role="tool"` and `role="function"` `content` as a string or as a content-part array. It MUST map `text`/`input_text`/`output_text` parts to `ToolResultContent::Text`, image parts to `ToolResultContent::Image`, and file parts to `ToolResultContent::File`. It MUST NOT drop image or file parts by concatenating only text fields. A later Responses encoder MUST place those image and file parts in `function_call_output.output` or `custom_tool_call_output.output` under RESP-3b.
 
 CHAT-8. If cumulative usage is available when a successful Chat Completions stream terminates, the encoder MUST emit exactly one usage chunk after the empty-delta finish chunk and immediately before `[DONE]`. The usage chunk MUST use the same `id`, `object`, `created`, and `model` envelope values as the finish chunk, MUST set `choices` to an empty array, and MUST contain the cumulative `usage` object. The finish chunk MUST NOT contain a non-null `usage` object. If cumulative usage is unavailable, the encoder MUST omit the usage chunk.
 
