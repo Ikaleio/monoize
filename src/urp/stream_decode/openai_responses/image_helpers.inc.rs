@@ -45,8 +45,12 @@ fn image_node_from_image_generation_payload(payload: &Value) -> Option<Node> {
             native_body,
         );
     }
+    extra_body.retain(|key, _| !crate::urp::ImageGenerationMetadata::KEYS.contains(&key.as_str()));
     Some(Node::Image {
-        metadata: Default::default(),
+        metadata: crate::urp::MediaMetadata {
+            image_generation: crate::urp::ImageGenerationMetadata::from_object(payload.as_object()?),
+            ..Default::default()
+        },
         id: payload
             .get("id")
             .and_then(|value| value.as_str())

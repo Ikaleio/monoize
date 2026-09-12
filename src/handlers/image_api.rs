@@ -542,6 +542,7 @@ impl ImageStreamSink {
         for (position, image) in images.into_iter().enumerate() {
             let event_name = self.family.completed_event_name();
             let mut payload = Map::new();
+            payload.extend(image.generation.to_object());
             payload.insert("type".to_string(), Value::String(event_name.to_string()));
             if let Some(b64) = image.b64_json {
                 payload.insert("b64_json".to_string(), Value::String(b64));
@@ -1983,6 +1984,7 @@ struct ExtractedImage {
     b64_json: Option<String>,
     url: Option<String>,
     revised_prompt: Option<String>,
+    generation: urp::ImageGenerationMetadata,
 }
 
 fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> {
@@ -1993,7 +1995,9 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
 
     for item in &resp.output {
         match item {
-            urp::Node::Image { source, .. } => match source {
+            urp::Node::Image {
+                source, metadata, ..
+            } => match source {
                 urp::ImageSource::Base64 { data, .. } => {
                     if !seen_base64.insert(data.clone()) {
                         continue;
@@ -2002,6 +2006,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                         b64_json: Some(data.clone()),
                         url: None,
                         revised_prompt: None,
+                        generation: metadata.image_generation.for_source(source),
                     });
                 }
                 urp::ImageSource::Url { url, .. } => {
@@ -2012,6 +2017,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                         b64_json: None,
                         url: Some(url.clone()),
                         revised_prompt: None,
+                        generation: metadata.image_generation.for_source(source),
                     });
                 }
                 urp::ImageSource::FileId { .. } => continue,
@@ -2060,6 +2066,7 @@ fn assemble_image_response(
     let mut data_items: Vec<Value> = Vec::new();
     let mut last_error: Option<AppError> = None;
     let mut total_usage: Option<AggregatedUsage> = None;
+    let mut common_generation: Option<Map<String, Value>> = None;
 
     for result in results {
         match result {
@@ -2070,6 +2077,12 @@ fn assemble_image_response(
                 }
                 let images = extract_images_from_response(&resp);
                 for img in images {
+                    let generation = img.generation.to_object();
+                    if let Some(common) = &mut common_generation {
+                        common.retain(|key, value| generation.get(key) == Some(value));
+                    } else {
+                        common_generation = Some(generation);
+                    }
                     let mut item = Map::new();
                     if let Some(b64) = img.b64_json {
                         item.insert("b64_json".to_string(), Value::String(b64));
@@ -2107,6 +2120,9 @@ fn assemble_image_response(
         "created": created,
         "data": data_items,
     });
+    if let Some(generation) = common_generation {
+        response.as_object_mut().unwrap().extend(generation);
+    }
 
     if let Some(usage) = total_usage {
         response

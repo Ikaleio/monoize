@@ -1867,6 +1867,9 @@ fn stream_output_item_start_stub_from_node_header(
                     obj.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
+            if let urp::NodeHeader::Image { metadata, .. } = header {
+                metadata.image_generation.apply_to(&mut obj);
+            }
             obj.retain(|key, _| !key.starts_with("_monoize_"));
             Value::Object(obj)
         }
@@ -2179,9 +2182,9 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }
-        urp::Node::Image { id, source, extra_body, .. } => {
+        urp::Node::Image { id, source, metadata, extra_body, .. } => {
             urp::encode::openai_responses::encode_image_generation_call_item(
-                id.as_deref(), source, extra_body,
+                id.as_deref(), source, metadata, extra_body,
             ).map(complete_stream_output_item).unwrap_or(Value::Null)
         }
         urp::Node::Audio { .. } | urp::Node::File { .. } => Value::Null,

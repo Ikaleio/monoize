@@ -15,6 +15,10 @@ MT7. Messages custom document strings MUST normalize to an ordered one-element t
 MT8. File reference provenance MUST use typed MediaResource metadata. It MUST identify the source protocol and optionally its provider, channel, and credential scope.
 MT9. Resource metadata MUST NOT appear as native wire fields. Protocol-family compatibility alone MUST NOT authorize a bound resource on another credential scope.
 
+MT9a. `MediaMetadata.image_generation` MUST retain upstream-reported quality, dimensions, background, output format, and image model as optional typed strings. Empty generation metadata MUST be omitted from serialized URP. Nodes, headers, bridge parts, and terminal stream reconstruction MUST preserve it. Encoders MUST use the typed values rather than native extras or request values.
+
+MT9b. When `output_format` is present and the current Base64 source has a supported MIME, output encoders MUST reconcile the format with that source. A source changed to WebP MUST NOT retain an obsolete PNG format. An absent `output_format` MUST remain absent.
+
 ## Request preparation
 
 MT10. Checked encoders MUST prepare and validate a complete request before producing its wire object. Preparation MUST preserve the caller's request.

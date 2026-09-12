@@ -28,12 +28,16 @@ fn decode_image_generation_call_node(item_obj: &Map<String, Value>) -> Option<No
         return None;
     }
     let mut extra_body = split_extra(item_obj, &["type", "id", "result", "output_format"]);
+    extra_body.retain(|key, _| !crate::urp::ImageGenerationMetadata::KEYS.contains(&key.as_str()));
     extra_body.insert(
         RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
         Value::Object(Map::new()),
     );
     Some(Node::Image {
-        metadata: Default::default(),
+        metadata: crate::urp::MediaMetadata {
+            image_generation: crate::urp::ImageGenerationMetadata::from_object(item_obj),
+            ..Default::default()
+        },
         id: item_obj
             .get("id")
             .and_then(|v| v.as_str())

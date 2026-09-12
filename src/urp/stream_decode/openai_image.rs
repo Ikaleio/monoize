@@ -239,7 +239,12 @@ fn image_source_from_payload(payload: &Value) -> Option<ImageSource> {
 fn image_node_from_payload(payload: &Value) -> Option<Node> {
     let source = image_source_from_payload(payload)?;
     Some(Node::Image {
-        metadata: Default::default(),
+        metadata: crate::urp::MediaMetadata {
+            image_generation: crate::urp::ImageGenerationMetadata::from_object(
+                payload.as_object()?,
+            ),
+            ..Default::default()
+        },
 
         id: payload
             .get("id")
@@ -269,6 +274,7 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
                 .filter(|(key, _)| {
                     !crate::urp::decode::is_internal_extra_key(key)
                         && !known.contains(&key.as_str())
+                        && !crate::urp::ImageGenerationMetadata::KEYS.contains(&key.as_str())
                 })
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect()

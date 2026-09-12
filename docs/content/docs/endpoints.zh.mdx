@@ -134,6 +134,8 @@ curl http://localhost:8080/v1/images/edits \
   -F image[]=@input.png
 ```
 
+图像响应保留上游返回的 `quality`、`size`、`background`、`output_format` 和图像 `model`。上游未返回的值保持缺省；请求参数不能证明上游的实际执行结果。返回多张图像时，只有所有图像都报告相同值，响应才会包含对应的顶层字段。图像流的完成事件携带各自图像的元数据。
+
 ## 使用官方 SDK
 
 将官方 SDK 的基础 URL 指向 Monoize：

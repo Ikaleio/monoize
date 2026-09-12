@@ -7,6 +7,11 @@ use std::collections::HashMap;
 
 pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String> {
     let obj = value.as_object().ok_or("response is not an object")?;
+    let generation = crate::urp::ImageGenerationMetadata::from_object(obj);
+    let metadata = crate::urp::MediaMetadata {
+        image_generation: generation.clone(),
+        ..Default::default()
+    };
 
     let id = obj
         .get("created")
@@ -33,19 +38,24 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
 
         if let Some(b64) = item_obj.get("b64_json").and_then(|v| v.as_str()) {
             output.push(Node::Image {
-                metadata: Default::default(),
+                metadata: metadata.clone(),
 
                 id: None,
                 role: OrdinaryRole::Assistant,
                 source: ImageSource::Base64 {
-                    media_type: "image/png".to_string(),
+                    media_type: match generation.output_format.as_deref() {
+                        Some("jpeg") => "image/jpeg",
+                        Some("webp") => "image/webp",
+                        _ => "image/png",
+                    }
+                    .to_string(),
                     data: b64.to_string(),
                 },
                 extra_body: HashMap::new(),
             });
         } else if let Some(url) = item_obj.get("url").and_then(|v| v.as_str()) {
             output.push(Node::Image {
-                metadata: Default::default(),
+                metadata: metadata.clone(),
 
                 id: None,
                 role: OrdinaryRole::Assistant,

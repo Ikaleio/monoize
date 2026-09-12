@@ -134,6 +134,8 @@ curl http://localhost:8080/v1/images/edits \
   -F image[]=@input.png
 ```
 
+画像レスポンスは、上流が返した `quality`、`size`、`background`、`output_format`、画像の `model` を保持します。上流が返さない値は省略します。リクエストの値を実行結果として補完しません。複数の画像では、すべての画像が同じ値を報告したフィールドだけをトップレベルに返します。画像ストリームの完了イベントは、その画像のメタデータを返します。
+
 ## 公式 SDK の利用
 
 公式 SDK のベース URL を Monoize に向けます。

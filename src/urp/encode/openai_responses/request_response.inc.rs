@@ -144,21 +144,17 @@ pub(crate) fn encode_provider_item_for_responses(
 pub(crate) fn encode_image_generation_call_item(
     id: Option<&str>,
     source: &ImageSource,
+    metadata: &crate::urp::MediaMetadata,
     extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
     extra_body.get(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)?;
     let mut item = Map::new();
-    let ImageSource::Base64 { data, media_type } = source else {
+    let ImageSource::Base64 { data, .. } = source else {
         return None;
     };
 
     item.insert("type".to_string(), json!("image_generation_call"));
     item.insert("result".to_string(), Value::String(data.clone()));
-    item.insert("output_format".to_string(), json!(match media_type.as_str() {
-        "image/webp" => "webp",
-        "image/jpeg" => "jpeg",
-        _ => "png",
-    }));
     if let Some(id) = id.filter(|id| !id.is_empty()) {
         item.insert("id".to_string(), Value::String(id.to_string()));
     }
@@ -168,18 +164,19 @@ pub(crate) fn encode_image_generation_call_item(
             item.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
+    metadata.image_generation.for_source(source).apply_to(&mut item);
     item.retain(|key, _| !key.starts_with("_monoize_"));
     Some(Value::Object(item))
 }
 
 fn encode_image_generation_call_part(part: &Part, id: Option<&str>) -> Option<Value> {
     let Part::Image {
-        source, extra_body, ..
+        source, metadata, extra_body, ..
     } = part
     else {
         return None;
     };
-    encode_image_generation_call_item(id, source, extra_body)
+    encode_image_generation_call_item(id, source, metadata, extra_body)
 }
 
 pub(crate) fn encode_input_image(
