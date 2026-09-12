@@ -55,6 +55,8 @@ Monoize には 36 個の組み込み変換があります。このセクショ�
 | ロール | メッセージロールの書き換え・結合 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
 | ストリーム | ストリーミング動作の制御 | `stream_force`、`stream_split_sse_frames` |
 
+レスポンスフェーズで `image_resolve_urls` を有効にすると、上流の画像 URL を Images API の `b64_json` として下流に返します。
+
 ## カスタム変換
 
 管理者は `js:` を ID プレフィックスとする JavaScript 変換も作成できます。

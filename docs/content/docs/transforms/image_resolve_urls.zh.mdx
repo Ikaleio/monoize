@@ -1,11 +1,11 @@
 ---
 title: "图像：URL 解析为 base64"
-description: 下载请求中的图片 URL，并内联为 base64 数据。
+description: 下载请求或响应中的图片 URL，并内联为 base64 数据。
 ---
 
 ## 行为
 
-此变换并发下载请求中的图片 URL，替换为内联 base64 数据。下载失败或超过大小限制的节点保持不变。
+此变换并发下载请求或响应中的图片 URL，替换为内联 base64 数据。下载失败或超过大小限制的节点保持不变。
 
 没有此变换时，Monoize 绝不抓取远程图片 URL。
 
@@ -14,7 +14,7 @@ description: 下载请求中的图片 URL，并内联为 base64 数据。
 | 属性 | 值 |
 | --- | --- |
 | 类型 ID | `image_resolve_urls` |
-| 阶段 | `request` |
+| 阶段 | `request`, `response` |
 | 范围 | Provider, API 密钥 |
 
 ## 适用场景
@@ -44,6 +44,28 @@ description: 下载请求中的图片 URL，并内联为 base64 数据。
     "timeout_seconds": 30,
     "roles": [
       "user"
+    ]
+  }
+}
+```
+
+### 向下游返回 base64 图片
+
+如果 Images API 客户端需要 `b64_json`，请在响应阶段启用此变换。Monoize 下载上游图片 URL，并将图片编码为 `data[].b64_json`。
+
+```json
+{
+  "transform": "image_resolve_urls",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "gpt-image-2.5-sunburst"
+  ],
+  "config": {
+    "timeout_seconds": 30,
+    "max_bytes": 20971520,
+    "roles": [
+      "assistant"
     ]
   }
 }

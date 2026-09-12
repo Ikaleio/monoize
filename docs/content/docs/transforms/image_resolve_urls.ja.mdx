@@ -1,11 +1,11 @@
 ---
 title: "画像: URL を base64 に解決"
-description: リクエスト内の画像 URL をダウンロードし、base64 ソースとしてインライン化します。
+description: リクエストまたはレスポンス内の画像 URL をダウンロードし、base64 ソースとしてインライン化します。
 ---
 
 ## 動作
 
-この変換はリクエスト内の画像 URL を並行してダウンロードし、インライン base64 ソースに置き換えます。ダウンロードの失敗やサイズ超過があったノードは変更されません。
+この変換はリクエストまたはレスポンス内の画像 URL を並行してダウンロードし、インライン base64 ソースに置き換えます。ダウンロードの失敗やサイズ超過があったノードは変更されません。
 
 この変換がない場合、Monoize はリモート画像 URL を取得しません。
 
@@ -14,7 +14,7 @@ description: リクエスト内の画像 URL をダウンロードし、base64 �
 | 項目 | 値 |
 | --- | --- |
 | タイプ ID | `image_resolve_urls` |
-| フェーズ | `request` |
+| フェーズ | `request`, `response` |
 | スコープ | Provider, API キー |
 
 ## 使いどころ
@@ -44,6 +44,28 @@ description: リクエスト内の画像 URL をダウンロードし、base64 �
     "timeout_seconds": 30,
     "roles": [
       "user"
+    ]
+  }
+}
+```
+
+### 下流に base64 画像を返す
+
+Images API クライアントが `b64_json` を必要とする場合は、レスポンスフェーズでこの変換を有効にします。Monoize は上流の画像 URL をダウンロードし、`data[].b64_json` として返します。
+
+```json
+{
+  "transform": "image_resolve_urls",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "gpt-image-2.5-sunburst"
+  ],
+  "config": {
+    "timeout_seconds": 30,
+    "max_bytes": 20971520,
+    "roles": [
+      "assistant"
     ]
   }
 }

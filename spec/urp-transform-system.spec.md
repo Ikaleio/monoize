@@ -595,7 +595,7 @@ CUMI-14. The content cache root defaults to `${TMPDIR}/monoize/image-transform-c
 
 CUMI-15. Cache construction MUST scan the cache directory once, delete expired or invalid entries, evict oldest entries until startup file/byte quotas hold, and build a bounded in-memory metadata index containing key, byte count, modification time, and LRU sequence. Point reads and writes MUST use that index and MUST NOT rescan the cache directory. A point read MUST verify the indexed file's current size before allocating its contents. Point reads MUST update LRU order. A stale point-read observation MUST NOT delete a concurrently published replacement for the same key; validation and deletion MUST serialize with replacement or perform equivalent identity revalidation. Writes MUST evict through the ordered metadata index and MUST update metadata only after atomic rename succeeds. A deletion failure MUST leave metadata accounting intact and fail that cleanup/write operation. Periodic cleanup MAY traverse the bounded metadata index and MUST NOT rescan the directory.
 
-RIU-1. `image_resolve_urls` is request-phase only.
+RIU-1. `image_resolve_urls` supports request and response phases. It MUST process request input, non-streaming response output, stream `NodeDone` image nodes, and stream `ResponseDone.output`. Other stream events remain unchanged.
 
 RIU-2. Config MAY contain:
 - `timeout_seconds` (integer, default `30`)
@@ -611,6 +611,8 @@ RIU-5. On successful fetch, the transform MUST replace the source with `Image.so
 RIU-6. Multiple eligible image fetches within one request MUST be concurrent.
 
 RIU-7. A failed fetch for one image node MUST NOT block other eligible image nodes and MUST leave the failed node unchanged.
+
+RIU-8. Successful URL resolutions MUST be reused within one rule execution state so terminal stream replay does not download the same image again. Resolution MUST preserve node identity, role, and metadata. The byte limit MUST be enforced while reading the response body, before extending the buffer beyond the limit.
 
 ### 4.7 Reasoning transforms on flat nodes and stream state
 

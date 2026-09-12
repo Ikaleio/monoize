@@ -55,6 +55,8 @@ Model matching always uses the logical model name that the client requested, not
 | Role | Rewrite or merge message roles | `role_developer_to_system`, `role_merge_consecutive`, `role_system_to_developer` |
 | Stream | Control streaming behavior | `stream_force`, `stream_split_sse_frames` |
 
+Use `image_resolve_urls` in the response phase to return upstream image URLs as `b64_json` through the Images API.
+
 ## Custom transforms
 
 Administrators can also write JavaScript transforms with the `js:` ID prefix.
