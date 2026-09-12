@@ -23,23 +23,17 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             Some(block)
         }
         Node::Image {
-            source, extra_body, ..
-        } => {
-            let mut block = encode_anthropic_image(source, extra_body)?;
-            if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
-            }
-            Some(block)
-        }
+            source,
+            metadata,
+            extra_body,
+            ..
+        } => encode_anthropic_image(source, metadata, extra_body),
         Node::File {
-            source, extra_body, ..
-        } => {
-            let mut block = encode_anthropic_file(source, extra_body)?;
-            if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
-            }
-            Some(block)
-        }
+            source,
+            metadata,
+            extra_body,
+            ..
+        } => encode_anthropic_file(source, metadata, extra_body),
         Node::Reasoning {
             metadata,
             id,
@@ -78,6 +72,8 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
         }
         Node::ToolCall {
             id: _,
+            namespace,
+            signature: _,
             tool_type,
             call_id,
             name,
@@ -96,18 +92,27 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
                 "name": name,
                 "input": input
             });
+            if let Some(namespace) = namespace {
+                block["toolset_name"] = json!(namespace);
+            }
             if let Some(obj) = block.as_object_mut() {
                 merge_extra(obj, extra_body);
+                if namespace.is_none() {
+                    obj.remove("toolset_name");
+                }
             }
             Some(block)
         }
         Node::ProviderItem {
+            id,
             origin_protocol,
             item_type,
             body,
             extra_body,
             ..
-        } => encode_messages_provider_block(*origin_protocol, item_type, body, extra_body),
+        } => {
+            encode_messages_provider_block(*origin_protocol, Some(id), item_type, body, extra_body)
+        }
         Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ToolResult { .. }
@@ -115,7 +120,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
     }
 }
 
-fn encode_assistant_response_block(node: &Node) -> Option<Value> {
+pub(crate) fn encode_assistant_response_block(node: &Node) -> Option<Value> {
     match node {
         Node::Text {
             citations,
@@ -182,6 +187,8 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
         }
         Node::ToolCall {
             id: _,
+            namespace,
+            signature: _,
             tool_type,
             call_id,
             name,
@@ -200,43 +207,28 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
                 "name": name,
                 "input": input
             });
-            if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
+            if let Some(namespace) = namespace {
+                block["toolset_name"] = json!(namespace);
             }
-            Some(block)
-        }
-        Node::Image {
-            role: OrdinaryRole::Assistant,
-            source,
-            extra_body,
-            ..
-        } => {
-            let mut block = encode_anthropic_image(source, extra_body)?;
             if let Some(obj) = block.as_object_mut() {
                 merge_extra(obj, extra_body);
-            }
-            Some(block)
-        }
-        Node::File {
-            role: OrdinaryRole::Assistant,
-            source,
-            extra_body,
-            ..
-        } => {
-            let mut block = encode_anthropic_file(source, extra_body)?;
-            if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
+                if namespace.is_none() {
+                    obj.remove("toolset_name");
+                }
             }
             Some(block)
         }
         Node::ProviderItem {
+            id,
             role: OrdinaryRole::Assistant,
             origin_protocol,
             item_type,
             body,
             extra_body,
             ..
-        } => encode_messages_provider_block(*origin_protocol, item_type, body, extra_body),
+        } => {
+            encode_messages_provider_block(*origin_protocol, Some(id), item_type, body, extra_body)
+        }
         Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ToolResult { .. }
@@ -250,6 +242,7 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
 
 fn encode_tool_result_block(
     call_id: &str,
+    namespace: Option<&str>,
     content: &[ToolResultContent],
     is_error: bool,
     extra_body: &HashMap<String, Value>,
@@ -262,22 +255,24 @@ fn encode_tool_result_block(
                 merge_extra(block.as_object_mut()?, extra_body);
                 Some(block)
             }
-            ToolResultContent::Image { source, extra_body } => {
-                let mut block = encode_anthropic_image(source, extra_body)?;
-                merge_extra(block.as_object_mut()?, extra_body);
-                Some(block)
-            }
-            ToolResultContent::File { source, extra_body } => {
-                let mut block = encode_anthropic_file(source, extra_body)?;
-                merge_extra(block.as_object_mut()?, extra_body);
-                Some(block)
-            }
+            ToolResultContent::Image {
+                source,
+                metadata,
+                extra_body,
+            } => encode_anthropic_image(source, metadata, extra_body),
+            ToolResultContent::File {
+                source,
+                metadata,
+                extra_body,
+            } => encode_anthropic_file(source, metadata, extra_body),
             ToolResultContent::ProviderItem {
                 origin_protocol,
                 item_type,
                 body,
                 extra_body,
-            } => encode_messages_provider_block(*origin_protocol, item_type, body, extra_body),
+            } => {
+                encode_messages_provider_block(*origin_protocol, None, item_type, body, extra_body)
+            }
         })
         .collect();
     if content.is_empty() {
@@ -289,8 +284,14 @@ fn encode_tool_result_block(
         "is_error": is_error,
         "content": content
     });
+    if let Some(namespace) = namespace {
+        tool_result_block["toolset_name"] = json!(namespace);
+    }
     if let Some(obj) = tool_result_block.as_object_mut() {
         merge_extra(obj, extra_body);
+        if namespace.is_none() {
+            obj.remove("toolset_name");
+        }
     }
     tool_result_block
 }

@@ -1,55 +1,53 @@
-fn file_id_origin_is_openai(extras: &[&HashMap<String, Value>]) -> bool {
-    let mut saw_origin = false;
-    for extra_body in extras {
-        let Some(origin) = extra_body.get(urp::FILE_ID_ORIGIN_EXTRA_KEY) else {
-            continue;
-        };
-        saw_origin = true;
-        if origin.as_str() != Some(urp::FILE_ID_ORIGIN_OPENAI) {
-            return false;
-        }
-    }
-    saw_origin
-}
-
 fn responses_media_delta_is_encodable(
     delta: &urp::NodeDelta,
-    node_extra_body: &HashMap<String, Value>,
-    event_extra_body: &HashMap<String, Value>,
+    _node_extra_body: &HashMap<String, Value>,
+    _event_extra_body: &HashMap<String, Value>,
 ) -> Option<bool> {
-    match delta {
-        urp::NodeDelta::Image {
-            source: urp::ImageSource::FileId { .. },
-        }
-        | urp::NodeDelta::File {
-            source: urp::FileSource::FileId { .. },
-        } => Some(file_id_origin_is_openai(&[
-            node_extra_body,
-            event_extra_body,
-        ])),
-        urp::NodeDelta::Image { .. } | urp::NodeDelta::File { .. } => Some(true),
-        _ => None,
-    }
+    matches!(delta, urp::NodeDelta::Image { .. } | urp::NodeDelta::File { .. }).then_some(true)
 }
 
 fn responses_media_node_is_encodable(
     node: &urp::Node,
-    start_extra_body: &HashMap<String, Value>,
+    _start_extra_body: &HashMap<String, Value>,
 ) -> bool {
-    match node {
-        urp::Node::Image {
-            source: urp::ImageSource::FileId { .. },
-            extra_body,
-            ..
-        }
-        | urp::Node::File {
-            source: urp::FileSource::FileId { .. },
-            extra_body,
-            ..
-        } => file_id_origin_is_openai(&[start_extra_body, extra_body]),
-        urp::Node::Image { .. } | urp::Node::File { .. } => true,
-        _ => false,
+    matches!(node, urp::Node::Image { .. } | urp::Node::File { .. })
+}
+
+fn prepare_responses_media_event(event: &mut UrpStreamEvent) -> Result<(), String> {
+    match event {
+        UrpStreamEvent::NodeStart { header: urp::NodeHeader::ProviderItem { item_type, .. }, .. }
+            if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio" | "audio" | "output_audio") =>
+            Err("Native response content cannot contain input-only media items".into()),
+        UrpStreamEvent::NodeStart { header: urp::NodeHeader::Image { .. }, extra_body, .. }
+            if extra_body.contains_key(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY) => Ok(()),
+        UrpStreamEvent::NodeStart { header: urp::NodeHeader::Image { .. } | urp::NodeHeader::File { .. } | urp::NodeHeader::Audio { .. }, .. }
+        | UrpStreamEvent::NodeDelta { delta: urp::NodeDelta::File { .. } | urp::NodeDelta::Audio { .. }, .. } =>
+            Err("Responses output cannot represent ordinary image, file, or audio media".into()),
+        UrpStreamEvent::NodeDelta { delta: urp::NodeDelta::Image { source }, .. }
+            if !matches!(&*source, urp::ImageSource::Base64 { media_type, .. } if matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp")) =>
+            Err("Responses image_generation_call requires supported Base64 image bytes".into()),
+        UrpStreamEvent::NodeDone { node, .. } =>
+            urp::encode::openai_responses::prepare_response_nodes(std::slice::from_mut(node)),
+        UrpStreamEvent::ResponseDone { output, .. } =>
+            urp::encode::openai_responses::prepare_response_nodes(output),
+        _ => Ok(()),
     }
+}
+
+async fn emit_responses_media_error(
+    tx: &mpsc::Sender<Event>, seq: &mut u64, response_id: &str, created: i64,
+    logical_model: &str, message: &str,
+) -> AppResult<()> {
+    let response = response_failed_payload(response_id, created, logical_model,
+        Some("unsupported_media"), message, &HashMap::new());
+    send_responses_event(tx, seq, "response.failed", json!({ "response": response })).await?;
+    send_plain_sse_data(tx, "[DONE]".into()).await?;
+    Err(crate::error::AppError::new(
+        axum::http::StatusCode::BAD_GATEWAY,
+        "unsupported_media",
+        message,
+    )
+    .with_downstream_stream_terminal_sent(!tx.is_closed()))
 }
 
 fn materialize_deferred_message_state(
@@ -246,11 +244,24 @@ pub(crate) async fn encode_urp_stream_as_responses(
         Ok(())
     }
 
-    while let Some(event) = rx.recv().await {
+    let mut signature_projection = urp::tool_signature::SignatureProjection::default();
+    while let Some(mut event) = signature_projection.recv(&mut rx).await {
         if error_terminal_sent {
             continue;
         }
 
+        if let UrpStreamEvent::NodeDelta { node_index, delta: urp::NodeDelta::Image { .. }, extra_body, .. } = &event
+            && !node_states.get(node_index).is_some_and(|state| state.zone == ResponsesOutputZone::ImageGenerationCall)
+            && image_generation_call_downstream_event(extra_body).is_none()
+        {
+            return emit_responses_media_error(&tx, &mut seq, &response_id,
+                created.unwrap_or_else(now_ts), logical_model,
+                "Responses image fragments require a native image_generation_call lifecycle").await;
+        }
+        if let Err(error) = prepare_responses_media_event(&mut event) {
+            return emit_responses_media_error(&tx, &mut seq, &response_id,
+                created.unwrap_or_else(now_ts), logical_model, &error).await;
+        }
         match event {
             UrpStreamEvent::ResponseStart {
                 usage,
@@ -293,6 +304,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 };
                 payload["response"]["status"] = json!("in_progress");
                 payload["response"]["output"] = json!([]);
+                if let Some(response) = payload["response"].as_object_mut() {
+                    for (key, value) in &extra_body {
+                        if !key.starts_with("_monoize_") && !matches!(key.as_str(),
+                            "id" | "model" | "output" | "usage" | "status" | "incomplete_details" | "error"
+                        ) {
+                            response.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
                 payload["response"].as_object_mut().unwrap().remove("usage");
                 if let Some(usage) = usage {
                     payload["response"]["usage"] =
@@ -580,18 +600,32 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 match delta {
                     urp::NodeDelta::Text {
                         signature: _,
-                        citations: _,
+                        citations,
                         content,
                     } => {
+                        let first_annotation = node_state.completed_item.as_ref()
+                            .and_then(|item| item.get("content"))
+                            .and_then(Value::as_array).and_then(|parts| parts.first())
+                            .and_then(|part| part.get("annotations"))
+                            .and_then(Value::as_array).map_or(0, Vec::len);
                         append_node_delta_to_completed_item(
                             node_state,
                             &urp::NodeDelta::Text {
                                 signature: None,
-                                citations: Vec::new(),
+                                citations: citations.clone(),
                                 content: content.clone(),
                             },
                             None,
                         );
+                        for (offset, annotation) in citations.iter().enumerate() {
+                            send_responses_event(&tx, &mut seq, "response.output_text.annotation.added", json!({
+                                "item_id": node_state.item_id,
+                                "output_index": node_state.output_index,
+                                "content_index": node_state.content_index.unwrap_or(0),
+                                "annotation_index": first_annotation + offset,
+                                "annotation": annotation,
+                            })).await?;
+                        }
                         send_responses_delta_string(
                             &tx,
                             &mut seq,
@@ -619,13 +653,11 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         send_responses_delta_string(
                             &tx,
                             &mut seq,
-                            "response.output_text.delta",
+                            "response.refusal.delta",
                             json!({
                                 "item_id": node_state.item_id,
                                 "output_index": node_state.output_index,
-                                "content_index": node_state.content_index.unwrap_or(0),
-                                "logprobs": Value::Null,
-                                "type": "refusal"
+                                "content_index": node_state.content_index.unwrap_or(0)
                             }),
                             "delta",
                             &content,
@@ -721,7 +753,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         }
                     }
                     urp::NodeDelta::ToolCallArguments { arguments } => {
-                        let arguments = urp::tool_call_arguments_for_wire(arguments);
+                        let is_custom = matches!(node_state.header, Some(urp::NodeHeader::ToolCall { tool_type: urp::ToolCallType::Custom, .. }));
+                        let arguments = if is_custom { arguments } else { urp::tool_call_arguments_for_wire(arguments) };
                         append_node_delta_to_completed_item(
                             node_state,
                             &urp::NodeDelta::ToolCallArguments {
@@ -841,6 +874,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         )
                         .await?;
                     }
+                    urp::Node::Refusal { content, .. } => {
+                        apply_node_done_to_stream_output_item_state(&mut node_state, &node);
+                        send_responses_event(&tx, &mut seq, "response.refusal.done", json!({
+                            "item_id": node_state.item_id, "output_index": node_state.output_index,
+                            "content_index": node_state.content_index.unwrap_or(0), "refusal": content,
+                        })).await?;
+                    }
                     urp::Node::Reasoning {
                         content,
                         encrypted,
@@ -941,7 +981,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         extra_body,
                         ..
                     } => {
-                        let arguments = urp::tool_call_arguments_for_wire(arguments);
+                        let arguments = if *tool_type == urp::ToolCallType::Custom { arguments.clone() } else { urp::tool_call_arguments_for_wire(arguments) };
                         append_node_delta_to_completed_item(
                             &mut node_state,
                             &urp::NodeDelta::ToolCallArguments {
@@ -1295,7 +1335,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             extra_body,
                             ..
                         } => {
-                            let arguments = urp::tool_call_arguments_for_wire(arguments);
+                            let arguments = if *tool_type == urp::ToolCallType::Custom { arguments.clone() } else { urp::tool_call_arguments_for_wire(arguments) };
                             append_node_delta_to_completed_item(
                                 &mut node_state,
                                 &urp::NodeDelta::ToolCallArguments {
@@ -1608,7 +1648,9 @@ fn zone_from_node_header(
             ResponsesOutputZone::ImageGenerationCall
         }
         urp::NodeHeader::Reasoning { .. } => ResponsesOutputZone::Reasoning,
-        urp::NodeHeader::ToolCall { .. } => ResponsesOutputZone::FunctionCall,
+        urp::NodeHeader::ToolCall { .. } | urp::NodeHeader::ToolResult { .. } => ResponsesOutputZone::FunctionCall,
+        urp::NodeHeader::ProviderItem { .. }
+            if extra_body.contains_key(urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY) => ResponsesOutputZone::Message,
         urp::NodeHeader::ProviderItem { .. } => ResponsesOutputZone::ProviderItem,
         _ => ResponsesOutputZone::Message,
     }
@@ -1714,10 +1756,9 @@ fn image_generation_call_image_event_payload(
             payload.insert(key.clone(), value.clone());
         }
     }
-    if !payload.contains_key("partial_image_b64") {
-        if let urp::ImageSource::Base64 { data, .. } = source {
-            payload.insert("partial_image_b64".to_string(), Value::String(data.clone()));
-        }
+    for key in ["partial_image_b64", "b64_json", "result"] { payload.remove(key); }
+    if let urp::ImageSource::Base64 { data, .. } = source {
+        payload.insert("partial_image_b64".to_string(), Value::String(data.clone()));
     }
     Value::Object(payload)
 }
@@ -1830,14 +1871,30 @@ fn stream_output_item_start_stub_from_node_header(
             Value::Object(obj)
         }
         ResponsesOutputZone::FunctionCall => {
-            let (tool_type, call_id, name) = match header {
+            if let urp::NodeHeader::ToolResult { id, tool_type, call_id, name, namespace, .. } = header {
+                let mut obj = Map::new();
+                merge_json_extra_preserving_typed(&mut obj, envelope_extra);
+                merge_json_extra(&mut obj, extra_body);
+                obj.insert("type".into(), json!(if *tool_type == urp::ToolCallType::Custom {
+                    "custom_tool_call_output"
+                } else { "function_call_output" }));
+                obj.insert("id".into(), json!(id.clone().unwrap_or_else(|| format!("fco_{}", uuid::Uuid::new_v4()))));
+                obj.insert("call_id".into(), json!(call_id));
+                obj.insert("output".into(), json!(""));
+                obj.insert("status".into(), json!("in_progress"));
+                obj.remove("name"); obj.remove("namespace");
+                if let Some(name) = name { obj.insert("name".into(), json!(name)); }
+                if let Some(namespace) = namespace { obj.insert("namespace".into(), json!(namespace)); }
+                return Value::Object(obj);
+            }
+            let (tool_type, call_id, name, namespace) = match header {
                 urp::NodeHeader::ToolCall {
                     tool_type,
                     call_id,
-                    name,
+                    name, namespace,
                     ..
-                } => (*tool_type, call_id.clone(), name.clone()),
-                _ => (urp::ToolCallType::Function, String::new(), String::new()),
+                } => (*tool_type, call_id.clone(), name.clone(), namespace.clone()),
+                _ => (urp::ToolCallType::Function, String::new(), String::new(), None),
             };
             let mut obj = Map::new();
             obj.insert(
@@ -1850,6 +1907,7 @@ fn stream_output_item_start_stub_from_node_header(
             );
             obj.insert("call_id".to_string(), json!(call_id));
             obj.insert("name".to_string(), json!(name));
+            if let Some(namespace) = namespace { obj.insert("namespace".to_string(), json!(namespace)); }
             obj.insert(
                 if tool_type == urp::ToolCallType::Custom {
                     "input"
@@ -1880,35 +1938,22 @@ fn stream_output_item_start_stub_from_node_header(
             Value::Object(obj)
         }
         ResponsesOutputZone::ProviderItem => {
-            let urp::NodeHeader::ProviderItem { id, item_type, .. } = header else {
+            let urp::NodeHeader::ProviderItem { id, item_type, body, .. } = header else {
                 return Value::Null;
             };
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!(item_type));
-            if let Some(id) = id
-                .clone()
-                .or_else(|| {
-                    extra_body
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .or_else(|| {
-                    envelope_extra
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-            {
-                obj.insert("id".to_string(), json!(id));
-            }
+            let mut obj = body.as_ref().map(sanitize_provider_item_wire_body)
+                .and_then(|value| value.as_object().cloned()).unwrap_or_default();
+            let native_had_id = obj.remove("id").is_some();
             merge_json_extra_preserving_typed(&mut obj, envelope_extra);
-            if let Value::Object(sanitized_extra_body) = sanitize_provider_item_wire_body(
+            if let Value::Object(extra) = sanitize_provider_item_wire_body(
                 &Value::Object(extra_body.clone().into_iter().collect()),
             ) {
-                for (key, value) in sanitized_extra_body {
-                    obj.insert(key, value);
-                }
+                obj.extend(extra);
+            }
+            obj.insert("type".to_string(), json!(item_type));
+            obj.remove("id");
+            if (body.is_none() || native_had_id) && let Some(id) = id {
+                obj.insert("id".to_string(), json!(id));
             }
             Value::Object(obj)
         }
@@ -1921,10 +1966,10 @@ fn encode_node_start_content_part(header: &urp::NodeHeader) -> Value {
             json!({ "type": "output_text", "text": "", "annotations": [], "logprobs": [] })
         }
         urp::NodeHeader::Refusal { .. } => json!({ "type": "refusal", "refusal": "" }),
-        urp::NodeHeader::Image { .. } => json!({ "type": "output_image" }),
-        urp::NodeHeader::Audio { .. } => json!({ "type": "audio" }),
-        urp::NodeHeader::File { .. } => json!({ "type": "output_file" }),
-        urp::NodeHeader::ProviderItem { .. } => Value::Null,
+        urp::NodeHeader::Image { .. } | urp::NodeHeader::Audio { .. } | urp::NodeHeader::File { .. } => Value::Null,
+        urp::NodeHeader::ProviderItem { id,origin_protocol,item_type,body,.. } => body.as_ref()
+            .and_then(|body| urp::encode::openai_responses::encode_provider_item_for_responses(*origin_protocol,item_type,body,&HashMap::new(),Some(id)))
+            .unwrap_or(Value::Null),
         _ => Value::Null,
     }
 }
@@ -1932,6 +1977,7 @@ fn encode_node_start_content_part(header: &urp::NodeHeader) -> Value {
 fn encode_node_done_content_part(node: &urp::Node) -> Option<Value> {
     match node {
         urp::Node::Text {
+            citations,
             content,
             extra_body,
             ..
@@ -1939,7 +1985,7 @@ fn encode_node_done_content_part(node: &urp::Node) -> Option<Value> {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("output_text"));
             obj.insert("text".to_string(), json!(content));
-            obj.insert("annotations".to_string(), json!([]));
+            obj.insert("annotations".to_string(), json!(citations));
             obj.insert("logprobs".to_string(), json!([]));
             merge_json_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
@@ -1955,44 +2001,9 @@ fn encode_node_done_content_part(node: &urp::Node) -> Option<Value> {
             merge_json_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }
-        urp::Node::Image {
-            source, extra_body, ..
-        } => encode_image_part(source, extra_body),
-        urp::Node::Audio {
-            source, extra_body, ..
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("audio"));
-            obj.insert("source".to_string(), encode_audio_source(source));
-            merge_json_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        urp::Node::File {
-            source, extra_body, ..
-        } => encode_file_part(source, extra_body),
-        urp::Node::ProviderItem {
-            origin_protocol,
-            item_type,
-            body,
-            extra_body,
-            ..
-        } => {
-            if *origin_protocol != urp::ProviderProtocol::Responses {
-                return None;
-            }
-            let sanitized_body = sanitize_provider_item_wire_body(body);
-            let mut obj = match sanitized_body {
-                Value::Object(map) => map,
-                other => {
-                    let mut map = Map::new();
-                    map.insert("body".to_string(), other);
-                    map
-                }
-            };
-            obj.entry("type".to_string())
-                .or_insert_with(|| Value::String(item_type.clone()));
-            merge_json_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
+        urp::Node::Image { .. } | urp::Node::Audio { .. } | urp::Node::File { .. } => None,
+        urp::Node::ProviderItem {id,origin_protocol,item_type,body,extra_body,..} => {
+            urp::encode::openai_responses::encode_provider_item_for_responses(*origin_protocol,item_type,body,extra_body,Some(id))
         }
         _ => None,
     }
@@ -2013,11 +2024,10 @@ fn encode_responses_provider_output_item(
             map
         }
     };
-    obj.entry("type".to_string())
-        .or_insert_with(|| Value::String(item_type.to_string()));
-    if let Some(id) = id.filter(|id| !id.is_empty()) {
-        obj.entry("id".to_string())
-            .or_insert_with(|| Value::String(id.clone()));
+    obj.insert("type".to_string(), Value::String(item_type.to_string()));
+    let had_id = obj.remove("id").is_some();
+    if had_id && let Some(id) = id.filter(|id| !id.is_empty()) {
+        obj.insert("id".to_string(), Value::String(id.clone()));
     }
     merge_json_extra(&mut obj, extra_body);
     Value::Object(obj)
@@ -2026,6 +2036,7 @@ fn encode_responses_provider_output_item(
 fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
     match node {
         urp::Node::Text {
+            citations,
             role,
             content,
             phase,
@@ -2035,7 +2046,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert("content".to_string(), json!([{ "type": "output_text", "text": content, "annotations": [], "logprobs": [] }]));
+            obj.insert("content".to_string(), json!([{ "type": "output_text", "text": content, "annotations": citations, "logprobs": [] }]));
             let id = extra_body
                 .get("id")
                 .and_then(Value::as_str)
@@ -2122,6 +2133,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             Value::Object(obj)
         }
         urp::Node::ToolCall {
+            namespace, signature: _,
             id,
             tool_type,
             call_id,
@@ -2140,6 +2152,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             );
             obj.insert("call_id".to_string(), json!(call_id));
             obj.insert("name".to_string(), json!(name));
+            if let Some(namespace) = namespace { obj.insert("namespace".to_string(), json!(namespace)); }
             obj.insert(
                 if *tool_type == urp::ToolCallType::Custom {
                     "input"
@@ -2147,7 +2160,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
                     "arguments"
                 }
                 .to_string(),
-                json!(urp::tool_call_arguments_for_wire(arguments)),
+                json!(if *tool_type == urp::ToolCallType::Custom { arguments.clone() } else { urp::tool_call_arguments_for_wire(arguments) }),
             );
             obj.insert(
                 "id".to_string(),
@@ -2166,85 +2179,12 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }
-        urp::Node::Image {
-            id,
-            role,
-            source,
-            extra_body,
-        } => {
-            if let Some(item) = urp::encode::openai_responses::encode_image_generation_call_item(
-                id.as_deref(),
-                source,
-                extra_body,
-            ) {
-                return complete_stream_output_item(item);
-            }
-            let Some(part) = encode_image_part(source, extra_body) else {
-                return Value::Null;
-            };
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("message"));
-            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert("content".to_string(), json!([part]));
-            let id = extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
-                .or_else(|| node.id().cloned())
-                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
-            obj.insert("id".to_string(), json!(id));
-            obj.insert("status".to_string(), json!("completed"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
+        urp::Node::Image { id, source, extra_body, .. } => {
+            urp::encode::openai_responses::encode_image_generation_call_item(
+                id.as_deref(), source, extra_body,
+            ).map(complete_stream_output_item).unwrap_or(Value::Null)
         }
-        urp::Node::Audio {
-            role,
-            source,
-            extra_body,
-            ..
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("message"));
-            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert(
-                "content".to_string(),
-                json!([{ "type": "audio", "source": encode_audio_source(source) }]),
-            );
-            let id = extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
-                .or_else(|| node.id().cloned())
-                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
-            obj.insert("id".to_string(), json!(id));
-            obj.insert("status".to_string(), json!("completed"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        urp::Node::File {
-            role,
-            source,
-            extra_body,
-            ..
-        } => {
-            let Some(part) = encode_file_part(source, extra_body) else {
-                return Value::Null;
-            };
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("message"));
-            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert("content".to_string(), json!([part]));
-            let id = extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
-                .or_else(|| node.id().cloned())
-                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
-            obj.insert("id".to_string(), json!(id));
-            obj.insert("status".to_string(), json!("completed"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
+        urp::Node::Audio { .. } | urp::Node::File { .. } => Value::Null,
         urp::Node::ProviderItem {
             origin_protocol,
             item_type,
@@ -2258,6 +2198,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             encode_responses_provider_output_item(item_type, body, extra_body, node.id())
         }
         urp::Node::ToolResult {
+            signature: _, namespace, name,
             id,
             tool_type,
             call_id,
@@ -2266,6 +2207,10 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             extra_body,
         } => {
             let mut obj = Map::new();
+            merge_json_extra(&mut obj, extra_body);
+            for key in ["id", "name", "namespace", "is_error"] { obj.remove(key); }
+            if let Some(name) = name { obj.insert("name".into(), json!(name)); }
+            if let Some(namespace) = namespace { obj.insert("namespace".into(), json!(namespace)); }
             obj.insert(
                 "type".to_string(),
                 json!(if *tool_type == urp::ToolCallType::Custom {
@@ -2278,12 +2223,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             obj.insert(
                 "id".to_string(),
                 json!(
-                    id.clone()
-                        .or_else(|| extra_body
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(|s| s.to_string()))
-                        .unwrap_or_else(|| format!("tr_{}", uuid::Uuid::new_v4()))
+                    id.clone().unwrap_or_else(|| format!("fco_{}", uuid::Uuid::new_v4()))
                 ),
             );
             obj.insert("status".to_string(), json!("completed"));
@@ -2291,7 +2231,6 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             if *is_error {
                 obj.insert("is_error".to_string(), Value::Bool(true));
             }
-            merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }
         urp::Node::NextDownstreamEnvelopeExtra { extra_body } => {
@@ -2388,11 +2327,20 @@ fn append_node_delta_to_completed_item(
             ResponsesOutputZone::Message,
             urp::NodeDelta::Text {
                 signature: _,
-                citations: _,
+                citations,
                 content,
             },
         ) => {
             append_string_field_to_message_content(&mut item, "output_text", "text", content);
+            if let Some(part) = item.get_mut("content").and_then(Value::as_array_mut)
+                .and_then(|parts| parts.iter_mut().find(|part| part.get("type").and_then(Value::as_str) == Some("output_text")))
+            {
+                let annotations = part.as_object_mut().unwrap().entry("annotations")
+                    .or_insert_with(|| json!([]));
+                if let Some(annotations) = annotations.as_array_mut() {
+                    annotations.extend(citations.iter().cloned());
+                }
+            }
         }
         (ResponsesOutputZone::Message, urp::NodeDelta::Refusal { content }) => {
             append_string_field_to_message_content(&mut item, "refusal", "refusal", content);
@@ -3092,77 +3040,43 @@ async fn emit_missing_terminal_output_done_events(
 }
 
 async fn emit_missing_terminal_message_child_lifecycles(
-    tx: &mpsc::Sender<Event>,
-    seq: &mut u64,
-    output_index: usize,
-    item: &Value,
-    sse_max_frame_length: Option<usize>,
+    tx: &mpsc::Sender<Event>, seq: &mut u64, output_index: usize,
+    item: &Value, sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    if item.get("type").and_then(Value::as_str) != Some("message") {
-        return Ok(());
-    }
-    let item_id = item.get("id").cloned().unwrap_or(Value::Null);
-    let phase = item.get("phase").and_then(Value::as_str);
-    let Some(content) = item.get("content").and_then(Value::as_array) else {
-        return Ok(());
-    };
-    for (content_index, part) in content.iter().enumerate() {
+    let Some(parts) = item.get("content").and_then(Value::as_array) else { return Ok(()); };
+    for (content_index, part) in parts.iter().enumerate() {
         let part_type = part.get("type").and_then(Value::as_str).unwrap_or_default();
-        if !matches!(part_type, "output_text" | "text") {
-            continue;
+        let text_field = match part_type {
+            "output_text" | "text" => Some(("text", "response.output_text.delta", "response.output_text.done")),
+            "refusal" => Some(("refusal", "response.refusal.delta", "response.refusal.done")),
+            _ => None,
+        };
+        let mut added = part.clone();
+        if let Some((field, _, _)) = text_field { added[field] = json!(""); }
+        if part_type == "output_text" { added["annotations"] = json!([]); }
+        let coordinates = json!({"item_id":item["id"],"output_index":output_index,"content_index":content_index});
+        let mut added_payload = coordinates.clone(); added_payload["part"] = added;
+        send_responses_event(tx, seq, "response.content_part.added", added_payload).await?;
+        if let Some((field, delta_event, done_event)) = text_field {
+            let text = part.get(field).and_then(Value::as_str).unwrap_or_default();
+            let mut payload = coordinates.clone();
+            if field == "text" { payload["logprobs"] = part.get("logprobs").cloned().unwrap_or(Value::Null); }
+            if !text.is_empty() {
+                send_responses_delta_string(tx, seq, delta_event, payload.clone(), "delta", text, sse_max_frame_length).await?;
+            }
+            if let Some(annotations) = part.get("annotations").and_then(Value::as_array) {
+                for (index, annotation) in annotations.iter().enumerate() {
+                    let mut annotation_payload = coordinates.clone();
+                    annotation_payload["annotation_index"] = json!(index);
+                    annotation_payload["annotation"] = annotation.clone();
+                    send_responses_event(tx, seq, "response.output_text.annotation.added", annotation_payload).await?;
+                }
+            }
+            payload[field] = json!(text);
+            send_responses_event(tx, seq, done_event, payload).await?;
         }
-        let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
-        let mut added_part = part.clone();
-        if let Some(obj) = added_part.as_object_mut() {
-            obj.insert("text".to_string(), Value::String(String::new()));
-        }
-        send_responses_event(
-            tx,
-            seq,
-            "response.content_part.added",
-            json!({
-                "output_index": output_index,
-                "content_index": content_index,
-                "item_id": item_id.clone(),
-                "part": added_part,
-            }),
-        )
-        .await?;
-        if !text.is_empty() {
-            send_responses_delta_string(
-                tx,
-                seq,
-                "response.output_text.delta",
-                responses_text_delta_payload(
-                    phase,
-                    item,
-                    output_index as u64,
-                    content_index as u64,
-                ),
-                "delta",
-                text,
-                sse_max_frame_length,
-            )
-            .await?;
-        }
-        let mut done_payload =
-            responses_text_delta_payload(phase, item, output_index as u64, content_index as u64);
-        if let Some(obj) = done_payload.as_object_mut() {
-            obj.insert("text".to_string(), Value::String(text.to_string()));
-        }
-        send_responses_event(tx, seq, "response.output_text.done", done_payload).await?;
-        send_responses_event(
-            tx,
-            seq,
-            "response.content_part.done",
-            json!({
-                "output_index": output_index,
-                "content_index": content_index,
-                "item_id": item_id.clone(),
-                "part": part,
-            }),
-        )
-        .await?;
+        let mut done_payload = coordinates; done_payload["part"] = part.clone();
+        send_responses_event(tx, seq, "response.content_part.done", done_payload).await?;
     }
     Ok(())
 }
@@ -3367,11 +3281,9 @@ async fn emit_missing_terminal_sub_lifecycles(
             "function_call" | "custom_tool_call" => {
                 let is_custom =
                     item.get("type").and_then(Value::as_str) == Some("custom_tool_call");
-                let arguments = urp::tool_call_arguments_for_wire(
-                    item.get(if is_custom { "input" } else { "arguments" })
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                );
+                let raw_arguments = item.get(if is_custom { "input" } else { "arguments" })
+                    .and_then(Value::as_str).unwrap_or_default();
+                let arguments = if is_custom { raw_arguments.to_string() } else { urp::tool_call_arguments_for_wire(raw_arguments) };
                 if function_args_delta_indices.insert(*output_index) && !arguments.is_empty() {
                     send_responses_delta_string(
                         tx,
@@ -3417,148 +3329,8 @@ async fn emit_missing_terminal_sub_lifecycles(
     Ok(())
 }
 
-fn encode_image_part(
-    source: &crate::urp::ImageSource,
-    extra_body: &HashMap<String, Value>,
-) -> Option<Value> {
-    let mut obj = Map::new();
-    merge_json_extra(&mut obj, extra_body);
-    obj.insert("type".to_string(), json!("output_image"));
-    match source {
-        crate::urp::ImageSource::Url { url, detail } => {
-            obj.insert("url".to_string(), json!(url));
-            if let Some(detail) = detail {
-                obj.insert("detail".to_string(), json!(detail));
-            }
-        }
-        crate::urp::ImageSource::Base64 { media_type, data } => {
-            obj.insert(
-                "source".to_string(),
-                json!({ "type": "base64", "media_type": media_type, "data": data }),
-            );
-        }
-        crate::urp::ImageSource::FileId { file_id, detail } => {
-            if !file_id_origin_matches(extra_body, urp::FILE_ID_ORIGIN_OPENAI) {
-                return None;
-            }
-            obj.insert("file_id".to_string(), json!(file_id));
-            if let Some(detail) = detail {
-                obj.insert("detail".to_string(), json!(detail));
-            }
-        }
-    }
-    Some(Value::Object(obj))
-}
-
-fn encode_file_part(
-    source: &crate::urp::FileSource,
-    extra_body: &HashMap<String, Value>,
-) -> Option<Value> {
-    let mut obj = Map::new();
-    merge_json_extra(&mut obj, extra_body);
-    obj.insert("type".to_string(), json!("output_file"));
-    match source {
-        crate::urp::FileSource::Url { url } => {
-            obj.insert("url".to_string(), json!(url));
-        }
-        crate::urp::FileSource::Base64 {
-            filename,
-            media_type,
-            data,
-        } => {
-            obj.insert(
-                "source".to_string(),
-                json!({
-                    "type": "base64",
-                    "filename": filename,
-                    "media_type": media_type,
-                    "data": data,
-                }),
-            );
-        }
-        crate::urp::FileSource::FileId { file_id } => {
-            if !file_id_origin_matches(extra_body, urp::FILE_ID_ORIGIN_OPENAI) {
-                return None;
-            }
-            obj.insert("file_id".to_string(), json!(file_id));
-        }
-        crate::urp::FileSource::Text { text } => {
-            obj.insert(
-                "source".to_string(),
-                json!({ "type": "text", "text": text }),
-            );
-        }
-        crate::urp::FileSource::Content { content } => {
-            obj.insert(
-                "source".to_string(),
-                json!({ "type": "content", "content": content }),
-            );
-        }
-    }
-    Some(Value::Object(obj))
-}
-
-fn encode_audio_source(source: &crate::urp::AudioSource) -> Value {
-    match source {
-        crate::urp::AudioSource::Url { url } => json!({ "type": "url", "url": url }),
-        crate::urp::AudioSource::Base64 { media_type, data } => {
-            json!({ "type": "base64", "media_type": media_type, "data": data })
-        }
-    }
-}
-
 fn encode_tool_result_output(content: &[ToolResultContent]) -> Value {
-    if content.is_empty() {
-        return Value::String(String::new());
-    }
-    if content.len() == 1 {
-        if let ToolResultContent::Text { text, extra_body } = &content[0]
-            && extra_body.is_empty()
-        {
-            return Value::String(text.clone());
-        }
-    }
-
-    Value::Array(
-        content
-            .iter()
-            .filter_map(|part| match part {
-                ToolResultContent::Text { text, extra_body } => {
-                    let mut obj = Map::new();
-                    merge_json_extra(&mut obj, extra_body);
-                    obj.insert("type".to_string(), json!("input_text"));
-                    obj.insert("text".to_string(), json!(text));
-                    Some(Value::Object(obj))
-                }
-                ToolResultContent::Image { source, extra_body } => {
-                    encode_image_part(source, extra_body)
-                }
-                ToolResultContent::File { source, extra_body } => {
-                    encode_file_part(source, extra_body)
-                }
-                ToolResultContent::ProviderItem {
-                    origin_protocol: crate::urp::ProviderProtocol::Responses,
-                    item_type,
-                    body,
-                    extra_body,
-                } => {
-                    let sanitized_body = sanitize_provider_item_wire_body(body);
-                    let mut obj = sanitized_body.as_object().cloned().unwrap_or_else(|| {
-                        [("body".to_string(), sanitized_body)].into_iter().collect()
-                    });
-                    for (key, value) in extra_body {
-                        if !key.starts_with("_monoize_") {
-                            obj.entry(key.clone()).or_insert_with(|| value.clone());
-                        }
-                    }
-                    obj.entry("type".to_string())
-                        .or_insert_with(|| json!(item_type));
-                    Some(Value::Object(obj))
-                }
-                ToolResultContent::ProviderItem { .. } => None,
-            })
-            .collect(),
-    )
+    urp::encode::openai_responses::encode_tool_result_output(content)
 }
 
 fn merge_json_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {

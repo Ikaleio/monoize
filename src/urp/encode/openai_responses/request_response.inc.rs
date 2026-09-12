@@ -2,53 +2,14 @@ fn encode_tool_result_item(
     id: Option<&str>,
     tool_type: ToolCallType,
     call_id: &str,
+    namespace: Option<&str>,
+    name: Option<&str>,
     content: &[ToolResultContent],
     _is_error: bool,
     extra_body: &HashMap<String, Value>,
     output_item: bool,
     out: &mut Vec<Value>,
 ) {
-    let mut tool_content = Vec::new();
-    for item in content {
-        match item {
-            ToolResultContent::Text { text, extra_body } => {
-                let mut block = json!({
-                    "type": "input_text",
-                    "text": text,
-                });
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                tool_content.push(block);
-            }
-            ToolResultContent::Image { source, extra_body } => {
-                if let Some(block) = encode_input_image(source, extra_body) {
-                    tool_content.push(block);
-                }
-            }
-            ToolResultContent::File { source, extra_body } => {
-                if let Some(block) = encode_input_file(source, extra_body) {
-                    tool_content.push(block);
-                }
-            }
-            ToolResultContent::ProviderItem {
-                origin_protocol,
-                item_type,
-                body,
-                extra_body,
-            } => {
-                if let Some(block) = encode_provider_item_for_responses(
-                    *origin_protocol,
-                    item_type,
-                    body,
-                    extra_body,
-                ) {
-                    tool_content.push(block);
-                }
-            }
-        }
-    }
-
     let mut obj = Map::new();
     obj.insert(
         "type".to_string(),
@@ -85,34 +46,79 @@ fn encode_tool_result_item(
     }
     obj.insert("call_id".to_string(), Value::String(call_id.to_string()));
 
+    obj.insert("output".to_string(), encode_tool_result_output(content));
+
+    merge_extra(&mut obj, extra_body);
+    obj.remove("namespace"); obj.remove("name");
+    if let Some(namespace) = namespace { obj.insert("namespace".into(), json!(namespace)); }
+    if let Some(name) = name { obj.insert("name".into(), json!(name)); }
+    if id.is_none() && !output_item { obj.remove("id"); }
+    out.push(Value::Object(obj));
+}
+
+pub(crate) fn encode_tool_result_output(content: &[ToolResultContent]) -> Value {
+    let mut tool_content = Vec::new();
+    for item in content {
+        match item {
+            ToolResultContent::Text { text, extra_body } => {
+                let mut block = json!({
+                    "type": "input_text",
+                    "text": text,
+                });
+                if let Some(obj) = block.as_object_mut() {
+                    merge_extra(obj, extra_body);
+                }
+                tool_content.push(block);
+            }
+            ToolResultContent::Image { metadata, source, extra_body } => {
+                if let Some(block) = encode_input_image(source, metadata, extra_body) {
+                    tool_content.push(block);
+                }
+            }
+            ToolResultContent::File { metadata, source, extra_body } => {
+                if let Some(block) = encode_input_file(source, metadata, extra_body) {
+                    tool_content.push(block);
+                }
+            }
+            ToolResultContent::ProviderItem {
+                origin_protocol,
+                item_type,
+                body,
+                extra_body,
+            } => {
+                if let Some(block) = encode_provider_item_for_responses(
+                    *origin_protocol,
+                    item_type,
+                    body,
+                    extra_body,
+                    None,
+                ) {
+                    tool_content.push(block);
+                }
+            }
+        }
+    }
+
     if tool_content.is_empty() {
-        obj.insert("output".to_string(), Value::String(String::new()));
+        Value::String(String::new())
     } else if tool_content.len() == 1
         && tool_content[0].get("type").and_then(|v| v.as_str()) == Some("input_text")
         && tool_content[0]
             .as_object()
             .is_some_and(|obj| obj.keys().all(|key| key == "type" || key == "text"))
     {
-        obj.insert(
-            "output".to_string(),
-            tool_content[0]
-                .get("text")
-                .cloned()
-                .unwrap_or(Value::String(String::new())),
-        );
+        tool_content[0].get("text").cloned().unwrap_or_else(|| json!(""))
     } else {
-        obj.insert("output".to_string(), Value::Array(tool_content));
+        Value::Array(tool_content)
     }
-
-    merge_extra(&mut obj, extra_body);
-    out.push(Value::Object(obj));
 }
 
-fn encode_provider_item_for_responses(
+pub(crate) fn encode_provider_item_for_responses(
     origin_protocol: ProviderProtocol,
     item_type: &str,
     body: &Value,
     extra_body: &HashMap<String, Value>,
+    id: Option<&Option<String>>,
 ) -> Option<Value> {
     if origin_protocol != ProviderProtocol::Responses {
         return None;
@@ -126,8 +132,11 @@ fn encode_provider_item_for_responses(
             obj
         }
     };
-    item.entry("type".to_string())
-        .or_insert_with(|| Value::String(item_type.to_string()));
+    item.insert("type".to_string(), Value::String(item_type.to_string()));
+    if let Some(id) = id {
+        let had_id = item.remove("id").is_some();
+        if had_id && let Some(id) = id { item.insert("id".to_string(), json!(id)); }
+    }
     merge_extra(&mut item, extra_body);
     Some(Value::Object(item))
 }
@@ -137,21 +146,25 @@ pub(crate) fn encode_image_generation_call_item(
     source: &ImageSource,
     extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
-    let mut item = extra_body
-        .get(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)?
-        .as_object()?
-        .clone();
-    let ImageSource::Base64 { data, .. } = source else {
+    extra_body.get(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)?;
+    let mut item = Map::new();
+    let ImageSource::Base64 { data, media_type } = source else {
         return None;
     };
 
     item.insert("type".to_string(), json!("image_generation_call"));
     item.insert("result".to_string(), Value::String(data.clone()));
+    item.insert("output_format".to_string(), json!(match media_type.as_str() {
+        "image/webp" => "webp",
+        "image/jpeg" => "jpeg",
+        _ => "png",
+    }));
     if let Some(id) = id.filter(|id| !id.is_empty()) {
         item.insert("id".to_string(), Value::String(id.to_string()));
     }
     for (key, value) in extra_body {
-        if key != RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY && !key.starts_with("_monoize_") {
+        if key != RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY && !key.starts_with("_monoize_")
+            && !matches!(key.as_str(), "id" | "result" | "output_format" | "type") {
             item.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
@@ -159,192 +172,70 @@ pub(crate) fn encode_image_generation_call_item(
     Some(Value::Object(item))
 }
 
-fn encode_image_generation_call_part(part: &Part) -> Option<Value> {
+fn encode_image_generation_call_part(part: &Part, id: Option<&str>) -> Option<Value> {
     let Part::Image {
         source, extra_body, ..
     } = part
     else {
         return None;
     };
-    encode_image_generation_call_item(None, source, extra_body)
+    encode_image_generation_call_item(id, source, extra_body)
 }
 
-fn encode_input_image(
+pub(crate) fn encode_input_image(
     source: &ImageSource,
-    extra_body: &std::collections::HashMap<String, Value>,
+    metadata: &crate::urp::MediaMetadata,
+    extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
-    match source {
+    let mut obj = Map::new();
+    merge_extra(&mut obj, extra_body);
+    for key in ["type", "source", "image_url", "url", "file_id", "detail", "filename", "media_type"] {
+        obj.remove(key);
+    }
+    obj.insert("type".into(), json!("input_image"));
+    let detail = match source {
         ImageSource::Url { url, detail } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("input_image".to_string()));
-            obj.insert("image_url".to_string(), Value::String(url.clone()));
-            if let Some(detail) = detail {
-                obj.insert("detail".to_string(), Value::String(detail.clone()));
-            }
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
+            obj.insert("image_url".into(), json!(url));
+            detail.as_ref()
         }
         ImageSource::Base64 { media_type, data } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("input_image".to_string()));
-            obj.insert(
-                "image_url".to_string(),
-                Value::String(format!("data:{media_type};base64,{data}")),
-            );
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
+            obj.insert("image_url".into(), json!(format!("data:{media_type};base64,{data}")));
+            metadata.detail.as_ref()
         }
         ImageSource::FileId { file_id, detail }
-            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_OPENAI) =>
-        {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("input_image".to_string()));
-            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
-            if let Some(detail) = detail {
-                obj.insert("detail".to_string(), Value::String(detail.clone()));
-            }
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
+            if crate::urp::media::resource_matches(metadata, ProviderProtocol::Responses) => {
+            obj.insert("file_id".into(), json!(file_id));
+            detail.as_ref()
         }
-        ImageSource::FileId { .. } => None,
-    }
+        ImageSource::FileId { .. } => return None,
+    };
+    if let Some(detail) = detail { obj.insert("detail".into(), json!(detail)); }
+    Some(Value::Object(obj))
 }
 
-fn encode_input_file(
+pub(crate) fn encode_input_file(
     source: &FileSource,
-    extra_body: &std::collections::HashMap<String, Value>,
+    metadata: &crate::urp::MediaMetadata,
+    extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
+    let mut obj = Map::new();
+    merge_extra(&mut obj, extra_body);
+    for key in ["type", "source", "file_url", "url", "file_id", "file_data", "filename", "detail", "media_type"] {
+        obj.remove(key);
+    }
+    obj.insert("type".into(), json!("input_file"));
     match source {
-        FileSource::Url { url } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("input_file".to_string()));
-            obj.insert("file_url".to_string(), Value::String(url.clone()));
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
+        FileSource::Url { url } => { obj.insert("file_url".into(), json!(url)); }
         FileSource::FileId { file_id }
-            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_OPENAI) =>
-        {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("input_file".to_string()));
-            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
+            if crate::urp::media::resource_matches(metadata, ProviderProtocol::Responses) => {
+            obj.insert("file_id".into(), json!(file_id));
         }
-        FileSource::FileId { .. } => None,
-        FileSource::Base64 {
-            filename,
-            media_type,
-            data,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("input_file".to_string()));
-            obj.insert("file_data".to_string(), Value::String(format!("data:{media_type};base64,{data}")));
-            if let Some(name) = filename {
-                obj.insert("filename".to_string(), Value::String(name.clone()));
-            }
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
+        FileSource::Base64 { media_type, data } => {
+            obj.insert("file_data".into(), json!(format!("data:{media_type};base64,{data}")));
         }
-        FileSource::Text { .. } | FileSource::Content { .. } => None,
+        FileSource::FileId { .. } | FileSource::Text { .. } | FileSource::Content { .. } => return None,
     }
-}
-
-fn encode_output_image(
-    source: &ImageSource,
-    extra_body: &std::collections::HashMap<String, Value>,
-) -> Option<Value> {
-    match source {
-        ImageSource::Url { url, detail } => {
-            let mut obj = Map::new();
-            obj.insert(
-                "type".to_string(),
-                Value::String("output_image".to_string()),
-            );
-            obj.insert("url".to_string(), Value::String(url.clone()));
-            if let Some(detail) = detail {
-                obj.insert("detail".to_string(), Value::String(detail.clone()));
-            }
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        ImageSource::Base64 { media_type, data } => {
-            let mut obj = Map::new();
-            obj.insert(
-                "type".to_string(),
-                Value::String("output_image".to_string()),
-            );
-            obj.insert(
-                "source".to_string(),
-                json!({
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": data
-                }),
-            );
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        ImageSource::FileId { file_id, detail }
-            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_OPENAI) =>
-        {
-            let mut obj = Map::new();
-            obj.insert(
-                "type".to_string(),
-                Value::String("output_image".to_string()),
-            );
-            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
-            if let Some(detail) = detail {
-                obj.insert("detail".to_string(), Value::String(detail.clone()));
-            }
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        ImageSource::FileId { .. } => None,
-    }
-}
-
-fn encode_output_file(
-    source: &FileSource,
-    extra_body: &std::collections::HashMap<String, Value>,
-) -> Option<Value> {
-    match source {
-        FileSource::Url { url } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("output_file".to_string()));
-            obj.insert("url".to_string(), Value::String(url.clone()));
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        FileSource::FileId { file_id }
-            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_OPENAI) =>
-        {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("output_file".to_string()));
-            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        FileSource::FileId { .. } => None,
-        FileSource::Base64 {
-            filename,
-            media_type,
-            data,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("output_file".to_string()));
-            obj.insert(
-                "source".to_string(),
-                json!({
-                    "type": "base64",
-                    "filename": filename,
-                    "media_type": media_type,
-                    "data": data
-                }),
-            );
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        FileSource::Text { .. } | FileSource::Content { .. } => None,
-    }
+    if let Some(filename) = &metadata.filename { obj.insert("filename".into(), json!(filename)); }
+    if let Some(detail) = &metadata.detail { obj.insert("detail".into(), json!(detail)); }
+    Some(Value::Object(obj))
 }

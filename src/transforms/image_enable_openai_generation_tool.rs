@@ -180,6 +180,11 @@ impl Transform for ImageEnableOpenAiGenerationToolTransform {
             );
         }
         tools.push(ToolDefinition {
+            namespace: None,
+            tools: None,
+            origin_protocol: None,
+            config: None,
+
             tool_type: "image_generation".to_string(),
             name: None,
             description: None,

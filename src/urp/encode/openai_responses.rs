@@ -1,10 +1,10 @@
 use crate::urp::encode::{
-    file_id_origin_matches, merge_extra, role_to_str, sanitize_provider_item_wire_body, text_parts,
+    merge_extra, role_to_str, sanitize_provider_item_wire_body, text_parts,
     tool_choice_to_responses_value, usage_input_details, usage_output_details,
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::{
-    FILE_ID_ORIGIN_OPENAI, FileSource, FinishReason, ImageSource, Node, ProviderProtocol,
+    FileSource, FinishReason, ImageSource, Node, ProviderProtocol,
     RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_INSTRUCTION_NODE_EXTRA_KEY,
     RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ResponseFormat, ToolCallType, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,

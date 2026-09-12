@@ -1,7 +1,7 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, normalize_reasoning_effort, parse_file_part_from_obj,
-    parse_image_part_from_obj, parse_tool_definition, remove_untrusted_internal_keys,
-    retain_wire_extra_fields, split_extra, value_to_text,
+    deserialize_u64ish_default, normalize_reasoning_effort, parse_compatible_media_part,
+    parse_tool_definition, remove_untrusted_internal_keys, retain_wire_extra_fields, split_extra,
+    value_to_text,
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
@@ -30,9 +30,10 @@ fn decode_image_generation_call_node(item_obj: &Map<String, Value>) -> Option<No
     let mut extra_body = split_extra(item_obj, &["type", "id", "result", "output_format"]);
     extra_body.insert(
         RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
-        Value::Object(split_extra(item_obj, &[]).into_iter().collect()),
+        Value::Object(Map::new()),
     );
     Some(Node::Image {
+        metadata: Default::default(),
         id: item_obj
             .get("id")
             .and_then(|v| v.as_str())
@@ -235,9 +236,13 @@ fn text_part_with_phase(
     if let Some(phase) = phase {
         extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
     }
+    let citations = extra_body
+        .remove("annotations")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
     Part::Text {
         signature: None,
-        citations: Vec::new(),
+        citations,
         content: content.into(),
         extra_body,
     }
@@ -300,7 +305,23 @@ fn decode_structured_instruction_item(item: &Value, out: &mut Vec<Node>) {
     };
     let item_type = source_obj.get("type").and_then(Value::as_str).unwrap_or("");
     let is_message = matches!(item_type, "" | "message") && source_obj.contains_key("content");
-    let is_content_part = matches!(item_type, "input_text" | "input_image" | "input_file");
+    let is_content_part = matches!(
+        item_type,
+        "input_text"
+            | "output_text"
+            | "text"
+            | "image"
+            | "image_url"
+            | "input_image"
+            | "output_image"
+            | "file"
+            | "document"
+            | "input_file"
+            | "output_file"
+            | "audio"
+            | "input_audio"
+            | "output_audio"
+    );
     if !is_message && !is_content_part {
         return;
     }
@@ -354,7 +375,115 @@ fn decode_instructions_nodes(instructions: &Value, out: &mut Vec<Node>) {
     }
 }
 
+fn mark_responses_tool_origin(tool: &mut crate::urp::ToolDefinition) {
+    if let Some(children) = &mut tool.tools {
+        for child in children {
+            mark_responses_tool_origin(child);
+        }
+    }
+    if tool.function.is_none() && tool.custom.is_none() && tool.tools.is_none() {
+        tool.origin_protocol = Some(ProviderProtocol::Responses);
+    }
+}
+
+pub(crate) const RESPONSES_CONTENT_PART_SHAPE_KEY: &str = "_monoize_responses_content_part";
+
+pub(crate) fn validate_compatible_content(value: &Value) -> Result<(), String> {
+    let parts = match value {
+        Value::Array(parts) => parts.as_slice(),
+        _ => std::slice::from_ref(value),
+    };
+    for part in parts {
+        if let Some(obj) = part.as_object() {
+            parse_compatible_media_part(obj)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_responses_items(value: &Value) -> Result<(), String> {
+    let items = match value {
+        Value::Array(items) => items.as_slice(),
+        _ => std::slice::from_ref(value),
+    };
+    for item in items {
+        let kind = item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("message");
+        let content = match kind {
+            "message" => item.get("content"),
+            "function_call_output" | "custom_tool_call_output" => item.get("output"),
+            "input_text" | "output_text" | "text" | "image" | "image_url" | "input_image"
+            | "output_image" | "file" | "document" | "input_file" | "output_file" | "audio"
+            | "input_audio" | "output_audio" => Some(item),
+            _ => None,
+        };
+        if let Some(content) = content {
+            validate_compatible_content(content)?;
+        }
+    }
+    Ok(())
+}
+
+fn compatible_content_parts(content: &Value, phase: Option<&str>) -> Vec<Part> {
+    let values = match content {
+        Value::Null => return Vec::new(),
+        Value::Array(values) => values.as_slice(),
+        _ => std::slice::from_ref(content),
+    };
+    let mut parts = Vec::new();
+    for value in values {
+        if let Some(text) = value.as_str() {
+            parts.push(text_part_with_phase(text, phase, HashMap::new()));
+            continue;
+        }
+        let Some(obj) = value.as_object() else {
+            continue;
+        };
+        let kind = obj.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(kind, "text" | "input_text" | "output_text")
+            && let Some(text) = obj
+                .get("text")
+                .or_else(|| obj.get("content"))
+                .and_then(Value::as_str)
+        {
+            parts.push(text_part_with_phase(
+                text,
+                phase,
+                split_extra(obj, &["type", "text", "content"]),
+            ));
+        } else if kind == "refusal"
+            && let Some(text) = obj.get("refusal").and_then(Value::as_str)
+        {
+            parts.push(Part::Refusal {
+                content: text.into(),
+                extra_body: split_extra(obj, &["type", "refusal"]),
+            });
+        } else if let Ok(Some(part)) = parse_compatible_media_part(obj) {
+            parts.push(part);
+        } else {
+            parts.push(Part::ProviderItem {
+                id: obj.get("id").and_then(Value::as_str).map(str::to_owned),
+                origin_protocol: ProviderProtocol::Responses,
+                item_type: kind.into(),
+                body: value.clone(),
+                extra_body: HashMap::from([(
+                    RESPONSES_CONTENT_PART_SHAPE_KEY.into(),
+                    Value::Bool(true),
+                )]),
+            });
+        }
+    }
+    parts
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
+    for key in ["input", "instructions"] {
+        if let Some(items) = value.get(key) {
+            validate_responses_items(items)?;
+        }
+    }
     let obj = value
         .as_object()
         .ok_or_else(|| "responses request must be object".to_string())?;
@@ -397,10 +526,14 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let tools = obj.get("tools").and_then(|v| v.as_array()).map(|arr| {
         arr.iter()
             .filter_map(parse_tool_definition)
+            .map(|mut tool| {
+                mark_responses_tool_origin(&mut tool);
+                tool
+            })
             .collect::<Vec<_>>()
     });
 
-    let extra_body = split_extra(
+    let mut extra_body = split_extra(
         obj,
         &[
             "model",
@@ -416,9 +549,20 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             "parallel_tool_calls",
             "response_format",
             "user",
+            "text",
         ],
     );
+    if let Some(text) = obj.get("text").and_then(Value::as_object) {
+        let unknown = split_extra(text, &["format", "verbosity"]);
+        if !unknown.is_empty() {
+            extra_body.insert(
+                "text".to_string(),
+                Value::Object(unknown.into_iter().collect()),
+            );
+        }
+    }
 
+    crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     Ok(UrpRequest {
         context: Default::default(),
         instructions_format: obj.get("instructions").map(|v| {
@@ -516,6 +660,11 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                 serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
             };
             out.push(Node::ToolCall {
+                namespace: obj
+                    .get("namespace")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                signature: None,
                 id: obj
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -526,7 +675,15 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                 arguments,
                 extra_body: split_extra(
                     obj,
-                    &["type", "call_id", "id", "name", "arguments", "input"],
+                    &[
+                        "type",
+                        "call_id",
+                        "id",
+                        "name",
+                        "namespace",
+                        "arguments",
+                        "input",
+                    ],
                 ),
             });
         }
@@ -546,6 +703,12 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                 decode_tool_result_content(output, &mut content);
             }
             out.push(Node::ToolResult {
+                signature: None,
+                namespace: obj
+                    .get("namespace")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                name: obj.get("name").and_then(Value::as_str).map(str::to_string),
                 id: obj
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -554,7 +717,10 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                 call_id,
                 is_error: false,
                 content,
-                extra_body: split_extra(obj, &["type", "id", "call_id", "output"]),
+                extra_body: split_extra(
+                    obj,
+                    &["type", "id", "call_id", "namespace", "name", "output"],
+                ),
             });
         }
         "reasoning" => {
@@ -571,51 +737,10 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                 _ => Role::User,
             };
             let message_phase = obj.get("phase").and_then(|v| v.as_str());
-            let mut parts = Vec::new();
-
-            if let Some(content) = obj.get("content") {
-                if let Some(s) = content.as_str() {
-                    if !s.is_empty() {
-                        parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
-                    }
-                } else if let Some(content_arr) = content.as_array() {
-                    for p in content_arr {
-                        let Some(pobj) = p.as_object() else { continue };
-                        let ptype = pobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        match ptype {
-                            "input_text" | "output_text" | "text" => {
-                                if let Some(text) = pobj
-                                    .get("text")
-                                    .and_then(|v| v.as_str())
-                                    .or_else(|| pobj.get("content").and_then(|v| v.as_str()))
-                                {
-                                    parts.push(text_part_with_phase(
-                                        text,
-                                        message_phase,
-                                        split_extra(pobj, &["type", "text", "content"]),
-                                    ));
-                                }
-                            }
-                            "refusal" => {
-                                if let Some(text) = pobj.get("refusal").and_then(|v| v.as_str()) {
-                                    parts.push(Part::Refusal {
-                                        content: text.to_string(),
-                                        extra_body: split_extra(pobj, &["type", "refusal"]),
-                                    });
-                                }
-                            }
-                            _ => {
-                                if let Some(image) = parse_image_part_from_obj(pobj) {
-                                    parts.push(image);
-                                }
-                                if let Some(file) = parse_file_part_from_obj(pobj) {
-                                    parts.push(file);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            let parts = obj
+                .get("content")
+                .map(|content| compatible_content_parts(content, message_phase))
+                .unwrap_or_default();
 
             push_message_nodes_with_envelope_control(
                 out,
@@ -624,7 +749,22 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
                 parts,
-                split_extra(obj, &["type", "role", "content", "phase"]),
+                split_extra(obj, &["type", "id", "role", "content", "phase"]),
+            );
+        }
+        "input_text" | "output_text" | "text" | "image" | "image_url" | "input_image"
+        | "output_image" | "file" | "document" | "input_file" | "output_file" | "audio"
+        | "input_audio" | "output_audio" => {
+            let role = match obj.get("role").and_then(Value::as_str) {
+                Some("system") => OrdinaryRole::System,
+                Some("developer") => OrdinaryRole::Developer,
+                Some("assistant") => OrdinaryRole::Assistant,
+                _ => OrdinaryRole::User,
+            };
+            out.extend(
+                compatible_content_parts(&Value::Object(obj.clone()), None)
+                    .into_iter()
+                    .map(|part| part.into_node(role)),
             );
         }
         _ => {
@@ -717,18 +857,44 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
             }
         }
         _ => {
-            if let Some(image) = parse_image_part_from_obj(obj) {
-                let Part::Image { source, extra_body } = image else {
-                    unreachable!();
-                };
-                content.push(ToolResultContent::Image { source, extra_body });
-                return;
-            }
-            if let Some(file) = parse_file_part_from_obj(obj) {
-                let Part::File { source, extra_body } = file else {
-                    unreachable!();
-                };
-                content.push(ToolResultContent::File { source, extra_body });
+            if let Ok(Some(part)) = parse_compatible_media_part(obj) {
+                content.push(match part {
+                    Part::Image {
+                        metadata,
+                        source,
+                        extra_body,
+                    } => ToolResultContent::Image {
+                        metadata,
+                        source,
+                        extra_body,
+                    },
+                    Part::File {
+                        metadata,
+                        source,
+                        extra_body,
+                    } => ToolResultContent::File {
+                        metadata,
+                        source,
+                        extra_body,
+                    },
+                    Part::Audio {
+                        metadata,
+                        source,
+                        extra_body,
+                    } => ToolResultContent::File {
+                        metadata,
+                        source: match source {
+                            crate::urp::AudioSource::Base64 { media_type, data } => {
+                                crate::urp::FileSource::Base64 { media_type, data }
+                            }
+                            crate::urp::AudioSource::Url { url } => {
+                                crate::urp::FileSource::Url { url }
+                            }
+                        },
+                        extra_body,
+                    },
+                    _ => unreachable!(),
+                });
                 return;
             }
             content.push(ToolResultContent::ProviderItem {
@@ -746,42 +912,11 @@ fn decode_response_message_nodes(
     message_id: Option<String>,
     message_phase: Option<&str>,
     extra_body: HashMap<String, Value>,
-    content_arr: Option<&Vec<Value>>,
+    content: Option<&Value>,
 ) -> Vec<Node> {
-    let mut parts = Vec::new();
-    if let Some(content_arr) = content_arr {
-        for p in content_arr {
-            let Some(pobj) = p.as_object() else { continue };
-            let ptype = pobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            match ptype {
-                "output_text" | "text" => {
-                    if let Some(text) = pobj.get("text").and_then(|v| v.as_str()) {
-                        parts.push(text_part_with_phase(
-                            text,
-                            message_phase,
-                            split_extra(pobj, &["type", "text"]),
-                        ));
-                    }
-                }
-                "refusal" => {
-                    if let Some(text) = pobj.get("refusal").and_then(|v| v.as_str()) {
-                        parts.push(Part::Refusal {
-                            content: text.to_string(),
-                            extra_body: split_extra(pobj, &["type", "refusal"]),
-                        });
-                    }
-                }
-                _ => {
-                    if let Some(image) = parse_image_part_from_obj(pobj) {
-                        parts.push(image);
-                    }
-                    if let Some(file) = parse_file_part_from_obj(pobj) {
-                        parts.push(file);
-                    }
-                }
-            }
-        }
-    }
+    let parts = content
+        .map(|content| compatible_content_parts(content, message_phase))
+        .unwrap_or_default();
 
     let mut nodes = Vec::new();
     push_message_nodes_with_envelope_control(&mut nodes, role, message_id, parts, extra_body);
@@ -796,6 +931,7 @@ fn decode_reasoning_node(
         item_obj,
         &[
             "type",
+            "id",
             "content",
             "encrypted_content",
             "summary",
@@ -889,7 +1025,8 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                         "tool" => Role::Tool,
                         _ => Role::Assistant,
                     };
-                    let extra_body = split_extra(item_obj, &["type", "role", "content", "phase"]);
+                    let extra_body =
+                        split_extra(item_obj, &["type", "id", "role", "content", "phase"]);
                     nodes.extend(decode_response_message_nodes(
                         role,
                         item_obj
@@ -898,7 +1035,7 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                             .map(|s| s.to_string()),
                         message_phase,
                         extra_body,
-                        item_obj.get("content").and_then(|v| v.as_array()),
+                        item_obj.get("content"),
                     ));
                 }
                 "function_call" | "custom_tool_call" => {
@@ -931,6 +1068,11 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                         serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
                     };
                     nodes.push(Node::ToolCall {
+                        namespace: item_obj
+                            .get("namespace")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        signature: None,
                         id: item_obj
                             .get("id")
                             .and_then(|v| v.as_str())
@@ -941,7 +1083,15 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                         arguments,
                         extra_body: split_extra(
                             item_obj,
-                            &["type", "id", "call_id", "name", "arguments", "input"],
+                            &[
+                                "type",
+                                "id",
+                                "call_id",
+                                "name",
+                                "namespace",
+                                "arguments",
+                                "input",
+                            ],
                         ),
                     });
                 }
@@ -962,6 +1112,15 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                         decode_tool_result_content(output, &mut content);
                     }
                     nodes.push(Node::ToolResult {
+                        signature: None,
+                        namespace: item_obj
+                            .get("namespace")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        name: item_obj
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         id: item_obj
                             .get("id")
                             .and_then(|v| v.as_str())
@@ -970,7 +1129,10 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                         call_id,
                         is_error: false,
                         content,
-                        extra_body: split_extra(item_obj, &["type", "call_id", "id", "output"]),
+                        extra_body: split_extra(
+                            item_obj,
+                            &["type", "call_id", "id", "namespace", "name", "output"],
+                        ),
                     });
                 }
                 "reasoning" => {
@@ -982,6 +1144,15 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                     if let Some(node) = decode_image_generation_call_node(item_obj) {
                         nodes.push(node);
                     }
+                }
+                "input_text" | "output_text" | "text" | "image" | "image_url" | "input_image"
+                | "output_image" | "file" | "document" | "input_file" | "output_file" | "audio"
+                | "input_audio" | "output_audio" => {
+                    nodes.extend(
+                        compatible_content_parts(item, None)
+                            .into_iter()
+                            .map(|part| part.into_node(responses_item_role(item_obj))),
+                    );
                 }
                 _ => {
                     nodes.push(Node::ProviderItem {
@@ -1005,9 +1176,28 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
 }
 
 pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
+    if let Some(items) = value.get("output") {
+        validate_responses_items(items)?;
+    }
     let obj = value
         .as_object()
         .ok_or_else(|| "responses response must be object".to_string())?;
+
+    let is_response = obj.get("object").and_then(Value::as_str) == Some("response")
+        || matches!(
+            obj.get("status").and_then(Value::as_str),
+            Some("completed" | "incomplete" | "failed" | "cancelled" | "queued" | "in_progress")
+        );
+    if let Some(error) = obj.get("error").filter(|error| !error.is_null()) {
+        if !is_response {
+            return Err(error
+                .get("message")
+                .and_then(Value::as_str)
+                .or_else(|| error.as_str())
+                .unwrap_or("upstream Responses error")
+                .to_string());
+        }
+    }
 
     let output_nodes = decode_response_nodes(obj);
     let has_tool_calls = output_nodes
@@ -1021,7 +1211,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             FinishReason::Stop
         }),
         Some("incomplete") => Some(incomplete_finish_reason(obj)),
-        Some("failed") => Some(FinishReason::Other),
+        Some("failed" | "cancelled") => Some(FinishReason::Other),
         _ => None,
     };
 
@@ -1044,24 +1234,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     );
     extra_body.insert(
         RESPONSES_RESPONSE_SOURCE_EXTRA_KEY.to_string(),
-        Value::Object(
-            split_extra(
-                obj,
-                &[
-                    "id",
-                    "object",
-                    "created",
-                    "created_at",
-                    "model",
-                    "output",
-                    "usage",
-                    "status",
-                    "incomplete_details",
-                ],
-            )
-            .into_iter()
-            .collect(),
-        ),
+        Value::Object(Map::new()),
     );
 
     Ok(UrpResponse {

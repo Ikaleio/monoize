@@ -18,6 +18,17 @@ fn is_retained_responses_instruction_node(node: &Node) -> bool {
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+    encode_request_checked(req, upstream_model)
+        .unwrap_or_else(|error| crate::urp::media::error_body(&error))
+}
+
+pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
+    let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Responses)?;
+    validate_stable_responses_audio(&prepared.input)?;
+    Ok(encode_request_prepared(&prepared, upstream_model))
+}
+
+fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
     let instruction_nodes = req
         .input
         .iter()
@@ -145,6 +156,64 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    encode_response_checked(resp, logical_model)
+        .unwrap_or_else(|error| crate::urp::media::error_body(&error))
+}
+
+pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Result<Value, String> {
+    let mut prepared = resp.clone();
+    prepare_response_nodes(&mut prepared.output)?;
+    Ok(encode_response_validated(&prepared, logical_model))
+}
+
+fn validate_stable_responses_audio(nodes: &[Node]) -> Result<(), String> {
+    fn audio_kind(kind: &str) -> bool { matches!(kind, "audio" | "input_audio" | "output_audio") }
+    for node in nodes {
+        let unsupported = match node {
+            Node::ProviderItem { item_type, .. } => audio_kind(item_type),
+            Node::ToolResult { content, .. } => content.iter().any(|part| {
+                matches!(part, ToolResultContent::ProviderItem { item_type, .. } if audio_kind(item_type))
+            }),
+            _ => false,
+        };
+        if unsupported { return Err("The stable Responses schema has no audio content carrier".into()); }
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_response_nodes(nodes: &mut [Node]) -> Result<(), String> {
+    validate_response_nodes(nodes)?;
+    for node in nodes {
+        if let Node::ToolResult { content, .. } = node {
+            *content = crate::urp::media::prepare_tool_result_content(content, ProviderProtocol::Responses)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_response_nodes(nodes: &[Node]) -> Result<(), String> {
+    validate_stable_responses_audio(nodes)?;
+    for node in nodes {
+        match node {
+            Node::Image { source: ImageSource::Base64 { media_type, .. }, extra_body, .. }
+                if extra_body.contains_key(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)
+                    && matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp") => {}
+            Node::Image { .. } | Node::File { .. } | Node::Audio { .. } => {
+                return Err("Responses output cannot represent ordinary image, file, or audio media; native image_generation_call is required for generated images".into());
+            }
+            Node::ProviderItem { item_type, .. }
+                if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio") => {
+                return Err("Native response content cannot contain input-only media items".into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
+    let projected = crate::urp::tool_signature::project_response(resp);
+    let resp = &projected;
     let response_items = nodes_to_items(&resp.output);
     let mut output = Vec::new();
     for item in &response_items {
@@ -164,7 +233,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 }
                 let mut pending_message: Option<PendingResponsesMessageItem> = None;
                 for part in parts {
-                    if let Some(image_generation_call) = encode_image_generation_call_part(part) {
+                    if let Some(image_generation_call) = encode_image_generation_call_part(part, id.as_deref()) {
                         flush_pending_message_item(&mut pending_message, &mut output, true);
                         output.push(image_generation_call);
                         continue;
@@ -195,6 +264,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                     }
 
                     if let Part::ProviderItem {
+                        id,
                         origin_protocol,
                         item_type,
                         body,
@@ -207,6 +277,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                             item_type,
                             body,
                             extra_body,
+                            Some(id),
                         ) {
                             output.push(item);
                         }
@@ -215,6 +286,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 flush_pending_message_item(&mut pending_message, &mut output, true);
             }
             Item::ToolResult {
+                namespace, name,
                 id,
                 tool_type,
                 call_id,
@@ -225,6 +297,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 id.as_deref(),
                 *tool_type,
                 call_id,
+                namespace.as_deref(), name.as_deref(),
                 content,
                 *is_error,
                 extra_body,
@@ -244,11 +317,8 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         Value::Null
     };
 
-    let source_response = resp
-        .extra_body
-        .get(RESPONSES_RESPONSE_SOURCE_EXTRA_KEY)
-        .and_then(Value::as_object)
-        .cloned();
+    let source_response = resp.extra_body.contains_key(RESPONSES_RESPONSE_SOURCE_EXTRA_KEY)
+        .then(Map::new);
     let mut body = source_response.map(Value::Object).unwrap_or_else(|| {
         json!({
             "id": resp.id,
@@ -311,13 +381,27 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             }
         }
     }
-    body["status"] = json!(status);
-    if let Some(reason) = resp.finish_reason {
+    let native_status = resp.extra_body.get("status").and_then(Value::as_str);
+    let native_reason = match native_status {
+        Some("incomplete") => Some(crate::urp::decode::openai_responses::incomplete_finish_reason(
+            &resp.extra_body.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
+        )),
+        Some("failed" | "cancelled") => Some(FinishReason::Other),
+        Some("completed") => Some(if resp.output.iter().any(|node| matches!(node, Node::ToolCall { .. })) {
+            FinishReason::ToolCalls
+        } else { FinishReason::Stop }),
+        _ => None,
+    };
+    let retain_native_terminal = native_status.is_some() && native_reason == resp.finish_reason;
+    body["status"] = json!(if retain_native_terminal { native_status.unwrap() } else { status });
+    if !retain_native_terminal {
+        let reason = resp.finish_reason;
         body["incomplete_details"] = match reason {
-            FinishReason::Length => json!({"reason": "max_output_tokens"}),
-            FinishReason::ContentFilter => json!({"reason": "content_filter"}),
+            Some(FinishReason::Length) => json!({"reason": "max_output_tokens"}),
+            Some(FinishReason::ContentFilter) => json!({"reason": "content_filter"}),
             _ => Value::Null,
         };
+        body["error"] = Value::Null;
     }
     body
 }
@@ -338,10 +422,16 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
                     .or_insert(Value::String(id));
             }
             let mut pending_message: Option<PendingResponsesMessageItem> = None;
-            let output_text_type = matches!(role, Role::Assistant);
+            let has_media = parts.iter().any(|part| matches!(part, Part::Image { .. } | Part::File { .. }));
+            let output_text_type = matches!(role, Role::Assistant) && !has_media;
+            if has_media {
+                // Easy-input messages have no native output item identity or status.
+                message_extra.remove("id");
+                message_extra.remove("status");
+            }
 
             for part in parts {
-                if let Some(image_generation_call) = encode_image_generation_call_part(part) {
+                if let Some(image_generation_call) = encode_image_generation_call_part(part, id.as_deref()) {
                     flush_pending_message_item(&mut pending_message, out, false);
                     out.push(image_generation_call);
                     continue;
@@ -370,6 +460,7 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
                 }
 
                 if let Part::ProviderItem {
+                        id,
                     origin_protocol,
                     item_type,
                     body,
@@ -381,6 +472,7 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
                         item_type,
                         body,
                         extra_body,
+                        Some(id),
                     )
                 {
                     out.push(item);
@@ -389,6 +481,7 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             flush_pending_message_item(&mut pending_message, out, false);
         }
         Item::ToolResult {
+                namespace, name,
             id,
             tool_type,
             call_id,
@@ -399,6 +492,7 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             id.as_deref(),
             *tool_type,
             call_id,
+            namespace.as_deref(), name.as_deref(),
             content,
             *is_error,
             extra_body,

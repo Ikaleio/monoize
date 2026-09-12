@@ -361,15 +361,7 @@ pub(crate) fn typed_request_to_legacy(
     req: &urp::UrpRequest,
     max_multiplier: Option<Multiplier>,
 ) -> AppResult<UrpRequest> {
-    let encoded = urp::encode::openai_responses::encode_request(req, &req.model);
-    let mut extra = Map::new();
-    if let Some(limit) = max_multiplier {
-        extra.insert(
-            "max_multiplier".to_string(),
-            Value::String(limit.to_string()),
-        );
-    }
-    let mut legacy = parse_urp_request(&encoded, extra)?;
+    let mut legacy = build_routing_stub(req, max_multiplier);
     legacy.messages_custom_tool_names = messages_custom_bridge_names(req);
     Ok(legacy)
 }
@@ -532,6 +524,8 @@ impl Write for BoundedHashWriter {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CanonicalAffinityNode<'a> {
     Text {
+        signature: &'a Option<Value>,
+        citations: &'a [Value],
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         role: urp::OrdinaryRole,
@@ -542,6 +536,7 @@ enum CanonicalAffinityNode<'a> {
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     Image {
+        metadata: &'a urp::MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         role: urp::OrdinaryRole,
@@ -550,6 +545,7 @@ enum CanonicalAffinityNode<'a> {
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     Audio {
+        metadata: &'a urp::MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         role: urp::OrdinaryRole,
@@ -558,6 +554,7 @@ enum CanonicalAffinityNode<'a> {
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     File {
+        metadata: &'a urp::MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         role: urp::OrdinaryRole,
@@ -573,6 +570,7 @@ enum CanonicalAffinityNode<'a> {
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     Reasoning {
+        metadata: CanonicalAffinityReasoningMetadata<'a>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -587,6 +585,8 @@ enum CanonicalAffinityNode<'a> {
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     ToolCall {
+        namespace: &'a Option<String>,
+        signature: &'a Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         tool_type: urp::ToolCallType,
@@ -607,6 +607,9 @@ enum CanonicalAffinityNode<'a> {
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     ToolResult {
+        signature: &'a Option<Value>,
+        namespace: &'a Option<String>,
+        name: &'a Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         tool_type: urp::ToolCallType,
@@ -623,6 +626,39 @@ enum CanonicalAffinityNode<'a> {
 }
 
 #[derive(Serialize)]
+struct CanonicalAffinityReasoningMetadata<'a> {
+    redacted: bool,
+    downstream_only: bool,
+    chat_content: bool,
+    summary_as_thinking: bool,
+    item_id: &'a Option<String>,
+    summary_parts: Option<CanonicalAffinityReasoningParts<'a>>,
+    content_parts: Option<CanonicalAffinityReasoningParts<'a>>,
+}
+
+struct CanonicalAffinityReasoningParts<'a>(&'a [urp::ReasoningTextPart]);
+
+impl Serialize for CanonicalAffinityReasoningParts<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        #[derive(Serialize)]
+        struct Entry<'a> {
+            byte_length: usize,
+            #[serde(flatten)]
+            extra_body: BTreeMap<&'a String, &'a Value>,
+        }
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for part in self.0 {
+            sequence.serialize_element(&Entry {
+                byte_length: part.byte_length,
+                extra_body: sorted_extra(&part.extra_body),
+            })?;
+        }
+        sequence.end()
+    }
+}
+
+#[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CanonicalAffinityToolResultContent<'a> {
     Text {
@@ -631,11 +667,13 @@ enum CanonicalAffinityToolResultContent<'a> {
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     Image {
+        metadata: &'a urp::MediaMetadata,
         source: &'a ImageSource,
         #[serde(flatten)]
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
     File {
+        metadata: &'a urp::MediaMetadata,
         source: &'a urp::FileSource,
         #[serde(flatten)]
         extra_body: BTreeMap<&'a String, &'a Value>,
@@ -663,18 +701,24 @@ fn canonical_affinity_tool_result_content(
                 extra_body: sorted_extra(extra_body),
             }
         }
-        urp::ToolResultContent::Image { source, extra_body } => {
-            CanonicalAffinityToolResultContent::Image {
-                source,
-                extra_body: sorted_extra(extra_body),
-            }
-        }
-        urp::ToolResultContent::File { source, extra_body } => {
-            CanonicalAffinityToolResultContent::File {
-                source,
-                extra_body: sorted_extra(extra_body),
-            }
-        }
+        urp::ToolResultContent::Image {
+            source,
+            metadata,
+            extra_body,
+        } => CanonicalAffinityToolResultContent::Image {
+            metadata,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
+        urp::ToolResultContent::File {
+            source,
+            metadata,
+            extra_body,
+        } => CanonicalAffinityToolResultContent::File {
+            metadata,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
         urp::ToolResultContent::ProviderItem {
             origin_protocol,
             item_type,
@@ -692,14 +736,16 @@ fn canonical_affinity_tool_result_content(
 fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
     match node {
         urp::Node::Text {
-            signature: _,
-            citations: _,
+            signature,
+            citations,
             id,
             role,
             content,
             phase,
             extra_body,
         } => CanonicalAffinityNode::Text {
+            signature,
+            citations,
             id,
             role: *role,
             content,
@@ -707,33 +753,42 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::Image {
+            metadata,
             id,
             role,
             source,
             extra_body,
+            ..
         } => CanonicalAffinityNode::Image {
+            metadata,
             id,
             role: *role,
             source,
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::Audio {
+            metadata,
             id,
             role,
             source,
             extra_body,
+            ..
         } => CanonicalAffinityNode::Audio {
+            metadata,
             id,
             role: *role,
             source,
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::File {
+            metadata,
             id,
             role,
             source,
             extra_body,
+            ..
         } => CanonicalAffinityNode::File {
+            metadata,
             id,
             role: *role,
             source,
@@ -749,7 +804,7 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::Reasoning {
-            metadata: _,
+            metadata,
             id,
             content,
             encrypted,
@@ -757,6 +812,21 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             source,
             extra_body,
         } => CanonicalAffinityNode::Reasoning {
+            metadata: CanonicalAffinityReasoningMetadata {
+                redacted: metadata.redacted,
+                downstream_only: metadata.downstream_only,
+                chat_content: metadata.chat_content,
+                summary_as_thinking: metadata.summary_as_thinking,
+                item_id: &metadata.item_id,
+                summary_parts: metadata
+                    .summary_parts
+                    .as_deref()
+                    .map(CanonicalAffinityReasoningParts),
+                content_parts: metadata
+                    .content_parts
+                    .as_deref()
+                    .map(CanonicalAffinityReasoningParts),
+            },
             id,
             content,
             encrypted,
@@ -765,13 +835,18 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::ToolCall {
+            namespace,
+            signature,
             id,
             tool_type,
             call_id,
             name,
             arguments,
             extra_body,
+            ..
         } => CanonicalAffinityNode::ToolCall {
+            namespace,
+            signature,
             id,
             tool_type: *tool_type,
             call_id,
@@ -795,13 +870,20 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::ToolResult {
+            signature,
+            namespace,
+            name,
             id,
             tool_type,
             call_id,
             is_error,
             content,
             extra_body,
+            ..
         } => CanonicalAffinityNode::ToolResult {
+            signature,
+            namespace,
+            name,
             id,
             tool_type: *tool_type,
             call_id,
@@ -817,6 +899,108 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
                 extra_body: sorted_extra(extra_body),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod canonical_field_regressions {
+    use super::*;
+
+    fn fingerprint(node: Value) -> String {
+        let request: urp::UrpRequest =
+            serde_json::from_value(json!({"model":"m","input":[node]})).unwrap();
+        affinity_prefix_hash(&request)
+    }
+
+    #[test]
+    fn affinity_hash_distinguishes_typed_signatures_namespaces_and_media() {
+        for (base, field, changed) in [
+            (
+                json!({"type":"text","role":"assistant","content":"same"}),
+                "signature",
+                json!("signature"),
+            ),
+            (
+                json!({"type":"text","role":"assistant","content":"same"}),
+                "citations",
+                json!([{"uri":"https://example.com"}]),
+            ),
+            (
+                json!({"type":"tool_call","call_id":"c","name":"run","arguments":"{}"}),
+                "namespace",
+                json!("functions"),
+            ),
+            (
+                json!({"type":"tool_call","call_id":"c","name":"run","arguments":"{}"}),
+                "signature",
+                json!("signature"),
+            ),
+            (
+                json!({"type":"tool_result","call_id":"c","content":[]}),
+                "namespace",
+                json!("functions"),
+            ),
+            (
+                json!({"type":"tool_result","call_id":"c","content":[]}),
+                "name",
+                json!("run"),
+            ),
+            (
+                json!({"type":"reasoning","content":"same"}),
+                "metadata",
+                json!({"redacted":true}),
+            ),
+        ] {
+            let mut other = base.clone();
+            other[field] = changed;
+            assert_ne!(fingerprint(base), fingerprint(other), "missing {field}");
+        }
+        for kind in ["image", "audio", "file"] {
+            let base = json!({"type":kind,"role":"assistant","source":{"type":"base64","media_type":"image/png","data":"bytes"}});
+            let mut changed = base.clone();
+            changed["metadata"] = json!({"signature":"new","media_type":"image/png","transcript":"words","expires_at":20});
+            assert_ne!(
+                fingerprint(base),
+                fingerprint(changed),
+                "missing {kind} metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn affinity_reasoning_part_unknown_fields_have_stable_order() {
+        let left: urp::Node = serde_json::from_value(json!({"type":"reasoning","content":"same","metadata":{"content_parts":[{"byte_length":4,"z":3,"a":1,"m":2}]}})).unwrap();
+        let right: urp::Node = serde_json::from_value(json!({"type":"reasoning","content":"same","metadata":{"content_parts":[{"m":2,"a":1,"z":3,"byte_length":4}]}})).unwrap();
+        assert_eq!(
+            serde_json::to_string(&canonical_affinity_node(&left)).unwrap(),
+            serde_json::to_string(&canonical_affinity_node(&right)).unwrap()
+        );
+    }
+
+    #[test]
+    fn gemini_native_tools_and_allowed_lists_survive_provider_filtering() {
+        let mut request = urp::decode::gemini::decode_request(&json!({"contents":[],"tools":[
+            {"computerUse":{"environment":"ENVIRONMENT_BROWSER"}}, {"googleSearch":{}},
+            {"functionDeclarations":[{"name":"run","parametersJsonSchema":{"type":"object"}}]}],
+            "toolConfig":{"functionCallingConfig":{"mode":"VALIDATED","allowedFunctionNames":["run"]}}})).unwrap();
+        filter_tools_for_provider(
+            &mut request,
+            ProviderType::Gemini,
+            DownstreamProtocol::Responses,
+        );
+        assert_eq!(request.tools.as_ref().unwrap().len(), 3);
+        assert!(request.tool_choice.is_some());
+        assert_eq!(
+            urp::encode::gemini::encode_request(&request, "m")["toolConfig"]["functionCallingConfig"],
+            json!({"mode":"VALIDATED","allowedFunctionNames":["run"]})
+        );
+        filter_tools_for_provider(
+            &mut request,
+            ProviderType::Responses,
+            DownstreamProtocol::Responses,
+        );
+        assert_eq!(request.tools.as_ref().unwrap().len(), 1);
+        assert_eq!(request.tools.as_ref().unwrap()[0].tool_type, "function");
     }
 }
 
@@ -853,6 +1037,12 @@ pub(super) fn build_routing_stub(
     max_multiplier: Option<Multiplier>,
 ) -> UrpRequest {
     UrpRequest {
+        audio_output_format: req
+            .extra_body
+            .get("audio")
+            .and_then(|v| v.get("format"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         model: req.model.clone(),
         max_multiplier,
         server_tool_usage_classes: server_tool_usage_classes(req.tools.as_deref()),
@@ -862,11 +1052,86 @@ pub(super) fn build_routing_stub(
     }
 }
 
+pub(super) fn media_resource_scope(attempt: &MonoizeAttempt) -> Option<urp::MediaResource> {
+    use sha2::{Digest, Sha256};
+    let protocol = provider_type_protocol(attempt.provider_type)?;
+    let mut hash = Sha256::new();
+    hash.update(attempt.base_url.as_bytes());
+    hash.update([0]);
+    hash.update(attempt.api_key.as_bytes());
+    Some(urp::MediaResource {
+        protocol,
+        provider_id: Some(attempt.provider_id.clone()),
+        channel_id: Some(attempt.channel_id.clone()),
+        credential_scope: Some(format!("{:x}", hash.finalize())),
+    })
+}
+
+pub(super) fn bind_media_request_routes(
+    request: &mut urp::UrpRequest,
+    attempts: &mut Vec<MonoizeAttempt>,
+) -> AppResult<()> {
+    let refs = urp::media::resources(&request.input).map_err(|message| {
+        AppError::new(StatusCode::BAD_REQUEST, "invalid_file_reference", message)
+    })?;
+    if refs.is_empty() {
+        return Ok(());
+    }
+    attempts.retain(|attempt| {
+        media_resource_scope(attempt).is_some_and(|scope| {
+            refs.iter()
+                .all(|reference| urp::media::resource_matches_scope(reference, &scope))
+        })
+    });
+    let scopes: Vec<_> = attempts.iter().filter_map(media_resource_scope).collect();
+    let scope = scopes.first().ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "incompatible_file_reference",
+            "No route matches the file reference source. Supply file bytes or a public URL.",
+        )
+    })?;
+    if scopes.iter().any(|other| other != scope) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "ambiguous_file_reference",
+            "The file reference is not bound to one provider and credential scope. Supply file bytes or use an unambiguous source route.",
+        ));
+    }
+    urp::media::bind_resources(&mut request.input, scope);
+    Ok(())
+}
+
+pub(super) fn validate_media_request_route(
+    request: &urp::UrpRequest,
+    attempt: &MonoizeAttempt,
+) -> AppResult<()> {
+    let refs = urp::media::resources(&request.input).map_err(|message| {
+        AppError::new(StatusCode::BAD_REQUEST, "invalid_file_reference", message)
+    })?;
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let valid = media_resource_scope(attempt).is_some_and(|scope| {
+        refs.iter()
+            .all(|reference| urp::media::resource_matches_scope(reference, &scope))
+    });
+    if !valid {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "incompatible_file_reference",
+            "The file reference cannot be used with this provider or credential scope.",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn build_embeddings_routing_stub(
     model: &str,
     max_multiplier: Option<Multiplier>,
 ) -> UrpRequest {
     UrpRequest {
+        audio_output_format: None,
         model: model.to_string(),
         max_multiplier,
         server_tool_usage_classes: Vec::new(),
@@ -1414,6 +1679,11 @@ fn messages_custom_bridge_function(tool: urp::ToolDefinition) -> urp::ToolDefini
         .custom
         .expect("custom tool promotion requires a custom definition");
     urp::ToolDefinition {
+        namespace: None,
+        tools: None,
+        origin_protocol: None,
+        config: None,
+
         tool_type: "function".to_string(),
         name: None,
         description: None,
@@ -1515,39 +1785,47 @@ pub(super) fn promote_responses_additional_tools(
 ) {
     if !matches!(
         provider_type,
-        ProviderType::ChatCompletion | ProviderType::Messages
+        ProviderType::ChatCompletion | ProviderType::Messages | ProviderType::Gemini
     ) {
         return;
     }
 
-    let mut raw_tools = Vec::new();
-    let explicit = req.tools.take().unwrap_or_default();
-    for tool in explicit {
+    fn append_explicit_tool(tool: urp::ToolDefinition, output: &mut Vec<urp::ToolDefinition>) {
         if tool.tool_type == "namespace" {
-            let raw = json!({"type": "namespace", "name": tool.name,
-                "tools": tool.extra_body.get("tools")});
-            collect_additional_tool_leaves(&raw, &mut raw_tools);
+            let namespace = tool.name;
+            for mut child in tool.tools.unwrap_or_default() {
+                if child.namespace.is_none() {
+                    child.namespace = namespace.clone();
+                }
+                append_explicit_tool(child, output);
+            }
         } else {
-            raw_tools.push(serde_json::to_value(tool).expect("tool definition serialization"));
+            output.push(tool);
         }
     }
-    raw_tools.extend(responses_additional_tool_leaves(req));
-    let mut names: HashSet<String> = raw_tools
+    let had_tools = req.tools.is_some();
+    let mut candidates = Vec::new();
+    for tool in req.tools.take().unwrap_or_default() {
+        append_explicit_tool(tool, &mut candidates);
+    }
+    candidates.extend(
+        responses_additional_tool_leaves(req)
+            .iter()
+            .filter_map(urp::decode::parse_tool_definition),
+    );
+    let mut names: HashSet<String> = candidates
         .iter()
-        .filter(|raw| raw.get("namespace").and_then(Value::as_str).is_none())
-        .filter_map(urp::decode::parse_tool_definition)
-        .filter_map(|tool| tool_wire_name(&tool).map(ToOwned::to_owned))
+        .filter(|tool| tool.namespace.is_none())
+        .filter_map(|tool| tool_wire_name(tool).map(ToOwned::to_owned))
         .collect();
     let mut identities = HashSet::new();
     let mut promoted = Vec::new();
-    for mut raw in raw_tools {
-        let namespace = raw
-            .as_object_mut()
-            .and_then(|obj| obj.remove("namespace"))
-            .and_then(|value| value.as_str().map(ToOwned::to_owned));
-        let Some(mut tool) = urp::decode::parse_tool_definition(&raw) else {
+    for mut tool in candidates {
+        if !matches!(tool.tool_type.as_str(), "function" | "custom") {
+            promoted.push(tool);
             continue;
-        };
+        }
+        let namespace = tool.namespace.take();
         let Some(name) = tool_wire_name(&tool).map(ToOwned::to_owned) else {
             promoted.push(tool);
             continue;
@@ -1593,22 +1871,47 @@ pub(super) fn promote_responses_additional_tools(
         }
         promoted.push(tool);
     }
-    if !promoted.is_empty() {
-        req.tools = Some(promoted);
-    }
+    req.tools = (had_tools || !promoted.is_empty()).then_some(promoted);
     let aliases = tool_namespace_aliases(req);
+    let mut call_aliases = HashMap::new();
     for node in &mut req.input {
         if let urp::Node::ToolCall {
-            name, extra_body, ..
+            call_id,
+            name,
+            namespace,
+            ..
+        } = node
+            && let Some(current_namespace) = namespace.as_deref()
+            && let Some((alias, _)) = aliases.iter().find(|(_, identity)| {
+                identity.get("namespace").and_then(Value::as_str) == Some(current_namespace)
+                    && identity.get("name").and_then(Value::as_str) == Some(name.as_str())
+            })
+        {
+            call_aliases.insert(call_id.clone(), alias.clone());
+            *name = alias.clone();
+            *namespace = None;
+        }
+    }
+    for node in &mut req.input {
+        if let urp::Node::ToolResult {
+            call_id,
+            name,
+            namespace,
+            ..
         } = node
         {
-            if let Some(namespace) = extra_body.remove("namespace") {
-                if let Some((alias, _)) = aliases.iter().find(|(_, identity)| {
-                    identity.get("namespace") == Some(&namespace)
-                        && identity.get("name").and_then(Value::as_str) == Some(name.as_str())
-                }) {
-                    *name = alias.clone();
-                }
+            let alias = match (namespace.as_deref(), name.as_deref()) {
+                (Some(namespace), Some(name)) => aliases.iter().find_map(|(alias, identity)| {
+                    (identity.get("namespace").and_then(Value::as_str) == Some(namespace)
+                        && identity.get("name").and_then(Value::as_str) == Some(name))
+                    .then_some(alias)
+                }),
+                (None, Some(_)) => call_aliases.get(call_id),
+                _ => None,
+            };
+            if let Some(alias) = alias {
+                *name = Some(alias.clone());
+                *namespace = None;
             }
         }
     }
@@ -1659,11 +1962,15 @@ fn bridge_namespace_selector(value: &mut Value, aliases: &HashMap<String, Value>
             }
         }
     } else if kind == "allowed_tools" {
-        if let Some(wrapper) = obj.get_mut("allowed_tools") {
-            if let Some(tools) = wrapper.get_mut("tools").and_then(Value::as_array_mut) {
-                for tool in tools {
-                    bridge_namespace_selector(tool, aliases);
-                }
+        let tools = if obj.contains_key("allowed_tools") {
+            obj.get_mut("allowed_tools")
+                .and_then(|wrapper| wrapper.get_mut("tools"))
+        } else {
+            obj.get_mut("tools")
+        };
+        if let Some(tools) = tools.and_then(Value::as_array_mut) {
+            for tool in tools {
+                bridge_namespace_selector(tool, aliases);
             }
         }
     }
@@ -1671,26 +1978,26 @@ fn bridge_namespace_selector(value: &mut Value, aliases: &HashMap<String, Value>
 
 fn restore_tool_namespace(
     name: &mut String,
-    extra: &mut HashMap<String, Value>,
+    target_namespace: &mut Option<String>,
     aliases: &HashMap<String, Value>,
 ) {
     if let Some(identity) = aliases.get(name) {
         if let (Some(original), Some(namespace)) = (
             identity.get("name").and_then(Value::as_str),
-            identity.get("namespace"),
+            identity.get("namespace").and_then(Value::as_str),
         ) {
             *name = original.to_string();
-            extra.insert("namespace".to_string(), namespace.clone());
+            *target_namespace = Some(namespace.to_string());
         }
     }
 }
 
 pub(super) fn restore_tool_namespace_node(node: &mut urp::Node, aliases: &HashMap<String, Value>) {
     if let urp::Node::ToolCall {
-        name, extra_body, ..
+        name, namespace, ..
     } = node
     {
-        restore_tool_namespace(name, extra_body, aliases);
+        restore_tool_namespace(name, namespace, aliases);
     }
 }
 
@@ -1700,11 +2007,12 @@ pub(super) fn restore_tool_namespace_event(
 ) {
     match event {
         urp::UrpStreamEvent::NodeStart {
-            header: urp::NodeHeader::ToolCall { name, .. },
-            extra_body,
+            header: urp::NodeHeader::ToolCall {
+                name, namespace, ..
+            },
             ..
         } => {
-            restore_tool_namespace(name, extra_body, aliases);
+            restore_tool_namespace(name, namespace, aliases);
         }
         urp::UrpStreamEvent::NodeDone { node, .. } => restore_tool_namespace_node(node, aliases),
         urp::UrpStreamEvent::ResponseDone { output, .. } => {
@@ -1794,6 +2102,19 @@ fn provider_supports_tool_definition(
         return provider_supports_custom_tool(tool, provider_type);
     }
 
+    if let Some(origin) = tool.origin_protocol {
+        return matches!(
+            (origin, provider_type),
+            (urp::ProviderProtocol::Gemini, ProviderType::Gemini)
+                | (urp::ProviderProtocol::Responses, ProviderType::Responses)
+                | (urp::ProviderProtocol::Messages, ProviderType::Messages)
+                | (
+                    urp::ProviderProtocol::ChatCompletion,
+                    ProviderType::ChatCompletion
+                )
+        );
+    }
+
     if let Some(family) = provider_native_tool_family(&tool.tool_type) {
         return provider_supports_native_tool_family(provider_type, family);
     }
@@ -1834,16 +2155,11 @@ fn selector_matches_tool(
         }
         let mut leaf_selector = selector.clone();
         leaf_selector.remove("namespace");
-        return tool
-            .extra_body
-            .get("tools")
-            .and_then(Value::as_array)
-            .is_some_and(|tools| {
-                tools
-                    .iter()
-                    .filter_map(urp::decode::parse_tool_definition)
-                    .any(|leaf| selector_matches_tool(&leaf_selector, &leaf))
-            });
+        return tool.tools.as_ref().is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|leaf| selector_matches_tool(&leaf_selector, leaf))
+        });
     }
     match selector.get("type").and_then(Value::as_str) {
         Some("function") => {
@@ -1867,7 +2183,13 @@ fn selector_matches_tool(
                 && selector
                     .get("server_label")
                     .and_then(Value::as_str)
-                    .zip(tool.extra_body.get("server_label").and_then(Value::as_str))
+                    .zip(
+                        tool.config
+                            .as_ref()
+                            .and_then(|config| config.get("server_label"))
+                            .or_else(|| tool.extra_body.get("server_label"))
+                            .and_then(Value::as_str),
+                    )
                     .is_some_and(|(selected, available)| selected == available)
         }
         Some("auto" | "required" | "any" | "none" | "allowed_tools") | None => false,
@@ -1922,7 +2244,7 @@ pub(super) fn filter_tools_for_provider(
     if is_allowed_tools {
         if !matches!(
             provider_type,
-            ProviderType::ChatCompletion | ProviderType::Responses
+            ProviderType::ChatCompletion | ProviderType::Responses | ProviderType::Gemini
         ) {
             req.tool_choice = None;
             return;
@@ -1964,3 +2286,453 @@ pub(super) fn filter_tools_for_provider(
 #[cfg(test)]
 #[path = "tool_namespace_tests.rs"]
 mod tool_namespace_tests;
+
+#[cfg(test)]
+mod routing_media_context_tests {
+    use super::*;
+
+    fn assert_context(request: &urp::UrpRequest, audio_format: Option<&str>) {
+        let before = serde_json::to_value(request).unwrap();
+        assert!(
+            urp::encode::openai_responses::encode_request_checked(request, &request.model).is_err()
+        );
+        let context = typed_request_to_legacy(request, Some("1.5".parse().unwrap())).unwrap();
+        assert_eq!(context.model, request.model);
+        assert_eq!(context.audio_output_format.as_deref(), audio_format);
+        assert_eq!(context.max_multiplier.unwrap().to_string(), "1.5");
+        assert_eq!(serde_json::to_value(request).unwrap(), before);
+    }
+
+    #[test]
+    fn chat_audio_context_does_not_require_a_responses_media_carrier() {
+        for stream in [false, true] {
+            let request = urp::decode::openai_chat::decode_request(&json!({
+                "model":"chat-audio", "stream":stream, "audio":{"format":"pcm16", "voice":"alloy"},
+                "messages":[{"role":"user", "content":[
+                    {"type":"input_audio", "input_audio":{"data":"YQ==", "format":"wav"}}
+                ]}]
+            }))
+            .unwrap();
+            assert_context(&request, Some("pcm16"));
+        }
+    }
+
+    #[test]
+    fn gemini_private_file_context_does_not_require_a_responses_media_carrier() {
+        for stream in [false, true] {
+            let mut request = urp::decode::gemini::decode_request(&json!({
+                "model":"gemini-files", "contents":[{"role":"user", "parts":[
+                    {"fileData":{"mimeType":"application/pdf", "fileUri":"https://generativelanguage.googleapis.com/v1beta/files/source-file"}}
+                ]}]
+            })).unwrap();
+            request.stream = Some(stream);
+            assert_context(&request, None);
+        }
+    }
+
+    #[test]
+    fn gemini_audio_context_does_not_require_a_responses_media_carrier() {
+        for stream in [false, true] {
+            let mut request = urp::decode::gemini::decode_request(&json!({
+                "model":"gemini-audio", "contents":[{"role":"user", "parts":[
+                    {"inlineData":{"mimeType":"audio/wav", "data":"YQ=="}}
+                ]}]
+            }))
+            .unwrap();
+            request.stream = Some(stream);
+            assert_context(&request, None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod media_resource_routing_tests {
+    use super::*;
+
+    fn attempt(provider: &str, channel: &str, api_key: &str) -> MonoizeAttempt {
+        MonoizeAttempt {
+            provider_id: provider.into(),
+            provider_name: provider.into(),
+            provider_type: ProviderType::Responses,
+            channel_id: channel.into(),
+            channel_name: channel.into(),
+            base_url: "https://api.example.com/v1".into(),
+            api_key: api_key.into(),
+            logical_model: "test-model".into(),
+            upstream_model: "upstream-model".into(),
+            model_multiplier: Multiplier::ONE,
+            server_tool_usage_classes: vec![],
+            provider_transforms: vec![],
+            passive_failure_count_threshold: 0,
+            passive_cooldown_seconds: 0,
+            passive_window_seconds: 0,
+            passive_rate_limit_cooldown_seconds: 0,
+            channel_max_retries: 1,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: false,
+            per_model_circuit_break: false,
+            provider_attempt_limit: None,
+            request_timeout_ms: 1000,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: false,
+            model_price: None,
+            pricing_model_key: "test-model".into(),
+            allow_free_when_unpriced: true,
+            allow_free_when_missing_usage: true,
+            billing_group_id: None,
+            group_billing_ratio: Multiplier::ONE,
+            affinity_key: None,
+            affinity_key_hash: None,
+            affinity_hit: None,
+            affinity_target: None,
+            affinity_enabled: false,
+            affinity_idle_ttl_seconds: 0,
+            affinity_failback_mode: crate::monoize_routing::AffinityFailbackMode::Sticky,
+            affinity_failback_delay_seconds: 0,
+            routing_config_revision: 0,
+            proxy_url: None,
+            extra_headers: None,
+            session_affinity_auto: false,
+            client_session_id: None,
+            derived_session_affinity: None,
+            session_affinity_value: None,
+            origin_key: None,
+            origin_peer_channel_ids: vec![],
+        }
+    }
+
+    fn request(content: Value) -> urp::UrpRequest {
+        urp::decode::openai_responses::decode_request(&json!({"model":"test-model",
+            "input":[{"role":"user","content":[content]}]}))
+        .unwrap()
+    }
+
+    fn private_request() -> urp::UrpRequest {
+        request(json!({"type":"input_file","file_id":"file-original"}))
+    }
+
+    #[test]
+    fn unbound_file_ids_reject_multiple_credential_channel_or_provider_scopes() {
+        let source = attempt("provider-A", "channel-A", "key-A");
+        for alternative in [
+            attempt("provider-A", "channel-A", "key-B"),
+            attempt("provider-A", "channel-B", "key-A"),
+            attempt("provider-B", "channel-A", "key-A"),
+        ] {
+            let mut req = private_request();
+            let mut attempts = vec![source.clone(), alternative];
+            let error = bind_media_request_routes(&mut req, &mut attempts).unwrap_err();
+            assert_eq!(error.code, "ambiguous_file_reference");
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+            let refs = urp::media::resources(&req.input).unwrap();
+            assert!(refs[0].credential_scope.is_none());
+        }
+    }
+
+    #[test]
+    fn a_bound_file_reference_keeps_only_its_eligible_candidate() {
+        let allowed = attempt("provider-A", "channel-A", "key-A");
+        let mut req = private_request();
+        urp::media::bind_resources(&mut req.input, &media_resource_scope(&allowed).unwrap());
+        let mut attempts = vec![
+            attempt("provider-B", "channel-B", "key-B"),
+            attempt("provider-A", "channel-B", "key-A"),
+            allowed.clone(),
+            attempt("provider-A", "channel-A", "wrong-key"),
+        ];
+        bind_media_request_routes(&mut req, &mut attempts).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].provider_id, "provider-A");
+        assert_eq!(attempts[0].channel_id, "channel-A");
+        assert_eq!(attempts[0].api_key, "key-A");
+        validate_media_request_route(&req, &allowed).unwrap();
+        assert_eq!(
+            urp::media::resources(&req.input).unwrap()[0]
+                .provider_id
+                .as_deref(),
+            Some("provider-A")
+        );
+    }
+
+    #[test]
+    fn same_scope_retries_survive_binding_without_changing_the_source_reference() {
+        let source = attempt("provider-A", "channel-A", "key-A");
+        let mut retry = source.clone();
+        retry.upstream_model = "compatible-retry-model".into();
+        let mut attempts = vec![source, retry];
+        let mut req = private_request();
+        bind_media_request_routes(&mut req, &mut attempts).unwrap();
+        assert_eq!(attempts.len(), 2);
+        for attempt in &attempts {
+            validate_media_request_route(&req, attempt).unwrap();
+        }
+        let wire =
+            urp::encode::openai_responses::encode_request_checked(&req, "test-model").unwrap();
+        assert_eq!(wire["input"][0]["content"][0]["file_id"], "file-original");
+        assert!(!wire.to_string().contains("credential_scope"));
+    }
+
+    #[test]
+    fn credential_or_endpoint_changes_cannot_reuse_an_already_bound_file() {
+        let source = attempt("provider-A", "channel-A", "key-A");
+        let mut req = private_request();
+        bind_media_request_routes(&mut req, &mut vec![source.clone()]).unwrap();
+        let mut different_key = source.clone();
+        different_key.api_key = "key-B".into();
+        let mut different_endpoint = source;
+        different_endpoint.base_url = "https://other.example.com/v1".into();
+        for changed in [different_key, different_endpoint] {
+            let error = validate_media_request_route(&req, &changed).unwrap_err();
+            assert_eq!(error.code, "incompatible_file_reference");
+            let mut attempts = vec![changed];
+            assert_eq!(
+                bind_media_request_routes(&mut req.clone(), &mut attempts)
+                    .unwrap_err()
+                    .code,
+                "incompatible_file_reference"
+            );
+            assert!(attempts.is_empty());
+        }
+    }
+
+    #[test]
+    fn public_urls_and_inline_bytes_leave_candidate_selection_unrestricted() {
+        for content in [
+            json!({"type":"input_file","file_url":"https://public.example.com/download"}),
+            json!({"type":"input_file","file_data":"data:application/pdf;base64,JVBERi0="}),
+        ] {
+            let mut req = request(content);
+            let mut attempts = vec![
+                attempt("provider-A", "channel-A", "key-A"),
+                attempt("provider-B", "channel-B", "key-B"),
+            ];
+            attempts[1].provider_type = ProviderType::Gemini;
+            bind_media_request_routes(&mut req, &mut attempts).unwrap();
+            assert_eq!(attempts.len(), 2);
+            for attempt in &attempts {
+                validate_media_request_route(&req, attempt).unwrap();
+            }
+            assert!(urp::media::resources(&req.input).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn cross_protocol_png_survives_production_request_encoding_matrix() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6p8AAAAASUVORK5CYII=";
+        let data_url = format!("data:image/png;base64,{png}");
+        let sources = [
+            (
+                ProviderType::ChatCompletion,
+                DownstreamProtocol::ChatCompletions,
+                json!({
+                "model":"test-model", "messages":[{"role":"user","content":[
+                    {"type":"image_url","image_url":{"url":data_url,"detail":"high"}},
+                    {"type":"text","text":"Inspect image"},
+                    {"type":"image_url","image_url":{"url":data_url,"detail":"high"}}
+                ]}]}),
+            ),
+            (
+                ProviderType::Responses,
+                DownstreamProtocol::Responses,
+                json!({
+                "model":"test-model", "input":[{"role":"user","content":[
+                    {"type":"input_image","image_url":data_url,"detail":"high"},
+                    {"type":"input_text","text":"Inspect image"},
+                    {"type":"input_image","image_url":data_url,"detail":"high"}
+                ]}]}),
+            ),
+            (
+                ProviderType::Messages,
+                DownstreamProtocol::AnthropicMessages,
+                json!({
+                "model":"test-model", "max_tokens":64,"messages":[{"role":"user","content":[
+                    {"type":"image","source":{"type":"base64","media_type":"image/png","data":png}},
+                    {"type":"text","text":"Inspect image"},
+                    {"type":"image","source":{"type":"base64","media_type":"image/png","data":png}}
+                ]}]}),
+            ),
+            (
+                ProviderType::Gemini,
+                DownstreamProtocol::Responses,
+                json!({
+                "model":"test-model", "contents":[{"role":"user","parts":[
+                    {"inlineData":{"mimeType":"image/png","data":png}},
+                    {"text":"Inspect image"}, {"inlineData":{"mimeType":"image/png","data":png}}
+                ]}]}),
+            ),
+        ];
+        fn decode(provider: ProviderType, native: &Value) -> urp::UrpRequest {
+            match provider {
+                ProviderType::ChatCompletion => urp::decode::openai_chat::decode_request(native),
+                ProviderType::Responses => urp::decode::openai_responses::decode_request(native),
+                ProviderType::Messages => urp::decode::anthropic::decode_request(native),
+                ProviderType::Gemini => urp::decode::gemini::decode_request(native),
+                _ => unreachable!(),
+            }
+            .unwrap()
+        }
+        for (source, downstream, native) in sources {
+            let canonical = decode(source, &native);
+            for target in [
+                ProviderType::ChatCompletion,
+                ProviderType::Responses,
+                ProviderType::Messages,
+                ProviderType::Gemini,
+            ] {
+                for stream in [false, true] {
+                    let mut candidate = attempt("image-provider", "image-channel", "image-key");
+                    candidate.provider_type = target;
+                    candidate.strip_cross_protocol_nested_extra = true;
+                    let mut req = canonical.clone();
+                    req.stream = Some(stream);
+                    let mut candidates = vec![candidate];
+                    bind_media_request_routes(&mut req, &mut candidates).unwrap();
+                    let candidate = candidates.pop().unwrap();
+                    let target_protocol = provider_type_protocol(target).unwrap();
+                    urp::retain_provider_items_for_protocol(&mut req.input, target_protocol);
+                    if target_protocol == urp::ProviderProtocol::Responses {
+                        urp::remove_downstream_only_reasoning_for_responses(&mut req.input);
+                    }
+                    // Gemini has no downstream endpoint; its native fixture enters at the URP boundary.
+                    let same_family = if source == ProviderType::Gemini {
+                        target == source
+                    } else {
+                        downstream.is_same_family(target)
+                    };
+                    if candidate.strip_cross_protocol_nested_extra && !same_family {
+                        urp::strip_nested_extra_body(&mut req.input);
+                    }
+                    req.model = candidate.upstream_model.clone();
+                    let wire = encode_request_for_provider(&mut req, &candidate, downstream)
+                        .unwrap_or_else(|err| {
+                            panic!("{source:?} -> {target:?}, stream={stream}: {}", err.message)
+                        });
+                    let content = match target {
+                        ProviderType::ChatCompletion | ProviderType::Messages => {
+                            &wire["messages"][0]["content"]
+                        }
+                        ProviderType::Responses => &wire["input"][0]["content"],
+                        ProviderType::Gemini => &wire["contents"][0]["parts"],
+                        _ => unreachable!(),
+                    }
+                    .as_array()
+                    .unwrap();
+                    let native_images: Vec<_> = content
+                        .iter()
+                        .filter(|part| match target {
+                            ProviderType::ChatCompletion => part["type"] == "image_url",
+                            ProviderType::Responses => part["type"] == "input_image",
+                            ProviderType::Messages => part["type"] == "image",
+                            ProviderType::Gemini => part.get("inlineData").is_some(),
+                            _ => false,
+                        })
+                        .collect();
+                    assert_eq!(
+                        native_images.len(),
+                        2,
+                        "missing image {source:?} -> {target:?}, stream={stream}: {wire}"
+                    );
+                    for image in native_images {
+                        match target {
+                            ProviderType::ChatCompletion => {
+                                assert_eq!(image["image_url"]["url"], data_url)
+                            }
+                            ProviderType::Responses => assert_eq!(image["image_url"], data_url),
+                            ProviderType::Messages => assert_eq!(
+                                image["source"],
+                                json!({"type":"base64","media_type":"image/png","data":png})
+                            ),
+                            ProviderType::Gemini => assert_eq!(
+                                image["inlineData"],
+                                json!({"mimeType":"image/png","data":png})
+                            ),
+                            _ => unreachable!(),
+                        }
+                    }
+                    assert_eq!(
+                        content.len(),
+                        3,
+                        "{source:?} -> {target:?}, stream={stream}: {wire}"
+                    );
+                    assert_eq!(content[1]["text"], "Inspect image");
+                    let decoded = decode(target, &wire);
+                    let images: Vec<_> = decoded
+                        .input
+                        .iter()
+                        .filter_map(|node| match node {
+                            urp::Node::Image {
+                                source: urp::ImageSource::Base64 { media_type, data },
+                                ..
+                            } => Some((media_type.as_str(), data.as_str())),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        images,
+                        vec![("image/png", png), ("image/png", png)],
+                        "{source:?} -> {target:?}, stream={stream}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn completed_tool_media_without_local_call_survives_production_hygiene() {
+        let png = "iVBORw0KGgo=";
+        let image_url = format!("data:image/png;base64,{png}");
+        for stream in [false, true] {
+            for source_chat in [false, true] {
+                let mut request = if source_chat {
+                    urp::decode::openai_chat::decode_request(&json!({
+                        "model":"test-model", "stream":stream, "messages":[
+                            {"role":"tool", "tool_call_id":"call_history", "content":[
+                                {"type":"text", "text":"screenshot"},
+                                {"type":"image_url", "image_url":{"url":image_url}},
+                                {"type":"file", "file":{"filename":"result.pdf", "file_data":"data:application/pdf;base64,JVBERi0xLjcK"}}
+                            ]},
+                            {"role":"user", "content":[{"type":"image_url", "image_url":{"url":image_url}}]}
+                        ]
+                    })).unwrap()
+                } else {
+                    urp::decode::openai_responses::decode_request(&json!({
+                        "model":"test-model", "stream":stream, "input":[
+                            {"type":"function_call_output", "call_id":"call_history", "output":[
+                                {"type":"input_text", "text":"screenshot"},
+                                {"type":"input_image", "image_url":image_url},
+                                {"type":"input_file", "filename":"result.pdf", "file_data":"data:application/pdf;base64,JVBERi0xLjcK"}
+                            ]},
+                            {"role":"user", "content":[{"type":"input_image", "image_url":image_url}]}
+                        ]
+                    })).unwrap()
+                };
+                urp::retain_provider_items_for_protocol(
+                    &mut request.input,
+                    urp::ProviderProtocol::Responses,
+                );
+                urp::strip_nested_extra_body(&mut request.input);
+                let mut candidates = vec![attempt("media", "channel", "key")];
+                bind_media_request_routes(&mut request, &mut candidates).unwrap();
+                let wire = encode_request_for_provider(
+                    &mut request,
+                    &candidates[0],
+                    if source_chat {
+                        DownstreamProtocol::ChatCompletions
+                    } else {
+                        DownstreamProtocol::Responses
+                    },
+                )
+                .unwrap();
+                assert_eq!(wire["input"].as_array().unwrap().len(), 2, "{wire}");
+                assert_eq!(wire["input"][0]["type"], "function_call_output");
+                assert_eq!(wire["input"][0]["call_id"], "call_history");
+                assert_eq!(wire["input"][0]["output"][0]["text"], "screenshot");
+                assert_eq!(wire["input"][0]["output"][1]["type"], "input_image");
+                assert_eq!(wire["input"][0]["output"][1]["image_url"], image_url);
+                assert_eq!(wire["input"][0]["output"][2]["filename"], "result.pdf");
+                assert_eq!(wire["input"][1]["role"], "user");
+                assert_eq!(wire["input"][1]["content"][0]["image_url"], image_url);
+            }
+        }
+    }
+}

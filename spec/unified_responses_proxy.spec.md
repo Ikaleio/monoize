@@ -439,15 +439,18 @@ TCI6. For same-Responses programmatic tool calling, Monoize MUST preserve `type 
 
 TCI7. For same-Responses tool search, Monoize MUST preserve `defer_loading` on function and MCP tool descriptors, native `namespace` and `tool_search` descriptors, and native `tool_search_call`, `tool_search_output`, and `additional_tools` input or output items. These item types MUST use Responses ProviderItems when no typed URP node exists. Monoize MUST NOT execute client-owned tool search calls.
 
-TCI7a. For a Responses request routed to Chat Completions or Messages, Monoize MUST read every ordered `additional_tools.tools` array before it removes cross-protocol ProviderItems. It MUST promote each direct `function` or `custom` descriptor and each direct `function` or `custom` child of a `namespace.tools` array into `UrpRequestV2.tools`. Monoize MUST preserve the leaf tool name, description, JSON Schema, `strict`, and custom `format` fields until target-specific adaptation. TCI7c defines the Messages adaptation for a custom tool without `input_schema`. Monoize MUST NOT send the `namespace` wrapper to the cross-family provider.
+TCI7a. For a Responses request routed to Chat Completions, Messages, or Gemini, Monoize MUST read every ordered `additional_tools.tools` array before it removes cross-protocol ProviderItems. It MUST promote each direct `function` or `custom` descriptor and each direct `function` or `custom` child of a `namespace.tools` array into `UrpRequestV2.tools`. Monoize MUST preserve the leaf tool name, description, JSON Schema, `strict`, and custom `format` fields until target-specific adaptation. TCI7c defines the Messages adaptation for a custom tool without `input_schema`. Monoize MUST NOT send the `namespace` wrapper to the cross-family provider.
 
 TCI7b. Monoize MUST append promoted tools after explicit top-level tools. A promoted tool MUST NOT replace an earlier tool with the same namespace and leaf name. For duplicate identities, Monoize MUST keep the first descriptor. A same-Responses attempt MUST NOT promote `additional_tools`; it MUST preserve the native item according to TCI7.
 
-TCI7b.1. Cross-family Chat and Messages attempts MUST also expand top-level `namespace.tools` arrays before provider filtering. Tool identity is the pair `(namespace, name)`. Distinct namespaces MUST NOT lose tools with equal leaf names. Explicit descriptors precede additional descriptors; the first descriptor for each identity wins.
+TCI7b.1. Cross-family Chat, Messages, and Gemini attempts MUST also expand top-level `namespace.tools` arrays before provider filtering. Tool identity is the pair `(namespace, name)`. Distinct namespaces MUST NOT lose tools with equal leaf names. Explicit descriptors precede additional descriptors; the first descriptor for each identity wins.
+Opaque native definitions without function or custom identity MUST retain their namespace until provider filtering.
 
 TCI7b.2. Each namespaced leaf MUST receive a unique upstream name of at most 64 ASCII letters, digits, or underscores. Generated names MUST avoid all unqualified tool names. Attempt-local metadata MUST retain the original namespace and leaf name. Same-Responses attempts MUST retain native namespaces without renaming. Named selectors MUST match the namespace and child name before provider filtering.
 
 TCI7b.3. Historical calls and named tool selectors, including allowed-tool entries, MUST use the corresponding upstream name. Cross-family history MUST omit the native namespace field. Non-stream output and every streaming tool-call start, completion, and terminal output MUST restore the original name and namespace before response transforms. Call IDs MUST remain unchanged.
+Historical ToolResult names and namespaces MUST use the same alias as their corresponding ToolCall.
+When a result has a name without a namespace, alias selection MUST use its matching input ToolCall by call id when available.
 
 TCI7b.4. The Messages custom-input bridge MUST apply to explicit and promoted Responses custom tools without `input_schema`, including namespace children. It MUST restore custom input semantics before restoring namespace identity.
 
@@ -472,8 +475,8 @@ TCI9. For same-Messages tool search, Monoize MUST preserve native versioned `too
 TRC1. `ToolResultContent` is an enum representing typed content within `ToolResult.content`. The variants are:
 
 - `Text { text: String, extra_body: Map<String, JsonValue> }`
-- `Image { source: ImageSource, extra_body: Map<String, JsonValue> }`
-- `File { source: FileSource, extra_body: Map<String, JsonValue> }`
+- `Image { source: ImageSource, metadata: MediaMetadata, extra_body: Map<String, JsonValue> }`
+- `File { source: FileSource, metadata: MediaMetadata, extra_body: Map<String, JsonValue> }`
 - `ProviderItem { origin_protocol: ProviderProtocol, item_type: String, body: JsonValue, extra_body: Map<String, JsonValue> }`
 
 TRC2. Each `ToolResult.content` field contains zero or more `ToolResultContent` entries. An empty `content` vector represents a tool result with no output payload.
@@ -490,7 +493,7 @@ TRC4. `FileSource` contains exactly the following variants:
 - `FileId { file_id: String }`
 - `Text { text: String }`
 - `Content { content: Vec<JsonValue> }`
-- `Base64 { filename: Option<String>, media_type: String, data: String }`
+- `Base64 { media_type: String, data: String }`; filename belongs to MediaMetadata.
 
 TRC5. An encoder MUST merge `ToolResultContent.extra_body` into the generated nested protocol object without replacing a typed field.
 
@@ -705,7 +708,11 @@ An upstream Responses `response.output_item.added.item.encrypted_content` value 
 
 PR2d. When encoding URP v2 to a Responses request or response, Monoize MUST replay a `ProviderItem` as one native Responses `input[]` or `output[]` item only when `origin_protocol = "responses"`. It MUST omit all other ProviderItems.
 
-PR2h. A non-stream Responses decoder MUST preserve the exact top-level `status`, `error`, and `incomplete_details` values. A same-Responses encoder MUST re-emit those values and MUST NOT replace `failed`, `incomplete`, `cancelled`, `queued`, or `in_progress` with generated `completed`, `error:null`, or `incomplete_details:null`. Optional fields absent from the source MUST remain absent unless Monoize is synthesizing a new response object or applying the local history fields in S2/S3.
+PR2h. A non-stream Responses decoder MUST preserve top-level `status`, `error`, and `incomplete_details` without a second native snapshot.
+If the canonical finish reason remains compatible with the native status and details, a same-Responses encoder MUST preserve their current values.
+This includes `failed`, `incomplete`, `cancelled`, `queued`, and `in_progress`.
+If the canonical finish reason changes incompatibly, the encoder MUST derive status and terminal details from the current canonical value.
+Obsolete error and incomplete details MUST NOT reappear. Optional source fields MUST remain absent unless reconstruction requires them under this rule or S2/S3.
 
 PR2a. Responses order preservation:
 
@@ -802,7 +809,10 @@ PR4c.5c. Anthropic Messages `signature_delta.signature` values and legacy Chat s
 
 PR4c.6. Before sending an upstream request, Monoize MUST inspect replayed URP `Reasoning.encrypted` values. If the value is an `mz2.` envelope and `reasoning_envelope_enabled = true`, Monoize MUST unwrap and forward the original `payload` only when both `provider_type` and `model` equal the selected upstream provider type and upstream model for the current attempt. If either value differs, Monoize MUST drop that replayed reasoning node from the upstream request. Unwrapping an `mz2.` envelope MUST NOT change `Reasoning.id`. The envelope `item_id` is downstream lifecycle metadata and MUST NOT populate a top-level reasoning `id` that the replay request omitted. An explicit top-level reasoning `id` remains unchanged. The legacy `mz1.` behavior under PR4c.8 is unchanged.
 
-PR4c.6a. Envelope unwrapping MUST preserve a non-empty envelope `item_id` in internal `_monoize_reasoning_envelope_item_id` node metadata. This metadata MUST NOT change the top-level `Reasoning.id` or appear as an external wire field. The Gemini adapter MAY use this metadata to recover the function-call signature binding specified by PG5a1.
+PR4c.6a. Envelope unwrapping MUST preserve a non-empty envelope `item_id` in typed `ReasoningMetadata.item_id`.
+It MUST NOT retain another copy in internal extras or change the top-level `Reasoning.id`.
+The adapter MUST consume this provenance without emitting a separate metadata field on the wire.
+PG5a1 defines request normalization for bound function-call signatures, including legacy internal provenance.
 
 PR4c.7. If `reasoning_envelope_enabled = false`, Monoize MUST NOT wrap newly produced downstream encrypted reasoning payloads. If a downstream request nevertheless replays an `mz2.` envelope, Monoize MAY unwrap it before upstream encoding, but MUST NOT enforce the provider/model mismatch drop defined by PR4c.6.
 
@@ -811,7 +821,7 @@ PR4c.8. Monoize MUST accept legacy `mz1.<item_id>.<payload>` reasoning signature
 PR4d. When encoding URP v2 ordinary nodes into upstream `POST /v1/responses` request `input[]` messages, Monoize MUST choose content block types by message role:
 
 - `role="user"` content MUST use request or input block types such as `input_text`, `input_image`, and `input_file`.
-- `role="assistant"` message content MUST use only current Response output-message block types, including `output_text` and `refusal`. A native `image_generation_call` MUST remain a top-level output item and MUST NOT be rewritten as non-schema `output_image` message content. A file or image without a current Responses assistant-message content shape MUST remain a same-Responses provider item or be omitted on an incompatible cross-family replay.
+- `role="assistant"` text/refusal history MUST use output-message blocks. Media history MAY use a stable easy-input message with input_text/input_image/input_file. A native image_generation_call MUST remain a top-level item. Unsupported typed media MUST produce an explicit error under media-transport.spec.md.
 - `role="assistant"` text or refusal history MUST NOT be encoded as `input_text`.
 
 PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Responses event payloads where:
@@ -827,9 +837,12 @@ PR5c. When parsing upstream Responses SSE, Monoize MAY receive official image-ge
 - For `image_generation.completed`, if the payload carries non-empty `b64_json` or non-empty `result`, Monoize MUST decode that payload as one assistant `Image` node with `Image.source = Base64`.
 - Monoize MUST treat `response.image_generation.completed` as an alias of `image_generation.completed`.
 - The decoded media type MUST be derived from `output_format` using the same mapping as PR2b, defaulting to `image/png`.
-- For `image_generation.partial_image`, Monoize MAY ignore the event for canonical URP node emission. Ignoring that event MUST NOT be treated as a stream error.
+- For `image_generation.partial_image`, a non-empty partial image MUST map to a typed `NodeDelta::Image` source. Event extras MUST NOT duplicate image bytes.
 - Monoize MUST treat `response.image_generation.partial_image` as an alias of `image_generation.partial_image`.
-- An `Image` node decoded from a Responses `image_generation_call` MUST retain the complete native top-level item in same-protocol node-local state. A same-Responses encoder MUST reconstruct the top-level `image_generation_call` item, including its id, status, result, and unknown fields. It MUST NOT place that node inside a `message.content[]` array.
+- An Image decoded from `image_generation_call` MUST retain only a native shape marker and unknown item fields in node extras.
+- A same-Responses encoder MUST reconstruct the top-level `image_generation_call` from the current Image id, source, and unknown item fields.
+- The current Base64 data owns `result`. The current media type determines `output_format`.
+- The encoder MUST NOT restore prior image bytes or identifiers. It MUST NOT place this node inside `message.content[]`.
 
 PR5a. Responses stream node reconstruction:
 
@@ -955,23 +968,23 @@ PC2.4. Assistant message history preservation for chat adapter:
 
 PC2.5. Chat Completions file and audio input content:
 
-- A content part `{type:"file",file:{file_id:<id>}}` MUST decode as `FileSource::FileId` with `_monoize_file_id_origin = "openai"`.
-- A content part `{type:"file",file:{file_data:<base64>,filename?:<name>}}` MUST decode as `FileSource::Base64`. The decoder MUST preserve the optional filename. A base64 data URI MUST be split into its MIME type and raw base64 payload. A legacy raw base64 string MUST use `application/octet-stream`.
+- A content part `{type:"file",file:{file_id:<id>}}` MUST decode as FileSource::FileId with typed OpenAI resource provenance.
+- File Base64 decoding MUST preserve filename in MediaMetadata. Data URLs MUST separate MIME and bytes. Raw Base64 MUST follow MT2/MT3 MIME inference and validation.
 - A content part `{type:"input_audio",input_audio:{data:<base64>,format:"wav"|"mp3"}}` MUST decode as `AudioSource::Base64` with media type `audio/wav` or `audio/mpeg` respectively.
-- A Chat encoder MUST encode an OpenAI-origin `FileSource::FileId` using the nested `file.file_id` shape and a `FileSource::Base64` using nested `file.file_data` plus optional `file.filename`. It MUST omit `FileSource::Url`, `FileSource::Text`, and `FileSource::Content` because Chat has no native mapping for those source variants. It MUST NOT invent a bracketed text marker for an unsupported file.
-- A Chat encoder MUST encode `AudioSource::Base64` as `input_audio` when the media type maps to `wav` or `mp3`. It MUST omit an audio URL and any unsupported audio media type.
-- Responses create and Messages have no current input-audio content mapping. Their encoders MUST omit `Audio` nodes. Gemini MAY encode canonical audio using its native inline-data or file-data surface.
+- Chat MUST encode compatible file IDs and Base64 files using nested file syntax. Text/Content documents MUST expand under MT11. Unsupported URLs MUST fail explicitly.
+- Chat user audio MUST use WAV or MP3 input_audio. Assistant history MAY reference native audio by id. Other roles, sources, or formats MUST fail explicitly.
+- Stable Responses and Messages requests MUST reject Audio nodes. Gemini MAY use supported inline-data or file-data audio carriers.
 
-PC2.6. Responses `input_file.file_data` and Chat `file.file_data` MUST encode canonical Base64 files as `data:<media_type>;base64,<data>`. Their decoders MUST split this URI before creating FileSource::Base64. Messages document sources MUST receive the canonical MIME type and raw base64 data. A Responses or Chat encoder MUST NOT emit a sibling `media_type` field.
+PC2.6. Responses and Chat file_data MUST encode one MIME-bearing data URL. Messages MUST use PDF Base64 or a UTF-8 text source under MT13. Encoders MUST NOT emit unsupported sibling MIME fields.
 
 PC2.7. A Chat request decoder MUST map top-level `stop`, `verbosity`, and `user` into typed `UrpRequestV2.stop`, `UrpRequestV2.verbosity`, and `UrpRequestV2.user`. A Chat encoder MUST restore scalar-versus-array `stop` shape, emit top-level `verbosity`, and emit top-level `user`. Typed fields MUST win collisions with `extra_body`.
 
 PC2.8. Chat assistant audio envelope preservation:
 
-- A Chat decoder that receives a non-null assistant `message.audio` object MUST emit one `ProviderItem` with `origin_protocol = "chat_completion"`, `item_type = "audio"`, and `body` equal to the complete audio object. The provider item MUST carry an internal marker that identifies it as a Chat message-level audio field.
-- A Chat request or response encoder MUST consume that marked provider item as the enclosing message's `audio` field. It MUST NOT place the audio object in `messages[].content[]` or `choices[].message.content[]`.
-- A marked audio provider item MUST make an audio-only assistant message consumable even when `content = null`. The same-family encoded message MUST contain `audio` and MUST contain `content = null` for a response or an empty request content value when the request schema requires content.
-- A non-Chat encoder MUST omit the marked provider item under `PI5` and `PI6`. The internal marker MUST NOT appear on the wire.
+- Chat audio bytes MUST use an Audio node. MediaMetadata MUST own the reference ID, transcript, and expiry. Unknown format MUST follow MT32.
+- A native reference without bytes MAY remain a protocol-scoped ProviderItem. Native shape metadata MUST NOT duplicate typed audio bytes or transcript.
+- Chat request history MUST encode only audio.id. Native responses MAY emit the complete audio envelope, with content=null for audio-only output.
+- Other targets MUST use a supported typed audio carrier or produce an explicit media error. Shape metadata MUST NOT appear on the wire.
 
 PC2.9. Deprecated Chat function-call lifecycle preservation:
 
@@ -980,8 +993,8 @@ PC2.9. Deprecated Chat function-call lifecycle preservation:
 - A Chat request encoder MUST partition semantic tools by provenance. It MUST emit a marked legacy function definition only in `functions[]` and an unmarked Chat-valid tool definition only in `tools[]`; it MUST NOT emit one semantic definition in both arrays. When semantic `tool_choice` carries legacy-choice request provenance, the encoder MUST emit only `function_call`; otherwise it MUST emit only `tool_choice`. A marked legacy specific choice MUST restore its unknown deprecated-object fields, while semantic `name` wins a collision.
 - Responses, Messages, and other non-Chat encoders MUST ignore the internal legacy-definition and legacy-choice markers and encode the normalized semantic tools and tool choice using their target-family shapes.
 - An assistant `function_call = {name, arguments}` object MUST decode as one `ToolCall` with `tool_type = function`, `name` and `arguments` copied exactly, deterministic `call_id = "legacy_function:" + name`, and an internal legacy-function-call marker.
-- A request message with `role = "function"`, `name = N`, and `content = C` MUST decode as one `ToolResult` with `tool_type = function`, `call_id = "legacy_function:" + N`, text content `C`, and an internal legacy-function-result marker containing `N`.
-- A Chat encoder MUST restore a marked legacy call as `function_call` rather than `tool_calls[]`. It MUST restore a marked legacy result as `role = "function"`, `name`, and `content` rather than `role = "tool"` and `tool_call_id`.
+- A request message with `role = "function"`, `name = N`, and `content = C` MUST decode as one ToolResult with `tool_type = function`, `call_id = "legacy_function:" + N`, and typed `name = N`. Content MUST follow DC4c. Its internal legacy-function-result marker MUST record shape only.
+- A Chat encoder MUST restore a marked legacy call as `function_call` rather than `tool_calls[]`. It MUST restore a marked legacy result as `role = "function"` with current typed name and content. An absent typed name MUST remain absent. Neither the marker nor the call id MAY restore a removed name.
 - A Chat stream decoder MUST normalize `delta.function_call` and terminal `message.function_call` through the same marked `ToolCall` lifecycle. A Chat stream encoder MUST emit marked call chunks under `delta.function_call`, preserve argument-fragment order, and use terminal `finish_reason = "function_call"`.
 - Legacy markers are internal metadata under `XTRA-10`. They MUST remain available until target encoding and MUST NOT appear on the wire.
 
@@ -1080,12 +1093,12 @@ PM2c. For downstream `POST /v1/messages` request parsing, Monoize MUST decode or
 PM2c.1. The Messages adapter MUST decode and encode the following document source shapes:
 
 - `{ type: "url", url: <url> }` as `FileSource::Url`;
-- `{ type: "base64", media_type: <media type>, data: <raw base64> }` as `FileSource::Base64`;
+- `{ type: "base64", media_type: "application/pdf", data: <raw base64> }` as FileSource::Base64;
 - `{ type: "file", file_id: <file id> }` as `FileSource::FileId`;
 - `{ type: "text", media_type: "text/plain", data: <text> }` as `FileSource::Text`;
-- `{ type: "content", content: <content block array> }` as `FileSource::Content`.
+- `{ type: "content", content: <string or content block array> }` as FileSource::Content under MT7.
 
-PM2c.2. A Messages encoder MUST NOT add `filename` to a document source of type `base64`. When `_monoize_file_id_origin = "messages"`, a Messages encoder MUST encode `ImageSource::FileId` and `FileSource::FileId` as nested Anthropic sources with `type = "file"` and the original `file_id`. It MUST omit a typed file identifier whose origin marker is absent or belongs to another protocol family under `URPV2-13b`.
+PM2c.2. Messages MUST NOT add filename to a Base64 document source. Compatible typed resource references MUST use nested type=file sources. Missing or incompatible provenance MUST fail explicitly.
 
 PM2d. For downstream `POST /v1/messages` request parsing and upstream `type=messages` response parsing, Monoize MUST decode any unknown `content[]` block object as `ProviderItem(origin_protocol = "messages")`. This rule applies to both ordinary message content and the top-level `system` block array. When encoding to `type=messages`, Monoize MUST replay only `ProviderItem` nodes whose `origin_protocol = "messages"` as native `content[]` or `system[]` blocks in source order. Other ProviderItems MUST be omitted.
 
@@ -1116,7 +1129,7 @@ PM4.2. For PM4.1 block-array content, Monoize MUST map blocks to `ToolResult.con
 - `image` -> image entry;
 - `document` -> file entry.
 
-PM4.3. When parsing upstream Messages assistant output, Monoize MUST support multimodal output blocks `image` and `document` in addition to `text`, `thinking`, and `tool_use`.
+PM4.3. Messages response encoders MUST follow the native ContentBlock union. Decoders MUST preserve recognized compatible image/document/file/audio content as typed URP under MT41. Legal server-tool results retain their documented nested media and native semantics.
 
 PM4.4. When encoding a request to an upstream `type=messages` provider, Monoize MUST NOT emit an upstream request field named `response_format`. If the URP request carries `ResponseFormat::JsonSchema`, Monoize MUST encode it as `output_config.format = { "type": "json_schema", "schema": <S> }`. When no explicit Messages `output_config.format` passthrough object exists, the generated Messages format object MUST NOT contain the OpenAI-only schema `name`, `description`, or `strict` members. `ResponseFormat::Text` and `ResponseFormat::JsonObject` have no Messages equivalent and MUST NOT produce an `output_config.format` member.
 
@@ -1189,9 +1202,10 @@ PM7. Messages `tool_choice` normalization:
   - `{ "type": "auto" }` -> `"auto"`
   - `{ "type": "any" }` -> `"required"`
   - `{ "type": "tool", "name": "<N>" }` -> `{ "type": "function", "function": { "name": "<N>" } }`
-- If an Anthropic Messages `tool_choice` object has boolean `disable_parallel_tool_use` and `type` is `auto`, `any`, or `tool`, Monoize MUST preserve that flag as request-level tool-choice semantics. It MUST NOT store the flag in any tool descriptor or tool descriptor `extra_body`.
-- When a preserved Anthropic `any` choice is encoded back to a Messages upstream, Monoize MUST emit `{ "type": "any" }`, not `{ "type": "required" }`. If `disable_parallel_tool_use` was present, the emitted object MUST include the same boolean flag.
-- When a preserved Anthropic named `tool` choice is encoded back to a Messages upstream, Monoize MUST emit `{ "type": "tool", "name": "<N>" }`. If `disable_parallel_tool_use` was present, the emitted object MUST include the same boolean flag.
+- A boolean `tool_choice.disable_parallel_tool_use` MUST map to the inverse boolean in typed `UrpRequest.parallel_tool_calls` for `auto`, `any`, or `tool`.
+- The decoder MUST remove that flag from ToolChoice passthrough. It MUST NOT store the flag in any tool descriptor.
+- When a preserved Anthropic `any` choice is encoded back to a Messages upstream, Monoize MUST emit `{ "type": "any" }`, not `{ "type": "required" }`. If typed `parallel_tool_calls` is present, the emitted flag MUST equal its inverse. If the typed field is absent, the encoder MUST omit the flag.
+- When a preserved Anthropic named `tool` choice is encoded back to a Messages upstream, Monoize MUST emit `{ "type": "tool", "name": "<N>" }`. If typed `parallel_tool_calls` is present, the emitted flag MUST equal its inverse. If the typed field is absent, the encoder MUST omit the flag.
 - For OpenAI-compatible upstream requests, `parallel_tool_calls` is a top-level request field. Monoize MUST emit it at the request object top level when the canonical request carries a boolean value, and MUST NOT nest it under `tools[]`, `function`, `custom`, or any other tool descriptor object.
 
 PM8. When calling a `type=messages` upstream, Monoize MUST send HTTP header `anthropic-version` with value `2023-06-01`.
@@ -1263,7 +1277,7 @@ PG4. Monoize MUST encode URP v2 requests to Gemini native request fields:
 - `generationConfig` for temperature, top_p, and max_output_tokens;
 - `tools[]` and `toolConfig.functionCallingConfig` for tool definitions and tool choice.
 
-PG4a. When encoding a URP `ToolResult` node into Gemini `functionResponse`, Monoize MUST set `functionResponse.name` to the tool function name, not the URP `call_id`. Monoize MAY recover that function name from preserved metadata or from the corresponding earlier URP `ToolCall` node.
+PG4a. When encoding a URP `ToolResult` node into Gemini `functionResponse`, Monoize MUST use its typed `name` or the correlated ToolCall name. It MUST NOT use the URP `call_id` as the function name.
 
 PG4b. If normalized reasoning effort is `none`, Monoize MUST encode `generationConfig.thinkingConfig.thinkingBudget = 0`. Monoize MUST NOT replace this value with a positive budget. The upstream model determines whether disabled thinking is supported.
 
@@ -1277,15 +1291,48 @@ PG5. Monoize MUST decode Gemini responses from `candidates[].content.parts[]` an
 - tool or function call nodes;
 - reasoning or thought nodes and signatures when provided.
 
-PG5a. A thought text Part MUST map to one Reasoning node with its signature in `encrypted`. A signature attached to a text or media Part MUST remain attached to that node in internal `_monoize_gemini_part` metadata. Gemini encoding MUST restore these fields on that Part, not on a separate signature Part. A signature-only Part MUST retain its native shape. Text and media replay requires preservation of canonical Part metadata; another protocol can discard this metadata.
+PG5a. A thought text Part MUST map to one Reasoning node with its signature in `encrypted`. Text signatures use typed `signature`. Media signatures use typed `MediaMetadata.signature`. Gemini encoding MUST attach each signature to its owning Part. A signature-only Part MUST retain its native shape.
 
-PG5a1. A signed function-call Part MUST additionally produce one Reasoning transport node containing its original signature in `encrypted`. Its id MUST be `rs_gemini_call_` followed by the unpadded base64url encoding of the canonical call id. The existing reasoning-envelope and signature-sigil transports MUST carry this binding. During envelope unwrapping, Monoize MUST retain a non-empty envelope item id in internal `_monoize_reasoning_envelope_item_id` metadata without changing the top-level Reasoning id. The Gemini encoder MUST recover the binding from the top-level id or this internal metadata. It MUST attach the signature to the matching function-call Part and MUST omit the transport node from native Parts. Dropping encrypted reasoning prevents recovery. Synthetic call ids MUST use the reserved prefix `call_gemini_` and MUST NOT be sent as native function ids. A Gemini thought-text encoder MUST select `content` when present and otherwise select `summary`.
+PG5a1. A Gemini function-call Part signature MUST map only to canonical `ToolCall.signature`.
+The decoder MUST NOT create a second canonical Reasoning node for that signature.
+At a downstream Responses, Messages, or Chat response boundary, the encoder MAY project a signed call into adapter-local transport nodes.
+The projection MUST emit one bound Reasoning transport and remove the signature from the projected call.
+When the signature is known at call start, the transport MUST precede the call start.
+When the signature first arrives at completion, the transport MUST precede that completion and bind through the call id.
+The encoder MUST NOT delay unsigned call argument deltas to wait for a possible completion signature.
+The transport id MUST equal `rs_gemini_call_` plus the unpadded base64url encoding of the canonical call id.
+Existing reasoning-envelope and signature-sigil transports MUST preserve this binding in non-stream, live-stream, and synthetic-stream responses.
+Projection MUST NOT mutate canonical nodes or create another stored signature owner. Upstream request encoders MUST NOT apply response projection.
+Before request transforms, decode normalization MUST move a recognized bound transport signature into its matching ToolCall and consume that transport node.
+An existing typed call signature wins a collision. A transport MUST NOT attach its signature to a different call.
+Normalization MUST accept legacy bindings from the Reasoning id or `_monoize_reasoning_envelope_item_id` provenance.
+The Gemini encoder MUST attach the current typed signature to the corresponding functionCall Part.
+A transform deletion MUST remain absent. A provider or model mismatch MUST clear only the signature and preserve the tool call.
+Synthetic call ids MUST use `call_gemini_` and MUST NOT become native function ids.
+A Gemini thought-text encoder MUST select `content` when present and otherwise select `summary`.
+
+PG5a2. Signature projection MUST preserve the relative order of canonical terminal nodes, including envelope controls and repeated content.
+Terminal vector positions MUST NOT be interpreted as source stream node indices.
+Previously emitted signature transports MUST retain their order relative to emitted content nodes and bind by call id.
+Projection MUST preserve the original target of each envelope control. A transport MUST NOT consume a control intended for the call.
+Terminal-only signatures MUST project immediately before their owning call and its envelope controls.
+Typed terminal deletion MUST suppress the corresponding transport.
 
 PG5b. Gemini stream text values are deltas. The decoder MUST append each fragment exactly once. It MAY combine adjacent unsigned text or thought fragments of the same kind. It MUST preserve signed Part boundaries and Part order. Every function-call, image, file, or unknown Part MUST receive a new monotonically increasing node index; positions within an SSE frame MUST NOT identify nodes across frames. Native function-call arguments are complete JSON objects, not string deltas.
 
 PG5c. Streaming and non-streaming Gemini Parts MUST use the same semantic decoding for text, thoughts, function calls, inline media, file media, and unknown Parts. An `inlineData` Part with an image MIME type MUST produce an Image node with its original MIME type and base64 payload.
 
 PG5d. The decoder MUST process `finishReason` even when candidate content or Parts are absent. A non-default `promptFeedback.blockReason` MUST produce a Refusal node and `ContentFilter` termination even when candidates are absent. Native feedback MUST remain in response passthrough. Safety, recitation, blocklist, prohibited-content, sensitive-information, and image-safety termination reasons MUST map to `ContentFilter`. `STOP` with tool calls MUST map to `ToolCalls`. A stream without a non-default finish reason or prompt block MUST fail with `upstream_stream_missing_terminal`; EOF and `[DONE]` alone MUST NOT establish success. Malformed JSON and upstream error objects MUST fail decoding.
+
+PG5e. The Gemini stream encoder MUST emit completed nodes in canonical order and emit terminal metadata once.
+It MUST buffer out-of-order completions until lower node indices complete or authoritative terminal output supplies those nodes.
+It MUST reconcile terminal-only output without emitting an already emitted Part twice.
+If terminal state retracts or replaces an emitted Part, encoding MUST fail because Gemini cannot retract prior Parts.
+The codec does not add a downstream HTTP endpoint. Request configuration tests MUST cover both streaming modes.
+Audio MIME types map to Audio nodes. File MIME types map to MediaMetadata.media_type.
+Citation sources map to Text.citations. Other candidate metadata remains provider-scoped passthrough without duplicate canonical values.
+Built-in tool declarations use typed ToolDefinition.config and origin_protocol. Function schemas use FunctionDefinition.parameters.
+Recognized generation controls MUST be removed from native passthrough before encoding current typed values.
 
 PG6. Monoize MUST map Gemini usage metadata to URP usage fields using:
 
@@ -1422,19 +1469,11 @@ DC4b. A same-Chat non-streaming response MUST preserve the upstream integer `cre
 
 DC4c. Chat tool-result content decode:
 
-- A downstream Chat `role="tool"` or `role="function"` message `content` value MUST decode as `ToolResult.content` as follows:
-  - a JSON string becomes one `ToolResultContent::Text` entry with that string;
-  - a JSON array is decoded item by item in array order;
-  - a JSON object is decoded as one content item;
-  - `null` yields an empty content list.
-- For each array or object item:
-  - `{type:"text"|"input_text"|"output_text"}` becomes `ToolResultContent::Text`;
-  - `{type:"image_url"|"input_image"|"output_image"|"image"}` becomes `ToolResultContent::Image`;
-  - a recognized file content part becomes `ToolResultContent::File`.
-- Monoize MUST NOT reduce a tool-result content array to concatenated text when that array contains image or file parts.
-- If an item is not a recognized text, image, or file part, Monoize MUST keep it as `ToolResultContent::Text` whose text is the JSON serialization of that item. Monoize MUST NOT drop that item.
-- When encoding that `ToolResult` to an upstream Responses request, Monoize MUST emit official `function_call_output.output` or `custom_tool_call_output.output` under PR7: a string when the content is one extra-free text entry, otherwise an array of `input_text`, `input_image`, and `input_file` blocks. Monoize MUST NOT lift those image or file parts into a following user `input_image` message on the official Responses path.
-- A later Chat `role="user"` image part remains a user `Image` node. Monoize MUST NOT merge it into the preceding `ToolResult`.
+- A tool or legacy function message content string MUST become typed Text. An array MUST decode in order. One object MUST decode as one block. Null MUST produce no blocks.
+- Recognized text, image, file, and audio content MUST retain their typed URP semantics under MT41-MT46.
+- An unrecognized tool-result JSON item MUST become one Text entry containing its JSON serialization. A malformed recognized media item MUST fail explicitly.
+- A Responses request encoder MUST emit one extra-free Text as an output string. Mixed content MUST use ordered input_text, input_image, and input_file blocks.
+- Tool-result images and files MUST remain inside function_call_output.output or custom_tool_call_output.output. Later user images MUST retain their ordinary user role.
 
 DC5. Reasoning:
 
@@ -1451,7 +1490,17 @@ DC5. Reasoning:
 
 DC5a. For DeepSeek V4 thinking-mode tool loops, an assistant message that contains tool calls and non-empty `reasoning_content` MUST replay that `reasoning_content` byte-for-byte on the next outbound DeepSeek V4 Chat request. A no-tool prior turn MAY omit it. Monoize MUST preserve provenance so this DeepSeek replay field is not confused with an OpenRouter scalar alias.
 
-DC5b. A post-start OpenRouter stream chunk with top-level `error`, or a non-stream choice with `error` and `finish_reason="error"`, is terminal failure state. Monoize MUST NOT convert it to `finish_reason="stop"`, emit a successful terminal chunk, or bill it as a successful completion. Monoize MUST preserve a string or numeric `error.code` as its decimal/string representation. If the top-level error object omits `code` or `type`, Monoize MUST use `error.metadata.provider_code` or `error.metadata.error_type`, respectively, when those values are non-empty JSON scalars. A top-level `code` or `type` wins a collision with its metadata fallback. When a same-Chat stream encoder retains the original error chunk, it MUST use that chunk as the replay base and materialize missing canonical `message`, `code`, `type`, and `param` members in the native top-level or choice-local `error` object. Existing native direct members MUST win those insertions. Before replay, the encoder MUST reject incoming `_monoize_` members at the retained chunk, choice, error, and error-metadata owner layers while preserving other unknown provider fields. DeepSeek `finish_reason="insufficient_system_resource"` likewise MUST NOT normalize to `stop`.
+DC5b. A post-start OpenRouter chunk with top-level `error` is terminal failure state.
+A non-stream choice with `error` and `finish_reason="error"` is also terminal failure state.
+Monoize MUST NOT emit successful completion, convert these failures to `finish_reason="stop"`, or bill them as successful responses.
+A string or numeric error code MUST map to the canonical string code.
+If native `code` or `type` is absent, the decoder MUST use non-empty scalar `error.metadata.provider_code` or `error.metadata.error_type`, respectively.
+A native direct value wins over its metadata fallback during decode.
+A same-Chat encoder MAY retain native error placement and unknown fields. It MUST NOT retain another canonical code or message copy.
+The encoder MUST reconstruct code and message from current typed Error fields. Native replay metadata MUST NOT restore changed or deleted values.
+The decoder MUST reject incoming `_monoize_` members at chunk, choice, error, and error-metadata owner layers.
+Other unknown provider fields MUST remain at their original owner.
+DeepSeek `finish_reason="insufficient_system_resource"` MUST NOT normalize to `stop`.
 
 DC5c. DeepSeek Chat requests MUST preserve the normalized reasoning effort value without model-specific remapping or synthesized thinking controls. The normal Chat reasoning container rules in RC4 apply. An explicit native `thinking` object MUST be reconstructed from current typed controls and unknown native members. The maximum output-token field for a model identifier containing `deepseek` MUST be `max_tokens`.
 

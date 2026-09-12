@@ -159,6 +159,8 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
                 }
                 for source in images {
                     rewritten.push(Node::Image {
+                        metadata: Default::default(),
+
                         id: None,
                         role: OrdinaryRole::Assistant,
                         source,
@@ -476,6 +478,8 @@ fn emit_synthetic_image_node(
     emitted.push(UrpStreamEvent::NodeStart {
         node_index,
         header: NodeHeader::Image {
+            metadata: Default::default(),
+
             id: None,
             role: OrdinaryRole::Assistant,
         },
@@ -484,6 +488,8 @@ fn emit_synthetic_image_node(
     emitted.push(UrpStreamEvent::NodeDone {
         node_index,
         node: Node::Image {
+            metadata: Default::default(),
+
             id: None,
             role: OrdinaryRole::Assistant,
             source,

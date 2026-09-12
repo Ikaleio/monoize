@@ -49,6 +49,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
         if let Some(image_url) = input_obj.get("image").and_then(|v| v.as_str()) {
             input_nodes.push(Node::Image {
+                metadata: Default::default(),
+
                 id: None,
                 role: OrdinaryRole::User,
                 source: ImageSource::Url {
@@ -156,6 +158,8 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
         Value::String(s) => {
             if looks_like_url(s) && looks_like_media_url(s) {
                 nodes.push(Node::Image {
+                    metadata: Default::default(),
+
                     id: None,
                     role: OrdinaryRole::Assistant,
                     source: ImageSource::Url {
@@ -187,6 +191,8 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                     for v in arr {
                         if let Some(url) = v.as_str() {
                             nodes.push(Node::Image {
+                                metadata: Default::default(),
+
                                 id: None,
                                 role: OrdinaryRole::Assistant,
                                 source: ImageSource::Url {

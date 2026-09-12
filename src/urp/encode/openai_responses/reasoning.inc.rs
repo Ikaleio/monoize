@@ -166,6 +166,8 @@ fn sanitize_request_input_items(input_items: &mut [Value]) {
 fn encode_tool_call_item(part: &Part, output_item: bool) -> Option<Value> {
     match part {
         Part::ToolCall {
+            namespace,
+            signature: _,
             id,
             tool_type,
             call_id,
@@ -184,9 +186,7 @@ fn encode_tool_call_item(part: &Part, output_item: bool) -> Option<Value> {
                     .to_string(),
                 ),
             );
-            let item_id = id
-                .as_deref()
-                .or_else(|| extra_body.get("id").and_then(Value::as_str));
+            let item_id = id.as_deref();
             if let Some(item_id) = item_id {
                 obj.insert(
                     "id".to_string(),
@@ -217,13 +217,14 @@ fn encode_tool_call_item(part: &Part, output_item: bool) -> Option<Value> {
             }
             obj.insert("call_id".to_string(), Value::String(call_id.clone()));
             obj.insert("name".to_string(), Value::String(name.clone()));
+            if let Some(namespace) = namespace { obj.insert("namespace".to_string(), json!(namespace)); }
             obj.insert(
                 match tool_type {
                     ToolCallType::Function => "arguments",
                     ToolCallType::Custom => "input",
                 }
                 .to_string(),
-                Value::String(crate::urp::tool_call_arguments_for_wire(arguments)),
+                Value::String(if *tool_type == ToolCallType::Custom { arguments.clone() } else { crate::urp::tool_call_arguments_for_wire(arguments) }),
             );
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))

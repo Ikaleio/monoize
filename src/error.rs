@@ -16,6 +16,8 @@ pub struct AppError {
     /// When set, request logs use this instead of `message` so the client
     /// receives sanitized text while internal logs retain full detail.
     pub internal_message: Option<String>,
+    /// The downstream encoder already sent its complete terminal error sequence.
+    pub downstream_stream_terminal_sent: bool,
 }
 
 impl AppError {
@@ -31,11 +33,17 @@ impl AppError {
             upstream_type: None,
             upstream_param: None,
             internal_message: None,
+            downstream_stream_terminal_sent: false,
         }
     }
 
     pub fn with_internal_message(mut self, msg: impl Into<String>) -> Self {
         self.internal_message = Some(msg.into());
+        self
+    }
+
+    pub fn with_downstream_stream_terminal_sent(mut self, sent: bool) -> Self {
+        self.downstream_stream_terminal_sent = sent;
         self
     }
     pub fn with_type(mut self, error_type: impl Into<String>) -> Self {

@@ -1,12 +1,11 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, is_internal_extra_key, parse_file_node_from_obj,
-    parse_file_source_from_obj, parse_image_node_from_obj, parse_image_source_from_obj,
-    parse_tool_definition, remove_untrusted_internal_keys, retain_wire_extra_fields, split_extra,
-    value_to_text, value_to_u64,
+    deserialize_u64ish_default, is_internal_extra_key, parse_audio_node_from_obj,
+    parse_file_node_from_obj, parse_image_node_from_obj, parse_tool_definition,
+    remove_untrusted_internal_keys, retain_wire_extra_fields, split_extra, value_to_text,
+    value_to_u64,
 };
 use crate::urp::{
-    FILE_ID_ORIGIN_EXTRA_KEY, FILE_ID_ORIGIN_MESSAGES, FileSource, FinishReason, ImageSource,
-    InputDetails, JsonSchemaDefinition, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
+    FinishReason, InputDetails, JsonSchemaDefinition, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
     MESSAGES_THINKING_CONFIG_EXTRA_KEY, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
     ReasoningConfig, ResponseFormat, StopControl, ToolChoice, ToolResultContent, UrpRequest,
     UrpResponse, Usage, unwrap_reasoning_signature_sigil,
@@ -163,7 +162,7 @@ fn decode_anthropic_response_format(obj: &Map<String, Value>) -> Option<Response
             description: None,
             schema: format.get("schema")?.clone(),
             strict: None,
-            extra_body: HashMap::new(),
+            extra_body: split_extra(format, &["type", "schema"]),
         },
     })
 }
@@ -318,9 +317,6 @@ fn text_node_with_phase(
     phase: Option<&str>,
     mut extra_body: HashMap<String, Value>,
 ) -> Node {
-    if let Some(phase) = phase {
-        extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
-    }
     Node::Text {
         signature: None,
         citations: extra_body
@@ -358,44 +354,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let mut input_nodes = Vec::new();
 
     if let Some(system) = obj.get("system") {
-        if let Some(text) = system.as_str() {
-            if !text.is_empty() {
-                input_nodes.push(Node::Text {
-                    signature: None,
-                    citations: Vec::new(),
-                    id: None,
-                    role: OrdinaryRole::System,
-                    content: text.to_string(),
-                    phase: None,
-                    extra_body: HashMap::new(),
-                });
-            }
-        } else if let Some(blocks) = system.as_array() {
-            for block in blocks {
-                let Some(bobj) = block.as_object() else {
-                    continue;
-                };
-                let btype = bobj.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-                match btype {
-                    "text" => {
-                        if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
-                            input_nodes.push(text_node_with_phase(
-                                OrdinaryRole::System,
-                                text,
-                                bobj.get("phase").and_then(|v| v.as_str()),
-                                split_extra(bobj, &["type", "text", "phase"]),
-                            ));
-                        }
-                    }
-                    _ => {
-                        input_nodes.push(provider_item_from_messages_block(
-                            bobj,
-                            OrdinaryRole::System,
-                        ));
-                    }
-                }
-            }
-        }
+        input_nodes.extend(decode_content_nodes(system, OrdinaryRole::System)?);
     }
 
     for raw_msg in obj
@@ -414,111 +373,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         );
 
         let msg_extra_body = split_extra(msg_obj, &["role", "content"]);
-        let mut message_nodes = Vec::new();
-        let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
-        if let Some(s) = content.as_str() {
-            if !s.is_empty() {
-                message_nodes.push(Node::Text {
-                    signature: None,
-                    citations: Vec::new(),
-                    id: None,
-                    role: base_role,
-                    content: s.to_string(),
-                    phase: None,
-                    extra_body: HashMap::new(),
-                });
-            }
-        } else if let Some(blocks) = content.as_array() {
-            for block in blocks {
-                let Some(bobj) = block.as_object() else {
-                    continue;
-                };
-                let btype = bobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                match btype {
-                    "text" => {
-                        if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
-                            message_nodes.push(text_node_with_phase(
-                                base_role,
-                                text,
-                                bobj.get("phase").and_then(|v| v.as_str()),
-                                split_extra(bobj, &["type", "text", "phase"]),
-                            ));
-                        }
-                    }
-                    "thinking" => {
-                        if let Some(node) = decode_anthropic_thinking_block(bobj) {
-                            message_nodes.push(node);
-                        }
-                    }
-                    "redacted_thinking" => {
-                        if let Some(node) = decode_anthropic_redacted_thinking_block(bobj) {
-                            message_nodes.push(node);
-                        }
-                    }
-                    "tool_use" => {
-                        let call_id = bobj
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let name = bobj
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let arguments = bobj.get("input").cloned().unwrap_or(Value::Null);
-                        let arguments =
-                            serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string());
-                        message_nodes.push(Node::ToolCall {
-                            id: bobj
-                                .get("id")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string()),
-                            tool_type: crate::urp::ToolCallType::Function,
-                            call_id,
-                            name,
-                            arguments,
-                            extra_body: split_extra(bobj, &["type", "id", "name", "input"]),
-                        });
-                    }
-                    "tool_result" => {
-                        let call_id = bobj
-                            .get("tool_use_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let is_error = bobj
-                            .get("is_error")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        message_nodes.push(Node::ToolResult {
-                            id: None,
-                            tool_type: crate::urp::ToolCallType::Function,
-                            call_id,
-                            is_error,
-                            content: decode_tool_result_content(bobj.get("content")),
-                            extra_body: split_extra(
-                                bobj,
-                                &["type", "tool_use_id", "is_error", "content"],
-                            ),
-                        });
-                    }
-                    "image" => {
-                        if let Some(node) = parse_image_node_from_obj(bobj, base_role) {
-                            message_nodes.push(node);
-                        }
-                    }
-                    "document" | "file" => {
-                        if let Some(node) = parse_file_node_from_obj(bobj, base_role) {
-                            message_nodes.push(node);
-                        }
-                    }
-                    _ => {
-                        message_nodes.push(provider_item_from_messages_block(bobj, base_role));
-                    }
-                }
-            }
-        }
+        let message_nodes = match msg_obj.get("content") {
+            Some(content) => decode_content_nodes(content, base_role)?,
+            None => Vec::new(),
+        };
 
         if !msg_extra_body.is_empty() && !message_nodes.is_empty() {
             input_nodes.push(Node::NextDownstreamEnvelopeExtra {
@@ -530,7 +388,18 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     let tools = obj.get("tools").and_then(|v| v.as_array()).map(|arr| {
         arr.iter()
-            .filter_map(parse_tool_definition)
+            .filter_map(|value| {
+                let mut tool = parse_tool_definition(value)?;
+                if tool.function.is_none() && tool.custom.is_none() {
+                    tool.origin_protocol = Some(ProviderProtocol::Messages);
+                    if tool.config.is_none() {
+                        tool.config = Some(Value::Object(
+                            std::mem::take(&mut tool.extra_body).into_iter().collect(),
+                        ));
+                    }
+                }
+                Some(tool)
+            })
             .collect::<Vec<_>>()
     });
 
@@ -573,6 +442,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
     }
 
+    crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     Ok(UrpRequest {
         context: Default::default(),
         instructions_format: None,
@@ -612,76 +482,19 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "messages response must be object".to_string())?;
-
-    let mut output_nodes = Vec::new();
-    if let Some(content) = obj.get("content").and_then(|v| v.as_array()) {
-        for block in content {
-            let Some(bobj) = block.as_object() else {
-                continue;
-            };
-            let btype = bobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            let decoded_nodes = match btype {
-                "text" => {
-                    if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
-                        vec![text_node_with_phase(
-                            OrdinaryRole::Assistant,
-                            text,
-                            bobj.get("phase").and_then(|v| v.as_str()),
-                            split_extra(bobj, &["type", "text", "phase"]),
-                        )]
-                    } else {
-                        Vec::new()
-                    }
-                }
-                "thinking" => decode_anthropic_thinking_block(bobj)
-                    .map(|node| vec![node])
-                    .unwrap_or_default(),
-                "redacted_thinking" => decode_anthropic_redacted_thinking_block(bobj)
-                    .map(|node| vec![node])
-                    .unwrap_or_default(),
-                "tool_use" => {
-                    let call_id = bobj
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let name = bobj
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let arguments =
-                        serde_json::to_string(&bobj.get("input").cloned().unwrap_or(Value::Null))
-                            .unwrap_or_else(|_| "{}".to_string());
-                    vec![Node::ToolCall {
-                        id: bobj
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        tool_type: crate::urp::ToolCallType::Function,
-                        call_id,
-                        name,
-                        arguments,
-                        extra_body: split_extra(bobj, &["type", "id", "name", "input"]),
-                    }]
-                }
-                "image" => parse_image_node_from_obj(bobj, OrdinaryRole::Assistant)
-                    .into_iter()
-                    .collect(),
-                "document" | "file" => parse_file_node_from_obj(bobj, OrdinaryRole::Assistant)
-                    .into_iter()
-                    .collect(),
-                _ => {
-                    vec![provider_item_from_messages_block(
-                        bobj,
-                        OrdinaryRole::Assistant,
-                    )]
-                }
-            };
-
-            output_nodes.extend(decoded_nodes);
-        }
+    if obj.get("type").and_then(Value::as_str) == Some("error") {
+        return Err(obj
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("Messages API returned an error")
+            .to_string());
     }
+
+    let output_nodes = match obj.get("content") {
+        Some(content) => decode_content_nodes(content, OrdinaryRole::Assistant)?,
+        None => Vec::new(),
+    };
 
     let finish_reason = match obj.get("stop_reason").and_then(|v| v.as_str()) {
         Some("end_turn" | "stop_sequence") => Some(FinishReason::Stop),
@@ -716,6 +529,111 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     })
 }
 
+fn decode_content_nodes(content: &Value, role: OrdinaryRole) -> Result<Vec<Node>, String> {
+    if let Some(blocks) = content.as_array() {
+        let mut nodes = Vec::new();
+        for block in blocks {
+            nodes.extend(decode_content_nodes(block, role)?);
+        }
+        return Ok(nodes);
+    }
+    Ok(decode_content_block(content, role)?.into_iter().collect())
+}
+
+pub(crate) fn decode_content_block(
+    block: &Value,
+    role: OrdinaryRole,
+) -> Result<Option<Node>, String> {
+    if let Some(text) = block.as_str() {
+        return Ok(Some(Node::text(role, text)));
+    }
+    let Some(obj) = block.as_object() else {
+        return Ok(None);
+    };
+    let kind = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or(if role == OrdinaryRole::System {
+            "text"
+        } else {
+            ""
+        });
+    let node = match kind {
+        "text" | "input_text" | "output_text" => {
+            obj.get("text").and_then(Value::as_str).map(|text| {
+                text_node_with_phase(
+                    role,
+                    text,
+                    obj.get("phase").and_then(Value::as_str),
+                    split_extra(obj, &["type", "text", "phase"]),
+                )
+            })
+        }
+        "thinking" => decode_anthropic_thinking_block(obj),
+        "redacted_thinking" => decode_anthropic_redacted_thinking_block(obj),
+        "image" | "image_url" | "input_image" | "output_image" => Some(
+            parse_image_node_from_obj(obj, role)
+                .ok_or("Messages image source is unsupported or malformed")?,
+        ),
+        "document" | "file" | "input_file" | "output_file" => Some(
+            parse_file_node_from_obj(obj, role)
+                .ok_or("Messages document source is unsupported or malformed")?,
+        ),
+        "audio" | "input_audio" | "output_audio" => Some(
+            parse_audio_node_from_obj(obj, role)
+                .ok_or("Messages audio source is unsupported or malformed")?,
+        ),
+        "tool_use" => Some(Node::ToolCall {
+            namespace: obj
+                .get("toolset_name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            signature: None,
+            id: obj.get("id").and_then(Value::as_str).map(str::to_string),
+            tool_type: crate::urp::ToolCallType::Function,
+            call_id: obj
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            name: obj
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            arguments: serde_json::to_string(obj.get("input").unwrap_or(&Value::Null))
+                .unwrap_or_else(|_| "{}".into()),
+            extra_body: split_extra(obj, &["type", "id", "name", "input", "toolset_name"]),
+        }),
+        "tool_result" => Some(Node::ToolResult {
+            signature: None,
+            namespace: obj
+                .get("toolset_name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            name: None,
+            id: None,
+            tool_type: crate::urp::ToolCallType::Function,
+            call_id: obj
+                .get("tool_use_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            is_error: obj
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            content: decode_tool_result_content(obj.get("content"))?,
+            extra_body: split_extra(
+                obj,
+                &["type", "tool_use_id", "is_error", "content", "toolset_name"],
+            ),
+        }),
+        _ => Some(provider_item_from_messages_block(obj, role)),
+    };
+    Ok(node)
+}
+
 fn provider_item_from_messages_block(block: &Map<String, Value>, role: OrdinaryRole) -> Node {
     let item_type = block
         .get("type")
@@ -736,51 +654,34 @@ fn provider_item_from_messages_block(block: &Map<String, Value>, role: OrdinaryR
     }
 }
 
-fn tool_choice_from_messages_value(mut v: Value) -> ToolChoice {
-    remove_untrusted_internal_keys(&mut v);
-    if let Some(obj) = v.as_object() {
-        let disable_parallel = obj
-            .get("disable_parallel_tool_use")
-            .and_then(|x| x.as_bool());
-        match obj.get("type").and_then(|x| x.as_str()) {
-            Some("auto") => {
-                if let Some(disable) = disable_parallel {
-                    return ToolChoice::Specific(serde_json::json!({
-                        "type": "auto",
-                        "disable_parallel_tool_use": disable
-                    }));
-                }
-                return ToolChoice::Mode("auto".to_string());
-            }
-            Some("any") => {
-                if let Some(disable) = disable_parallel {
-                    return ToolChoice::Specific(serde_json::json!({
-                        "type": "required",
-                        "disable_parallel_tool_use": disable
-                    }));
-                }
-                return ToolChoice::Mode("required".to_string());
-            }
-            Some("none") => return ToolChoice::Mode("none".to_string()),
-            Some("tool") => {
-                if let Some(name) = obj.get("name").and_then(|x| x.as_str()) {
-                    let mut choice = serde_json::json!({
-                        "type": "function",
-                        "function": { "name": name }
-                    });
-                    if let Some(disable) = disable_parallel {
-                        choice["disable_parallel_tool_use"] = Value::Bool(disable);
-                    }
-                    return ToolChoice::Specific(choice);
-                }
-            }
-            _ => {}
+fn tool_choice_from_messages_value(mut value: Value) -> ToolChoice {
+    remove_untrusted_internal_keys(&mut value);
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("disable_parallel_tool_use");
+        let kind = obj
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let normalized = match kind.as_str() {
+            "any" => "required",
+            "tool" => "function",
+            other => other,
+        };
+        if matches!(kind.as_str(), "auto" | "any" | "none") && obj.len() == 1 {
+            return ToolChoice::Mode(normalized.to_string());
         }
+        if kind == "tool"
+            && let Some(name) = obj.remove("name")
+        {
+            obj.insert("function".into(), serde_json::json!({"name":name}));
+        }
+        obj.insert("type".into(), Value::String(normalized.to_string()));
     }
-    if let Some(s) = v.as_str() {
-        return ToolChoice::Mode(s.to_string());
+    match value {
+        Value::String(mode) => ToolChoice::Mode(mode),
+        value => ToolChoice::Specific(value),
     }
-    ToolChoice::Specific(v)
 }
 
 fn tool_choice_disable_parallel(v: &Value) -> Option<bool> {
@@ -793,53 +694,30 @@ fn tool_choice_disable_parallel(v: &Value) -> Option<bool> {
     }
 }
 
-fn decode_tool_result_content(content: Option<&Value>) -> Vec<ToolResultContent> {
+fn decode_tool_result_content(content: Option<&Value>) -> Result<Vec<ToolResultContent>, String> {
     let mut blocks = Vec::new();
     let Some(content) = content else {
-        return blocks;
+        return Ok(blocks);
     };
-    if let Some(text) = content.as_str() {
-        if !text.is_empty() {
-            blocks.push(ToolResultContent::Text {
-                text: text.to_string(),
-                extra_body: HashMap::new(),
-            });
+    if let Some(items) = content.as_array() {
+        for block in items {
+            decode_tool_result_content_block(block, &mut blocks)?;
         }
-        return blocks;
+    } else {
+        decode_tool_result_content_block(content, &mut blocks)?;
     }
-
-    if let Some(blocks) = content.as_array() {
-        let mut decoded = Vec::new();
-        for block in blocks {
-            decode_tool_result_content_block(block, &mut decoded);
-        }
-        return decoded;
-    }
-
-    if let Some(obj) = content.as_object() {
-        decode_tool_result_content_block(&Value::Object(obj.clone()), &mut blocks);
-        return blocks;
-    }
-
-    let text = value_to_text(content);
-    if !text.is_empty() {
-        blocks.push(ToolResultContent::Text {
-            text,
-            extra_body: HashMap::new(),
-        });
-    }
-    blocks
+    Ok(blocks)
 }
 
-fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultContent>) {
-    if let Some(text) = block.as_str() {
-        if !text.is_empty() {
-            content.push(ToolResultContent::Text {
-                text: text.to_string(),
-                extra_body: HashMap::new(),
-            });
+fn decode_tool_result_content_block(
+    block: &Value,
+    content: &mut Vec<ToolResultContent>,
+) -> Result<(), String> {
+    if let Some(blocks) = block.as_array() {
+        for block in blocks {
+            decode_tool_result_content_block(block, content)?;
         }
-        return;
+        return Ok(());
     }
     let Some(obj) = block.as_object() else {
         let text = value_to_text(block);
@@ -849,46 +727,79 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
                 extra_body: HashMap::new(),
             });
         }
-        return;
+        return Ok(());
     };
-
-    match obj.get("type").and_then(|v| v.as_str()).unwrap_or("") {
-        "text" => {
-            if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+    match obj.get("type").and_then(Value::as_str).unwrap_or("") {
+        "text" | "input_text" | "output_text" => {
+            if let Some(text) = obj.get("text").and_then(Value::as_str) {
                 content.push(ToolResultContent::Text {
                     text: text.to_string(),
                     extra_body: split_extra(obj, &["type", "text"]),
                 });
             }
         }
+        "image" | "image_url" | "input_image" | "output_image" => {
+            let Some(Node::Image {
+                source,
+                metadata,
+                extra_body,
+                ..
+            }) = parse_image_node_from_obj(obj, OrdinaryRole::User)
+            else {
+                return Err("Messages tool-result image source is unsupported or malformed".into());
+            };
+            content.push(ToolResultContent::Image {
+                source,
+                metadata,
+                extra_body,
+            });
+        }
+        "document" | "file" | "input_file" | "output_file" => {
+            let Some(Node::File {
+                source,
+                metadata,
+                extra_body,
+                ..
+            }) = parse_file_node_from_obj(obj, OrdinaryRole::User)
+            else {
+                return Err(
+                    "Messages tool-result document source is unsupported or malformed".into(),
+                );
+            };
+            content.push(ToolResultContent::File {
+                source,
+                metadata,
+                extra_body,
+            });
+        }
+        "audio" | "input_audio" | "output_audio" => {
+            let Some(Node::Audio {
+                source,
+                metadata,
+                extra_body,
+                ..
+            }) = parse_audio_node_from_obj(obj, OrdinaryRole::User)
+            else {
+                return Err("Messages tool-result audio source is unsupported or malformed".into());
+            };
+            let source = match source {
+                crate::urp::AudioSource::Base64 { media_type, data } => {
+                    crate::urp::FileSource::Base64 { media_type, data }
+                }
+                crate::urp::AudioSource::Url { url } => crate::urp::FileSource::Url { url },
+            };
+            content.push(ToolResultContent::File {
+                source,
+                metadata,
+                extra_body,
+            });
+        }
         _ => {
-            if let Some(source) = parse_image_source_from_obj(obj) {
-                let mut extra_body = split_extra(obj, &["type", "source"]);
-                if matches!(source, ImageSource::FileId { .. }) {
-                    extra_body.insert(
-                        FILE_ID_ORIGIN_EXTRA_KEY.to_string(),
-                        Value::String(FILE_ID_ORIGIN_MESSAGES.to_string()),
-                    );
-                }
-                content.push(ToolResultContent::Image { source, extra_body });
-                return;
-            }
-            if let Some(source) = parse_file_source_from_obj(obj) {
-                let mut extra_body = split_extra(obj, &["type", "source"]);
-                if matches!(source, FileSource::FileId { .. }) {
-                    extra_body.insert(
-                        FILE_ID_ORIGIN_EXTRA_KEY.to_string(),
-                        Value::String(FILE_ID_ORIGIN_MESSAGES.to_string()),
-                    );
-                }
-                content.push(ToolResultContent::File { source, extra_body });
-                return;
-            }
             content.push(ToolResultContent::ProviderItem {
                 origin_protocol: ProviderProtocol::Messages,
                 item_type: obj
                     .get("type")
-                    .and_then(|value| value.as_str())
+                    .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string(),
                 body: block.clone(),
@@ -896,4 +807,5 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
             });
         }
     }
+    Ok(())
 }

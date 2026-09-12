@@ -1,8 +1,7 @@
 use crate::urp::decode::{
     deserialize_u64ish_default, is_internal_extra_key, normalize_reasoning_effort,
-    parse_audio_part_from_obj, parse_file_part_from_obj, parse_image_part_from_obj,
-    parse_tool_call_part_from_obj, parse_tool_definition, remove_untrusted_internal_keys,
-    retain_wire_extra_fields, split_extra, value_to_text,
+    parse_compatible_media_part, parse_tool_call_part_from_obj, parse_tool_definition,
+    remove_untrusted_internal_keys, retain_wire_extra_fields, split_extra,
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
@@ -268,6 +267,9 @@ fn parse_legacy_function_call_part(value: &Value) -> Option<Part> {
         Value::Bool(true),
     );
     Some(Part::ToolCall {
+        namespace: None,
+        signature: None,
+
         id: None,
         tool_type: ToolCallType::Function,
         call_id: legacy_function_call_id(&name),
@@ -277,30 +279,67 @@ fn parse_legacy_function_call_part(value: &Value) -> Option<Part> {
     })
 }
 
-fn parse_chat_message_audio_part(value: &Value) -> Option<Part> {
-    let body = value.as_object()?.clone();
+pub(crate) fn parse_chat_message_audio_part(value: &Value) -> Option<Part> {
+    let body = value.as_object()?;
     if body.is_empty() {
         return None;
+    }
+    let shape = HashMap::from([(CHAT_MESSAGE_AUDIO_EXTRA_KEY.to_string(), Value::Bool(true))]);
+    if let Some(data) = body.get("data").and_then(Value::as_str) {
+        let mut extra_body = split_extra(body, &["id", "data", "transcript", "expires_at"]);
+        extra_body.extend(shape);
+        return Some(Part::Audio {
+            metadata: crate::urp::MediaMetadata {
+                reference_id: body.get("id").and_then(Value::as_str).map(str::to_string),
+                transcript: body
+                    .get("transcript")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                expires_at: body.get("expires_at").and_then(Value::as_i64),
+                ..Default::default()
+            },
+            source: crate::urp::AudioSource::Base64 {
+                media_type: "audio/unknown".into(),
+                data: data.into(),
+            },
+            extra_body,
+        });
     }
     Some(Part::ProviderItem {
         id: body.get("id").and_then(Value::as_str).map(str::to_string),
         origin_protocol: ProviderProtocol::ChatCompletion,
         item_type: "audio".to_string(),
-        body: Value::Object(body),
-        extra_body: HashMap::from([(CHAT_MESSAGE_AUDIO_EXTRA_KEY.to_string(), Value::Bool(true))]),
+        body: Value::Object(body.clone()),
+        extra_body: shape,
     })
 }
 
-fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase: Option<&str>) {
+fn attach_chat_annotations(parts: &mut [Part], message: &Map<String, Value>) {
+    if let Some(annotations) = message.get("annotations").and_then(Value::as_array)
+        && let Some(Part::Text { citations, .. }) = parts
+            .iter_mut()
+            .find(|part| matches!(part, Part::Text { .. }))
+    {
+        citations.extend(annotations.iter().cloned());
+    }
+}
+
+fn push_chat_content_parts(
+    parts: &mut Vec<Part>,
+    content: &Value,
+    message_phase: Option<&str>,
+) -> Result<(), String> {
     if let Some(s) = content.as_str() {
         if !s.is_empty() {
             parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
         }
-        return;
+        return Ok(());
     }
 
-    let Some(arr) = content.as_array() else {
-        return;
+    let arr = match content {
+        Value::Array(parts) => parts.as_slice(),
+        Value::Object(_) => std::slice::from_ref(content),
+        _ => return Ok(()),
     };
 
     for item in arr {
@@ -316,7 +355,8 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
         let mut recognized = false;
         if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
             let item_type = item_obj.get("type").and_then(|v| v.as_str());
-            if !text.is_empty() && matches!(item_type, Some("text" | "output_text")) {
+            if !text.is_empty() && matches!(item_type, Some("input_text" | "text" | "output_text"))
+            {
                 parts.push(text_part_with_phase(
                     text,
                     message_phase,
@@ -325,16 +365,8 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
                 recognized = true;
             }
         }
-        if let Some(image_part) = parse_image_part_from_obj(item_obj) {
-            parts.push(image_part);
-            recognized = true;
-        }
-        if let Some(file_part) = parse_file_part_from_obj(item_obj) {
-            parts.push(file_part);
-            recognized = true;
-        }
-        if let Some(audio_part) = parse_audio_part_from_obj(item_obj) {
-            parts.push(audio_part);
+        if let Some(media) = parse_compatible_media_part(item_obj)? {
+            parts.push(media);
             recognized = true;
         }
         if let Some(tool_call_part) = parse_tool_call_part_from_obj(item_obj) {
@@ -359,98 +391,81 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
             });
         }
     }
+    Ok(())
 }
 
-fn decode_chat_tool_result_content(content: &Value) -> Vec<ToolResultContent> {
-    let mut out = Vec::new();
-    match content {
-        Value::Null => {}
-        Value::String(text) => {
-            if !text.is_empty() {
-                out.push(ToolResultContent::Text {
-                    text: text.clone(),
-                    extra_body: HashMap::new(),
-                });
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                decode_chat_tool_result_item(item, &mut out);
-            }
-        }
-        Value::Object(_) => decode_chat_tool_result_item(content, &mut out),
-        other => {
-            let text = value_to_text(other);
-            if !text.is_empty() {
-                out.push(ToolResultContent::Text {
-                    text,
-                    extra_body: HashMap::new(),
-                });
-            }
-        }
-    }
-    out
-}
-
-fn decode_chat_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) {
-    if let Some(text) = value.as_str() {
-        if !text.is_empty() {
-            content.push(ToolResultContent::Text {
-                text: text.to_string(),
-                extra_body: HashMap::new(),
-            });
-        }
-        return;
-    }
-    let Some(obj) = value.as_object() else {
-        let text = value_to_text(value);
-        if !text.is_empty() {
-            content.push(ToolResultContent::Text {
-                text,
-                extra_body: HashMap::new(),
-            });
-        }
-        return;
+fn decode_chat_tool_result_content(value: &Value) -> Result<Vec<ToolResultContent>, String> {
+    let values = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(values) => values.as_slice(),
+        _ => std::slice::from_ref(value),
     };
-
-    let ptype = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    match ptype {
-        "input_text" | "output_text" | "text" => {
-            if let Some(text) = obj
-                .get("text")
-                .and_then(|v| v.as_str())
-                .or_else(|| obj.get("content").and_then(|v| v.as_str()))
+    let mut content = Vec::new();
+    for value in values {
+        if let Some(obj) = value.as_object() {
+            let kind = obj.get("type").and_then(Value::as_str);
+            if matches!(kind, Some("input_text" | "output_text" | "text"))
+                && let Some(text) = obj
+                    .get("text")
+                    .or_else(|| obj.get("content"))
+                    .and_then(Value::as_str)
             {
                 content.push(ToolResultContent::Text {
-                    text: text.to_string(),
+                    text: text.into(),
                     extra_body: split_extra(obj, &["type", "text", "content"]),
                 });
+                continue;
             }
-        }
-        _ => {
-            if let Some(image) = parse_image_part_from_obj(obj) {
-                let Part::Image { source, extra_body } = image else {
-                    unreachable!();
-                };
-                content.push(ToolResultContent::Image { source, extra_body });
-                return;
-            }
-            if let Some(file) = parse_file_part_from_obj(obj) {
-                let Part::File { source, extra_body } = file else {
-                    unreachable!();
-                };
-                content.push(ToolResultContent::File { source, extra_body });
-                return;
-            }
-            let text = value_to_text(value);
-            if !text.is_empty() {
-                content.push(ToolResultContent::Text {
-                    text,
-                    extra_body: HashMap::new(),
+            if let Some(part) = parse_compatible_media_part(obj)? {
+                content.push(match part {
+                    Part::Image {
+                        metadata,
+                        source,
+                        extra_body,
+                    } => ToolResultContent::Image {
+                        metadata,
+                        source,
+                        extra_body,
+                    },
+                    Part::File {
+                        metadata,
+                        source,
+                        extra_body,
+                    } => ToolResultContent::File {
+                        metadata,
+                        source,
+                        extra_body,
+                    },
+                    Part::Audio {
+                        metadata,
+                        source,
+                        extra_body,
+                    } => ToolResultContent::File {
+                        metadata,
+                        source: match source {
+                            crate::urp::AudioSource::Base64 { media_type, data } => {
+                                crate::urp::FileSource::Base64 { media_type, data }
+                            }
+                            crate::urp::AudioSource::Url { url } => {
+                                crate::urp::FileSource::Url { url }
+                            }
+                        },
+                        extra_body,
+                    },
+                    _ => unreachable!(),
                 });
+                continue;
             }
         }
+        content.push(ToolResultContent::Text {
+            text: value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string()),
+            extra_body: HashMap::new(),
+        });
     }
+    Ok(content)
 }
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
@@ -486,10 +501,17 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .is_some_and(Value::is_object)
         {
             input_nodes.push(Node::ProviderItem {
-                id: None,
+                id: msg_obj
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 origin_protocol: ProviderProtocol::ChatCompletion,
                 role: OrdinaryRole::System,
-                item_type: "configuration_update".to_string(),
+                item_type: msg_obj
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("configuration_update")
+                    .to_string(),
                 body: crate::urp::encode::sanitize_provider_item_wire_body(raw_msg),
                 extra_body: HashMap::from([(
                     crate::urp::CHAT_MESSAGE_ITEM_EXTRA_KEY.to_string(),
@@ -506,23 +528,26 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             let name = msg_obj
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+                .map(str::to_string);
             let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
-            let mut result_extra = split_extra(msg_obj, &["role", "name", "content"]);
+            let mut result_extra = split_extra(msg_obj, &["role", "id", "name", "content"]);
             result_extra.insert(
                 CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY.to_string(),
-                Value::String(name.clone()),
+                Value::Bool(true),
             );
             input_nodes.push(Node::ToolResult {
+                signature: None,
+                namespace: None,
+                name: name.clone(),
+
                 id: msg_obj
                     .get("id")
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 tool_type: ToolCallType::Function,
-                call_id: legacy_function_call_id(&name),
+                call_id: legacy_function_call_id(name.as_deref().unwrap_or_default()),
                 is_error: false,
-                content: decode_chat_tool_result_content(&content),
+                content: decode_chat_tool_result_content(&content)?,
                 extra_body: result_extra,
             });
             continue;
@@ -543,6 +568,13 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .to_string();
             let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
             input_nodes.push(Node::ToolResult {
+                signature: None,
+                namespace: None,
+                name: msg_obj
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+
                 id: msg_obj
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -553,8 +585,11 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     .unwrap_or(ToolCallType::Function),
                 call_id,
                 is_error: false,
-                content: decode_chat_tool_result_content(&content),
-                extra_body: split_extra(msg_obj, &["role", "tool_call_id", "content"]),
+                content: decode_chat_tool_result_content(&content)?,
+                extra_body: split_extra(
+                    msg_obj,
+                    &["role", "id", "name", "tool_call_id", "content"],
+                ),
             });
             continue;
         }
@@ -569,6 +604,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "tool_calls",
                 "reasoning",
                 "reasoning_details",
+                "annotations",
                 "reasoning_content",
                 "reasoning_opaque",
                 "refusal",
@@ -589,8 +625,9 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
 
         if let Some(content) = msg_obj.get("content") {
-            push_chat_content_parts(&mut parts, content, message_phase);
+            push_chat_content_parts(&mut parts, content, message_phase)?;
         }
+        attach_chat_annotations(&mut parts, msg_obj);
 
         if let Some(refusal) = msg_obj.get("refusal").and_then(|v| v.as_str()) {
             if !refusal.is_empty() {
@@ -707,10 +744,14 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     if let Some(raw_choice) = legacy_function_choice_raw {
         extra_body.insert(
             CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY.to_string(),
-            raw_choice,
+            raw_choice
+                .as_object()
+                .map(|obj| Value::Object(split_extra(obj, &["name"]).into_iter().collect()))
+                .unwrap_or(Value::Null),
         );
     }
 
+    crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     Ok(UrpRequest {
         context: Default::default(),
         instructions_format: None,
@@ -795,6 +836,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             "content",
             "reasoning",
             "reasoning_details",
+            "annotations",
             "reasoning_content",
             "reasoning_opaque",
             "tool_calls",
@@ -817,7 +859,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     }
 
     if let Some(content) = msg_obj.get("content") {
-        push_chat_content_parts(&mut parts, content, message_phase);
+        push_chat_content_parts(&mut parts, content, message_phase)?;
     }
 
     if let Some(tool_calls) = msg_obj.get("tool_calls").and_then(|v| v.as_array()) {
@@ -849,6 +891,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         }
     }
 
+    attach_chat_annotations(&mut parts, msg_obj);
     let mut output_nodes = Vec::new();
     push_message_nodes(
         &mut output_nodes,
@@ -879,7 +922,9 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             Value::Object(choice_extra),
         );
     }
-    if let Some(native_finish_reason) = native_finish_reason {
+    if let Some(native_finish_reason) =
+        native_finish_reason.filter(|reason| parse_finish_reason(reason) == FinishReason::Other)
+    {
         extra_body.insert(
             CHAT_NATIVE_FINISH_REASON_EXTRA_KEY.to_string(),
             Value::String(native_finish_reason),
@@ -1047,9 +1092,6 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                 extra_body,
             });
         }
-        if !details.is_empty() {
-            return;
-        }
     }
 
     let scalar = msg_obj
@@ -1064,7 +1106,8 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                 .filter(|value| !value.is_empty())
                 .map(|value| (value, CHAT_REASONING_SURFACE_REASONING_CONTENT))
         });
-    if let Some((content, surface)) = scalar {
+    if let Some((content, surface)) = scalar
+        && !parts.iter().any(|part| matches!(part, Part::Reasoning {content: existing,summary,..} if existing.as_deref()==Some(content) || summary.as_deref()==Some(content))) {
         parts.push(Part::Reasoning {
             metadata: Default::default(),
             id: None,
@@ -1082,6 +1125,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
         .get("reasoning_opaque")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
+        .filter(|value| !parts.iter().any(|part| matches!(part, Part::Reasoning {encrypted:Some(existing),..} if existing.as_str()==Some(*value))))
     {
         parts.push(Part::Reasoning {
             metadata: Default::default(),

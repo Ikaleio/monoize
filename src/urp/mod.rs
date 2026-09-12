@@ -7,11 +7,15 @@ pub mod decode;
 pub mod encode;
 pub mod greedy;
 pub(crate) mod internal_legacy_bridge;
+pub mod media;
+#[cfg(test)]
+mod media_transport_tests;
 pub mod reasoning;
 pub mod stream_decode;
 pub mod stream_encode;
 pub mod stream_helpers;
 pub mod tool_call_json;
+pub mod tool_signature;
 
 pub use tool_call_json::{
     integerize_json_floats, integerize_tool_call_arguments_json, integerize_tool_call_node,
@@ -59,17 +63,14 @@ pub const CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY: &str = "_monoize_chat_legacy_func
 pub const CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY: &str = "_monoize_chat_legacy_function_result";
 pub const MESSAGES_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_messages_thinking_config";
 pub const MESSAGES_OUTPUT_CONFIG_EXTRA_KEY: &str = "_monoize_messages_output_config";
-pub const FILE_ID_ORIGIN_EXTRA_KEY: &str = "_monoize_file_id_origin";
-pub const FILE_ID_ORIGIN_OPENAI: &str = "openai";
-pub const FILE_ID_ORIGIN_MESSAGES: &str = "messages";
-/// Complete native Responses `image_generation_call` item retained on a semantic Image node.
+/// Shape marker for a Responses image-generation item; typed source owns the image payload.
 pub const RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY: &str =
     "_monoize_responses_image_generation_call";
 /// Marks semantic nodes decoded from top-level Responses `instructions`.
 pub const RESPONSES_INSTRUCTION_NODE_EXTRA_KEY: &str = "_monoize_responses_instruction_node";
-/// Unmodeled Responses fields retained without a second copy of canonical fields.
+/// Shape marker for a native Responses envelope; extras own unmodeled fields once.
 pub const RESPONSES_RESPONSE_SOURCE_EXTRA_KEY: &str = "_monoize_responses_response_source";
-/// Upstream Responses start object retained for same-protocol stream envelope reconstruction.
+/// Shape marker for a native Responses start envelope; no semantic snapshot is retained.
 pub const RESPONSES_STREAM_START_SOURCE_EXTRA_KEY: &str = "_monoize_responses_stream_start_source";
 pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
 
@@ -183,28 +184,19 @@ fn wrap_reasoning_payload(
     )));
 }
 
-fn wrap_reasoning_extra_body_encrypted_content(
-    extra_body: &mut HashMap<String, Value>,
-    item_id: Option<&str>,
-    provider_type: &str,
-    model: &str,
-) {
-    let Some(value) = extra_body.remove("encrypted_content") else {
-        return;
-    };
-    let mut encrypted = Some(value);
-    wrap_reasoning_payload(&mut encrypted, item_id, provider_type, model);
-    if let Some(value) = encrypted {
-        extra_body.insert("encrypted_content".to_string(), value);
-    }
-}
-
-fn extra_body_is_reasoning_item(extra_body: &HashMap<String, Value>) -> bool {
-    extra_body.contains_key("encrypted_content")
-        || extra_body.get("type").and_then(Value::as_str) == Some("reasoning")
-}
-
 fn wrap_reasoning_node_envelope(node: &mut Node, provider_type: &str, model: &str) {
+    if let Node::ToolCall {
+        call_id, signature, ..
+    } = node
+    {
+        wrap_reasoning_payload(
+            signature,
+            Some(&tool_signature::signature_item_id(call_id)),
+            provider_type,
+            model,
+        );
+        return;
+    }
     if let Node::Reasoning {
         id,
         encrypted,
@@ -212,14 +204,8 @@ fn wrap_reasoning_node_envelope(node: &mut Node, provider_type: &str, model: &st
         ..
     } = node
     {
+        extra_body.remove("encrypted_content");
         wrap_reasoning_payload(encrypted, id.as_deref(), provider_type, model);
-
-        wrap_reasoning_extra_body_encrypted_content(
-            extra_body,
-            id.as_deref(),
-            provider_type,
-            model,
-        );
     }
 }
 
@@ -240,30 +226,14 @@ pub fn wrap_reasoning_envelope_in_stream_event(
 ) {
     match event {
         UrpStreamEvent::NodeStart {
-            header: NodeHeader::Reasoning { metadata: _, id },
-            extra_body,
+            header: NodeHeader::ToolCall {
+                call_id, signature, ..
+            },
             ..
         } => {
-            wrap_reasoning_extra_body_encrypted_content(
-                extra_body,
-                id.as_deref(),
-                provider_type,
-                model,
-            );
-        }
-        UrpStreamEvent::NodeStart {
-            header: NodeHeader::NextDownstreamEnvelopeExtra,
-            extra_body,
-            ..
-        } if extra_body_is_reasoning_item(extra_body) => {
-            let item_id = extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .or_else(|| extra_body.get("item_id").and_then(Value::as_str))
-                .map(str::to_string);
-            wrap_reasoning_extra_body_encrypted_content(
-                extra_body,
-                item_id.as_deref(),
+            wrap_reasoning_payload(
+                signature,
+                Some(&tool_signature::signature_item_id(call_id)),
                 provider_type,
                 model,
             );
@@ -275,28 +245,12 @@ pub fn wrap_reasoning_envelope_in_stream_event(
                     metadata,
                     ..
                 },
-            extra_body: _,
             ..
         } => {
-            let item_id = metadata.item_id.clone();
-            wrap_reasoning_payload(encrypted, item_id.as_deref(), provider_type, model);
+            wrap_reasoning_payload(encrypted, metadata.item_id.as_deref(), provider_type, model);
         }
         UrpStreamEvent::NodeDone { node, .. } => {
-            wrap_reasoning_node_envelope(node, provider_type, model);
-            if let Node::NextDownstreamEnvelopeExtra { extra_body } = node
-                && extra_body_is_reasoning_item(extra_body)
-            {
-                let item_id = extra_body
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                wrap_reasoning_extra_body_encrypted_content(
-                    extra_body,
-                    item_id.as_deref(),
-                    provider_type,
-                    model,
-                );
-            }
+            wrap_reasoning_node_envelope(node, provider_type, model)
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
             for node in output {
@@ -495,6 +449,18 @@ pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
     enforce_match: bool,
 ) {
     nodes.retain_mut(|node| {
+        if let Node::ToolCall { signature, .. } = node {
+            if let Some(envelope) = signature.as_ref().and_then(parse_reasoning_envelope) {
+                *signature = if enforce_match
+                    && !reasoning_envelope_matches(&envelope, provider_type, model)
+                {
+                    None
+                } else {
+                    Some(envelope.payload)
+                };
+            }
+            return true;
+        }
         let Node::Reasoning {
             encrypted,
             metadata,
@@ -513,15 +479,7 @@ pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
             }
             *encrypted = Some(envelope.payload);
         }
-        if let Some(envelope) = extra_body
-            .get("encrypted_content")
-            .and_then(parse_reasoning_envelope)
-        {
-            if enforce_match && !reasoning_envelope_matches(&envelope, provider_type, model) {
-                return false;
-            }
-            extra_body.insert("encrypted_content".to_string(), envelope.payload);
-        }
+        extra_body.remove("encrypted_content");
         true
     });
 }
@@ -620,6 +578,8 @@ pub enum Node {
         extra_body: HashMap<String, Value>,
     },
     Image {
+        #[serde(default)]
+        metadata: MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
@@ -628,6 +588,8 @@ pub enum Node {
         extra_body: HashMap<String, Value>,
     },
     Audio {
+        #[serde(default)]
+        metadata: MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
@@ -636,6 +598,8 @@ pub enum Node {
         extra_body: HashMap<String, Value>,
     },
     File {
+        #[serde(default)]
+        metadata: MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
@@ -667,6 +631,10 @@ pub enum Node {
         extra_body: HashMap<String, Value>,
     },
     ToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         #[serde(default)]
@@ -688,6 +656,12 @@ pub enum Node {
         extra_body: HashMap<String, Value>,
     },
     ToolResult {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         #[serde(default)]
@@ -751,24 +725,11 @@ pub enum AudioSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FileSource {
-    Url {
-        url: String,
-    },
-    FileId {
-        file_id: String,
-    },
-    Text {
-        text: String,
-    },
-    Content {
-        content: Vec<Value>,
-    },
-    Base64 {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        filename: Option<String>,
-        media_type: String,
-        data: String,
-    },
+    Url { url: String },
+    FileId { file_id: String },
+    Text { text: String },
+    Content { content: Vec<Value> },
+    Base64 { media_type: String, data: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -780,11 +741,15 @@ pub enum ToolResultContent {
         extra_body: HashMap<String, Value>,
     },
     Image {
+        #[serde(default)]
+        metadata: MediaMetadata,
         source: ImageSource,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
     File {
+        #[serde(default)]
+        metadata: MediaMetadata,
         source: FileSource,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
@@ -831,6 +796,43 @@ pub enum InstructionsFormat {
     Text,
     Items,
     Null,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MediaMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_citations: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<MediaResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaResource {
+    pub protocol: ProviderProtocol,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -910,6 +912,14 @@ impl ReasoningConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolDefinition>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_protocol: Option<ProviderProtocol>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<Value>,
     #[serde(rename = "type")]
     pub tool_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1156,16 +1166,22 @@ pub enum NodeHeader {
         phase: Option<String>,
     },
     Image {
+        #[serde(default)]
+        metadata: MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
     },
     Audio {
+        #[serde(default)]
+        metadata: MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
     },
     File {
+        #[serde(default)]
+        metadata: MediaMetadata,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         role: OrdinaryRole,
@@ -1181,6 +1197,10 @@ pub enum NodeHeader {
         id: Option<String>,
     },
     ToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         #[serde(default)]
@@ -1189,6 +1209,8 @@ pub enum NodeHeader {
         name: String,
     },
     ProviderItem {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         origin_protocol: ProviderProtocol,
@@ -1196,6 +1218,12 @@ pub enum NodeHeader {
         item_type: String,
     },
     ToolResult {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         #[serde(default)]
@@ -1518,3 +1546,12 @@ pub fn remove_downstream_only_reasoning_for_responses(nodes: &mut Vec<Node>) {
         )
     });
 }
+
+#[cfg(test)]
+mod chat_feature_tests;
+#[cfg(test)]
+mod gemini_feature_tests;
+#[cfg(test)]
+mod messages_feature_tests;
+#[cfg(test)]
+mod responses_feature_tests;

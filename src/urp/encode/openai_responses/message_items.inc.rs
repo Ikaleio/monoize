@@ -140,6 +140,7 @@ fn append_content_part_to_pending(
 fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Value> {
     match part {
         Part::Text {
+            citations,
             content,
             extra_body,
             ..
@@ -159,34 +160,18 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
             obj.insert("text".to_string(), Value::String(content.clone()));
             if output_text_type {
                 obj.entry("annotations".to_string())
-                    .or_insert_with(|| Value::Array(Vec::new()));
+                    .or_insert_with(|| Value::Array(citations.clone()));
                 obj.entry("logprobs".to_string())
                     .or_insert_with(|| Value::Array(Vec::new()));
             }
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }
-        Part::Image { source, extra_body } => {
-            let mut value = if output_text_type {
-                encode_output_image(source, extra_body)?
-            } else {
-                encode_input_image(source, extra_body)?
-            };
-            if let Some(obj) = value.as_object_mut() {
-                merge_extra(obj, extra_body);
-            }
-            Some(value)
+        Part::Image { metadata, source, extra_body, .. } if !output_text_type => {
+            encode_input_image(source, metadata, extra_body)
         }
-        Part::File { source, extra_body } => {
-            let mut value = if output_text_type {
-                encode_output_file(source, extra_body)?
-            } else {
-                encode_input_file(source, extra_body)?
-            };
-            if let Some(obj) = value.as_object_mut() {
-                merge_extra(obj, extra_body);
-            }
-            Some(value)
+        Part::File { metadata, source, extra_body, .. } if !output_text_type => {
+            encode_input_file(source, metadata, extra_body)
         }
         Part::Refusal {
             content,
@@ -197,6 +182,11 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
             obj.insert("refusal".to_string(), Value::String(content.clone()));
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
+        }
+        Part::ProviderItem {id,origin_protocol,item_type,body,extra_body}
+            if extra_body.contains_key(crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY) =>
+        {
+            encode_provider_item_for_responses(*origin_protocol,item_type,body,extra_body,Some(id))
         }
         _ => None,
     }

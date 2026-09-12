@@ -45,7 +45,20 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
                 out.push(Value::Object(item));
             }
         } else {
-            let mut item = Map::new();
+            if tool
+                .origin_protocol
+                .is_some_and(|origin| origin != ProviderProtocol::Messages)
+            {
+                continue;
+            }
+            let mut item = tool
+                .config
+                .as_ref()
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            item.remove("name");
+            item.remove("description");
             item.insert("type".to_string(), Value::String(tool.tool_type.clone()));
             if let Some(name) = &tool.name {
                 item.insert("name".to_string(), Value::String(name.clone()));
@@ -69,61 +82,46 @@ fn encode_tool_choice_for_anthropic(
 ) -> Value {
     match tool_choice_to_value(choice) {
         Value::String(mode) => match mode.as_str() {
-            "auto" => anthropic_tool_choice_object("auto", None, parallel_tool_calls),
-            "required" => anthropic_tool_choice_object("any", None, parallel_tool_calls),
+            "auto" => anthropic_tool_choice_object("auto", parallel_tool_calls),
+            "required" => anthropic_tool_choice_object("any", parallel_tool_calls),
             "none" => json!({ "type": "none" }),
             _ => Value::String(mode),
         },
-        Value::Object(obj) => {
-            let explicit_disable = obj
-                .get("disable_parallel_tool_use")
-                .and_then(|v| v.as_bool());
+        Value::Object(mut obj) => {
+            obj.remove("disable_parallel_tool_use");
             if let Some(name) = obj
                 .get("function")
                 .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
+                .map(str::to_string)
             {
-                let mut out = Map::new();
-                out.insert("type".to_string(), Value::String("tool".to_string()));
-                out.insert("name".to_string(), Value::String(name.to_string()));
-                insert_anthropic_disable_parallel(&mut out, explicit_disable, parallel_tool_calls);
-                Value::Object(out)
-            } else if let Some(mode) = obj.get("type").and_then(|v| v.as_str()) {
-                match mode {
-                    "auto" => {
-                        anthropic_tool_choice_object("auto", explicit_disable, parallel_tool_calls)
-                    }
-                    "required" | "any" => {
-                        anthropic_tool_choice_object("any", explicit_disable, parallel_tool_calls)
-                    }
-                    "none" => json!({ "type": "none" }),
-                    _ => Value::Object(obj),
-                }
-            } else {
-                Value::Object(obj)
+                obj.remove("function");
+                obj.insert("type".into(), json!("tool"));
+                obj.insert("name".into(), json!(name));
+            } else if obj.get("type").and_then(Value::as_str) == Some("required") {
+                obj.insert("type".into(), json!("any"));
             }
+            if obj.get("type").and_then(Value::as_str) != Some("none") {
+                insert_anthropic_disable_parallel(&mut obj, parallel_tool_calls);
+            }
+            Value::Object(obj)
         }
         other => other,
     }
 }
 
-fn anthropic_tool_choice_object(
-    mode: &str,
-    explicit_disable: Option<bool>,
-    parallel_tool_calls: Option<bool>,
-) -> Value {
+fn anthropic_tool_choice_object(mode: &str, parallel_tool_calls: Option<bool>) -> Value {
     let mut obj = Map::new();
     obj.insert("type".to_string(), Value::String(mode.to_string()));
-    insert_anthropic_disable_parallel(&mut obj, explicit_disable, parallel_tool_calls);
+    insert_anthropic_disable_parallel(&mut obj, parallel_tool_calls);
     Value::Object(obj)
 }
 
 fn insert_anthropic_disable_parallel(
     obj: &mut Map<String, Value>,
-    explicit_disable: Option<bool>,
     parallel_tool_calls: Option<bool>,
 ) {
-    let disable = explicit_disable.or_else(|| (parallel_tool_calls == Some(false)).then_some(true));
+    let disable = parallel_tool_calls.map(|enabled| !enabled);
     if let Some(disable) = disable {
         obj.insert(
             "disable_parallel_tool_use".to_string(),
@@ -134,15 +132,18 @@ fn insert_anthropic_disable_parallel(
 
 fn encode_anthropic_image(
     source: &ImageSource,
+    metadata: &MediaMetadata,
     extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
-    match source {
+    let mut block = match source {
         ImageSource::Url { url, .. } => {
             if let Some((media_type, data)) = split_base64_image_data_url(url) {
-                return Some(json!({
+                let mut block = json!({
                     "type": "image",
                     "source": { "type": "base64", "media_type": media_type, "data": data }
-                }));
+                });
+                merge_messages_media_metadata(&mut block, metadata, extra_body, false);
+                return Some(block);
             }
             Some(json!({
                 "type": "image",
@@ -154,7 +155,7 @@ fn encode_anthropic_image(
             "source": { "type": "base64", "media_type": media_type, "data": data }
         })),
         ImageSource::FileId { file_id, .. }
-            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_MESSAGES) =>
+            if crate::urp::media::resource_matches(metadata, ProviderProtocol::Messages) =>
         {
             Some(json!({
                 "type": "image",
@@ -162,7 +163,9 @@ fn encode_anthropic_image(
             }))
         }
         ImageSource::FileId { .. } => None,
-    }
+    }?;
+    merge_messages_media_metadata(&mut block, metadata, extra_body, false);
+    Some(block)
 }
 
 fn split_base64_image_data_url(url: &str) -> Option<(&str, &str)> {
@@ -177,9 +180,10 @@ fn split_base64_image_data_url(url: &str) -> Option<(&str, &str)> {
 
 fn encode_anthropic_file(
     source: &FileSource,
+    metadata: &MediaMetadata,
     extra_body: &HashMap<String, Value>,
 ) -> Option<Value> {
-    match source {
+    let mut block = match source {
         FileSource::Url { url } => Some(json!({
             "type": "document",
             "source": { "type": "url", "url": url }
@@ -210,7 +214,7 @@ fn encode_anthropic_file(
             }
         })),
         FileSource::FileId { file_id }
-            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_MESSAGES) =>
+            if crate::urp::media::resource_matches(metadata, ProviderProtocol::Messages) =>
         {
             Some(json!({
                 "type": "document",
@@ -218,7 +222,9 @@ fn encode_anthropic_file(
             }))
         }
         FileSource::FileId { .. } => None,
-    }
+    }?;
+    merge_messages_media_metadata(&mut block, metadata, extra_body, true);
+    Some(block)
 }
 
 /// Claude identifiers default to adaptive thinking. The bounded legacy
@@ -296,5 +302,16 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
         Some(FinishReason::ToolCalls) => "tool_use",
         Some(FinishReason::ContentFilter) => "refusal",
         _ => "end_turn",
+    }
+}
+
+pub(crate) fn messages_finish_reason(reason: &str) -> Option<FinishReason> {
+    match reason {
+        "end_turn" | "stop_sequence" => Some(FinishReason::Stop),
+        "max_tokens" => Some(FinishReason::Length),
+        "tool_use" => Some(FinishReason::ToolCalls),
+        "refusal" => Some(FinishReason::ContentFilter),
+        "" => None,
+        _ => Some(FinishReason::Other),
     }
 }

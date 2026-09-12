@@ -860,6 +860,7 @@ const URP_KNOWN_MESSAGES_FIELDS: [&str; 8] = [
 
 #[derive(Clone, Debug)]
 pub(crate) struct UrpRequest {
+    pub(crate) audio_output_format: Option<String>,
     pub(crate) model: String,
     pub(crate) max_multiplier: Option<Multiplier>,
     pub(crate) server_tool_usage_classes: Vec<String>,
@@ -1504,34 +1505,4 @@ fn parse_max_multiplier_header(headers: &HeaderMap) -> Option<Multiplier> {
         .get("x-max-multiplier")
         .and_then(|v| v.to_str().ok())
         .and_then(parse_positive_multiplier)
-}
-
-#[allow(clippy::result_large_err)]
-fn parse_urp_request(known: &Value, extra: Map<String, Value>) -> AppResult<UrpRequest> {
-    let merged = merge_known_and_extra(known.clone(), extra);
-    let obj = merged.as_object().ok_or_else(|| {
-        AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "body must be object",
-        )
-    })?;
-    let model = obj
-        .get("model")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing model"))?
-        .to_string();
-    let max_multiplier = obj
-        .get("max_multiplier")
-        .and_then(Value::as_str)
-        .and_then(parse_positive_multiplier);
-
-    Ok(UrpRequest {
-        affinity_explicit: None,
-        affinity_prefix_hash: crate::handlers::helpers::short_xxh3_hex(&model),
-        model,
-        max_multiplier,
-        server_tool_usage_classes: Vec::new(),
-        messages_custom_tool_names: HashSet::new(),
-    })
 }

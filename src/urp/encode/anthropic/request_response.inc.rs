@@ -1,4 +1,17 @@
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    encode_response_checked(resp, logical_model)
+        .unwrap_or_else(|message| messages_media_error_body(&message))
+}
+
+/// Encodes a Messages response only when all output nodes have a legal response representation.
+pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Result<Value, String> {
+    validate_response_nodes(&resp.output)?;
+    Ok(encode_supported_response(resp, logical_model))
+}
+
+fn encode_supported_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    let projected = crate::urp::tool_signature::project_response(resp);
+    let resp = &projected;
     let response_nodes = &resp.output;
     let mut content = Vec::new();
     let mut envelope_extra = HashMap::new();
@@ -32,7 +45,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         .extra_body
         .get("stop_reason")
         .and_then(Value::as_str)
-        .filter(|reason| !reason.is_empty())
+        .filter(|reason| messages_finish_reason(reason) == resp.finish_reason)
         .unwrap_or_else(|| finish_reason_to_stop_reason(resp.finish_reason));
     let mut body = json!({
         "id": resp.id,
@@ -54,6 +67,9 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     if let Some(obj) = body.as_object_mut() {
         merge_extra(obj, &envelope_extra);
         merge_extra(obj, &resp.extra_body);
+        if stop_reason != "stop_sequence" {
+            obj.insert("stop_sequence".into(), Value::Null);
+        }
     }
     body
 }
@@ -120,6 +136,7 @@ fn append_tool_result_to_pending_anthropic_message(
     out: &mut Vec<Value>,
     pending_envelope_extra: &mut HashMap<String, Value>,
     call_id: &str,
+    namespace: Option<&str>,
     content: &[ToolResultContent],
     is_error: bool,
     extra_body: &HashMap<String, Value>,
@@ -141,7 +158,7 @@ fn append_tool_result_to_pending_anthropic_message(
         extra_body: std::mem::take(pending_envelope_extra),
     });
     entry.content.push(encode_tool_result_block(
-        call_id, content, is_error, extra_body,
+        call_id, namespace, content, is_error, extra_body,
     ));
 }
 
@@ -188,13 +205,16 @@ fn encode_system_block(node: &Node) -> Option<Value> {
             Some(block)
         }
         Node::ProviderItem {
+            id,
             role: OrdinaryRole::System | OrdinaryRole::Developer,
             origin_protocol,
             item_type,
             body,
             extra_body,
             ..
-        } => encode_messages_provider_block(*origin_protocol, item_type, body, extra_body),
+        } => {
+            encode_messages_provider_block(*origin_protocol, Some(id), item_type, body, extra_body)
+        }
         _ => None,
     }
 }

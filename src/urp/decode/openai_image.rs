@@ -33,6 +33,8 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
 
         if let Some(b64) = item_obj.get("b64_json").and_then(|v| v.as_str()) {
             output.push(Node::Image {
+                metadata: Default::default(),
+
                 id: None,
                 role: OrdinaryRole::Assistant,
                 source: ImageSource::Base64 {
@@ -43,6 +45,8 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
             });
         } else if let Some(url) = item_obj.get("url").and_then(|v| v.as_str()) {
             output.push(Node::Image {
+                metadata: Default::default(),
+
                 id: None,
                 role: OrdinaryRole::Assistant,
                 source: ImageSource::Url {
