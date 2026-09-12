@@ -7,6 +7,7 @@ use crate::handlers::usage::{
     record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
+use crate::upstream_websocket::ResponsesWsSession;
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,

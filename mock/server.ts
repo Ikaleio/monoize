@@ -3,7 +3,19 @@ declare const process: {
 };
 
 declare const Bun: {
-  serve(options: { port: number; fetch: (req: Request) => Response | Promise<Response> }): void;
+  serve(options: {
+    port: number;
+    fetch: (
+      req: Request,
+      server: { upgrade: (req: Request) => boolean },
+    ) => Response | Promise<Response | undefined>;
+    websocket: {
+      message: (
+        ws: { send: (data: string) => void },
+        message: string | ArrayBuffer,
+      ) => void | Promise<void>;
+    };
+  }): void;
 };
 
 const port = Number(process.env.PORT ?? 4010);
@@ -271,6 +283,62 @@ function responsesEventFrame(type: string, data: Record<string, unknown>): strin
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
 }
 
+function jsonFromSseFrames(frames: string[]): Record<string, unknown>[] {
+  const events: Record<string, unknown>[] = [];
+  for (const frame of frames) {
+    const data = frame
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => line.slice(6))
+      .join("\n");
+    if (!data || data === "[DONE]") continue;
+    events.push(JSON.parse(data) as Record<string, unknown>);
+  }
+  return events;
+}
+
+function warmupResponsesEvents(model: string): Record<string, unknown>[] {
+  const id = `resp_mock_${Date.now()}`;
+  const createdAt = Math.floor(Date.now() / 1000);
+  const response = {
+    id,
+    object: "response",
+    created_at: createdAt,
+    model,
+    status: "completed",
+    output: [],
+  };
+  return [
+    { type: "response.created", response: { ...response, status: "in_progress" } },
+    { type: "response.completed", response },
+  ];
+}
+
+function simpleResponsesWsEvents(model: string, text: string): Record<string, unknown>[] {
+  const id = `resp_mock_${Date.now()}`;
+  const createdAt = Math.floor(Date.now() / 1000);
+  const response = {
+    id,
+    object: "response",
+    created_at: createdAt,
+    model,
+    status: "completed",
+    output: [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text }],
+      },
+    ],
+    usage: { input_tokens: 8, output_tokens: 16, total_tokens: 24 },
+  };
+  return [
+    { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
+    { type: "response.output_text.delta", text },
+    { type: "response.completed", response },
+  ];
+}
+
 // MU9: full OpenAI Responses lifecycle with a reasoning-summary item followed
 // by a message item, so Monoize's upstream decoder reconstructs a Reasoning
 // node with summary text.
@@ -396,10 +464,45 @@ function responsesObject(model: string, text: string) {
 
 Bun.serve({
   port,
-  fetch: async (req: Request) => {
+  websocket: {
+    message(ws, message) {
+      const raw = typeof message === "string" ? message : new TextDecoder().decode(message);
+      let event: any;
+      try {
+        event = JSON.parse(raw);
+      } catch {
+        ws.send(JSON.stringify({ type: "error", error: { message: "invalid JSON" } }));
+        return;
+      }
+      if (event?.type !== "response.create") {
+        ws.send(JSON.stringify({ type: "error", error: { message: "unsupported event" } }));
+        return;
+      }
+      const model = String(event.model ?? "mock-model");
+      if (event.generate === false) {
+        for (const frame of warmupResponsesEvents(model)) {
+          ws.send(JSON.stringify(frame));
+        }
+        return;
+      }
+      const text = `${collectResponsesText(event.input)}${echoSuffix(event)}`;
+      const frames = hasReasoningTrigger(event)
+        ? jsonFromSseFrames(reasoningResponsesStream(model, text))
+        : simpleResponsesWsEvents(model, text);
+      for (const frame of frames) {
+        ws.send(JSON.stringify(frame));
+      }
+    },
+  },
+  fetch: async (req: Request, server) => {
     const url = new URL(req.url);
 
     if (url.pathname === "/health") return jsonResponse({ ok: true });
+
+    if (req.method === "GET" && url.pathname === "/v1/responses") {
+      if (server.upgrade(req)) return;
+      return jsonResponse({ error: { message: "WebSocket upgrade failed" } }, 400);
+    }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
       const body = await req.json();

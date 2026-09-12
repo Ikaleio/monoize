@@ -41,6 +41,7 @@ export type ChannelRow = {
 	proxy_url: string
 	extra_headers: string
 	session_affinity_auto: boolean | null
+	websocket_supported: boolean | null
 	_health_status?: 'healthy' | 'probing' | 'unhealthy'
 }
 
@@ -122,6 +123,7 @@ export function emptyChannelRow(): ChannelRow {
 		proxy_url: '',
 		extra_headers: '',
 		session_affinity_auto: null,
+		websocket_supported: null,
 		_health_status: undefined
 	}
 }
@@ -203,6 +205,7 @@ export function fromProvider(provider: Provider): ProviderForm {
 			proxy_url: channel.proxy_url ?? '',
 			extra_headers: channel.extra_headers && Object.keys(channel.extra_headers).length > 0 ? JSON.stringify(channel.extra_headers, null, 2) : '',
 			session_affinity_auto: channel.session_affinity_auto ?? null,
+			websocket_supported: channel.websocket_supported ?? null,
 			_health_status: channel._health_status
 		})),
 		transforms: provider.transforms ?? [],

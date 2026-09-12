@@ -351,6 +351,8 @@ PL23b. Provider channel edit dialog MUST expose these Channel affinity overrides
 
 PL23c. The Channel editor MUST describe `"sticky"` as retaining an eligible bound Channel and `"prefer_higher_priority"` as retrying an earlier eligible Provider after the configured delay.
 
+PL23d. The Channel editor MUST expose `websocket_supported` as unknown / supported / not supported. When `provider_type` is `responses`, it MUST show a Detect WebSocket button that calls `POST /api/dashboard/probe-channel-websocket` with the current draft `provider_type`, `base_url`, optional draft API key, and stored `provider_id`/`channel_id` when present. A successful `supported` value MUST update only the draft field. Cancel MUST discard that draft value.
+
 PL23a. Provider channel edit dialog MUST operate on a draft copy of the selected channel row.
 
 - Clicking "Add Channel" MUST open a draft channel dialog without appending a row immediately.

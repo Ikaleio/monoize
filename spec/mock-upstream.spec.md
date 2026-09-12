@@ -63,6 +63,20 @@ OpenAI Responses lifecycle in this order, then `data: [DONE]`:
 Every frame in MU9 MUST carry the event name in both the `event:` line and the `data:`
 JSON `type` field.
 
+## 3a. `GET /v1/responses` WebSocket
+
+MU9a. `GET /v1/responses` MUST accept a WebSocket upgrade. After 101, each inbound text
+frame MUST be one JSON object.
+
+MU9b. A `response.create` object with `generate=false` is warmup. The mock MUST send
+`response.created` then `response.completed` for one synthetic response whose `id`
+starts with `resp_`, whose `output` is `[]`, and whose `model` equals the request
+model. The mock MUST NOT require `stream`.
+
+MU9c. Any other `response.create` MUST emit the same Responses JSON objects as the
+matching `POST /v1/responses` SSE lifecycle (MU8 or MU9), each as one text frame,
+without SSE `event:` wrapping and without a `[DONE]` frame.
+
 ## 4. `POST /v1/chat/completions`
 
 MU10. Without `stream: true`, the endpoint MUST return the tool-loop responses defined

@@ -52,6 +52,16 @@ OpenCode Go は `x-opencode-session` でプロンプトキャッシュをセッ�
 
 OpenCode Zen または OpenCode Go への生存プローブでは、Channel の追加ヘッダーにこれらの名前がないとき、リテラル値 `mono-probe` を送ります。
 
+## 上流 WebSocket
+
+Responses Channel で **上流 WebSocket** を設定します。値は次のとおりです。
+
+- `null`（不明）: Responses WebSocket クライアントは先に Upgrade を試します。ハンドシェイク失敗時は、同じ attempt で HTTP SSE を使います。保存値が `null` のときだけ、成功または失敗の結果を書き込めます。
+- `true`（対応）: Upgrade を優先します。ハンドシェイク失敗時も HTTP SSE を使います。保存値は変わりません。
+- `false`（非対応）: Upgrade しません。
+
+**WebSocket を検出** をクリックすると `GET {base}/v1/responses` をプローブします。結果は下書きに入ります。Provider を保存すると永続化します。HTTP POST クライアント、ヘルスプローブ、Channel 生存テストは HTTP のままです。
+
 ## Channel をテスト
 
 Channel を開き、順次テストまたは同時テストを実行します。

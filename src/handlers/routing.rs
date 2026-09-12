@@ -631,6 +631,7 @@ pub(super) async fn collect_provider_attempts(
                 &channel.base_url,
                 channel.session_affinity_auto,
             ),
+            websocket_supported: effective_websocket_supported(state, &channel),
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,
@@ -644,6 +645,51 @@ pub(super) async fn collect_provider_attempts(
 /// OpenCode Zen/Go URLs.
 pub(super) fn effective_session_affinity_auto(base_url: &str, configured: Option<bool>) -> bool {
     configured.unwrap_or_else(|| crate::monoize_routing::default_session_affinity_auto(base_url))
+}
+
+pub(super) fn effective_websocket_supported(
+    state: &AppState,
+    channel: &crate::monoize_routing::MonoizeChannel,
+) -> Option<bool> {
+    channel.websocket_supported.or_else(|| {
+        state
+            .websocket_supported_overlay
+            .get(&channel.id)
+            .map(|value| *value)
+    })
+}
+
+pub(super) async fn remember_websocket_supported(
+    state: &AppState,
+    channel_id: &str,
+    supported: bool,
+) {
+    if state.node.is_replica() {
+        state
+            .websocket_supported_overlay
+            .entry(channel_id.to_string())
+            .or_insert(supported);
+        return;
+    }
+    match state
+        .monoize_store
+        .remember_channel_websocket_supported(channel_id, supported)
+        .await
+    {
+        Ok(true) => {
+            state
+                .routing_config_revision
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+        Ok(false) => {}
+        Err(err) => {
+            tracing::warn!(
+                channel_id,
+                error = %err,
+                "failed to persist channel websocket_supported"
+            );
+        }
+    }
 }
 
 /// CM-AFF-1a/1b/2: stamp every freshly built attempt with the client header,

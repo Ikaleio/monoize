@@ -60,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260911_000051_billing_plan_sliding_windows::Migration),
             Box::new(m20260912_000052_billing_plan_subscription_revocation::Migration),
             Box::new(m20260913_000053_billing_plan_admin_grants::Migration),
+            Box::new(m20260914_000054_channel_websocket_supported::Migration),
         ]
     }
 }
@@ -249,3 +250,4 @@ mod m20260910_000050_recharge_system;
 mod m20260911_000051_billing_plan_sliding_windows;
 mod m20260912_000052_billing_plan_subscription_revocation;
 mod m20260913_000053_billing_plan_admin_grants;
+mod m20260914_000054_channel_websocket_supported;

@@ -2393,6 +2393,7 @@ mod media_resource_routing_tests {
             proxy_url: None,
             extra_headers: None,
             session_affinity_auto: false,
+            websocket_supported: None,
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,

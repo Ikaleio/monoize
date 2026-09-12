@@ -249,6 +249,23 @@ pub async fn create_response(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
+    create_response_inner(state, headers, body, false).await
+}
+
+pub(crate) async fn create_response_prefer_websocket(
+    state: AppState,
+    headers: HeaderMap,
+    body: Value,
+) -> AppResult<Response> {
+    create_response_inner(state, headers, body, true).await
+}
+
+async fn create_response_inner(
+    state: AppState,
+    headers: HeaderMap,
+    body: Value,
+    prefer_upstream_websocket: bool,
+) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     let request_id = extract_request_id(&headers);
     // Session starts before decode so the body is deep-cloned only when a
@@ -308,6 +325,7 @@ pub async fn create_response(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
+                prefer_upstream_websocket,
             ),
         );
         return Ok(Sse::new(stream)
@@ -386,6 +404,7 @@ pub async fn create_chat_completions(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
+                false,
             ),
         );
         return Ok(Sse::new(stream)
@@ -475,6 +494,7 @@ async fn create_messages_inner(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
+                false,
             ),
         );
         return Ok(Sse::new(stream)
@@ -924,6 +944,8 @@ struct MonoizeAttempt {
     extra_headers: Option<std::collections::BTreeMap<String, String>>,
     /// CM-AFF-2: derive per-request session affinity for this Channel.
     session_affinity_auto: bool,
+    /// WS2e: effective Responses WebSocket memory after replica overlay.
+    websocket_supported: Option<bool>,
     /// CM-AFF-1a/1b: client header or decoded-body conversation identifier.
     client_session_id: Option<String>,
     /// CM-AFF-2 rule 2: `mono-*` digest of instructions plus the first two

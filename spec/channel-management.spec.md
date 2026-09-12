@@ -138,6 +138,10 @@ Channel automatic session affinity flag MAY be present:
 
 - `session_affinity_auto: boolean | null`. `true` enables automatic session affinity. `false` disables it. `null` or absent selects the URL-based default in CM-AFF-0. When effective automatic session affinity is enabled, every proxied upstream request issued for this Channel MUST carry the session-cache headers in CM-AFF-5, with values selected by CM-AFF-1 through CM-AFF-2.
 
+Channel Responses WebSocket memory MAY be present:
+
+- `websocket_supported: boolean | null`. `null` or absent means unknown. `true` means prefer an upstream Responses WebSocket when the client is a Responses WebSocket and the attempt effective API type is `responses`. `false` means that attempt MUST use HTTP. Lazy detection MUST NOT overwrite a non-null value (`unified_responses_proxy.spec.md` WS2e).
+
 ## 2. Invariants
 
 CP-INV-1. `channels.length >= 1`.
@@ -281,7 +285,7 @@ All endpoints require an authenticated dashboard admin session.
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null, websocket_supported?: boolean | null }>`
   - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -345,9 +349,25 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
   - Return unique model ids sorted ascending.
   - Classify the compact scheme from the fetched ids. If any id equals `{base}-openai-compact` and `base` is also in the fetched ids, `compact_scheme` MUST be `openai_compact_sibling` and `compact_models` MUST list those sibling ids sorted ascending. Otherwise `compact_scheme` MUST be `same_model` and `compact_models` MUST be `[]`.
 - Response: `{ "models": string[], "compact_scheme": "same_model" | "openai_compact_sibling", "compact_models": string[] }`
+
 - Errors:
   - `502 upstream_discovery_response_too_large` when a declared or streamed upstream body exceeds `MONOIZE_UPSTREAM_DISCOVERY_MAX_BYTES`.
   - `502 upstream_fetch_failed` when the upstream request, bounded body read, upstream status, or JSON decode fails for another reason.
+
+### 3.7a Probe channel WebSocket
+
+- Method/Path: `POST /api/dashboard/probe-channel-websocket`
+- Body: `{ "provider_type": ProviderType, "base_url": string, "api_key"?: string, "provider_id"?: string, "channel_id"?: string, "model"?: string }`
+- Semantics:
+  - API-key resolution MUST match §3.7.
+  - The request body `provider_type` and `base_url` are the source of truth for the upgrade URL.
+  - If `provider_id` and `channel_id` identify a stored Channel, the probe MUST use that Channel `proxy_url` and `extra_headers`. Otherwise the probe MUST use the process upstream proxy and no Channel extra headers.
+  - The probe MUST NOT write `monoize_channels` or create a request log or charge a tenant.
+  - When `provider_type` is not `responses`, return `{ "supported": false, "http_status": null, "warmup": "skipped", "error": "provider_type is not responses" }`.
+  - Otherwise GET-upgrade `{base}/v1/responses` with `Authorization`, `OpenAI-Beta: responses_websockets=2026-02-06`, stored extra headers when resolved, and session-affinity headers when the stored Channel enables them. Timeout is Channel/Provider/global `request_timeout_ms`.
+  - Non-101 or transport failure MUST return `supported=false`.
+  - Status 101 MUST return `supported=true`. If `model` is a non-empty string after trim, the probe MUST send `response.create` with `generate=false` and that model. A warmup protocol error MUST still return `supported=true` and `warmup="protocol_error"`. A successful warmup MUST return `warmup="ok"`. Missing model MUST return `warmup="skipped"`.
+- Response: `{ "supported": boolean, "http_status": integer | null, "warmup": "skipped" | "ok" | "protocol_error", "error": string | null }`
 
 ### 3.8 Test channel liveness
 
@@ -406,6 +426,8 @@ CP-FE-5. Saving a provider child editor popup MUST update the parent provider dr
 CP-FE-6. Saving from the provider unsaved-changes confirmation MUST invoke the provider create or update operation at most once for the same tap or click sequence. That same sequence MUST NOT reopen the unsaved-changes confirmation.
 
 CP-FE-7. The null choice for `session_affinity_auto` MUST use a label that identifies URL-based automatic selection. It MUST NOT use the global-inheritance label used by unrelated nullable settings.
+
+CP-FE-7a. The Channel editor MUST expose `websocket_supported` as a three-state control: unknown (`null`), supported (`true`), not supported (`false`). When Channel `provider_type` is `responses`, the editor MUST expose a "Detect WebSocket" action that calls `POST /api/dashboard/probe-channel-websocket` and writes `supported` into the draft `websocket_supported` field. The action MUST NOT persist until the Provider save. The action MUST be disabled when `base_url` is empty, or when the Channel has no draft API key and no stored `channel_id`.
 
 CP-FE-8. The Channel liveness-test dialog MUST contain a `Stream response` checkbox. The checkbox MUST be checked whenever a stream-capable Channel test dialog opens. It MUST be disabled and unchecked for a Channel type whose liveness test does not define streaming.
 
