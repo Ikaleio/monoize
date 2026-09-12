@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[tokio::main]
 async fn main() {
+    monoize::upstream_websocket::ensure_rustls_crypto_provider();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

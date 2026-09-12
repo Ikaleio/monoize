@@ -23,6 +23,10 @@ use tokio_tungstenite::{
 
 const RESPONSES_WS_BETA: &str = "responses_websockets=2026-02-06";
 
+pub fn ensure_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[derive(Debug)]
 pub struct HandshakeError {
     pub message: String,
@@ -164,6 +168,7 @@ async fn connect_responses_websocket_inner(
     headers: &[(String, String)],
     proxy_url: Option<&str>,
 ) -> Result<Box<dyn ResponsesWsSession>, HandshakeError> {
+    ensure_rustls_crypto_provider();
     let http_url = join_url(base_url, "/v1/responses");
     let ws_url = http_url_to_ws(&http_url)?;
     let request = build_upgrade_request(&ws_url, headers)?;
@@ -382,6 +387,7 @@ async fn tls_connect(stream: TcpStream, host: &str) -> Result<BoxedIo, Handshake
 }
 
 fn rustls_client_config() -> Arc<rustls::ClientConfig> {
+    ensure_rustls_crypto_provider();
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     CONFIG
         .get_or_init(|| {
@@ -554,5 +560,11 @@ mod tests {
             object.get("model").and_then(serde_json::Value::as_str),
             Some("gpt-5")
         );
+    }
+
+    #[test]
+    fn rustls_client_config_installs_crypto_provider() {
+        ensure_rustls_crypto_provider();
+        let _ = rustls_client_config();
     }
 }

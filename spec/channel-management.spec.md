@@ -367,7 +367,7 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
   - Otherwise GET-upgrade `{base}/v1/responses` with `Authorization`, `OpenAI-Beta: responses_websockets=2026-02-06`, stored extra headers when resolved, and session-affinity headers when the stored Channel enables them. Timeout is Provider `request_timeout_ms_override` when set, otherwise global `request_timeout_ms`.
   - Non-101 or transport failure MUST return `supported=false`.
   - Status 101 MUST return `supported=true`. If `model` is a non-empty string after trim, the probe MUST send `response.create` with `generate=false` and that model. Handshake plus warmup send and the first warmup frame MUST consume one timeout budget of that `request_timeout_ms`. A warmup protocol error or warmup timeout MUST still return `supported=true` and `warmup="protocol_error"`. A successful warmup MUST return `warmup="ok"`. Missing model MUST return `warmup="skipped"`.
-  - The dashboard HTTP status MUST be `200` for every probe outcome, including handshake failure, transport failure, and warmup timeout. The probe MUST NOT return dashboard HTTP `502`.
+  - The dashboard HTTP status MUST be `200` for every probe outcome, including handshake failure, transport failure, TLS client initialization failure, and warmup timeout. The probe MUST NOT return dashboard HTTP `502`.
 - Response: `{ "supported": boolean, "http_status": integer | null, "warmup": "skipped" | "ok" | "protocol_error", "error": string | null }`
 
 ### 3.8 Test channel liveness

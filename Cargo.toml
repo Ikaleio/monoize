@@ -36,7 +36,7 @@ tokio = { version = "1.49.0", features = ["full"] }
 tokio-stream = "0.1.18"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-native-roots"] }
 tokio-rustls = "0.26"
-rustls = "0.23"
+rustls = { version = "0.23", features = ["ring"] }
 rustls-native-certs = "0.8"
 tower-http = { version = "0.6.8", features = ["trace", "request-id", "cors", "set-header", "limit"] }
 tracing = "0.1.44"
