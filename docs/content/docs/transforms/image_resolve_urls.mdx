@@ -1,11 +1,11 @@
 ---
 title: "Image: resolve URLs to base64"
-description: Download image URLs in the request and inline them as base64 sources.
+description: Download image URLs in requests or responses and inline them as base64 sources.
 ---
 
 ## What it does
 
-This transform downloads request image URLs concurrently and replaces them with inline base64 sources. A failed or oversized download leaves that node unchanged.
+This transform downloads request or response image URLs concurrently and replaces them with inline base64 sources. A failed or oversized download leaves that node unchanged.
 
 Without this transform, Monoize never fetches remote image URLs.
 
@@ -14,7 +14,7 @@ Without this transform, Monoize never fetches remote image URLs.
 | Property | Value |
 | --- | --- |
 | Type ID | `image_resolve_urls` |
-| Phase | `request` |
+| Phase | `request`, `response` |
 | Scopes | Provider, API key |
 
 ## When to use
@@ -44,6 +44,28 @@ Without this transform, Monoize never fetches remote image URLs.
     "timeout_seconds": 30,
     "roles": [
       "user"
+    ]
+  }
+}
+```
+
+### Return base64 images to downstream clients
+
+For an Images API client that requires `b64_json`, apply the transform in the response phase. Monoize downloads the upstream URL and encodes the image as `data[].b64_json`.
+
+```json
+{
+  "transform": "image_resolve_urls",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "gpt-image-2.5-sunburst"
+  ],
+  "config": {
+    "timeout_seconds": 30,
+    "max_bytes": 20971520,
+    "roles": [
+      "assistant"
     ]
   }
 }
