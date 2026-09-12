@@ -682,6 +682,7 @@ export interface CreateMonoizeChannelInput {
   proxy_url?: string | null;
   extra_headers?: Record<string, string> | null;
   session_affinity_auto?: boolean | null;
+  websocket_supported?: boolean | null;
 }
 
 export interface CreateProviderInput {
@@ -1598,10 +1599,61 @@ class ApiClient {
     if (input.provider_id?.trim()) body.provider_id = input.provider_id.trim();
     if (input.channel_id?.trim()) body.channel_id = input.channel_id.trim();
     if (input.model?.trim()) body.model = input.model.trim();
-    return this.request("/probe-channel-websocket", {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const response = await fetch(`${API_BASE}/probe-channel-websocket`, {
       method: "POST",
+      headers,
+      credentials: "include",
       body: JSON.stringify(body),
     });
+    let data: {
+      supported?: boolean;
+      http_status?: number | null;
+      warmup?: ProbeChannelWebsocketResult["warmup"];
+      error?: string | null | { code?: string; message?: string };
+    } = {};
+    try {
+      data = (await response.json()) as typeof data;
+    } catch {
+      data = {};
+    }
+    const errorCode =
+      typeof data.error === "object" && data.error ? data.error.code : undefined;
+    const errorMessage =
+      typeof data.error === "string"
+        ? data.error
+        : data.error && typeof data.error === "object"
+          ? data.error.message
+          : undefined;
+    if (response.status === 401 && errorCode === "unauthorized") {
+      notifyDashboardUnauthorized();
+      throw new DashboardApiError(
+        errorCode || "unauthorized",
+        errorMessage || "unauthorized",
+      );
+    }
+    if (
+      response.ok &&
+      typeof data.supported === "boolean" &&
+      (data.warmup === "skipped" ||
+        data.warmup === "ok" ||
+        data.warmup === "protocol_error")
+    ) {
+      return {
+        supported: data.supported,
+        http_status: data.http_status ?? null,
+        warmup: data.warmup,
+        error: typeof data.error === "string" ? data.error : errorMessage ?? null,
+      };
+    }
+    return {
+      supported: false,
+      http_status: Number.isFinite(response.status) ? response.status : null,
+      warmup: "skipped",
+      error: errorMessage || `HTTP ${response.status}`,
+    };
   }
 
   async listRequestLogs(

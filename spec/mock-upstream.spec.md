@@ -75,7 +75,9 @@ model. The mock MUST NOT require `stream`.
 
 MU9c. Any other `response.create` MUST emit the same Responses JSON objects as the
 matching `POST /v1/responses` SSE lifecycle (MU8 or MU9), each as one text frame,
-without SSE `event:` wrapping and without a `[DONE]` frame.
+without SSE `event:` wrapping and without a `[DONE]` frame. Because WS2d requires a
+protocol terminal and MU8 terminates HTTP SSE with `[DONE]`, a non-reasoning WS
+stream MUST then send one `response.completed` text frame after the MU8 JSON object.
 
 ## 4. `POST /v1/chat/completions`
 

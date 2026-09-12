@@ -54,7 +54,7 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 ## 上游 WebSocket
 
-在 Responses Channel 上设置 **上游 WebSocket**。取值如下：
+在 **连接** 中、**接口类型** 之后设置 **上游 WebSocket**。不要把该控件放在路由亲和下。取值如下：
 
 - `null`（未知）：Responses WebSocket 客户端先尝试 Upgrade。握手失败时，同一 attempt 使用 HTTP SSE。仅当存储值仍为 `null` 时，成功或失败的握手可以写入结果。
 - `true`（支持）：优先 Upgrade。握手失败仍使用 HTTP SSE。存储值不变。
