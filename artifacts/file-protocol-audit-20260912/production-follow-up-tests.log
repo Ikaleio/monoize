@@ -1,0 +1,16 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.60s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 7 tests
+test handlers::helpers::media_resource_routing_tests::public_urls_and_inline_bytes_leave_candidate_selection_unrestricted ... ok
+test handlers::helpers::media_resource_routing_tests::a_bound_file_reference_keeps_only_its_eligible_candidate ... ok
+test handlers::helpers::media_resource_routing_tests::credential_or_endpoint_changes_cannot_reuse_an_already_bound_file ... ok
+test handlers::helpers::media_resource_routing_tests::unbound_file_ids_reject_multiple_credential_channel_or_provider_scopes ... ok
+test handlers::helpers::media_resource_routing_tests::same_scope_retries_survive_binding_without_changing_the_source_reference ... ok
+test handlers::helpers::media_resource_routing_tests::completed_tool_media_without_local_call_survives_production_hygiene ... ok
+test handlers::helpers::media_resource_routing_tests::cross_protocol_png_survives_production_request_encoding_matrix ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 254 filtered out; finished in 0.01s

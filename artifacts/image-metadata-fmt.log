@@ -1,0 +1,441 @@
+Diff in /Users/ikaleio/Projects/monoize/src/handlers/image_api.rs:1995:
+
+     for item in &resp.output {
+         match item {
+-            urp::Node::Image { source, metadata, .. } => match source {
++            urp::Node::Image {
++                source, metadata, ..
++            } => match source {
+                 urp::ImageSource::Base64 { data, .. } => {
+                     if !seen_base64.insert(data.clone()) {
+                         continue;
+Diff in /Users/ikaleio/Projects/monoize/src/transforms/field_alias_reserved_tool_names.rs:2:
+     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+     TransformRuntimeContext, TransformScope, TransformState, UrpData,
+ };
+-use crate::urp::{Node, NodeHeader, ToolChoice, ToolDefinition, UrpRequest, UrpResponse, UrpStreamEvent};
++use crate::urp::{
++    Node, NodeHeader, ToolChoice, ToolDefinition, UrpRequest, UrpResponse, UrpStreamEvent,
++};
+ use async_trait::async_trait;
+ use serde::Deserialize;
+ use serde_json::{Map, Value, json};
+Diff in /Users/ikaleio/Projects/monoize/src/transforms/field_alias_reserved_tool_names.rs:35:
+         .collect()
+ }
+
+-fn parse_alias_map(raw: Option<Map<String, Value>>) -> Result<HashMap<String, String>, TransformError> {
++fn parse_alias_map(
++    raw: Option<Map<String, Value>>,
++) -> Result<HashMap<String, String>, TransformError> {
+     let Some(obj) = raw else {
+         return Ok(default_alias_map());
+     };
+Diff in /Users/ikaleio/Projects/monoize/src/transforms/field_alias_reserved_tool_names.rs:62:
+                 "alias {alias} is mapped from more than one original name"
+             )));
+         }
+-        if forward.insert(original.clone(), alias.to_string()).is_some() {
++        if forward
++            .insert(original.clone(), alias.to_string())
++            .is_some()
++        {
+             return Err(TransformError::InvalidConfig(format!(
+                 "duplicate alias key {original}"
+             )));
+Diff in /Users/ikaleio/Projects/monoize/src/transforms/field_custom_tools_to_function.rs:231:
+     match value {
+         Value::Object(obj) => {
+             let type_is_custom = obj.get("type").and_then(Value::as_str) == Some("custom");
+-            let name = obj
+-                .get("name")
+-                .and_then(Value::as_str)
+-                .map(str::to_string);
++            let name = obj.get("name").and_then(Value::as_str).map(str::to_string);
+             if type_is_custom {
+                 if let Some(name) = name.as_deref() {
+                     if should_convert(cfg, name) {
+Diff in /Users/ikaleio/Projects/monoize/src/urp/decode/openai_image.rs:47:
+                         Some("jpeg") => "image/jpeg",
+                         Some("webp") => "image/webp",
+                         _ => "image/png",
+-                    }.to_string(),
++                    }
++                    .to_string(),
+                     data: b64.to_string(),
+                 },
+                 extra_body: HashMap::new(),
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:1:
+ use crate::urp::encode::{
+-    role_to_str, sanitize_provider_item_wire_body, text_parts,
+-    tool_choice_to_chat_value, usage_input_details, usage_output_details,
++    role_to_str, sanitize_provider_item_wire_body, text_parts, tool_choice_to_chat_value,
++    usage_input_details, usage_output_details,
+ };
+ use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
+ use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:9:
+     CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY, CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY,
+     CHAT_MESSAGE_AUDIO_EXTRA_KEY, CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
+     CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING_CONTENT,
+-    CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource, FinishReason, ImageSource,
+-    Node, OrdinaryRole, ProviderProtocol, ResponseFormat, StopControl, ToolCallType, ToolChoice,
+-    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse, tool_call_arguments_for_wire,
++    CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource, FinishReason, ImageSource, Node, OrdinaryRole,
++    ProviderProtocol, ResponseFormat, StopControl, ToolCallType, ToolChoice, ToolDefinition,
++    ToolResultContent, UrpRequest, UrpResponse, tool_call_arguments_for_wire,
+ };
+ use serde_json::{Map, Value, json};
+ use std::collections::HashMap;
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:97:
+             Some(block)
+         }
+         Part::Image {
+-            metadata, source, extra_body,
++            metadata,
++            source,
++            extra_body,
+         } => {
+             let mut image = match source {
+                 ImageSource::Url { url, detail } => {
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:111:
+             };
+             if let Some(obj) = image.as_object_mut() {
+                 merge_chat_wire_extra(obj, extra_body);
+-                for key in ["detail", "filename", "media_type", "source"] { obj.remove(key); }
++                for key in ["detail", "filename", "media_type", "source"] {
++                    obj.remove(key);
++                }
+                 let mut image_url = Map::new();
+                 let detail = match source {
+-                    ImageSource::Url { url, detail } => { image_url.insert("url".into(), json!(url)); detail.as_ref() }
++                    ImageSource::Url { url, detail } => {
++                        image_url.insert("url".into(), json!(url));
++                        detail.as_ref()
++                    }
+                     ImageSource::Base64 { media_type, data } => {
+-                        image_url.insert("url".into(), json!(format!("data:{media_type};base64,{data}")));
++                        image_url.insert(
++                            "url".into(),
++                            json!(format!("data:{media_type};base64,{data}")),
++                        );
+                         metadata.detail.as_ref()
+                     }
+                     ImageSource::FileId { .. } => return None,
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:123:
+                 };
+-                if let Some(detail) = detail { image_url.insert("detail".into(), json!(detail)); }
++                if let Some(detail) = detail {
++                    image_url.insert("detail".into(), json!(detail));
++                }
+                 obj.insert("image_url".into(), Value::Object(image_url));
+                 obj.insert("type".into(), json!("image_url"));
+             }
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:128:
+             Some(image)
+         }
+         Part::File {
+-            metadata, source, extra_body,
++            metadata,
++            source,
++            extra_body,
+         } => encode_chat_file_part(source, metadata, extra_body),
+         Part::Audio {
+             source, extra_body, ..
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:170:
+         | FileSource::Content { .. } => return None,
+     };
+     let mut file = file;
+-    if let Some(filename) = &metadata.filename { file["filename"] = json!(filename); }
++    if let Some(filename) = &metadata.filename {
++        file["filename"] = json!(filename);
++    }
+     let mut block = Map::new();
+     merge_chat_wire_extra(&mut block, extra_body);
+-    for key in ["filename", "detail", "media_type", "source", "file_url", "url", "file_id", "file_data"] { block.remove(key); }
++    for key in [
++        "filename",
++        "detail",
++        "media_type",
++        "source",
++        "file_url",
++        "url",
++        "file_id",
++        "file_data",
++    ] {
++        block.remove(key);
++    }
+     block.insert("type".into(), json!("file"));
+     block.insert("file".into(), file);
+     Some(Value::Object(block))
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:383:
+             == Some(true) =>
+         {
+             if let Some(id) = &metadata.reference_id {
+-                entry.message_extra.insert("audio".into(), json!({ "id": id }));
++                entry
++                    .message_extra
++                    .insert("audio".into(), json!({ "id": id }));
+             }
+         }
+         Part::ProviderItem {
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:629:
+     for node in nodes {
+         match node {
+             Node::Image { .. } | Node::File { .. } => {
+-                return Err("Chat Completions responses cannot represent ordinary image or file output".into());
++                return Err(
++                    "Chat Completions responses cannot represent ordinary image or file output"
++                        .into(),
++                );
+             }
+-            Node::Audio { role: OrdinaryRole::Assistant, source, extra_body, .. }
+-                if extra_body.get(CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true)
+-                    && matches!(source, AudioSource::Base64 { .. }) => {}
++            Node::Audio {
++                role: OrdinaryRole::Assistant,
++                source,
++                extra_body,
++                ..
++            } if extra_body
++                .get(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
++                .and_then(Value::as_bool)
++                == Some(true)
++                && matches!(source, AudioSource::Base64 { .. }) => {}
+             Node::Audio { .. } => {
+-                return Err("Chat Completions responses require native message.audio for audio output".into());
++                return Err(
++                    "Chat Completions responses require native message.audio for audio output"
++                        .into(),
++                );
+             }
+             Node::ToolResult { content, .. }
+-                if content.iter().any(|part| matches!(part, ToolResultContent::Image { .. } | ToolResultContent::File { .. })) => {
++                if content.iter().any(|part| {
++                    matches!(
++                        part,
++                        ToolResultContent::Image { .. } | ToolResultContent::File { .. }
++                    )
++                }) =>
++            {
+                 return Err("Chat Completions responses cannot represent tool-result media".into());
+             }
+             Node::ProviderItem { item_type, .. }
+Diff in /Users/ikaleio/Projects/monoize/src/urp/encode/openai_chat.rs:645:
+-                if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio") => {
++                if matches!(
++                    item_type.as_str(),
++                    "input_image"
++                        | "output_image"
++                        | "image_url"
++                        | "input_file"
++                        | "output_file"
++                        | "file"
++                        | "input_audio"
++                ) =>
++            {
+                 return Err("Native response content cannot contain input-only media items".into());
+             }
+             _ => {}
+Diff in /Users/ikaleio/Projects/monoize/src/urp/messages_feature_tests.rs:1207:
+     assert!(error.message.contains("closed text block"));
+     assert!(error.downstream_stream_terminal_sent);
+     let wire = sse_json(rx).await;
+-    assert_eq!(wire.iter().filter(|frame| frame["type"] == "error").count(), 1);
+     assert_eq!(
+-        wire.iter().filter(|frame| frame["type"] == "content_block_start").count(),
++        wire.iter().filter(|frame| frame["type"] == "error").count(),
+         1
+     );
+-    assert!(wire.iter().any(|frame| frame["type"] == "content_block_stop"));
++    assert_eq!(
++        wire.iter()
++            .filter(|frame| frame["type"] == "content_block_start")
++            .count(),
++        1
++    );
++    assert!(
++        wire.iter()
++            .any(|frame| frame["type"] == "content_block_stop")
++    );
+     assert!(wire.iter().any(|frame| frame["delta"]["text"] == "answer"));
+     assert!(!wire.iter().any(|frame| matches!(
+         frame["type"].as_str(),
+Diff in /Users/ikaleio/Projects/monoize/src/urp/mod.rs:855:
+     }
+
+     pub fn is_empty(&self) -> bool {
+-        self.quality.is_none() && self.size.is_none() && self.background.is_none()
+-            && self.output_format.is_none() && self.model.is_none()
++        self.quality.is_none()
++            && self.size.is_none()
++            && self.background.is_none()
++            && self.output_format.is_none()
++            && self.model.is_none()
+     }
+
+     pub fn to_object(&self) -> serde_json::Map<String, Value> {
+Diff in /Users/ikaleio/Projects/monoize/src/urp/mod.rs:866:
+             ("background", &self.background),
+             ("output_format", &self.output_format),
+             ("model", &self.model),
+-        ].into_iter().filter_map(|(key, value)| {
+-            value.as_ref().map(|value| (key.to_owned(), Value::String(value.clone())))
+-        }).collect()
++        ]
++        .into_iter()
++        .filter_map(|(key, value)| {
++            value
++                .as_ref()
++                .map(|value| (key.to_owned(), Value::String(value.clone())))
++        })
++        .collect()
+     }
+
+     pub fn apply_to(&self, obj: &mut serde_json::Map<String, Value>) {
+Diff in /Users/ikaleio/Projects/monoize/src/urp/stream_decode/openai_image.rs:240:
+     let source = image_source_from_payload(payload)?;
+     Some(Node::Image {
+         metadata: crate::urp::MediaMetadata {
+-            image_generation: crate::urp::ImageGenerationMetadata::from_object(payload.as_object()?),
++            image_generation: crate::urp::ImageGenerationMetadata::from_object(
++                payload.as_object()?,
++            ),
+             ..Default::default()
+         },
+
+Diff in /Users/ikaleio/Projects/monoize/src/urp/stream_encode/anthropic.rs:926:
+         }
+         (
+             AnthropicBlockPayload::Thinking {
+-                metadata, item_id, extra: _, ..
++                metadata,
++                item_id,
++                extra: _,
++                ..
+             },
+             NodeDelta::Reasoning {
+                 metadata: delta_metadata,
+Diff in /Users/ikaleio/Projects/monoize/src/urp/stream_encode/gemini.rs:198:
+             crate::urp::media::error_body(message).to_string(),
+         )
+         .await?;
+-        return Err(AppError::new(
+-            StatusCode::BAD_GATEWAY,
+-            "stream_encode_failed",
+-            message,
+-        )
+-        .with_downstream_stream_terminal_sent(!tx.is_closed()));
++        return Err(
++            AppError::new(StatusCode::BAD_GATEWAY, "stream_encode_failed", message)
++                .with_downstream_stream_terminal_sent(!tx.is_closed()),
++        );
+     }
+     Ok(())
+ }
+Diff in /Users/ikaleio/Projects/monoize/src/urp/stream_encode/openai_chat.rs:228:
+
+ fn validate_chat_media_event(event: &UrpStreamEvent) -> Result<(), String> {
+     match event {
+-        UrpStreamEvent::NodeStart { header: NodeHeader::ProviderItem { item_type, .. }, .. }
+-            if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio") =>
+-            Err("Native response content cannot contain input-only media items".into()),
+-        UrpStreamEvent::NodeStart { header: NodeHeader::Audio { role: urp::OrdinaryRole::Assistant, .. }, extra_body, .. }
+-            if extra_body.get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true) => Ok(()),
+-        UrpStreamEvent::NodeStart { header: NodeHeader::Image { .. } | NodeHeader::File { .. } | NodeHeader::Audio { .. }, .. }
+-        | UrpStreamEvent::NodeDelta { delta: NodeDelta::Image { .. } | NodeDelta::File { .. } | NodeDelta::Audio { source: urp::AudioSource::Url { .. } }, .. } =>
+-            Err("Chat Completions responses cannot represent ordinary media content".into()),
+-        UrpStreamEvent::NodeDone { node, .. } =>
+-            urp::encode::openai_chat::validate_response_nodes(std::slice::from_ref(node)),
+-        UrpStreamEvent::ResponseDone { output, .. } =>
+-            urp::encode::openai_chat::validate_response_nodes(output),
++        UrpStreamEvent::NodeStart {
++            header: NodeHeader::ProviderItem { item_type, .. },
++            ..
++        } if matches!(
++            item_type.as_str(),
++            "input_image"
++                | "output_image"
++                | "image_url"
++                | "input_file"
++                | "output_file"
++                | "file"
++                | "input_audio"
++        ) =>
++        {
++            Err("Native response content cannot contain input-only media items".into())
++        }
++        UrpStreamEvent::NodeStart {
++            header:
++                NodeHeader::Audio {
++                    role: urp::OrdinaryRole::Assistant,
++                    ..
++                },
++            extra_body,
++            ..
++        } if extra_body
++            .get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY)
++            .and_then(Value::as_bool)
++            == Some(true) =>
++        {
++            Ok(())
++        }
++        UrpStreamEvent::NodeStart {
++            header: NodeHeader::Image { .. } | NodeHeader::File { .. } | NodeHeader::Audio { .. },
++            ..
++        }
++        | UrpStreamEvent::NodeDelta {
++            delta:
++                NodeDelta::Image { .. }
++                | NodeDelta::File { .. }
++                | NodeDelta::Audio {
++                    source: urp::AudioSource::Url { .. },
++                },
++            ..
++        } => Err("Chat Completions responses cannot represent ordinary media content".into()),
++        UrpStreamEvent::NodeDone { node, .. } => {
++            urp::encode::openai_chat::validate_response_nodes(std::slice::from_ref(node))
++        }
++        UrpStreamEvent::ResponseDone { output, .. } => {
++            urp::encode::openai_chat::validate_response_nodes(output)
++        }
+         _ => Ok(()),
+     }
+ }
+Diff in /Users/ikaleio/Projects/monoize/src/urp/stream_encode/openai_chat.rs:599:
+         if finished {
+             continue;
+         }
+-        if let UrpStreamEvent::NodeStart { node_index, header: NodeHeader::Audio { .. }, extra_body, .. } = &event
+-            && extra_body.get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true) {
++        if let UrpStreamEvent::NodeStart {
++            node_index,
++            header: NodeHeader::Audio { .. },
++            extra_body,
++            ..
++        } = &event
++            && extra_body
++                .get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY)
++                .and_then(Value::as_bool)
++                == Some(true)
++        {
+             native_audio_nodes.insert(*node_index);
+         }
+-        if let UrpStreamEvent::NodeDelta { node_index, delta: NodeDelta::Audio { .. }, .. } = &event
+-            && !native_audio_nodes.contains(node_index) {
+-            return emit_chat_media_error(&tx, "Chat audio fragments require a native message.audio lifecycle").await;
++        if let UrpStreamEvent::NodeDelta {
++            node_index,
++            delta: NodeDelta::Audio { .. },
++            ..
++        } = &event
++            && !native_audio_nodes.contains(node_index)
++        {
++            return emit_chat_media_error(
++                &tx,
++                "Chat audio fragments require a native message.audio lifecycle",
++            )
++            .await;
+         }
+         if let Err(error) = validate_chat_media_event(&event) {
+             return emit_chat_media_error(&tx, &error).await;

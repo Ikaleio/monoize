@@ -1,0 +1,30 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.87s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 2 tests
+
+thread 'urp::chat_feature_tests::chat_compatible_single_content_object_and_input_text_are_typed' (2412337) panicked at src/urp/chat_feature_tests.rs:970:13:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'urp::chat_feature_tests::chat_compatible_tool_media_preserves_blocks_and_following_user' (2412338) panicked at src/urp/chat_feature_tests.rs:920:17:
+assertion failed: parts.iter().any(|part|
+        matches!(part, ToolResultContent::Image { .. } |
+            ToolResultContent::File { .. }))
+test urp::chat_feature_tests::chat_compatible_tool_media_preserves_blocks_and_following_user ... FAILED
+test urp::chat_feature_tests::chat_compatible_single_content_object_and_input_text_are_typed ... FAILED
+
+failures:
+
+failures:
+    urp::chat_feature_tests::chat_compatible_single_content_object_and_input_text_are_typed
+    urp::chat_feature_tests::chat_compatible_tool_media_preserves_blocks_and_following_user
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 231 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

@@ -1,0 +1,551 @@
+From https://github.com/Ikaleio/monoize
+   6914e8e..c0bd5e1  master     -> origin/master
+ * [new tag]         v1.9.1     -> v1.9.1
+ * [new tag]         v1.9.3     -> v1.9.3
+Preparing worktree (detached HEAD c0bd5e1)
+HEAD is now at c0bd5e1 release: v1.9.3
+bun install v1.4.0 (34cbb9a40)
+
++ @eslint/js@9.39.2
++ @types/md5@2.3.6
++ @types/node@24.10.4
++ @types/react@19.2.7
++ @types/react-dom@19.2.3
++ @vitejs/plugin-react-swc@4.3.0
++ autoprefixer@10.4.23
++ eslint@9.39.2
++ eslint-plugin-react-hooks@7.0.1
++ eslint-plugin-react-refresh@0.4.26
++ globals@16.5.0
++ postcss@8.5.6
++ tailwindcss@3.4.14
++ typescript@5.9.3
++ typescript-eslint@8.52.0
++ vite@7.3.1
++ @ai-sdk/openai@4.0.47
++ @ai-sdk/react@4.0.82
++ @cap.js/wasm@0.0.7
++ @codemirror/lang-javascript@6.2.5
++ @hookform/resolvers@5.2.2
++ @lobehub/icons@4.6.0
++ @radix-ui/react-alert-dialog@1.1.15
++ @radix-ui/react-avatar@1.1.11
++ @radix-ui/react-checkbox@1.3.3
++ @radix-ui/react-dialog@1.1.15
++ @radix-ui/react-dropdown-menu@2.1.16
++ @radix-ui/react-label@2.1.8
++ @radix-ui/react-popover@1.1.15
++ @radix-ui/react-progress@1.1.16
++ @radix-ui/react-scroll-area@1.2.18
++ @radix-ui/react-select@2.2.6
++ @radix-ui/react-separator@1.1.8
++ @radix-ui/react-slider@1.4.7
++ @radix-ui/react-slot@1.2.4
++ @radix-ui/react-switch@1.2.6
++ @radix-ui/react-tabs@1.1.13
++ @radix-ui/react-toggle@1.1.18
++ @radix-ui/react-toggle-group@1.1.19
++ @radix-ui/react-tooltip@1.2.8
++ @uiw/react-codemirror@4.25.11
++ ai@7.0.79
++ cap-widget@0.1.57
++ class-variance-authority@0.7.1
++ clsx@2.1.1
++ cmdk@1.1.1
++ date-fns@4.1.0
++ framer-motion@12.25.0
++ i18next@25.7.4
++ lucide-react@0.572.0
++ md5@2.3.0
++ next-themes@0.4.6
++ pako@2.1.0
++ prettier@3.9.6
++ react@19.2.3
++ react-day-picker@9.13.2
++ react-dom@19.2.3
++ react-hook-form@7.70.0
++ react-i18next@16.5.1
++ react-router-dom@7.12.0
++ react-virtuoso@4.18.1
++ recharts@2.15.4
++ sonner@2.0.7
++ streamdown@2.6.0
++ swr@2.3.8
++ tailwind-merge@3.4.0
++ zod@4.3.5
+
+912 packages installed [4.82s]
+[0;32m[DEPLOY][0m Building frontend...
+$ vite build
+vite v7.3.1 building client environment for production...
+transforming...
+Browserslist: browsers data (caniuse-lite) is 9 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+✓ 16957 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                        1.00 kB │ gzip:     0.53 kB
+dist/assets/pako_inflate.min-DFjmC4Gb.js              21.48 kB
+dist/assets/cap_wasm_bg-DY4f-UZd.wasm                 22.61 kB │ gzip:     8.83 kB
+dist/assets/index-qZ_J01T1.css                        88.40 kB │ gzip:    16.04 kB
+dist/assets/highlighted-body-KPVGNVTW-C5DW31bx.js      0.46 kB │ gzip:     0.31 kB
+dist/assets/cap.min-D9FmRLV5.js                       44.23 kB │ gzip:    15.47 kB
+dist/assets/index-BMzRcRtu.js                      4,659.19 kB │ gzip: 1,322.21 kB
+✓ built in 45.96s
+
+(!) Some chunks are larger than 1000 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+[0;32m[DEPLOY][0m Building release binary...
+   Compiling proc-macro2 v1.0.105
+   Compiling unicode-ident v1.0.22
+   Compiling quote v1.0.43
+   Compiling libc v0.2.179
+   Compiling serde v1.0.228
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.6
+   Compiling cfg-if v1.0.4
+   Compiling serde_core v1.0.228
+   Compiling version_check v0.9.5
+   Compiling autocfg v1.5.0
+   Compiling typenum v1.19.0
+   Compiling generic-array v0.14.7
+   Compiling memchr v2.7.6
+   Compiling syn v2.0.114
+   Compiling crossbeam-utils v0.8.21
+   Compiling jobserver v0.1.34
+   Compiling parking_lot_core v0.9.12
+   Compiling cc v1.2.51
+   Compiling log v0.4.29
+   Compiling itoa v1.0.17
+   Compiling pin-project-lite v0.2.16
+   Compiling num-traits v0.2.19
+   Compiling once_cell v1.21.3
+   Compiling futures-core v0.3.31
+   Compiling thiserror v2.0.17
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling crossbeam-epoch v0.9.18
+   Compiling stable_deref_trait v1.2.1
+   Compiling bytes v1.11.0
+   Compiling rayon-core v1.13.0
+   Compiling subtle v2.6.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling icu_properties_data v2.1.2
+   Compiling icu_normalizer_data v2.1.1
+   Compiling zerocopy v0.8.33
+   Compiling crypto-common v0.1.7
+   Compiling cmake v0.1.57
+   Compiling getrandom v0.3.4
+   Compiling futures-sink v0.3.31
+   Compiling dunce v1.0.5
+   Compiling zmij v1.0.12
+   Compiling errno v0.3.14
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.2.0
+   Compiling signal-hook-registry v1.4.8
+   Compiling tracing-core v0.1.36
+   Compiling socket2 v0.6.1
+   Compiling synstructure v0.13.2
+   Compiling mio v1.1.1
+   Compiling getrandom v0.2.16
+   Compiling slab v0.4.11
+   Compiling bitflags v2.10.0
+   Compiling block-buffer v0.10.4
+   Compiling fs_extra v1.3.0
+   Compiling pin-utils v0.1.0
+   Compiling digest v0.10.7
+   Compiling hashbrown v0.16.1
+   Compiling aws-lc-sys v0.35.0
+   Compiling zeroize v1.8.2
+   Compiling futures-io v0.3.31
+   Compiling pkg-config v0.3.32
+   Compiling serde_derive v1.0.228
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.1
+   Compiling zerovec-derive v0.11.2
+   Compiling displaydoc v0.2.5
+   Compiling thiserror-impl v2.0.17
+   Compiling tracing-attributes v0.1.31
+   Compiling zerocopy-derive v0.8.33
+   Compiling zerofrom v0.1.6
+   Compiling tokio-macros v2.6.0
+   Compiling yoke v0.8.1
+   Compiling zerovec v0.11.5
+   Compiling futures-macro v0.3.31
+   Compiling tracing v0.1.44
+   Compiling libm v0.2.15
+   Compiling futures-task v0.3.31
+   Compiling ring v0.17.14
+   Compiling num-integer v0.1.46
+   Compiling futures-util v0.3.31
+   Compiling num-conv v0.1.0
+   Compiling time-core v0.1.6
+   Compiling time-macros v0.2.24
+   Compiling smallvec v1.15.1
+   Compiling either v1.15.0
+   Compiling rayon v1.11.0
+   Compiling parking_lot v0.12.5
+   Compiling tokio v1.49.0
+   Compiling num-bigint v0.4.6
+   Compiling rustls-pki-types v1.13.2
+   Compiling indexmap v2.13.0
+   Compiling aws-lc-rs v1.15.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling tinystr v0.8.2
+   Compiling litemap v0.8.1
+   Compiling cpufeatures v0.2.17
+   Compiling writeable v0.6.2
+   Compiling percent-encoding v2.3.2
+   Compiling arrayvec v0.7.6
+   Compiling untrusted v0.9.0
+   Compiling icu_locale_core v2.1.1
+   Compiling potential_utf v0.1.4
+   Compiling zerotrie v0.2.3
+   Compiling base64 v0.22.1
+   Compiling serde_json v1.0.149
+   Compiling icu_provider v2.1.1
+   Compiling icu_collections v2.1.1
+   Compiling rustls v0.23.36
+   Compiling rand_core v0.6.4
+   Compiling futures-channel v0.3.31
+   Compiling http v1.4.0
+   Compiling vcpkg v0.2.15
+   Compiling anyhow v1.0.100
+   Compiling libsqlite3-sys v0.30.1
+   Compiling rand_chacha v0.3.1
+   Compiling icu_normalizer v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling form_urlencoded v1.2.2
+   Compiling powerfmt v0.2.0
+   Compiling iana-time-zone v0.1.64
+   Compiling glob v0.3.3
+   Compiling allocator-api2 v0.2.21
+   Compiling chrono v0.4.42
+   Compiling deranged v0.5.5
+   Compiling idna_adapter v1.2.1
+   Compiling rand v0.8.5
+   Compiling bigdecimal v0.4.10
+   Compiling rust_decimal v1.40.0
+   Compiling simd-adler32 v0.3.8
+   Compiling utf8_iter v1.0.4
+   Compiling foldhash v0.1.5
+   Compiling heck v0.5.0
+   Compiling idna v1.1.0
+   Compiling hashbrown v0.15.5
+   Compiling time v0.3.44
+   Compiling rustls-webpki v0.103.8
+   Compiling concurrent-queue v2.5.0
+   Compiling webpki-roots v1.0.5
+   Compiling uuid v1.19.0
+   Compiling parking v2.2.1
+   Compiling httparse v1.10.1
+   Compiling crc-catalog v2.4.0
+   Compiling tinyvec_macros v0.1.1
+   Compiling heck v0.4.1
+   Compiling tokio-stream v0.1.18
+   Compiling tinyvec v1.10.0
+   Compiling sha2 v0.10.9
+   Compiling crc v3.4.0
+   Compiling event-listener v5.4.1
+   Compiling webpki-roots v0.26.11
+   Compiling futures-intrusive v0.5.0
+   Compiling url v2.5.8
+   Compiling hashlink v0.10.0
+   Compiling crossbeam-queue v0.3.12
+   Compiling rand_core v0.9.3
+   Compiling unicode-normalization v0.1.25
+   Compiling sqlx-core v0.8.6
+   Compiling http-body v1.0.1
+   Compiling hmac v0.12.1
+   Compiling spin v0.9.8
+   Compiling atoi v2.0.0
+   Compiling aho-corasick v1.1.4
+   Compiling ryu v1.0.22
+   Compiling unicode-properties v0.1.4
+   Compiling fnv v1.0.7
+   Compiling regex-syntax v0.8.8
+   Compiling ident_case v1.0.1
+   Compiling unicode-bidi v0.3.18
+   Compiling regex-automata v0.4.13
+   Compiling stringprep v0.1.5
+   Compiling serde_urlencoded v0.7.1
+   Compiling darling_core v0.20.11
+   Compiling flume v0.11.1
+   Compiling hkdf v0.12.4
+   Compiling rand_chacha v0.9.0
+   Compiling futures-executor v0.3.31
+   Compiling clang-sys v1.9.1
+   Compiling md-5 v0.10.6
+   Compiling equator-macro v0.4.2
+   Compiling rustix v1.1.3
+   Compiling hex v0.4.3
+   Compiling home v0.5.12
+   Compiling tower-service v0.3.3
+   Compiling dotenvy v0.15.7
+   Compiling utf8parse v0.2.2
+   Compiling byteorder v1.5.0
+   Compiling whoami v1.6.1
+   Compiling adler2 v2.0.1
+   Compiling crc32fast v1.5.0
+   Compiling miniz_oxide v0.8.9
+   Compiling sqlx-postgres v0.8.6
+   Compiling anstyle-parse v0.2.7
+   Compiling darling_macro v0.20.11
+   Compiling equator v0.4.2
+   Compiling sqlx-sqlite v0.8.6
+   Compiling rand v0.9.2
+   Compiling tokio-util v0.7.18
+   Compiling block-padding v0.3.3
+   Compiling nom v8.0.0
+   Compiling try-lock v0.2.5
+   Compiling atomic-waker v1.1.2
+   Compiling colorchoice v1.0.4
+   Compiling linux-raw-sys v0.11.0
+   Compiling anstyle-query v1.1.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling minimal-lexical v0.2.1
+   Compiling anstyle v1.0.13
+   Compiling anstream v0.6.21
+   Compiling nom v7.1.3
+   Compiling h2 v0.4.13
+   Compiling want v0.3.1
+   Compiling inout v0.1.4
+   Compiling sqlx-macros-core v0.8.6
+   Compiling aligned-vec v0.6.4
+   Compiling darling v0.20.11
+   Compiling libloading v0.8.9
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling siphasher v1.0.3
+   Compiling bytemuck v1.25.0
+   Compiling httpdate v1.0.3
+   Compiling bindgen v0.72.1
+   Compiling flate2 v1.1.5
+   Compiling v_frame v0.3.9
+   Compiling sea-query-derive v0.4.3
+   Compiling sqlx-macros v0.8.6
+   Compiling regex v1.12.2
+   Compiling hyper v1.8.1
+   Compiling cipher v0.4.4
+   Compiling cexpr v0.6.0
+   Compiling terminal_size v0.4.3
+   Compiling http-body-util v0.1.3
+   Compiling itertools v0.13.0
+   Compiling num-rational v0.4.2
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling inherent v1.0.13
+   Compiling as-slice v0.2.1
+   Compiling ordered-float v4.6.0
+   Compiling sync_wrapper v1.0.2
+   Compiling proc-macro-error-attr2 v2.0.0
+   Compiling ahash v0.8.12
+   Compiling encoding_rs v0.8.35
+   Compiling av-scenechange v0.14.1
+   Compiling openssl-probe v0.2.0
+   Compiling clap_lex v1.0.0
+   Compiling yansi v1.0.1
+   Compiling rustc-hash v2.1.1
+   Compiling mime v0.3.17
+   Compiling paste v1.0.15
+   Compiling weezl v0.1.12
+   Compiling lazy_static v1.5.0
+   Compiling built v0.8.0
+   Compiling ipnet v2.11.0
+   Compiling strsim v0.11.1
+   Compiling tower-layer v0.3.3
+   Compiling clap_builder v4.5.60
+   Compiling rav1e v0.8.1
+   Compiling hyper-util v0.1.19
+   Compiling phf_shared v0.11.3
+   Compiling rustls-native-certs v0.8.3
+   Compiling proc-macro-error2 v2.0.1
+   Compiling sea-query v0.32.7
+   Compiling aligned v0.4.3
+   Compiling rgb v0.8.53
+   Compiling clap_derive v4.5.55
+   Compiling nasm-rs v0.3.2
+   Compiling profiling-procmacros v1.0.17
+   Compiling arg_enum_proc_macro v0.3.4
+   Compiling rquickjs-sys v0.12.2
+   Compiling libdeflate-sys v1.25.2
+   Compiling core2 v0.4.0
+   Compiling semver v1.0.27
+   Compiling unicase v2.9.0
+   Compiling quick-error v2.0.1
+   Compiling radium v0.7.0
+   Compiling pastey v0.1.1
+   Compiling unicode-xid v0.2.6
+   Compiling y4m v0.8.0
+   Compiling derive_more-impl v2.1.1
+   Compiling mime_guess v2.0.5
+   Compiling jxl-sys v0.1.11+libjxl-0.11.2
+   Compiling bitstream-io v4.9.0
+   Compiling profiling v1.0.17
+   Compiling mozjpeg-sys v2.2.3
+   Compiling clap v4.5.60
+   Compiling sea-bae v0.2.1
+   Compiling ouroboros_macro v0.18.5
+   Compiling phf_generator v0.11.3
+   Compiling tower v0.5.2
+   Compiling sharded-slab v0.1.7
+   Compiling av1-grain v0.2.5
+   Compiling matchers v0.2.0
+   Compiling libwebp-sys v0.9.6
+   Compiling sha1 v0.10.6
+   Compiling maybe-rayon v0.1.1
+   Compiling half v2.7.1
+   Compiling itertools v0.14.0
+   Compiling tracing-serde v0.2.0
+   Compiling fax_derive v0.2.0
+   Compiling num-derive v0.4.2
+   Compiling async-stream-impl v0.3.6
+   Compiling raw-cpuid v11.6.0
+   Compiling tracing-log v0.2.0
+   Compiling simd_helpers v0.1.0
+   Compiling multer v3.1.0
+   Compiling thread_local v1.1.9
+   Compiling tap v1.0.1
+   Compiling nu-ansi-term v0.50.3
+   Compiling aliasable v0.1.3
+   Compiling bytecount v0.6.9
+   Compiling noop_proc_macro v0.3.0
+   Compiling zstd-safe v7.2.4
+   Compiling bit-vec v0.6.3
+   Compiling pom v1.1.0
+   Compiling zune-core v0.4.12
+   Compiling static_assertions v1.1.0
+   Compiling data-encoding v2.9.0
+   Compiling new_debug_unreachable v1.0.6
+   Compiling utf-8 v0.7.6
+   Compiling imgref v1.12.0
+   Compiling loop9 v0.1.5
+   Compiling tungstenite v0.28.0
+   Compiling ouroboros v0.18.5
+   Compiling zune-jpeg v0.4.21
+   Compiling bit-set v0.5.3
+   Compiling nom_locate v5.0.0
+   Compiling tracing-subscriber v0.3.22
+   Compiling quanta v0.12.6
+   Compiling wyz v0.5.1
+   Compiling async-stream v0.3.6
+   Compiling fax v0.2.6
+   Compiling phf_macros v0.11.3
+   Compiling metrics v0.24.3
+   Compiling sea-orm-macros v1.1.19
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.7
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling derive_more v2.1.1
+   Compiling ecb v0.1.2
+   Compiling aes v0.8.4
+   Compiling cbc v0.1.2
+   Compiling phf_shared v0.12.1
+   Compiling rand_xoshiro v0.7.0
+   Compiling sea-schema-derive v0.3.0
+   Compiling zune-inflate v0.2.54
+   Compiling fdeflate v0.3.7
+   Compiling hashbrown v0.17.1
+   Compiling futures v0.3.31
+   Compiling avif-serialize v0.8.8
+   Compiling async-trait v0.1.89
+   Compiling env_filter v1.0.0
+   Compiling metrics-exporter-prometheus v0.18.1
+   Compiling base64ct v1.8.2
+   Compiling rangemap v1.7.1
+   Compiling lebe v0.5.3
+   Compiling pxfm v0.1.28
+   Compiling iri-string v0.7.10
+   Compiling zune-core v0.5.1
+   Compiling strum v0.26.3
+   Compiling byteorder-lite v0.1.0
+   Compiling bumpalo v3.19.1
+   Compiling bit_field v0.10.3
+   Compiling chrono-tz v0.10.4
+   Compiling funty v2.0.0
+   Compiling sketches-ddsketch v0.3.0
+   Compiling ttf-parser v0.25.1
+   Compiling color_quant v1.1.0
+   Compiling gif v0.14.1
+   Compiling bitvec v1.0.1
+   Compiling metrics-util v0.20.1
+   Compiling lopdf v0.38.0
+   Compiling sea-orm-cli v1.1.19
+   Compiling moxcms v0.7.11
+   Compiling exr v1.74.0
+   Compiling zopfli v0.8.3
+   Compiling tower-http v0.6.8
+   Compiling image-webp v0.2.4
+   Compiling sea-orm v1.1.19
+   Compiling zune-jpeg v0.5.12
+   Compiling password-hash v0.5.0
+   Compiling env_logger v0.11.9
+   Compiling ravif v0.12.0
+   Compiling sea-schema v0.16.2
+   Compiling rquickjs-core v0.12.2
+   Compiling png v0.18.1
+   Compiling phf v0.11.3
+   Compiling phf v0.12.1
+   Compiling rustls-platform-verifier v0.6.2
+   Compiling libdeflater v1.25.2
+   Compiling tiff v0.10.3
+   Compiling fancy-regex v0.13.0
+   Compiling tokio-tungstenite v0.28.0
+   Compiling adobe-cmap-parser v0.4.1
+   Compiling type1-encoding-parser v0.1.0
+   Compiling axum-core v0.5.6
+   Compiling qoi v0.4.1
+   Compiling bstr v1.12.1
+   Compiling simple_asn1 v0.6.3
+   Compiling pem v3.0.6
+   Compiling axum-macros v0.5.0
+   Compiling blake2 v0.10.6
+   Compiling euclid v0.20.14
+   Compiling serde_path_to_error v0.1.20
+   Compiling crossbeam-channel v0.5.15
+   Compiling include_dir_macros v0.7.4
+   Compiling winnow v0.7.14
+   Compiling matchit v0.8.4
+   Compiling monoize v1.9.3 (/home/ikaleio/projects/monoize/.git/deploy-worktrees/v1.9.3)
+   Compiling rustc-hash v1.1.0
+   Compiling parse-size v1.1.0
+   Compiling cff-parser v0.1.0
+   Compiling hashbrown v0.14.5
+   Compiling postscript v0.14.1
+   Compiling dashmap v6.1.0
+   Compiling cron v0.17.0
+   Compiling pdf-extract v0.10.0
+   Compiling oxipng v10.1.0
+   Compiling tiktoken-rs v0.9.1
+   Compiling axum v0.8.8
+   Compiling include_dir v0.7.4
+   Compiling argon2 v0.5.3
+   Compiling jsonwebtoken v9.3.1
+   Compiling image v0.25.9
+   Compiling reqwest v0.13.1
+   Compiling mozjpeg v0.10.13
+   Compiling zstd v0.13.3
+   Compiling rquickjs v0.12.2
+   Compiling sea-orm-migration v1.1.19
+   Compiling webp v0.3.1
+   Compiling eventsource-stream v0.2.3
+   Compiling xxhash-rust v0.8.15
+   Compiling inventory v0.3.21
+    Finished `release` profile [optimized] target(s) in 9m 01s
+[0;32m[DEPLOY][0m Backing up current binary to /opt/monoize/monoize.bak.20260912150206
+[0;32m[DEPLOY][0m Deploying binary to /opt/monoize...
+[0;32m[DEPLOY][0m Restarting PM2 process...
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [monoize](ids: [ 0 ])
+[PM2] [monoize](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ monoize    │ default     │ N/A     │ fork    │ 200658   │ 0s     │ 7    │ online    │ 0%       │ 9.5mb    │ ikaleio  │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /home/ikaleio/.pm2/dump.pm2
+[0;32m[DEPLOY][0m Rollback watchdog armed for 300s. Run ./deploy.sh cancel-watchdog to keep the new binary.
+[0;32m[DEPLOY][0m Deploy complete.

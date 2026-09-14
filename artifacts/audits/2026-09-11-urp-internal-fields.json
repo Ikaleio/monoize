@@ -1,0 +1,1803 @@
+{
+  "baseline": "16f8920",
+  "version": "v1.8.4",
+  "reserved_identifiers": 44,
+  "additional_internal_fields": 3,
+  "entries": [
+    {
+      "key": "_monoize_chat_choice_extra",
+      "classification": "保留",
+      "description": "choice 层未知字段及流事件位置，不能与 delta 层合并。",
+      "symbols": [
+        "CHAT_CHOICE_EXTRA_BODY_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 19
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 12
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 22
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 24
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 19
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 575
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 592
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 12
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 189
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 485
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1051
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 22
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 791
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 24
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 188
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 212
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 735
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 744
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_delta_extra",
+      "classification": "保留",
+      "description": "原生 delta 层未知字段，保留封装层级。",
+      "symbols": [
+        "CHAT_DELTA_EXTRA_BODY_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 13
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 25
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 13
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 51
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1097
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 25
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 569
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 739
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_error_event",
+      "classification": "保留",
+      "description": "重放原生错误形状；不是推理正文。",
+      "symbols": [
+        "CHAT_ERROR_EVENT_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 14
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 26
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 14
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1068
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 26
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 816
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_native_finish_reason",
+      "classification": "保留",
+      "description": "为 `FinishReason::Other` 保留原生枚举值。当前 Chat 编码并非无条件覆盖类型化 finish_reason。",
+      "symbols": [
+        "CHAT_NATIVE_FINISH_REASON_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 20
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 15
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 23
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 27
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 20
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 512
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 593
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 15
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 465
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1031
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 23
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 797
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 27
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 181
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_legacy_function_definition",
+      "classification": "保留",
+      "description": "标识旧 functions 形状；函数参数和名字已有类型字段。",
+      "symbols": [
+        "CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 62
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 61
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 880
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 936
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 233
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_legacy_function_choice",
+      "classification": "保留",
+      "description": "旧 function_call 选择形状；编码时重写类型化名字。",
+      "symbols": [
+        "CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 63
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 63
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 8
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 439
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 624
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_legacy_function_call",
+      "classification": "保留",
+      "description": "旧函数调用格式标记；调用语义已有类型字段。",
+      "symbols": [
+        "CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 64
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 64
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 8
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 352
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 504
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 705
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 362
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 615
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 794
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 921
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 265
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 13
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 1931
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 2173
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_legacy_function_result",
+      "classification": "保留",
+      "description": "旧函数结果消息格式标记。",
+      "symbols": [
+        "CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 65
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 65
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 829
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 415
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_message_audio",
+      "classification": "保留/拆分",
+      "description": "标识完整 message.audio ProviderItem；可转换内容不应永久不透明。",
+      "symbols": [
+        "CHAT_MESSAGE_AUDIO_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 60
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 60
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 319
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 725
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 288
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_message_item",
+      "classification": "保留",
+      "description": "完整 Chat configuration_update 消息封装。",
+      "symbols": [
+        "CHAT_MESSAGE_ITEM_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 53
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 53
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 289
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 397
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_reasoning_config",
+      "classification": "修复 F1",
+      "description": "不能包住公共 summary 等请求控制。",
+      "symbols": [
+        "CHAT_REASONING_CONFIG_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 58
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 58
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 398
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 865
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_thinking_config",
+      "classification": "修复 F6",
+      "description": "不能只在原生包中保存启停与预算。",
+      "symbols": [
+        "CHAT_THINKING_CONFIG_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 59
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 59
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 12
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 403
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 13
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 873
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_reasoning_detail",
+      "classification": "修复 F3",
+      "description": "可保留 detail 未知字段及顺序；不能作为覆盖类型文本的权威副本。",
+      "symbols": [
+        "CHAT_REASONING_DETAIL_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 51
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 51
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 220
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 349
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 452
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 1035
+        },
+        {
+          "path": "src/urp/encode/anthropic.rs",
+          "line": 6
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 259
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1096
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1279
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 390
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 917
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 13
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 1006
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 1253
+        },
+        {
+          "path": "src/urp/stream_decode/openai_chat.rs",
+          "line": 1364
+        },
+        {
+          "path": "src/urp/encode/anthropic/reasoning.inc.rs",
+          "line": 100
+        }
+      ]
+    },
+    {
+      "key": "_monoize_chat_reasoning_surface",
+      "classification": "保留",
+      "description": "记录 reasoning / reasoning_content 原生入口。字符串本体已在 content 中。",
+      "symbols": [
+        "CHAT_REASONING_SURFACE_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 54
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 54
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 1080
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 12
+        },
+        {
+          "path": "src/urp/decode/openai_chat.rs",
+          "line": 954
+        }
+      ]
+    },
+    {
+      "key": "_monoize_file_id_origin",
+      "classification": "保留",
+      "description": "防止跨供应方错误重放文件 ID；不是可见内容。",
+      "symbols": [
+        "FILE_ID_ORIGIN_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 68
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 68
+        },
+        {
+          "path": "src/transforms/cache_openai_tool_use.rs",
+          "line": 7
+        },
+        {
+          "path": "src/transforms/cache_openai_tool_use.rs",
+          "line": 262
+        },
+        {
+          "path": "src/urp/encode/mod.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/encode/mod.rs",
+          "line": 32
+        },
+        {
+          "path": "src/urp/decode/mod.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/mod.rs",
+          "line": 666
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 8
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 852
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 863
+        },
+        {
+          "path": "src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs",
+          "line": 4
+        }
+      ]
+    },
+    {
+      "key": "_monoize_gemini_function_response",
+      "classification": "保留/拆分",
+      "description": "结构化工具结果原生形状。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/urp/encode/gemini.rs",
+          "line": 101
+        },
+        {
+          "path": "src/urp/decode/gemini.rs",
+          "line": 693
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "_monoize_gemini_part",
+      "classification": "保留/拆分",
+      "description": "Gemini Part 未知字段；普通文本 thoughtSignature 是已识别的类型模型缺口。",
+      "symbols": [
+        "GEMINI_PART_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/decode/gemini.rs",
+          "line": 497
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/encode/gemini.rs",
+          "line": 2
+        },
+        {
+          "path": "src/urp/encode/gemini.rs",
+          "line": 589
+        },
+        {
+          "path": "src/urp/decode/gemini.rs",
+          "line": 497
+        },
+        {
+          "path": "src/urp/decode/gemini.rs",
+          "line": 514
+        }
+      ]
+    },
+    {
+      "key": "_monoize_messages_chat_reasoning_detail_type",
+      "classification": "上下文",
+      "description": "Messages 编码器将相邻 Chat plaintext/encrypted detail 合并成一个输出块时使用。",
+      "symbols": [
+        "CHAT_REASONING_DETAIL_TYPE_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 15
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 15
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 297
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 305
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 397
+        }
+      ]
+    },
+    {
+      "key": "_monoize_messages_citation_delta",
+      "classification": "类型化",
+      "description": "引用增量应获得明确事件表达。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 930
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 1576
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 1040
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "_monoize_messages_output_config",
+      "classification": "修复 F6/拆分",
+      "description": "effort 和已识别 format 不应只有原生权威副本；未知选项可重放。",
+      "symbols": [
+        "MESSAGES_OUTPUT_CONFIG_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 67
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 67
+        },
+        {
+          "path": "src/urp/encode/anthropic.rs",
+          "line": 7
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 136
+        },
+        {
+          "path": "src/urp/encode/anthropic/reasoning.inc.rs",
+          "line": 415
+        }
+      ]
+    },
+    {
+      "key": "_monoize_messages_provider_item_start_body",
+      "classification": "保留",
+      "description": "不透明供应方块的 start payload，受协议来源限制。",
+      "symbols": [
+        "MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 17
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 21
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 16
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 537
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 20
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 974
+        }
+      ]
+    },
+    {
+      "key": "_monoize_messages_stream_start_usage",
+      "classification": "类型化",
+      "description": "用字符串键搬运已有 Usage 类型。",
+      "symbols": [
+        "MESSAGES_STREAM_START_USAGE_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 73
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 73
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 6
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 1493
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 741
+        }
+      ]
+    },
+    {
+      "key": "_monoize_messages_thinking_config",
+      "classification": "修复 F6",
+      "description": "精确预算与启停应类型化。",
+      "symbols": [
+        "MESSAGES_THINKING_CONFIG_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 66
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 66
+        },
+        {
+          "path": "src/urp/encode/anthropic.rs",
+          "line": 7
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 130
+        },
+        {
+          "path": "src/urp/encode/anthropic/reasoning.inc.rs",
+          "line": 410
+        }
+      ]
+    },
+    {
+      "key": "_monoize_reasoning_downstream_only_presentation",
+      "classification": "类型化",
+      "description": "决定推理是否允许向上游重放，属于重放/展示策略。",
+      "symbols": [
+        "REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 48
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 47
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 1481
+        },
+        {
+          "path": "src/urp/encode/openai_responses.rs",
+          "line": 8
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 45
+        },
+        {
+          "path": "src/urp/encode/openai_responses/reasoning.inc.rs",
+          "line": 21
+        }
+      ]
+    },
+    {
+      "key": "_monoize_reasoning_envelope_item_id",
+      "classification": "类型化",
+      "description": "传输封装中的原始 item id。",
+      "symbols": [
+        "REASONING_ENVELOPE_ITEM_ID_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 88
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 88
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 597
+        },
+        {
+          "path": "src/urp/encode/gemini.rs",
+          "line": 612
+        }
+      ]
+    },
+    {
+      "key": "_monoize_reasoning_kind",
+      "classification": "类型化",
+      "description": "区分 redacted_thinking，不能作为任意 JSON 标志处理。",
+      "symbols": [
+        "REASONING_KIND_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 45
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 45
+        },
+        {
+          "path": "src/urp/encode/anthropic.rs",
+          "line": 8
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 7
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 262
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 385
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/anthropic.rs",
+          "line": 74
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 1232
+        },
+        {
+          "path": "src/urp/encode/anthropic/reasoning.inc.rs",
+          "line": 48
+        },
+        {
+          "path": "src/urp/encode/anthropic/reasoning.inc.rs",
+          "line": 56
+        }
+      ]
+    },
+    {
+      "key": "_monoize_response_history",
+      "classification": "上下文",
+      "description": "请求历史缓存的关联上下文，实际历史节点仍是 URP。",
+      "symbols": [
+        "CONTEXT_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/handlers/responses_history.rs",
+          "line": 3
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/handlers/responses_history.rs",
+          "line": 3
+        },
+        {
+          "path": "src/handlers/responses_history.rs",
+          "line": 137
+        },
+        {
+          "path": "src/handlers/responses_history.rs",
+          "line": 158
+        },
+        {
+          "path": "src/handlers/responses_history.rs",
+          "line": 254
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_custom_messages_bridge",
+      "classification": "上下文",
+      "description": "custom tool 转 Messages function 的桥接标记。",
+      "symbols": [
+        "RESPONSES_CUSTOM_MESSAGES_BRIDGE_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1345
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1344
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1438
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1451
+        }
+      ]
+    },
+    {
+      "key": "_monoize_tool_namespace_bridge",
+      "classification": "上下文",
+      "description": "namespaced tool 的别名反向映射；类型语义与适配状态应分开。",
+      "symbols": [
+        "TOOL_NAMESPACE_BRIDGE_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1358
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1358
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1581
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1589
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1593
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 1633
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_image_generation_call",
+      "classification": "保留/限制",
+      "description": "原生图片生成项元数据。编码已用类型化图像数据替换 result；其他与媒体类型相关字段仍需保持一致。",
+      "symbols": [
+        "RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 78
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 77
+        },
+        {
+          "path": "src/urp/internal_legacy_bridge.rs",
+          "line": 3
+        },
+        {
+          "path": "src/urp/internal_legacy_bridge.rs",
+          "line": 347
+        },
+        {
+          "path": "src/urp/encode/openai_responses.rs",
+          "line": 8
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 33
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses.rs",
+          "line": 16
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses/image_helpers.inc.rs",
+          "line": 54
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses/completed.inc.rs",
+          "line": 348
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses/completed.inc.rs",
+          "line": 373
+        },
+        {
+          "path": "src/urp/stream_encode/openai_responses/state.inc.rs",
+          "line": 83
+        },
+        {
+          "path": "src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs",
+          "line": 1582
+        },
+        {
+          "path": "src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs",
+          "line": 1785
+        },
+        {
+          "path": "src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs",
+          "line": 1798
+        },
+        {
+          "path": "src/urp/encode/openai_responses/request_response.inc.rs",
+          "line": 141
+        },
+        {
+          "path": "src/urp/encode/openai_responses/request_response.inc.rs",
+          "line": 154
+        },
+        {
+          "path": "src/urp/encode/openai_responses/tool_call.inc.rs",
+          "line": 129
+        },
+        {
+          "path": "src/urp/encode/openai_responses/tool_call.inc.rs",
+          "line": 311
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_instruction_node",
+      "classification": "修复 F4",
+      "description": "来源标记可以保留，但不能据此丢弃变换后的节点。",
+      "symbols": [
+        "RESPONSES_INSTRUCTION_NODE_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 82
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 82
+        },
+        {
+          "path": "src/handlers/responses_history.rs",
+          "line": 163
+        },
+        {
+          "path": "src/urp/encode/openai_responses.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 282
+        },
+        {
+          "path": "src/urp/encode/openai_responses/tool_call.inc.rs",
+          "line": 15
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_instructions",
+      "classification": "修复 F4",
+      "description": "原始 instructions 副本覆盖公共提示词节点。",
+      "symbols": [
+        "RESPONSES_INSTRUCTIONS_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 80
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 80
+        },
+        {
+          "path": "src/handlers/routing.rs",
+          "line": 996
+        },
+        {
+          "path": "src/urp/encode/openai_responses.rs",
+          "line": 9
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 417
+        },
+        {
+          "path": "src/urp/encode/openai_responses/tool_call.inc.rs",
+          "line": 23
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_reasoning_content",
+      "classification": "修复 F2",
+      "description": "原生数组覆盖类型化 CoT。",
+      "symbols": [
+        "RESPONSES_REASONING_CONTENT_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 75
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 75
+        },
+        {
+          "path": "src/urp/encode/openai_responses.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 804
+        },
+        {
+          "path": "src/urp/encode/openai_responses/reasoning.inc.rs",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_reasoning_summary",
+      "classification": "修复 F2",
+      "description": "原生数组覆盖类型化概要。",
+      "symbols": [
+        "RESPONSES_REASONING_SUMMARY_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 74
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 74
+        },
+        {
+          "path": "src/urp/encode/openai_responses.rs",
+          "line": 10
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 798
+        },
+        {
+          "path": "src/urp/encode/openai_responses/reasoning.inc.rs",
+          "line": 49
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_response_source",
+      "classification": "保留/限制",
+      "description": "仅为缺省字段形状保存完整响应副本，范围过大；不得覆盖类型化状态。",
+      "symbols": [
+        "RESPONSES_RESPONSE_SOURCE_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 84
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 84
+        },
+        {
+          "path": "src/urp/encode/openai_responses.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 11
+        },
+        {
+          "path": "src/urp/decode/openai_responses.rs",
+          "line": 1056
+        },
+        {
+          "path": "src/urp/encode/openai_responses/tool_call.inc.rs",
+          "line": 219
+        }
+      ]
+    },
+    {
+      "key": "_monoize_responses_stream_start_source",
+      "classification": "保留/限制",
+      "description": "起始响应 envelope 的原生形状；应只保留未类型化的形状信息。",
+      "symbols": [
+        "RESPONSES_STREAM_START_SOURCE_EXTRA_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 86
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 86
+        },
+        {
+          "path": "src/handlers/responses_history.rs",
+          "line": 184
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses.rs",
+          "line": 16
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses/stream_loop_part1.inc.rs",
+          "line": 146
+        },
+        {
+          "path": "src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs",
+          "line": 266
+        }
+      ]
+    },
+    {
+      "key": "_monoize_summary_from_messages_thinking",
+      "classification": "类型化",
+      "description": "Messages summary delta 的来源/展示选择。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 741
+        },
+        {
+          "path": "src/urp/stream_decode/anthropic.rs",
+          "line": 1068
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "_monoize_summary_from_plaintext_reasoning",
+      "classification": "类型化",
+      "description": "变换后的文本来源/展示选择。",
+      "symbols": [
+        "SUMMARY_FROM_PLAINTEXT_REASONING_KEY"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/transforms/reasoning_content_to_summary.rs",
+          "line": 12
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 745
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/transforms/reasoning_content_to_summary.rs",
+          "line": 12
+        },
+        {
+          "path": "src/transforms/reasoning_content_to_summary.rs",
+          "line": 134
+        }
+      ]
+    },
+    {
+      "key": "__monoize_username",
+      "classification": "上下文",
+      "description": "注入缓存变换身份信息；正常 handler 在发送上游前删除。宜放 TransformRuntimeContext。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/transforms/cache_openai_prompt.rs",
+          "line": 239
+        },
+        {
+          "path": "src/transforms/cache_openai_prompt.rs",
+          "line": 253
+        },
+        {
+          "path": "src/transforms/cache_user_id.rs",
+          "line": 91
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 123
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 134
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "__monoize_api_key_id",
+      "classification": "上下文",
+      "description": "同上，缓存身份粒度。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/transforms/cache_openai_prompt.rs",
+          "line": 260
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 127
+        },
+        {
+          "path": "src/handlers/helpers.rs",
+          "line": 135
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "openwebui_reasoning_content",
+      "classification": "修复 F5",
+      "description": "无保留前缀的内部输出选项。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/transforms/reasoning_summary_to_raw_cot.rs",
+          "line": 117
+        },
+        {
+          "path": "src/transforms/reasoning_summary_to_raw_cot.rs",
+          "line": 131
+        },
+        {
+          "path": "src/urp/encode/openai_chat.rs",
+          "line": 1099
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 286
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1376
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "inject_reasoning_content",
+      "classification": "修复 F5",
+      "description": "无保留前缀的第二份推理文本。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/transforms/reasoning_inject_content_field.rs",
+          "line": 131
+        },
+        {
+          "path": "src/transforms/reasoning_inject_content_field.rs",
+          "line": 150
+        },
+        {
+          "path": "src/transforms/reasoning_inject_content_field.rs",
+          "line": 166
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 267
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1093
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1302
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "reasoning_item_id",
+      "classification": "类型化",
+      "description": "流式晚到的 reasoning item id，不应混同未知供应方字段。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/urp/mod.rs",
+          "line": 328
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 344
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 410
+        },
+        {
+          "path": "src/urp/mod.rs",
+          "line": 544
+        },
+        {
+          "path": "src/urp/stream_encode/openai_chat.rs",
+          "line": 1329
+        },
+        {
+          "path": "src/urp/stream_encode/anthropic.rs",
+          "line": 758
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses/state.inc.rs",
+          "line": 140
+        },
+        {
+          "path": "src/urp/stream_decode/openai_responses/stream_loop_part2.inc.rs",
+          "line": 118
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "_monoize_active_probe",
+      "classification": "非字段",
+      "description": "内部主动探测账号名称。",
+      "symbols": [
+        "ACTIVE_PROBE_SYSTEM_USER"
+      ],
+      "literal_locations": [
+        {
+          "path": "src/app.rs",
+          "line": 224
+        }
+      ],
+      "symbol_locations": [
+        {
+          "path": "src/app.rs",
+          "line": 224
+        },
+        {
+          "path": "src/app.rs",
+          "line": 1017
+        },
+        {
+          "path": "src/app.rs",
+          "line": 1041
+        },
+        {
+          "path": "src/app.rs",
+          "line": 1207
+        },
+        {
+          "path": "src/app.rs",
+          "line": 1329
+        }
+      ]
+    },
+    {
+      "key": "__monoize_host_fetch",
+      "classification": "非字段",
+      "description": "JavaScript sandbox 临时宿主函数名。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/custom_transforms/sandbox.rs",
+          "line": 445
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "__monoize_host_log",
+      "classification": "非字段",
+      "description": "JavaScript sandbox 临时宿主函数名。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/custom_transforms/sandbox.rs",
+          "line": 412
+        }
+      ],
+      "symbol_locations": []
+    },
+    {
+      "key": "__monoize_image_api_mask",
+      "classification": "非字段",
+      "description": "Image API mask 节点的保留 ID；不是 extra_body 字段。",
+      "symbols": [],
+      "literal_locations": [
+        {
+          "path": "src/handlers/image_api.rs",
+          "line": 391
+        },
+        {
+          "path": "src/urp/encode/openai_image.rs",
+          "line": 116
+        }
+      ],
+      "symbol_locations": []
+    }
+  ]
+}

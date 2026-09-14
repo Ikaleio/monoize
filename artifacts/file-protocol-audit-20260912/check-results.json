@@ -1,0 +1,281 @@
+{
+  "fixture_rows": 82,
+  "request_scenarios": 40,
+  "request_stream_flag_variants": 80,
+  "nonstream_response_scenarios": 2,
+  "checks": 44,
+  "satisfied": 17,
+  "not_satisfied": 27,
+  "limitations": [
+    "The stream suffix means request.stream=true; these fixtures do not execute SSE event handling.",
+    "Payloads are synthetic bytes; this harness checks structural conversion, not file validity or provider acceptance.",
+    "Capability-policy failures record missing adaptation/error behavior, not native support for every exact source shape.",
+    "Scope controls check protocol-family provenance only, not provider/account/project ownership."
+  ],
+  "results": [
+    {
+      "id": "chat-image-data-url-nonstream",
+      "requirement": "Gemini encodes image data URLs as inlineData with MIME and raw Base64",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "chat-pdf-data-url-nonstream",
+      "requirement": "PDF MIME and Base64 survive all four target encoders",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "chat-pdf-raw-base64-nonstream",
+      "requirement": "Messages must not emit application/octet-stream as a base64 PDF document source",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "responses-image-data-url-nonstream",
+      "requirement": "Gemini encodes image data URLs as inlineData with MIME and raw Base64",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "responses-pdf-data-url-nonstream",
+      "requirement": "PDF MIME and Base64 survive all four target encoders",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "responses-pdf-raw-base64-nonstream",
+      "requirement": "Messages must not emit application/octet-stream as a base64 PDF document source",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-string-nonstream",
+      "requirement": "Valid Messages string custom document survives native decoding",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-text-source-nonstream",
+      "requirement": "chat preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-text-source-nonstream",
+      "requirement": "responses preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-text-source-nonstream",
+      "requirement": "gemini preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-array-nonstream",
+      "requirement": "chat preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-array-nonstream",
+      "requirement": "responses preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-array-nonstream",
+      "requirement": "gemini preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "gemini-inline-json-nonstream",
+      "requirement": "Messages does not encode application/json as a base64 PDF source",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-tool-result-media-nonstream",
+      "requirement": "Gemini FunctionResponsePart uses only supported inlineData media",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-tool-result-media-nonstream",
+      "requirement": "Responses tool result uses input media block shapes",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "urp-url-file-mime-nonstream",
+      "requirement": "Gemini preserves typed URL MIME metadata",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "urp-url-image-mime-nonstream",
+      "requirement": "Gemini preserves typed URL MIME metadata",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "urp-url-audio-mime-nonstream",
+      "requirement": "Gemini preserves typed URL MIME metadata",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "gemini-tool-result-file-display-name-nonstream",
+      "requirement": "Gemini preserves inline file displayName and matching reference",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "responses-file-id-nonstream",
+      "requirement": "OpenAI file IDs remain confined to compatible protocol-family outputs",
+      "classification": "scope_control_only",
+      "result": "satisfied"
+    },
+    {
+      "id": "chat-image-data-url-stream",
+      "requirement": "Gemini encodes image data URLs as inlineData with MIME and raw Base64",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "chat-pdf-data-url-stream",
+      "requirement": "PDF MIME and Base64 survive all four target encoders",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "chat-pdf-raw-base64-stream",
+      "requirement": "Messages must not emit application/octet-stream as a base64 PDF document source",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "responses-image-data-url-stream",
+      "requirement": "Gemini encodes image data URLs as inlineData with MIME and raw Base64",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "responses-pdf-data-url-stream",
+      "requirement": "PDF MIME and Base64 survive all four target encoders",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "responses-pdf-raw-base64-stream",
+      "requirement": "Messages must not emit application/octet-stream as a base64 PDF document source",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-string-stream",
+      "requirement": "Valid Messages string custom document survives native decoding",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-text-source-stream",
+      "requirement": "chat preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-text-source-stream",
+      "requirement": "responses preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-text-source-stream",
+      "requirement": "gemini preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-array-stream",
+      "requirement": "chat preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-array-stream",
+      "requirement": "responses preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-content-array-stream",
+      "requirement": "gemini preserves available document text or reports an explicit conversion error",
+      "classification": "capability_policy",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "gemini-inline-json-stream",
+      "requirement": "Messages does not encode application/json as a base64 PDF source",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-tool-result-media-stream",
+      "requirement": "Gemini FunctionResponsePart uses only supported inlineData media",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "messages-tool-result-media-stream",
+      "requirement": "Responses tool result uses input media block shapes",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "urp-url-file-mime-stream",
+      "requirement": "Gemini preserves typed URL MIME metadata",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "urp-url-image-mime-stream",
+      "requirement": "Gemini preserves typed URL MIME metadata",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "urp-url-audio-mime-stream",
+      "requirement": "Gemini preserves typed URL MIME metadata",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "gemini-tool-result-file-display-name-stream",
+      "requirement": "Gemini preserves inline file displayName and matching reference",
+      "classification": "positive_control",
+      "result": "satisfied"
+    },
+    {
+      "id": "responses-file-id-stream",
+      "requirement": "OpenAI file IDs remain confined to compatible protocol-family outputs",
+      "classification": "scope_control_only",
+      "result": "satisfied"
+    },
+    {
+      "id": "chat-generated-audio",
+      "requirement": "Unknown audio format is not emitted as a literal audio/unknown MIME",
+      "classification": "contract",
+      "result": "not_satisfied"
+    },
+    {
+      "id": "gemini-generated-audio",
+      "requirement": "Gemini PCM MIME parameters survive native response roundtrip",
+      "classification": "positive_control",
+      "result": "satisfied"
+    }
+  ]
+}

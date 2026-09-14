@@ -1,0 +1,27 @@
+{"request": {"model": "gpt-5.6-sol", "stream": true, "reasoning": {"effort": "high", "summary": "detailed"}, "max_output_tokens": 6000, "input": "设 a,b,c 为正实数，且 abc=1。证明：a^5-a^2+b^5-b^2+c^5-c^2 >= 0。请先独立寻找证明，再给出两种本质不同的严格证明，并确定全部等号情况。第二种证明不得引用幂平均不等式或 Jensen 不等式。若你发现条件可减弱，请精确陈述并证明推广。请用中文回答。"}}
+{"status": 200, "headers": {"content-type": "text/event-stream", "x-request-id": "5ab00faa-ee7a-4912-8b8e-59c6f64e515f"}}
+: heartbeat
+: heartbeat
+: heartbeat
+: heartbeat
+: heartbeat
+: heartbeat
+: heartbeat
+: heartbeat
+: heartbeat
+event: response.created
+data: {"response":{"background":false,"completed_at":null,"created_at":1789137141,"error":null,"frequency_penalty":0,"id":"resp_monoize_754764f1527c4587a744b70c4db2a1da","incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"metadata":{},"model":"gpt-5.6-sol","object":"response","output":[],"parallel_tool_calls":true,"presence_penalty":0,"previous_response_id":null,"prompt_cache_key":null,"reasoning":null,"safety_identifier":null,"status":"in_progress","store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":1.0,"truncation":"auto","usage":null,"user":null},"sequence_number":1,"type":"response.created"}
+event: response.in_progress
+data: {"response":{"background":false,"completed_at":null,"created_at":1789137141,"error":null,"frequency_penalty":0,"id":"resp_monoize_754764f1527c4587a744b70c4db2a1da","incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"metadata":{},"model":"gpt-5.6-sol","object":"response","output":[],"parallel_tool_calls":true,"presence_penalty":0,"previous_response_id":null,"prompt_cache_key":null,"reasoning":null,"safety_identifier":null,"status":"in_progress","store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":1.0,"truncation":"auto","usage":null,"user":null},"sequence_number":2,"type":"response.in_progress"}
+event: response.output_item.added
+data: {"item":{"SSE-Keep-Alive":true,"content":[],"id":"msg_urp_b8fbb77577fd4265a76ec1768a34ffdb","role":"assistant","status":"in_progress","type":"response.output_text.delta"},"output_index":0,"sequence_number":3,"type":"response.output_item.added"}
+event: response.content_part.added
+data: {"content_index":0,"item_id":"msg_urp_b8fbb77577fd4265a76ec1768a34ffdb","output_index":0,"part":{"annotations":[],"logprobs":[],"text":"","type":"output_text"},"sequence_number":4,"type":"response.content_part.added"}
+event: response.output_text.delta
+data: {"content_index":0,"delta":"","item_id":"msg_urp_b8fbb77577fd4265a76ec1768a34ffdb","logprobs":[],"output_index":0,"sequence_number":5,"type":"response.output_text.delta"}
+: heartbeat
+event: proxy.upstream_error
+data: {"content_type":"application/json; charset=utf-8","message":"upstream response arrived after synthetic frame; original HTTP status is already committed","req_id":"60a670783f9bdd410af13867a4316477","sequence_number":6,"status":502,"type":"proxy.upstream_error","upstream_body":"{\"error\":{\"message\":\"Upstream service temporarily unavailable\",\"type\":\"upstream_error\"}}","upstream_body_truncated":false}
+event: response.failed
+data: {"response":{"background":false,"completed_at":1789137268,"created_at":1789137141,"error":{"code":"upstream_error","message":"Upstream request failed"},"frequency_penalty":0,"id":"resp_monoize_754764f1527c4587a744b70c4db2a1da","incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"metadata":{},"model":"gpt-5.6-sol","object":"response","output":[],"parallel_tool_calls":true,"presence_penalty":0,"previous_response_id":null,"prompt_cache_key":null,"reasoning":null,"safety_identifier":null,"status":"failed","store":false,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":1.0,"truncation":"auto","usage":null,"user":null},"sequence_number":7,"type":"response.failed"}
+data: [DONE]

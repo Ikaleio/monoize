@@ -1,0 +1,2229 @@
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 1 minute ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  * Cache Bun install
+  * Cache Rust build
+  * Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 2 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  * Cache Bun install
+  * Cache Rust build
+  * Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 2 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  * Cache Rust build
+  * Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 3 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  * Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 3 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 4 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 5 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 5 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 6 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 6 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 7 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 7 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 8 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 9 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 9 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  * Post Check out release ref
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 10 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build container linux/arm64 / Build container linux/arm64 (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  * Post Build and push platform image
+  * Post Set up Docker Buildx
+  * Post Log in to GHCR
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 10 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 11 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl in 10m32s (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build container linux/amd64 / Build container linux/amd64 (ID 103601314850)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  * Build and push platform image
+  * Stage platform digest
+  * Upload platform digest
+  * Post Build and push platform image
+  * Post Set up Docker Buildx
+  * Post Log in to GHCR
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 11 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl in 10m32s (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  * Build non-Linux release binary
+  * Build static musl release binary
+  * Restore runner ownership after Linux build
+  * Verify static musl linkage
+  * Package release asset
+  * Stage target artifact
+  * Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/amd64 / Build container linux/amd64 in 47s (ID 103601314850)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Publish multi-platform container (ID 103601430853)
+  ✓ Set up job
+  ✓ Download platform digests
+  ✓ Detect available platform digests
+  ✓ Log in to GHCR
+  * Set up Docker Buildx
+  * Create and verify container manifest
+  * Post Set up Docker Buildx
+  * Post Log in to GHCR
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 12 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl in 10m32s (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  ✓ Build non-Linux release binary
+  - Build static musl release binary
+  - Restore runner ownership after Linux build
+  - Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  * Upload npm platform package
+  * Post Cache Rust build
+  * Post Cache Bun install
+  * Post Install Bun
+  * Post Check out release ref
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/amd64 / Build container linux/amd64 in 47s (ID 103601314850)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Publish multi-platform container in 17s (ID 103601430853)
+  ✓ Set up job
+  ✓ Download platform digests
+  ✓ Detect available platform digests
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Create and verify container manifest
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Complete job
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 12 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl in 10m32s (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  ✓ Build non-Linux release binary
+  - Build static musl release binary
+  - Restore runner ownership after Linux build
+  - Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  * Complete job
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/amd64 / Build container linux/amd64 in 47s (ID 103601314850)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Publish multi-platform container in 17s (ID 103601430853)
+  ✓ Set up job
+  ✓ Download platform digests
+  ✓ Detect available platform digests
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Create and verify container manifest
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Complete job
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 13 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl in 10m32s (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc in 12m45s (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  ✓ Build non-Linux release binary
+  - Build static musl release binary
+  - Restore runner ownership after Linux build
+  - Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/amd64 / Build container linux/amd64 in 47s (ID 103601314850)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Publish multi-platform container in 17s (ID 103601430853)
+  ✓ Set up job
+  ✓ Download platform digests
+  ✓ Detect available platform digests
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Create and verify container manifest
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Complete job
+✓ Verify available release set in 6s (ID 103601619720)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Download target artifacts
+  ✓ Verify available asset set
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Attach assets to GitHub Release in 6s (ID 103601637824)
+  ✓ Set up job
+  ✓ Download target artifacts
+  ✓ Upload Release assets
+  ✓ Complete job
+* Verify available npm package set (ID 103601637879)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install Bun
+  ✓ Download npm platform packages
+  ✓ Build root npm package
+  ✓ Verify available npm package set
+  ✓ Detect packaging runner platform package
+  ✓ Install pnpm for compatibility verification
+  ✓ Verify Bun, npm, and pnpm installation
+  * Upload available npm package set
+  * Post Install Bun
+  * Post Check out release ref
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* v1.9.6 Release artifacts · 34711072545
+Triggered via release about 14 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl in 10m32s (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc in 12m45s (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  ✓ Build non-Linux release binary
+  - Build static musl release binary
+  - Restore runner ownership after Linux build
+  - Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/amd64 / Build container linux/amd64 in 47s (ID 103601314850)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Publish multi-platform container in 17s (ID 103601430853)
+  ✓ Set up job
+  ✓ Download platform digests
+  ✓ Detect available platform digests
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Create and verify container manifest
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Complete job
+✓ Verify available release set in 6s (ID 103601619720)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Download target artifacts
+  ✓ Verify available asset set
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Attach assets to GitHub Release in 6s (ID 103601637824)
+  ✓ Set up job
+  ✓ Download target artifacts
+  ✓ Upload Release assets
+  ✓ Complete job
+✓ Verify available npm package set in 20s (ID 103601637879)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install Bun
+  ✓ Download npm platform packages
+  ✓ Build root npm package
+  ✓ Verify available npm package set
+  ✓ Detect packaging runner platform package
+  ✓ Install pnpm for compatibility verification
+  ✓ Verify Bun, npm, and pnpm installation
+  ✓ Upload available npm package set
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+* Publish npm package set (ID 103601686609)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Download npm package set
+  ✓ Install Bun
+  ✓ Set up Node for npm Trusted Publishing
+  ✓ Install npm CLI for Trusted Publishing
+  * Publish platform packages, then root package
+  * Post Set up Node for npm Trusted Publishing
+  * Post Install Bun
+  * Post Check out release ref
+✓ v1.9.6 Release artifacts · 34711072545
+Triggered via release about 14 minutes ago
+
+JOBS
+✓ Validate release ref in 9s (ID 103599857054)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Match tag to Cargo version
+  ✓ Resolve immutable source revision
+  ✓ Validate container tag
+  ✓ Resolve container image name
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build aarch64-unknown-linux-musl / Build aarch64-unknown-linux-musl in 9m16s (ID 103599882612)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-unknown-linux-musl / Build x86_64-unknown-linux-musl in 10m32s (ID 103599882614)
+  ✓ Set up job
+  ✓ Check out release ref
+  - Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  - Build non-Linux release binary
+  ✓ Build static musl release binary
+  ✓ Restore runner ownership after Linux build
+  ✓ Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build x86_64-pc-windows-msvc / Build x86_64-pc-windows-msvc in 12m45s (ID 103599882643)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install stable Rust
+  ✓ Install Bun
+  ✓ Cache Bun install
+  ✓ Cache Rust build
+  ✓ Install frontend dependencies
+  ✓ Build non-Linux release binary
+  - Build static musl release binary
+  - Restore runner ownership after Linux build
+  - Verify static musl linkage
+  ✓ Package release asset
+  ✓ Stage target artifact
+  ✓ Stage npm platform package
+  ✓ Upload npm platform package
+  ✓ Post Cache Rust build
+  ✓ Post Cache Bun install
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/arm64 / Build container linux/arm64 in 30s (ID 103601153577)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Build container linux/amd64 / Build container linux/amd64 in 47s (ID 103601314850)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Resolve source revision
+  ✓ Download native linux archive
+  ✓ Stage prebuilt binary
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Build and push platform image
+  ✓ Stage platform digest
+  ✓ Upload platform digest
+  ✓ Post Build and push platform image
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Publish multi-platform container in 17s (ID 103601430853)
+  ✓ Set up job
+  ✓ Download platform digests
+  ✓ Detect available platform digests
+  ✓ Log in to GHCR
+  ✓ Set up Docker Buildx
+  ✓ Create and verify container manifest
+  ✓ Post Set up Docker Buildx
+  ✓ Post Log in to GHCR
+  ✓ Complete job
+✓ Verify available release set in 6s (ID 103601619720)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Download target artifacts
+  ✓ Verify available asset set
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Attach assets to GitHub Release in 6s (ID 103601637824)
+  ✓ Set up job
+  ✓ Download target artifacts
+  ✓ Upload Release assets
+  ✓ Complete job
+✓ Verify available npm package set in 20s (ID 103601637879)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Install Bun
+  ✓ Download npm platform packages
+  ✓ Build root npm package
+  ✓ Verify available npm package set
+  ✓ Detect packaging runner platform package
+  ✓ Install pnpm for compatibility verification
+  ✓ Verify Bun, npm, and pnpm installation
+  ✓ Upload available npm package set
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job
+✓ Publish npm package set in 50s (ID 103601686609)
+  ✓ Set up job
+  ✓ Check out release ref
+  ✓ Download npm package set
+  ✓ Install Bun
+  ✓ Set up Node for npm Trusted Publishing
+  ✓ Install npm CLI for Trusted Publishing
+  ✓ Publish platform packages, then root package
+  ✓ Post Set up Node for npm Trusted Publishing
+  ✓ Post Install Bun
+  ✓ Post Check out release ref
+  ✓ Complete job

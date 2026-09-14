@@ -1,0 +1,19 @@
+{"commit": "c0bd5e193a0f45351ac7b24dc70734658f29fd17"}
+{"pid": 200658, "status": "online", "restart_count": 7, "uptime": 1789196529310}
+{"sha256": {"/home/ikaleio/projects/monoize/.git/deploy-worktrees/v1.9.3/target/release/monoize": "a8fb1da656f019654965bf49c0831b07671f2f105b00eeb7964d9718a632541d", "/opt/monoize/monoize": "a8fb1da656f019654965bf49c0831b07671f2f105b00eeb7964d9718a632541d", "/proc/200658/exe": "a8fb1da656f019654965bf49c0831b07671f2f105b00eeb7964d9718a632541d"}}
+{"url": "http://127.0.0.1:40550/", "status": 200, "bytes": 1011}
+{"url": "http://127.0.0.1:40550/api/dashboard/settings/public", "status": 200, "bytes": 203}
+{"url": "http://127.0.0.1:40550/v1/models", "status": 401, "bytes": 102}
+{"url": "http://127.0.0.1:40550/assets/index-BMzRcRtu.js", "status": 200, "bytes": 4659189}
+{"asset": "/assets/index-BMzRcRtu.js", "sha256": "0fa523053d981c0825eeb4dc6d7d1bf9ef9603d601f22122229035b122b5b19c", "matches_build": true}
+{"url": "https://mono.ikale.io/", "status": 200, "bytes": 1011}
+{"url": "https://mono.ikale.io/api/dashboard/settings/public", "status": 200, "bytes": 203}
+{"url": "https://mono.ikale.io/v1/models", "status": 401, "bytes": 102}
+{"url": "https://mono.ikale.io/assets/index-BMzRcRtu.js", "status": 200, "bytes": 4659189}
+{"asset": "/assets/index-BMzRcRtu.js", "sha256": "0fa523053d981c0825eeb4dc6d7d1bf9ef9603d601f22122229035b122b5b19c", "matches_build": true}
+TYO_RELEASE_VERIFIED
+[0;32m[DEPLOY][0m Rollback watchdog cancelled.
+{"pid": 200658, "status": "online", "restart_count": 7, "watchdog": "cancelled"}
+a8fb1da656f019654965bf49c0831b07671f2f105b00eeb7964d9718a632541d  /opt/monoize/monoize
+a8fb1da656f019654965bf49c0831b07671f2f105b00eeb7964d9718a632541d  /proc/200658/exe
+{"final_pm2": {"pid": 200658, "status": "online", "restart_count": 7}}

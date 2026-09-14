@@ -1,0 +1,8 @@
+pid=735291
+0a344b91512ae021cdbf1b5f599eeffdf919cafcad10637565298037a0cf1a28  target/release/monoize
+0a344b91512ae021cdbf1b5f599eeffdf919cafcad10637565298037a0cf1a28  /opt/monoize/monoize
+0a344b91512ae021cdbf1b5f599eeffdf919cafcad10637565298037a0cf1a28  /proc/735291/exe
+local_home=200
+public_home=200
+unauth_models=401
+[0;32m[DEPLOY][0m Rollback watchdog cancelled.

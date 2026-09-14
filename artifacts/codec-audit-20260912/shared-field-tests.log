@@ -1,0 +1,21 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+warning: function `encode_urp_stream_as_gemini` is never used
+   --> src/urp/stream_encode/gemini.rs:144:21
+    |
+144 | pub(crate) async fn encode_urp_stream_as_gemini(
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `monoize` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.65s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 3 tests
+test handlers::helpers::canonical_field_regressions::affinity_reasoning_part_unknown_fields_have_stable_order ... ok
+test handlers::helpers::canonical_field_regressions::gemini_native_tools_and_allowed_lists_survive_provider_filtering ... ok
+test handlers::helpers::canonical_field_regressions::affinity_hash_distinguishes_typed_signatures_namespaces_and_media ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.00s

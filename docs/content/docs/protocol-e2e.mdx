@@ -1,0 +1,94 @@
+---
+title: Protocol E2E Tests
+description: Run isolated CLI clients through Monoize against a selected upstream.
+---
+
+Run these tests from the repository root. Install Bun and start a Docker-compatible daemon first.
+The runner builds current workspace source, including uncommitted changes, in a separate image.
+It does not deploy Monoize or use your dashboard configuration.
+
+```bash
+bun e2e/cli.ts list
+export BASE_URL='https://example.com/v1/chat/completions'
+export API_KEY='your-upstream-key'
+export MODEL='your-model'
+bun e2e/cli.ts run --harness codex-responses-ws-v2,claude-messages
+```
+
+`BASE_URL` must include the complete endpoint. The runner preserves its path and query.
+Standard suffixes infer `responses`, `chat_completion`, or `messages`.
+For a custom path, set `--upstream-type` explicitly.
+A conflicting type or an unknown harness stops the run before container creation.
+Real upstream calls consume the upstream account's quota.
+
+Builds use configured `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values.
+For loopback proxies, builds use the configured Docker daemon proxy, or fall back to `host.docker.internal`.
+These variables are not copied into runtime images.
+
+## Select clients and limits
+
+The harness IDs are `codex-responses-ws-v2`, `claude-messages`, `opencode-responses`, `opencode-chat`, `pi-responses`, and `pi-chat`.
+Each ID selects a client and its downstream protocol. The default selection is `all`.
+Repeat `--harness` or separate IDs with commas.
+
+| Option | Default or behavior |
+| --- | --- |
+| `--base-url`, `--api-key`, `--model` | Override `BASE_URL`, `API_KEY`, `MODEL` |
+| `--upstream-type` | Overrides `UPSTREAM_TYPE`; otherwise infer from the URL |
+| `--jobs` | `1`; increase for parallel items |
+| `--timeout` | `1800` seconds per item; excludes image builds |
+| `--max-requests` | `100` generated requests; includes retries, excludes WS warmup |
+| `--repo`, `--ref` | `https://github.com/Ikaleio/Monoize`, `HEAD` |
+| `--task`, `--task-file` | Mutually exclusive custom prompts |
+| `--monoize-image` | Use an existing image instead of building Monoize |
+| `--output` | New directory inside the project; defaults under `e2e/.runs/` |
+
+The runner resolves the repository revision once for all items.
+Each item receives separate containers, credentials, database, and workspace.
+A failed item does not stop the remaining items. The runner does not retry failed items.
+Interrupting the runner preserves available evidence and removes temporary containers and volumes.
+
+## Read the results
+
+Read `report.json` and the per-harness event files in the output directory.
+The report separates protocol checks from task checks.
+It records source and image identities and client versions. Credentials are redacted.
+Evidence exceeding 128 MiB per item fails the item.
+
+Protocol checks require a successful tool call, local execution, result submission, and subsequent generation.
+Codex must use WS v2 and an actual `previous_response_id` continuation.
+An HTTP fallback fails that harness.
+
+The built-in task clones the repository, reads at least three source files, and writes an architecture document.
+Checks verify the revision, execution evidence, document headings, and existing source references.
+They do not verify every claim in the explanation.
+Custom tasks require a nonempty final response and normal exit, plus the same protocol checks.
+They do not run the repository-specific checks.
+
+Exit codes are `0` for all items passing, `1` for item failures, `2` for setup or argument errors, and `130` for interruption.
+The supported matrix contains six harnesses and three upstream types. Run each upstream configuration separately.
+Missing credentials or unavailable models leave those combinations unverified.
+
+## Check the test tool
+
+```bash
+cd e2e
+bun install --frozen-lockfile
+bun run check
+bun test
+```
+
+`fixture.ts` provides a deterministic upstream for development checks.
+Fixture results do not establish compatibility with a real model.
+
+OpenCode uses stateless Responses requests and disables title and summary agents. Claude disables optional thinking.
+Auxiliary HTTP errors remain in evidence but do not count as generation errors.
+
+The runner stops an item after it records a generation HTTP error or an upstream terminal error. It continues queued items.
+
+From the repository root, run the container fixture matrix, repository acceptance checks, and interruption check:
+
+```bash
+docker build -f e2e/Dockerfile -t monoize-e2e:dev .
+E2E_DOCKER_IMAGE=monoize-e2e:dev bun test e2e/docker.test.ts
+```

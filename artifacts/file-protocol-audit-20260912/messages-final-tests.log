@@ -1,0 +1,49 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.88s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 40 tests
+test urp::messages_feature_tests::messages_compatible_binary_files_are_retained_until_target_validation ... ok
+test urp::messages_feature_tests::messages_compound_document_rejects_unsupported_image_mime ... ok
+test urp::messages_feature_tests::messages_computer_member_name_does_not_collide_with_custom_tool ... ok
+test urp::messages_feature_tests::messages_documents_images_files_request_bidirectional ... ok
+test urp::messages_feature_tests::messages_compatible_tool_result_response_preserves_native_and_typed_contents ... ok
+test urp::messages_feature_tests::messages_cross_protocol_media_preparation_and_errors ... ok
+test urp::messages_feature_tests::messages_document_string_and_typed_metadata_request_bidirectional ... ok
+test urp::messages_feature_tests::messages_compatible_single_objects_and_ordered_arrays_reach_typed_urp ... ok
+test urp::messages_feature_tests::messages_buffered_reasoning_deletion_does_not_restore_signature ... ok
+test urp::messages_feature_tests::messages_file_reference_metadata_is_typed_and_required ... ok
+test urp::messages_feature_tests::messages_late_citations_after_closed_text_block_are_explicit_stream_errors ... ok
+test urp::messages_feature_tests::messages_malformed_media_sources_are_request_errors ... ok
+test urp::messages_feature_tests::messages_compatible_tool_result_media_aliases_preserve_bytes_and_audio_uris ... ok
+test urp::messages_feature_tests::messages_missing_image_mime_uses_bytes_or_rejects ... ok
+test urp::messages_feature_tests::messages_buffered_terminal_deletions_override_accumulated_values ... ok
+test urp::messages_feature_tests::messages_malformed_compatible_media_remains_explicit_decode_error ... ok
+test urp::messages_feature_tests::messages_native_thinking_field_deletions_do_not_trigger_defaults ... ok
+test urp::messages_feature_tests::messages_nonstream_error_is_not_a_successful_empty_response ... ok
+test urp::messages_feature_tests::messages_parallel_control_mutations_and_unknown_choice_fields ... ok
+test urp::messages_feature_tests::messages_compatible_media_actual_sse_reaches_gemini_wire_once ... ok
+test urp::messages_feature_tests::messages_stream_errors_are_terminal_and_preserve_details ... ok
+test urp::messages_feature_tests::messages_compatible_media_responses_preserve_typed_nodes_in_actual_sse ... ok
+test urp::messages_feature_tests::messages_provider_start_uses_typed_body_without_internal_snapshot ... ok
+test urp::messages_feature_tests::messages_code_execution_bidirectional ... ok
+test urp::messages_feature_tests::messages_provider_typed_identity_and_kind_override_native_body ... ok
+test urp::messages_feature_tests::messages_citations_cache_and_phase_bidirectional ... ok
+test urp::messages_feature_tests::messages_bash_execution_bidirectional ... ok
+test urp::messages_feature_tests::messages_typed_deletions_and_mutations_own_nonstream_values ... ok
+test urp::messages_feature_tests::messages_terminal_snapshot_emits_unstreamed_nodes_of_same_kind ... ok
+test urp::messages_feature_tests::messages_mcp_bidirectional ... ok
+test urp::messages_feature_tests::messages_request_tools_configuration_and_results_bidirectional ... ok
+test urp::messages_feature_tests::messages_client_function_and_computer_use_bidirectional ... ok
+test urp::messages_feature_tests::messages_thinking_redaction_signature_bidirectional ... ok
+test urp::messages_feature_tests::messages_text_editor_execution_bidirectional ... ok
+test urp::messages_feature_tests::messages_media_like_tool_arguments_and_native_tool_payloads_remain_opaque ... ok
+test urp::messages_feature_tests::messages_tool_search_bidirectional ... ok
+test urp::messages_feature_tests::messages_web_search_bidirectional ... ok
+test urp::messages_feature_tests::messages_unsupported_output_media_errors_in_all_response_modes ... ok
+test urp::messages_feature_tests::messages_web_fetch_bidirectional ... ok
+test urp::messages_feature_tests::messages_stop_reasons_and_usage_bidirectional_and_typed_override ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 226 filtered out; finished in 0.01s

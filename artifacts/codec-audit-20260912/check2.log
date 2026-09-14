@@ -1,0 +1,9 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+src/urp/messages_feature_tests.rs:5:25: warning: unused import: `HashMap`
+src/urp/responses_feature_tests.rs:1:64: warning: unused import: `UrpResponse`
+src/urp/responses_feature_tests.rs:5:24: warning: unused import: `HashMap`
+src/urp/stream_decode/openai_responses/state.inc.rs:187:36: error[E0425]: cannot find function `decode_item_from_value` in this scope
+error: could not compile `monoize` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+warning: `monoize` (lib test) generated 3 warnings
+error: could not compile `monoize` (lib test) due to 1 previous error; 3 warnings emitted

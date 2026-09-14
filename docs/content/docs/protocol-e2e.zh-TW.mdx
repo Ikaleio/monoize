@@ -1,0 +1,93 @@
+---
+title: 協定端到端測試
+description: 在隔離容器中透過 Monoize 測試真實 CLI 與指定上游。
+---
+
+請在儲存庫根目錄執行測試。先安裝 Bun，並啟動相容 Docker 的服務。
+工具會以目前工作區的原始碼建立獨立映像，包含尚未提交的修改。
+它不會部署 Monoize，也不會使用既有的 Dashboard 設定。
+
+```bash
+bun e2e/cli.ts list
+export BASE_URL='https://example.com/v1/chat/completions'
+export API_KEY='your-upstream-key'
+export MODEL='your-model'
+bun e2e/cli.ts run --harness codex-responses-ws-v2,claude-messages
+```
+
+`BASE_URL` 必須包含完整端點。工具會保留路徑與查詢參數。
+標準路徑結尾可用來判定 `responses`、`chat_completion` 或 `messages`。
+使用自訂路徑時，必須明確設定 `--upstream-type`。
+類型衝突或 harness 不存在時，工具會在建立容器前回報錯誤。
+真實上游呼叫會消耗上游帳戶的額度。
+
+建置時會使用已設定的 `HTTP_PROXY`、`HTTPS_PROXY` 與 `NO_PROXY`。
+本機回環代理會優先使用 Docker daemon 設定的代理位址，否則轉換為 `host.docker.internal`。
+這些變數不會寫入執行映像。
+
+## 選擇用戶端與限制
+
+支援 `codex-responses-ws-v2`、`claude-messages`、`opencode-responses`、`opencode-chat`、`pi-responses` 與 `pi-chat`。
+每個 ID 對應一個用戶端及其下游協定。預設選取 `all`。
+可重複傳入 `--harness`，也可用逗號分隔 ID。
+
+| 參數 | 預設值或行為 |
+| --- | --- |
+| `--base-url`、`--api-key`、`--model` | 覆寫 `BASE_URL`、`API_KEY`、`MODEL` |
+| `--upstream-type` | 覆寫 `UPSTREAM_TYPE`；未設定時依 URL 判定 |
+| `--jobs` | `1`；增加後並行執行 |
+| `--timeout` | 每項 `1800` 秒，不含映像建置時間 |
+| `--max-requests` | `100` 次生成，包含重試，不含 WS 預熱 |
+| `--repo`、`--ref` | `https://github.com/Ikaleio/Monoize`、`HEAD` |
+| `--task`、`--task-file` | 自訂提示詞，兩者互斥 |
+| `--monoize-image` | 使用現有映像，略過 Monoize 建置 |
+| `--output` | 專案內的新目錄，預設位於 `e2e/.runs/` |
+
+工具只解析一次儲存庫版本，所有測試項目使用相同的 commit。
+每項使用獨立的容器、憑證、資料庫及工作目錄。
+單項失敗後仍會繼續其他項目，不會自動重跑。
+中斷時會保留已收集的證據，並清理臨時容器與磁碟區。
+
+## 查看結果
+
+請在輸出目錄查看 `report.json` 及各 harness 的事件檔案。
+報告分別列出協定驗收與任務驗收，並記錄原始碼、映像及用戶端版本。
+憑證會經過遮蔽處理。每項證據超過 128 MiB 時，該項判定為失敗。
+
+協定驗收要求完成工具呼叫、本機執行、結果回傳及後續生成。
+Codex 必須實際使用 WS v2，並透過 `previous_response_id` 接續。
+退回 HTTP 會使該 harness 失敗。
+
+內建任務會複製儲存庫、讀取至少三個原始碼檔案，並撰寫架構說明。
+驗收會檢查版本、執行紀錄、文件標題，以及原始碼參照是否存在。
+這些檢查無法證明說明中的所有結論都正確。
+自訂任務必須正常結束、提供非空的最終回覆，並通過相同的協定驗收。
+自訂任務不執行儲存庫專用檢查。
+
+結束代碼：全部通過為 `0`，測試項目失敗為 `1`，參數或初始化錯誤為 `2`，中斷為 `130`。
+支援六種 harness 與三種上游類型。每種上游設定須分別執行。
+缺少憑證或相容模型的組合仍屬於未驗證。
+
+## 檢查測試工具
+
+```bash
+cd e2e
+bun install --frozen-lockfile
+bun run check
+bun test
+```
+
+`fixture.ts` 提供固定回應的上游，供開發驗證使用。
+測試替身的結果無法證明真實模型的相容性。
+
+OpenCode 使用無狀態 Responses 請求，並停用標題和摘要代理。Claude 關閉可選的思考功能。
+輔助 HTTP 錯誤保留在證據中，但不計為生成錯誤。
+
+記錄生成請求的 HTTP 錯誤或上游終止錯誤後，runner 結束該項，並繼續執行佇列中的測試項。
+
+從儲存庫根目錄執行容器夾具矩陣、儲存庫驗收和中斷檢查：
+
+```bash
+docker build -f e2e/Dockerfile -t monoize-e2e:dev .
+E2E_DOCKER_IMAGE=monoize-e2e:dev bun test e2e/docker.test.ts
+```

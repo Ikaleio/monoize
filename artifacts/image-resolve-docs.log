@@ -1,0 +1,51 @@
+$ next build
+▲ Next.js 16.3.0 (Turbopack)
+[MDX] generated files in 0.7269580000000246ms
+✓ Running next.config.mjs took 177ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 1693ms
+  Running TypeScript ...
+  Finished TypeScript in 803ms ...
+  Collecting page data using 11 workers ...
+  Generating static pages using 11 workers (0/610) ...
+  Generating static pages using 11 workers (152/610)
+⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000". See https://nextjs.org/docs/app/api-reference/functions/generate-metadata#metadatabase
+⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000". See https://nextjs.org/docs/app/api-reference/functions/generate-metadata#metadatabase
+⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000". See https://nextjs.org/docs/app/api-reference/functions/generate-metadata#metadatabase
+⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000". See https://nextjs.org/docs/app/api-reference/functions/generate-metadata#metadatabase
+  Generating static pages using 11 workers (304/610)
+  Generating static pages using 11 workers (457/610)
+✓ Generating static pages using 11 workers (610/610) in 891ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├   /[lang]
+│ ├ ● /en
+│ ├ ● /zh
+│ ├ ● /zh-TW
+│ └ ● /ja
+├   /[lang]/docs/[[...slug]]
+│ ├ ● /en/docs/configuration
+│ ├ ● /en/docs/endpoints
+│ ├ ● /en/docs
+│ └ ● [+197 more paths]
+├   /[lang]/llms.mdx/docs/[[...slug]]
+│ ├ ● /en/llms.mdx/docs/configuration/content.md
+│ ├ ● /en/llms.mdx/docs/endpoints/content.md
+│ ├ ● /en/llms.mdx/docs/content.md
+│ └ ● [+197 more paths]
+├   /[lang]/og/docs/[...slug]
+│ ├ ● /en/og/docs/configuration/image.png
+│ ├ ● /en/og/docs/endpoints/image.png
+│ ├ ● /en/og/docs/image.png
+│ └ ● [+197 more paths]
+├ ○ /api/search
+├ ○ /llms-full.txt
+└ ○ /llms.txt
+
+
+○  (Static)  prerendered as static content
+●  (SSG)     prerendered as static HTML (uses generateStaticParams)

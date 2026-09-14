@@ -1,0 +1,26 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 17 tests
+test urp::media_transport_tests::media_messages_system_and_developer_media_are_explicit_errors ... ok
+test urp::media_transport_tests::media_bound_resource_requires_matching_provider_channel_and_credential_scope ... ok
+test urp::media_transport_tests::media_file_id_provenance_is_typed_and_deletion_prevents_replay ... ok
+test urp::media_transport_tests::media_malformed_bytes_and_non_utf8_messages_text_fail_without_partial_output ... ok
+test urp::media_transport_tests::media_file_data_url_has_single_filename_owner_and_raw_bytes ... ok
+test urp::media_transport_tests::media_image_mime_parameters_do_not_enter_fixed_native_mime_fields ... ok
+test urp::media_transport_tests::compatible_media_aliases_keep_actual_bytes_types_and_private_audio_provenance ... ok
+test urp::media_transport_tests::media_pdf_metadata_prefix_is_visible_once_across_preparation_and_encoding ... ok
+test urp::media_transport_tests::media_messages_url_documents_require_pdf_evidence_without_relabeling ... ok
+test urp::media_transport_tests::media_data_url_owns_mime_and_image_detail_across_openai_schemas ... ok
+test urp::media_transport_tests::compatible_url_mime_and_inline_detail_are_typed_before_conversion ... ok
+test urp::media_transport_tests::compound_document_text_fields_survive_preparation_and_citations_become_typed ... ok
+test urp::media_transport_tests::media_deleted_private_provenance_cannot_be_restored_from_native_shapes ... ok
+test urp::media_transport_tests::media_raw_file_mime_uses_magic_then_filename_and_rejects_unknown ... ok
+test urp::media_transport_tests::media_replacing_private_uri_with_inline_bytes_removes_obsolete_resource_constraints ... ok
+test urp::media_transport_tests::media_nested_tool_result_metadata_has_one_canonical_owner_and_survives_preparation ... ok
+test urp::media_transport_tests::media_text_and_compound_documents_keep_visible_metadata_and_prepare_is_idempotent ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 244 filtered out; finished in 0.01s

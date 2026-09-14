@@ -1,0 +1,75 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+warning: variable does not need to be mutable
+   --> src/urp/decode/mod.rs:518:9
+    |
+518 |     let mut extra_body = split_extra(
+    |         ----^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/urp/decode/mod.rs:544:9
+    |
+544 |     let mut extra_body = split_extra(
+    |         ----^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: `monoize` (lib test) generated 2 warnings (run `cargo fix --lib -p monoize --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.86s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 47 tests
+test urp::responses_feature_tests::flat_tool_definition_namespaces_are_typed_and_deletable ... ok
+test urp::responses_feature_tests::failed_and_error_events_prevent_later_success ... ok
+test urp::responses_feature_tests::apply_patch_output ... ok
+test urp::responses_feature_tests::compaction ... ok
+test urp::responses_feature_tests::bare_native_error_envelopes_fail_without_losing_failed_response_semantics ... ok
+test urp::responses_feature_tests::computer_screenshot_result ... ok
+test urp::responses_feature_tests::mcp_approval_response ... ok
+test urp::responses_feature_tests::generated_image_has_no_payload_snapshot ... ok
+test urp::responses_feature_tests::computer_use ... ok
+test urp::responses_feature_tests::apply_patch_call ... ok
+test urp::responses_feature_tests::mcp_approval_request ... ok
+test urp::responses_feature_tests::computer_use_preview ... ok
+test urp::responses_feature_tests::code_interpreter ... ok
+test urp::responses_feature_tests::file_search ... ok
+test urp::responses_feature_tests::additional_tools ... ok
+test urp::responses_feature_tests::namespace_definitions_and_selectors_are_owned_by_urp ... ok
+test urp::responses_feature_tests::local_shell_call ... ok
+test urp::responses_feature_tests::citations_are_typed_and_deleted_values_do_not_reappear ... ok
+test urp::responses_feature_tests::native_terminal_details_survive_only_compatible_finish_reason ... ok
+test urp::responses_feature_tests::native_incomplete_and_cancelled_terminal_events_remain_terminal ... ok
+test urp::responses_feature_tests::response_start_usage_and_unknown_fields_have_one_owner ... ok
+test urp::responses_feature_tests::provider_item_identity_and_config_mutation_override_native_shape ... ok
+test urp::responses_feature_tests::responses_assistant_easy_input_media_and_file_metadata_are_typed ... ok
+test urp::responses_feature_tests::mcp_list_tools ... ok
+test urp::responses_feature_tests::mcp_call ... ok
+test urp::responses_feature_tests::programmatic_program_output ... ok
+test urp::responses_feature_tests::stable_responses_audio_content_is_an_explicit_unsupported_boundary ... ok
+test urp::responses_feature_tests::structured_format_controls_are_single_owned_and_deletable ... ok
+test urp::responses_feature_tests::stable_responses_native_audio_output_is_an_explicit_decode_error ... ok
+test urp::responses_feature_tests::function_and_custom_calls_preserve_namespace_and_mutation ... ok
+test urp::responses_feature_tests::programmatic_program ... ok
+test urp::responses_feature_tests::shell_output ... ok
+test urp::responses_feature_tests::refusal_uses_native_lifecycles_in_both_stream_encoders ... ok
+test urp::responses_feature_tests::responses_nonofficial_media_output_returns_explicit_error ... ok
+test urp::responses_feature_tests::shell_call ... ok
+test urp::responses_feature_tests::responses_tool_result_metadata_mutation_wins_in_all_output_modes ... ok
+test urp::responses_feature_tests::programmatic_function_callers_and_deferred_tool_config_roundtrip ... ok
+test urp::responses_feature_tests::partial_generated_image_uses_current_typed_bytes ... ok
+test urp::responses_feature_tests::streaming_namespace_deletion_cannot_be_replayed_from_extras ... ok
+test urp::responses_feature_tests::tool_search_call ... ok
+test urp::responses_feature_tests::signed_tool_calls_survive_responses_live_and_synthetic_client_loops ... ok
+test urp::responses_feature_tests::web_search ... ok
+test urp::responses_feature_tests::tool_search_output ... ok
+test urp::responses_feature_tests::reasoning_summary_content_and_encrypted_roundtrip ... ok
+test urp::responses_feature_tests::custom_input_remains_byte_exact_when_it_looks_like_json ... ok
+test urp::responses_feature_tests::missing_terminal_output_keeps_typed_phase_and_citations_without_replay_copies ... ok
+test urp::responses_feature_tests::tool_results_keep_streamed_payloads ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 159 filtered out; finished in 0.01s

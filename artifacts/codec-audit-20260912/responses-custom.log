@@ -1,0 +1,144 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+warning: function `encode_urp_stream_as_gemini` is never used
+   --> src/urp/stream_encode/gemini.rs:144:21
+    |
+144 | pub(crate) async fn encode_urp_stream_as_gemini(
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `monoize` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.46s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 1 test
+
+thread 'urp::responses_feature_tests::custom_input_remains_byte_exact_when_it_looks_like_json' (2124080) panicked at src/urp/responses_feature_tests.rs:174:28:
+terminal output missing: [
+    ResponseStart {
+        usage: None,
+        id: "resp_feature",
+        model: "feature-model",
+        extra_body: {
+            "completed_at": Null,
+            "frequency_penalty": Number(0),
+            "object": String("response"),
+            "text": Object {
+                "format": Object {
+                    "type": String("text"),
+                },
+            },
+            "tools": Array [],
+            "temperature": Number(1.0),
+            "max_tool_calls": Null,
+            "top_logprobs": Number(0),
+            "tool_choice": String("auto"),
+            "background": Bool(false),
+            "safety_identifier": Null,
+            "previous_response_id": Null,
+            "prompt_cache_key": Null,
+            "max_output_tokens": Null,
+            "reasoning": Null,
+            "parallel_tool_calls": Bool(true),
+            "presence_penalty": Number(0),
+            "created_at": Number(123),
+            "top_p": Number(1.0),
+            "metadata": Object {},
+            "instructions": Null,
+            "store": Bool(false),
+            "truncation": String("auto"),
+            "user": Null,
+            "_monoize_responses_stream_start_source": Object {},
+        },
+    },
+    NodeStart {
+        node_index: 1,
+        header: NextDownstreamEnvelopeExtra,
+        extra_body: {
+            "status": String("completed"),
+        },
+    },
+    NodeDone {
+        node_index: 1,
+        node: NextDownstreamEnvelopeExtra {
+            extra_body: {
+                "status": String("completed"),
+            },
+        },
+        usage: None,
+        extra_body: {
+            "status": String("completed"),
+        },
+    },
+    NodeStart {
+        node_index: 0,
+        header: ToolCall {
+            namespace: None,
+            signature: None,
+            id: Some(
+                "ctc_exact",
+            ),
+            tool_type: Custom,
+            call_id: "call_exact",
+            name: "raw",
+        },
+        extra_body: {
+            "status": String("completed"),
+        },
+    },
+    NodeDelta {
+        node_index: 0,
+        delta: ToolCallArguments {
+            arguments: "1.0",
+        },
+        usage: None,
+        extra_body: {
+            "item_id": String("ctc_exact"),
+            "type": String("response.custom_tool_call_input.delta"),
+            "sequence_number": Number(4),
+        },
+    },
+    NodeDone {
+        node_index: 0,
+        node: ToolCall {
+            namespace: None,
+            signature: None,
+            id: Some(
+                "ctc_exact",
+            ),
+            tool_type: Custom,
+            call_id: "call_exact",
+            name: "raw",
+            arguments: "1.0",
+            extra_body: {
+                "status": String("completed"),
+            },
+        },
+        usage: None,
+        extra_body: {
+            "status": String("completed"),
+        },
+    },
+    Error {
+        code: Some(
+            "responses_terminal_conflict",
+        ),
+        message: "Responses stream terminal output conflicts with streamed state: function_call.arguments differs from completed output",
+        extra_body: {
+            "conflict_reason": String("function_call.arguments differs from completed output"),
+        },
+    },
+]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test urp::responses_feature_tests::custom_input_remains_byte_exact_when_it_looks_like_json ... FAILED
+
+failures:
+
+failures:
+    urp::responses_feature_tests::custom_input_remains_byte_exact_when_it_looks_like_json
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 121 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

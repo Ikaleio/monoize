@@ -1,0 +1,57 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+warning: variable does not need to be mutable
+   --> src/urp/decode/mod.rs:518:9
+    |
+518 |     let mut extra_body = split_extra(
+    |         ----^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/urp/decode/mod.rs:544:9
+    |
+544 |     let mut extra_body = split_extra(
+    |         ----^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: `monoize` (lib test) generated 2 warnings (run `cargo fix --lib -p monoize --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.30s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 29 tests
+test urp::chat_feature_tests::chat_native_tool_media_is_rejected_before_text_extraction ... ok
+test urp::chat_feature_tests::chat_configuration_update_identity_preserves_native_shape_both_stream_modes ... ok
+test urp::chat_feature_tests::chat_assistant_history_annotations_bidirectional_both_stream_modes ... ok
+test urp::chat_feature_tests::chat_legacy_result_name_uses_typed_state_both_stream_modes ... ok
+test urp::chat_feature_tests::chat_errors_and_missing_terminal_are_failures ... ok
+test urp::chat_feature_tests::chat_assistant_file_response_returns_explicit_error ... ok
+test urp::chat_feature_tests::chat_error_typed_code_and_message_override_shape ... ok
+test urp::chat_feature_tests::chat_assistant_image_response_returns_explicit_error ... ok
+test urp::chat_feature_tests::chat_fragmented_audio_and_refusal_preserve_ordered_payloads ... ok
+test urp::chat_feature_tests::chat_request_features_both_stream_modes ... ok
+test urp::chat_feature_tests::chat_assistant_audio_content_returns_explicit_error ... ok
+test urp::chat_feature_tests::chat_audio_context_and_history_reference_are_legal ... ok
+test urp::chat_feature_tests::chat_request_media_metadata_and_role_constraints ... ok
+test urp::chat_feature_tests::chat_refusal_bidirectional ... ok
+test urp::chat_feature_tests::chat_custom_tool_calls_bidirectional ... ok
+test urp::chat_feature_tests::chat_legacy_functions_bidirectional ... ok
+test urp::chat_feature_tests::chat_typed_audio_and_citation_deletion_wins ... ok
+test urp::chat_feature_tests::chat_generated_audio_bidirectional ... ok
+test urp::chat_feature_tests::chat_tool_result_identity_uses_typed_state_both_stream_modes ... ok
+test urp::chat_feature_tests::chat_tool_results_and_legacy_history_both_stream_modes ... ok
+test urp::chat_feature_tests::chat_function_calls_bidirectional ... ok
+test urp::chat_feature_tests::chat_citations_bidirectional ... ok
+test urp::chat_feature_tests::chat_typed_terminal_finish_reason_wins_over_tools ... ok
+test urp::chat_feature_tests::chat_reasoning_details_bidirectional ... ok
+test urp::chat_feature_tests::chat_text_phase_bidirectional ... ok
+test urp::chat_feature_tests::chat_scalar_reasoning_bidirectional ... ok
+test urp::chat_feature_tests::chat_custom_json_looking_input_remains_verbatim ... ok
+test urp::chat_feature_tests::chat_provider_identity_is_authoritative_in_all_response_modes ... ok
+test urp::chat_feature_tests::chat_bounded_text_frames_emit_citations_once ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 177 filtered out; finished in 0.01s

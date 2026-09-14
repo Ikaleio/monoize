@@ -1,0 +1,7 @@
+*
+!package.json
+!bun.lock
+!*.ts
+!*.js
+!Harness.Dockerfile
+*.test.ts

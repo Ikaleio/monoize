@@ -1,0 +1,8 @@
+BEGIN
+DO
+INSERT 0 1
+COMMIT
+                  id                  | name |                                                                                      transforms
+--------------------------------------+------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 714d3ed5-99a4-47a5-8cb0-32ad25fb998e | Test | [{"transform":"image_resolve_urls","enabled":true,"phase":"response","models":["gpt-image-2.5-sunburst"],"config":{"timeout_seconds":30,"max_bytes":20971520,"roles":["assistant"]}}]
+(1 row)

@@ -1,0 +1,64 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.13s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 55 tests
+test urp::gemini_feature_tests::gemini_file_uri_nonstream ... ok
+test urp::gemini_feature_tests::gemini_audio_uri_nonstream ... ok
+test urp::gemini_feature_tests::gemini_code_result_nonstream ... ok
+test urp::gemini_feature_tests::gemini_audio_nonstream ... ok
+test urp::gemini_feature_tests::gemini_code_execution_nonstream ... ok
+test urp::gemini_feature_tests::gemini_computer_action_nonstream ... ok
+test urp::gemini_feature_tests::gemini_function_call_nonstream ... ok
+test urp::gemini_feature_tests::gemini_image_nonstream ... ok
+test urp::gemini_feature_tests::gemini_image_uri_nonstream ... ok
+test urp::gemini_feature_tests::gemini_built_in_definitions_roundtrip_and_respect_config_deletion ... ok
+test urp::gemini_feature_tests::gemini_inline_file_nonstream ... ok
+test urp::gemini_feature_tests::gemini_native_schema_types_map_to_canonical_json_schema ... ok
+test urp::gemini_feature_tests::gemini_multimodal_function_result_nonstream ... ok
+test urp::gemini_feature_tests::gemini_grounding_citations_safety_metadata_nonstream_and_stream ... ok
+test urp::gemini_feature_tests::gemini_file_uri_stream ... ok
+test urp::gemini_feature_tests::gemini_audio_stream ... ok
+test urp::gemini_feature_tests::gemini_late_citations_reach_terminal_stream_output ... ok
+test urp::gemini_feature_tests::gemini_code_result_stream ... ok
+test urp::gemini_feature_tests::gemini_inline_file_stream ... ok
+test urp::gemini_feature_tests::gemini_audio_uri_stream ... ok
+test urp::gemini_feature_tests::gemini_image_uri_stream ... ok
+test urp::gemini_feature_tests::gemini_image_stream ... ok
+test urp::gemini_feature_tests::gemini_code_execution_stream ... ok
+test urp::gemini_feature_tests::gemini_function_call_stream ... ok
+test urp::gemini_feature_tests::gemini_computer_action_stream ... ok
+test urp::gemini_feature_tests::gemini_async_sse_encoder_writes_native_frames_and_requires_terminal ... ok
+test urp::gemini_feature_tests::gemini_response_format_and_controls_obey_typed_deletion ... ok
+test urp::gemini_feature_tests::gemini_opaque_identity_obeys_typed_mutation_and_deletion_nonstream ... ok
+test urp::gemini_feature_tests::gemini_server_tool_call_nonstream ... ok
+test urp::gemini_feature_tests::gemini_prompt_refusal_stream_roundtrip_does_not_duplicate_text ... ok
+test urp::gemini_feature_tests::gemini_server_tool_result_nonstream ... ok
+test urp::gemini_feature_tests::gemini_function_schema_choice_and_unknown_config_roundtrip ... ok
+test urp::gemini_feature_tests::gemini_multimodal_function_result_stream ... ok
+test urp::gemini_feature_tests::gemini_signature_only_nonstream ... ok
+test urp::gemini_feature_tests::gemini_signed_nodes_have_no_shadow_payload_and_obey_mutation ... ok
+test urp::gemini_feature_tests::gemini_signed_text_nonstream ... ok
+test urp::gemini_feature_tests::gemini_stream_does_not_mark_unrepresentable_nodes_as_emitted ... ok
+test urp::gemini_feature_tests::gemini_server_tool_result_stream ... ok
+test urp::gemini_feature_tests::gemini_server_tool_call_stream ... ok
+test urp::gemini_feature_tests::gemini_prompt_block_and_finish_without_content_roundtrip ... ok
+test urp::gemini_feature_tests::gemini_stream_rejects_prefix_extension_after_later_part_emission ... ok
+test urp::gemini_feature_tests::gemini_signature_only_stream ... ok
+test urp::gemini_feature_tests::gemini_stream_rejects_missing_terminal_and_malformed_payload ... ok
+test urp::gemini_feature_tests::gemini_signed_text_stream ... ok
+test urp::gemini_feature_tests::gemini_thought_nonstream ... ok
+test urp::gemini_feature_tests::gemini_stream_orders_out_of_order_completions_and_terminal_repairs ... ok
+test urp::gemini_feature_tests::gemini_synthetic_call_result_matching_preserves_parallel_name_correlation ... ok
+test urp::gemini_feature_tests::gemini_stream_usage_survives_without_runtime_metrics_and_after_finish ... ok
+test urp::gemini_feature_tests::gemini_usage_roundtrip_does_not_double_count_thoughts_or_tool_prompt ... ok
+test urp::gemini_feature_tests::gemini_video_nonstream ... ok
+test urp::gemini_feature_tests::gemini_stream_terminal_reconciliation_emits_missing_parts_once ... ok
+test urp::gemini_feature_tests::gemini_thought_stream ... ok
+test urp::gemini_feature_tests::gemini_video_stream ... ok
+test urp::gemini_feature_tests::gemini_opaque_identity_obeys_typed_mutation_and_deletion_stream ... ok
+test urp::gemini_feature_tests::gemini_usage_modality_details_and_overflow_both_paths ... ok
+
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.01s

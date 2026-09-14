@@ -1,0 +1,77 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+src/handlers/helpers.rs:714:12: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/handlers/helpers.rs:725:12: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/handlers/helpers.rs:736:12: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/handlers/helpers.rs:774:12: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/handlers/helpers.rs:804:12: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/urp/decode/mod.rs:352:8: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/urp/internal_legacy_bridge.rs:219:16: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/urp/internal_legacy_bridge.rs:277:16: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/urp/internal_legacy_bridge.rs:478:12: error: expected `}`, found `,`: expected `}`, help: remove this comma
+src/urp/decode/anthropic.rs:472:44: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/decode/anthropic.rs:494:44: error[E0063]: missing fields `name` and `namespace` in initializer of `Node`: missing `name` and `namespace`
+src/urp/decode/anthropic.rs:656:26: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/decode/gemini.rs:456:22: error[E0063]: missing fields `config`, `namespace`, `origin_protocol` and 1 other field in initializer of `ToolDefinition`: missing `config`, `namespace`, `origin_protocol` and 1 other field
+src/urp/decode/gemini.rs:619:34: error[E0063]: missing fields `namespace` and `signature` in initializer of `internal_legacy_bridge::Part`: missing `namespace` and `signature`
+src/urp/decode/gemini.rs:661:13: error[E0063]: missing field `metadata` in initializer of `internal_legacy_bridge::Part`: missing `metadata`
+src/urp/decode/gemini.rs:669:13: error[E0063]: missing field `metadata` in initializer of `internal_legacy_bridge::Part`: missing `metadata`
+src/urp/decode/gemini.rs:691:13: error[E0063]: missing field `metadata` in initializer of `internal_legacy_bridge::Part`: missing `metadata`
+src/urp/decode/gemini.rs:696:13: error[E0063]: missing field `metadata` in initializer of `internal_legacy_bridge::Part`: missing `metadata`
+src/urp/decode/gemini.rs:739:5: error[E0063]: missing fields `name` and `namespace` in initializer of `Node`: missing `name` and `namespace`
+src/urp/decode/openai_responses.rs:35:10: error[E0063]: missing field `metadata` in initializer of `Node`: missing `metadata`
+src/urp/decode/openai_responses.rs:525:22: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/decode/openai_responses.rs:555:22: error[E0063]: missing fields `name` and `namespace` in initializer of `Node`: missing `name` and `namespace`
+src/urp/decode/openai_responses.rs:728:21: error[E0027]: pattern does not mention field `metadata`: missing field `metadata`
+src/urp/decode/openai_responses.rs:735:21: error[E0027]: pattern does not mention field `metadata`: missing field `metadata`
+src/urp/decode/openai_responses.rs:941:32: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/decode/openai_responses.rs:972:32: error[E0063]: missing fields `name` and `namespace` in initializer of `Node`: missing `name` and `namespace`
+src/urp/encode/anthropic/reasoning.inc.rs:292:13: error[E0027]: pattern does not mention fields `namespace`, `name`: missing fields `namespace`, `name`
+src/urp/encode/anthropic/messages_part1.inc.rs:79:9: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/encode/anthropic/messages_part1.inc.rs:183:9: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/encode/gemini.rs:75:13: error[E0027]: pattern does not mention fields `namespace`, `name`: missing fields `namespace`, `name`
+src/urp/encode/gemini.rs:556:9: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/encode/openai_responses/message_items.inc.rs:169:9: error[E0027]: pattern does not mention field `metadata`: missing field `metadata`
+src/urp/encode/openai_responses/message_items.inc.rs:180:9: error[E0027]: pattern does not mention field `metadata`: missing field `metadata`
+src/urp/encode/openai_responses/reasoning.inc.rs:168:9: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/encode/openai_responses/tool_call.inc.rs:217:13: error[E0027]: pattern does not mention fields `namespace`, `name`: missing fields `namespace`, `name`
+src/urp/encode/openai_responses/tool_call.inc.rs:402:9: error[E0027]: pattern does not mention fields `namespace`, `name`: missing fields `namespace`, `name`
+src/urp/stream_decode/anthropic.rs:1359:14: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/stream_decode/anthropic.rs:1407:14: error[E0063]: missing fields `namespace` and `signature` in initializer of `NodeHeader`: missing `namespace` and `signature`
+src/urp/stream_decode/anthropic.rs:1413:37: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/anthropic.rs:1417:37: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/anthropic.rs:1421:36: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/anthropic.rs:1433:14: error[E0063]: missing field `body` in initializer of `NodeHeader`: missing `body`
+src/urp/stream_decode/anthropic.rs:1441:14: error[E0063]: missing fields `name` and `namespace` in initializer of `NodeHeader`: missing `name` and `namespace`
+src/urp/stream_decode/gemini.rs:296:14: error[E0063]: missing fields `namespace` and `signature` in initializer of `NodeHeader`: missing `namespace` and `signature`
+src/urp/stream_decode/gemini.rs:302:37: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/gemini.rs:306:37: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/gemini.rs:310:36: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/gemini.rs:322:14: error[E0063]: missing field `body` in initializer of `NodeHeader`: missing `body`
+src/urp/stream_decode/gemini.rs:330:14: error[E0063]: missing fields `name` and `namespace` in initializer of `NodeHeader`: missing `name` and `namespace`
+src/urp/stream_decode/openai_responses/image_helpers.inc.rs:48:10: error[E0063]: missing field `metadata` in initializer of `Node`: missing `metadata`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:34:9: error[E0027]: pattern does not mention fields `namespace`, `name`: missing fields `namespace`, `name`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:41:19: error[E0063]: missing fields `name` and `namespace` in initializer of `Node`: missing `name` and `namespace`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:69:41: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:73:41: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:77:40: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:92:14: error[E0063]: missing fields `namespace` and `signature` in initializer of `NodeHeader`: missing `namespace` and `signature`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:104:14: error[E0063]: missing field `body` in initializer of `NodeHeader`: missing `body`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:115:14: error[E0063]: missing fields `name` and `namespace` in initializer of `NodeHeader`: missing `name` and `namespace`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:268:75: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:311:75: error[E0063]: missing fields `name` and `namespace` in initializer of `Node`: missing `name` and `namespace`
+src/urp/stream_decode/openai_responses/event_map.inc.rs:342:25: error[E0063]: missing field `metadata` in initializer of `NodeHeader`: missing `metadata`
+src/urp/stream_decode/openai_responses/state.inc.rs:49:75: error[E0063]: missing fields `name` and `namespace` in initializer of `Node`: missing `name` and `namespace`
+src/urp/stream_decode/openai_responses/state.inc.rs:585:13: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/stream_decode/openai_responses/state.inc.rs:593:13: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/stream_decode/openai_responses/state.inc.rs:601:17: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/stream_decode/openai_responses/output_events.inc.rs:215:63: error[E0063]: missing fields `name` and `namespace` in initializer of `internal_legacy_bridge::Item`: missing `name` and `namespace`
+src/urp/stream_decode/openai_responses/output_events.inc.rs:361:63: error[E0063]: missing fields `namespace` and `signature` in initializer of `internal_legacy_bridge::Part`: missing `namespace` and `signature`
+src/urp/stream_decode/openai_responses/output_events.inc.rs:397:22: error[E0063]: missing field `metadata` in initializer of `internal_legacy_bridge::Part`: missing `metadata`
+src/urp/stream_decode/openai_responses/completed.inc.rs:306:37: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/stream_encode/openai_responses/state.inc.rs:194:9: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/stream_encode/openai_responses/state.inc.rs:219:9: error[E0027]: pattern does not mention field `body`: missing field `body`
+src/urp/stream_encode/openai_responses/state.inc.rs:199:19: error[E0063]: missing fields `namespace` and `signature` in initializer of `Node`: missing `namespace` and `signature`
+src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs:2133:9: error[E0027]: pattern does not mention fields `namespace`, `signature`: missing fields `namespace`, `signature`
+src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs:2178:9: error[E0027]: pattern does not mention field `metadata`: missing field `metadata`
+src/urp/stream_encode/openai_responses/encode_loop_part1.inc.rs:2269:9: error[E0027]: pattern does not mention fields `namespace`, `name`: missing fields `namespace`, `name`
+error: could not compile `monoize` (lib) due to 75 previous errors

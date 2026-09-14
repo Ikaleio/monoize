@@ -1,0 +1,3 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+src/urp/stream_decode/openai_chat.rs:292:53: error: cannot find macro `json` in this scope
+error: could not compile `monoize` (lib) due to 1 previous error

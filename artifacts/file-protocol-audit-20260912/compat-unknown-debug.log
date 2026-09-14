@@ -1,0 +1,118 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.51s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 1 test
+
+thread 'urp::responses_feature_tests::responses_unknown_content_preserves_its_message_position' (2468768) panicked at src/urp/responses_feature_tests.rs:1807:5:
+assertion `left == right` failed: Object {
+    "response": Object {
+        "background": Bool(false),
+        "completed_at": Number(1789194245),
+        "created_at": Number(123),
+        "error": Null,
+        "id": String("resp_feature"),
+        "incomplete_details": Null,
+        "instructions": Null,
+        "max_output_tokens": Null,
+        "max_tool_calls": Null,
+        "metadata": Object {},
+        "model": String("feature-model"),
+        "object": String("response"),
+        "output": Array [
+            Object {
+                "content": Array [
+                    Object {
+                        "annotations": Array [],
+                        "logprobs": Array [],
+                        "text": String("before"),
+                        "type": String("output_text"),
+                    },
+                ],
+                "id": String("msg_vendor"),
+                "role": String("assistant"),
+                "status": String("completed"),
+                "type": String("message"),
+            },
+            Object {
+                "content": Array [
+                    Object {
+                        "payload": Object {
+                            "type": String("audio"),
+                            "value": Number(7),
+                        },
+                        "type": String("vendor_content"),
+                    },
+                ],
+                "id": String("msg_6796e45c44874d8ca70950908ece99de"),
+                "role": String("assistant"),
+                "status": String("completed"),
+                "type": String("message"),
+            },
+            Object {
+                "content": Array [
+                    Object {
+                        "annotations": Array [],
+                        "logprobs": Array [],
+                        "text": String("after"),
+                        "type": String("output_text"),
+                    },
+                ],
+                "id": String("msg_a2512cc85a664602a88b8bd12c22f1b4"),
+                "role": String("assistant"),
+                "status": String("completed"),
+                "type": String("message"),
+            },
+        ],
+        "parallel_tool_calls": Bool(true),
+        "previous_response_id": Null,
+        "reasoning": Null,
+        "status": String("completed"),
+        "store": Bool(false),
+        "temperature": Number(1.0),
+        "text": Object {
+            "format": Object {
+                "type": String("text"),
+            },
+        },
+        "tool_choice": String("auto"),
+        "tools": Array [],
+        "top_logprobs": Number(0),
+        "top_p": Number(1.0),
+        "truncation": String("disabled"),
+        "usage": Object {
+            "input_tokens": Number(4),
+            "input_tokens_details": Object {
+                "cache_creation_tokens": Number(0),
+                "cache_write_tokens": Number(0),
+                "cached_tokens": Number(0),
+                "tool_prompt_tokens": Number(0),
+            },
+            "output_tokens": Number(3),
+            "output_tokens_details": Object {
+                "accepted_prediction_tokens": Number(0),
+                "reasoning_tokens": Number(0),
+                "rejected_prediction_tokens": Number(0),
+            },
+            "total_tokens": Number(7),
+        },
+        "user": Null,
+    },
+    "sequence_number": Number(25),
+    "type": String("response.completed"),
+}
+  left: Null
+ right: Object {"payload": Object {"type": String("audio"), "value": Number(7)}, "type": String("vendor_content")}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test urp::responses_feature_tests::responses_unknown_content_preserves_its_message_position ... FAILED
+
+failures:
+
+failures:
+    urp::responses_feature_tests::responses_unknown_content_preserves_its_message_position
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 260 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

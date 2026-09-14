@@ -1,0 +1,42 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+warning: function `encode_urp_stream_as_gemini` is never used
+   --> src/urp/stream_encode/gemini.rs:144:21
+    |
+144 | pub(crate) async fn encode_urp_stream_as_gemini(
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `monoize` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.57s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 24 tests
+test urp::messages_feature_tests::messages_nonstream_error_is_not_a_successful_empty_response ... ok
+test urp::messages_feature_tests::messages_parallel_control_mutations_and_unknown_choice_fields ... ok
+test urp::messages_feature_tests::messages_native_thinking_field_deletions_do_not_trigger_defaults ... ok
+test urp::messages_feature_tests::messages_stream_errors_are_terminal_and_preserve_details ... ok
+test urp::messages_feature_tests::messages_computer_member_name_does_not_collide_with_custom_tool ... ok
+test urp::messages_feature_tests::messages_buffered_reasoning_deletion_does_not_restore_signature ... ok
+test urp::messages_feature_tests::messages_provider_typed_identity_and_kind_override_native_body ... ok
+test urp::messages_feature_tests::messages_buffered_terminal_deletions_override_accumulated_values ... ok
+test urp::messages_feature_tests::messages_request_tools_configuration_and_results_bidirectional ... ok
+test urp::messages_feature_tests::messages_typed_deletions_and_mutations_own_nonstream_values ... ok
+test urp::messages_feature_tests::messages_provider_start_uses_typed_body_without_internal_snapshot ... ok
+test urp::messages_feature_tests::messages_terminal_snapshot_emits_unstreamed_nodes_of_same_kind ... ok
+test urp::messages_feature_tests::messages_thinking_redaction_signature_bidirectional ... ok
+test urp::messages_feature_tests::messages_mcp_bidirectional ... ok
+test urp::messages_feature_tests::messages_bash_execution_bidirectional ... ok
+test urp::messages_feature_tests::messages_citations_cache_and_phase_bidirectional ... ok
+test urp::messages_feature_tests::messages_tool_search_bidirectional ... ok
+test urp::messages_feature_tests::messages_code_execution_bidirectional ... ok
+test urp::messages_feature_tests::messages_text_editor_execution_bidirectional ... ok
+test urp::messages_feature_tests::messages_web_search_bidirectional ... ok
+test urp::messages_feature_tests::messages_web_fetch_bidirectional ... ok
+test urp::messages_feature_tests::messages_client_function_and_computer_use_bidirectional ... ok
+test urp::messages_feature_tests::messages_documents_images_files_bidirectional ... ok
+test urp::messages_feature_tests::messages_stop_reasons_and_usage_bidirectional_and_typed_override ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 99 filtered out; finished in 0.01s

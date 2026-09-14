@@ -1,0 +1,12 @@
+   Compiling monoize v1.8.4 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.99s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-351b2abf2da7cabb)
+
+running 3 tests
+test handlers::helpers::tool_namespace_tests::namespace_native_responses_retains_named_choice ... ok
+test handlers::helpers::tool_namespace_tests::namespace_stream_start_done_and_terminal_restore ... ok
+test handlers::helpers::tool_namespace_tests::namespace_messages_custom_patch_roundtrip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

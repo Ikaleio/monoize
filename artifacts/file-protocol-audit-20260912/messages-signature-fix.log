@@ -1,0 +1,21 @@
+   Compiling monoize v1.9.0 (/Users/ikaleio/Projects/monoize)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.70s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/monoize-cc4a2b5d7c90d82a)
+
+running 12 tests
+test urp::tool_signature::tests::terminal_only_signed_group_does_not_displace_late_stream_signature ... ok
+test urp::tool_signature::tests::terminal_projection_does_not_restore_deleted_signature ... ok
+test urp::tool_signature::tests::late_signature_precedes_completion_without_delaying_arguments ... ok
+test urp::tool_signature::tests::signed_controls_keep_dense_indices_with_start_done_or_delta_only_nodes ... ok
+test urp::tool_signature::tests::provider_model_mismatch_removes_signature_without_removing_call ... ok
+test urp::tool_signature::tests::stream_projection_uses_dense_indices_for_headers_done_and_terminal_only_calls ... ok
+test urp::tool_signature::tests::terminal_projection_preserves_controls_and_content_with_nonpositional_indices ... ok
+test transforms::reasoning_strip_encrypted::tool_signature_tests::stripping_call_signature_prevents_wire_transport_for_node_and_header ... ok
+test urp::tool_signature::tests::legacy_transport_moves_payload_and_typed_signature_wins ... ok
+test urp::tool_signature::tests::nonstream_client_tool_loops_preserve_one_canonical_signature ... ok
+test urp::tool_signature::tests::wire_projection_keeps_control_target_and_parallel_late_signatures ... ok
+test urp::tool_signature::tests::live_and_synthetic_client_tool_loops_preserve_signature ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 254 filtered out; finished in 0.01s
