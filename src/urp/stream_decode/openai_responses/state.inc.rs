@@ -612,11 +612,21 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
             },
             call_id: merge_string_field("function_call.call_id", left_call_id, right_call_id)?,
             name: merge_string_field("function_call.name", left_name, right_name)?,
-            arguments: merge_string_field(
-                "function_call.arguments",
-                left_arguments,
-                right_arguments,
-            )?,
+            arguments: if *left_tool_type == ToolCallType::Function
+                && *right_tool_type == ToolCallType::Function
+                && left_arguments != right_arguments
+                && matches!(
+                    (
+                        serde_json::from_str::<Value>(left_arguments),
+                        serde_json::from_str::<Value>(right_arguments),
+                    ),
+                    (Ok(left), Ok(right)) if left == right
+                )
+            {
+                right_arguments.clone()
+            } else {
+                merge_string_field("function_call.arguments", left_arguments, right_arguments)?
+            },
             extra_body: merge_extra_body(left_extra, right_extra),
         }),
         (left, right) if left == right || nodes_semantically_match(left, right) => Ok(right.clone()),
