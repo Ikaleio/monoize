@@ -833,6 +833,10 @@ pub(crate) async fn stream_messages_to_urp_events(
             }
             "message_delta" => {
                 merge_message_delta_state(&mut state, &data_val);
+                if state.saw_terminal_delta {
+                    explicit_terminal_event = Some("message_delta.stop_reason");
+                    break;
+                }
             }
             "ping" => {
                 let _ = tx
