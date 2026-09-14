@@ -1,6 +1,6 @@
 [package]
 name = "monoize"
-version = "1.9.8"
+version = "1.9.9"
 edition = "2024"
 build = "build.rs"
 
