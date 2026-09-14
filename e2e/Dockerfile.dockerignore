@@ -1,0 +1,14 @@
+*
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!src
+!src/**
+!frontend
+!frontend/**
+frontend/node_modules
+frontend/dist
+frontend/artifacts
+frontend/.cache
+frontend/.env*
+!e2e/Dockerfile

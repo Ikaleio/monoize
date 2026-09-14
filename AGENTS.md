@@ -1,200 +1,85 @@
-# Agents Guidelines
+# Monoize Agent Instructions
 
-You are participating in the development of **Monoize**.
-During the development process, you must strictly adhere to the rules in this document.
+## Scope and instruction priority
 
----
+Apply these instructions throughout this repository.
+Treat Monoize as the user's personal project.
+Keep each solution proportional to the requested work.
 
-## 0. Agent Behavior
+Obey system and developer instructions first.
+Then obey explicit user instructions, including task-specific exceptions to this file.
+Apply more specific repository instructions within their directory scope.
+Use skill guidance where it does not conflict with those instructions.
 
-- You are an automated coding / tooling agent working inside this repository.
-- You must **not** modify files outside the project root during ordinary code, test, or tooling work.
-- You must **not** write or add tests unless the user explicitly requests tests.
-- Deployment is an explicit exception: when the user explicitly requests deployment, you may run project-owned deployment
-  scripts or commands that write their documented deployment targets outside the project root, such as copying release
-  artifacts to `/opt/monoize` or restarting the configured process manager. Do not modify unrelated external paths.
-- For the Provider/Channel model-routing migration, you must not preserve old compatibility fields or tables.
-  The migration must remove obsolete API fields, database columns, tables, entities, and stores instead of
-  keeping compatibility aliases.
-- Whenever you change observable behavior of the system, you **must**:
-  1. Update the corresponding specification file under `spec/`.
-  2. Update the implementation.
-  3. Keep the spec and code exactly aligned.
+If a skill blocks authorized work, identify the exact `SKILL.md` file.
+Quote the blocking instruction and explain its application.
+Distinguish a stated requirement from your interpretation.
 
-If any rule in this document conflicts with ad-hoc instructions, this document takes precedence.
+## Execution and authorization
 
----
+Complete the requested work through implementation and relevant verification.
+Use established project conventions for routine implementation choices.
+Ask only when missing information changes required behavior, scope, authorization, or an irreversible outcome.
+Continue independent, authorized work while an answer is pending.
+Do not request approval again when the conversation already supplies it.
+If approval is necessary, first prepare the authorized work for review.
 
-## 1. Specification First
+Preserve unrelated files and existing user changes.
+Keep ordinary code, test, and tooling writes inside the project root.
 
-For every subsystem in the project, there must exist a corresponding `spec.md` file
-under `[project root]/spec`. The filename should be of the form:
+Deploy only when the user explicitly requests deployment.
+For an authorized deployment, use project-owned scripts or commands.
+These commands may write documented deployment targets outside the project root, such as `/opt/monoize`.
+They may also restart the configured process manager.
+Do not modify unrelated external paths.
 
-- `config-system.spec.md`
-- `billing-engine.spec.md`
-- `…`
+Use subagents only when the user or applicable instructions request delegation.
+Give each delegated task a defined scope, file ownership, and completion condition.
 
-Place each spec file **directly** under the `spec` directory.  
-**Do not create subdirectories inside `spec/`.**
+## Specifications
 
-### 1.1 Style of the spec
+Treat `spec/` as the source of truth for expected system behavior.
+Maintain one corresponding specification for each subsystem.
+Name each file `<subsystem>.spec.md`, such as `config-system.spec.md` or `billing-engine.spec.md`.
+Place every specification directly under `spec/`.
+Do not create subdirectories under `spec/`.
 
-The spec must be written in **low-entropy, concrete English that approximates mathematical language**.
-This means:
+Write specifications in concrete English that approximates mathematical language.
+State preconditions, inputs, outputs, limits, and postconditions explicitly.
+Define state, invariants, and transitions.
+Make each requirement testable.
+Quantify performance or quality claims.
+Avoid hidden assumptions, subjective descriptions, and marketing language.
 
-- Each statement should be **testable**: it must have clear preconditions and postconditions.
-- Avoid vague adjectives and marketing language (e.g. “fast”, “simple”, “seamless”)
-  unless quantified.
-- Avoid hidden assumptions: all inputs, outputs, and constraints must be explicit.
-- Prefer describing **state, invariants, and transitions** over describing “how the UI feels”.
+### New features and behavior changes
 
-Example of vague requirement (❌):
+1. Read the relevant specification.
+2. Resolve missing behavioral requirements before finalizing the specification or implementation.
+3. Update or create the specification before changing the implementation.
+4. Implement the specified behavior.
+5. Keep the specification and implementation aligned in the same change or pull request.
 
-> "I want multi-client cursor position synchronization."
+Use existing specifications and conversation context to resolve requirements when they contain the answer.
+If required limits, timing, or edge cases remain unresolved, ask the user.
 
-Example of acceptable spec statement (✅):
+### Bug fixes
 
-> "Upon loading, the canvas component sends the current brush info and cursor position  
-> to the WebSocket backend at a sampling rate of 15 Hz.  
-> Each client is identified by a unique `client_id` and a color.  
-> Synchronization packets use JSON with the following schema: …"
+1. Read the relevant specification before investigating the implementation.
+2. Determine the expected behavior from the specification.
+3. If the specification is incorrect or incomplete, correct it before changing the implementation.
+4. Fix the implementation to satisfy the specification.
 
-### 1.2 Workflow for new features
+For each observable behavior change, update the corresponding specification in the same change.
 
-When implementing a new feature:
+### Code Review Rules
 
-1. Translate the user’s vague requirement into spec language as defined above.
-2. Update or create the corresponding `*.spec.md` under `spec/`.
-3. Only after the spec is updated and logically sound, implement or modify the code.
-4. In the same change / PR, ensure the implementation matches the spec exactly.
-
-If you are missing information (e.g. sync frequency, limits, edge cases), you must
-ask for clarification **before** finalizing the spec and implementation.
-
-### 1.3 Workflow for bug fixes
-
-When fixing a bug:
-
-1. Read the relevant spec first.
-2. Walk through the logic defined in the spec to locate the expected behavior.
-3. If the spec itself is logically incorrect or incomplete:
-   - Update the spec to the corrected behavior.
-   - Then update the code to match the corrected spec.
-4. If the spec is correct:
-   - Compare the current implementation with the spec.
-   - Fix the implementation so that it conforms to the spec.
-
-Under all circumstances, the **spec is the single source of truth** for expected behavior.
-
-### 1.4 Spec and code review
-
-During code review:
-
-- If no spec exists for the subsystem:
-  - Derive a spec from the existing code behavior.
-  - Write it into a new `*.spec.md` under `spec/`.
-  - Then review both the spec’s logical soundness and the code quality.
-- Always check alignment between code and spec.
-- If the spec is not low-entropy, concrete, and written as specified above:
-  - Reject the change and request a spec rewrite.
-
----
-
-## 2. Meaningful Comments Only
-
-Add comments **if and only if** the code logic:
-
-- requires **reasoning / deduction** to be understood, or
-- is **counter-intuitive** compared to a naive implementation, or
-- encodes a non-obvious **invariant, complexity guarantee, or trade-off**.
-
-All comments must be in English.
-
-Examples of acceptable comments:
-
-- Explaining an invariant or a tricky loop condition.
-- Documenting a non-obvious performance optimization and its trade-offs.
-- Explaining why a “weird-looking” branch is necessary to maintain correctness.
-
-Examples of unacceptable comments:
-
-```ts
-i++ // increment i  (❌ redundant)
-
-// fetch data
-const res = await fetch(url) // (❌ restates the obvious)
-```
-
-Docstrings for public APIs (explaining inputs, outputs, and behavior) are allowed and
-encouraged; they are part of the interface specification, not “noise”.
-
-⸻
-
-3. CLI First
-
-Whenever possible, you must prefer using CLI tools rather than manual edits. For example:
-•Frontend package management in this repository uses **bun**. Use `bun add`, `bun install`, and `bun run` for frontend dependency and script operations.
-•Use bun add to install frontend packages instead of manually editing package.json.
-•Use shadcn add to install UI components instead of manually copying component code.
-•Use drizzle-kit migrate to generate SQL migrations instead of hand-writing migration files.
-
-If a CLI does not support the required operation:
-1.Confirm in the documentation that there is no supported CLI workflow.
-2.Perform the minimal necessary manual edits.
-3.Ensure that running the CLI again will not overwrite or conflict with your manual changes.
-
-Manual edits must remain an exception, not the default.
-
----
-
-## 4. Data Fetching and UX Resilience
-
-- Prefer **SWR** for frontend data fetching whenever possible.
-- For every UI surface that performs data fetching, you must provide:
-  1. **Optimistic updates** for user-triggered mutations, and
-  2. **Skeleton fallback** while data is loading or hydrating.
-- Do not ship fetch-driven UI flows that require close/reopen or manual refresh to display fresh data.
-
----
-
-## 5. Documentation
-
-The user-facing documentation site lives under `docs/` and is governed by `spec/docs-site.spec.md`.
-These rules apply whenever you modify the documentation site, the README, or user-visible behavior
-that the documentation describes.
-
-### 5.1 Language and style
-
-- Write all documentation prose in **Simplified Technical English (STE)**:
-  imperative mood, active voice, short sentences (target at most 25 words), one instruction
-  per sentence, one term per concept.
-- Marketing vocabulary is forbidden in docs and README ("seamless", "powerful",
-  "revolutionary", "blazing", "effortless", "world-class").
-- Keep product nouns in canonical English in every locale: Provider, Channel, transform
-  `type_id` values, environment variable names, endpoint paths.
-- Translations must read as native technical prose. Word-for-word translationese is a defect.
-
-### 5.2 Locale completeness
-
-- The docs site supports exactly `en`, `zh`, `zh-TW`, and `ja`.
-- When you change observable user-facing behavior that the docs describe, update the
-  affected pages in **all four locales** in the same change.
-- When you add or remove a built-in transform, add or remove the matching transform pages
-  in all four locales and update the transforms overview page.
-
-### 5.3 Screenshots
-
-- Dashboard screenshots are WebP files under `docs/public/images/en/` (English UI) and
-  `docs/public/images/zh/` (Simplified Chinese UI).
-- `zh` pages reference the `zh` set; `en`, `zh-TW`, and `ja` pages reference the `en` set.
-- When a UI change alters a documented flow, recapture the affected screenshots in **both**
-  sets in the same change.
-
-### 5.4 Build and links
-
-- `cd docs && bun install && bun run build` must pass before a docs change merges.
-- Update README links when documentation URLs change.
-- Follow the visual identity in `DESIGN_SYSTEM.md` for any docs-site UI work.
+Compare the implementation with its specification.
+If a specification is missing, derive it from the current implementation before reviewing both.
+When the review permits edits, write that specification to `spec/<subsystem>.spec.md`.
+For a read-only review, present the derived specification in the review instead of writing a file.
+Identify inferred behavior as current behavior, not approved product intent.
+Reject specifications that lack concrete, testable requirements.
+Request a specification rewrite before accepting the change.
 
 ## Canonical URP ownership
 
@@ -204,3 +89,119 @@ Add a typed URP field when shared protocol semantics need a new representation.
 Keep only unknown fields, source provenance, and native shape metadata in adapter extras.
 Typed values, including deletion and absence, take precedence over replay metadata.
 Do not retain a second text, summary, instruction, or request-control copy in internal fields.
+
+## Provider and Channel migration
+
+For the Provider/Channel model-routing migration, remove obsolete API fields, database columns, tables, entities, and stores.
+Do not retain compatibility fields, tables, or aliases.
+
+## Tools and code changes
+
+Use `rg` for text searches and `rg --files` for file searches.
+Prefer `ast-grep` (`sg`) for syntax-aware searches when regular expressions would be fragile.
+
+Use the supported CLI for dependency management, component installation, and generated files.
+Use Bun for frontend dependencies and scripts.
+Run frontend commands from `frontend/`.
+
+| Operation | Command |
+| --- | --- |
+| Install dependencies | `bun install` |
+| Add a dependency | `bun add <package>` |
+| Run a script | `bun run <script>` |
+| Add a shadcn component | `bunx --bun shadcn@latest add <component>` |
+
+Do not edit `package.json` manually to install a dependency.
+Do not copy shadcn component code manually to install a component.
+Preserve existing component customizations when the CLI proposes an overwrite.
+
+Use the existing SeaORM migration structure under `src/migration/`.
+Register migrations in `src/migration/mod.rs`.
+Do not introduce Drizzle commands into this Rust migration workflow.
+
+If a required generator operation is unsupported, verify that limitation in its documentation.
+Then make the smallest necessary manual change.
+Ensure subsequent generator runs preserve that change or remain compatible with it.
+This restriction applies to generated or tool-managed content.
+Edit application code and prose directly when the task requires it.
+
+## Code comments
+
+Write all code comments in English.
+Add a comment only when it explains reasoning, counter-intuitive behavior, or a non-obvious invariant, complexity guarantee, or trade-off.
+Do not add comments that repeat the code.
+Use public API docstrings to document inputs, outputs, and behavior.
+
+## Frontend data fetching
+
+Prefer SWR for frontend data fetching.
+For each UI surface that fetches data, provide a skeleton during loading or hydration.
+For each user-triggered mutation on that surface, provide an optimistic update.
+Display fresh data without requiring the user to reopen the surface or refresh the page.
+
+## Documentation
+
+Apply this section to the documentation site, README, and changes to behavior described by the documentation.
+Read `spec/docs-site.spec.md` before changing the documentation site under `docs/`.
+For documentation UI changes, obey `DESIGN_SYSTEM.md`.
+
+### Language
+
+Write documentation prose in Simplified Technical English (STE).
+Use active voice and one term per concept.
+Use imperative verbs for instructions.
+Keep one instruction per sentence.
+Target at most 25 words per English sentence.
+Do not use marketing terms such as "seamless", "powerful", "revolutionary", "blazing", "effortless", or "world-class".
+
+Apply STE-derived clarity principles to translations through each language's native grammar.
+Keep translations natural and technically precise.
+Keep Provider, Channel, transform `type_id` values, environment variable names, and endpoint paths in canonical English.
+
+### Locales
+
+Support exactly `en`, `zh`, `zh-TW`, and `ja`.
+When documented behavior changes, update the affected pages in all four locales in the same change.
+When adding a built-in transform, add its matching pages in all four locales.
+When removing a built-in transform, remove its matching pages in all four locales.
+Update the transforms overview pages in the same change.
+
+### Screenshots
+
+Store dashboard screenshots as WebP files.
+Use `docs/public/images/en/` for English UI screenshots.
+Use `docs/public/images/zh/` for Simplified Chinese UI screenshots.
+Reference the `zh` screenshots from `zh` pages.
+Reference the `en` screenshots from `en`, `zh-TW`, and `ja` pages.
+When a UI change alters a documented flow, recapture both screenshot sets in the same change.
+
+### Build and links
+
+Before merging a documentation-site change, run `cd docs && bun install && bun run build` successfully.
+Update README links when documentation URLs change.
+
+## Verification and completion
+
+Do not write or add tests unless the user explicitly requests tests.
+Run existing checks that verify the affected behavior and satisfy applicable project requirements.
+Choose checks proportional to the change.
+Repeat or broaden checks only after further edits, failures, or unresolved evidence gaps.
+For instruction-only edits, review the diff and run `git diff --check`.
+
+Do not equate a successful build with verified runtime behavior.
+Report failed checks, blockers, and behavior that remains unverified.
+
+Use concise technical prose in progress updates and final responses.
+State the result first.
+Then describe relevant changes, verification, and remaining limitations.
+Use lists for steps or parallel facts.
+Avoid filler, invented terminology, and unsupported claims.
+
+## Guidance sources
+
+This file adapts the following OpenAI guidance, checked on 2026-09-07:
+
+- [GPT-6 Astra prompting guidance](https://developers.openai.com/api/docs/guides/latest-model#prompting-best-practices)
+- [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
+
+The writing style applies the `ste-writing` skill's controlled-language principles.

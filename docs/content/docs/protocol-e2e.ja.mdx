@@ -1,0 +1,93 @@
+---
+title: プロトコル E2E テスト
+description: 隔離コンテナー内の CLI から Monoize を経由して上流 API を検証します。
+---
+
+リポジトリのルートで実行してください。先に Bun をインストールし、Docker 互換のデーモンを起動します。
+ツールは現在の作業ツリーから専用イメージをビルドします。未コミットの変更も含まれます。
+Monoize のデプロイや、既存の Dashboard 設定の使用は行いません。
+
+```bash
+bun e2e/cli.ts list
+export BASE_URL='https://example.com/v1/chat/completions'
+export API_KEY='your-upstream-key'
+export MODEL='your-model'
+bun e2e/cli.ts run --harness codex-responses-ws-v2,claude-messages
+```
+
+`BASE_URL` には完全なエンドポイントを指定します。パスとクエリは保持されます。
+標準のパス末尾から `responses`、`chat_completion`、`messages` を判定します。
+独自のパスを使う場合は、`--upstream-type` を指定してください。
+種類の不一致や不明な harness は、コンテナー作成前にエラーになります。
+実際の上流 API の呼び出しは、上流アカウントの利用枠を消費します。
+
+ビルドでは設定済みの `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` を使用します。
+ループバックのプロキシには Docker デーモンの設定を優先します。設定がなければ `host.docker.internal` に置き換えます。
+これらの変数は実行用イメージに保存しません。
+
+## クライアントと制限の選択
+
+`codex-responses-ws-v2`、`claude-messages`、`opencode-responses`、`opencode-chat`、`pi-responses`、`pi-chat` に対応します。
+各 ID はクライアントと下流プロトコルの組み合わせを表します。既定値は `all` です。
+`--harness` を繰り返すか、ID をカンマで区切ってください。
+
+| オプション | 既定値または動作 |
+| --- | --- |
+| `--base-url`、`--api-key`、`--model` | `BASE_URL`、`API_KEY`、`MODEL` より優先 |
+| `--upstream-type` | `UPSTREAM_TYPE` より優先。未指定なら URL から判定 |
+| `--jobs` | `1`。増やすと並列実行 |
+| `--timeout` | 項目ごとに `1800` 秒。イメージのビルド時間は対象外 |
+| `--max-requests` | 生成を `100` 回まで許可。再試行を含み、WS の予熱は除外 |
+| `--repo`、`--ref` | `https://github.com/Ikaleio/Monoize`、`HEAD` |
+| `--task`、`--task-file` | 独自のプロンプト。併用不可 |
+| `--monoize-image` | 既存イメージを使い、Monoize のビルドを省略 |
+| `--output` | プロジェクト内の新しいディレクトリ。既定では `e2e/.runs/` 配下 |
+
+リビジョンは実行開始時に一度だけ解決します。全項目で同じ commit を使用します。
+項目ごとにコンテナー、認証情報、データベース、作業ディレクトリを分離します。
+一つの項目が失敗しても残りを続行します。失敗した項目は自動で再実行しません。
+中断時は収集済みの証拠を保存し、一時コンテナーとボリュームを削除します。
+
+## 結果の確認
+
+出力ディレクトリの `report.json` と、各 harness のイベントファイルを確認してください。
+レポートはプロトコル検証とタスク検証を分け、ソース、イメージ、クライアントのバージョンを記録します。
+認証情報はマスクされます。証拠が項目ごとに 128 MiB を超えると、その項目は失敗します。
+
+プロトコル検証には、ツール呼び出し、ローカル実行、結果送信、次の生成が必要です。
+Codex は WS v2 を実際に使用し、`previous_response_id` で継続する必要があります。
+HTTP へのフォールバックは失敗として扱います。
+
+組み込みタスクはリポジトリを clone し、少なくとも三つのソースファイルを読んで、構成説明を書きます。
+検証対象はリビジョン、実行記録、見出し、実在するソースへの参照です。
+説明内のすべての主張が正しいことまでは確認しません。
+独自タスクでは、正常終了と空でない最終回答に加え、同じプロトコル検証が必要です。
+リポジトリ専用の検査は実行しません。
+
+終了コードは、全項目成功が `0`、項目失敗が `1`、引数または初期化エラーが `2`、中断が `130` です。
+六つの harness と三種類の上流に対応します。上流設定ごとに実行してください。
+認証情報や対応モデルがない組み合わせは未検証のままです。
+
+## テストツールの検査
+
+```bash
+cd e2e
+bun install --frozen-lockfile
+bun run check
+bun test
+```
+
+`fixture.ts` は開発検証用に決まった応答を返す上流を提供します。
+この結果は実際のモデルとの互換性を保証しません。
+
+OpenCode はステートレスの Responses リクエストを使用し、タイトルと要約のエージェントを無効にします。Claude はオプションの思考機能を無効にします。
+補助 HTTP エラーは証拠に残しますが、生成エラーには含めません。
+
+生成リクエストの HTTP エラーまたは上流の終了エラーを記録すると、runner はその項目を終了し、待機中の項目を続行します。
+
+リポジトリのルートでコンテナーのフィクスチャーマトリクス、リポジトリの受け入れチェック、中断チェックを実行します。
+
+```bash
+docker build -f e2e/Dockerfile -t monoize-e2e:dev .
+E2E_DOCKER_IMAGE=monoize-e2e:dev bun test e2e/docker.test.ts
+```

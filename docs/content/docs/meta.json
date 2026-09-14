@@ -8,6 +8,7 @@
     "routing",
     "endpoints",
     "transforms",
+    "protocol-e2e",
     "troubleshooting"
   ]
 }
