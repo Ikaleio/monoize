@@ -121,6 +121,7 @@ fn strip_xml_invoke(raw: &str) -> String {
 fn normalize_apply_patch(raw: &str) -> String {
     let stripped = strip_xml_invoke(raw);
     let mut out = String::new();
+    let mut in_add_file = false;
     for line in stripped.lines() {
         let trimmed = line.trim();
         if trimmed.eq_ignore_ascii_case("*** End of File ***") || trimmed == "*** End of File" {
@@ -128,11 +129,28 @@ fn normalize_apply_patch(raw: &str) -> String {
         }
         if trimmed.starts_with("*** Begin Patch") {
             out.push_str("*** Begin Patch\n");
+            in_add_file = false;
             continue;
         }
         if trimmed.starts_with("*** End Patch") {
             out.push_str("*** End Patch\n");
+            in_add_file = false;
             continue;
+        }
+        if trimmed.starts_with("*** Add File") {
+            out.push_str(line);
+            out.push('\n');
+            in_add_file = true;
+            continue;
+        }
+        if trimmed.starts_with("***") {
+            out.push_str(line);
+            out.push('\n');
+            in_add_file = false;
+            continue;
+        }
+        if in_add_file && !line.starts_with('+') {
+            out.push('+');
         }
         out.push_str(line);
         out.push('\n');
@@ -146,7 +164,7 @@ fn function_parameters() -> Value {
         "properties": {
             "input": {
                 "type": "string",
-                "description": "The entire apply_patch document. First line must be exactly `*** Begin Patch`. Last line must be exactly `*** End Patch`."
+                "description": "The entire apply_patch document. First line must be exactly `*** Begin Patch`. Last line must be exactly `*** End Patch`. After `*** Add File: path`, every content line must start with `+`."
             }
         },
         "required": ["input"]
@@ -163,7 +181,7 @@ fn convert_tool_to_function(tool: &mut ToolDefinition, cfg: &Config) {
     let custom = tool.custom.take();
     let description = custom.and_then(|c| c.description).or_else(|| {
         Some(
-            "Use the apply_patch tool to edit files. Pass the full patch text in `input`. Do not wrap the patch in extra JSON keys other than `input`.".to_string(),
+            "Use the apply_patch tool to edit files. Pass the full patch text in `input`. Do not wrap the patch in extra JSON keys other than `input`. After `*** Add File: path`, prefix every content line with `+`.".to_string(),
         )
     });
     tool.tool_type = "function".to_string();
@@ -211,7 +229,9 @@ fn convert_node_response(node: &mut Node, cfg: &Config) {
         *tool_type = ToolCallType::Custom;
         *arguments = unwrap_input(arguments);
     }
-    *arguments = normalize_apply_patch(arguments);
+    if name == "apply_patch" {
+        *arguments = normalize_apply_patch(arguments);
+    }
 }
 
 fn convert_header_response(header: &mut NodeHeader, cfg: &Config) {

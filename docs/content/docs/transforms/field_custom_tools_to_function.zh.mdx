@@ -11,6 +11,10 @@ Codex 0.15x 的 `apply_patch` 只以 Responses **custom/freeform** 工具下发�
 
 函数 schema 只有必填字符串字段 `input`，内容为完整的 `*** Begin Patch` 文档。Lark 语法约束不会保留。
 
+Grok 常输出 `*** Begin Patch ***` / `*** End Patch ***`。Codex 要求首行恰好为 `*** Begin Patch`。响应阶段会改写这些头，并去掉 `*** End of File ***` 与 `<invoke>` 包装。
+
+Grok 还会把 Add File 正文写成原始文件行。Codex 要求 Add File 的每一行内容都以 `+` 开头。响应阶段会给这些行补上 `+`。Update File 的 hunk 不会改写。
+
 ## 参考
 
 | 属性 | 值 |

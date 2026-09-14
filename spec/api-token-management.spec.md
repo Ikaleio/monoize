@@ -177,6 +177,7 @@ TM-TF-3. Allowed API-key request-phase transforms are exactly:
 - `cache_openai_tool_use`
 - `cache_user_id`
 - `cache_openai_prompt`
+- `field_alias_reserved_tool_names`
 - `field_custom_tools_to_function`
 
 TM-TF-4. Allowed API-key response-phase transforms are exactly:
@@ -193,6 +194,7 @@ TM-TF-4. Allowed API-key response-phase transforms are exactly:
 - `image_markdown_to_output`
 - `image_output_to_markdown`
 - `image_compress_output`
+- `field_alias_reserved_tool_names`
 - `field_custom_tools_to_function`
 
 TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routing, upstream model selection, upstream pricing tier, request execution mode, output token ceiling, or arbitrary provider passthrough fields. This forbidden set includes at minimum:

@@ -11,6 +11,10 @@ Codex 0.15x の `apply_patch` は Responses の **custom/freeform** ツール（
 
 function のスキーマは必須文字列フィールド `input` のみで、値は `*** Begin Patch` 文書全体です。Lark 制約は保持しません。
 
+Grok は `*** Begin Patch ***` / `*** End Patch ***` を出すことがあります。Codex は先頭行が正確に `*** Begin Patch` であることを要求します。応答フェーズでこれらのヘッダを直し、`*** End of File ***` と `<invoke>` ラッパを取り除きます。
+
+Grok は Add File 本文を生のファイル行として出すこともあります。Codex は Add File の各内容行が `+` で始まることを要求します。応答フェーズでそれらの行に `+` を付けます。Update File の hunk は変更しません。
+
 ## リファレンス
 
 | 項目 | 値 |
