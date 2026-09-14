@@ -73,8 +73,9 @@ OIU-D1. Monoize MUST parse the upstream response as the OpenAI Image API respons
 ```
 
 OIU-D2. For each entry in `data[]`:
-- If `b64_json` is present: create a `Node::Image` with `role: Assistant` and `ImageSource::Base64 { media_type: <MIME per OIU-D8>, data: <b64_json> }`.
-- If `url` is present (and `b64_json` is absent): create a `Node::Image` with `role: Assistant` and `ImageSource::Url { url: <url>, detail: None }`.
+- If `b64_json` is a string with non-whitespace content, create an assistant `Node::Image` with `ImageSource::Base64`. Preserve its value and use the MIME type from OIU-D8.
+- Otherwise, if `url` is a string with non-whitespace content, create an assistant `Node::Image` with `ImageSource::Url`. Preserve its value and set `detail` to `None`.
+- Otherwise, skip the entry. If no image nodes remain, return an error instead of a successful response.
 
 OIU-D3. If `revised_prompt` is present in any `data[]` entry, Monoize MUST create a `Node::Text` with `role: Assistant` and the `revised_prompt` content, placed before image nodes in source order.
 

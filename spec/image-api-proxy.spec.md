@@ -155,6 +155,8 @@ IR2. For each `Node::Image` found:
 
 IR3. If a sub-request succeeds but produces zero assistant `Node::Image` nodes, Monoize MUST scan for assistant `Node::Text` nodes and attempt to extract text content. If the URP response contains no extractable image, that sub-request MUST be treated as failed for the purpose of IM16.
 
+IR3a. Image extraction MUST skip Base64 sources whose data is empty or whitespace-only, and URL sources whose URL is empty or whitespace-only. These nodes MUST NOT satisfy IR3 validation.
+
 IR4. `revised_prompt`: If the URP response contains assistant `Node::Text` nodes alongside assistant `Node::Image` nodes, the concatenated text content of those text nodes MUST be used as `revised_prompt` for the corresponding `data[]` entry. If no assistant text nodes exist alongside images, `revised_prompt` MUST be omitted.
 
 ### 5.2 Response envelope

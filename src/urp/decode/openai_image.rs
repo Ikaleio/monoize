@@ -36,7 +36,11 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
             }
         }
 
-        if let Some(b64) = item_obj.get("b64_json").and_then(|v| v.as_str()) {
+        if let Some(b64) = item_obj
+            .get("b64_json")
+            .and_then(|v| v.as_str())
+            .filter(|value| !value.trim().is_empty())
+        {
             output.push(Node::Image {
                 metadata: metadata.clone(),
 
@@ -53,7 +57,11 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
                 },
                 extra_body: HashMap::new(),
             });
-        } else if let Some(url) = item_obj.get("url").and_then(|v| v.as_str()) {
+        } else if let Some(url) = item_obj
+            .get("url")
+            .and_then(|v| v.as_str())
+            .filter(|value| !value.trim().is_empty())
+        {
             output.push(Node::Image {
                 metadata: metadata.clone(),
 
