@@ -13,6 +13,8 @@ The function schema uses a single required string field `input` holding the full
 
 Grok often emits `*** Begin Patch ***` / `*** End Patch ***`. Codex requires the first line to be exactly `*** Begin Patch`. The response phase rewrites those headers (and strips `*** End of File ***` / `<invoke>` wrappers) before Codex parses the patch.
 
+Grok also emits Add File bodies as raw file lines. Codex requires each Add File content line to start with `+`. The response phase prefixes `+` on those lines. Update File hunks stay unchanged.
+
 ## Reference
 
 | Property | Value |

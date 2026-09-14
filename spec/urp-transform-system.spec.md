@@ -421,7 +421,7 @@ SF-7. A Provider request transform with config `{ "path": "service_tier", "when_
 
 ### 4.5c `field_alias_reserved_tool_names`
 
-ARTN-1. `field_alias_reserved_tool_names` MUST support request-phase and response-phase execution.
+ARTN-1. `field_alias_reserved_tool_names` MUST support request-phase and response-phase execution. Supported scopes are `provider`, `global`, and `api_key`.
 
 ARTN-2. Config MAY contain `aliases` as a JSON object mapping original function names to alias names. If `aliases` is absent, the transform MUST use the default map `{ "view_image": "client_view_image" }`. If `aliases` is present, including an empty object, the transform MUST use that object and MUST NOT add the default map.
 
@@ -481,6 +481,7 @@ CTF-12. After CTF-8 and CTF-9, for a matching `apply_patch` `ToolCall` (whether 
 2. a line that starts with `*** End Patch` becomes exactly `*** End Patch`;
 3. lines equal to `*** End of File` or `*** End of File ***` are removed;
 4. if the payload is wrapped in an `<invoke ...>...</invoke>` element, the inner text is used before rules 1–3.
+5. after a line that starts with `*** Add File`, each following line that does not start with `***` and does not already start with `+` MUST be rewritten by prefixing `+`. This prefix MUST NOT be applied inside `*** Update File` or `*** Delete File` sections. A line that already starts with `+` MUST remain unchanged.
 
 ### 4.6 Image transforms on request ordinary nodes
 
