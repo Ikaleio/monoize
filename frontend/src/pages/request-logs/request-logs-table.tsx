@@ -85,7 +85,7 @@ export function RequestLogsTable({
 }: RequestLogsTableProps) {
 	if (isInitialLoading) {
 		return (
-			<div className='p-4 space-y-1.5'>
+			<div className='h-full min-h-[20rem] space-y-1.5 p-4'>
 				{Array.from({ length: 24 }).map((_, i) => (
 					<Skeleton key={i} className='h-9 w-full' />
 				))}
@@ -95,7 +95,7 @@ export function RequestLogsTable({
 
 	if (logs.length === 0) {
 		return (
-			<EmptyState title={t('requestLogs.noLogs')} className='h-full px-4 py-0' />
+			<EmptyState title={t('requestLogs.noLogs')} className='h-full min-h-[20rem] px-4 py-0' />
 		)
 	}
 

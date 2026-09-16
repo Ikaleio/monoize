@@ -300,6 +300,8 @@ RL-API9. `model` and `search` matching MUST have the same ASCII-case-insensitive
 
 RL-API10. The page rows, `total`, and `total_charge_nano_usd` returned by one request MUST be computed from one database snapshot. PostgreSQL reads MUST use at least repeatable-read isolation. The final row order MUST be `created_at_unix_ms DESC` with nulls last, then `created_at DESC`, then `id DESC`; `id` is the unique pagination tie-breaker.
 
+RL-API10a. `total` and `total_charge_nano_usd` MUST be computed in one aggregate query (`COUNT(*)` plus the charge sum). The list path MUST NOT scan matching rows once for count and again for sum.
+
 RL-API11. Exact charge totals MUST be aggregated in the database into bounded exact integer components or an exact decimal value. The server MUST NOT transfer one `charge_nano_usd` value per matching row solely to calculate a list-page total. Rust MUST reconstruct or parse the database aggregate with checked `i128` arithmetic. A syntactically canonical charge outside the signed `i128` domain, or a total outside that domain, MUST return an explicit internal storage error. Non-canonical stored charge text is ignored.
 
 RL-API12. The effective maximum number of non-empty comma-separated `model` terms MUST be configured by `MONOIZE_REQUEST_LOG_MODEL_FILTER_MAX_TERMS`. The default and hard maximum MUST both be `32`. A trimmed base-10 integer in `[1, 32]` selects that value. An unset, empty, malformed, zero, negative, or greater-than-32 value MUST resolve to `32`. Empty comma-separated entries are discarded; every remaining entry, including a duplicate, counts as one term because it creates one SQL predicate and one bind value.
@@ -496,6 +498,8 @@ FL13. The virtualized table viewport MUST occupy the remaining page height below
 
 FL13a. The `TableVirtuoso` root MUST have a non-zero definite height on the first paint. The table MUST own vertical scrolling. A parent of the virtuoso root MUST NOT use `overflow: auto` as the vertical scroll container, because a zero-height virtuoso then treats the viewport as ended and can request further pages until the page freezes.
 
+FL13b. The table viewport MUST keep a minimum height of 20 rem on every viewport width, including mobile. The logs page wrapper MUST NOT clip that region with `overflow: hidden` while its own height is unresolved. The extra filter row MUST start collapsed below the `lg` breakpoint so the table remains visible on the first mobile paint.
+
 FL14. The filter-control area first row MUST include an IP visibility toggle button between the manual-refresh button and the filter-expansion toggle:
 
 - The button MUST be a square icon button using an eye/eye-off glyph.
@@ -582,6 +586,8 @@ FL37. Automatic updates MUST be enabled when the logs page mounts. While automat
 FL37b. The logs filter toolbar MUST provide a localized toggle for automatic updates. Disabling automatic updates MUST close or suppress the request-log SSE subscription, stop the three-second fallback poll, and disable request-log revalidation triggered by window focus or network reconnection. The explicit manual-refresh action MUST remain enabled. Enabling automatic updates MUST immediately revalidate the current request-log page and the newest request-log page, then resume the SSE lifecycle defined in FL48. This toggle state is page-local and MUST reset to enabled after the logs page unmounts and mounts again.
 
 FL37c. The automatic-update toggle MUST render as a square icon-only button. It MUST show the radio-tower icon while enabled and the disconnected icon while disabled. Its localized accessible name and title MUST describe the action that the next activation performs.
+
+FL37d. The logs page MUST finish the initial REST list request (success or error) before it opens the request-log SSE stream. The three-second polling fallback MUST stay stopped until that first REST request has settled. The page MUST NOT open SSE or start the fallback poll in parallel with the first list fetch.
 
 FL37a. When SWR revalidation replaces `loadedLogs` with server-fetched data (initial load, focus revalidation, reconnect revalidation, resync, or polling), the frontend MUST preserve any SSE-delivered `pending` rows that are not yet represented in the server response. Specifically: rows with `status = "pending"` whose `id` is absent from the server data AND whose `request_id` (when non-null) is absent from the server data MUST be re-prepended to the merged result. This prevents SSE-only pending items (which are never persisted to the database per RL1a-1) from being silently dropped by SWR cache replacement.
 

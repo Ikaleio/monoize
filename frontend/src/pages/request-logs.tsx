@@ -15,6 +15,7 @@ import {
 import { useRequestLogs, useApiKeys, useProviders } from '@/lib/swr'
 import { useRequestLogSSE } from '@/lib/sse'
 import { useAuth } from '@/hooks/use-auth'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 import type { RequestLog, RequestLogsFilter, RequestLogsResponse } from '@/lib/api'
 import { PageWrapper, motion, transitions } from '@/components/ui/motion'
@@ -30,6 +31,7 @@ const REQUEST_LOGS_PAGE_SIZE = 100
 export function RequestLogsPage() {
 	const { t } = useTranslation()
 	const { user } = useAuth()
+	const isMobile = useIsMobile()
 	const [searchParams] = useSearchParams()
 	const isAdmin = user?.role === 'super_admin' || user?.role === 'admin'
 	const usernameFromQuery = isAdmin ? (searchParams.get('username')?.trim() ?? '') : ''
@@ -63,7 +65,7 @@ export function RequestLogsPage() {
 	const [totalCharge, setTotalCharge] = useState<string>('0')
 	const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined)
 	const [timeTo, setTimeTo] = useState<Date | undefined>(undefined)
-	const [filtersExpanded, setFiltersExpanded] = useState(true)
+	const [filtersExpanded, setFiltersExpanded] = useState(() => !isMobile)
 	const [automaticUpdatesEnabled, setAutomaticUpdatesEnabled] = useState(true)
 	const openTooltipIdsRef = useRef<Set<string>>(new Set())
 	const pendingPageDataRef = useRef<RequestLogsResponse | null>(null)
@@ -78,7 +80,6 @@ export function RequestLogsPage() {
 	const captureRevalidateTimerRef = useRef<number | null>(null)
 
 	const handleOpenCapture = useCallback((log: RequestLog) => {
-		if (!log.request_id) return
 		if (!log.request_id || !log.user?.id) return
 		setCaptureTarget({ requestId: log.request_id, userId: log.user.id })
 		setCaptureOpen(true)
@@ -97,19 +98,6 @@ export function RequestLogsPage() {
 	}, [])
 
 	const { data: apiKeys } = useApiKeys()
-	const { data: providers } = useProviders(undefined, isAdmin)
-	const affinityTargetNames = useMemo(() => {
-		const names = new Map<string, string>()
-		for (const provider of providers ?? []) {
-			for (const channel of provider.channels) {
-				const readableNames = [provider.name.trim(), channel.name.trim()].filter(Boolean)
-				if (readableNames.length > 0) {
-					names.set(`${provider.id}/${channel.id}`, readableNames.join('/'))
-				}
-			}
-		}
-		return names
-	}, [providers])
 
 	const activeFilters = useMemo<RequestLogsFilter>(() => {
 		const f: RequestLogsFilter = {}
@@ -135,13 +123,30 @@ export function RequestLogsPage() {
 
 	const {
 		data: pageData,
+		error: logsError,
 		isLoading,
 		isValidating,
 		mutate
 	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters, {
+		refreshInterval: 0,
 		revalidateOnFocus: automaticUpdatesEnabled,
-		revalidateOnReconnect: automaticUpdatesEnabled
+		revalidateOnReconnect: automaticUpdatesEnabled,
+		isPaused: () => openTooltipIdsRef.current.size > 0
 	})
+	const pageSettled = pageData != null || logsError != null
+	const { data: providers } = useProviders(undefined, isAdmin && pageSettled)
+	const affinityTargetNames = useMemo(() => {
+		const names = new Map<string, string>()
+		for (const provider of providers ?? []) {
+			for (const channel of provider.channels ?? []) {
+				const readableNames = [provider.name.trim(), channel.name.trim()].filter(Boolean)
+				if (readableNames.length > 0) {
+					names.set(`${provider.id}/${channel.id}`, readableNames.join('/'))
+				}
+			}
+		}
+		return names
+	}, [providers])
 
 	const matchesActiveFilters = useCallback(
 		(log: RequestLog) => {
@@ -282,7 +287,7 @@ export function RequestLogsPage() {
 	)
 
 	const { connected: sseConnected, event: sseEvent } = useRequestLogSSE(
-		automaticUpdatesEnabled
+		automaticUpdatesEnabled && pageSettled
 	)
 
 	const { data: newestPageData, mutate: mutateNewest } = useRequestLogs(
@@ -290,9 +295,10 @@ export function RequestLogsPage() {
 		0,
 		activeFilters,
 		{
-			refreshInterval: automaticUpdatesEnabled && !sseConnected ? 3000 : 0,
-			revalidateOnFocus: automaticUpdatesEnabled,
-			revalidateOnReconnect: automaticUpdatesEnabled,
+			refreshInterval:
+				automaticUpdatesEnabled && pageSettled && !sseConnected ? 3000 : 0,
+			revalidateOnFocus: automaticUpdatesEnabled && pageSettled,
+			revalidateOnReconnect: automaticUpdatesEnabled && pageSettled,
 			isPaused: () => openTooltipIdsRef.current.size > 0
 		}
 	)
@@ -474,11 +480,17 @@ export function RequestLogsPage() {
 		}
 	}, [flushSignal, prependSSELogs, preservePendingItems, requestOffset])
 
-	const isInitialLoading = isLoading && loadedLogs.length === 0
-	const hasMore = loadedLogs.length < totalCount
+	const visibleLogs = useMemo(() => {
+		if (loadedLogs.length > 0) return loadedLogs
+		if (requestOffset === 0) return pageData?.data ?? []
+		return []
+	}, [loadedLogs, pageData, requestOffset])
+	const isInitialLoading = isLoading && visibleLogs.length === 0
+	const visibleTotal = pageData?.total ?? totalCount
+	const hasMore = visibleLogs.length < visibleTotal
 
 	const sortedLogs = useMemo(() => {
-		const sorted = [...loadedLogs]
+		const sorted = [...visibleLogs]
 		sorted.sort((a, b) => {
 			const ta = Date.parse(a.created_at)
 			const tb = Date.parse(b.created_at)
@@ -486,11 +498,11 @@ export function RequestLogsPage() {
 			return b.id.localeCompare(a.id)
 		})
 		return sorted
-	}, [loadedLogs])
+	}, [visibleLogs])
 
 	const handleLoadMore = () => {
 		if (!hasMore || isLoading || isValidating) return
-		setRequestOffset(loadedLogs.length)
+		setRequestOffset(visibleLogs.length)
 	}
 
 	const handleStatusChange = (value: string) => {
@@ -528,22 +540,16 @@ export function RequestLogsPage() {
 		setTimeTo(to)
 	}
 
-	const showingSummary = !!pageData || loadedLogs.length > 0
+	const showingSummary = !!pageData || visibleLogs.length > 0
 
 	return (
-		<PageWrapper className='flex min-h-0 flex-1 flex-col gap-4 overflow-hidden'>
-			<motion.div
-				initial={{ opacity: 0, y: -10 }}
-				animate={{ opacity: 1, y: 0 }}
-				transition={transitions.normal}
-			>
+		<PageWrapper instant className='flex min-h-0 flex-1 flex-col gap-4'>
+			<motion.div initial={false}>
 				<PageHeader title={t('requestLogs.title')} description={t('requestLogs.description')} />
 			</motion.div>
 
 			<motion.div
-				initial={{ opacity: 0, y: 10 }}
-				animate={{ opacity: 1, y: 0 }}
-				transition={{ delay: 0.05, ...transitions.normal }}
+				initial={false}
 				className='rounded-lg border bg-card px-3 py-1.5 space-y-1.5'
 			>
 				<div className='flex flex-wrap items-center gap-2'>
@@ -636,14 +642,14 @@ export function RequestLogsPage() {
 					<div className='ml-auto flex items-center gap-3 text-xs text-muted-foreground'>
 						{showingSummary && (
 							<span className='font-medium text-foreground'>
-								{t('requestLogs.totalCost')}: {formatCost(totalCharge)}
+								{t('requestLogs.totalCost')}: {formatCost(pageData?.total_charge_nano_usd ?? totalCharge)}
 							</span>
 						)}
 						{showingSummary ?
 							t('requestLogs.showing', {
-								from: totalCount === 0 ? 0 : 1,
-								to: Math.min(loadedLogs.length, totalCount),
-								total: totalCount
+								from: visibleTotal === 0 ? 0 : 1,
+								to: Math.min(visibleLogs.length, visibleTotal),
+								total: visibleTotal
 							})
 						: <Skeleton className='h-4 w-24 inline-block' />}
 					</div>
@@ -733,10 +739,8 @@ export function RequestLogsPage() {
 			</motion.div>
 
 			<motion.div
-				initial={{ opacity: 0, y: 20 }}
-				animate={{ opacity: 1, y: 0 }}
-				transition={{ delay: 0.1, ...transitions.normal }}
-				className='relative min-h-0 flex-1 overflow-hidden rounded-lg border bg-card'
+				initial={false}
+				className='relative min-h-[20rem] flex-1 overflow-hidden rounded-lg border bg-card'
 			>
 				<RequestLogsTable
 					affinityTargetNames={affinityTargetNames}

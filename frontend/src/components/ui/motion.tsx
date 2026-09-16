@@ -95,16 +95,18 @@ const reducedTransition: Transition = { duration: 0 };
 interface PageWrapperProps {
   children: ReactNode;
   className?: string;
+  /** Skip the enter fade. Fill-height pages must paint immediately. */
+  instant?: boolean;
 }
 
 export const PageWrapper = forwardRef<HTMLDivElement, PageWrapperProps>(
-  ({ children, className = "" }, ref) => {
+  ({ children, className = "", instant = false }, ref) => {
     const shouldReduceMotion = useReducedMotionPreference();
 
     return (
       <motion.div
         ref={ref}
-        initial="initial"
+        initial={instant ? false : "initial"}
         animate="animate"
         exit="exit"
         variants={shouldReduceMotion ? reducedPageVariants : pageVariants}
