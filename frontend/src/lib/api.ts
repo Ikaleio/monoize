@@ -448,8 +448,13 @@ export interface BillingExprTier {
   reasoning_usd_per_1m?: string | null;
 }
 
+export interface BillingExprServiceTier {
+  tiers: BillingExprTier[];
+}
+
 export interface BillingExpr {
   tiers: BillingExprTier[];
+  service_tiers?: Record<string, BillingExprServiceTier>;
 }
 
 export interface ModelPriceRecord {

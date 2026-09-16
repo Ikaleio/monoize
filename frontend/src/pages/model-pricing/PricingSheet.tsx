@@ -68,6 +68,7 @@ interface PriceForm {
   prices: Record<PerTokenPriceField, string>;
   perRequestUsd: string;
   tiers: TierRow[];
+  serviceTiers: Record<string, TierRow[]>;
   lockedFields: string[];
   enabled: boolean;
 }
@@ -106,6 +107,42 @@ function tierFromExpr(tier: BillingExprTier): TierRow {
   };
 }
 
+function serviceTiersFromRecord(
+  record: ModelPriceRecord | null,
+): Record<string, TierRow[]> {
+  const tables = record?.billing_expr?.service_tiers;
+  if (!tables) return {};
+  return Object.fromEntries(
+    Object.entries(tables).map(([key, table]) => [
+      key,
+      table.tiers.map(tierFromExpr),
+    ]),
+  );
+}
+
+function rowsToExprTiers(tiers: TierRow[]): BillingExprTier[] {
+  return tiers.map((tier, index) => ({
+    when_input_tokens_lte:
+      index === tiers.length - 1 || !tier.lte.trim()
+        ? null
+        : Number.parseInt(tier.lte.trim(), 10),
+    input_usd_per_1m: tier.input.trim(),
+    output_usd_per_1m: tier.output.trim() || null,
+    cache_read_usd_per_1m: tier.cacheRead.trim() || null,
+    cache_write_usd_per_1m: tier.cacheWrite.trim() || null,
+    cache_write_1h_usd_per_1m: tier.cacheWrite1h.trim() || null,
+    reasoning_usd_per_1m: tier.reasoning.trim() || null,
+  }));
+}
+
+function copyThresholds(source: TierRow[]): TierRow[] {
+  const rows = source.length > 0 ? source : [emptyTier()];
+  return rows.map((tier) => ({
+    ...emptyTier(),
+    lte: tier.lte,
+  }));
+}
+
 function formFromRecord(record: ModelPriceRecord | null): PriceForm {
   return {
     billingMode: record?.billing_mode ?? "per_token",
@@ -114,6 +151,7 @@ function formFromRecord(record: ModelPriceRecord | null): PriceForm {
     ) as Record<PerTokenPriceField, string>,
     perRequestUsd: record?.per_request_usd ?? "",
     tiers: record?.billing_expr?.tiers.map(tierFromExpr) ?? [emptyTier()],
+    serviceTiers: serviceTiersFromRecord(record),
     lockedFields: record?.locked_fields ?? [],
     enabled: record?.enabled ?? true,
   };
@@ -178,6 +216,156 @@ const PRICE_FIELD_LABEL_KEYS: Record<PerTokenPriceField, [string, string]> = {
   ],
   reasoning_usd_per_1m: ["modelPricing.fieldReasoning", "Reasoning"],
 };
+
+function TiersEditor({
+  formId,
+  idPrefix,
+  labelPrefix,
+  tiers,
+  onChange,
+}: {
+  formId: string;
+  idPrefix: string;
+  labelPrefix?: string;
+  tiers: TierRow[];
+  onChange: (tiers: TierRow[]) => void;
+}) {
+  const { t } = useTranslation();
+  const tierName = (index: number) => {
+    const label = t("modelPricing.tierLabel", "Tier {{index}}", {
+      index: index + 1,
+    });
+    return labelPrefix ? `${labelPrefix} · ${label}` : label;
+  };
+  return (
+    <div className="space-y-3">
+      {tiers.map((tier, index) => {
+        const isLast = index === tiers.length - 1;
+        const updateTier = (patch: Partial<TierRow>) =>
+          onChange(
+            tiers.map((item, itemIndex) =>
+              itemIndex === index ? { ...item, ...patch } : item,
+            ),
+          );
+        return (
+          <div key={index} className="space-y-2 rounded-lg border p-3">
+            <div className="flex items-center justify-between">
+              <span
+                id={`${formId}-${idPrefix}-${index}`}
+                className="text-sm font-medium text-muted-foreground"
+              >
+                {tierName(index)}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 text-error-foreground hover:text-error-foreground"
+                aria-label={t("modelPricing.removeTier", "Remove tier")}
+                disabled={tiers.length === 1}
+                onClick={() =>
+                  onChange(tiers.filter((_, itemIndex) => itemIndex !== index))
+                }
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  [
+                    "lte",
+                    isLast
+                      ? t(
+                          "modelPricing.tierUnbounded",
+                          "Input tokens ≤ (unbounded)",
+                        )
+                      : t("modelPricing.tierThreshold", "Input tokens ≤"),
+                    tier.lte,
+                    isLast,
+                    "numeric",
+                    isLast ? "∞" : "272000",
+                    (value: string) => updateTier({ lte: value }),
+                  ],
+                  [
+                    "input",
+                    t("modelPricing.fieldInput", "Input"),
+                    tier.input,
+                    false,
+                    "decimal",
+                    undefined,
+                    (value: string) => updateTier({ input: value }),
+                  ],
+                  [
+                    "output",
+                    t("modelPricing.fieldOutput", "Output"),
+                    tier.output,
+                    false,
+                    "decimal",
+                    undefined,
+                    (value: string) => updateTier({ output: value }),
+                  ],
+                  [
+                    "cacheRead",
+                    t("modelPricing.fieldCacheRead", "Cache read"),
+                    tier.cacheRead,
+                    false,
+                    "decimal",
+                    undefined,
+                    (value: string) => updateTier({ cacheRead: value }),
+                  ],
+                  [
+                    "cacheWrite",
+                    t("modelPricing.fieldCacheWrite", "Cache write 5m"),
+                    tier.cacheWrite,
+                    false,
+                    "decimal",
+                    undefined,
+                    (value: string) => updateTier({ cacheWrite: value }),
+                  ],
+                  [
+                    "reasoning",
+                    t("modelPricing.fieldReasoning", "Reasoning"),
+                    tier.reasoning,
+                    false,
+                    "decimal",
+                    undefined,
+                    (value: string) => updateTier({ reasoning: value }),
+                  ],
+                ] as const
+              ).map(([field, label, value, disabled, inputMode, placeholder, onValue]) => (
+                <div key={field} className="space-y-1">
+                  <Label htmlFor={`${formId}-${idPrefix}-${index}-${field}`}>
+                    <span className="sr-only">
+                      {tierName(index)}
+                      {" · "}
+                    </span>
+                    {label}
+                  </Label>
+                  <Input
+                    inputMode={inputMode}
+                    id={`${formId}-${idPrefix}-${index}-${field}`}
+                    value={value}
+                    disabled={disabled}
+                    placeholder={placeholder}
+                    onChange={(event) => onValue(event.target.value)}
+                    className="font-mono"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onChange([...tiers, emptyTier()])}
+      >
+        {t("modelPricing.addTier", "Add tier")}
+      </Button>
+    </div>
+  );
+}
 
 export function PricingSheet({
   target,
@@ -267,38 +455,47 @@ export function PricingSheet({
       const value = form.perRequestUsd.trim();
       if (!value || !isValidUsdDecimal(value)) return invalidDecimal;
     } else {
-      if (form.tiers.length === 0) {
-        return t(
-          "modelPricing.errorTierRequired",
-          "Tiered pricing requires at least one tier",
-        );
-      }
-      for (const [index, tier] of form.tiers.entries()) {
-        if (!tier.input.trim() || !isValidUsdDecimal(tier.input.trim())) {
+      const tables: Array<{ label: string; tiers: TierRow[] }> = [
+        { label: "", tiers: form.tiers },
+        ...Object.entries(form.serviceTiers).map(([key, tiers]) => ({
+          label: key,
+          tiers,
+        })),
+      ];
+      for (const table of tables) {
+        if (table.tiers.length === 0) {
           return t(
-            "modelPricing.errorTierInput",
-            "Tier {{index}} requires a valid input price",
-            {
-              index: index + 1,
-            },
+            "modelPricing.errorTierRequired",
+            "Tiered pricing requires at least one tier",
           );
         }
-        for (const value of [
-          tier.output,
-          tier.cacheRead,
-          tier.cacheWrite,
-          tier.cacheWrite1h,
-          tier.reasoning,
-        ]) {
-          if (value.trim() && !isValidUsdDecimal(value.trim()))
-            return invalidDecimal;
-        }
-        const isLast = index === form.tiers.length - 1;
-        if (!isLast && (!tier.lte.trim() || !/^\d+$/.test(tier.lte.trim()))) {
-          return t(
-            "modelPricing.errorTierThreshold",
-            "Every tier except the last requires an integer token threshold",
-          );
+        for (const [index, tier] of table.tiers.entries()) {
+          if (!tier.input.trim() || !isValidUsdDecimal(tier.input.trim())) {
+            return t(
+              "modelPricing.errorTierInput",
+              "Tier {{index}} requires a valid input price",
+              {
+                index: index + 1,
+              },
+            );
+          }
+          for (const value of [
+            tier.output,
+            tier.cacheRead,
+            tier.cacheWrite,
+            tier.cacheWrite1h,
+            tier.reasoning,
+          ]) {
+            if (value.trim() && !isValidUsdDecimal(value.trim()))
+              return invalidDecimal;
+          }
+          const isLast = index === table.tiers.length - 1;
+          if (!isLast && (!tier.lte.trim() || !/^\d+$/.test(tier.lte.trim()))) {
+            return t(
+              "modelPricing.errorTierThreshold",
+              "Every tier except the last requires an integer token threshold",
+            );
+          }
         }
       }
     }
@@ -318,19 +515,14 @@ export function PricingSheet({
     } else if (form.billingMode === "per_request") {
       input.per_request_usd = form.perRequestUsd.trim();
     } else {
+      const service_tiers = Object.fromEntries(
+        Object.entries(form.serviceTiers)
+          .filter(([, tiers]) => tiers.length > 0)
+          .map(([key, tiers]) => [key, { tiers: rowsToExprTiers(tiers) }]),
+      );
       input.billing_expr = {
-        tiers: form.tiers.map((tier, index) => ({
-          when_input_tokens_lte:
-            index === form.tiers.length - 1 || !tier.lte.trim()
-              ? null
-              : Number.parseInt(tier.lte.trim(), 10),
-          input_usd_per_1m: tier.input.trim(),
-          output_usd_per_1m: tier.output.trim() || null,
-          cache_read_usd_per_1m: tier.cacheRead.trim() || null,
-          cache_write_usd_per_1m: tier.cacheWrite.trim() || null,
-          cache_write_1h_usd_per_1m: tier.cacheWrite1h.trim() || null,
-          reasoning_usd_per_1m: tier.reasoning.trim() || null,
-        })),
+        tiers: rowsToExprTiers(form.tiers),
+        ...(Object.keys(service_tiers).length > 0 ? { service_tiers } : {}),
       };
     }
     // MP-Y18: an explicit locked_fields replaces the stored set; only send it
@@ -597,207 +789,90 @@ export function PricingSheet({
                   />
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {form.tiers.map((tier, index) => {
-                    const isLast = index === form.tiers.length - 1;
-                    const updateTier = (patch: Partial<TierRow>) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        tiers: previous.tiers.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, ...patch } : item,
-                        ),
-                      }));
-                    return (
-                      <div
-                        key={index}
-                        className="space-y-2 rounded-lg border p-3"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span
-                            id={`${formId}-tier-${index}`}
-                            className="text-sm font-medium text-muted-foreground"
-                          >
-                            {t("modelPricing.tierLabel", "Tier {{index}}", {
-                              index: index + 1,
-                            })}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-error-foreground hover:text-error-foreground"
-                            aria-label={t(
-                              "modelPricing.removeTier",
-                              "Remove tier",
-                            )}
-                            disabled={form.tiers.length === 1}
-                            onClick={() =>
-                              setForm((previous) => ({
-                                ...previous,
-                                tiers: previous.tiers.filter(
-                                  (_, i) => i !== index,
-                                ),
-                              }))
-                            }
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <Label htmlFor={`${formId}-tier-${index}-lte`}>
-                              <span className="sr-only">
-                                {t("modelPricing.tierLabel", "Tier {{index}}", {
-                                  index: index + 1,
-                                })}
-                                {" · "}
-                              </span>
-                              {isLast
-                                ? t(
-                                    "modelPricing.tierUnbounded",
-                                    "Input tokens ≤ (unbounded)",
-                                  )
-                                : t(
-                                    "modelPricing.tierThreshold",
-                                    "Input tokens ≤",
-                                  )}
-                            </Label>
-                            <Input
-                              inputMode="numeric"
-                              id={`${formId}-tier-${index}-lte`}
-                              value={tier.lte}
-                              disabled={isLast}
-                              placeholder={isLast ? "∞" : "200000"}
-                              onChange={(event) =>
-                                updateTier({ lte: event.target.value })
-                              }
-                              className="font-mono"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label htmlFor={`${formId}-tier-${index}-input`}>
-                              <span className="sr-only">
-                                {t("modelPricing.tierLabel", "Tier {{index}}", {
-                                  index: index + 1,
-                                })}
-                                {" · "}
-                              </span>
-                              {t("modelPricing.fieldInput", "Input")}
-                            </Label>
-                            <Input
-                              inputMode="decimal"
-                              id={`${formId}-tier-${index}-input`}
-                              value={tier.input}
-                              onChange={(event) =>
-                                updateTier({ input: event.target.value })
-                              }
-                              className="font-mono"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label htmlFor={`${formId}-tier-${index}-output`}>
-                              <span className="sr-only">
-                                {t("modelPricing.tierLabel", "Tier {{index}}", {
-                                  index: index + 1,
-                                })}
-                                {" · "}
-                              </span>
-                              {t("modelPricing.fieldOutput", "Output")}
-                            </Label>
-                            <Input
-                              inputMode="decimal"
-                              id={`${formId}-tier-${index}-output`}
-                              value={tier.output}
-                              onChange={(event) =>
-                                updateTier({ output: event.target.value })
-                              }
-                              className="font-mono"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label
-                              htmlFor={`${formId}-tier-${index}-cacheRead`}
-                            >
-                              <span className="sr-only">
-                                {t("modelPricing.tierLabel", "Tier {{index}}", {
-                                  index: index + 1,
-                                })}
-                                {" · "}
-                              </span>
-                              {t("modelPricing.fieldCacheRead", "Cache read")}
-                            </Label>
-                            <Input
-                              inputMode="decimal"
-                              id={`${formId}-tier-${index}-cacheRead`}
-                              value={tier.cacheRead}
-                              onChange={(event) =>
-                                updateTier({ cacheRead: event.target.value })
-                              }
-                              className="font-mono"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label
-                              htmlFor={`${formId}-tier-${index}-cacheWrite`}
-                            >
-                              <span className="sr-only">
-                                {t("modelPricing.tierLabel", "Tier {{index}}", {
-                                  index: index + 1,
-                                })}
-                                {" · "}
-                              </span>
-                              {t(
-                                "modelPricing.fieldCacheWrite",
-                                "Cache write 5m",
-                              )}
-                            </Label>
-                            <Input
-                              inputMode="decimal"
-                              id={`${formId}-tier-${index}-cacheWrite`}
-                              value={tier.cacheWrite}
-                              onChange={(event) =>
-                                updateTier({ cacheWrite: event.target.value })
-                              }
-                              className="font-mono"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label
-                              htmlFor={`${formId}-tier-${index}-reasoning`}
-                            >
-                              <span className="sr-only">
-                                {t("modelPricing.tierLabel", "Tier {{index}}", {
-                                  index: index + 1,
-                                })}
-                                {" · "}
-                              </span>
-                              {t("modelPricing.fieldReasoning", "Reasoning")}
-                            </Label>
-                            <Input
-                              inputMode="decimal"
-                              id={`${formId}-tier-${index}-reasoning`}
-                              value={tier.reasoning}
-                              onChange={(event) =>
-                                updateTier({ reasoning: event.target.value })
-                              }
-                              className="font-mono"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      setForm((previous) => ({
-                        ...previous,
-                        tiers: [...previous.tiers, emptyTier()],
-                      }))
+                <div className="space-y-4">
+                  <TiersEditor
+                    formId={formId}
+                    idPrefix="tier"
+                    tiers={form.tiers}
+                    onChange={(tiers) =>
+                      setForm((previous) => ({ ...previous, tiers }))
                     }
-                  >
-                    {t("modelPricing.addTier", "Add tier")}
-                  </Button>
+                  />
+                  <div className="space-y-3 rounded-lg border p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">
+                          {t(
+                            "modelPricing.serviceTierFast",
+                            "Fast / Priority",
+                          )}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {t(
+                            "modelPricing.serviceTierFastHint",
+                            "Used when the upstream response service_tier is fast or priority, or Anthropic usage.speed is fast.",
+                          )}
+                        </p>
+                      </div>
+                      {form.serviceTiers.fast ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setForm((previous) => {
+                              const next = { ...previous.serviceTiers };
+                              delete next.fast;
+                              return { ...previous, serviceTiers: next };
+                            })
+                          }
+                        >
+                          {t(
+                            "modelPricing.removeFastPrices",
+                            "Remove Fast prices",
+                          )}
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setForm((previous) => ({
+                              ...previous,
+                              serviceTiers: {
+                                ...previous.serviceTiers,
+                                fast: copyThresholds(previous.tiers),
+                              },
+                            }))
+                          }
+                        >
+                          {t(
+                            "modelPricing.addFastPrices",
+                            "Add Fast prices",
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                    {form.serviceTiers.fast ? (
+                      <TiersEditor
+                        formId={formId}
+                        idPrefix="fast-tier"
+                        labelPrefix={t(
+                          "modelPricing.serviceTierFast",
+                          "Fast / Priority",
+                        )}
+                        tiers={form.serviceTiers.fast}
+                        onChange={(tiers) =>
+                          setForm((previous) => ({
+                            ...previous,
+                            serviceTiers: {
+                              ...previous.serviceTiers,
+                              fast: tiers,
+                            },
+                          }))
+                        }
+                      />
+                    ) : null}
+                  </div>
                 </div>
               )}
 

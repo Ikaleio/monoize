@@ -22,6 +22,9 @@ Channel 的模型条目可以用 `redirect` 指定真实的上游模型名。
 **模型**页面是定价控制台，包含五个标签页：
 
 - **模型定价**：每个模型一条价格记录。每条记录设置计费模式：`per_token`、`per_request` 或 `tiered_expr`。
+  `tiered_expr` 可以保存按输入 token 阈值划分的阶梯价格，以及 Fast / Priority 价格表。
+  当上游响应的 `service_tier` 为 `fast` 或 `priority` 时，Monoize 使用 Fast 价格。
+  当 Anthropic 的 `usage.speed` 为 `fast` 时，Monoize 也使用 Fast 价格。
 - **未定价模型**：已映射但没有启用价格记录的模型。
 - **工具价格**：服务端工具类别的价格。计量单位为 `1k_calls`、`minute` 和 `session`。
 - **上游同步**：从 Models.dev、OpenRouter 或 new-api 实例导入价格。
@@ -50,6 +53,8 @@ Monoize 默认拒绝未定价模型和缺少必要 Usage 的响应。仅在允�
 2. 选择数据源：Models.dev、OpenRouter 或 new-api 实例。
 3. 点击**预览**。表格显示新增记录和变更字段。
 4. 点击**应用**。Monoize 写入变更并记录一条审计记录。
+
+Models.dev 同步会把按上下文窗口划分的阶梯价格和 Fast 模式价格写入 `billing_expr`。
 
 同步不会修改已锁定的字段。同步不会删除手动创建的记录。
 

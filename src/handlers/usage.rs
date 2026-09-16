@@ -59,14 +59,60 @@ pub(crate) async fn record_stream_response_id(
     runtime_metrics.lock().await.response_id = Some(response_id.to_string());
 }
 
-pub(crate) fn response_service_tier(value: &Value) -> Option<&str> {
+fn json_string_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     value
-        .get("service_tier")
-        .or_else(|| value.get("response").and_then(|v| v.get("service_tier")))
-        .or_else(|| value.get("message").and_then(|v| v.get("service_tier")))
+        .get(field)
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|tier| !tier.is_empty())
+        .filter(|value| !value.is_empty())
+}
+
+fn usage_speed_or_tier(usage: &Value) -> Option<&str> {
+    json_string_field(usage, "speed").or_else(|| json_string_field(usage, "service_tier"))
+}
+
+pub(crate) fn response_service_tier(value: &Value) -> Option<&str> {
+    json_string_field(value, "service_tier")
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| json_string_field(response, "service_tier"))
+        })
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| json_string_field(message, "service_tier"))
+        })
+        .or_else(|| value.get("usage").and_then(usage_speed_or_tier))
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("usage"))
+                .and_then(usage_speed_or_tier)
+        })
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("usage"))
+                .and_then(usage_speed_or_tier)
+        })
+}
+
+pub(crate) fn usage_service_tier(usage: &urp::Usage) -> Option<&str> {
+    usage
+        .extra_body
+        .get("speed")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            usage
+                .extra_body
+                .get("service_tier")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 pub(crate) async fn record_stream_response_service_tier(

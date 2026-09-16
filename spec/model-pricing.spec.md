@@ -180,9 +180,27 @@ MP-R5. Null price columns resolve through these fallbacks at computation time:
 - `cache_write_1h_usd_per_1m` null → use the resolved `cache_write_usd_per_1m`.
 - `reasoning_usd_per_1m` null → use the resolved `output_usd_per_1m`.
 
-MP-R6. Service tier and modality do not select prices. Settlement MUST apply the same
-resolved prices for every service tier and every modality. The settled `service_tier`
-value is still recorded in the breakdown (§8).
+MP-R6. Modality does not select prices. Service tier selects prices only through
+`billing_expr.service_tiers` (§4.4). Settlement MUST read the settled selector in this
+order:
+
+1. the upstream response `service_tier` when present;
+2. otherwise `usage.speed` when present (Anthropic Fast mode);
+3. otherwise the selector is absent.
+
+Normalize the selector as follows, case-insensitive after trim:
+
+- absent, empty, `default`, `auto`, or `standard` → the standard table;
+- `priority` or `fast` → `service_tiers.fast` when that table exists, else the
+  standard table;
+- any other value → `service_tiers[value]` when that table exists, else the
+  standard table.
+
+The standard table is `billing_expr.tiers` in `tiered_expr` mode and the row price
+columns in `per_token` mode. `per_request` mode ignores `service_tiers`. After table
+selection, MP-C8 and MP-C3 apply to that table only. The breakdown records the raw
+selector as `service_tier` and the lookup key as `applied_service_tier` (`null` when
+the standard table applies).
 
 MP-R7. Provider attempt preflight MUST attach the resolved `model_prices` row snapshot
 (or its absence) plus the resolved free-settlement flags to the attempt. Settlement of
@@ -246,34 +264,60 @@ MP-C6. `billing_expr` MUST decode as a JSON object:
 {
   "tiers": [
     {
-      "when_input_tokens_lte": 200000,
-      "input_usd_per_1m": "1.25",
-      "output_usd_per_1m": "10",
-      "cache_read_usd_per_1m": "0.31",
-      "cache_write_usd_per_1m": "1.625",
+      "when_input_tokens_lte": 272000,
+      "input_usd_per_1m": "4",
+      "output_usd_per_1m": "20",
+      "cache_read_usd_per_1m": "0.4",
+      "cache_write_usd_per_1m": "5",
       "cache_write_1h_usd_per_1m": null,
       "reasoning_usd_per_1m": null
     },
-    { "input_usd_per_1m": "2.5", "output_usd_per_1m": "15" }
-  ]
+    { "input_usd_per_1m": "8", "output_usd_per_1m": "30" }
+  ],
+  "service_tiers": {
+    "fast": {
+      "tiers": [
+        {
+          "when_input_tokens_lte": 272000,
+          "input_usd_per_1m": "8",
+          "output_usd_per_1m": "40",
+          "cache_read_usd_per_1m": "0.8",
+          "cache_write_usd_per_1m": "10"
+        },
+        { "input_usd_per_1m": "16", "output_usd_per_1m": "60" }
+      ]
+    }
+  }
 }
 ```
 
-MP-C7. `tiers` MUST be a non-empty array of at most 8 objects. Every tier except the
-last MUST have integer `when_input_tokens_lte >= 1`, strictly increasing across tiers.
-The last tier MUST omit `when_input_tokens_lte` (unbounded). Each tier MUST contain a
-non-null `input_usd_per_1m`; other price fields are optional and resolve per MP-R5
-within the tier.
+MP-C6a. `service_tiers` is optional. When present it MUST be a JSON object with 1 to 8
+keys. Each key MUST match `^[a-z][a-z0-9_]{0,31}$` and MUST NOT be `default`, `auto`,
+`standard`, or `priority`. The key `fast` stores Fast mode prices. OpenAI Priority
+processing uses that same table (MP-R6). Each value MUST be an object whose only field
+is `tiers`, and that `tiers` array MUST satisfy MP-C7.
 
-MP-C8. Tier selection uses the settled `usage.input_tokens`: the applied tier is the
-first tier whose `when_input_tokens_lte` is `>= input_tokens`, else the last tier.
-Exactly one tier applies to the whole request.
+MP-C6b. A non-empty `service_tiers` object is valid only when
+`billing_mode = "tiered_expr"`. A write path MUST reject the combination of
+`service_tiers` with `per_token` or `per_request`.
+
+MP-C7. Each `tiers` array, including every `service_tiers.*.tiers` array, MUST be a
+non-empty array of at most 8 objects. Every tier except the last MUST have integer
+`when_input_tokens_lte >= 1`, strictly increasing across tiers. The last tier MUST omit
+`when_input_tokens_lte` (unbounded). Each tier MUST contain a non-null
+`input_usd_per_1m`; other price fields are optional and resolve per MP-R5 within the
+tier.
+
+MP-C8. After MP-R6 selects a table, tier selection uses the settled
+`usage.input_tokens`: the applied tier is the first tier whose
+`when_input_tokens_lte` is `>= input_tokens`, else the last tier. Exactly one tier
+applies to the whole request.
 
 MP-C9. After tier selection, the charge follows MP-C3 with the tier's resolved prices.
 
-MP-C10. A `billing_expr` that violates MP-C6 or MP-C7 MUST be rejected at write time
-with HTTP `400` and code `invalid_request`. A persisted violating value makes the row
-incomplete (MP-R4).
+MP-C10. A `billing_expr` that violates MP-C6, MP-C6a, MP-C6b, or MP-C7 MUST be rejected
+at write time with HTTP `400` and code `invalid_request`. A persisted violating value
+makes the row incomplete (MP-R4).
 
 ### 4.5 Final charge
 
@@ -455,6 +499,7 @@ MP-B1. A settled request MUST persist `billing_breakdown_json` with this schema:
   "pricing_model_key": "gpt-4o",
   "price_row_model_id": "gpt-4o",
   "applied_tier_index": null,
+  "applied_service_tier": null,
   "token_line_items": [
     { "usage_class": "input_uncached", "quantity": 1200, "usd_per_1m": "2.5", "charge_nano": "3000" }
   ],
@@ -487,7 +532,9 @@ are omitted (MP-C3).
 
 MP-B3. `price_row_model_id` is the `model_prices.model_id` of the applied row, or
 `null` for a `free_reason = "unpriced"` settlement. `applied_tier_index` is the
-zero-based selected tier for `tiered_expr` mode, else `null`.
+zero-based selected tier for `tiered_expr` mode, else `null`. `applied_service_tier`
+is the MP-R6 lookup key (`fast`, `flex`, or another stored key) when a service-tier
+table applies, else `null`.
 
 MP-B4. `free_reason` domain is `null`, `"unpriced"`, `"missing_usage"`.
 
@@ -544,9 +591,10 @@ the JSON tokens, never through binary floating point):
 If `cost.tiers` is absent or empty, `billing_mode = "per_token"` and
 `billing_expr = NULL`. Missing cost subfields store NULL.
 
-MP-Y5a. If the selected variant contains a non-empty `cost.tiers` array, the sync MUST
-set `billing_mode = "tiered_expr"`. The sync MUST convert the base `cost` object and
-the context tiers into `billing_expr` as follows:
+MP-Y5a. If the selected variant contains a non-empty `cost.tiers` array, or a
+service-tier cost under MP-Y5b, the sync MUST set `billing_mode = "tiered_expr"`. When
+`cost.tiers` is present, the sync MUST convert the base `cost` object and the context
+tiers into `billing_expr.tiers` as follows:
 
 - Every source tier MUST have `tier.type = "context"`.
 - Every source tier MUST have an integer `tier.size >= 1`.
@@ -566,6 +614,32 @@ If the source has more than seven tiers, has duplicate sizes, or has an invalid 
 the models.dev sync MUST fail with `parse_failed`. The sync MUST NOT replace a tiered
 row with one flat price after such an error. `cost.tiers` is authoritative when both
 `cost.tiers` and legacy `cost.context_over_200k` exist.
+
+MP-Y5b. If the selected variant contains `experimental.modes` entries that include a
+`cost` object, the sync MUST include those prices in `billing_expr.service_tiers`.
+For each mode name with a `cost` object:
+
+- Canonicalize `priority` to `fast`. Skip a name that is not a valid service-tier key
+  after that canonicalization (MP-C6a). If both `priority` and `fast` exist, `fast`
+  wins.
+- Ignore a mode that has no `cost` object (for example `pro`).
+- When `mode.cost.tiers` is a non-empty array, convert it with MP-Y5a using
+  `mode.cost` as the base. Store the result at `service_tiers[name].tiers`.
+- When `mode.cost.tiers` is absent or empty and the standard `billing_expr.tiers`
+  array has two or more tiers, build the mode table by scaling each standard-tier
+  price field with exact decimal arithmetic:
+  `mode_tier[field] = trunc9(standard_tier[field] * mode.cost[field] / standard.cost[field])`.
+  Scale a field only when both bases are strictly positive and the standard tier sets
+  that field. Keep the same `when_input_tokens_lte` bounds. `input_usd_per_1m` MUST
+  scale; a missing positive input base MUST fail with `parse_failed`.
+- When `mode.cost.tiers` is absent or empty and the standard table has one unbounded
+  tier, or when the variant has no `cost.tiers` and the sync synthesizes a one-tier
+  standard table from the base `cost`, the mode table is one unbounded tier from
+  `mode.cost`.
+
+When the variant has service-tier costs and no `cost.tiers`, the standard table is one
+unbounded tier from the base `cost` object. The generated `billing_expr` MUST satisfy
+MP-C10.
 
 MP-Y6. All grouped variants MUST be stored in `raw_json` as
 `{ "providers": { "<provider_id>": <variant model JSON>, ... } }` with every cost value
@@ -759,11 +833,14 @@ MP-UI2. Every tab uses SWR for data loading, renders a skeleton while loading, a
 applies optimistic updates for user-triggered mutations.
 
 MP-UI3. Model Pricing tab: a virtualized table (`TableVirtuoso`) with columns Model,
-Mode, Input $/1M, Output $/1M, Source, Status (enabled + lock count), Updated. A row
+Mode, Input $/1M, Output $/1M, Source, Status (enabled + lock count), Updated. The Mode
+cell MUST show a `fast` badge when `billing_expr.service_tiers.fast` exists. A row
 click opens a pricing sheet (drawer) with one section per `billing_mode` selected by a
 mode switcher: per-token price fields, per-request price field, and a tiered editor
-for `billing_expr`. All price inputs are decimal strings; conversion and validation
-MUST NOT pass values through JavaScript `Number` or `parseFloat`.
+for `billing_expr`. The tiered editor MUST include the standard context tiers and an
+optional Fast / Priority table (`service_tiers.fast`). All price inputs are decimal
+strings; conversion and validation MUST NOT pass values through JavaScript `Number` or
+`parseFloat`.
 
 MP-UI4. Unpriced Models tab: renders MP-A4 results with a per-row action that opens
 the pricing sheet pre-filled with the model id.

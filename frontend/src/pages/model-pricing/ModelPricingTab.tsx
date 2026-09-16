@@ -139,7 +139,14 @@ export function ModelPricingTab() {
                 <ModelBadge model={record.model_id} showDetails={false} />
               </VirtualTableCell>
               <VirtualTableCell className="font-mono text-xs" onClick={() => openEdit(record)}>
-                {modeLabel(record)}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span>{modeLabel(record)}</span>
+                  {record.billing_expr?.service_tiers?.fast ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      {t("modelPricing.serviceTierFastBadge", "fast")}
+                    </Badge>
+                  ) : null}
+                </div>
               </VirtualTableCell>
               <VirtualTableCell className="font-mono text-xs" onClick={() => openEdit(record)}>
                 {record.billing_mode === "per_request"

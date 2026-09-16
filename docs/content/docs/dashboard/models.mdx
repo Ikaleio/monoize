@@ -22,6 +22,9 @@ Example: clients call `my-fast-model`. Channel A redirects it to `gpt-4o-mini`. 
 The **Models** page is the pricing console. It has five tabs:
 
 - **Model Pricing**: one price row per model. Each row sets a billing mode: `per_token`, `per_request`, or `tiered_expr`.
+  `tiered_expr` can store context-window price steps and a Fast / Priority table.
+  Monoize applies Fast prices when the upstream response `service_tier` is `fast` or `priority`.
+  It also applies Fast prices when Anthropic `usage.speed` is `fast`.
 - **Unpriced Models**: mapped models that have no enabled price row.
 - **Tool Prices**: prices for server-side tool classes. Units are `1k_calls`, `minute`, and `session`.
 - **Upstream Sync**: price import from Models.dev, OpenRouter, or a new-api instance.
@@ -50,6 +53,8 @@ By default, Monoize rejects an unpriced model or a response without required Usa
 2. Select a source: Models.dev, OpenRouter, or a new-api instance.
 3. Click **Preview**. The table shows new rows and changed fields.
 4. Click **Apply**. Monoize writes the changes and records an audit row.
+
+Models.dev sync writes context-window price steps and Fast mode prices into `billing_expr`.
 
 Sync does not change a locked field. Sync does not delete rows that you created manually.
 

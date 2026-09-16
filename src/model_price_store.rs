@@ -116,51 +116,46 @@ const TIER_PRICE_FIELDS: &[&str] = &[
     "reasoning_usd_per_1m",
 ];
 
-/// MP-C6/MP-C7 write-time validation for `billing_expr`.
-pub fn validate_billing_expr(expr: &serde_json::Value) -> Result<(), String> {
-    let object = expr
-        .as_object()
-        .ok_or_else(|| "billing_expr must be a JSON object".to_string())?;
-    for key in object.keys() {
-        if key != "tiers" {
-            return Err(format!("billing_expr: unknown field `{key}`"));
-        }
+pub(crate) fn is_service_tier_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() || key.len() > 32 {
+        return false;
     }
-    let tiers = object
-        .get("tiers")
-        .and_then(|value| value.as_array())
-        .ok_or_else(|| "billing_expr.tiers must be an array".to_string())?;
+    chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+        && !matches!(key, "default" | "auto" | "standard" | "priority")
+}
+
+fn validate_tiers_array(tiers: &[serde_json::Value], path: &str) -> Result<(), String> {
     if tiers.is_empty() || tiers.len() > 8 {
-        return Err("billing_expr.tiers must contain 1 to 8 tiers".to_string());
+        return Err(format!("{path} must contain 1 to 8 tiers"));
     }
     let mut previous_bound: Option<u64> = None;
     for (index, tier) in tiers.iter().enumerate() {
         let tier = tier
             .as_object()
-            .ok_or_else(|| format!("billing_expr.tiers[{index}] must be an object"))?;
+            .ok_or_else(|| format!("{path}[{index}] must be an object"))?;
         let is_last = index == tiers.len() - 1;
         match tier.get("when_input_tokens_lte") {
             Some(bound) if !is_last => {
                 let bound = bound.as_u64().filter(|value| *value >= 1).ok_or_else(|| {
-                    format!(
-                        "billing_expr.tiers[{index}].when_input_tokens_lte must be an integer >= 1"
-                    )
+                    format!("{path}[{index}].when_input_tokens_lte must be an integer >= 1")
                 })?;
                 if previous_bound.is_some_and(|previous| bound <= previous) {
-                    return Err("billing_expr tier bounds must be strictly increasing".to_string());
+                    return Err(format!("{path} tier bounds must be strictly increasing"));
                 }
                 previous_bound = Some(bound);
             }
             Some(serde_json::Value::Null) | None if is_last => {}
             Some(_) => {
-                return Err(
-                    "the last billing_expr tier must omit when_input_tokens_lte".to_string()
-                );
+                return Err(format!(
+                    "the last {path} tier must omit when_input_tokens_lte"
+                ));
             }
             None => {
-                return Err(format!(
-                    "billing_expr.tiers[{index}] must set when_input_tokens_lte"
-                ));
+                return Err(format!("{path}[{index}] must set when_input_tokens_lte"));
             }
         }
         let mut has_input_price = false;
@@ -169,34 +164,87 @@ pub fn validate_billing_expr(expr: &serde_json::Value) -> Result<(), String> {
                 continue;
             }
             if !TIER_PRICE_FIELDS.contains(&key.as_str()) {
-                return Err(format!(
-                    "billing_expr.tiers[{index}]: unknown field `{key}`"
-                ));
+                return Err(format!("{path}[{index}]: unknown field `{key}`"));
             }
             match value {
                 serde_json::Value::Null => {}
                 serde_json::Value::String(raw) => {
-                    validate_usd_decimal(raw).map_err(|message| {
-                        format!("billing_expr.tiers[{index}].{key}: {message}")
-                    })?;
+                    validate_usd_decimal(raw)
+                        .map_err(|message| format!("{path}[{index}].{key}: {message}"))?;
                     if key == "input_usd_per_1m" {
                         has_input_price = true;
                     }
                 }
                 _ => {
                     return Err(format!(
-                        "billing_expr.tiers[{index}].{key} must be a decimal string or null"
+                        "{path}[{index}].{key} must be a decimal string or null"
                     ));
                 }
             }
         }
         if !has_input_price {
             return Err(format!(
-                "billing_expr.tiers[{index}] must set a non-null input_usd_per_1m"
+                "{path}[{index}] must set a non-null input_usd_per_1m"
             ));
         }
     }
     Ok(())
+}
+
+/// MP-C6/MP-C6a/MP-C7 write-time validation for `billing_expr`.
+pub fn validate_billing_expr(expr: &serde_json::Value) -> Result<(), String> {
+    let object = expr
+        .as_object()
+        .ok_or_else(|| "billing_expr must be a JSON object".to_string())?;
+    for key in object.keys() {
+        if key != "tiers" && key != "service_tiers" {
+            return Err(format!("billing_expr: unknown field `{key}`"));
+        }
+    }
+    let tiers = object
+        .get("tiers")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "billing_expr.tiers must be an array".to_string())?;
+    validate_tiers_array(tiers, "billing_expr.tiers")?;
+    match object.get("service_tiers") {
+        None => Ok(()),
+        Some(serde_json::Value::Object(service_tiers)) => {
+            if service_tiers.is_empty() || service_tiers.len() > 8 {
+                return Err("billing_expr.service_tiers must contain 1 to 8 keys".to_string());
+            }
+            for (name, table) in service_tiers {
+                if !is_service_tier_key(name) {
+                    return Err(format!("billing_expr.service_tiers: invalid key `{name}`"));
+                }
+                let table = table.as_object().ok_or_else(|| {
+                    format!("billing_expr.service_tiers.{name} must be an object")
+                })?;
+                for key in table.keys() {
+                    if key != "tiers" {
+                        return Err(format!(
+                            "billing_expr.service_tiers.{name}: unknown field `{key}`"
+                        ));
+                    }
+                }
+                let tiers = table
+                    .get("tiers")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| {
+                        format!("billing_expr.service_tiers.{name}.tiers must be an array")
+                    })?;
+                validate_tiers_array(tiers, &format!("billing_expr.service_tiers.{name}.tiers"))?;
+            }
+            Ok(())
+        }
+        Some(_) => Err("billing_expr.service_tiers must be an object".to_string()),
+    }
+}
+
+pub fn billing_expr_has_service_tiers(expr: &Option<serde_json::Value>) -> bool {
+    expr.as_ref()
+        .and_then(|value| value.get("service_tiers"))
+        .and_then(|value| value.as_object())
+        .is_some_and(|object| !object.is_empty())
 }
 
 fn validate_locked_fields(fields: &[String]) -> Result<(), String> {
@@ -432,6 +480,11 @@ impl ModelPriceStore {
                 changed_price_fields.push("billing_expr");
             }
             record.billing_expr = expr.clone();
+        }
+        if record.billing_mode != "tiered_expr"
+            && billing_expr_has_service_tiers(&record.billing_expr)
+        {
+            return Err("service_tiers require billing_mode tiered_expr".to_string());
         }
         if let Some(enabled) = input.enabled {
             record.enabled = enabled;

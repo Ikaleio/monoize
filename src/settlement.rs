@@ -155,14 +155,51 @@ fn resolve_tier_prices(tier: &Map<String, Value>) -> Result<ResolvedTokenPrices,
     )
 }
 
-/// MP-C8: the applied tier is the first tier whose bound is `>= input_tokens`,
-/// else the last tier.
-fn select_tier(expr: &Value, input_tokens: u64) -> Result<(usize, Map<String, Value>), String> {
-    let tiers = expr
-        .get("tiers")
+fn canonical_service_tier_key(raw: &str) -> Option<String> {
+    let key = raw.trim().to_ascii_lowercase();
+    match key.as_str() {
+        "" | "default" | "auto" | "standard" => None,
+        "priority" | "fast" => Some("fast".to_string()),
+        _ => Some(key),
+    }
+}
+
+fn expr_tiers_array<'a>(expr: &'a Value, path: &str) -> Result<&'a Vec<Value>, String> {
+    expr.get("tiers")
         .and_then(Value::as_array)
         .filter(|tiers| !tiers.is_empty())
-        .ok_or_else(|| "billing_expr.tiers missing or empty".to_string())?;
+        .ok_or_else(|| format!("{path} missing or empty"))
+}
+
+/// MP-R6: select `service_tiers[key].tiers` when present, else the standard table.
+fn select_applied_tiers<'a>(
+    expr: &'a Value,
+    raw_service_tier: Option<&str>,
+) -> Result<(Option<String>, &'a Vec<Value>), String> {
+    let standard = expr_tiers_array(expr, "billing_expr.tiers")?;
+    let Some(raw) = raw_service_tier else {
+        return Ok((None, standard));
+    };
+    let Some(key) = canonical_service_tier_key(raw) else {
+        return Ok((None, standard));
+    };
+    match expr
+        .get("service_tiers")
+        .and_then(Value::as_object)
+        .and_then(|tables| tables.get(&key))
+    {
+        Some(table) => {
+            let tiers =
+                expr_tiers_array(table, &format!("billing_expr.service_tiers.{key}.tiers"))?;
+            Ok((Some(key), tiers))
+        }
+        None => Ok((None, standard)),
+    }
+}
+
+/// MP-C8: the applied tier is the first tier whose bound is `>= input_tokens`,
+/// else the last tier.
+fn select_tier(tiers: &[Value], input_tokens: u64) -> Result<(usize, Map<String, Value>), String> {
     for (index, tier) in tiers.iter().enumerate() {
         let tier = tier
             .as_object()
@@ -568,6 +605,7 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
     let mut billing_mode: Option<&str> = None;
     let mut price_row_model_id: Option<String> = None;
     let mut applied_tier_index: Option<usize> = None;
+    let mut applied_service_tier: Option<String> = None;
     let mut token_line_items: Vec<Value> = Vec::new();
     let mut token_charge_nano = 0i128;
 
@@ -611,7 +649,9 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
                             .billing_expr
                             .as_ref()
                             .ok_or_else(|| "tiered_expr row without billing_expr".to_string())?;
-                        let (index, tier) = select_tier(expr, usage.input_tokens)?;
+                        let (service_key, tiers) = select_applied_tiers(expr, inputs.service_tier)?;
+                        applied_service_tier = service_key;
+                        let (index, tier) = select_tier(tiers, usage.input_tokens)?;
                         applied_tier_index = Some(index);
                         let prices = resolve_tier_prices(&tier)?;
                         let quantities = token_quantities(usage);
@@ -651,6 +691,7 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
         "pricing_model_key": inputs.pricing_model_key,
         "price_row_model_id": price_row_model_id,
         "applied_tier_index": applied_tier_index,
+        "applied_service_tier": applied_service_tier,
         "token_line_items": token_line_items,
         "tool_line_items": tools.line_items,
         "unpriced_tool_classes": tools.unpriced_tool_classes,

@@ -22,6 +22,9 @@ Channel のモデルエントリでは、`redirect` に実際の上流モデル�
 **モデル**ページは価格コンソールです。5 つのタブがあります。
 
 - **モデル価格**：モデルごとに 1 件の価格レコード。各レコードは課金モードを設定します：`per_token`、`per_request`、`tiered_expr`。
+  `tiered_expr` は、入力 token 閾値ごとの段階価格と Fast / Priority 価格表を保存できます。
+  上流応答の `service_tier` が `fast` または `priority` のとき、Monoize は Fast 価格を使います。
+  Anthropic の `usage.speed` が `fast` のときも、Monoize は Fast 価格を使います。
 - **未価格モデル**：対応付け済みで、有効な価格レコードがないモデル。
 - **ツール価格**：サーバー側ツールクラスの価格。単位は `1k_calls`、`minute`、`session` です。
 - **上流同期**：Models.dev、OpenRouter、または new-api インスタンスから価格を取り込みます。
@@ -50,6 +53,8 @@ Monoize は既定で、価格未設定モデルと必要な Usage がない応�
 2. データソースを選択します：Models.dev、OpenRouter、または new-api インスタンス。
 3. **プレビュー**をクリックします。テーブルは新規レコードと変更フィールドを表示します。
 4. **適用**をクリックします。Monoize は変更を書き込み、監査レコードを記録します。
+
+Models.dev 同期は、コンテキストウィンドウの段階価格と Fast モード価格を `billing_expr` に書き込みます。
 
 同期はロックされたフィールドを変更しません。同期は手動で作成したレコードを削除しません。
 

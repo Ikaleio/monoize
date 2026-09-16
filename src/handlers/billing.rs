@@ -273,6 +273,11 @@ pub(super) async fn maybe_charge_settled(
         return Ok(ChargeComputation::default());
     };
     let tool_prices = state.monoize_runtime.read().await.tool_prices.clone();
+    let usage_speed = usage.usage().and_then(super::usage::usage_service_tier);
+    let service_tier = response_service_tier
+        .map(str::trim)
+        .filter(|tier| !tier.is_empty())
+        .or(usage_speed);
     let inputs = SettlementInputs {
         usage,
         output,
@@ -280,9 +285,7 @@ pub(super) async fn maybe_charge_settled(
         pricing_model_key: &attempt.pricing_model_key,
         tool_prices: &tool_prices,
         requested_tool_classes: &attempt.server_tool_usage_classes,
-        service_tier: response_service_tier
-            .map(str::trim)
-            .filter(|tier| !tier.is_empty()),
+        service_tier,
         billing_group_id: attempt.billing_group_id.as_deref(),
         group_billing_ratio: attempt.group_billing_ratio,
         channel_multiplier: attempt.model_multiplier,
