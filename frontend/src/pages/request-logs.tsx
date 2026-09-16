@@ -79,6 +79,7 @@ export function RequestLogsPage() {
 
 	const handleOpenCapture = useCallback((log: RequestLog) => {
 		if (!log.request_id) return
+		if (!log.request_id || !log.user?.id) return
 		setCaptureTarget({ requestId: log.request_id, userId: log.user.id })
 		setCaptureOpen(true)
 	}, [])
@@ -157,7 +158,7 @@ export function RequestLogsPage() {
 				}
 			}
 			if (activeFilters.status && log.status !== activeFilters.status) return false
-			if (activeFilters.api_key_id && log.api_key.id !== activeFilters.api_key_id) {
+			if (activeFilters.api_key_id && log.api_key?.id !== activeFilters.api_key_id) {
 				return false
 			}
 
@@ -530,7 +531,7 @@ export function RequestLogsPage() {
 	const showingSummary = !!pageData || loadedLogs.length > 0
 
 	return (
-		<PageWrapper className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
+		<PageWrapper className='flex min-h-0 flex-1 flex-col gap-4 overflow-hidden'>
 			<motion.div
 				initial={{ opacity: 0, y: -10 }}
 				animate={{ opacity: 1, y: 0 }}
@@ -735,7 +736,7 @@ export function RequestLogsPage() {
 				initial={{ opacity: 0, y: 20 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ delay: 0.1, ...transitions.normal }}
-				className='rounded-lg border bg-card flex-1 min-h-0 overflow-auto'
+				className='relative min-h-0 flex-1 overflow-hidden rounded-lg border bg-card'
 			>
 				<RequestLogsTable
 					affinityTargetNames={affinityTargetNames}

@@ -494,6 +494,8 @@ FL12. Infinite loading MUST fetch in backend-paginated chunks using `limit=100` 
 
 FL13. The virtualized table viewport MUST occupy the remaining page height below the header + filter controls (using a flexible layout) so the first screen shows as many rows as possible.
 
+FL13a. The `TableVirtuoso` root MUST have a non-zero definite height on the first paint. The table MUST own vertical scrolling. A parent of the virtuoso root MUST NOT use `overflow: auto` as the vertical scroll container, because a zero-height virtuoso then treats the viewport as ended and can request further pages until the page freezes.
+
 FL14. The filter-control area first row MUST include an IP visibility toggle button between the manual-refresh button and the filter-expansion toggle:
 
 - The button MUST be a square icon button using an eye/eye-off glyph.

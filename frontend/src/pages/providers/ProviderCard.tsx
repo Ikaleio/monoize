@@ -109,7 +109,7 @@ export function ProviderCard({
 	)
 	const canDragCard = useFinePointer()
 	const modelEntries = useMemo(
-		() => Array.from(new Set(provider.channels.flatMap(channel => Object.keys(channel.models)))).sort(),
+		() => Array.from(new Set(provider.channels.flatMap(channel => Object.keys(channel.models ?? {})))).sort(),
 		[provider.channels]
 	)
 	const modelMetadataById = useMemo(() => {
@@ -511,7 +511,7 @@ export function ProviderCard({
 															setTestDialogChannel({
 																id: channel.id,
 																name: channel.name,
-																models: Object.keys(channel.models).sort(),
+																models: Object.keys(channel.models ?? {}).sort(),
 																providerType: channel.provider_type
 															})
 																	setTestDialogOpen(true)
@@ -521,7 +521,7 @@ export function ProviderCard({
 															</button>
 														</span>
 														<span className='text-xs text-muted-foreground'>
-															{Object.keys(channel.models).length}M ·{' '}
+															{Object.keys(channel.models ?? {}).length}M ·{' '}
 															W:{channel.weight}
 														</span>
 														<StatusBadge variant={channel.enabled ? 'success' : 'info'}>

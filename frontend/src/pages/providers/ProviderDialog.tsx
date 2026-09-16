@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Virtuoso } from 'react-virtuoso'
 import { useTranslation } from 'react-i18next'
 import {
 	ArrowLeft,
@@ -227,7 +228,12 @@ export function ProviderDialog({
 	const zh = i18n.language.startsWith('zh')
 	const c = (zhText: string, enText: string) => zh ? zhText : enText
 	const isEdit = mode === 'edit'
-	const [form, setForm] = useState<ProviderForm>(() => current ? fromProvider(current) : emptyForm())
+	const [form, setFormState] = useState<ProviderForm>(() => current ? fromProvider(current) : emptyForm())
+	const [dirty, setDirty] = useState(false)
+	const setForm = useCallback<React.Dispatch<React.SetStateAction<ProviderForm>>>(updater => {
+		setDirty(true)
+		setFormState(updater)
+	}, [])
 	const [section, setSection] = useState<Section>('channels')
 	const [selectedChannel, setSelectedChannel] = useState(0)
 	const [mobileChannelOpen, setMobileChannelOpen] = useState(false)
@@ -236,8 +242,6 @@ export function ProviderDialog({
 	const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
 	const [removeV1Open, setRemoveV1Open] = useState(false)
 	const [v1ChannelIndex, setV1ChannelIndex] = useState<number | null>(null)
-	const initialSnapshot = useRef('')
-
 	const { data: detail, error: detailError, isLoading: detailLoading } = useProviderDetail(
 		open && isEdit && current ? current.id : null,
 		{ revalidateOnFocus: false }
@@ -248,14 +252,13 @@ export function ProviderDialog({
 		const next = isEdit ? (detail ?? (detailError ? current : null)) : null
 		if (isEdit && !next) return
 		const hydrated = next ? fromProvider(next) : emptyForm()
-		setForm(cloneForm(hydrated))
-		initialSnapshot.current = JSON.stringify(hydrated)
+		setFormState(cloneForm(hydrated))
+		setDirty(false)
 		setSelectedChannel(0)
 		setSection('channels')
 		setMobileChannelOpen(false)
 	}, [open, isEdit, detail, detailError, current])
 
-	const dirty = JSON.stringify(form) !== initialSnapshot.current
 	const activeChannel = form.channels[selectedChannel]
 	const pricedModels = useMemo(() => buildPricedModelIdSet(modelPrices), [modelPrices])
 	const metadataProvider = useMemo(
@@ -313,7 +316,7 @@ export function ProviderDialog({
 				await createProviderOptimistic(input, providers)
 			}
 			toast.success(c('Provider 已保存', 'Provider saved'))
-			initialSnapshot.current = JSON.stringify(form)
+			setDirty(false)
 			onOpenChange(false)
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : c('保存失败', 'Save failed'))
@@ -376,7 +379,7 @@ export function ProviderDialog({
 		<>
 			<Dialog open={open} onOpenChange={next => { if (!next) requestClose() }}>
 				<DialogContent
-					className='flex h-[calc(100dvh-2rem)] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-[94vh] sm:w-[96vw] sm:max-w-[1500px] sm:rounded-xl sm:border [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:size-10 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>div:first-child]:flex-1 [&>div:first-child]:gap-0'
+					className='flex h-[calc(100dvh-2rem)] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-[94vh] sm:w-[96vw] sm:max-w-[1500px] sm:rounded-xl sm:border [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:size-10 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>div:first-child]:h-full [&>div:first-child]:min-h-0 [&>div:first-child]:flex-1 [&>div:first-child]:gap-0 [&>div:first-child]:overflow-hidden'
 					onPointerDownOutside={event => event.preventDefault()}
 				>
 					<DialogHeader className='shrink-0 border-b bg-background py-3 pl-4 pr-16 text-left sm:pl-6 sm:pr-16'>
@@ -420,7 +423,7 @@ export function ProviderDialog({
 									{sections.map(item => <Button key={item.id} size='sm' variant={section === item.id ? 'secondary' : 'ghost'} onClick={() => { setSection(item.id); setMobileChannelOpen(false) }} className='shrink-0'>{item.label}</Button>)}
 								</div>
 
-								<div className='min-h-0 flex-1 overflow-y-auto'>
+								<div className={cn('min-h-0 flex-1', section === 'channels' ? 'overflow-hidden' : 'overflow-y-auto')}>
 									{section === 'channels' ? (
 										<ChannelsWorkbench
 											form={form}
@@ -569,18 +572,27 @@ type WorkbenchProps = {
 
 function ChannelsWorkbench(props: WorkbenchProps) {
 	const { form, activeChannel, selectedChannel, mobileChannelOpen, setMobileChannelOpen, setSelectedChannel, addChannel, c } = props
-	return <div className='h-full lg:grid lg:grid-cols-[300px_minmax(0,1fr)]'>
-		<div className={cn('h-full border-r bg-muted/10', mobileChannelOpen ? 'hidden lg:block' : 'block')}>
-			<div className='flex items-center justify-between border-b px-4 py-3'><div><h3 className='font-semibold'>Channels</h3><p className='text-xs text-muted-foreground'>{c('每个上游独立配置模型能力', 'Models are configured per upstream')}</p></div><Button size='icon' variant='outline' className='size-11 touch-manipulation sm:size-9' onClick={addChannel} aria-label={c('添加 Channel', 'Add channel')}><Plus data-icon /></Button></div>
-			<div className='flex flex-col gap-1 p-2'>
-				{form.channels.map((channel, index) => <button type='button' key={channel.id || index} onClick={() => { setSelectedChannel(index); setMobileChannelOpen(true) }} className={cn('flex min-h-16 items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-left transition-colors', selectedChannel === index ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}>
-					<div className='min-w-0 flex-1'><div className='flex items-center gap-2'><span className='truncate text-sm font-medium'>{channel.name || c('未命名 Channel', 'Untitled channel')}</span>{!channel.enabled ? <Badge variant='secondary'>{c('停用', 'Off')}</Badge> : null}</div><p className='mt-1 truncate font-mono text-xs text-muted-foreground'>{channel.base_url || c('尚未填写 Base URL', 'No base URL')}</p><p className='mt-1 text-xs text-muted-foreground'>{PROVIDER_TYPE_CONFIG[channel.provider_type].label} · {channel.models.length} {c('个模型', 'models')}</p></div>
-					<ChevronRight className='size-4 shrink-0 text-muted-foreground' />
-				</button>)}
+	return <div className='grid h-full min-h-0 lg:grid-cols-[300px_minmax(0,1fr)]'>
+		<div className={cn('flex h-full min-h-0 flex-col border-r bg-muted/10', mobileChannelOpen ? 'hidden lg:block' : 'block')}>
+			<div className='flex shrink-0 items-center justify-between border-b px-4 py-3'><div><h3 className='font-semibold'>Channels</h3><p className='text-xs text-muted-foreground'>{c('每个上游独立配置模型能力', 'Models are configured per upstream')}</p></div><Button size='icon' variant='outline' className='size-11 touch-manipulation sm:size-9' onClick={addChannel} aria-label={c('添加 Channel', 'Add channel')}><Plus data-icon /></Button></div>
+			<div className='min-h-0 flex-1'>
+				<Virtuoso
+					style={{ height: '100%' }}
+					className='pt-2'
+					data={form.channels}
+					itemContent={(index, channel) => (
+						<div className='px-2 pb-1'>
+							<button type='button' onClick={() => { setSelectedChannel(index); setMobileChannelOpen(true) }} className={cn('flex min-h-16 w-full items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-left transition-colors', selectedChannel === index ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}>
+								<div className='min-w-0 flex-1'><div className='flex items-center gap-2'><span className='truncate text-sm font-medium'>{channel.name || c('未命名 Channel', 'Untitled channel')}</span>{!channel.enabled ? <Badge variant='secondary'>{c('停用', 'Off')}</Badge> : null}</div><p className='mt-1 truncate font-mono text-xs text-muted-foreground'>{channel.base_url || c('尚未填写 Base URL', 'No base URL')}</p><p className='mt-1 text-xs text-muted-foreground'>{PROVIDER_TYPE_CONFIG[channel.provider_type]?.label ?? channel.provider_type} · {channel.models.length} {c('个模型', 'models')}</p></div>
+								<ChevronRight className='size-4 shrink-0 text-muted-foreground' />
+							</button>
+						</div>
+					)}
+				/>
 			</div>
 		</div>
 
-		<div className={cn('min-w-0', mobileChannelOpen ? 'block' : 'hidden lg:block')}>
+		<div className={cn('min-h-0 min-w-0 overflow-y-auto', mobileChannelOpen ? 'block' : 'hidden lg:block')}>
 			{activeChannel ? <ChannelDetail {...props} /> : <div className='grid h-full place-items-center p-6 text-center text-sm text-muted-foreground'>{c('选择一个 Channel 开始配置', 'Select a channel to start configuring')}</div>}
 		</div>
 	</div>

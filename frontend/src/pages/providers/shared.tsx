@@ -185,7 +185,7 @@ export function fromProvider(provider: Provider): ProviderForm {
 			base_url: channel.base_url,
 			weight: String(channel.weight),
 			enabled: channel.enabled,
-			models: Object.entries(channel.models).map(([model, entry]) => ({
+			models: Object.entries(channel.models ?? {}).map(([model, entry]) => ({
 				model,
 				redirect: entry.redirect ?? '',
 				multiplier: String(entry.multiplier)

@@ -135,7 +135,7 @@ function tpsFromBasis(tokens: number | null, windowMs: number | null): TpsBasis 
 /** FL4a-1: the total output token count for the TPS numerator. */
 function totalOutputTokens(log: RequestLog): number | null {
 	const usageOutput = asObject(asObject(log.usage)?.output)
-	return readTokenCount(usageOutput, 'total_tokens') ?? log.tokens.output ?? null
+	return readTokenCount(usageOutput, 'total_tokens') ?? log.tokens?.output ?? null
 }
 
 /**
@@ -162,11 +162,11 @@ export function billingValueTranslationKey(
 }
 
 export function getDurationMs(log: RequestLog): number | null {
-	return parseTimingMs(log.timing.duration_ms)
+	return parseTimingMs(log.timing?.duration_ms)
 }
 
 export function getTtfbMs(log: RequestLog): number | null {
-	return parseTimingMs(log.timing.ttfb_ms)
+	return parseTimingMs(log.timing?.ttfb_ms)
 }
 
 export function formatCost(nanoUsd: string | null | undefined): string {
@@ -263,15 +263,15 @@ export function readableAffinityTarget(
 	log: RequestLog,
 	knownTargets: ReadonlyMap<string, string>
 ): string | null {
-	const target = nonempty(log.affinity.target)
+	const target = nonempty(log.affinity?.target)
 	if (!target) return null
 
 	const knownName = nonempty(knownTargets.get(target))
 	if (knownName) return knownName
 
-	const terminalKey = affinityTargetKey(log.provider.id, log.channel.id)
+	const terminalKey = affinityTargetKey(log.provider?.id, log.channel?.id)
 	if (terminalKey === target) {
-		const terminalName = readableRouteName(log.provider.name, log.channel.name)
+		const terminalName = readableRouteName(log.provider?.name, log.channel?.name)
 		if (terminalName) return terminalName
 	}
 

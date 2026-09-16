@@ -153,6 +153,8 @@ DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pa
 - left sidebar pane MUST remain fixed in viewport and MUST NOT move during right-pane content scroll;
 - right main content pane MUST be the only vertical scroll container when page content overflows viewport height.
 
+DL7a. The right main pane MUST receive a definite remaining viewport height (`flex-1` and `min-height: 0` inside the `h-dvh` shell). Fill-height pages such as request logs MAY consume that height with an internal scroll region. Other pages MAY grow and scroll inside the same main pane.
+
 ## 2. Providers Page
 
 PL1. `/providers` page MUST be provider-centric.

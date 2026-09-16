@@ -99,19 +99,19 @@ export function LogRowCells({
   };
 
   const internalSourceDisplay =
-    !log.api_key.name && log.request_kind === "playground"
+    !log.api_key?.name && log.request_kind === "playground"
       ? t("requestLogs.playgroundSource")
-      : !log.api_key.name && log.request_kind === "active_probe_connectivity"
+      : !log.api_key?.name && log.request_kind === "active_probe_connectivity"
         ? t("requestLogs.modelProbe")
         : null;
-  const tokenDisplay = internalSourceDisplay || log.api_key.name || "-";
+  const tokenDisplay = internalSourceDisplay || log.api_key?.name || "-";
   const durationMs = getDurationMs(log);
   const ttfbMs = getTtfbMs(log);
   const duration = formatDuration(durationMs);
   const ttfb = formatDuration(ttfbMs);
   const computedTps = computeTps(log);
-  const channelDisplay = log.channel.name?.trim() || log.channel.id || null;
-  const providerDisplay = log.provider.name?.trim() || log.provider.id || null;
+  const channelDisplay = log.channel?.name?.trim() || log.channel?.id || null;
+  const providerDisplay = log.provider?.name?.trim() || log.provider?.id || null;
   const affinityHit = log.affinity?.hit === true;
   const triedProviders = triedProvidersOf(log);
   const hasTriedProviders = triedProviders.length > 0;
@@ -120,11 +120,11 @@ export function LogRowCells({
     log,
     affinityTargetNames,
   );
-  const costDisplay = formatCost(log.billing.charge_nano_usd);
+  const costDisplay = formatCost(log.billing?.charge_nano_usd);
   const usageSnapshot = asObject(log.usage);
   const usageInput = asObject(usageSnapshot?.input);
   const usageOutput = asObject(usageSnapshot?.output);
-  const billingSnapshot = asObject(log.billing.breakdown);
+  const billingSnapshot = asObject(log.billing?.breakdown);
   // MP-B6: version 2 breakdowns stay readable; version 3 is the only shape
   // written after the cutover, with flat line items and top-level tiers.
   const isV3Breakdown = billingSnapshot?.version === 3;
@@ -321,15 +321,15 @@ export function LogRowCells({
   const outputDetailRows: Array<[string, string]> = [];
 
   const inputTotal =
-    readTokenCount(usageInput, "total_tokens") ?? log.tokens.input ?? null;
+    readTokenCount(usageInput, "total_tokens") ?? log.tokens?.input ?? null;
   const inputUsageUnavailable = inputTotal == null;
   const inputUncached =
     readTokenCount(usageInput, "uncached_tokens") ??
-    Math.max((log.tokens.input ?? 0) - (log.tokens.cache_read ?? 0), 0);
+    Math.max((log.tokens?.input ?? 0) - (log.tokens?.cache_read ?? 0), 0);
   const inputText = readTokenCount(usageInput, "text_tokens");
   const inputCached =
     readTokenCount(usageInput, "cached_tokens") ??
-    log.tokens.cache_read ??
+    log.tokens?.cache_read ??
     null;
   const inputCachePercentage = formatCachePercentage(inputCached, inputTotal);
   const inputCacheCreation = readTokenCount(
@@ -391,15 +391,15 @@ export function LogRowCells({
   }
 
   const outputTotal =
-    readTokenCount(usageOutput, "total_tokens") ?? log.tokens.output ?? null;
+    readTokenCount(usageOutput, "total_tokens") ?? log.tokens?.output ?? null;
   const outputUsageUnavailable = outputTotal == null;
   const outputNonReasoning =
     readTokenCount(usageOutput, "non_reasoning_tokens") ??
-    Math.max((log.tokens.output ?? 0) - (log.tokens.reasoning ?? 0), 0);
+    Math.max((log.tokens?.output ?? 0) - (log.tokens?.reasoning ?? 0), 0);
   const outputText = readTokenCount(usageOutput, "text_tokens");
   const outputReasoning =
     readTokenCount(usageOutput, "reasoning_tokens") ??
-    log.tokens.reasoning ??
+    log.tokens?.reasoning ??
     null;
   const inputTokensForDisplay = inputTotal ?? null;
   const outputTokensForDisplay = outputTotal ?? null;
@@ -610,18 +610,18 @@ export function LogRowCells({
                       {(log.status === "error" ||
                         log.status === "client_gone") && (
                         <>
-                          {log.error.http_status != null && (
+                          {log.error?.http_status != null && (
                             <div>
                               {t("requestLogs.errorStatus")}:{" "}
-                              {log.error.http_status}
+                              {log.error?.http_status}
                             </div>
                           )}
-                          {log.error.code && (
+                          {log.error?.code && (
                             <div>
                               {t("requestLogs.errorCode")}: {log.error.code}
                             </div>
                           )}
-                          {log.error.message && (
+                          {log.error?.message && (
                             <div className="whitespace-pre-wrap break-words">
                               {t("requestLogs.errorMessage")}:{" "}
                               {log.error.message}
@@ -667,7 +667,7 @@ export function LogRowCells({
                 <span className="h-5 cursor-default whitespace-nowrap">
                   <ModelBadge
                     model={log.model}
-                    multiplier={log.provider.multiplier}
+                    multiplier={log.provider?.multiplier}
                     showDetails={false}
                     truncateModelText={false}
                     className="h-5 min-w-max px-1.5 text-[10px]"
@@ -686,13 +686,13 @@ export function LogRowCells({
                       <span className="font-mono">{log.upstream_model}</span>
                     </div>
                   )}
-                  {log.provider.id && (
+                  {log.provider?.id && (
                     <div className="flex items-center justify-between gap-3">
                       <span>{t("requestLogs.modelProvider")}</span>
                       <span className="font-mono">{log.provider.id}</span>
                     </div>
                   )}
-                  {log.provider.multiplier != null &&
+                  {log.provider?.multiplier != null &&
                     log.provider.multiplier !== "1" && (
                       <div className="flex items-center justify-between gap-3">
                         <span>{t("requestLogs.multiplier")}</span>
@@ -781,7 +781,7 @@ export function LogRowCells({
         <span className="inline-flex max-w-24 flex-col items-start">
           {isAdmin && (
             <span className="h-4 max-w-full truncate text-xs font-medium text-foreground">
-              {log.user.username || "-"}
+              {log.user?.username || "-"}
             </span>
           )}
           <TooltipProvider delayDuration={200}>
@@ -1122,7 +1122,7 @@ export function LogRowCells({
                         {t("requestLogs.totalCost")}
                       </span>
                       <span className="font-mono text-xs">
-                        {formatCost(log.billing.charge_nano_usd)}
+                        {formatCost(log.billing?.charge_nano_usd)}
                       </span>
                     </div>
                   </div>

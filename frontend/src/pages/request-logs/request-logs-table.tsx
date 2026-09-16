@@ -100,25 +100,27 @@ export function RequestLogsTable({
 	}
 
 	return (
-		<TableVirtuoso
-			style={{ height: '100%', overflowX: 'auto' }}
-			data={logs}
-			computeItemKey={(_index, log) => log.id}
-			overscan={480}
-			endReached={onLoadMore}
-			components={tableComponents}
-			fixedHeaderContent={() => <RequestLogsTableHeader isAdmin={isAdmin} t={t} />}
-			itemContent={(_index, log) => (
-				<LogRowCells
-					affinityTargetNames={affinityTargetNames}
-					log={log}
-					isAdmin={isAdmin}
-					showIp={showIp}
-					t={t}
-					onOpenCapture={onOpenCapture}
-					onTooltipOpenChange={onTooltipOpenChange}
-				/>
-			)}
-		/>
+		<div className='absolute inset-0 min-h-[240px]'>
+			<TableVirtuoso
+				style={{ height: '100%', overflowX: 'auto' }}
+				data={logs}
+				computeItemKey={(_index, log) => log.id}
+				overscan={480}
+				endReached={onLoadMore}
+				components={tableComponents}
+				fixedHeaderContent={() => <RequestLogsTableHeader isAdmin={isAdmin} t={t} />}
+				itemContent={(_index, log) => (
+					<LogRowCells
+						affinityTargetNames={affinityTargetNames}
+						log={log}
+						isAdmin={isAdmin}
+						showIp={showIp}
+						t={t}
+						onOpenCapture={onOpenCapture}
+						onTooltipOpenChange={onTooltipOpenChange}
+					/>
+				)}
+			/>
+		</div>
 	)
 }
