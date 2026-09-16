@@ -782,6 +782,7 @@ PR4c. When encoding URP v2 `Reasoning` nodes into upstream `POST /v1/responses` 
 - If the source item explicitly carried an empty `summary` or `content` array, a same-Responses replay MUST preserve that empty array. An encoder MUST NOT invent summary text from raw content.
 - Monoize MUST NOT forward URP-internal metadata or non-schema fields such as `source`, `started_at`, or transform markers on an upstream Responses reasoning item.
 - A reasoning item `status` is output lifecycle metadata. Monoize MUST preserve it on downstream response items and streaming lifecycle events, but MUST omit it when the item is replayed in an upstream `POST /v1/responses` request `input[]` array.
+- A reasoning item `duration` is downstream presentation metadata. Monoize MUST preserve or synthesize it under STR3o, but MUST omit it from upstream Responses request `input[]` items, including replayed history.
 - Monoize MUST NOT encode a legacy top-level `text` field. Raw reasoning text uses `content[].type = "reasoning_text"`.
 
 PR4c.1. When decoding downstream Responses `input[]`, Monoize MUST decode an item with `type = "reasoning"` into one URP v2 `Reasoning` node using the same field mapping as non-streaming Responses `output[]` reasoning items:

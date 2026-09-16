@@ -112,6 +112,7 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     obj.remove("source");
     obj.remove("started_at");
     obj.remove("status");
+    obj.remove("duration");
     obj.retain(|key, _| !key.starts_with("_monoize_"));
     if !obj.contains_key("summary") {
         obj.insert("summary".to_string(), Value::Array(Vec::new()));
