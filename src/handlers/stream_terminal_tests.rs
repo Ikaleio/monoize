@@ -170,9 +170,11 @@ async fn unmarked_transport_failure_emits_one_target_error_sequence() {
         drop(tx);
         let wire = collect_wire(rx).await;
         assert_single_terminal_error(&wire, downstream);
-        assert!(
-            wire.contains("upstream_transport_failed") && wire.contains("connection interrupted")
-        );
+        let expected_code = match downstream {
+            DownstreamProtocol::Responses => "server_error",
+            _ => "upstream_transport_failed",
+        };
+        assert!(wire.contains(expected_code) && wire.contains("connection interrupted"));
     }
 }
 

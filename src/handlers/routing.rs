@@ -1624,10 +1624,18 @@ pub(super) fn openai_error_json(err: &AppError) -> Value {
 }
 
 pub(super) fn responses_stream_error_json(seq: u64, err: &AppError) -> Value {
+    let status = err.upstream_status.unwrap_or(err.status.as_u16());
+    let code = err.upstream_code.as_deref().unwrap_or_else(|| {
+        if (500..=599).contains(&status) {
+            "server_error"
+        } else {
+            &err.code
+        }
+    });
     json!({
         "type": "error",
         "sequence_number": seq,
-        "code": err.upstream_code.as_ref().unwrap_or(&err.code),
+        "code": code,
         "message": err.message,
         "param": err.upstream_param.as_ref().or(err.param.as_ref()),
     })
