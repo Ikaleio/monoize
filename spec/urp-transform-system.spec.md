@@ -481,7 +481,7 @@ CTF-12. After CTF-8 and CTF-9, for a matching `apply_patch` `ToolCall` (whether 
 2. a line that starts with `*** End Patch` becomes exactly `*** End Patch`;
 3. lines equal to `*** End of File` or `*** End of File ***` are removed;
 4. if the payload is wrapped in an `<invoke ...>...</invoke>` element, the inner text is used before rules 1–3.
-5. after a line that starts with `*** Add File`, each following line that does not start with `***` and does not already start with `+` MUST be rewritten by prefixing `+`. This prefix MUST NOT be applied inside `*** Update File` or `*** Delete File` sections. A line that already starts with `+` MUST remain unchanged.
+5. after a line that starts with `*** Add File`, prefix `+` on each following content line if and only if all of these hold: the line does not start with `***`; the line is not a `@@` hunk header after trimming; the line does not already start with `+`, `-`, or `\`. A `@@` hunk header, a line that starts with `*** Update File` or `*** Delete File`, and a `*** End of File` line (including when rule 3 removes it) MUST end this Add File prefixing section. The prefix MUST NOT be applied inside `*** Update File` or `*** Delete File` sections. A line that already starts with `+`, `-`, or `\` MUST remain unchanged.
 
 ### 4.6 Image transforms on request ordinary nodes
 

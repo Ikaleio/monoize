@@ -125,6 +125,7 @@ fn normalize_apply_patch(raw: &str) -> String {
     for line in stripped.lines() {
         let trimmed = line.trim();
         if trimmed.eq_ignore_ascii_case("*** End of File ***") || trimmed == "*** End of File" {
+            in_add_file = false;
             continue;
         }
         if trimmed.starts_with("*** Begin Patch") {
@@ -149,7 +150,13 @@ fn normalize_apply_patch(raw: &str) -> String {
             in_add_file = false;
             continue;
         }
-        if in_add_file && !line.starts_with('+') {
+        if trimmed.starts_with("@@") {
+            in_add_file = false;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if in_add_file && should_prefix_add_file_line(line) {
             out.push('+');
         }
         out.push_str(line);
@@ -158,13 +165,18 @@ fn normalize_apply_patch(raw: &str) -> String {
     out
 }
 
+fn should_prefix_add_file_line(line: &str) -> bool {
+    let t = line.trim_start();
+    !(t.starts_with('+') || t.starts_with('-') || t.starts_with('\\') || t.starts_with("@@"))
+}
+
 fn function_parameters() -> Value {
     json!({
         "type": "object",
         "properties": {
             "input": {
                 "type": "string",
-                "description": "The entire apply_patch document. First line must be exactly `*** Begin Patch`. Last line must be exactly `*** End Patch`. After `*** Add File: path`, every content line must start with `+`."
+                "description": "The entire apply_patch document. First line must be exactly `*** Begin Patch`. Last line must be exactly `*** End Patch`. New files use `*** Add File: path` and each content line starts with `+`. Existing files use `*** Update File: path` with `@@` hunks: `-` deletes, `+` adds, a leading space keeps context. Do not rewrite an existing file as Add File."
             }
         },
         "required": ["input"]
@@ -181,7 +193,7 @@ fn convert_tool_to_function(tool: &mut ToolDefinition, cfg: &Config) {
     let custom = tool.custom.take();
     let description = custom.and_then(|c| c.description).or_else(|| {
         Some(
-            "Use the apply_patch tool to edit files. Pass the full patch text in `input`. Do not wrap the patch in extra JSON keys other than `input`. After `*** Add File: path`, prefix every content line with `+`.".to_string(),
+            "Use the apply_patch tool to edit files. Pass the full patch text in `input`. Do not wrap the patch in extra JSON keys other than `input`. New files: `*** Add File: path` and prefix each content line with `+`. Existing files: `*** Update File: path` with `@@` hunks using `-` to delete, `+` to add, and a leading space for context.".to_string(),
         )
     });
     tool.tool_type = "function".to_string();

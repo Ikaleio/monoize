@@ -13,7 +13,7 @@ Codex 0.15x 的 `apply_patch` 只以 Responses **custom/freeform** 工具下發�
 
 Grok 常輸出 `*** Begin Patch ***` / `*** End Patch ***`。Codex 要求首行恰好為 `*** Begin Patch`。回應階段會改寫這些標頭，並去掉 `*** End of File ***` 與 `<invoke>` 包裝。
 
-Grok 也會把 Add File 正文寫成原始檔案行。Codex 要求 Add File 的每一行內容都以 `+` 開頭。回應階段會幫這些行補上 `+`。Update File 的 hunk 不會改寫。
+Grok 也會把 Add File 正文寫成原始檔案行。Codex 要求 Add File 的每一行內容都以 `+` 開頭。回應階段只幫這類原始行補 `+`。已經以 `+`、`-` 或 `\` 開頭的行不改。遇到 `@@` hunk 標頭後停止補前綴。Update File 的 `-` 刪除行會保留。
 
 ## 參考
 
