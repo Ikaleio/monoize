@@ -1226,6 +1226,8 @@ PM7. Messages `tool_choice` normalization:
 
 PM8. When calling a `type=messages` upstream, Monoize MUST send HTTP header `anthropic-version` with value `2023-06-01`.
 
+PM8e. When calling a `type=messages` upstream, Monoize MUST send the Channel `api_key` in HTTP header `x-api-key`. Monoize MUST also send the same Channel `api_key` as `Authorization: Bearer <api_key>`. Monoize MUST NOT send only Bearer authentication for a `type=messages` upstream. Purpose: official Anthropic authenticates `x-api-key`. Many Messages-compatible relays authenticate Bearer.
+
 PM8d. When an encoded `type=messages` upstream request contains an `image` or `document` block whose `source.type = "file"` and whose source has a non-empty `file_id`, or a `container_upload` block with a non-empty `file_id`, Monoize MUST also send HTTP header `anthropic-beta` with value `files-api-2025-04-14`. Monoize MUST NOT add this beta header solely because an unrelated string field happens to equal a file identifier.
 
 PM8a. When decoding Anthropic Messages usage, Monoize MUST map cache usage as follows:

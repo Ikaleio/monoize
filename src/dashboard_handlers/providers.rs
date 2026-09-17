@@ -631,20 +631,25 @@ pub async fn fetch_provider_models(
 
     let url = build_models_list_url(&channel.base_url);
 
-    let resp = state
+    let mut request = state
         .http
         .get(&url)
-        .header("Authorization", format!("Bearer {}", channel.api_key))
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_fetch_failed",
-                format!("failed to fetch models: {e}"),
-            )
-        })?;
+        .timeout(std::time::Duration::from_secs(15));
+    request = crate::monoize_routing::apply_provider_api_key(
+        request,
+        channel.provider_type,
+        &channel.api_key,
+    );
+    if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Messages {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
+    let resp = request.send().await.map_err(|e| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_fetch_failed",
+            format!("failed to fetch models: {e}"),
+        )
+    })?;
 
     let body = parse_discovery_json_response(resp).await?;
 
@@ -773,12 +778,14 @@ pub async fn fetch_channel_models(
         .http
         .get(&url)
         .timeout(std::time::Duration::from_secs(15));
-    request = match body.provider_type {
-        crate::monoize_routing::MonoizeProviderType::Gemini => {
-            request.header("x-goog-api-key", api_key.as_str())
-        }
-        _ => request.header("Authorization", format!("Bearer {api_key}")),
-    };
+    request = crate::monoize_routing::apply_provider_api_key(
+        request,
+        body.provider_type,
+        api_key.as_str(),
+    );
+    if body.provider_type == crate::monoize_routing::MonoizeProviderType::Messages {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
 
     let resp = request.send().await.map_err(|e| {
         AppError::new(

@@ -320,7 +320,14 @@ fn apply_auth(
                 .header_name
                 .clone()
                 .unwrap_or_else(|| "x-api-key".to_string());
-            Ok(req.header(header_name, auth_value))
+            let req = req.header(header_name.as_str(), auth_value);
+            // Official Anthropic authenticates `x-api-key`. Many Messages-compatible
+            // relays authenticate Bearer. Send both when the header is `x-api-key`.
+            if header_name.eq_ignore_ascii_case("x-api-key") {
+                Ok(req.bearer_auth(auth_value))
+            } else {
+                Ok(req)
+            }
         }
         ProviderAuthType::Query => {
             let query_name = auth

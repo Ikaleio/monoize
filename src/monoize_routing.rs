@@ -2527,6 +2527,18 @@ fn validate_api_type_overrides(overrides: &[ApiTypeOverride]) -> Result<(), Stri
     Ok(())
 }
 
+pub fn apply_provider_api_key(
+    request: reqwest::RequestBuilder,
+    provider_type: MonoizeProviderType,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    match provider_type {
+        MonoizeProviderType::Gemini => request.header("x-goog-api-key", api_key),
+        MonoizeProviderType::Messages => request.header("x-api-key", api_key).bearer_auth(api_key),
+        _ => request.bearer_auth(api_key),
+    }
+}
+
 pub async fn probe_channel_list_models(
     client: &reqwest::Client,
     channel: &MonoizeChannel,
@@ -2535,12 +2547,12 @@ pub async fn probe_channel_list_models(
     let base = channel.base_url.trim_end_matches('/');
     let url = format!("{base}/v1/models");
 
-    let result = client
-        .get(url)
-        .timeout(Duration::from_millis(timeout_ms))
-        .bearer_auth(&channel.api_key)
-        .send()
-        .await;
+    let mut request = client.get(url).timeout(Duration::from_millis(timeout_ms));
+    request = apply_provider_api_key(request, channel.provider_type, &channel.api_key);
+    if channel.provider_type == MonoizeProviderType::Messages {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
+    let result = request.send().await;
 
     match result {
         Ok(resp) => resp.status().is_success(),
@@ -2856,15 +2868,10 @@ pub async fn probe_channel_completion(
 ) -> ChannelProbeOutcome {
     let effective_type = resolve_effective_api_type(api_type_overrides, provider_type, model);
     let base = channel.base_url.trim_end_matches('/');
-    let (url, body, extra_headers, use_google_api_key_header) =
-        build_probe_request(base, model, effective_type, stream);
+    let (url, body, extra_headers) = build_probe_request(base, model, effective_type, stream);
 
     let mut request = client.post(&url).timeout(Duration::from_millis(timeout_ms));
-    request = if use_google_api_key_header {
-        request.header("x-goog-api-key", &channel.api_key)
-    } else {
-        request.bearer_auth(&channel.api_key)
-    };
+    request = apply_provider_api_key(request, effective_type, &channel.api_key);
     for &(header_name, header_value) in extra_headers {
         request = request.header(header_name, header_value);
     }
@@ -2930,7 +2937,7 @@ fn build_probe_request(
     model: &str,
     effective_type: MonoizeProviderType,
     stream: bool,
-) -> (String, Value, &'static [(&'static str, &'static str)], bool) {
+) -> (String, Value, &'static [(&'static str, &'static str)]) {
     match effective_type {
         MonoizeProviderType::Responses => {
             let url = format!("{base}/v1/responses");
@@ -2940,7 +2947,7 @@ fn build_probe_request(
                 "stream": stream,
                 "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
             });
-            (url, body, &[][..], false)
+            (url, body, &[][..])
         }
         MonoizeProviderType::ChatCompletion => {
             let url = format!("{base}/v1/chat/completions");
@@ -2950,7 +2957,7 @@ fn build_probe_request(
                 "stream": stream,
                 "messages": [{"role": "user", "content": "hi"}]
             });
-            (url, body, &[][..], false)
+            (url, body, &[][..])
         }
         MonoizeProviderType::Messages => {
             let url = format!("{base}/v1/messages");
@@ -2960,7 +2967,7 @@ fn build_probe_request(
                 "stream": stream,
                 "messages": [{"role": "user", "content": "hi"}]
             });
-            (url, body, &[("anthropic-version", "2023-06-01")][..], false)
+            (url, body, &[("anthropic-version", "2023-06-01")][..])
         }
         MonoizeProviderType::Gemini => {
             let method = if stream {
@@ -2973,7 +2980,7 @@ fn build_probe_request(
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
                 "generationConfig": {"maxOutputTokens": 16}
             });
-            (url, body, &[][..], true)
+            (url, body, &[][..])
         }
         MonoizeProviderType::OpenaiImage => {
             let url = format!("{base}/v1/images/generations");
@@ -2983,7 +2990,7 @@ fn build_probe_request(
                 "size": "1024x1024",
                 "n": 1,
             });
-            (url, body, &[][..], false)
+            (url, body, &[][..])
         }
         MonoizeProviderType::Replicate => {
             // Replicate providers are excluded from active probing; this is a
@@ -2993,7 +3000,7 @@ fn build_probe_request(
                 "version": model,
                 "input": {}
             });
-            (url, body, &[][..], false)
+            (url, body, &[][..])
         }
     }
 }

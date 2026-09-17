@@ -842,6 +842,11 @@ pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> Provide
             Some("x-goog-api-key".to_string()),
             None,
         ),
+        ProviderType::Messages => (
+            ProviderAuthType::Header,
+            Some("x-api-key".to_string()),
+            None,
+        ),
         _ => (ProviderAuthType::Bearer, None, None),
     };
     ProviderConfig {

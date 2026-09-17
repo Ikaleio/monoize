@@ -342,7 +342,8 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
   - If `api_key` is omitted or empty and `provider_id` plus `channel_id` identify an existing Channel, the request MUST use the stored Channel `api_key`.
   - If `api_key` is omitted or empty and no stored Channel key can be resolved, return `400 invalid_input`.
   - The request body `provider_type` and `base_url` are the source of truth for the upstream request. They MAY differ from the stored Channel values when the editor has unsaved changes.
-  - For `responses`, `chat_completion`, `messages`, `openai_image`, and `replicate`, call `GET {base}/v1/models` with bearer authentication.
+  - For `responses`, `chat_completion`, `openai_image`, and `replicate`, call `GET {base}/v1/models` with bearer authentication.
+  - For `messages`, call `GET {base}/v1/models` with header `x-api-key`, header `Authorization: Bearer <api_key>`, and header `anthropic-version: 2023-06-01`.
   - For `gemini`, call Gemini list models with `x-goog-api-key`.
   - Read both successful and non-successful upstream response bodies through the bounded discovery reader defined by RRB-UD1 through RRB-UD6 in `spec/runtime-resource-bounds.spec.md`.
   - Parse a successful upstream response as JSON only after the bounded reader returns the complete body.
@@ -381,6 +382,10 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
 - The upstream probe model MUST be the selected Channel model entry `redirect` when non-empty, otherwise the logical model key.
 - The effective API type is the first matching Provider `api_type_overrides[]` entry for the logical model, otherwise the Channel `provider_type`.
 - Replicate channels MUST be rejected for active completion probes.
+- Authentication for the probe request MUST match the effective API type:
+  - `gemini`: header `x-goog-api-key`
+  - `messages`: header `x-api-key`, header `Authorization: Bearer <api_key>`, and header `anthropic-version: 2023-06-01`
+  - all other probe types: `Authorization: Bearer <api_key>`
 - If `stream = true`, Responses, Chat Completions, Messages, and Gemini tests MUST send their protocol's streaming request form. A streaming test MUST read the upstream stream until a protocol terminal event is observed. HTTP success without a valid terminal event MUST return `success = false` and `error_code = "upstream_stream_missing_terminal"`.
 - The Responses probe body MUST set `max_output_tokens` to `16`. The Chat Completions and Messages probe bodies MUST set `max_tokens` to `16`. The Gemini probe body MUST set `generationConfig.maxOutputTokens` to `16`.
 - For a Responses streaming probe, a protocol terminal event is classified as follows:
