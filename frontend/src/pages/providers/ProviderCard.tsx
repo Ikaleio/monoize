@@ -95,7 +95,11 @@ export function ProviderCard({
 	onDrop,
 	modelMetadata
 }: ProviderCardProps) {
-	const { t } = useTranslation()
+	const { t, i18n } = useTranslation()
+	const numberFormatter = useMemo(
+		() => new Intl.NumberFormat(i18n.resolvedLanguage ?? i18n.language, { maximumFractionDigits: 0 }),
+		[i18n.resolvedLanguage, i18n.language]
+	)
 	const [expanded, setExpanded] = useState(false)
 	const [testDialogOpen, setTestDialogOpen] = useState(false)
 	const [testDialogChannel, setTestDialogChannel] = useState<{
@@ -290,8 +294,8 @@ export function ProviderCard({
 					className={cn('cursor-pointer select-none py-3', expanded && 'pb-4')}
 					onClick={() => setExpanded(value => !value)}
 					>
-						<div className='flex items-center justify-between gap-3'>
-							<div className='flex items-center gap-3 min-w-0'>
+						<div className='flex flex-col items-stretch justify-between gap-3 lg:flex-row lg:items-center'>
+							<div className='flex min-w-0 items-center gap-3 lg:flex-1'>
 								<GripVertical
 									className={cn(
 										'h-4 w-4 text-muted-foreground/50 transition-colors shrink-0',
@@ -310,7 +314,7 @@ export function ProviderCard({
 								<Server className='h-4 w-4' />
 							</div>
 							<div className='flex items-center gap-2 min-w-0 flex-wrap'>
-								<CardTitle className='text-base leading-normal'>
+								<CardTitle className='min-w-0 break-words text-base leading-normal [overflow-wrap:anywhere]'>
 									{provider.name}
 								</CardTitle>
 								<BadgeOverflowList
@@ -326,16 +330,39 @@ export function ProviderCard({
 							</div>
 						</div>
 						<div
-							className='flex items-center gap-4'
+							className='flex w-full flex-wrap items-center gap-4 lg:w-auto lg:shrink-0 lg:flex-nowrap'
 							onClick={event => event.stopPropagation()}
 						>
+							<TooltipProvider delayDuration={300}>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<div
+											tabIndex={0}
+											role='group'
+											aria-label={t('providers.liveUsageLabel', { name: provider.name })}
+											className='grid w-40 shrink-0 cursor-help grid-cols-[2.5rem_minmax(0,1fr)] gap-x-2 rounded-sm text-left font-mono text-sm font-normal leading-5 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+										>
+											<span>{t('providers.liveRpm')}</span>
+											<span className='tabular-nums [overflow-wrap:anywhere]'>
+												{provider.live_usage == null ? '—' : numberFormatter.format(provider.live_usage.rpm)}
+											</span>
+											<span>{t('providers.liveTpm')}</span>
+											<span className='tabular-nums [overflow-wrap:anywhere]'>
+												{provider.live_usage == null ? '—' : numberFormatter.format(provider.live_usage.tpm)}
+											</span>
+										</div>
+									</TooltipTrigger>
+									<TooltipContent align='start' className='max-w-[min(24rem,calc(100vw-2rem))]'>
+										{t('providers.liveUsageHelp')}
+									</TooltipContent>
+								</Tooltip>
 							<div className='hidden md:flex items-center gap-2'>
 								<Switch
+									aria-label={t('providers.providerEnabled')}
 									checked={provider.enabled}
 									onCheckedChange={value => onToggle(provider, value)}
 								/>
 							</div>
-							<TooltipProvider delayDuration={300}>
 								<div className='flex items-center gap-0.5 sm:gap-1'>
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -412,6 +439,7 @@ export function ProviderCard({
 							onClick={event => event.stopPropagation()}
 						>
 							<Switch
+								aria-label={t('providers.providerEnabled')}
 								checked={provider.enabled}
 								onCheckedChange={value => onToggle(provider, value)}
 							/>

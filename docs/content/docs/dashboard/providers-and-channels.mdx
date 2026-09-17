@@ -12,6 +12,13 @@ A request first selects a Provider, then selects a Channel inside it. See [Routi
 
 ![Provider list](/images/en/providers.webp)
 
+## Live usage
+
+Each Provider row shows RPM and TPM for the last 60 seconds. The visible page refreshes every 10 seconds.
+RPM counts persisted requests across all users and terminal statuses. TPM sums input and output tokens without counting cached or reasoning tokens again.
+In-flight requests and retry-chain entries do not count. An empty window shows `0`; unavailable metrics show `—`.
+The screenshot uses local example traffic.
+
 ## Create a Provider
 
 1. Open **Providers** in the sidebar.

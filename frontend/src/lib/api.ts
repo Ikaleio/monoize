@@ -661,6 +661,11 @@ export interface Provider {
   unpriced_model_count?: number;
   unpriced_model_ids?: string[];
   model_runtime_statuses?: ProviderModelRuntimeStatus[];
+  live_usage?: {
+    window_seconds: 60;
+    rpm: number;
+    tpm: number;
+  };
 }
 
 export interface CreateMonoizeChannelInput {

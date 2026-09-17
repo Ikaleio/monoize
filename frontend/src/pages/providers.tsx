@@ -34,7 +34,7 @@ import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
 
 export function ProvidersPage() {
 	const { t } = useTranslation()
-	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders()
+	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders({ refreshInterval: 10000 })
 	const providers = providersData ?? []
 	const { data: settings } = useSettings()
 	const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
@@ -116,8 +116,17 @@ export function ProvidersPage() {
 		)
 	}
 
-	if (providersError) {
-		const message = providersError instanceof Error ? providersError.message : t('common.error')
+	const errorState = providersError ? (
+		<EmptyState
+			variant='card'
+			icon={<AlertTriangle className='h-12 w-12 text-destructive' />}
+			title={t('providers.loadFailed', { defaultValue: 'Failed to load providers' })}
+			description={<span className='font-mono text-xs break-all'>{providersError instanceof Error ? providersError.message : t('common.error')}</span>}
+			action={<Button variant='outline' onClick={() => void reloadProviders()}>{t('common.retry', { defaultValue: 'Retry' })}</Button>}
+		/>
+	) : null
+
+	if (providersError && !providersData) {
 		return (
 			<PageWrapper className='space-y-6'>
 				<motion.div
@@ -127,13 +136,7 @@ export function ProvidersPage() {
 				>
 					<PageHeader title={t('providers.title')} description={t('providers.description')} />
 				</motion.div>
-				<EmptyState
-					variant='card'
-					icon={<AlertTriangle className='h-12 w-12 text-destructive' />}
-					title={t('providers.loadFailed', { defaultValue: 'Failed to load providers' })}
-					description={<span className='font-mono text-xs break-all'>{message}</span>}
-					action={<Button variant='outline' onClick={() => void reloadProviders()}>{t('common.retry', { defaultValue: 'Retry' })}</Button>}
-				/>
+				{errorState}
 			</PageWrapper>
 		)
 	}
@@ -154,6 +157,8 @@ export function ProvidersPage() {
 					</AnimatedButton>
 				)} />
 			</motion.div>
+
+			{errorState}
 
 			<div className='space-y-4'>
 				{providers.length === 0 && (

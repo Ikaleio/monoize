@@ -12,6 +12,13 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 
 ![Provider 列表](/images/zh/providers.webp)
 
+## 实时用量
+
+每个 Provider 行显示最近 60 秒的 RPM 和 TPM。页面可见时每 10 秒刷新一次。
+RPM 统计所有用户、所有终态的已落库请求。TPM 累加输入和输出 token，不重复累加缓存或推理 token。
+进行中的请求和重试链条目不计入统计。空窗口显示 `0`；指标不可用时显示 `—`。
+截图使用本地示例流量。
+
 ## 创建 Provider
 
 1. 在侧边栏打开**服务提供者**。

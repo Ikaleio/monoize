@@ -47,6 +47,20 @@ CM-READ-1. Provider list, Provider detail, model-constrained routing, and active
 
 A provider object MUST NOT include `provider_type`.
 
+### 1.1.1 Provider live usage
+
+CM-LU-1. `GET /api/dashboard/providers` MUST include `live_usage: { window_seconds: 60, rpm: integer, tpm: integer }` on every Provider. Existing administrator authorization MUST apply.
+
+CM-LU-2. Each aggregate MUST include all users' persisted request-log rows attributed to that Provider by `provider_id`. Include every terminal status. Exclude pending snapshots and retry-chain entries.
+
+CM-LU-3. The window MUST be `[now_ms - 60000, now_ms)` on `created_at_unix_ms`. Capture `now_ms` once for the list. Exclude null timestamps.
+
+CM-LU-4. `rpm` MUST count matching rows. `tpm` MUST sum input and output tokens, treating null tokens as zero. Do not add cached or reasoning tokens again. Checked integer overflow MUST return an internal error.
+
+CM-LU-5. A Provider with no matching rows MUST return zero for both metrics, including disabled Providers. Aggregate all Providers in one grouped SQL query. Do not load individual logs or execute one query per Provider.
+
+CM-LU-6. The Providers page MUST refresh its list every 10 seconds while visible. Show locale-grouped integer metrics in the Provider header. Identify the rolling 60-second window and persisted-log scope in localized help text.
+
 ### 1.2 Channel
 
 A channel object MUST include:

@@ -238,6 +238,8 @@ PL12. Provider list card header MUST place provider metadata and controls in a c
 - provider enable switch MUST be colocated in the header action zone;
 - edit/delete/reorder controls MUST remain available without expanding card height.
 
+PL12b. Provider headers MUST show RPM and TPM as two left-aligned rows immediately before the enable switch on desktop. Every card MUST reserve the same metric-column width. Labels and values MUST share consistent starting positions across cards. Both labels and values MUST use secondary typography: `font-mono`, `text-sm`, normal weight, and `text-muted-foreground`. Values MUST use tabular numerals. Do not add a card or badge. On narrow screens, place metrics below Provider identity without horizontal overflow or loss of actions. Initial list loading MUST use the existing page skeleton. Missing usage MUST render an em dash, not zero. Failed refreshes MUST retain cached values and preserve the existing list error notice.
+
 PL12a. Provider list card header metadata badges MUST render through a collapsed badge collection when the number of metadata badges is greater than 3.
 
 - The header badge preview MUST render no more than 3 badges before a `+N` overflow badge.

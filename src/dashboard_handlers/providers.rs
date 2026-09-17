@@ -358,6 +358,11 @@ pub async fn list_providers(
         .list_providers()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let live_usage = state
+        .user_store
+        .get_providers_live_usage()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     let reasoning_suffix_map = state
         .monoize_runtime
@@ -418,6 +423,15 @@ pub async fn list_providers(
         let model_runtime_statuses = build_provider_model_runtime_statuses(&p, &unpriced_entries);
         let val = serde_json::to_value(&p).unwrap_or_default();
         if let Value::Object(mut obj) = val {
+            let usage = live_usage.get(&p.id).copied().unwrap_or_default();
+            obj.insert(
+                "live_usage".to_string(),
+                json!({
+                    "window_seconds": crate::users::LIVE_USAGE_WINDOW_SECONDS,
+                    "rpm": usage.rpm,
+                    "tpm": usage.tpm,
+                }),
+            );
             obj.insert(
                 "unpriced_model_count".to_string(),
                 Value::Number(serde_json::Number::from(unpriced_count)),

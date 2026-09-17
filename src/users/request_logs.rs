@@ -1545,6 +1545,45 @@ impl UserStore {
         })
     }
 
+    pub async fn get_providers_live_usage(
+        &self,
+    ) -> Result<HashMap<String, super::ProviderLiveUsage>, String> {
+        let now_ms = Utc::now().timestamp_millis();
+        let from_ms = now_ms - super::LIVE_USAGE_WINDOW_SECONDS * 1000;
+        let sql = "SELECT rl.provider_id, COUNT(*) AS rpm, \
+             CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS BIGINT) AS input_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS BIGINT) AS output_tokens \
+             FROM request_logs rl \
+             WHERE rl.provider_id IS NOT NULL \
+               AND rl.status <> 'pending' \
+               AND rl.created_at_unix_ms IS NOT NULL \
+               AND rl.created_at_unix_ms >= $1 \
+               AND rl.created_at_unix_ms < $2 \
+             GROUP BY rl.provider_id";
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(sql, vec![from_ms.into(), now_ms.into()]))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        rows.into_iter()
+            .map(|row| {
+                let provider_id: String =
+                    row.try_get("", "provider_id").map_err(|e| e.to_string())?;
+                let rpm = row.try_get("", "rpm").map_err(|e| e.to_string())?;
+                let input_tokens: i64 =
+                    row.try_get("", "input_tokens").map_err(|e| e.to_string())?;
+                let output_tokens: i64 =
+                    row.try_get("", "output_tokens").map_err(|e| e.to_string())?;
+                let tpm = input_tokens
+                    .checked_add(output_tokens)
+                    .ok_or_else(|| "live usage token aggregate overflow".to_string())?;
+                Ok((provider_id, super::ProviderLiveUsage { rpm, tpm }))
+            })
+            .collect()
+    }
+
     /// Admin dashboard spend totals (admin-dashboard.spec.md AD-2):
     /// call count and charge aggregate over `[time_from, time_to)`.
     pub async fn get_window_usage_totals(

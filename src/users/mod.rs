@@ -814,4 +814,10 @@ pub struct UserLiveUsage {
     pub cache_read_tokens: i64,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProviderLiveUsage {
+    pub rpm: i64,
+    pub tpm: i64,
+}
+
 pub use utils::{format_nano_to_usd, parse_nano_usd, parse_usd_to_nano};
