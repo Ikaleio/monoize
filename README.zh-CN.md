@@ -6,146 +6,102 @@
 
 **AI API 接口形式相似，但底层协议约定各不相同。**
 
-Monoize 是基于 Rust 开发的 AI API 网关，支持 OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、Embeddings 与图像 API。它在网关层完成协议语义转换，将单个逻辑模型分发至多个上游 Channel，并统一处理客户端与上游之间的兼容和容灾问题。
+Monoize 是基于 Rust 开发的 AI API 网关。它在网关层完成 OpenAI Responses、Chat Completions、Anthropic Messages 之间的语义转换，将一个逻辑模型路由到多个上游 Channel，并在单个进程内提供管理控制台。
+
 [English](README.md) · [简体中文](README.zh-CN.md)
+
 </div>
 
-## 问题背景
+<div align="center">
+  <img src="docs/public/images/zh/dashboard.webp" width="880" alt="Monoize 控制台预览">
+</div>
+
+## 为什么需要 Monoize
 
 AI API 网关需要解决的不仅是 JSON 字段映射。
 
-Responses、Chat Completions 与 Messages 对对话历史、推理过程、工具调用、Token 计量、错误状态及流式事件的数据建模各不相同。简单的字段重命名即便返回 HTTP 200，也可能破坏会话状态：例如丢失加密推理上下文、将流式增量追加到错误的内容块、重复发送生命周期事件，或将工具执行结果误转为助手文本。
+Responses、Chat Completions 与 Messages 对对话历史、推理过程、工具调用、用量统计与流式事件的数据建模各不相同。简单的字段映射即使返回 HTTP 200，也可能破坏会话状态：
 
-多上游路由同样依赖严格的状态机。网关需要自动重试偶发失败、按序回退到备用 Provider，并在向下游客户端发送首个响应字节后锁定当前连接。若在数据下发后切换上游，会导致两次不同的生成内容拼接进同一条流。
+1. **丢失推理上下文**：Responses 使用 `encrypted_content` 在无状态请求间传递推理状态。无法表示该字段的转换器会在多轮对话中静默丢弃它。
+2. **破坏流式生命周期**：各协议对内容块的开启与闭合规则不同。在文本块内发送推理增量，或重复发送初始化事件，会让下游 SDK 丢弃数据。
+3. **流式切换串流**：网关必须重试失败的上游。但向下游发送首个响应字节后，切换上游会把两次不同的生成内容拼进同一条流。
 
-此外，客户端与上游网关存在各种边界差异。Claude Code、OpenRouter 兼容客户端、Codex WebSocket 客户端、DeepSeek 工具循环、图像服务以及各厂商的 SSE 实现，都有各自的协议假设。
+Monoize 通过类型化协议模型、流状态机与有界路由瀑布处理这些问题。
 
-直接传输内联图像会增加延迟。Base64 上传与上游图像预处理耗时会增加首字时间（TTFT），如果每次重试都原样转发未优化的请求体，开销还会成倍叠加。
-## 常见转换器的典型缺陷
+## 核心设计
 
-支持某类数据格式，不等于正确实现了对应协议。以下公开问题已于 2026-08-10 核对验证：
+### 1. URP v2 协议模型
 
-- OpenAI 使用 `encrypted_content` 保存无状态多轮对话所需的推理状态。在 New API 提交 [`823e263`](https://github.com/QuantumNous/new-api/commit/823e26304a396854ace30b52b98ec497c2dd9c36) 中，Responses 输出 DTO [无法表示该字段](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/dto/openai_response.go#L327-L339)，且 Responses 到 Chat 转换器[仅提取明文推理文本](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/relayconvert/internal/oai_responses/to_oai_chat_resp.go#L212-L229)，导致加密推理数据在转换中静默丢失。具体机制参见 [OpenAI 推理开发指南](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses)。
-- LiteLLM 问题 [#32357](https://github.com/BerriAI/litellm/issues/32357) 显示其 Anthropic 适配器会重复触发 `message_start`，并在文本块中下发 `thinking_delta`。由于违反了内容块生命周期规范，Anthropic 官方 SDK 会直接丢弃这部分推理输出。
-- New API 问题 [#5480](https://github.com/QuantumNous/new-api/issues/5480) 记录了流式转发路径为估算 Token 而在内存中全量保留完整生成文本的问题，导致网关内存占用随生成长度与并发连接数线性膨胀。
+Monoize 将每个接入协议解码为 URP v2。URP v2 是扁平的类型化表示，将文本、推理摘要、原始推理、加密推理、工具调用、工具结果、图像、文件、拒答、用量与控制边界表示为独立节点。上游适配器将节点编码为目标协议，响应按相反方向转换。
 
-Monoize 从协议模型、流状态机、路由规则和资源上限等设计上处理上述问题。
-## Monoize 如何解决
+- 明文推理与加密推理分离表示。可选的 `mz2` 信封在不兼容的重放格式间保留不透明推理数据。
+- 工具调用 ID、并行调用、多段工具结果与助手历史保持原有角色。
+- Responses 输出项与 Messages 内容块的生命周期事件保持配对。
+- 同协议族内的未知字段透传；跨协议族转换时剥离目标协议无法表示的嵌套字段。
 
-### 协议语义转换
+### 2. 首字节前重试
 
-Monoize 将接入的协议统一解码为 URP v2 规范表示。URP v2 采用扁平且强类型的结构，将普通文本、推理摘要、原始推理、加密推理、工具调用、工具返回值、图像、文件、拒答信息、用量数据与流控制边界分别表示为独立的类型化节点。
+一个逻辑模型可匹配多个有序 Provider，每个 Provider 包含带权重的 Channel。
 
-选定的上游适配器将这些节点编码为目标上游格式；上游响应则按相反流程转换后返回给客户端。
+1. 选择第一个匹配的 Provider。
+2. 按权重与 Channel 亲和性选择健康 Channel。
+3. 在配置的预算内重试可重试失败。
+4. 当前路由耗尽后推进到下一个路由。
+5. 发送首个响应字节后停止回退。
 
-该设计提供以下特性：
+网络错误、超时、`429` 与指定的 `5xx` 推进瀑布；`400`、`401`、`403`、`422` 终止瀑布。熔断器、被动健康检测、主动探测与冷却期将异常 Channel 排除在路径之外。Monoize 不会在可见流的中途切换 Provider。规则见[路由规范](spec/monoize-upstream-routing.spec.md)。
 
-- Responses、Chat Completions 与 Messages 之间的双向转换均支持流式与非流式模式。
-- 加密推理与明文推理隔离，可选的 `mz2` 信封机制可在跨格式重放时保留不透明推理状态。
-- 工具调用 ID、并行调用、多段工具结果及助手历史维持原始角色与层级结构。
-- Responses 输出项与 Anthropic 内容块生命周期保持有序开启与闭合。
-- 同协议族内的未知字段正常透传；跨协议族转换时自动剥离无对应表示的嵌套字段，避免触发上游 400 参数校验错误。
+### 3. 低转发开销
 
-### 首字节前重试与故障转移
+- Rust 与 Tokio 处理异步 I/O，请求路径无解释器。
+- 默认流式路径通过有界通道增量解码与编码。
+- 用量随流式增量到达即时累加，不缓冲完整响应文本。
 
-一个逻辑模型可配置多个按优先级排序的 Provider，每个 Provider 包含若干带权重的 Channel。
+部分响应 Transform 需要重构完整响应时会使用缓冲合成流，Replicate 也使用该路径。默认桥接保持增量。这里比较的是代理自身的 CPU、内存与延迟，不代表上游模型生成更快。
 
-Monoize 按照有界瀑布策略执行路由调度：
+## 功能范围
 
-1. 匹配当前逻辑模型优先级最高的 Provider。
-2. 根据权重与会话亲和性选择健康的 Channel。
-3. 在配置的预算内自动重试偶发故障。
-4. 当前 Channel 耗尽重试后，自动推进至下一个可用路由。
-5. 向客户端发送首个响应字节后，立即锁定当前路由并停止回退。
+**协议转换**：Responses、Chat Completions、Messages 之间的流式与非流式互转；Gemini、OpenAI 图像 API 与 Replicate 作为上游接入。
 
-网络断开、请求超时、HTTP `429` 以及指定的 `5xx` 错误会触发路由推进；`400`、`401`、`403`、`422` 等客户端错误则直接返回，不触发故障切换。熔断器、被动健康检测、主动健康探测、冷却期机制与模型亲和性可确保异常通道迅速脱离热路径。
+**路由**：Provider 有序回退、Channel 权重分流、熔断与主动探测、Channel 亲和性、按 API Key 的模型重定向。
 
-Monoize 严禁在流式响应中途切换上游 Provider。详细状态转换规则请参见[路由规范](spec/monoize-upstream-routing.spec.md)。
-### Transform 边界适配
+**Transform 边界适配**，可挂载在全局、Provider 或 API Key 级别，按模型通配符匹配：
 
-核心适配器负责通用协议转换，Transform 流水线则用于处理特定客户端、Provider、模型或 API Key 的专有行为。
+- OpenRouter 结构化推理与末尾用量块。
+- DeepSeek 工具循环中的推理重放。
+- Anthropic thinking 块与签名。
+- Codex Responses WebSocket 会话与 `/v1/responses/compact`。
+- 系统提示词、工具定义与历史消息的 Prompt Cache 断点。
+- `compress_user_message_images`：按需重压缩用户内联图像为 JPEG、PNG、WebP 或 JPEG XL，缩短 TTFT。
+- 自定义 JavaScript Transform：在运行时改写请求与响应。
+- SSE 帧拆分、孤立工具调用清理、连续同角色合并、`system`/`developer` 角色映射。
 
-常见 Transform 场景包括：
+**运营**：
 
-- 提取 OpenRouter 结构化推理格式与末尾用量块。
-- 在 DeepSeek 工具调用循环中重放历史推理上下文。
-- 处理 Anthropic thinking 内容块与签名生命周期。
-- 适配 Codex Responses WebSocket 传输与 `/v1/responses/compact` 上下文压缩。
-- 将 data URL 图像载荷转为上游原生支持的图像来源。
-- 为行缓冲区较小的客户端拆分超长 SSE 数据帧。
-- 清理孤立工具调用并自动合并连续同角色消息。
-- 映射 `system` 与 `developer` 角色差异。
-- 为系统提示词、工具定义与 OpenAI 工具链自动插入缓存断点（Prompt Cache）。
-- 剥离厂商私有请求头、处理模型后缀与推理 Token 预算映射。
-Transform 支持在 Provider、API Key 或全局级别挂载，并通过模型匹配通配符指定生效范围。完整规则见 [Transform 规范](spec/urp-transform-system.spec.md)。
-### 请求图像优化
-
-`compress_user_message_images` 是一个可选开启的请求 Transform，可在向请求上游转发前，自动缩放并重新压缩用户消息中的内联图像。支持输出 JPEG、PNG、WebP 及 JPEG XL 格式。
-
-该 Transform 会完整保留图像节点与厂商专有清晰度参数，并跳过普通远程 URL 和不支持的格式。输入大小、解码像素、并发编码线程数、缓存条目与内存占用均受严格限制。
-
-该优化可减小请求体积，缩短内联大图场景下的首字时间（TTFT）。内置缓存还可避免重试或重复请求时的二次编码开销。
-### 低开销代理转发
-
-Monoize 专注于降低网关本身的系统开销：
-
-- 基于 Rust 与 Tokio 实现原生异步 I/O，请求热路径无解释器开销与垃圾回收停顿。
-- 默认流式链路通过有界异步通道对数据块进行增量解码与编码。
-- 随流式数据块到达即时累加 Token 计数，无需在内存中全量缓冲响应正文。
-- 限流键、健康状态、亲和性表、API Key 缓存、抓包缓冲区、WebSocket 历史与图像转换均有严格的内存上限。
-- Release 构建将编译好的 React 控制台直接内嵌至可执行文件中，单进程同时提供 API 代理、管理后台与 Prometheus 指标。
-
-部分 Transform 在需要整段重构响应时会选择缓冲后合成流，Replicate 同样使用该路径；默认协议桥接均保持增量流式转发。
-
-这里比较的是代理自身的 CPU、内存和延迟开销，并不代表上游模型生成速度会变快。实现细节见[流式用量统计](src/handlers/usage.rs)和[运行时资源上限](spec/runtime-resource-bounds.spec.md)。
-## 支持范围
-
-### 下游端点
-
-| 方法 | 端点 | 协议 |
-| --- | --- | --- |
-| `GET` | `/v1/models` | OpenAI 兼容模型列表 |
-| `POST` | `/v1/responses` | OpenAI Responses，流式或非流式 |
-| `GET` | `/v1/responses` | OpenAI Responses WebSocket 传输 |
-| `POST` | `/v1/responses/compact` | Responses 压缩上下文 |
-| `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
-| `POST` | `/v1/messages` | Anthropic Messages |
-| `POST` | `/v1/embeddings` | Embeddings |
-| `POST` | `/v1/images/generations` | 图像生成 |
-| `POST` | `/v1/images/edits` | Multipart 图像编辑 |
-
-所有转发端点也提供 `/api/v1/...` 别名。
-
-### 上游 Channel 类型
-
-| 类型 | 上游原生协议 |
-| --- | --- |
-| `responses` | OpenAI Responses 兼容协议 |
-| `chat_completion` | OpenAI Chat Completions 兼容协议 |
-| `messages` | Anthropic Messages 兼容协议 |
-| `gemini` | Google Gemini 原生协议 |
-| `openai_image` | OpenAI 兼容图像 API |
-| `replicate` | Replicate Predictions |
-
-Provider 定义路由顺序、重试预算和健康策略。Channel 保存实际的上游类型、Base URL、凭据、模型映射、权重和超时。
+- 内嵌 React 控制台：Provider、Channel、模型映射、定价、用户、API Key 与子账户。
+- 纳美元精度计费、倍率与追加式账本；价格同步自 [models.dev](https://models.dev)、[OpenRouter](https://openrouter.ai) 与 new-api。
+- 请求日志：TTFB、耗时、Token、费用、错误与尝试过的路由。
+- Request Capture：按请求查看事件时间线，可选开启且有容量上限。
+- 内置 Cap 工作量证明人机验证，无需外部 Captcha 服务。
+- Prometheus `/metrics`。
 
 ## 请求路径
 
 ```text
-客户端协议
+客户端协议 (Responses / Chat Completions / Messages)
     │
     ▼
-解码为强类型 URP v2
+解码为 URP v2
     │
     ▼
-Provider 瀑布 ──► 带权 Channel ──► 熔断器 / 亲和性
-    │                                    │
-    │                         首字节前重试或向后回落
+Provider 瀑布 ──► 加权 Channel ──► 熔断 / 亲和性
+    │                                  │
+    │                        首字节前重试或推进
     ▼
-Provider、全局和 API Key Transform
+Transform（全局 / Provider / API Key）
     │
     ▼
-上游协议编码
+编码为上游协议
     │
     ▼
 上游流 ──► URP v2 事件 ──► 下游协议事件
@@ -153,47 +109,23 @@ Provider、全局和 API Key Transform
 
 ## 快速开始
 
-使用 Bun 单次运行 Monoize：
+### npm / Bun
 
 ```bash
 bunx monoize
+# 或: npx monoize
 ```
 
-也可以全局安装：
+全局安装：
 
 ```bash
 bun add --global monoize
 monoize
 ```
 
-同一个包也兼容 npm 和 pnpm：
-
-```bash
-npx monoize
-# 或：pnpm dlx monoize
-# 全局安装：npm install --global monoize
-# 全局安装：pnpm add --global monoize
-```
-
-包管理器只会安装与当前操作系统和 CPU 匹配的原生二进制文件。npm 包支持基于 GNU libc 或 musl 的 Linux x86-64 与 ARM64，以及 Windows x86-64。Linux 包使用静态 musl 可执行文件，不依赖宿主机的 libc 或 `libstdc++`。
-
-如需从源码构建，请安装稳定版 Rust 工具链和 [Bun](https://bun.sh/)。Release 构建会编译前端并把它嵌入可执行文件。
-
-```bash
-cargo build --release
-./target/release/monoize
-```
-
-打开 `http://localhost:8080`。即使公开注册已被关闭，第一个注册账户仍会成为 `super_admin`。然后：
-
-1. 创建一个 Provider。
-2. 添加至少一个 Channel，并填写上游地址和凭据。
-3. 把逻辑模型映射到该 Channel。
-4. 创建一个 API Key。
+包管理器只安装当前系统与 CPU 对应的原生二进制。支持 Linux x86-64/ARM64（glibc 与 musl）及 Windows x86-64。
 
 ### Docker
-
-发布镜像支持 Linux x86-64 和 ARM64。使用持久化 SQLite 数据卷启动：
 
 ```bash
 docker run -d \
@@ -204,102 +136,122 @@ docker run -d \
   ghcr.io/ikaleio/monoize:latest
 ```
 
-如需使用 PostgreSQL 或非默认 SQLite 路径，请通过 `-e` 设置 `MONOIZE_DATABASE_DSN`。
+`docker-compose.yml`：
 
-通过任意受支持的下游协议调用这个逻辑模型：
+```yaml
+services:
+  monoize:
+    image: ghcr.io/ikaleio/monoize:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    # PostgreSQL 时设置:
+    # environment:
+    #   - MONOIZE_DATABASE_DSN=postgres://user:pass@host/monoize
+```
+
+### 源码构建
+
+需要 Rust 稳定版工具链与 [Bun](https://bun.sh/)。Release 构建会编译前端并嵌入可执行文件。
 
 ```bash
-curl http://localhost:8080/v1/responses \
+cargo build --release
+./target/release/monoize
+```
+
+### 首次配置
+
+打开 `http://localhost:8080`。首个注册账号成为 `super_admin`，即使已关闭公开注册。
+
+1. 创建 Provider。
+2. 添加至少一个 Channel，填入上游地址与凭证。
+3. 将逻辑模型映射到 Channel。
+4. 创建 API Key。
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
   -H 'Authorization: Bearer sk-your-monoize-key' \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "your-logical-model",
-    "input": "解释为什么流式回落必须在首字节后停止。",
+    "messages": [{"role": "user", "content": "你好"}],
     "stream": true
   }'
 ```
 
+## 支持范围
+
+### 下游端点
+
+| 方法 | 端点 | 协议 |
+| --- | --- | --- |
+| `GET` | `/v1/models` | OpenAI 兼容模型列表 |
+| `POST` | `/v1/responses` | OpenAI Responses，流式或非流式 |
+| `GET` | `/v1/responses` | OpenAI Responses WebSocket 传输 |
+| `POST` | `/v1/responses/compact` | Responses 上下文压缩 |
+| `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
+| `POST` | `/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/embeddings` | Embeddings |
+| `POST` | `/v1/images/generations` | 图像生成 |
+| `POST` | `/v1/images/edits` | Multipart 图像编辑 |
+
+所有转发端点均有 `/api/v1/...` 别名。
+
+### 上游 Channel 类型
+
+| 类型 | 上游原生协议 |
+| --- | --- |
+| `responses` | OpenAI Responses 兼容 |
+| `chat_completion` | OpenAI Chat Completions 兼容 |
+| `messages` | Anthropic Messages 兼容 |
+| `gemini` | Google Gemini 原生 |
+| `openai_image` | OpenAI 兼容图像 API |
+| `replicate` | Replicate Predictions |
+
 ## 配置
 
-运行时引导使用环境变量。Provider、Channel、模型、路由策略、Transform、用户和 API Key 保存在数据库中。控制台负责管理这些配置。
+运行时引导使用环境变量。Provider、Channel、模型、路由、Transform、用户与 API Key 存储在数据库中，由控制台管理。
 
-| 变量 | 默认值 | 用途 |
+| 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP 监听地址 |
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite 或 PostgreSQL DSN |
-| `DATABASE_URL` | 未设置 | `MONOIZE_DATABASE_DSN` 未设置时的后备 DSN |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus 指标路径 |
 | `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | 转发请求体上限 |
-| `MONOIZE_TRUSTED_PROXY_CIDRS` | 空 | 受信任的反向代理网段 |
-| `MONOIZE_UPSTREAM_PROXY_URL` | 未设置 | 本节点的上游出站 HTTP(S) 代理；Channel 可通过 `proxy_url` 单独覆盖 |
-| `MONOIZE_CAP_API_ENDPOINT` | 未设置 | 可选的外部 Cap 公共站点端点（包含 site key 路径）；未设置时使用 Monoize 内置 Cap |
-| `MONOIZE_CAP_SECRET_KEY` | 未设置 | 外部 Cap 站点的 secret key；必须与 `MONOIZE_CAP_API_ENDPOINT` 同时配置 |
-
-仪表盘登录和注册默认使用 Monoize 内置的 Cap 工作量证明服务，无需额外配置。管理员可在系统设置中关闭人机验证；关闭后，登录和注册将失去机器人与撞库攻击防护。如需改用 [Cap Standalone](https://capjs.js.org/zh/guide/)，请创建 site key、同时设置上述两个变量，并在 Cap 的 CORS 配置中允许仪表盘来源。Monoize 随后通过该站点的 `/siteverify` 端点验证令牌。
-
-Monoize 支持 SQLite 和 PostgreSQL。业务表只支持由一个 Monoize 应用进程写入。
+| `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 受信任的反向代理网段；显式设为空则禁用 |
+| `MONOIZE_UPSTREAM_PROXY_URL` | 未设置 | 节点级出站 HTTP(S) 代理；Channel 可通过 `proxy_url` 覆盖 |
+| `MONOIZE_CAP_API_ENDPOINT` | 未设置 | 外部 Cap 站点端点；未设置时使用内置 Cap 服务 |
+| `MONOIZE_CAP_SECRET_KEY` | 未设置 | 外部 Cap 站点密钥，与上一项同时配置 |
 
 ### 主从部署
 
-Monoize 支持一个可写主机加若干只读从机的部署形态。所有节点共享同一个 PostgreSQL 数据库（见 `spec/primary-replica-deployment.spec.md`）。从机只服务 `/v1/**` 转发流量，不提供控制台。从机通过带鉴权的内部接口，把请求日志和计费扣减上报主机落库。余额预检会扣除尚未上报的本地欠账，以约束超支。故障切换为手动操作：把从机角色改为主机并重启，即可完成提升。
+Monoize 可运行为一个可写 Primary 加多个只读 Replica，所有节点共享一个 PostgreSQL 数据库。Replica 只服务 `/v1/**` 流量，不提供控制台。Replica 通过鉴权的内部 API 向 Primary 发送请求日志与计费增量，余额检查会扣除本地尚未发送的费用以限制超支。故障转移为手动：切换角色并重启。详见[主从部署规范](spec/primary-replica-deployment.spec.md)。
 
-| 变量 | 默认值 | 用途 |
+| 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MONOIZE_NODE_ROLE` | `primary` | `primary` 或 `replica` |
-| `MONOIZE_PRIMARY_INTERNAL_URL` | 从机必填 | 主机内部地址，用于计量上报 |
-| `MONOIZE_REPLICA_TOKEN` | 未设置 | 节点共享密钥：从机必填；主机设置后开启接收端点 |
-| `MONOIZE_REPLICA_ID` | 自动生成并持久化 | 从机固定标识（UUID v4）。未设置时首次启动自动生成，并持久化到计量外存目录下的 `replica-identity` 文件，重启后保持不变 |
-| `MONOIZE_CONFIG_POLL_INTERVAL_SECONDS` | `5` | 从机配置纪元轮询间隔 |
-| `MONOIZE_METERING_SHIP_INTERVAL_SECONDS` | `10` | 从机计量上报间隔 |
-| `MONOIZE_METERING_SHIP_BATCH_MAX_ENTRIES` | `500` | 单批次条目上限（硬上限 2000） |
-| `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | 计量差额外存目录 |
+| `MONOIZE_PRIMARY_INTERNAL_URL` | Replica 必填 | Primary 的内部地址 |
+| `MONOIZE_REPLICA_TOKEN` | 未设置 | 共享密钥；Replica 必填，Primary 设置后开启接收端点 |
+| `MONOIZE_REPLICA_ID` | 自动生成并持久化 | 固定 Replica 身份（UUID v4） |
+| `MONOIZE_CONFIG_POLL_INTERVAL_SECONDS` | `5` | Replica 配置轮询间隔 |
+| `MONOIZE_METERING_SHIP_INTERVAL_SECONDS` | `10` | Replica 计量发送间隔 |
+| `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | 持久化计量 Spool 目录 |
 
-## 运维能力
+## 边界与非目标
 
-内嵌控制台可以管理：
+- Monoize 转发工具定义与工具调用，不在本地执行工具。
+- 不提供 OpenAI Files、向量存储或本地检索。
+- 不实现 Responses 对象存储与后续按 ID 检索。
+- 下游开始接收字节后不再回退，禁止流中途切换 Provider。
+- 跨协议族转换保留可表示的语义；无安全对应表示的厂商私有嵌套字段会被移除。
+- 图像压缩需显式开启；不抓取远程图片 URL，除非单独配置 URL 解析 Transform。
 
-- Provider、Channel、健康状态、优先级、模型映射和价格倍率；
-- API Key、配额、模型限制、IP 白名单、Transform 和子账户；
-- 用户、余额、nano-dollar 精度计费和只追加账本；
-- 包含 TTFB、总耗时、Token、费用、错误和已尝试路由的请求日志；
-- 五个标签页的定价控制台，管理模型价格、工具价格和分组计费倍率；
-- 来自 [models.dev](https://models.dev)、[OpenRouter](https://openrouter.ai) 和 new-api 的价格同步；
-- Prometheus 指标和实时运维视图。
+## 规范与文档
 
-请求捕获需要显式启用，并且有资源上限。正常可观测日志不会记录凭据和提示词正文。
+可观测行为定义在 [`spec/`](spec/) 下，代码与规范同步变更。完整文档见 [`docs/`](docs/)。
 
-## 限制与非目标
-
-- Monoize 转发工具定义和工具调用，但不在本地执行工具。
-- Monoize 不提供 OpenAI Files、Vector Stores 或本地检索。
-- 当前不实现 Responses 对象存储和后续对象读取。
-- 下游开始接收字节后，回落结束。系统明确禁止流中途切换 Provider。
-- 跨协议转换保留目标协议可以表示的语义。没有安全目标表示的 Provider 专用嵌套字段会被删除。
-- 图像压缩需要显式启用。除非配置独立的 URL 解析 Transform，否则它不会抓取任意远程图像。
-
-## Release 构建产物
-
-发布 GitHub Release 时，如果标签等于 `v` 加 Cargo 包版本，[Release 工作流](.github/workflows/release.yml)会自动运行。它构建 Linux x86-64、Linux ARM64 和 Windows x86-64 原生二进制文件。
-
-Linux 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证。每个压缩包都带有独立的 SHA-256 文件。工作流在校验通过后上传成功的子集。
-
-手动运行工作流可以执行相同的三平台预检。它不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
-
-该工作流还会构建四个 npm 压缩包：一个由 TypeScript 构建的启动器，以及三个平台包。Bun、npm 或 pnpm 正常安装时，会根据 `os` 和 `cpu` 元数据选择一个平台包。npm 发布任务通过 npm Trusted Publishing 和 GitHub Actions OIDC 完成认证，不使用长期有效的 npm token。准确的 npm 约束见 [npm CLI 分发规范](spec/npm-cli-distribution.spec.md)。
-
-## 开发与验证
-
-检查前端：
-
-```bash
-cd frontend
-bun install
-bun run lint
-bun run build
-```
-
-所有可观察行为都在 [`spec/`](spec/) 中定义。代码和规范必须同步修改。
-
-## 许可证
+## 许可
 
 Monoize 使用 [MIT License](LICENSE)。
