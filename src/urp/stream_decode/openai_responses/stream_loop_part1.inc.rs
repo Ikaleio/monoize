@@ -150,7 +150,7 @@ async fn consume_responses_json_frames(
             )
         })?
     {
-        let (event_name, data) = frame?;
+        let (mut event_name, data) = frame?;
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;
@@ -186,6 +186,15 @@ async fn consume_responses_json_frames(
                 return Ok(());
             }
         };
+        if (event_name.is_empty() || event_name == "message")
+            && let Some(payload_type) = data_val
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+        {
+            event_name.clear();
+            event_name.push_str(payload_type);
+        }
         let content_validation = match event_name.as_str() {
             "response.content_part.added" | "response.content_part.done" => data_val.get("part")
                 .map(crate::urp::decode::openai_responses::validate_compatible_content),

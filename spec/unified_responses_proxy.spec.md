@@ -744,6 +744,12 @@ PR3b. When an upstream Responses SSE event has `type = "response.image_generatio
 
 PR3c. When an upstream Responses SSE event has `type = "response.image_generation_call.completed"`, Monoize MUST preserve it as a downstream Responses SSE event with the same event name when the downstream request is streaming and the downstream protocol is Responses. The downstream event payload MUST preserve `item_id` and `output_index` when those fields are present. It MUST preserve any other upstream payload fields except `type` and `sequence_number` as event-local fields. Monoize MAY assign a new downstream `sequence_number`.
 
+PR3d. Responses SSE event-name resolution MUST use a non-empty `event` field other than `message` when present.
+Otherwise, the decoder MUST use the JSON payload's non-empty string `type` field.
+The decoder MUST resolve the name before content validation, lifecycle tracking, output accumulation, error handling, and terminal detection.
+If neither field supplies a name, the frame MUST retain unknown-event behavior under PR6b.
+This rule MUST NOT treat EOF or `[DONE]` as a terminal response event under PR6c.
+
 PR4. When constructing upstream `POST /v1/responses` requests, Monoize MUST emit `tools[]` in Responses-style function-tool shape even if the downstream request used another tool schema.
 
 PR4a. Responses `phase` mapping:
