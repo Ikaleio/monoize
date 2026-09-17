@@ -456,7 +456,7 @@ CTF-4. An empty `names` array and no `"*"` MUST be a no-op in both phases.
 
 CTF-5. Request-phase application MUST convert each matching tool in `request.tools[]` whose `type` is `custom` into a `type = "function"` descriptor with:
 1. `function.name` equal to the custom tool name;
-2. `function.description` equal to the custom tool description when present, otherwise a non-empty apply_patch instruction string;
+2. `function.description` equal to the custom tool description when present, otherwise a non-empty apply_patch instruction string. When the converted tool name is `apply_patch`, the transform MUST append an apply_patch usage suffix if that suffix is not already present. The suffix MUST state that existing files use `*** Update File` with `@@` hunks, unchanged hunk lines start with one space, `-` deletes, `+` inserts, a hunk MUST NOT consist of identical `-` and `+` line bodies with no extra `+` or `-` line, and an existing file MUST NOT be rewritten as `*** Add File`;
 3. `function.parameters` equal to a JSON object schema with required string property `input`;
 4. `custom` absent.
 
@@ -482,6 +482,7 @@ CTF-12. After CTF-8 and CTF-9, for a matching `apply_patch` `ToolCall` (whether 
 3. lines equal to `*** End of File` or `*** End of File ***` are removed;
 4. if the payload is wrapped in an `<invoke ...>...</invoke>` element, the inner text is used before rules 1–3.
 5. after a line that starts with `*** Add File`, prefix `+` on each following content line if and only if all of these hold: the line does not start with `***`; the line is not a `@@` hunk header after trimming; the line does not already start with `+`, `-`, or `\`. A `@@` hunk header, a line that starts with `*** Update File` or `*** Delete File`, and a `*** End of File` line (including when rule 3 removes it) MUST end this Add File prefixing section. The prefix MUST NOT be applied inside `*** Update File` or `*** Delete File` sections. A line that already starts with `+`, `-`, or `\` MUST remain unchanged.
+6. after rules 1–5, each `*** Update File` hunk whose `-` line bodies equal its `+` line bodies and that contains no context line (a line that does not start with `+`, `-`, `\`, or `@@`) MUST be removed. If an Update File section then has no remaining hunk, the whole section MUST be removed.
 
 ### 4.6 Image transforms on request ordinary nodes
 

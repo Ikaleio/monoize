@@ -14,6 +14,7 @@ use std::collections::HashSet;
 
 const DEFAULT_NAMES: &[&str] = &["apply_patch"];
 const INPUT_KEYS: &[&str] = &["input", "patch", "command", "content"];
+const APPLY_PATCH_USAGE: &str = "Existing files: `*** Update File: path` with `@@` hunks. Unchanged hunk lines start with one space. `-` deletes. `+` inserts. Do not copy an unchanged line as both `-` and `+`. A hunk whose `-` lines and `+` lines are identical is a no-op. Do not rewrite an existing file as `*** Add File`. Example insert:\n*** Begin Patch\n*** Update File: path/file.py\n@@\n class Terminal:\n     host: str\n+    password: str | None = None\n*** End Patch";
 
 #[derive(Debug, Deserialize)]
 struct RawConfig {
@@ -162,12 +163,104 @@ fn normalize_apply_patch(raw: &str) -> String {
         out.push_str(line);
         out.push('\n');
     }
-    out
+    drop_noop_update_hunks(&out)
 }
 
 fn should_prefix_add_file_line(line: &str) -> bool {
     let t = line.trim_start();
     !(t.starts_with('+') || t.starts_with('-') || t.starts_with('\\') || t.starts_with("@@"))
+}
+
+fn apply_patch_tool_description(name: &str, existing: Option<String>) -> Option<String> {
+    if name != "apply_patch" {
+        return existing;
+    }
+    match existing {
+        Some(text) if text.contains("identical is a no-op") => Some(text),
+        Some(text) => Some(format!("{text}\n\n{APPLY_PATCH_USAGE}")),
+        None => Some(APPLY_PATCH_USAGE.to_string()),
+    }
+}
+
+fn drop_noop_update_hunks(raw: &str) -> String {
+    let lines: Vec<&str> = raw.lines().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim().starts_with("*** Update File") {
+            let header = lines[i];
+            i += 1;
+            let start = i;
+            while i < lines.len() {
+                let t = lines[i].trim();
+                if t.starts_with("***") && !t.starts_with("*** Update File") {
+                    break;
+                }
+                i += 1;
+            }
+            if let Some(body) = rewrite_update_body(&lines[start..i]) {
+                out.push_str(header);
+                out.push('\n');
+                out.push_str(&body);
+            }
+            continue;
+        }
+        out.push_str(lines[i]);
+        out.push('\n');
+        i += 1;
+    }
+    out
+}
+
+fn rewrite_update_body(body: &[&str]) -> Option<String> {
+    let mut kept = String::new();
+    let mut hunk: Vec<&str> = Vec::new();
+    let mut any = false;
+    for line in body {
+        if line.trim().starts_with("@@") {
+            if flush_update_hunk(&mut kept, &hunk) {
+                any = true;
+            }
+            hunk.clear();
+        }
+        hunk.push(*line);
+    }
+    if flush_update_hunk(&mut kept, &hunk) {
+        any = true;
+    }
+    any.then_some(kept)
+}
+
+fn flush_update_hunk(out: &mut String, hunk: &[&str]) -> bool {
+    if hunk.is_empty() || hunk_is_noop(hunk) {
+        return false;
+    }
+    for line in hunk {
+        out.push_str(line);
+        out.push('\n');
+    }
+    true
+}
+
+fn hunk_is_noop(hunk: &[&str]) -> bool {
+    let mut minus: Vec<&str> = Vec::new();
+    let mut plus: Vec<&str> = Vec::new();
+    let mut has_change_op = false;
+    for line in hunk {
+        if line.trim().starts_with("@@") {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('+') {
+            plus.push(rest);
+            has_change_op = true;
+        } else if let Some(rest) = line.strip_prefix('-') {
+            minus.push(rest);
+            has_change_op = true;
+        } else {
+            return false;
+        }
+    }
+    has_change_op && minus == plus
 }
 
 fn function_parameters() -> Value {
@@ -176,7 +269,7 @@ fn function_parameters() -> Value {
         "properties": {
             "input": {
                 "type": "string",
-                "description": "The entire apply_patch document. First line must be exactly `*** Begin Patch`. Last line must be exactly `*** End Patch`. New files use `*** Add File: path` and each content line starts with `+`. Existing files use `*** Update File: path` with `@@` hunks: `-` deletes, `+` adds, a leading space keeps context. Do not rewrite an existing file as Add File."
+                "description": "The entire apply_patch document. First line must be exactly `*** Begin Patch`. Last line must be exactly `*** End Patch`. New files use `*** Add File: path` and each content line starts with `+`. Existing files use `*** Update File: path` with `@@` hunks: unchanged lines start with one space, `-` deletes, `+` inserts. Do not copy an unchanged line as both `-` and `+`. Do not rewrite an existing file as Add File."
             }
         },
         "required": ["input"]
@@ -191,11 +284,7 @@ fn convert_tool_to_function(tool: &mut ToolDefinition, cfg: &Config) {
         return;
     }
     let custom = tool.custom.take();
-    let description = custom.and_then(|c| c.description).or_else(|| {
-        Some(
-            "Use the apply_patch tool to edit files. Pass the full patch text in `input`. Do not wrap the patch in extra JSON keys other than `input`. New files: `*** Add File: path` and prefix each content line with `+`. Existing files: `*** Update File: path` with `@@` hunks using `-` to delete, `+` to add, and a leading space for context.".to_string(),
-        )
-    });
+    let description = apply_patch_tool_description(name.as_str(), custom.and_then(|c| c.description));
     tool.tool_type = "function".to_string();
     tool.name = Some(name.clone());
     tool.function = Some(FunctionDefinition {
@@ -263,10 +352,7 @@ fn rewrite_tool_choice_request(value: &mut Value, cfg: &Config) {
     match value {
         Value::Object(obj) => {
             let type_is_custom = obj.get("type").and_then(Value::as_str) == Some("custom");
-            let name = obj
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            let name = obj.get("name").and_then(Value::as_str).map(str::to_string);
             if type_is_custom {
                 if let Some(name) = name.as_deref() {
                     if should_convert(cfg, name) {
