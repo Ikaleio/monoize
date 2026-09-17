@@ -22,6 +22,111 @@ fn receiver_event_stream(rx: mpsc::Receiver<Event>) -> ForwardEventStream {
         .map(event_ok as fn(Event) -> Result<Event, std::convert::Infallible>)
 }
 
+/// STRM-2a: an upstream stream that produced its first output event. The
+/// buffered `ResponseStart` events precede that event in decoder order.
+struct CommittedUpstreamStream {
+    buffered: Vec<crate::urp::UrpStreamEvent>,
+    decoded_rx: mpsc::Receiver<crate::urp::UrpStreamEvent>,
+    decode_handle: tokio::task::JoinHandle<AppResult<()>>,
+}
+
+/// STRM-2b: an upstream stream that failed before its first output event.
+struct PreOutputStreamFailure {
+    error: AppError,
+    failure_class: Option<RetryableFailureClass>,
+}
+
+/// Waits for the decoder's first output event. A terminal error or stream end
+/// inside the window ends the attempt so the router can fall back (STRM-2b).
+async fn probe_stream_first_output(
+    mut decoded_rx: mpsc::Receiver<crate::urp::UrpStreamEvent>,
+    decode_handle: tokio::task::JoinHandle<AppResult<()>>,
+    runtime_metrics: &Arc<Mutex<StreamRuntimeMetrics>>,
+) -> Result<CommittedUpstreamStream, PreOutputStreamFailure> {
+    let mut buffered = Vec::new();
+    loop {
+        match decoded_rx.recv().await {
+            Some(event @ crate::urp::UrpStreamEvent::ResponseStart { .. }) => buffered.push(event),
+            Some(crate::urp::UrpStreamEvent::Error { code, message, .. }) => {
+                let _ = decode_handle.await;
+                let terminal = runtime_metrics.lock().await.terminal.terminal_error.clone();
+                let http_status = terminal
+                    .as_ref()
+                    .map(|terminal| terminal.http_status)
+                    .unwrap_or(StatusCode::BAD_GATEWAY.as_u16());
+                let error_type = terminal
+                    .as_ref()
+                    .and_then(|terminal| terminal.error_type.clone());
+                let param = terminal.and_then(|terminal| terminal.param);
+                let code = code.unwrap_or_else(|| "upstream_stream_error".to_string());
+                let failure_class = midstream_terminal_failure_class(
+                    http_status,
+                    Some(&code),
+                    error_type.as_deref(),
+                );
+                // `upstream_status` stays unset: the status is synthesized by the
+                // decoder and must not trigger an RTA-6c shared-origin blast.
+                let error = AppError::new(StatusCode::BAD_GATEWAY, code.clone(), message)
+                    .with_upstream_error(None, Some(code), error_type, param);
+                return Err(PreOutputStreamFailure {
+                    error,
+                    failure_class,
+                });
+            }
+            Some(event) => {
+                buffered.push(event);
+                return Ok(CommittedUpstreamStream {
+                    buffered,
+                    decoded_rx,
+                    decode_handle,
+                });
+            }
+            None => {
+                let error = match decode_handle.await {
+                    Ok(Ok(())) => AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_stream_error",
+                        "upstream stream ended before its first output event",
+                    ),
+                    Ok(Err(err)) => err,
+                    Err(err) => AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "task_panic",
+                        err.to_string(),
+                    ),
+                };
+                let failure_class =
+                    is_upstream_adapter_failure(&error).then_some(RetryableFailureClass::Transient);
+                return Err(PreOutputStreamFailure {
+                    error,
+                    failure_class,
+                });
+            }
+        }
+    }
+}
+
+/// Replays the STRM-2a buffered events, then forwards the live decoder output.
+fn replay_then_forward(
+    buffered: Vec<crate::urp::UrpStreamEvent>,
+    mut decoded_rx: mpsc::Receiver<crate::urp::UrpStreamEvent>,
+) -> mpsc::Receiver<crate::urp::UrpStreamEvent> {
+    let (tx, rx) = mpsc::channel(64);
+    tokio::spawn(async move {
+        for event in buffered {
+            if tx.send(event).await.is_err() {
+                return;
+            }
+        }
+        while let Some(event) = decoded_rx.recv().await {
+            if tx.send(event).await.is_err() {
+                return;
+            }
+        }
+    });
+    rx
+}
+
 #[cfg(test)]
 #[path = "stream_terminal_tests.rs"]
 mod stream_terminal_tests;
@@ -1054,18 +1159,6 @@ pub(super) async fn forward_stream_typed(
             };
             match call {
                 Ok(upstream_source) => {
-                    update_pending_channel_info(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        true,
-                        request_id.as_deref(),
-                        request_ip.as_deref(),
-                        started_at,
-                    )
-                    .await;
-                    mark_channel_success(&state, &attempt).await;
                     let legacy = match typed_request_to_legacy(&req_attempt, max_multiplier) {
                         Ok(legacy) => legacy,
                         Err(err) => {
@@ -1095,11 +1188,6 @@ pub(super) async fn forward_stream_typed(
                             _ => None,
                         });
                     let provider_type = attempt.provider_type;
-                    let (tx, rx) = mpsc::channel::<Event>(64);
-                    let capture_frames = capture
-                        .session
-                        .as_ref()
-                        .map(|_| crate::request_capture::SseFrameCapture::new());
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                         ttfb_ms: None,
                         usage: None,
@@ -1109,8 +1197,133 @@ pub(super) async fn forward_stream_typed(
                         estimated_output_tokens: 0,
                         visible_output_bytes: 0,
                     }));
+                    let (stream_idle_timeout_ms, mask_sensitive_info) = {
+                        let runtime = state.monoize_runtime.read().await;
+                        (
+                            runtime.stream_idle_timeout_ms.max(1),
+                            runtime.mask_sensitive_info,
+                        )
+                    };
+                    let (decoded_rx, decode_handle) = {
+                        let (decoded_tx, decoded_rx) =
+                            mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                        let metrics = runtime_metrics.clone();
+                        let handle = tokio::spawn(async move {
+                            match upstream_source {
+                                StreamUpstreamSource::Http(upstream_resp) => {
+                                    stream_upstream_to_urp_events(
+                                        &legacy,
+                                        pending_request_envelope_extra,
+                                        provider_type,
+                                        upstream_resp,
+                                        decoded_tx,
+                                        Some(started_at),
+                                        Some(metrics),
+                                        stream_idle_timeout_ms,
+                                    )
+                                    .await
+                                }
+                                StreamUpstreamSource::ResponsesWebSocket(session) => {
+                                    crate::urp::stream_decode::openai_responses::stream_responses_websocket_to_urp_events(
+                                        &legacy,
+                                        pending_request_envelope_extra,
+                                        session,
+                                        decoded_tx,
+                                        Some(started_at),
+                                        Some(metrics),
+                                        stream_idle_timeout_ms,
+                                    )
+                                    .await
+                                }
+                            }
+                        });
+                        (decoded_rx, handle)
+                    };
+                    let committed = match probe_stream_first_output(
+                        decoded_rx,
+                        decode_handle,
+                        &runtime_metrics,
+                    )
+                    .await
+                    {
+                        Ok(committed) => committed,
+                        Err(failure) => {
+                            tracing::warn!(
+                                attempt_number,
+                                channel_id = %attempt.channel_id,
+                                code = %failure.error.code,
+                                "upstream stream failed before its first output event: {}",
+                                failure.error.message
+                            );
+                            if let Some(session) = capture.session.as_ref() {
+                                session
+                                    .push_attempt(crate::request_capture::build_attempt_dump(
+                                        attempt_number,
+                                        &attempt.provider_id,
+                                        Some(&attempt.channel_id),
+                                        attempt.provider_type,
+                                        &logical_model,
+                                        &req_attempt.model,
+                                        &path,
+                                        capture.raw_input.as_ref().clone(),
+                                        &req_attempt,
+                                        capture_upstream_request.clone(),
+                                        None,
+                                        None,
+                                        None,
+                                        capture_transform_chain.clone(),
+                                        Some(json!({
+                                            "message": failure.error.message,
+                                            "code": failure.error.code,
+                                            "status": failure.error.status.as_u16(),
+                                        })),
+                                    ))
+                                    .await;
+                            }
+                            record_upstream_attempt_failure(
+                                &state,
+                                &attempt,
+                                attempt_number,
+                                &failure.error,
+                                failure.failure_class,
+                                &mut tried_providers,
+                                &mut execution_state,
+                            )
+                            .await;
+                            last_failed_attempt = Some(attempt.clone());
+                            if allow_same_channel_retry(
+                                &state,
+                                &attempt,
+                                &execution_state,
+                                channel_attempt + 1,
+                                failure.failure_class,
+                            )
+                            .await
+                            {
+                                maybe_sleep_before_channel_retry(&attempt).await;
+                                continue 'channel_attempts;
+                            }
+                            break 'channel_attempts;
+                        }
+                    };
+                    update_pending_channel_info(
+                        &state,
+                        &auth,
+                        &attempt,
+                        &logical_model,
+                        true,
+                        request_id.as_deref(),
+                        request_ip.as_deref(),
+                        started_at,
+                    )
+                    .await;
+                    mark_channel_success(&state, &attempt).await;
+                    let (tx, rx) = mpsc::channel::<Event>(64);
+                    let capture_frames = capture
+                        .session
+                        .as_ref()
+                        .map(|_| crate::request_capture::SseFrameCapture::new());
                     let decoded_terminal_output = Arc::new(Mutex::new(Vec::<urp::Node>::new()));
-                    let metrics_for_stream = runtime_metrics.clone();
                     let history_for_stream = history_context
                         .clone()
                         .map(|history| history.with_resource_scope(media_resource_scope(&attempt)));
@@ -1140,13 +1353,6 @@ pub(super) async fn forward_stream_typed(
                     let reasoning_effort_for_log =
                         req.reasoning.as_ref().and_then(|r| r.effort.clone());
                     let tried_providers_for_log = tried_providers.clone();
-                    let (stream_idle_timeout_ms, mask_sensitive_info) = {
-                        let runtime = state.monoize_runtime.read().await;
-                        (
-                            runtime.stream_idle_timeout_ms.max(1),
-                            runtime.mask_sensitive_info,
-                        )
-                    };
                     let state_for_transform = state.clone();
                     let provider_rules_for_transform = attempt.provider_transforms.clone();
                     let global_rules_for_transform = global_transforms.clone();
@@ -1170,45 +1376,13 @@ pub(super) async fn forward_stream_typed(
                             .as_ref()
                             .map(|_| Arc::new(Mutex::new(None::<serde_json::Value>)));
                         let stream_future = async {
-                            let (decoded_tx, decoded_rx) =
-                                mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                            let decoded_rx =
+                                replay_then_forward(committed.buffered, committed.decoded_rx);
+                            let decode_handle = committed.decode_handle;
                             let (retained_tx, retained_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
                             let (transformed_tx, transformed_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-
-                            let decode_handle = {
-                                let metrics = metrics_for_stream.clone();
-                                crate::request_capture::spawn_with_sse_capture(async move {
-                                    match upstream_source {
-                                        StreamUpstreamSource::Http(upstream_resp) => {
-                                            stream_upstream_to_urp_events(
-                                                &legacy,
-                                                pending_request_envelope_extra,
-                                                provider_type,
-                                                upstream_resp,
-                                                decoded_tx,
-                                                Some(started_at),
-                                                Some(metrics),
-                                                stream_idle_timeout_ms,
-                                            )
-                                            .await
-                                        }
-                                        StreamUpstreamSource::ResponsesWebSocket(session) => {
-                                            crate::urp::stream_decode::openai_responses::stream_responses_websocket_to_urp_events(
-                                                &legacy,
-                                                pending_request_envelope_extra,
-                                                session,
-                                                decoded_tx,
-                                                Some(started_at),
-                                                Some(metrics),
-                                                stream_idle_timeout_ms,
-                                            )
-                                            .await
-                                        }
-                                    }
-                                })
-                            };
 
                             let retain_output_handle = {
                                 let terminal_output = decoded_terminal_output.clone();
