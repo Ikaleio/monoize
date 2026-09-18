@@ -185,6 +185,12 @@ fn append_reasoning_summary_delta(
     }
 }
 
+fn replace_nonempty_tool_arguments(current: &mut String, snapshot: &str) {
+    if !snapshot.is_empty() {
+        *current = snapshot.to_string();
+    }
+}
+
 fn complete_reasoning_text(slot: &mut AccumulatedReasoningSlot, text: &str) {
     if !text.is_empty() && slot.content.is_empty() {
         slot.content = text.to_string();

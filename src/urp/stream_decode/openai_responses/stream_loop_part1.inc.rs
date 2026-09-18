@@ -546,9 +546,7 @@ async fn consume_responses_json_frames(
                     if event_name == "response.custom_tool_call_input.done" {
                         entry.0 = ToolCallType::Custom;
                     }
-                    if entry.2.is_empty() && !args.is_empty() {
-                        entry.2 = args.to_string();
-                    }
+                    replace_nonempty_tool_arguments(&mut entry.2, args);
                 }
             }
         }
@@ -594,9 +592,7 @@ async fn consume_responses_json_frames(
                         if entry.1.is_empty() && !name.is_empty() {
                             entry.1 = name.to_string();
                         }
-                        if entry.2.is_empty() && !args.is_empty() {
-                            entry.2 = args.to_string();
-                        }
+                        replace_nonempty_tool_arguments(&mut entry.2, args);
                     }
                     if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                         call_ids_by_output_index.insert(idx, call_id.to_string());

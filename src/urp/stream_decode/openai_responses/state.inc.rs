@@ -612,21 +612,12 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
             },
             call_id: merge_string_field("function_call.call_id", left_call_id, right_call_id)?,
             name: merge_string_field("function_call.name", left_name, right_name)?,
-            arguments: if *left_tool_type == ToolCallType::Function
-                && *right_tool_type == ToolCallType::Function
-                && left_arguments != right_arguments
-                && matches!(
-                    (
-                        serde_json::from_str::<Value>(left_arguments),
-                        serde_json::from_str::<Value>(right_arguments),
-                    ),
-                    (Ok(left), Ok(right)) if left == right
-                )
-            {
-                right_arguments.clone()
-            } else {
-                merge_string_field("function_call.arguments", left_arguments, right_arguments)?
-            },
+            arguments: merge_function_or_custom_arguments(
+                *left_tool_type,
+                *right_tool_type,
+                left_arguments,
+                right_arguments,
+            )?,
             extra_body: merge_extra_body(left_extra, right_extra),
         }),
         (left, right) if left == right || nodes_semantically_match(left, right) => Ok(right.clone()),
@@ -638,6 +629,56 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
         }
         _ => Err("completed output item type differs from accumulated stream state".to_string()),
     }
+}
+
+fn merge_function_or_custom_arguments(
+    left_tool_type: ToolCallType,
+    right_tool_type: ToolCallType,
+    left_arguments: &str,
+    right_arguments: &str,
+) -> Result<String, String> {
+    if left_tool_type == ToolCallType::Function
+        && right_tool_type == ToolCallType::Function
+        && left_arguments != right_arguments
+        && (function_arguments_json_equal(left_arguments, right_arguments)
+            || function_arguments_match_projected_field(left_arguments, right_arguments))
+    {
+        return Ok(right_arguments.to_string());
+    }
+    merge_string_field("function_call.arguments", left_arguments, right_arguments)
+}
+
+fn function_arguments_json_equal(left: &str, right: &str) -> bool {
+    matches!(
+        (
+            serde_json::from_str::<Value>(left),
+            serde_json::from_str::<Value>(right),
+        ),
+        (Ok(left), Ok(right)) if left == right
+    )
+}
+
+fn function_arguments_match_projected_field(accumulated: &str, terminal: &str) -> bool {
+    if accumulated.is_empty() {
+        return false;
+    }
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(terminal) else {
+        return false;
+    };
+    if let Some(Value::String(value)) = map.get("input")
+        && value == accumulated
+    {
+        return true;
+    }
+    for key in ["patch", "command", "content"] {
+        if let Some(Value::String(value)) = map.get(key)
+            && value.contains("Begin Patch")
+            && value == accumulated
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn merge_string_field(field: &str, left: &str, right: &str) -> Result<String, String> {
