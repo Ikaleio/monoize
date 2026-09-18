@@ -2,7 +2,9 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Node, NodeHeader, ToolChoice, ToolDefinition, UrpRequest, UrpResponse, UrpStreamEvent};
+use crate::urp::{
+    Node, NodeHeader, ToolChoice, ToolDefinition, UrpRequest, UrpResponse, UrpStreamEvent,
+};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -35,7 +37,9 @@ fn default_alias_map() -> HashMap<String, String> {
         .collect()
 }
 
-fn parse_alias_map(raw: Option<Map<String, Value>>) -> Result<HashMap<String, String>, TransformError> {
+fn parse_alias_map(
+    raw: Option<Map<String, Value>>,
+) -> Result<HashMap<String, String>, TransformError> {
     let Some(obj) = raw else {
         return Ok(default_alias_map());
     };
@@ -62,7 +66,10 @@ fn parse_alias_map(raw: Option<Map<String, Value>>) -> Result<HashMap<String, St
                 "alias {alias} is mapped from more than one original name"
             )));
         }
-        if forward.insert(original.clone(), alias.to_string()).is_some() {
+        if forward
+            .insert(original.clone(), alias.to_string())
+            .is_some()
+        {
             return Err(TransformError::InvalidConfig(format!(
                 "duplicate alias key {original}"
             )));

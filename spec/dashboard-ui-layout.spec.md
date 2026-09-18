@@ -324,6 +324,9 @@ PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-v
 
 - Channel list MUST render through `Virtuoso`.
 - Container MUST have bounded height and provide an internal vertical scrollbar.
+- The Virtuoso root MUST have a non-zero definite height on the first paint. A parent of that root MUST NOT use `overflow: auto` as the vertical scroll container.
+- The Channel list pane MUST remain a column flex container at every viewport where the list is visible. Visibility classes MUST NOT replace `display: flex` with `display: block`.
+- Each draft Channel MUST render as a selectable row. A non-empty draft MUST NOT show only the list header.
 
 PL21. Provider overview model entries MUST combine availability and pricing warnings at model-badge level without combining their meanings.
 

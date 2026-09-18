@@ -198,12 +198,10 @@ pub async fn encode_urp_stream_as_gemini(
             crate::urp::media::error_body(message).to_string(),
         )
         .await?;
-        return Err(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "stream_encode_failed",
-            message,
-        )
-        .with_downstream_stream_terminal_sent(!tx.is_closed()));
+        return Err(
+            AppError::new(StatusCode::BAD_GATEWAY, "stream_encode_failed", message)
+                .with_downstream_stream_terminal_sent(!tx.is_closed()),
+        );
     }
     Ok(())
 }

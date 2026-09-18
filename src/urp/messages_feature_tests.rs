@@ -1207,12 +1207,20 @@ async fn messages_late_citations_after_closed_text_block_are_explicit_stream_err
     assert!(error.message.contains("closed text block"));
     assert!(error.downstream_stream_terminal_sent);
     let wire = sse_json(rx).await;
-    assert_eq!(wire.iter().filter(|frame| frame["type"] == "error").count(), 1);
     assert_eq!(
-        wire.iter().filter(|frame| frame["type"] == "content_block_start").count(),
+        wire.iter().filter(|frame| frame["type"] == "error").count(),
         1
     );
-    assert!(wire.iter().any(|frame| frame["type"] == "content_block_stop"));
+    assert_eq!(
+        wire.iter()
+            .filter(|frame| frame["type"] == "content_block_start")
+            .count(),
+        1
+    );
+    assert!(
+        wire.iter()
+            .any(|frame| frame["type"] == "content_block_stop")
+    );
     assert!(wire.iter().any(|frame| frame["delta"]["text"] == "answer"));
     assert!(!wire.iter().any(|frame| matches!(
         frame["type"].as_str(),

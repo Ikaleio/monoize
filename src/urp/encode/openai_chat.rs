@@ -1,6 +1,6 @@
 use crate::urp::encode::{
-    role_to_str, sanitize_provider_item_wire_body, text_parts,
-    tool_choice_to_chat_value, usage_input_details, usage_output_details,
+    role_to_str, sanitize_provider_item_wire_body, text_parts, tool_choice_to_chat_value,
+    usage_input_details, usage_output_details,
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
@@ -9,9 +9,9 @@ use crate::urp::{
     CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY, CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY,
     CHAT_MESSAGE_AUDIO_EXTRA_KEY, CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
     CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING_CONTENT,
-    CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource, FinishReason, ImageSource,
-    Node, OrdinaryRole, ProviderProtocol, ResponseFormat, StopControl, ToolCallType, ToolChoice,
-    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse, tool_call_arguments_for_wire,
+    CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource, FinishReason, ImageSource, Node, OrdinaryRole,
+    ProviderProtocol, ResponseFormat, StopControl, ToolCallType, ToolChoice, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse, tool_call_arguments_for_wire,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -97,7 +97,9 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
             Some(block)
         }
         Part::Image {
-            metadata, source, extra_body,
+            metadata,
+            source,
+            extra_body,
         } => {
             let mut image = match source {
                 ImageSource::Url { url, detail } => {
@@ -111,24 +113,36 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
             };
             if let Some(obj) = image.as_object_mut() {
                 merge_chat_wire_extra(obj, extra_body);
-                for key in ["detail", "filename", "media_type", "source"] { obj.remove(key); }
+                for key in ["detail", "filename", "media_type", "source"] {
+                    obj.remove(key);
+                }
                 let mut image_url = Map::new();
                 let detail = match source {
-                    ImageSource::Url { url, detail } => { image_url.insert("url".into(), json!(url)); detail.as_ref() }
+                    ImageSource::Url { url, detail } => {
+                        image_url.insert("url".into(), json!(url));
+                        detail.as_ref()
+                    }
                     ImageSource::Base64 { media_type, data } => {
-                        image_url.insert("url".into(), json!(format!("data:{media_type};base64,{data}")));
+                        image_url.insert(
+                            "url".into(),
+                            json!(format!("data:{media_type};base64,{data}")),
+                        );
                         metadata.detail.as_ref()
                     }
                     ImageSource::FileId { .. } => return None,
                 };
-                if let Some(detail) = detail { image_url.insert("detail".into(), json!(detail)); }
+                if let Some(detail) = detail {
+                    image_url.insert("detail".into(), json!(detail));
+                }
                 obj.insert("image_url".into(), Value::Object(image_url));
                 obj.insert("type".into(), json!("image_url"));
             }
             Some(image)
         }
         Part::File {
-            metadata, source, extra_body,
+            metadata,
+            source,
+            extra_body,
         } => encode_chat_file_part(source, metadata, extra_body),
         Part::Audio {
             source, extra_body, ..
@@ -170,10 +184,23 @@ fn encode_chat_file_part(
         | FileSource::Content { .. } => return None,
     };
     let mut file = file;
-    if let Some(filename) = &metadata.filename { file["filename"] = json!(filename); }
+    if let Some(filename) = &metadata.filename {
+        file["filename"] = json!(filename);
+    }
     let mut block = Map::new();
     merge_chat_wire_extra(&mut block, extra_body);
-    for key in ["filename", "detail", "media_type", "source", "file_url", "url", "file_id", "file_data"] { block.remove(key); }
+    for key in [
+        "filename",
+        "detail",
+        "media_type",
+        "source",
+        "file_url",
+        "url",
+        "file_id",
+        "file_data",
+    ] {
+        block.remove(key);
+    }
     block.insert("type".into(), json!("file"));
     block.insert("file".into(), file);
     Some(Value::Object(block))
@@ -383,7 +410,9 @@ fn push_part_into_pending_chat_message(
             == Some(true) =>
         {
             if let Some(id) = &metadata.reference_id {
-                entry.message_extra.insert("audio".into(), json!({ "id": id }));
+                entry
+                    .message_extra
+                    .insert("audio".into(), json!({ "id": id }));
             }
         }
         Part::ProviderItem {
@@ -629,20 +658,49 @@ pub(crate) fn validate_response_nodes(nodes: &[Node]) -> Result<(), String> {
     for node in nodes {
         match node {
             Node::Image { .. } | Node::File { .. } => {
-                return Err("Chat Completions responses cannot represent ordinary image or file output".into());
+                return Err(
+                    "Chat Completions responses cannot represent ordinary image or file output"
+                        .into(),
+                );
             }
-            Node::Audio { role: OrdinaryRole::Assistant, source, extra_body, .. }
-                if extra_body.get(CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true)
-                    && matches!(source, AudioSource::Base64 { .. }) => {}
+            Node::Audio {
+                role: OrdinaryRole::Assistant,
+                source,
+                extra_body,
+                ..
+            } if extra_body
+                .get(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+                .and_then(Value::as_bool)
+                == Some(true)
+                && matches!(source, AudioSource::Base64 { .. }) => {}
             Node::Audio { .. } => {
-                return Err("Chat Completions responses require native message.audio for audio output".into());
+                return Err(
+                    "Chat Completions responses require native message.audio for audio output"
+                        .into(),
+                );
             }
             Node::ToolResult { content, .. }
-                if content.iter().any(|part| matches!(part, ToolResultContent::Image { .. } | ToolResultContent::File { .. })) => {
+                if content.iter().any(|part| {
+                    matches!(
+                        part,
+                        ToolResultContent::Image { .. } | ToolResultContent::File { .. }
+                    )
+                }) =>
+            {
                 return Err("Chat Completions responses cannot represent tool-result media".into());
             }
             Node::ProviderItem { item_type, .. }
-                if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio") => {
+                if matches!(
+                    item_type.as_str(),
+                    "input_image"
+                        | "output_image"
+                        | "image_url"
+                        | "input_file"
+                        | "output_file"
+                        | "file"
+                        | "input_audio"
+                ) =>
+            {
                 return Err("Native response content cannot contain input-only media items".into());
             }
             _ => {}

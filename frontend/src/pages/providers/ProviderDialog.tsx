@@ -423,7 +423,7 @@ export function ProviderDialog({
 									{sections.map(item => <Button key={item.id} size='sm' variant={section === item.id ? 'secondary' : 'ghost'} onClick={() => { setSection(item.id); setMobileChannelOpen(false) }} className='shrink-0'>{item.label}</Button>)}
 								</div>
 
-								<div className={cn('min-h-0 flex-1', section === 'channels' ? 'overflow-hidden' : 'overflow-y-auto')}>
+								<div className={cn('min-h-0 flex-1', section === 'channels' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto')}>
 									{section === 'channels' ? (
 										<ChannelsWorkbench
 											form={form}
@@ -572,13 +572,13 @@ type WorkbenchProps = {
 
 function ChannelsWorkbench(props: WorkbenchProps) {
 	const { form, activeChannel, selectedChannel, mobileChannelOpen, setMobileChannelOpen, setSelectedChannel, addChannel, c } = props
-	return <div className='grid h-full min-h-0 lg:grid-cols-[300px_minmax(0,1fr)]'>
-		<div className={cn('flex h-full min-h-0 flex-col border-r bg-muted/10', mobileChannelOpen ? 'hidden lg:block' : 'block')}>
+	return <div className='grid h-full min-h-0 flex-1 lg:grid-cols-[300px_minmax(0,1fr)]'>
+		<div className={cn('flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r bg-muted/10', mobileChannelOpen ? 'hidden lg:flex' : 'flex')}>
 			<div className='flex shrink-0 items-center justify-between border-b px-4 py-3'><div><h3 className='font-semibold'>Channels</h3><p className='text-xs text-muted-foreground'>{c('每个上游独立配置模型能力', 'Models are configured per upstream')}</p></div><Button size='icon' variant='outline' className='size-11 touch-manipulation sm:size-9' onClick={addChannel} aria-label={c('添加 Channel', 'Add channel')}><Plus data-icon /></Button></div>
-			<div className='min-h-0 flex-1'>
+			<div className='relative min-h-0 flex-1'>
 				<Virtuoso
+					className='absolute inset-0 pt-2'
 					style={{ height: '100%' }}
-					className='pt-2'
 					data={form.channels}
 					itemContent={(index, channel) => (
 						<div className='px-2 pb-1'>

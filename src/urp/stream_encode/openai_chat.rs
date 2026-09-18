@@ -228,18 +228,56 @@ fn merge_pending_envelope_extra(
 
 fn validate_chat_media_event(event: &UrpStreamEvent) -> Result<(), String> {
     match event {
-        UrpStreamEvent::NodeStart { header: NodeHeader::ProviderItem { item_type, .. }, .. }
-            if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio") =>
-            Err("Native response content cannot contain input-only media items".into()),
-        UrpStreamEvent::NodeStart { header: NodeHeader::Audio { role: urp::OrdinaryRole::Assistant, .. }, extra_body, .. }
-            if extra_body.get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true) => Ok(()),
-        UrpStreamEvent::NodeStart { header: NodeHeader::Image { .. } | NodeHeader::File { .. } | NodeHeader::Audio { .. }, .. }
-        | UrpStreamEvent::NodeDelta { delta: NodeDelta::Image { .. } | NodeDelta::File { .. } | NodeDelta::Audio { source: urp::AudioSource::Url { .. } }, .. } =>
-            Err("Chat Completions responses cannot represent ordinary media content".into()),
-        UrpStreamEvent::NodeDone { node, .. } =>
-            urp::encode::openai_chat::validate_response_nodes(std::slice::from_ref(node)),
-        UrpStreamEvent::ResponseDone { output, .. } =>
-            urp::encode::openai_chat::validate_response_nodes(output),
+        UrpStreamEvent::NodeStart {
+            header: NodeHeader::ProviderItem { item_type, .. },
+            ..
+        } if matches!(
+            item_type.as_str(),
+            "input_image"
+                | "output_image"
+                | "image_url"
+                | "input_file"
+                | "output_file"
+                | "file"
+                | "input_audio"
+        ) =>
+        {
+            Err("Native response content cannot contain input-only media items".into())
+        }
+        UrpStreamEvent::NodeStart {
+            header:
+                NodeHeader::Audio {
+                    role: urp::OrdinaryRole::Assistant,
+                    ..
+                },
+            extra_body,
+            ..
+        } if extra_body
+            .get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+            .and_then(Value::as_bool)
+            == Some(true) =>
+        {
+            Ok(())
+        }
+        UrpStreamEvent::NodeStart {
+            header: NodeHeader::Image { .. } | NodeHeader::File { .. } | NodeHeader::Audio { .. },
+            ..
+        }
+        | UrpStreamEvent::NodeDelta {
+            delta:
+                NodeDelta::Image { .. }
+                | NodeDelta::File { .. }
+                | NodeDelta::Audio {
+                    source: urp::AudioSource::Url { .. },
+                },
+            ..
+        } => Err("Chat Completions responses cannot represent ordinary media content".into()),
+        UrpStreamEvent::NodeDone { node, .. } => {
+            urp::encode::openai_chat::validate_response_nodes(std::slice::from_ref(node))
+        }
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            urp::encode::openai_chat::validate_response_nodes(output)
+        }
         _ => Ok(()),
     }
 }
@@ -599,13 +637,31 @@ pub(crate) async fn encode_urp_stream_as_chat(
         if finished {
             continue;
         }
-        if let UrpStreamEvent::NodeStart { node_index, header: NodeHeader::Audio { .. }, extra_body, .. } = &event
-            && extra_body.get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY).and_then(Value::as_bool) == Some(true) {
+        if let UrpStreamEvent::NodeStart {
+            node_index,
+            header: NodeHeader::Audio { .. },
+            extra_body,
+            ..
+        } = &event
+            && extra_body
+                .get(urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
             native_audio_nodes.insert(*node_index);
         }
-        if let UrpStreamEvent::NodeDelta { node_index, delta: NodeDelta::Audio { .. }, .. } = &event
-            && !native_audio_nodes.contains(node_index) {
-            return emit_chat_media_error(&tx, "Chat audio fragments require a native message.audio lifecycle").await;
+        if let UrpStreamEvent::NodeDelta {
+            node_index,
+            delta: NodeDelta::Audio { .. },
+            ..
+        } = &event
+            && !native_audio_nodes.contains(node_index)
+        {
+            return emit_chat_media_error(
+                &tx,
+                "Chat audio fragments require a native message.audio lifecycle",
+            )
+            .await;
         }
         if let Err(error) = validate_chat_media_event(&event) {
             return emit_chat_media_error(&tx, &error).await;

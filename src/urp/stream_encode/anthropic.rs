@@ -926,7 +926,10 @@ async fn emit_live_delta_for_node_delta(
         }
         (
             AnthropicBlockPayload::Thinking {
-                metadata, item_id, extra: _, ..
+                metadata,
+                item_id,
+                extra: _,
+                ..
             },
             NodeDelta::Reasoning {
                 metadata: delta_metadata,
