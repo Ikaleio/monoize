@@ -137,6 +137,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
         let Some(start) = rest.find(&open) else {
             if !rest.is_empty() {
                 nodes.push(Node::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     id: None,
@@ -151,6 +152,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
         let before = &rest[..start];
         if !before.is_empty() {
             nodes.push(Node::Text {
+                logprobs: None,
                 signature: None,
                 citations: Vec::new(),
                 id: None,
@@ -214,6 +216,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                 return;
             };
             if let NodeDelta::Text {
+                logprobs: _,
                 signature: _,
                 citations: _,
                 content,

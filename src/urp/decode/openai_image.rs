@@ -84,6 +84,7 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         output.insert(
             0,
             Node::Text {
+                logprobs: None,
                 signature: None,
                 citations: Vec::new(),
                 id: None,
@@ -98,6 +99,7 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
     let usage = obj.get("usage").and_then(parse_image_usage);
 
     Ok(UrpResponse {
+        outcome: None,
         id,
         model: model.to_string(),
         created_at: obj.get("created").and_then(|v| v.as_i64()),
@@ -156,6 +158,7 @@ pub(crate) fn parse_image_usage(usage_value: &Value) -> Option<Usage> {
     };
 
     Some(Usage {
+        iterations: None,
         input_tokens,
         output_tokens,
         input_details,

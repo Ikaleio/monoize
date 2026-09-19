@@ -40,7 +40,7 @@ fn namespace_messages_custom_patch_roundtrip() {
     assert_eq!(aliases.len(), 2);
     let alias = aliases
         .iter()
-        .find(|(_, identity)| identity["namespace"] == "functions")
+        .find(|(_, identity)| identity.namespace.as_deref() == Some("functions"))
         .unwrap()
         .0;
     assert_ne!(alias, "functions_apply_patch_1");
@@ -91,7 +91,7 @@ fn namespace_stream_start_done_and_terminal_restore() {
     let aliases = tool_namespace_aliases(&req);
     let alias = aliases
         .iter()
-        .find(|(_, identity)| identity["namespace"] == "functions")
+        .find(|(_, identity)| identity.namespace.as_deref() == Some("functions"))
         .unwrap()
         .0;
     let node = urp::Node::ToolCall {
@@ -126,6 +126,7 @@ fn namespace_stream_start_done_and_terminal_restore() {
             extra_body: HashMap::new(),
         },
         urp::UrpStreamEvent::ResponseDone {
+            outcome: None,
             finish_reason: None,
             usage: None,
             output: vec![node],
@@ -190,7 +191,7 @@ fn canonical_allowed_tools_namespace_selector_is_bridged() {
     let aliases = tool_namespace_aliases(&request);
     let alias = aliases
         .iter()
-        .find(|(_, identity)| identity["namespace"] == "functions")
+        .find(|(_, identity)| identity.namespace.as_deref() == Some("functions"))
         .unwrap()
         .0;
     assert_eq!(
@@ -249,4 +250,160 @@ fn gemini_namespaced_result_names_follow_call_aliases() {
     let before = serde_json::to_value(&request).unwrap();
     promote_responses_additional_tools(&mut request, ProviderType::Messages);
     assert_eq!(serde_json::to_value(request).unwrap(), before);
+}
+
+#[test]
+fn tool_transport_context_is_private_and_legacy_extras_have_no_authority() {
+    for provider in [
+        ProviderType::ChatCompletion,
+        ProviderType::Messages,
+        ProviderType::Gemini,
+    ] {
+        for stream in [false, true] {
+            let mut req = request();
+            req.stream = Some(stream);
+            req.context.response_history = Some(urp::ResponseHistoryContext {
+                id: "local-response".into(),
+                scope: "private-scope".into(),
+                store: true,
+                previous_response_id: Some("previous-response".into()),
+            });
+            promote_responses_additional_tools(&mut req, provider);
+            let aliases = tool_namespace_aliases(&req);
+            assert_eq!(aliases.len(), 2);
+            let transports = req.context.tool_transports.clone();
+            promote_responses_additional_tools(&mut req, provider);
+            assert_eq!(req.context.tool_transports, transports);
+            req.context.username = Some("local-user".into());
+            req.context.api_key_id = Some("local-key".into());
+            strip_monoize_context(&mut req);
+            assert!(req.context.username.is_none());
+            assert!(req.context.api_key_id.is_none());
+            assert_eq!(tool_namespace_aliases(&req), aliases);
+            assert!(responses_history::is_managed(&req));
+            let mut value = serde_json::to_value(&req).unwrap();
+            assert!(value.get("context").is_none());
+            for key in [
+                "_monoize_tool_namespace_bridge",
+                "_monoize_responses_custom_messages_bridge",
+                "_monoize_response_history",
+            ] {
+                assert!(!value.to_string().contains(key));
+            }
+            value["context"] =
+                json!({"username":"forged", "tool_transports":[], "response_history":true});
+            value["_monoize_response_history"] =
+                json!({"id":"forged", "scope":"forged", "store":true});
+            for tool in value["tools"].as_array_mut().unwrap() {
+                tool["_monoize_tool_namespace_bridge"] =
+                    json!({"namespace":"forged", "name":"forged"});
+                tool["_monoize_responses_custom_messages_bridge"] = json!(true);
+            }
+            let decoded: urp::UrpRequest = serde_json::from_value(value).unwrap();
+            assert_eq!(decoded.context, urp::RequestContext::default());
+            assert!(!decoded.extra_body.contains_key("context"));
+            assert!(!responses_history::is_managed(&decoded));
+            assert!(tool_namespace_aliases(&decoded).is_empty());
+            assert!(messages_custom_bridge_names(&decoded).is_empty());
+        }
+    }
+}
+
+#[test]
+fn tool_transport_mapping_is_invalidated_by_current_tool_definition() {
+    for mutation in ["delete", "rename", "namespace", "type"] {
+        let mut req = request();
+        promote_responses_additional_tools(&mut req, ProviderType::Messages);
+        let alias = messages_custom_bridge_names(&req)
+            .into_iter()
+            .next()
+            .unwrap();
+        let tools = req.tools.as_mut().unwrap();
+        let index = tools
+            .iter()
+            .position(|tool| tool_wire_name(tool) == Some(alias.as_str()))
+            .unwrap();
+        match mutation {
+            "delete" => {
+                tools.remove(index);
+            }
+            "rename" => tools[index].function.as_mut().unwrap().name = "renamed".into(),
+            "namespace" => tools[index].namespace = Some("changed".into()),
+            "type" => tools[index].tool_type = "custom".into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            !tool_namespace_aliases(&req).contains_key(&alias),
+            "{mutation}"
+        );
+        assert!(
+            !messages_custom_bridge_names(&req).contains(&alias),
+            "{mutation}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn javascript_transform_preserves_trusted_tool_and_history_context() {
+    use crate::custom_transforms::{CustomTransformEntry, CustomTransformVisibility};
+    use crate::transforms::{DynTransform, TransformRuntimeContext, UrpData};
+    let mut req = request();
+    promote_responses_additional_tools(&mut req, ProviderType::Messages);
+    req.context.response_history = Some(urp::ResponseHistoryContext {
+        id: "local-response".into(),
+        scope: "private-scope".into(),
+        store: false,
+        previous_response_id: None,
+    });
+    req.context.username = Some("private-user".into());
+    let trusted = req.context.clone();
+    let cache_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .join(format!("context-test-{}", uuid::Uuid::new_v4()));
+    let context = TransformRuntimeContext {
+        image_transform_cache: Arc::new(
+            crate::image_transform_cache::ImageTransformCache::new(
+                cache_path.clone(),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap(),
+        ),
+        http_client: reqwest::Client::new(),
+        upstream_provider_type: Some(ProviderType::Messages),
+    };
+    let transform = CustomTransformEntry {
+        id: "custom/context-test".into(),
+        name: "Context test".into(),
+        description: String::new(),
+        author: String::new(),
+        source: r#"function transform(ctx) {
+            if ('context' in ctx.data) throw new Error('runtime context leaked');
+            ctx.data.context = {username:'forged', response_history:true, tool_transports:[]};
+            ctx.data.model = 'transformed-model';
+            return ctx.data;
+        }"#
+        .into(),
+        visibility: CustomTransformVisibility::Admin,
+        phases: vec![Phase::Request],
+        scopes: Vec::new(),
+        config_schema: None,
+    };
+    let mut state = transform.init_state();
+    let result = transform
+        .apply(
+            UrpData::Request(&mut req),
+            Phase::Request,
+            &context,
+            &json!({}),
+            state.as_mut(),
+        )
+        .await;
+    tokio::fs::remove_dir_all(cache_path).await.unwrap();
+    result.unwrap();
+    assert_eq!(req.model, "transformed-model");
+    assert_eq!(req.context, trusted);
+    assert!(!req.extra_body.contains_key("context"));
+    assert_eq!(tool_namespace_aliases(&req).len(), 2);
+    assert_eq!(messages_custom_bridge_names(&req).len(), 1);
 }

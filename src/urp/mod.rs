@@ -3,10 +3,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+pub mod citations;
+pub mod logprobs;
+pub mod outcome;
+pub mod usage;
+pub use citations::Citation;
+pub use logprobs::{LogprobConfig, TokenLogprob};
+pub use outcome::{ResponseOutcome, ResponseStatus};
+pub use usage::UsageIteration;
+mod context;
 pub mod decode;
 pub mod encode;
 pub mod greedy;
 pub(crate) mod internal_legacy_bridge;
+pub use context::{RequestContext, ResponseHistoryContext, ToolIdentity, ToolTransport};
 pub mod media;
 #[cfg(test)]
 mod media_transport_tests;
@@ -162,7 +172,7 @@ fn wrap_reasoning_payload(
     let Some(payload) = encrypted.take() else {
         return;
     };
-    if parse_reasoning_envelope(&payload).is_some() {
+    if !encrypted_value_is_non_empty(&payload) || parse_reasoning_envelope(&payload).is_some() {
         *encrypted = Some(payload);
         return;
     }
@@ -311,6 +321,8 @@ fn encrypted_value_is_non_empty(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
         _ => true,
     }
 }
@@ -525,10 +537,16 @@ pub enum StopControl {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<LogprobConfig>,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions_format: Option<InstructionsFormat>,
-    #[serde(default, skip_serializing)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "context::discard_wire_context"
+    )]
     pub context: RequestContext,
     #[serde(alias = "inputs")]
     pub input: Vec<Node>,
@@ -564,8 +582,10 @@ pub struct UrpRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Node {
     Text {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logprobs: Option<Vec<TokenLogprob>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        citations: Vec<Value>,
+        citations: Vec<crate::urp::Citation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -608,6 +628,8 @@ pub enum Node {
         extra_body: HashMap<String, Value>,
     },
     Refusal {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logprobs: Option<Vec<TokenLogprob>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         content: String,
@@ -1068,6 +1090,8 @@ pub struct JsonSchemaDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<ResponseOutcome>,
     pub id: String,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1089,6 +1113,9 @@ pub enum FinishReason {
     Length,
     ToolCalls,
     ContentFilter,
+    ContextLimit,
+    Paused,
+    Compaction,
     #[serde(other)]
     Other,
 }
@@ -1143,6 +1170,8 @@ pub struct OutputDetails {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iterations: Option<Vec<UsageIteration>>,
     pub input_tokens: u64,
     pub output_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1155,18 +1184,21 @@ pub struct Usage {
 
 impl Usage {
     pub fn total_tokens(&self) -> u64 {
-        self.input_tokens.saturating_add(self.output_tokens)
+        let usage = self.accounting();
+        usage.input_tokens.saturating_add(usage.output_tokens)
     }
 
     pub fn cached_tokens(&self) -> Option<u64> {
-        self.input_details
+        self.accounting()
+            .input_details
             .as_ref()
             .map(|d| d.cache_read_tokens)
             .filter(|&v| v > 0)
     }
 
     pub fn reasoning_tokens(&self) -> Option<u64> {
-        self.output_details
+        self.accounting()
+            .output_details
             .as_ref()
             .map(|d| d.reasoning_tokens)
             .filter(|&v| v > 0)
@@ -1208,6 +1240,8 @@ pub enum UrpStreamEvent {
         extra_body: HashMap<String, Value>,
     },
     ResponseDone {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<ResponseOutcome>,
         #[serde(skip_serializing_if = "Option::is_none")]
         finish_reason: Option<FinishReason>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1237,7 +1271,7 @@ pub enum UrpStreamEvent {
 pub enum NodeHeader {
     Text {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        citations: Vec<Value>,
+        citations: Vec<crate::urp::Citation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1318,8 +1352,10 @@ pub enum NodeHeader {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NodeDelta {
     Text {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logprobs: Option<Vec<TokenLogprob>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        citations: Vec<Value>,
+        citations: Vec<crate::urp::Citation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<Value>,
         content: String,
@@ -1337,6 +1373,8 @@ pub enum NodeDelta {
         source: Option<String>,
     },
     Refusal {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logprobs: Option<Vec<TokenLogprob>>,
         content: String,
     },
     ToolCallArguments {
@@ -1356,15 +1394,10 @@ pub enum NodeDelta {
     },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RequestContext {
-    pub username: Option<String>,
-    pub api_key_id: Option<String>,
-}
-
 impl Node {
     pub fn text(role: OrdinaryRole, content: impl Into<String>) -> Self {
         Node::Text {
+            logprobs: None,
             signature: None,
             citations: Vec::new(),
             id: None,
@@ -1636,3 +1669,6 @@ mod gemini_feature_tests;
 mod messages_feature_tests;
 #[cfg(test)]
 mod responses_feature_tests;
+
+#[cfg(test)]
+mod protocol_contract_tests;

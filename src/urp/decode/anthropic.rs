@@ -302,6 +302,9 @@ impl From<AnthropicUsage> for Usage {
             .saturating_add(value.cache_creation_input_tokens);
 
         Usage {
+            iterations: crate::urp::usage::decode_messages_iterations(
+                value.extra.remove("iterations").as_ref(),
+            ),
             input_tokens: normalized_input_tokens,
             output_tokens: value.output_tokens,
             input_details,
@@ -318,11 +321,15 @@ fn text_node_with_phase(
     mut extra_body: HashMap<String, Value>,
 ) -> Node {
     Node::Text {
+        logprobs: None,
         signature: None,
-        citations: extra_body
-            .remove("citations")
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default(),
+        citations: crate::urp::citations::decode(
+            extra_body
+                .remove("citations")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default(),
+            crate::urp::ProviderProtocol::Messages,
+        ),
         id: None,
         role,
         content: content.into(),
@@ -362,9 +369,9 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| "missing messages".to_string())?
     {
-        let Some(msg_obj) = raw_msg.as_object() else {
-            continue;
-        };
+        let msg_obj = raw_msg
+            .as_object()
+            .ok_or_else(|| "Messages message must be an object".to_string())?;
         let base_role = ordinary_role_from_messages_role(
             msg_obj
                 .get("role")
@@ -444,6 +451,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     Ok(UrpRequest {
+        logprobs: None,
         context: Default::default(),
         instructions_format: None,
         model,
@@ -499,6 +507,9 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     let finish_reason = match obj.get("stop_reason").and_then(|v| v.as_str()) {
         Some("end_turn" | "stop_sequence") => Some(FinishReason::Stop),
         Some("max_tokens") => Some(FinishReason::Length),
+        Some("model_context_window_exceeded") => Some(FinishReason::ContextLimit),
+        Some("pause_turn") => Some(FinishReason::Paused),
+        Some("compaction") => Some(FinishReason::Compaction),
         Some("tool_use") => Some(FinishReason::ToolCalls),
         Some("refusal") => Some(FinishReason::ContentFilter),
         _ => Some(FinishReason::Other),
@@ -511,6 +522,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .map(Usage::from);
 
     Ok(UrpResponse {
+        outcome: None,
         id: obj
             .get("id")
             .and_then(|v| v.as_str())
@@ -808,4 +820,10 @@ fn decode_tool_result_content_block(
         }
     }
     Ok(())
+}
+
+pub(crate) fn decode_usage(value: &Value) -> Option<Usage> {
+    serde_json::from_value::<AnthropicUsage>(value.clone())
+        .ok()
+        .map(Usage::from)
 }

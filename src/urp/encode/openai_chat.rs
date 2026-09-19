@@ -440,7 +440,11 @@ fn push_part_into_pending_chat_message(
                     .or_insert_with(|| json!([]))
                     .as_array_mut()
                     .expect("canonical annotations array")
-                    .extend(citations.iter().cloned());
+                    .extend(crate::urp::citations::encode(
+                        citations,
+                        crate::urp::ProviderProtocol::ChatCompletion,
+                        0,
+                    ));
             }
             if let Some(content) = encode_chat_content_part(part) {
                 entry.content_parts.push(content);
@@ -641,6 +645,11 @@ fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
         }
     }
 
+    crate::urp::logprobs::encode_request(
+        &mut body,
+        &req.logprobs,
+        crate::urp::ProviderProtocol::ChatCompletion,
+    );
     body
 }
 
@@ -650,6 +659,13 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
 }
 
 pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Result<Value, String> {
+    if let Some(body) = resp
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.failure_body(false))
+    {
+        return Ok(body);
+    }
     validate_response_nodes(&resp.output)?;
     Ok(encode_response_validated(resp, logical_model))
 }
@@ -767,7 +783,47 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
         }],
     });
 
+    let mut content_scores = Vec::new();
+    let mut refusal_scores = Vec::new();
+    for node in &resp.output {
+        match node {
+            Node::Text {
+                content, logprobs, ..
+            } => {
+                if let Some(scores) = crate::urp::logprobs::valid(logprobs, content) {
+                    content_scores.extend_from_slice(scores);
+                }
+            }
+            Node::Refusal {
+                content, logprobs, ..
+            } => {
+                if let Some(scores) = crate::urp::logprobs::valid(logprobs, content) {
+                    refusal_scores.extend_from_slice(scores);
+                }
+            }
+            _ => {}
+        }
+    }
+    let message = &result["choices"][0]["message"];
+    let content_scores = Some(content_scores);
+    let refusal_scores = Some(refusal_scores);
+    let content_scores = message
+        .get("content")
+        .and_then(Value::as_str)
+        .and_then(|text| crate::urp::logprobs::valid(&content_scores, text));
+    let refusal_scores = message
+        .get("refusal")
+        .and_then(Value::as_str)
+        .and_then(|text| crate::urp::logprobs::valid(&refusal_scores, text));
+    if content_scores.is_some_and(|v| !v.is_empty())
+        || refusal_scores.is_some_and(|v| !v.is_empty())
+    {
+        result["choices"][0]["logprobs"] =
+            json!({"content":content_scores,"refusal":refusal_scores});
+    }
     if let Some(usage) = &resp.usage {
+        let aggregate = usage.accounting();
+        let usage = aggregate.as_ref();
         let input_details = usage_input_details(usage);
         let output_details = usage_output_details(usage);
         let mut usage_value = json!({
@@ -787,6 +843,14 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
             }
         });
         merge_chat_usage_extra(&mut usage_value, &usage.extra_body);
+        crate::urp::usage::write_modality(
+            &mut usage_value["prompt_tokens_details"],
+            &input_details.modality_breakdown,
+        );
+        crate::urp::usage::write_modality(
+            &mut usage_value["completion_tokens_details"],
+            &output_details.modality_breakdown,
+        );
         result["usage"] = usage_value;
     }
 
@@ -801,7 +865,7 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
             .and_then(Value::as_object_mut)
     {
         for (key, value) in choice_extra {
-            if !key.starts_with("_monoize_") {
+            if !key.starts_with("_monoize_") && key != "logprobs" {
                 choice.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
@@ -820,6 +884,8 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
     message.insert("role".to_string(), Value::String("assistant".to_string()));
 
     let mut content_parts = Vec::new();
+    let mut text_offset = 0u64;
+    let mut text_count = 0usize;
     let mut tool_calls = Vec::new();
     let mut refusal: Option<String> = None;
     let mut reasoning_parts = Vec::new();
@@ -845,13 +911,20 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
                 extra_body,
                 ..
             } => {
+                if text_count > 0 {
+                    text_offset += 2;
+                }
                 if !citations.is_empty() {
                     message
                         .entry("annotations".to_string())
                         .or_insert_with(|| json!([]))
                         .as_array_mut()
                         .unwrap()
-                        .extend(citations.iter().cloned());
+                        .extend(crate::urp::citations::encode(
+                            citations,
+                            crate::urp::ProviderProtocol::ChatCompletion,
+                            text_offset,
+                        ));
                 }
                 let mut block = json!({ "type": "text", "text": content });
                 if let Some(obj) = block.as_object_mut() {
@@ -861,6 +934,8 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
                     &mut message_extra,
                     assistant_message_extra_from_node(node),
                 );
+                text_offset += content.chars().count() as u64;
+                text_count += 1;
                 content_parts.push(block);
             }
             Node::Audio {
@@ -1297,19 +1372,15 @@ fn insert_openrouter_reasoning_fields(
             continue;
         }
 
-        if extra_body
+        let native_raw_surface = extra_body
             .get(CHAT_REASONING_SURFACE_EXTRA_KEY)
             .and_then(Value::as_str)
-            == Some(CHAT_REASONING_SURFACE_REASONING_CONTENT)
-        {
-            if reasoning_content_value.is_none() {
-                reasoning_content_value = content
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .or_else(|| summary.as_deref().filter(|value| !value.is_empty()))
-                    .map(str::to_string);
-            }
-            continue;
+            == Some(CHAT_REASONING_SURFACE_REASONING_CONTENT);
+        if native_raw_surface && reasoning_content_value.is_none() {
+            reasoning_content_value = content
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
         }
 
         if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
@@ -1331,7 +1402,9 @@ fn insert_openrouter_reasoning_fields(
             }
         }
 
-        if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+        if !native_raw_surface
+            && let Some(content) = content.as_deref().filter(|content| !content.is_empty())
+        {
             if reasoning_value.is_none() {
                 reasoning_value = Some(content.to_string());
             }
@@ -1390,7 +1463,10 @@ fn chat_wire_effort(effort: &str) -> &str {
 fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
     match finish_reason {
         FinishReason::Stop => "stop",
-        FinishReason::Length => "length",
+        FinishReason::Length
+        | FinishReason::ContextLimit
+        | FinishReason::Paused
+        | FinishReason::Compaction => "length",
         FinishReason::ToolCalls => "tool_calls",
         FinishReason::ContentFilter => "content_filter",
         FinishReason::Other => "error",

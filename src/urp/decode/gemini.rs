@@ -144,6 +144,7 @@ impl TryFrom<GeminiUsage> for Usage {
         };
 
         Ok(Usage {
+            iterations: None,
             input_tokens,
             output_tokens,
             input_details,
@@ -327,6 +328,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     Ok(UrpRequest {
+        logprobs: None,
         context: Default::default(),
         instructions_format: None,
         model,
@@ -462,6 +464,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     };
 
     Ok(UrpResponse {
+        outcome: None,
         id: obj
             .get("responseId")
             .or_else(|| obj.get("id"))
@@ -637,6 +640,7 @@ fn decode_output_part(part: &Value) -> Result<DecodedOutput, String> {
 fn decode_part_value(value: &Value) -> Result<Vec<Part>, String> {
     match value {
         Value::String(text) => Ok(vec![Part::Text {
+            logprobs: None,
             content: text.clone(),
             signature: None,
             citations: Vec::new(),
@@ -709,6 +713,7 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Result<Vec<Part>, String> {
                 }
             } else {
                 Part::Text {
+                    logprobs: None,
                     citations: Vec::new(),
                     signature: obj.get("thoughtSignature").cloned(),
 
@@ -1148,7 +1153,10 @@ pub(crate) fn attach_candidate_citations(candidate: &Map<String, Value>, nodes: 
         .iter_mut()
         .find(|node| matches!(node, Node::Text { .. }))
     {
-        citations.extend(sources.iter().cloned());
+        citations.extend(crate::urp::citations::decode(
+            sources.clone(),
+            crate::urp::ProviderProtocol::Gemini,
+        ));
     }
 }
 
@@ -1162,6 +1170,7 @@ pub(crate) fn prompt_block_reason(value: &Value) -> Option<&str> {
 
 pub(crate) fn prompt_refusal(reason: &str) -> Node {
     Node::Refusal {
+        logprobs: None,
         id: None,
         content: format!("Gemini blocked the prompt: {reason}"),
         extra_body: HashMap::new(),

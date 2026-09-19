@@ -129,7 +129,10 @@ pub(crate) async fn stream_gemini_to_urp_events(
                     .find(|(_, node)| matches!(node, Node::Text { .. }))
                 {
                     let mut added = Vec::new();
-                    for source in sources {
+                    for source in &crate::urp::citations::decode(
+                        sources.clone(),
+                        crate::urp::ProviderProtocol::Gemini,
+                    ) {
                         if !citations.contains(source) {
                             citations.push(source.clone());
                             added.push(source.clone());
@@ -140,6 +143,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
                             .send(UrpStreamEvent::NodeDelta {
                                 node_index: index as u32,
                                 delta: NodeDelta::Text {
+                                    logprobs: None,
                                     content: String::new(),
                                     signature: None,
                                     citations: added,
@@ -225,6 +229,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
     }
     let _ = tx
         .send(UrpStreamEvent::ResponseDone {
+            outcome: None,
             finish_reason,
             usage,
             output,
@@ -284,6 +289,7 @@ fn initial_delta(node: &Node) -> Option<NodeDelta> {
             ..
         } => (!content.is_empty() || signature.is_some() || !citations.is_empty()).then(|| {
             NodeDelta::Text {
+                logprobs: None,
                 signature: signature.clone(),
                 citations: citations.clone(),
                 content: content.clone(),
@@ -316,6 +322,7 @@ fn initial_delta(node: &Node) -> Option<NodeDelta> {
             source: source.clone(),
         }),
         Node::Refusal { content, .. } => Some(NodeDelta::Refusal {
+            logprobs: None,
             content: content.clone(),
         }),
         _ => None,

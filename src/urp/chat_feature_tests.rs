@@ -20,6 +20,9 @@ async fn decode_stream_with_audio_format(
         .map(|frame| format!("data: {frame}\n\n"))
         .collect();
     wire.push_str("data: [DONE]\n\n");
+    decode_chat_wire(wire, audio_format).await
+}
+async fn decode_chat_wire(wire: String, audio_format: Option<&str>) -> Vec<UrpStreamEvent> {
     let upstream = reqwest::Response::from(
         axum::http::Response::builder()
             .header("content-type", "text/event-stream")
@@ -56,9 +59,10 @@ async fn wire_values(mut rx: mpsc::Receiver<Event>) -> Vec<Value> {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    String::from_utf8(body.to_vec())
-        .unwrap()
-        .lines()
+    let wire = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(wire.lines().filter(|line| *line == "data: [DONE]").count(), 1);
+    assert!(!wire.lines().any(|line| line.starts_with("event:")));
+    wire.lines()
         .filter_map(|line| line.strip_prefix("data: "))
         .filter(|line| *line != "[DONE]")
         .map(|line| serde_json::from_str(line).unwrap())
@@ -101,11 +105,13 @@ fn terminal(events: &[UrpStreamEvent]) -> UrpResponse {
         .rev()
         .find_map(|event| match event {
             UrpStreamEvent::ResponseDone {
+                outcome: _,
                 finish_reason,
                 usage,
                 output,
                 extra_body,
             } => Some(UrpResponse {
+                outcome: None,
                 id: "chat_feature".into(),
                 model: "chat-test".into(),
                 created_at: Some(1),
@@ -413,7 +419,10 @@ fn chat_typed_audio_and_citation_deletion_wins() {
                 assert!(!extra_body.contains_key("data"));
             }
             Node::Text {
-                content, citations, ..
+                logprobs: _,
+                content,
+                citations,
+                ..
             } => {
                 *content = "new".into();
                 citations.clear();
@@ -658,7 +667,9 @@ async fn chat_provider_identity_is_authoritative_in_all_response_modes() {
             for event in &mut events {
                 match event {
                     UrpStreamEvent::NodeDone { node, .. } => edit_identity(node, deleted),
-                    UrpStreamEvent::ResponseDone { output, .. } => {
+                    UrpStreamEvent::ResponseDone {
+                        outcome: _, output, ..
+                    } => {
                         for node in output {
                             edit_identity(node, deleted);
                         }
@@ -671,6 +682,7 @@ async fn chat_provider_identity_is_authoritative_in_all_response_modes() {
                 &expected,
             );
             let fallback = vec![UrpStreamEvent::ResponseDone {
+                outcome: None,
                 finish_reason: changed.finish_reason,
                 usage: changed.usage.clone(),
                 output: changed.output.clone(),
@@ -800,7 +812,12 @@ fn chat_assistant_history_annotations_bidirectional_both_stream_modes() {
             encode::encode_request(&request, "chat-test")["messages"][0]["annotations"],
             annotations
         );
-        if let Node::Text { citations, .. } = &mut request.input[0] {
+        if let Node::Text {
+            logprobs: _,
+            citations,
+            ..
+        } = &mut request.input[0]
+        {
             citations.clear();
         }
         assert!(
@@ -824,14 +841,21 @@ async fn chat_bounded_text_frames_emit_citations_once() {
     events.retain(|event| !matches!(event, UrpStreamEvent::NodeDelta {delta:super::NodeDelta::Text {content,citations,..},..} if content.is_empty() && !citations.is_empty()));
     for event in &mut events {
         if let UrpStreamEvent::NodeDelta {
-            delta: super::NodeDelta::Text {
-                content, citations, ..
-            },
+            delta:
+                super::NodeDelta::Text {
+                    logprobs: _,
+                    content,
+                    citations,
+                    ..
+                },
             ..
         } = event
             && !content.is_empty()
         {
-            *citations = vec![citation.clone()];
+            *citations = vec![crate::urp::Citation::decode(
+                citation.clone(),
+                crate::urp::ProviderProtocol::ChatCompletion,
+            )];
         }
     }
     for wire in [
@@ -1172,6 +1196,769 @@ fn chat_compatible_tool_audio_preserves_raw_source_as_typed_file() {
             assert!(
                 matches!(&request.input[0],Node::ToolResult {content,..} if matches!(&content[0],super::ToolResultContent::File {source:super::FileSource::Base64 {media_type,data},..} if media_type=="audio/wav" && data=="YQ=="))
             );
+        }
+    }
+}
+
+fn reasoning_fields(
+    response: &UrpResponse,
+) -> Vec<(Option<String>, Option<String>, Option<Value>)> {
+    response
+        .output
+        .iter()
+        .filter_map(|node| match node {
+            Node::Reasoning {
+                content,
+                summary,
+                encrypted,
+                ..
+            } => Some((content.clone(), summary.clone(), encrypted.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn chat_raw_cot_summary_and_cipher_remain_independent_all_response_modes() {
+    let cipher = "eyJzZWNyZXQiOiJtdXN0LW5vdC1iZWNvbWUtdGV4dCJ9";
+    for (message, expected) in [
+        (
+            json!({"role":"assistant","content":"answer","reasoning_content":"raw steps"}),
+            vec![(Some("raw steps".into()), None, None)],
+        ),
+        (
+            json!({"role":"assistant","content":"answer","reasoning_details":[{"type":"reasoning.summary","summary":"brief","index":0},{"type":"reasoning.encrypted","data":cipher,"index":1}]}),
+            vec![
+                (None, Some("brief".into()), None),
+                (None, None, Some(json!(cipher))),
+            ],
+        ),
+        (
+            json!({"role":"assistant","content":"answer","reasoning_details":[{"type":"reasoning.text","text":"raw","index":0},{"type":"reasoning.summary","summary":"brief","index":1},{"type":"reasoning.encrypted","data":cipher,"index":2}]}),
+            vec![
+                (Some("raw".into()), None, None),
+                (None, Some("brief".into()), None),
+                (None, None, Some(json!(cipher))),
+            ],
+        ),
+    ] {
+        let native = decode::decode_response(&response(message.clone(), "stop")).unwrap();
+        let streamed = decode_stream(vec![
+            json!({"choices":[{"delta":message,"finish_reason":"stop"}]}),
+        ])
+        .await;
+        for actual in [
+            native.clone(),
+            decode::decode_response(&encode::encode_response(&native, "chat-test")).unwrap(),
+            terminal(&streamed),
+            terminal(&decode_stream(encode_stream(streamed).await).await),
+            terminal(&decode_stream(synthetic_stream(&native).await).await),
+        ] {
+            assert_eq!(reasoning_fields(&actual), expected);
+            assert!(
+                !serde_json::to_string(&actual.output)
+                    .unwrap()
+                    .contains("must-not-become-text")
+            );
+        }
+    }
+}
+
+#[test]
+fn chat_reasoning_history_replay_mutation_and_deletion_both_stream_modes() {
+    for stream in [false, true] {
+        for message in [
+            json!({"role":"assistant","content":"answer","reasoning_content":"raw"}),
+            json!({"role":"assistant","content":"answer","reasoning_details":[{"type":"reasoning.text","text":"raw","index":0,"id":"r0"},{"type":"reasoning.summary","summary":"brief","index":1},{"type":"reasoning.encrypted","data":"cipher","index":2}]}),
+        ] {
+            let source = json!({"model":"chat-test","stream":stream,"messages":[message]});
+            let mut request = decode::decode_request(&source).unwrap();
+            assert_eq!(
+                encode::encode_request(&request, "chat-test")["messages"],
+                source["messages"]
+            );
+            for node in &mut request.input {
+                if let Node::Reasoning {
+                    content,
+                    summary,
+                    encrypted,
+                    ..
+                } = node
+                {
+                    if content.is_some() {
+                        *content = Some("new raw".into());
+                    }
+                    if summary.is_some() {
+                        *summary = Some("new brief".into());
+                    }
+                    if encrypted.is_some() {
+                        *encrypted = Some(json!("new cipher"));
+                    }
+                }
+            }
+            let encoded = encode::encode_request(&request, "chat-test");
+            let again = decode::decode_request(&encoded).unwrap();
+            assert_eq!(
+                serde_json::to_value(&again.input).unwrap(),
+                serde_json::to_value(&request.input).unwrap()
+            );
+            for node in &mut request.input {
+                if let Node::Reasoning {
+                    content,
+                    summary,
+                    encrypted,
+                    ..
+                } = node
+                {
+                    *content = None;
+                    *summary = None;
+                    *encrypted = None;
+                }
+            }
+            let encoded =
+                serde_json::to_string(&encode::encode_request(&request, "chat-test")).unwrap();
+            for deleted in ["new raw", "new brief", "new cipher"] {
+                assert!(!encoded.contains(deleted));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_fragmented_raw_and_opaque_do_not_merge_with_summary() {
+    let events = decode_stream(vec![
+        json!({"choices":[{"delta":{"reasoning_content":"raw ","reasoning_opaque":"cipher-"}}]}),
+        json!({"choices":[{"delta":{"reasoning_content":"steps","reasoning_opaque":"tail"}}]}),
+        json!({"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}),
+    ])
+    .await;
+    for actual in [
+        terminal(&events),
+        terminal(&decode_stream(encode_stream(events).await).await),
+    ] {
+        let fields = reasoning_fields(&actual);
+        assert_eq!(
+            fields
+                .iter()
+                .filter_map(|f| f.0.as_deref())
+                .collect::<String>(),
+            "raw steps"
+        );
+        assert!(fields.iter().all(|f| f.1.is_none()));
+        assert_eq!(
+            fields
+                .iter()
+                .filter_map(|f| f.2.as_ref().and_then(Value::as_str))
+                .collect::<String>(),
+            "cipher-tail"
+        );
+    }
+}
+
+fn chat_scores(text: &str) -> Value {
+    json!([{"token":text,"bytes":text.as_bytes(),"logprob":-0.25,"top_logprobs":[{"token":"alternative","bytes":null,"logprob":-1.5}]}])
+}
+
+#[test]
+fn chat_request_logprobs_and_formats_have_typed_ownership_both_stream_modes() {
+    for stream in [false, true] {
+        for format in [
+            json!({"type":"text"}),
+            json!({"type":"json_object"}),
+            json!({"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object","additionalProperties":false},"strict":true}}),
+        ] {
+            let mut request=decode::decode_request(&json!({"model":"chat-test","stream":stream,"messages":[{"role":"user","content":"JSON"}],"logprobs":true,"top_logprobs":2,"response_format":format,"stream_options":{"include_usage":true,"include_obfuscation":false}})).unwrap();
+            assert_eq!(
+                request.logprobs,
+                Some(super::LogprobConfig {
+                    enabled: true,
+                    top_k: Some(2)
+                })
+            );
+            let encoded = encode::encode_request(&request, "chat-test");
+            assert_eq!(encoded["response_format"], format);
+            assert_eq!(encoded["logprobs"], true);
+            assert_eq!(encoded["top_logprobs"], 2);
+            request.logprobs = None;
+            let encoded = encode::encode_request(&request, "chat-test");
+            assert!(encoded.get("logprobs").is_none());
+            assert!(encoded.get("top_logprobs").is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_logprobs_text_and_refusal_roundtrip_and_mutation_all_modes() {
+    for (surface, text) in [("content", "hello"), ("refusal", "cannot")] {
+        let mut message = json!({"role":"assistant","content":null});
+        message[surface] = json!(text);
+        let mut native = response(message.clone(), "stop");
+        native["choices"][0]["logprobs"] = json!({surface:chat_scores(text)});
+        let decoded = decode::decode_response(&native).unwrap();
+        let events=decode_stream(vec![json!({"choices":[{"delta":message,"logprobs":{surface:chat_scores(text)},"finish_reason":"stop"}]})]).await;
+        for mut actual in [
+            decoded.clone(),
+            terminal(&events),
+            terminal(&decode_stream(encode_stream(events).await).await),
+            terminal(&decode_stream(synthetic_stream(&decoded).await).await),
+        ] {
+            let encoded = encode::encode_response(&actual, "chat-test");
+            assert_eq!(
+                encoded["choices"][0]["logprobs"][surface],
+                chat_scores(text)
+            );
+            for node in &mut actual.output {
+                match node {
+                    Node::Text { content, .. } | Node::Refusal { content, .. } => {
+                        *content = "changed".into()
+                    }
+                    _ => {}
+                }
+            }
+            let encoded = encode::encode_response(&actual, "chat-test");
+            assert!(
+                encoded["choices"][0].get("logprobs").is_none(),
+                "stale scores {encoded}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_finish_reason_matrix_preserves_partial_output_and_usage_all_modes() {
+    for (reason, expected) in [
+        ("stop", super::FinishReason::Stop),
+        ("length", super::FinishReason::Length),
+        ("content_filter", super::FinishReason::ContentFilter),
+        ("tool_calls", super::FinishReason::ToolCalls),
+        ("future_stop", super::FinishReason::Other),
+    ] {
+        let mut native = response(json!({"role":"assistant","content":"partial"}), reason);
+        native["usage"] = json!({"prompt_tokens":20,"completion_tokens":10,"total_tokens":30,"prompt_tokens_details":{"cached_tokens":5,"audio_tokens":2,"cache_creation_tokens":0,"cache_write_tokens":0,"tool_prompt_tokens":0},"completion_tokens_details":{"reasoning_tokens":6,"audio_tokens":1,"accepted_prediction_tokens":2,"rejected_prediction_tokens":1}});
+        let decoded = decode::decode_response(&native).unwrap();
+        let events = decode_stream(vec![
+            json!({"choices":[{"delta":{"content":"partial"},"finish_reason":reason}]}),
+            json!({"choices":[],"usage":native["usage"]}),
+        ])
+        .await;
+        for actual in [
+            decoded.clone(),
+            terminal(&events),
+            terminal(&decode_stream(encode_stream(events).await).await),
+            terminal(&decode_stream(synthetic_stream(&decoded).await).await),
+        ] {
+            assert_eq!(actual.finish_reason, Some(expected));
+            let encoded = encode::encode_response(&actual, "chat-test");
+            assert_eq!(encoded["choices"][0]["message"]["content"], "partial");
+            assert_eq!(encoded["choices"][0]["finish_reason"], reason);
+            assert_eq!(encoded["usage"], native["usage"]);
+        }
+    }
+}
+
+#[test]
+fn chat_malformed_requests_and_nonstream_errors_are_rejected() {
+    for stream in [false, true] {
+        for n in [
+            json!(0),
+            json!(2),
+            json!(-1),
+            json!(1.5),
+            json!("1"),
+            json!(null),
+        ] {
+            assert!(
+                decode::decode_request(
+                    &json!({"model":"chat-test","stream":stream,"messages":[],"n":n})
+                )
+                .is_err()
+            );
+        }
+    }
+    for invalid in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!({"model":"m","messages":"wrong"}),
+    ] {
+        assert!(decode::decode_request(&invalid).is_err());
+    }
+    for invalid in [
+        json!(null),
+        json!({}),
+        json!({"choices":[]}),
+        json!({"choices":[{"message":null}]}),
+        json!({"error":{"message":"quota","code":"insufficient_quota"}}),
+        json!({"choices":[{"error":{"message":"failed"}}]}),
+        response(json!({"content":"partial"}), "error"),
+    ] {
+        assert!(decode::decode_response(&invalid).is_err(), "{invalid}");
+    }
+}
+
+#[tokio::test]
+async fn chat_interleaved_function_fragments_keep_call_identity_and_arguments() {
+    let events=decode_stream(vec![
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c0","type":"function","function":{"name":"weather","arguments":"{\"city\":\""}},{"index":1,"id":"c1","type":"function","function":{"name":"time","arguments":"{"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"}"}},{"index":0,"function":{"arguments":"北京\"}"}}]},"finish_reason":"tool_calls"}]}),
+    ]).await;
+    for actual in [
+        terminal(&events),
+        terminal(&decode_stream(encode_stream(events).await).await),
+    ] {
+        let wire = encode::encode_response(&actual, "chat-test");
+        assert_eq!(
+            wire["choices"][0]["message"]["tool_calls"],
+            json!([{"id":"c0","type":"function","function":{"name":"weather","arguments":"{\"city\":\"北京\"}"}},{"id":"c1","type":"function","function":{"name":"time","arguments":"{}"}}])
+        );
+    }
+}
+
+#[tokio::test]
+async fn chat_sse_malformed_json_eof_and_post_start_errors_never_succeed() {
+    for wire in [
+        "data: {broken\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+        "data: [DONE]\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\ndata: {\"error\":{\"code\":\"overloaded\",\"message\":\"retry\"}}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\"}]}\n\n",
+    ] {
+        let events = decode_chat_wire(wire.into(), None).await;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, UrpStreamEvent::Error { .. }))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, UrpStreamEvent::ResponseDone { .. })),
+            "{events:?}"
+        );
+        let downstream = encode_stream(events).await;
+        assert!(
+            downstream.iter().any(|v| v.get("error").is_some()),
+            "{downstream:?}"
+        );
+        assert!(
+            !downstream
+                .iter()
+                .any(|v| v["choices"][0]["finish_reason"] == "stop")
+        );
+    }
+}
+
+#[tokio::test]
+async fn chat_sse_comments_crlf_and_usage_after_finish_roundtrip() {
+    let wire = concat!(
+        ": keepalive\r\n\r\n",
+        "data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}\r\n\r\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\r\n\r\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2,\"total_tokens\":11}}\r\n\r\n",
+        "data: [DONE]\r\n\r\n"
+    );
+    let events = decode_chat_wire(wire.into(), None).await;
+    assert_eq!(terminal(&events).usage.unwrap().total_tokens(), 11);
+    let output = encode_stream(events).await;
+    let usage = output
+        .iter()
+        .position(|v| v.get("usage").is_some_and(|u| !u.is_null()))
+        .unwrap();
+    assert_eq!(output[usage]["choices"], json!([]));
+    assert_eq!(output[usage - 1]["choices"][0]["finish_reason"], "stop");
+    assert!(output[usage - 1].get("usage").is_none_or(Value::is_null));
+    assert_eq!(
+        output
+            .iter()
+            .filter(|v| v.get("usage").is_some_and(|u| !u.is_null()))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn chat_reasoning_typed_deletion_does_not_replay_native_payload_all_modes() {
+    let native = response(
+        json!({"role":"assistant","content":"answer","reasoning_details":[{"type":"reasoning.text","text":"raw-delete","signature":"cipher-delete","id":"r0","format":"native","index":0,"vendor":"kept"},{"type":"reasoning.summary","summary":"summary-delete","index":1}]}),
+        "stop",
+    );
+    let mut decoded = decode::decode_response(&native).unwrap();
+    for node in &mut decoded.output {
+        if let Node::Reasoning {
+            content,
+            summary,
+            encrypted,
+            ..
+        } = node
+        {
+            *content = None;
+            *summary = None;
+            *encrypted = None;
+        }
+    }
+    for output in [
+        encode::encode_response(&decoded, "chat-test"),
+        json!(synthetic_stream(&decoded).await),
+    ] {
+        let wire = serde_json::to_string(&output).unwrap();
+        for deleted in ["raw-delete", "cipher-delete", "summary-delete"] {
+            assert!(!wire.contains(deleted), "{wire}");
+        }
+    }
+    let mut events = decode_stream(vec![
+        json!({"choices":[{"delta":native["choices"][0]["message"],"finish_reason":"stop"}]}),
+    ])
+    .await;
+    for event in &mut events {
+        match event {
+            UrpStreamEvent::NodeDelta {
+                delta:
+                    super::NodeDelta::Reasoning {
+                        content,
+                        summary,
+                        encrypted,
+                        ..
+                    },
+                ..
+            } => {
+                *content = None;
+                *summary = None;
+                *encrypted = None;
+            }
+            UrpStreamEvent::NodeDone {
+                node:
+                    Node::Reasoning {
+                        content,
+                        summary,
+                        encrypted,
+                        ..
+                    },
+                ..
+            } => {
+                *content = None;
+                *summary = None;
+                *encrypted = None;
+            }
+            UrpStreamEvent::ResponseDone { output, .. } => {
+                for node in output {
+                    if let Node::Reasoning {
+                        content,
+                        summary,
+                        encrypted,
+                        ..
+                    } = node
+                    {
+                        *content = None;
+                        *summary = None;
+                        *encrypted = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let wire = serde_json::to_string(&encode_stream(events).await).unwrap();
+    for deleted in ["raw-delete", "cipher-delete", "summary-delete"] {
+        assert!(!wire.contains(deleted), "{wire}");
+    }
+}
+
+#[tokio::test]
+async fn chat_malformed_logprobs_are_omitted_without_losing_text() {
+    for scores in [
+        json!(null),
+        json!("invalid"),
+        json!([{"token":"hi","logprob":"invalid"}]),
+        chat_scores("stale"),
+    ] {
+        let mut native = response(json!({"role":"assistant","content":"hi"}), "stop");
+        native["choices"][0]["logprobs"] = json!({"content":scores});
+        let decoded = decode::decode_response(&native).unwrap();
+        let events=decode_stream(vec![json!({"choices":[{"delta":{"content":"hi"},"logprobs":{"content":scores},"finish_reason":"stop"}]})]).await;
+        for actual in [
+            decoded.clone(),
+            terminal(&events),
+            terminal(&decode_stream(encode_stream(events).await).await),
+            terminal(&decode_stream(synthetic_stream(&decoded).await).await),
+        ] {
+            let wire = encode::encode_response(&actual, "chat-test");
+            assert_eq!(wire["choices"][0]["message"]["content"], "hi");
+            assert!(wire["choices"][0].get("logprobs").is_none(), "{wire}");
+        }
+    }
+}
+
+#[test]
+fn chat_origin_metadata_and_reserved_keys_follow_protocol_boundary() {
+    let source = json!({"model":"chat-test","messages":[{"role":"assistant","content":"answer","annotations":[{"type":"url_citation","url_citation":{"url":"https://example.com","title":"source","start_index":0,"end_index":3},"chat_only":"kept"}],"vendor":"kept","_monoize_injected":"drop"}],"_monoize_injected":"drop"});
+    for stream in [false, true] {
+        let mut source = source.clone();
+        source["stream"] = json!(stream);
+        let mut decoded = decode::decode_request(&source).unwrap();
+        let same = encode::encode_request(&decoded, "chat-test");
+        assert_eq!(same["messages"][0]["annotations"][0]["chat_only"], "kept");
+        assert_eq!(same["messages"][0]["vendor"], "kept");
+        assert!(
+            !serde_json::to_string(&same)
+                .unwrap()
+                .contains("_monoize_injected")
+        );
+        super::strip_nested_extra_body(&mut decoded.input);
+        let other = super::encode::openai_responses::encode_request(&decoded, "chat-test");
+        let wire = serde_json::to_string(&other).unwrap();
+        assert!(!wire.contains("chat_only"));
+        assert!(!wire.contains("vendor"));
+        assert!(wire.contains("https://example.com"));
+    }
+}
+
+#[tokio::test]
+async fn chat_reasoning_only_length_finish_is_valid_and_billed() {
+    let native = response(
+        json!({"role":"assistant","content":"","reasoning_content":"unfinished analysis"}),
+        "length",
+    );
+    let decoded = decode::decode_response(&native).unwrap();
+    let events=decode_stream(vec![json!({"choices":[{"delta":{"reasoning_content":"unfinished analysis"},"finish_reason":"length"}]}),json!({"choices":[],"usage":native["usage"]})]).await;
+    for actual in [
+        decoded.clone(),
+        terminal(&events),
+        terminal(&decode_stream(encode_stream(events).await).await),
+        terminal(&decode_stream(synthetic_stream(&decoded).await).await),
+    ] {
+        assert_eq!(actual.finish_reason, Some(super::FinishReason::Length));
+        assert_eq!(actual.usage.as_ref().unwrap().output_tokens, 7);
+        assert_eq!(
+            reasoning_fields(&actual),
+            vec![(Some("unfinished analysis".into()), None, None)]
+        );
+        assert_eq!(
+            encode::encode_response(&actual, "chat-test")["choices"][0]["message"]["content"],
+            ""
+        );
+    }
+}
+
+#[test]
+fn chat_documented_controls_and_tool_choices_both_stream_modes() {
+    for stream in [false, true] {
+        for choice in [
+            json!("none"),
+            json!("auto"),
+            json!("required"),
+            json!({"type":"function","function":{"name":"f"}}),
+            json!({"type":"custom","custom":{"name":"patch"}}),
+        ] {
+            let source = json!({"model":"chat-test","stream":stream,"messages":[{"role":"system","content":"rules"},{"role":"developer","content":"developer"},{"role":"user","content":"question"}],"tools":[{"type":"function","function":{"name":"f","description":"function","parameters":{"type":"object"},"strict":false}},{"type":"custom","custom":{"name":"patch","format":{"type":"text"}}}],"tool_choice":choice,"temperature":0.4,"top_p":0.9,"max_completion_tokens":512,"stop":"END","parallel_tool_calls":true,"reasoning_effort":"high","presence_penalty":0.2,"frequency_penalty":0.1,"logit_bias":{"12":-1},"seed":42,"store":false,"metadata":{"trace":"test"},"service_tier":"default","safety_identifier":"safe","prompt_cache_key":"cache","prompt_cache_retention":"24h","prediction":{"type":"content","content":"predicted"}});
+            let mut request = decode::decode_request(&source).unwrap();
+            let output = encode::encode_request(&request, "chat-test");
+            for key in [
+                "messages",
+                "tools",
+                "tool_choice",
+                "temperature",
+                "top_p",
+                "stop",
+                "parallel_tool_calls",
+                "reasoning_effort",
+                "presence_penalty",
+                "frequency_penalty",
+                "logit_bias",
+                "seed",
+                "store",
+                "metadata",
+                "service_tier",
+                "safety_identifier",
+                "prompt_cache_key",
+                "prompt_cache_retention",
+                "prediction",
+            ] {
+                assert_eq!(output[key], source[key], "{key}");
+            }
+            assert_eq!(
+                decode::decode_request(&output).unwrap().max_output_tokens,
+                Some(512)
+            );
+            request.temperature = None;
+            request.top_p = None;
+            request.max_output_tokens = None;
+            request.stop = None;
+            request.reasoning = None;
+            request.tool_choice = None;
+            let output = encode::encode_request(&request, "chat-test");
+            for key in [
+                "temperature",
+                "top_p",
+                "max_tokens",
+                "max_completion_tokens",
+                "stop",
+                "reasoning_effort",
+                "reasoning",
+                "thinking",
+                "tool_choice",
+            ] {
+                assert!(output.get(key).is_none(), "{key}: {output}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_fragmented_logprobs_preserve_unicode_token_bytes_and_order() {
+    let native = response(json!({"role":"assistant","content":"你a"}), "stop");
+    let first = chat_scores("你");
+    let second = chat_scores("a");
+    let events=decode_stream(vec![json!({"choices":[{"delta":{"content":"你"},"logprobs":{"content":first}}]}),json!({"choices":[{"delta":{"content":"a"},"logprobs":{"content":second},"finish_reason":"stop"}]})]).await;
+    let expected = json!([first[0], second[0]]);
+    for actual in [
+        terminal(&events),
+        terminal(&decode_stream(encode_stream_with_limit(events, Some(320)).await).await),
+    ] {
+        let wire = encode::encode_response(&actual, "chat-test");
+        assert_eq!(
+            wire["choices"][0]["message"],
+            native["choices"][0]["message"]
+        );
+        assert_eq!(wire["choices"][0]["logprobs"]["content"], expected);
+    }
+}
+
+#[tokio::test]
+async fn chat_native_raw_provenance_cannot_restore_raw_from_summary() {
+    for stream in [false, true] {
+        let mut request=decode::decode_request(&json!({"model":"chat-test","stream":stream,"messages":[{"role":"assistant","content":"answer","reasoning_content":"deleted raw"}]})).unwrap();
+        for node in &mut request.input {
+            if let Node::Reasoning {
+                content,
+                summary,
+                encrypted,
+                ..
+            } = node
+            {
+                *content = None;
+                *summary = Some("retained summary".into());
+                *encrypted = Some(json!("retained cipher"));
+            }
+        }
+        let encoded = encode::encode_request(&request, "chat-test");
+        let message = &encoded["messages"][0];
+        assert!(message.get("reasoning_content").is_none(), "{message}");
+        assert_eq!(
+            message["reasoning_details"],
+            json!([{"type":"reasoning.summary","summary":"retained summary"},{"type":"reasoning.encrypted","data":"retained cipher"}])
+        );
+    }
+    let mut response = decode::decode_response(&response(
+        json!({"role":"assistant","content":"answer","reasoning_content":"deleted raw"}),
+        "stop",
+    ))
+    .unwrap();
+    for node in &mut response.output {
+        if let Node::Reasoning {
+            content,
+            summary,
+            encrypted,
+            ..
+        } = node
+        {
+            *content = None;
+            *summary = Some("retained summary".into());
+            *encrypted = Some(json!("retained cipher"));
+        }
+    }
+    let encoded = encode::encode_response(&response, "chat-test");
+    assert!(
+        encoded["choices"][0]["message"]
+            .get("reasoning_content")
+            .is_none()
+    );
+    for actual in [
+        decode::decode_response(&encoded).unwrap(),
+        terminal(&decode_stream(synthetic_stream(&response).await).await),
+    ] {
+        let fields = reasoning_fields(&actual);
+        assert!(fields.iter().all(|f| f.0.is_none()), "{fields:?}");
+        assert_eq!(
+            fields
+                .iter()
+                .filter_map(|f| f.1.as_deref())
+                .collect::<String>(),
+            "retained summary"
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .filter_map(|f| f.2.as_ref().and_then(Value::as_str))
+                .collect::<String>(),
+            "retained cipher"
+        );
+    }
+}
+
+#[tokio::test]
+async fn chat_equal_raw_and_summary_bytes_are_not_semantic_duplicates() {
+    for message in [
+        json!({"role":"assistant","content":"answer","reasoning_content":"same","reasoning_details":[{"type":"reasoning.summary","summary":"same","index":0}]}),
+        json!({"role":"assistant","content":"answer","reasoning":"same","reasoning_content":"same","reasoning_details":[{"type":"reasoning.summary","summary":"same","index":0}]}),
+        json!({"role":"assistant","content":"answer","reasoning":"generic","reasoning_content":"raw"}),
+        json!({"role":"assistant","content":"answer","reasoning":"same","reasoning_content":"same","reasoning_details":[{"type":"reasoning.text","text":"same","index":0}]}),
+    ] {
+        let expected_raw = if message["reasoning"] == "generic" {
+            "genericraw"
+        } else {
+            "same"
+        };
+        let expected_summary = if message["reasoning_details"][0]["type"] == "reasoning.summary" {
+            "same"
+        } else {
+            ""
+        };
+        let check = |nodes: &[Node]| {
+            let raw = nodes
+                .iter()
+                .filter_map(|node| match node {
+                    Node::Reasoning { content, .. } => content.as_deref(),
+                    _ => None,
+                })
+                .collect::<String>();
+            let summary = nodes
+                .iter()
+                .filter_map(|node| match node {
+                    Node::Reasoning { summary, .. } => summary.as_deref(),
+                    _ => None,
+                })
+                .collect::<String>();
+            assert_eq!(raw, expected_raw, "{nodes:?}");
+            assert_eq!(summary, expected_summary, "{nodes:?}");
+        };
+        for stream in [false, true] {
+            let request = decode::decode_request(
+                &json!({"model":"chat-test","stream":stream,"messages":[message.clone()]}),
+            )
+            .unwrap();
+            check(&request.input);
+            check(
+                &decode::decode_request(&encode::encode_request(&request, "chat-test"))
+                    .unwrap()
+                    .input,
+            );
+        }
+        let decoded = decode::decode_response(&response(message.clone(), "stop")).unwrap();
+        let events = decode_stream(vec![
+            json!({"choices":[{"delta":message,"finish_reason":"stop"}]}),
+        ])
+        .await;
+        for actual in [
+            decoded.clone(),
+            decode::decode_response(&encode::encode_response(&decoded, "chat-test")).unwrap(),
+            terminal(&events),
+            terminal(&decode_stream(encode_stream(events).await).await),
+            terminal(&decode_stream(synthetic_stream(&decoded).await).await),
+        ] {
+            check(&actual.output);
         }
     }
 }

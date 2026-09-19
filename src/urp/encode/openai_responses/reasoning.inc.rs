@@ -138,15 +138,13 @@ fn sanitize_request_input_item(item: &mut Value) {
                     let Some(part_obj) = part.as_object_mut() else {
                         continue;
                     };
-                    if matches!(
-                        part_obj.get("type").and_then(Value::as_str),
-                        Some("output_text" | "input_text" | "text")
-                    ) {
+                    let part_type = part_obj.get("type").and_then(Value::as_str);
+                    if matches!(part_type, Some("input_text" | "text")) {
                         part_obj.remove("annotations");
                         part_obj.remove("logprobs");
-                        if part_obj.get("phase").and_then(Value::as_str) == Some("analysis") {
-                            part_obj.remove("phase");
-                        }
+                    }
+                    if part_obj.get("phase").and_then(Value::as_str) == Some("analysis") {
+                        part_obj.remove("phase");
                     }
                 }
             }

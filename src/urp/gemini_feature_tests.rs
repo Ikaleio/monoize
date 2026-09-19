@@ -381,18 +381,18 @@ async fn gemini_media_only_terminal_keeps_prior_text_citations() {
     let canonical = terminal(&events);
     assert_eq!(canonical.output.len(), 3);
     assert!(
-        matches!(&canonical.output[0],Node::Text{citations,..} if citations==&vec![citation.clone()])
+        matches!(&canonical.output[0],Node::Text{citations,..} if citations==&vec![crate::urp::Citation::decode(citation.clone(),crate::urp::ProviderProtocol::Gemini)])
     );
     assert!(matches!(&canonical.output[1], Node::Image { .. }));
     assert!(matches!(&canonical.output[2], Node::Image { .. }));
-    assert_eq!(events.iter().filter(|event| matches!(event,UrpStreamEvent::NodeDelta{node_index:0,delta:NodeDelta::Text{content,citations,..},..} if content.is_empty() && citations==&vec![citation.clone()])).count(),1);
+    assert_eq!(events.iter().filter(|event| matches!(event,UrpStreamEvent::NodeDelta{node_index:0,delta:NodeDelta::Text{content,citations,..},..} if content.is_empty() && citations==&vec![crate::urp::Citation::decode(citation.clone(),crate::urp::ProviderProtocol::Gemini)])).count(),1);
     let (tx, rx) = tokio::sync::mpsc::channel(32);
     for event in events.iter().cloned() {
         tx.send(event).await.unwrap();
     }
     drop(tx);
     let (wire_tx, wire_rx) = tokio::sync::mpsc::channel(32);
-    // Messages emits the citation before rejecting the following unsupported response image.
+    // Messages cannot represent Gemini source ranges and rejects the following response image.
     assert!(
         stream_encode::anthropic::encode_urp_stream_as_messages(
             rx,
@@ -413,10 +413,10 @@ async fn gemini_media_only_terminal_keeps_prior_text_citations() {
     .await
     .unwrap();
     let text = String::from_utf8(bytes.to_vec()).unwrap();
-    assert_eq!(text.matches("\"citations_delta\"").count(), 1, "{text}");
+    assert_eq!(text.matches("\"citations_delta\"").count(), 0, "{text}");
     assert_eq!(
         text.matches("https://example.com/source").count(),
-        1,
+        0,
         "{text}"
     );
     assert!(text.contains("\"error\""), "{text}");
@@ -642,6 +642,7 @@ async fn gemini_custom_calls_and_results_fail_without_discarding_content() {
                 .unwrap();
             }
             tx.send(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: vec![node.clone()],
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
@@ -1007,6 +1008,7 @@ async fn gemini_media_mutation_discards_video_metadata_in_nonstream_and_stream()
         let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
         let frames = encoder
             .push_event(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: canonical.output,
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
@@ -1065,6 +1067,7 @@ async fn gemini_unsupported_media_errors_before_success_in_nonstream_and_live() 
                 .unwrap();
             }
             tx.send(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: vec![node.clone()],
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
@@ -1123,6 +1126,7 @@ async fn gemini_compound_document_response_expands_consistently_in_live_frames()
     frames.extend(
         encoder
             .push_event(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: canonical.output,
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
@@ -1191,11 +1195,13 @@ fn terminal(events: &[UrpStreamEvent]) -> UrpResponse {
         .iter()
         .find_map(|event| match event {
             UrpStreamEvent::ResponseDone {
+                outcome: _,
                 finish_reason,
                 usage,
                 output,
                 extra_body,
             } => Some(UrpResponse {
+                outcome: None,
                 id: id.clone(),
                 model: model.clone(),
                 created_at: None,
@@ -1552,6 +1558,7 @@ fn gemini_signed_nodes_have_no_shadow_payload_and_obey_mutation() {
         data: "bmV3".into(),
     };
     let Node::Text {
+        logprobs: _,
         signature,
         content,
         extra_body,
@@ -1624,7 +1631,12 @@ async fn gemini_grounding_citations_safety_metadata_nonstream_and_stream() {
         decode::gemini::decode_response(&native).unwrap(),
         terminal(&stream_decode(&[native.clone()]).await.unwrap()),
     ] {
-        let Node::Text { citations, .. } = &mut canonical.output[0] else {
+        let Node::Text {
+            logprobs: _,
+            citations,
+            ..
+        } = &mut canonical.output[0]
+        else {
             panic!()
         };
         assert_eq!(citations.len(), 1);
@@ -1637,7 +1649,12 @@ async fn gemini_grounding_citations_safety_metadata_nonstream_and_stream() {
         ] {
             assert_eq!(encoded["candidates"][0][key], native["candidates"][0][key]);
         }
-        let Node::Text { citations, .. } = &mut canonical.output[0] else {
+        let Node::Text {
+            logprobs: _,
+            citations,
+            ..
+        } = &mut canonical.output[0]
+        else {
             panic!()
         };
         citations.clear();
@@ -1690,6 +1707,7 @@ async fn gemini_stream_terminal_reconciliation_emits_missing_parts_once() {
     frames.extend(
         encoder
             .push_event(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
                 output: vec![Node::assistant_text("ab"), Node::assistant_text("c")],
@@ -1702,7 +1720,11 @@ async fn gemini_stream_terminal_reconciliation_emits_missing_parts_once() {
         .output
         .iter()
         .filter_map(|node| match node {
-            Node::Text { content, .. } => Some(content.as_str()),
+            Node::Text {
+                logprobs: _,
+                content,
+                ..
+            } => Some(content.as_str()),
             _ => None,
         })
         .collect();
@@ -1767,6 +1789,7 @@ async fn gemini_stream_orders_out_of_order_completions_and_terminal_repairs() {
         frames.extend(
             encoder
                 .push_event(UrpStreamEvent::ResponseDone {
+                    outcome: None,
                     output: vec![first, second],
                     finish_reason: Some(FinishReason::Stop),
                     usage: None,
@@ -1789,7 +1812,11 @@ async fn gemini_stream_orders_out_of_order_completions_and_terminal_repairs() {
             .output
             .iter()
             .filter_map(|node| match node {
-                Node::Text { content, .. } => Some(content.as_str()),
+                Node::Text {
+                    logprobs: _,
+                    content,
+                    ..
+                } => Some(content.as_str()),
                 _ => None,
             })
             .collect();
@@ -1817,6 +1844,7 @@ fn gemini_stream_does_not_mark_unrepresentable_nodes_as_emitted() {
         let expected_parts = output.len();
         let frames = encoder
             .push_event(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output,
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
@@ -1847,6 +1875,7 @@ fn gemini_stream_does_not_mark_unrepresentable_nodes_as_emitted() {
     assert!(
         encoder
             .push_event(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: vec![
                     Node::assistant_text("inserted"),
                     Node::assistant_text("later")
@@ -1875,6 +1904,7 @@ fn gemini_stream_rejects_prefix_extension_after_later_part_emission() {
     assert!(
         encoder
             .push_event(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: vec![Node::assistant_text("ab"), Node::assistant_text("c")],
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
@@ -1955,6 +1985,7 @@ async fn gemini_opaque_identity_obeys_typed_mutation_and_deletion_stream() {
         frames.extend(
             encoder
                 .push_event(UrpStreamEvent::ResponseDone {
+                    outcome: None,
                     output: canonical.output,
                     finish_reason: Some(FinishReason::Stop),
                     usage: None,
@@ -2081,7 +2112,12 @@ async fn gemini_late_citations_reach_terminal_stream_output() {
         .remove("finishReason");
     let terminal_frame = json!({"candidates":[{"finishReason":"STOP","citationMetadata":{"citationSources":[{"uri":"https://example.com"}]}}]});
     let events = stream_decode(&[initial, terminal_frame]).await.unwrap();
-    let Node::Text { citations, .. } = &terminal(&events).output[0] else {
+    let Node::Text {
+        logprobs: _,
+        citations,
+        ..
+    } = &terminal(&events).output[0]
+    else {
         panic!()
     };
     assert_eq!(citations.len(), 1);
@@ -2091,7 +2127,12 @@ async fn gemini_late_citations_reach_terminal_stream_output() {
         .flat_map(|event| encoder.push_event(event).unwrap())
         .collect();
     let decoded = terminal(&stream_decode(&frames).await.unwrap());
-    let Node::Text { citations, .. } = &decoded.output[0] else {
+    let Node::Text {
+        logprobs: _,
+        citations,
+        ..
+    } = &decoded.output[0]
+    else {
         panic!()
     };
     assert_eq!(citations.len(), 1);

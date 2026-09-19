@@ -73,7 +73,11 @@ fn visible_text(nodes: &[Node]) -> String {
     nodes
         .iter()
         .flat_map(|node| match node {
-            Node::Text { content, .. } => vec![content.clone()],
+            Node::Text {
+                logprobs: _,
+                content,
+                ..
+            } => vec![content.clone()],
             Node::File {
                 source, metadata, ..
             } => {
@@ -812,6 +816,7 @@ fn compound_document_text_fields_survive_preparation_and_citations_become_typed(
                 .iter()
                 .find_map(|node| match node {
                     Node::Text {
+                        logprobs,
                         content,
                         citations,
                         extra_body,
@@ -820,7 +825,13 @@ fn compound_document_text_fields_survive_preparation_and_citations_become_typed(
                     _ => None,
                 })
                 .unwrap();
-            assert_eq!(citations, &vec![citation.clone()]);
+            assert_eq!(
+                citations,
+                &vec![crate::urp::Citation::decode(
+                    citation.clone(),
+                    crate::urp::ProviderProtocol::Messages
+                )]
+            );
             assert!(!extra.contains_key("citations"));
         }
         assert_eq!(serde_json::to_value(&request).unwrap(), original);

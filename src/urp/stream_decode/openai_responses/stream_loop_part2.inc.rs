@@ -12,7 +12,12 @@ fn map_responses_event_to_urp_events_with_state(
         "response.refusal.delta" => vec![UrpStreamEvent::NodeDelta {
             node_index: urp_node_index_from_delta(&data_val, index_state),
             delta: NodeDelta::Refusal {
-                content: data_val.get("delta").and_then(Value::as_str).unwrap_or_default().to_string(),
+                logprobs: None,
+                content: data_val
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             },
             usage: None,
             extra_body: HashMap::new(),
@@ -20,8 +25,16 @@ fn map_responses_event_to_urp_events_with_state(
         "response.output_text.annotation.added" => vec![UrpStreamEvent::NodeDelta {
             node_index: urp_node_index_from_delta(&data_val, index_state),
             delta: NodeDelta::Text {
+                logprobs: None,
                 signature: None,
-                citations: data_val.get("annotation").cloned().into_iter().collect(),
+                citations: data_val
+                    .get("annotation")
+                    .cloned()
+                    .map(|v| {
+                        crate::urp::Citation::decode(v, crate::urp::ProviderProtocol::Responses)
+                    })
+                    .into_iter()
+                    .collect(),
                 content: String::new(),
             },
             usage: None,
@@ -59,6 +72,7 @@ fn map_responses_event_to_urp_events_with_state(
                 emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
                 let item_id = stable_message_item_id_for_output(index_state, output_index);
                 let node = Node::Text {
+                    logprobs: crate::urp::logprobs::decode(data_val.get("logprobs")),
                     signature: None,
                     citations: Vec::new(),
                     id: Some(item_id),
@@ -85,6 +99,7 @@ fn map_responses_event_to_urp_events_with_state(
             events.push(UrpStreamEvent::NodeDelta {
                 node_index,
                 delta: NodeDelta::Text {
+                    logprobs: crate::urp::logprobs::decode(data_val.get("logprobs")),
                     signature: None,
                     citations: Vec::new(),
                     content: output_text_delta_content(&data_val).to_string(),
@@ -126,6 +141,8 @@ fn map_responses_event_to_urp_events_with_state(
             let extra_body = split_known_fields(
                 data_val.clone(),
                 &[
+                    "type",
+                    "sequence_number",
                     "delta",
                     "text",
                     "output_index",
@@ -170,7 +187,7 @@ fn map_responses_event_to_urp_events_with_state(
                 usage: None,
                 extra_body: split_known_fields(
                     data_val,
-                    &["delta", "output_index", "content_index", "part_index"],
+                    &["type", "sequence_number", "delta", "output_index", "content_index", "part_index"],
                 ),
             }]
         }
@@ -273,7 +290,7 @@ struct OutputItemStreamState {
     function_arguments_delta_seen: bool,
     reasoning_source: Option<String>,
     message_phase: Option<String>,
-    text_citations: BTreeMap<(u64, u64), Value>,
+    text_citations: BTreeMap<(u64, u64), crate::urp::Citation>,
     content_nodes: BTreeMap<u64, Node>,
 }
 

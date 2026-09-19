@@ -1283,6 +1283,7 @@ async fn persist_active_probe_request_log(
         && let Some((prompt_tokens, completion_tokens)) = usage_tokens
     {
         let usage = crate::urp::Usage {
+            iterations: None,
             input_tokens: prompt_tokens,
             output_tokens: completion_tokens,
             input_details: None,

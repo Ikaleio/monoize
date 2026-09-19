@@ -52,6 +52,7 @@ UrpRequest {
   top_p: Option<f64>,
   max_output_tokens: Option<u64>,
   reasoning: Option<ReasoningConfig>,
+  logprobs: Option<LogprobConfig>,
   tools: Option<Vec<ToolDefinition>>,
   tool_choice: Option<ToolChoice>,
   parallel_tool_calls: Option<bool>,
@@ -68,6 +69,7 @@ UrpResponse {
   created_at: Option<i64>,
   output: Vec<Node>,
   finish_reason: Option<FinishReason>,
+  outcome: Option<ResponseOutcome>,
   usage: Option<Usage>,
   extra_body: HashMap<String, JsonValue>
 }
@@ -155,7 +157,7 @@ Node =
       content: String,
       phase: Option<String>,
       signature: Option<JsonValue>,
-      citations: Vec<JsonValue>,
+      citations: Vec<Citation>,
       extra_body: HashMap<String, JsonValue>
     }
   | Image {
@@ -318,7 +320,7 @@ UrpStreamEvent =
   | NodeStart { node_index: u32, header: NodeHeader, extra_body: HashMap<String, JsonValue> }
   | NodeDelta { node_index: u32, delta: NodeDelta, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
   | NodeDone { node_index: u32, node: Node, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
-  | ResponseDone { finish_reason: Option<FinishReason>, usage: Option<Usage>, output: Vec<Node>, extra_body: HashMap<String, JsonValue> }
+  | ResponseDone { outcome: Option<ResponseOutcome>, finish_reason: Option<FinishReason>, usage: Option<Usage>, output: Vec<Node>, extra_body: HashMap<String, JsonValue> }
   | ProviderControl { protocol: String, event_name: String, data: JsonValue, extra_body: HashMap<String, JsonValue> }
   | Error { code: Option<String>, message: String, extra_body: HashMap<String, JsonValue> }
 ```
@@ -632,6 +634,14 @@ RTYPE-NEW-4. A text-part encoder MUST use current text. Invalid lengths or UTF-8
 RTYPE-NEW-5. Text nodes, headers, deltas, and temporary bridge parts MUST carry citations and an optional signature.
 RTYPE-NEW-6. `ResponseStart.usage` MUST use `Option<Usage>`. No JSON serialization round trip is permitted for internal start usage.
 RTYPE-NEW-7. `UrpRequest.context` MUST hold runtime identities independently of extra_body. Serialization and JavaScript transform round trips MUST NOT expose or replace trusted context.
+
+RTYPE-NEW-7a. Serialization MUST omit `UrpRequest.context`. Deserialization MUST consume and discard any JSON `context` value.
+The discarded value MUST NOT enter flattened `extra_body`. Missing context MUST produce the default runtime context.
+`RequestContext` MUST hold optional `ResponseHistoryContext` and a map from wire tool names to `ToolTransport`.
+`ResponseHistoryContext` MUST contain typed response ID, authorization scope, storage flag, and optional previous response ID.
+`ToolTransport` MUST contain a target `ProviderProtocol`, a wire `ToolCallType`, and an original `ToolIdentity`.
+`ToolIdentity` MUST contain optional namespace, name, and `ToolCallType`.
+These fields MUST NOT be recovered from `_monoize_*` extras.
 RTYPE-NEW-8. The typed additions in this section extend the type listings above. Absence remains authoritative at every adapter boundary.
 
 RTYPE-NEW-9. ToolCall nodes, headers, and bridge parts MUST include optional `namespace: String` and `signature: JsonValue` fields.
@@ -639,3 +649,12 @@ ToolResult nodes and headers MUST include optional `namespace: String` and `name
 RTYPE-NEW-10. ToolDefinition MUST include optional namespace, ordered child tools, origin_protocol, and native config fields under URPV2-S8.
 RTYPE-NEW-11. Media nodes, headers, bridge parts, and ToolResultContent media MUST carry MediaMetadata under media-transport.spec.md. ToolResult nodes and headers MUST retain typed signatures.
 RTYPE-NEW-12. ProviderItem headers MUST include an optional initial body. Stream helpers MUST preserve that body as canonical initial state.
+
+
+## Canonical semantic metadata extension
+
+RSEM-1. SEM-1 through SEM-6 in urp-v2-flat-structure.spec.md supersede older JSON citation and terminal-extra shapes in this file.
+Rust citations MUST use Citation values. Text and Refusal nodes, bridge parts, and deltas MUST retain optional TokenLogprob arrays.
+UrpRequest MUST expose optional LogprobConfig. UrpResponse and ResponseDone MUST expose optional ResponseOutcome.
+Usage MUST expose optional ordered UsageIteration values. Constructors that omit these optional semantic fields MUST default to absence during deserialization.
+Existing final audio and reasoning representations remain unchanged.

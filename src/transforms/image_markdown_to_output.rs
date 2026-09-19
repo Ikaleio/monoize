@@ -137,6 +137,7 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
     for node in nodes.drain(..) {
         match node {
             Node::Text {
+                logprobs: _,
                 signature: _,
                 citations: _,
                 id,
@@ -148,6 +149,7 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
                 let (cleaned, images) = extract_markdown_images_from_text(&content);
                 if !cleaned.is_empty() {
                     rewritten.push(Node::Text {
+                        logprobs: None,
                         signature: None,
                         citations: Vec::new(),
                         id,
@@ -347,6 +349,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             node_index,
             delta:
                 NodeDelta::Text {
+                    logprobs: _,
                     signature: _,
                     citations: _,
                     content,
@@ -379,6 +382,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             node_index,
             node:
                 Node::Text {
+                    logprobs: _,
                     signature: _,
                     citations: _,
                     id,
@@ -421,6 +425,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                 emitted.push(UrpStreamEvent::NodeDone {
                     node_index: *node_index,
                     node: Node::Text {
+                        logprobs: None,
                         signature: None,
                         citations: Vec::new(),
                         id: id.clone(),
@@ -519,6 +524,7 @@ fn emit_node_segments(
                 emitted.push(UrpStreamEvent::NodeDelta {
                     node_index,
                     delta: NodeDelta::Text {
+                        logprobs: None,
                         signature: None,
                         citations: Vec::new(),
                         content: text,

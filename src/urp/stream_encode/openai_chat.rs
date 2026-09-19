@@ -299,6 +299,16 @@ pub(crate) async fn emit_synthetic_chat_stream(
     sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
+    if let Some(body) = resp
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.failure_body(false))
+    {
+        send_plain_sse_data(&tx, body.to_string()).await?;
+        send_plain_sse_data(&tx, "[DONE]".into()).await?;
+        return Ok(());
+    }
+
     if let Err(error) = urp::encode::openai_chat::validate_response_nodes(&resp.output) {
         return emit_chat_media_error(&tx, &error).await;
     }
@@ -308,6 +318,7 @@ pub(crate) async fn emit_synthetic_chat_stream(
     let created = now_ts();
     let mut saw_tool = false;
     let mut saw_legacy_function_call = false;
+    let mut text_offset = 0u64;
     let mut tool_idx = 0usize;
     for node in &resp.output {
         match node {
@@ -491,7 +502,13 @@ pub(crate) async fn emit_synthetic_chat_stream(
                         &id,
                         created,
                         logical_model,
-                        chat_text_node_delta(node),
+                        {
+                            let delta = chat_text_node_delta(node, text_offset);
+                            if matches!(node, Node::Text { .. }) {
+                                text_offset += content.chars().count() as u64;
+                            }
+                            delta
+                        },
                         content,
                         if matches!(node, Node::Refusal { .. }) {
                             chat_delta_path_refusal
@@ -499,6 +516,7 @@ pub(crate) async fn emit_synthetic_chat_stream(
                             chat_delta_path_content
                         },
                         sse_max_frame_length,
+                        node.token_scores(),
                     )
                     .await?;
                 }
@@ -561,7 +579,10 @@ pub(crate) async fn emit_synthetic_chat_stream(
 fn finish_reason_to_chat(reason: urp::FinishReason) -> &'static str {
     match reason {
         urp::FinishReason::Stop => "stop",
-        urp::FinishReason::Length => "length",
+        urp::FinishReason::Length
+        | FinishReason::ContextLimit
+        | FinishReason::Paused
+        | FinishReason::Compaction => "length",
         urp::FinishReason::ToolCalls => "tool_calls",
         urp::FinishReason::ContentFilter => "content_filter",
         urp::FinishReason::Other => "error",
@@ -624,6 +645,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
     let mut signature_projection = crate::urp::tool_signature::SignatureProjection::default();
     let mut chat_id = String::new();
     let mut created = 0i64;
+    let mut text_offset = 0u64;
     let mut tool_idx = 0usize;
     let mut saw_tool = false;
     let mut saw_legacy_function_call = false;
@@ -632,6 +654,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
     let mut emitted_node_indices: HashSet<u32> = HashSet::new();
     let mut pending_envelope_extra = HashMap::new();
     let mut native_audio_nodes = HashSet::new();
+    let mut node_text_offsets = HashMap::new();
 
     while let Some(event) = signature_projection.recv(&mut rx).await {
         if finished {
@@ -769,6 +792,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 node_index,
                 delta:
                     NodeDelta::Text {
+                        logprobs,
                         signature: _,
                         citations,
                         content,
@@ -776,9 +800,15 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 extra_body,
                 ..
             } => {
+                let node_text_offset = *node_text_offsets.entry(node_index).or_insert(text_offset);
+                text_offset = text_offset.saturating_add(content.chars().count() as u64);
                 let mut native_delta = json!({"content":""});
                 if !citations.is_empty() {
-                    native_delta["annotations"] = json!(citations);
+                    native_delta["annotations"] = json!(crate::urp::citations::encode(
+                        &citations,
+                        crate::urp::ProviderProtocol::ChatCompletion,
+                        node_text_offset
+                    ));
                 }
                 let delta =
                     chat_delta_with_extras(native_delta, &extra_body, &mut pending_envelope_extra);
@@ -791,13 +821,14 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &content,
                     chat_delta_path_content,
                     sse_max_frame_length,
+                    crate::urp::logprobs::valid(&logprobs, &content),
                 )
                 .await?;
                 emitted_node_indices.insert(node_index);
             }
             UrpStreamEvent::NodeDelta {
                 node_index,
-                delta: NodeDelta::Refusal { content },
+                delta: NodeDelta::Refusal { logprobs, content },
                 extra_body,
                 ..
             } => {
@@ -806,7 +837,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &extra_body,
                     &mut pending_envelope_extra,
                 );
-                send_chat_chunk_string(
+                send_chat_text_chunk(
                     &tx,
                     &chat_id,
                     created,
@@ -815,6 +846,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &content,
                     chat_delta_path_refusal,
                     sse_max_frame_length,
+                    crate::urp::logprobs::valid(&logprobs, &content),
                 )
                 .await?;
                 emitted_node_indices.insert(node_index);
@@ -1006,11 +1038,28 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 }
             }
             UrpStreamEvent::ResponseDone {
+                outcome,
                 finish_reason,
                 usage,
                 output,
                 extra_body,
             } => {
+                if let Some(mut body) = outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.failure_body(false))
+                {
+                    if let Some(message) = body["error"]["message"].as_str() {
+                        body["error"]["message"] =
+                            json!(crate::error_sanitize::maybe_mask_sensitive_text(
+                                message,
+                                mask_sensitive_info
+                            ));
+                    }
+                    send_plain_sse_data(&tx, body.to_string()).await?;
+                    send_plain_sse_data(&tx, "[DONE]".into()).await?;
+                    return Ok(());
+                }
+
                 for (key, value) in native_chat_delta_extra(&extra_body) {
                     pending_envelope_extra.insert(key, value);
                 }
@@ -1113,10 +1162,13 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         | Node::Refusal { content, .. } => {
                             if !content.is_empty() {
                                 let delta = chat_delta_with_extras(
-                                    chat_text_node_delta(node),
+                                    chat_text_node_delta(node, text_offset),
                                     &HashMap::new(),
                                     &mut pending_envelope_extra,
                                 );
+                                if matches!(node, Node::Text { .. }) {
+                                    text_offset += content.chars().count() as u64;
+                                }
                                 send_chat_text_chunk(
                                     &tx,
                                     &chat_id,
@@ -1130,6 +1182,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                         chat_delta_path_content
                                     },
                                     sse_max_frame_length,
+                                    node.token_scores(),
                                 )
                                 .await?;
                             }
@@ -1558,7 +1611,7 @@ fn chat_delta_path_refusal(value: &mut Value, content: &str) {
     value["choices"][0]["delta"]["refusal"] = json!(content);
 }
 
-fn chat_text_node_delta(node: &Node) -> Value {
+fn chat_text_node_delta(node: &Node, text_offset: u64) -> Value {
     match node {
         Node::Refusal { .. } => json!({"refusal":""}),
         Node::Text {
@@ -1566,7 +1619,11 @@ fn chat_text_node_delta(node: &Node) -> Value {
         } => {
             let mut delta = json!({"content":""});
             if !citations.is_empty() {
-                delta["annotations"] = json!(citations);
+                delta["annotations"] = json!(crate::urp::citations::encode(
+                    &citations,
+                    crate::urp::ProviderProtocol::ChatCompletion,
+                    text_offset
+                ));
             }
             if let Some(phase) = phase {
                 delta["phase"] = json!(phase);
@@ -1599,21 +1656,43 @@ async fn send_chat_text_chunk(
     content: &str,
     patch: fn(&mut Value, &str),
     max_frame_length: Option<usize>,
+    scores: Option<&[urp::TokenLogprob]>,
 ) -> AppResult<()> {
     let annotations = delta
         .as_object_mut()
         .and_then(|object| object.remove("annotations"));
-    send_chat_chunk_string(
-        tx,
-        id,
-        created,
-        model,
-        delta,
-        content,
-        patch,
-        max_frame_length,
-    )
-    .await?;
+    if let Some(scores) = scores {
+        let field = if delta.get("refusal").is_some() {
+            "refusal"
+        } else {
+            "content"
+        };
+        let mut chunk = json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null,"logprobs":{field:scores}}]});
+        patch(&mut chunk, content);
+        if max_frame_length.is_some_and(|limit| chunk.to_string().len() + 8 > limit) {
+            for (text, scores) in urp::logprobs::fragments(scores) {
+                let mut part = chunk.clone();
+                patch(&mut part, &text);
+                part["choices"][0]["logprobs"][field] = json!(scores);
+                send_plain_sse_data(tx, part.to_string()).await?;
+            }
+        } else {
+            send_plain_sse_data(tx, chunk.to_string()).await?;
+        }
+    } else {
+        send_chat_chunk_string(
+            tx,
+            id,
+            created,
+            model,
+            delta,
+            content,
+            patch,
+            max_frame_length,
+        )
+        .await?;
+    }
+
     if let Some(annotations) = annotations
         .and_then(|value| value.as_array().cloned())
         .filter(|values| !values.is_empty())

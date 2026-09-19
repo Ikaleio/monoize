@@ -97,6 +97,7 @@ fn apply_client_gone_if_needed(log: &mut InsertRequestLog, client_gone: bool) {
 
 fn apply_usage_fields(log: &mut InsertRequestLog, usage: Option<&urp::Usage>) {
     if let Some(usage) = usage {
+        let usage = usage.accounting();
         log.input_tokens = Some(usage.input_tokens);
         log.output_tokens = Some(usage.output_tokens);
         log.cache_read_tokens = usage.cached_tokens();
@@ -121,7 +122,7 @@ fn apply_usage_fields(log: &mut InsertRequestLog, usage: Option<&urp::Usage>) {
             .as_ref()
             .map(|details| details.rejected_prediction_tokens)
             .filter(|&value| value > 0);
-        log.usage_breakdown_json = Some(build_usage_breakdown(usage));
+        log.usage_breakdown_json = Some(build_usage_breakdown(&usage));
     }
 }
 

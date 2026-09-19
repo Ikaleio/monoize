@@ -299,6 +299,9 @@ fn effort_to_budget(effort: &str) -> u32 {
 fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static str {
     match finish_reason {
         Some(FinishReason::Length) => "max_tokens",
+        Some(FinishReason::ContextLimit) => "model_context_window_exceeded",
+        Some(FinishReason::Paused) => "pause_turn",
+        Some(FinishReason::Compaction) => "compaction",
         Some(FinishReason::ToolCalls) => "tool_use",
         Some(FinishReason::ContentFilter) => "refusal",
         _ => "end_turn",
@@ -309,6 +312,9 @@ pub(crate) fn messages_finish_reason(reason: &str) -> Option<FinishReason> {
     match reason {
         "end_turn" | "stop_sequence" => Some(FinishReason::Stop),
         "max_tokens" => Some(FinishReason::Length),
+        "model_context_window_exceeded" => Some(FinishReason::ContextLimit),
+        "pause_turn" => Some(FinishReason::Paused),
+        "compaction" => Some(FinishReason::Compaction),
         "tool_use" => Some(FinishReason::ToolCalls),
         "refusal" => Some(FinishReason::ContentFilter),
         "" => None,

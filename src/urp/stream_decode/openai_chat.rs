@@ -46,6 +46,8 @@ pub(crate) async fn stream_chat_to_urp_events(
 ) -> AppResult<()> {
     let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut output_text = String::new();
+    let mut text_logprobs = None;
+    let mut refusal_logprobs = None;
     let mut citations = Vec::new();
     let mut refusal_text = String::new();
     let mut refusal_node_index = None;
@@ -284,19 +286,42 @@ pub(crate) async fn stream_chat_to_urp_events(
             }
         }
 
-        if let Some(t) = delta.get("content").and_then(|v| v.as_str()) {
-            process_text_delta(
+        if let Some(t) = delta.get("content").and_then(Value::as_str) {
+            let scores = crate::urp::logprobs::decode(
+                choice
+                    .and_then(|c| c.get("logprobs"))
+                    .and_then(|v| v.get("content")),
+            );
+            crate::urp::logprobs::append(&mut text_logprobs, &scores);
+            let node_index = ensure_node_started(
                 &tx,
                 &response_id,
                 &urp.model,
-                t,
-                assistant_message_phase.as_deref(),
                 &mut response_started,
                 &mut text_node_index,
                 &mut next_node_index,
-                &mut output_text,
-                &mut delta_extra,
-                &runtime_metrics,
+                NodeHeader::Text {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
+                    phase: assistant_message_phase.clone(),
+                    citations: vec![],
+                    signature: None,
+                },
+                HashMap::new(),
+            )
+            .await?;
+            output_text.push_str(t);
+            record_visible_output_delta(&runtime_metrics, t).await;
+            send_node_delta(
+                &tx,
+                node_index,
+                NodeDelta::Text {
+                    logprobs: scores,
+                    content: t.into(),
+                    citations: vec![],
+                    signature: None,
+                },
+                chat_delta_event_extra(std::mem::take(&mut delta_extra)),
             )
             .await?;
         }
@@ -319,13 +344,20 @@ pub(crate) async fn stream_chat_to_urp_events(
                 HashMap::new(),
             )
             .await?;
-            citations.extend(annotations.iter().cloned());
+            citations.extend(crate::urp::citations::decode(
+                annotations.clone(),
+                crate::urp::ProviderProtocol::ChatCompletion,
+            ));
             send_node_delta(
                 &tx,
                 node_index,
                 NodeDelta::Text {
+                    logprobs: None,
                     content: String::new(),
-                    citations: annotations.clone(),
+                    citations: crate::urp::citations::decode(
+                        annotations.clone(),
+                        crate::urp::ProviderProtocol::ChatCompletion,
+                    ),
                     signature: None,
                 },
                 HashMap::new(),
@@ -344,11 +376,18 @@ pub(crate) async fn stream_chat_to_urp_events(
                 HashMap::new(),
             )
             .await?;
+            let scores = crate::urp::logprobs::decode(
+                choice
+                    .and_then(|c| c.get("logprobs"))
+                    .and_then(|v| v.get("refusal")),
+            );
+            crate::urp::logprobs::append(&mut refusal_logprobs, &scores);
             refusal_text.push_str(refusal);
             send_node_delta(
                 &tx,
                 node_index,
                 NodeDelta::Refusal {
+                    logprobs: scores,
                     content: refusal.into(),
                 },
                 chat_delta_event_extra(std::mem::take(&mut delta_extra)),
@@ -530,6 +569,7 @@ pub(crate) async fn stream_chat_to_urp_events(
             .get("reasoning_details")
             .and_then(Value::as_array)
             .filter(|details| !details.is_empty());
+        let mut scalar_delta = delta.clone();
         if let Some(reasoning_details) = reasoning_details {
             for detail in reasoning_details {
                 process_reasoning_detail_delta(
@@ -544,57 +584,79 @@ pub(crate) async fn stream_chat_to_urp_events(
                 )
                 .await?;
             }
-        } else {
-            let (reasoning_text_deltas, reasoning_summary_deltas, reasoning_sig_deltas) =
-                extract_chat_reasoning_delta_chunks(&delta);
-            for summary in reasoning_summary_deltas {
-                process_reasoning_summary_delta(
-                    &tx,
-                    &response_id,
-                    &urp.model,
-                    Some(&summary.text),
-                    summary.format.as_deref(),
-                    &mut response_started,
-                    &mut reasoning_node_index,
-                    &mut next_node_index,
-                    &mut reasoning_summary,
-                    &mut reasoning_source,
-                    &mut delta_extra,
-                )
-                .await?;
+            let scalar_obj = scalar_delta.as_object_mut().expect("chat delta object");
+            scalar_obj.remove("reasoning_details");
+            for key in ["reasoning", "reasoning_content", "reasoning_opaque"] {
+                let duplicate = delta.get(key).and_then(Value::as_str).is_some_and(|value| {
+                    reasoning_details
+                        .iter()
+                        .any(|detail| match detail["type"].as_str() {
+                            Some("reasoning.text") => {
+                                key != "reasoning_opaque" && detail["text"].as_str() == Some(value)
+                            }
+                            Some("reasoning.summary") => {
+                                key == "reasoning" && detail["summary"].as_str() == Some(value)
+                            }
+                            Some("reasoning.encrypted") => {
+                                key == "reasoning_opaque" && detail["data"].as_str() == Some(value)
+                            }
+                            _ => false,
+                        })
+                });
+                if duplicate {
+                    scalar_obj.remove(key);
+                }
             }
-            for text in reasoning_text_deltas {
-                process_reasoning_text_delta(
-                    &tx,
-                    &response_id,
-                    &urp.model,
-                    Some(&text.text),
-                    text.format.as_deref(),
-                    &mut response_started,
-                    &mut reasoning_node_index,
-                    &mut next_node_index,
-                    &mut reasoning_text,
-                    &mut reasoning_source,
-                    &mut delta_extra,
-                )
-                .await?;
-            }
-            for encrypted in reasoning_sig_deltas {
-                process_reasoning_encrypted_delta(
-                    &tx,
-                    &response_id,
-                    &urp.model,
-                    Some(&Value::String(encrypted.text)),
-                    encrypted.format.as_deref(),
-                    &mut response_started,
-                    &mut reasoning_node_index,
-                    &mut next_node_index,
-                    &mut reasoning_sig,
-                    &mut reasoning_source,
-                    &mut delta_extra,
-                )
-                .await?;
-            }
+        }
+        let (reasoning_text_deltas, reasoning_summary_deltas, reasoning_sig_deltas) =
+            extract_chat_reasoning_delta_chunks(&scalar_delta);
+        for summary in reasoning_summary_deltas {
+            process_reasoning_summary_delta(
+                &tx,
+                &response_id,
+                &urp.model,
+                Some(&summary.text),
+                summary.format.as_deref(),
+                &mut response_started,
+                &mut reasoning_node_index,
+                &mut next_node_index,
+                &mut reasoning_summary,
+                &mut reasoning_source,
+                &mut delta_extra,
+            )
+            .await?;
+        }
+        for text in reasoning_text_deltas {
+            process_reasoning_text_delta(
+                &tx,
+                &response_id,
+                &urp.model,
+                Some(&text.text),
+                text.format.as_deref(),
+                &mut response_started,
+                &mut reasoning_node_index,
+                &mut next_node_index,
+                &mut reasoning_text,
+                &mut reasoning_source,
+                &mut delta_extra,
+            )
+            .await?;
+        }
+        for encrypted in reasoning_sig_deltas {
+            process_reasoning_encrypted_delta(
+                &tx,
+                &response_id,
+                &urp.model,
+                Some(&Value::String(encrypted.text)),
+                encrypted.format.as_deref(),
+                &mut response_started,
+                &mut reasoning_node_index,
+                &mut next_node_index,
+                &mut reasoning_sig,
+                &mut reasoning_source,
+                &mut delta_extra,
+            )
+            .await?;
         }
 
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -744,6 +806,7 @@ pub(crate) async fn stream_chat_to_urp_events(
         output_nodes.push((
             index,
             Node::Refusal {
+                logprobs: None,
                 id: None,
                 content: refusal_text,
                 extra_body: HashMap::new(),
@@ -775,11 +838,17 @@ pub(crate) async fn stream_chat_to_urp_events(
         } = node
         {
             *target = std::mem::take(&mut citations);
+            if let Node::Text { logprobs, .. } = node {
+                *logprobs = text_logprobs.take();
+            }
             break;
         }
     }
     output_nodes.sort_by_key(|(index, _)| *index);
-    for (node_index, node) in &output_nodes {
+    for (node_index, node) in &mut output_nodes {
+        if let Node::Refusal { logprobs, .. } = node {
+            *logprobs = refusal_logprobs.take();
+        }
         send_event(
             &tx,
             UrpStreamEvent::NodeDone {
@@ -795,6 +864,7 @@ pub(crate) async fn stream_chat_to_urp_events(
     send_event(
         &tx,
         UrpStreamEvent::ResponseDone {
+            outcome: None,
             finish_reason,
             usage,
             output: output_nodes.into_iter().map(|(_, node)| node).collect(),
@@ -813,7 +883,7 @@ fn chat_choice_extra(choice: &Map<String, Value>) -> Map<String, Value> {
             !crate::urp::decode::is_internal_extra_key(key)
                 && !matches!(
                     key.as_str(),
-                    "index" | "delta" | "message" | "finish_reason"
+                    "index" | "delta" | "message" | "finish_reason" | "logprobs"
                 )
         })
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -1203,6 +1273,7 @@ async fn process_text_delta(
         tx,
         node_index,
         NodeDelta::Text {
+            logprobs: None,
             signature: None,
             citations: Vec::new(),
             content: text.to_string(),
@@ -2458,6 +2529,7 @@ fn sorted_nodes(
         nodes.push((
             node_index,
             Node::Text {
+                logprobs: None,
                 signature: None,
                 citations: Vec::new(),
                 id: Some(crate::urp::synthetic_message_id()),

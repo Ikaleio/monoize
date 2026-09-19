@@ -264,6 +264,22 @@ pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
         );
     }
 
+    usage_object.remove("iterations");
+    if let Some(iterations) = &usage.iterations {
+        usage_object.insert(
+            "iterations".into(),
+            Value::Array(
+                iterations
+                    .iter()
+                    .map(|iteration| {
+                        let mut value = anthropic_native_usage_json(&iteration.usage);
+                        value["type"] = json!(iteration.kind);
+                        value
+                    })
+                    .collect(),
+            ),
+        );
+    }
     Value::Object(usage_object)
 }
 
@@ -462,7 +478,7 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         if let Some(mode) = mode {
             thinking.insert("type".into(), json!(mode));
         }
-        if let Some(budget) = reasoning.budget_tokens.filter(|_| mode == Some("enabled")) {
+        if let Some(budget) = reasoning.budget_tokens {
             thinking.insert("budget_tokens".into(), json!(budget));
         } else if mode == Some("enabled") && native_thinking.is_none() {
             thinking.insert(

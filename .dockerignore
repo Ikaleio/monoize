@@ -14,3 +14,7 @@ deploy.sh
 *.db-shm
 *.db-wal
 *.log
+**/artifacts
+reports
+**/test-results
+**/playwright-report

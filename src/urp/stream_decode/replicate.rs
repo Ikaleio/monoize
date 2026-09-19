@@ -84,6 +84,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
                 output_text.push_str(&ev.data);
                 record_visible_output_delta(&runtime_metrics, &ev.data).await;
                 let delta = NodeDelta::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     content: ev.data.clone(),
@@ -122,6 +123,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
 
     let completed_nodes = if text_started {
         vec![Node::Text {
+            logprobs: None,
             citations: Vec::new(),
             signature: None,
 
@@ -151,6 +153,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
     if started_response {
         let _ = tx
             .send(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 finish_reason,
                 usage: None,
                 output: outputs,

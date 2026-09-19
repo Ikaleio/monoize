@@ -128,6 +128,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
                 && matches!(delta, NodeDelta::Reasoning { .. })
             {
                 *delta = NodeDelta::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     content: String::new(),
@@ -145,6 +146,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
                     _ => (None, Default::default()),
                 };
                 *node = Node::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     id,

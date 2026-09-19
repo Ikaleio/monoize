@@ -22,6 +22,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(system_prompt) = input_obj.get("system_prompt").and_then(|v| v.as_str()) {
             if !system_prompt.is_empty() {
                 input_nodes.push(Node::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     id: None,
@@ -36,6 +37,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(prompt) = input_obj.get("prompt").and_then(|v| v.as_str()) {
             if !prompt.is_empty() {
                 input_nodes.push(Node::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     id: None,
@@ -74,6 +76,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let stream = obj.get("stream").and_then(|v| v.as_bool());
 
     Ok(UrpRequest {
+        logprobs: None,
         context: Default::default(),
         instructions_format: None,
         model,
@@ -128,6 +131,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     if let Some(error) = obj.get("error").and_then(|v| v.as_str()) {
         if !error.is_empty() && output_nodes.is_empty() {
             output_nodes.push(Node::Refusal {
+                logprobs: None,
                 id: None,
                 content: error.to_string(),
                 extra_body: HashMap::new(),
@@ -138,6 +142,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     let usage = parse_replicate_usage(obj);
 
     Ok(UrpResponse {
+        outcome: None,
         id,
         model,
         created_at: None,
@@ -170,6 +175,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                 });
             } else {
                 nodes.push(Node::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     id: None,
@@ -211,6 +217,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                         .join("");
                     if !combined.is_empty() {
                         nodes.push(Node::Text {
+                            logprobs: None,
                             signature: None,
                             citations: Vec::new(),
                             id: None,
@@ -225,6 +232,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                 let serialized = serde_json::to_string(output).unwrap_or_default();
                 if !serialized.is_empty() {
                     nodes.push(Node::Text {
+                        logprobs: None,
                         signature: None,
                         citations: Vec::new(),
                         id: None,
@@ -241,6 +249,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
             let serialized = serde_json::to_string(other).unwrap_or_default();
             if !serialized.is_empty() {
                 nodes.push(Node::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     id: None,
@@ -285,6 +294,7 @@ fn parse_replicate_usage(obj: &Map<String, Value>) -> Option<Usage> {
         return None;
     }
     Some(Usage {
+        iterations: None,
         input_tokens,
         output_tokens,
         input_details: None,

@@ -118,14 +118,13 @@ pub(super) fn read_max_multiplier_from_extra(req: &urp::UrpRequest) -> Option<Mu
 }
 
 pub(super) fn inject_monoize_context(auth: &crate::auth::AuthResult, req: &mut urp::UrpRequest) {
-    req.context = urp::RequestContext {
-        username: auth.username.clone(),
-        api_key_id: auth.api_key_id.clone(),
-    };
+    req.context.username = auth.username.clone();
+    req.context.api_key_id = auth.api_key_id.clone();
 }
 
 pub(super) fn strip_monoize_context(req: &mut urp::UrpRequest) {
-    req.context = Default::default();
+    req.context.username = None;
+    req.context.api_key_id = None;
 }
 
 pub(super) async fn apply_transform_rules_request(
@@ -525,7 +524,7 @@ impl Write for BoundedHashWriter {
 enum CanonicalAffinityNode<'a> {
     Text {
         signature: &'a Option<Value>,
-        citations: &'a [Value],
+        citations: &'a [crate::urp::Citation],
         #[serde(skip_serializing_if = "Option::is_none")]
         id: &'a Option<String>,
         role: urp::OrdinaryRole,
@@ -736,6 +735,7 @@ fn canonical_affinity_tool_result_content(
 fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
     match node {
         urp::Node::Text {
+            logprobs: _,
             signature,
             citations,
             id,
@@ -795,6 +795,7 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::Refusal {
+            logprobs: _,
             id,
             content,
             extra_body,
@@ -923,7 +924,10 @@ mod canonical_field_regressions {
             (
                 json!({"type":"text","role":"assistant","content":"same"}),
                 "citations",
-                json!([{"uri":"https://example.com"}]),
+                json!([urp::Citation::decode(
+                    json!({"uri":"https://example.com"}),
+                    urp::ProviderProtocol::Gemini
+                )]),
             ),
             (
                 json!({"type":"tool_call","call_id":"c","name":"run","arguments":"{}"}),
@@ -1303,6 +1307,7 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
         }
     } else {
         resp.output.push(urp::Node::Text {
+            logprobs: None,
             signature: None,
             citations: Vec::new(),
             id: None,
@@ -1604,9 +1609,6 @@ const MESSAGES_NATIVE_TOOL_TYPES: &[&str] = &[
     "tool_search_tool_regex",
 ];
 
-const RESPONSES_CUSTOM_MESSAGES_BRIDGE_EXTRA_KEY: &str =
-    "_monoize_responses_custom_messages_bridge";
-
 fn tool_wire_name(tool: &urp::ToolDefinition) -> Option<&str> {
     match tool.tool_type.as_str() {
         "function" => tool
@@ -1617,8 +1619,6 @@ fn tool_wire_name(tool: &urp::ToolDefinition) -> Option<&str> {
         _ => tool.name.as_deref(),
     }
 }
-
-const TOOL_NAMESPACE_BRIDGE_KEY: &str = "_monoize_tool_namespace_bridge";
 
 fn collect_additional_tool_leaves(value: &Value, output: &mut Vec<Value>) {
     let Some(object) = value.as_object() else {
@@ -1702,26 +1702,41 @@ fn messages_custom_bridge_function(tool: urp::ToolDefinition) -> urp::ToolDefini
             extra_body: HashMap::new(),
         }),
         custom: None,
-        extra_body: HashMap::from([(
-            RESPONSES_CUSTOM_MESSAGES_BRIDGE_EXTRA_KEY.to_string(),
-            Value::Bool(true),
-        )]),
+        extra_body: HashMap::new(),
     }
 }
 
-fn messages_custom_bridge_names(req: &urp::UrpRequest) -> HashSet<String> {
+fn tool_call_type(tool: &urp::ToolDefinition) -> Option<urp::ToolCallType> {
+    match tool.tool_type.as_str() {
+        "function" => Some(urp::ToolCallType::Function),
+        "custom" => Some(urp::ToolCallType::Custom),
+        _ => None,
+    }
+}
+
+fn active_tool_transports(
+    req: &urp::UrpRequest,
+) -> impl Iterator<Item = (&str, &urp::ToolTransport)> {
     req.tools
         .as_deref()
         .unwrap_or_default()
         .iter()
-        .filter(|tool| {
-            tool.extra_body
-                .get(RESPONSES_CUSTOM_MESSAGES_BRIDGE_EXTRA_KEY)
-                .and_then(Value::as_bool)
-                == Some(true)
+        .filter_map(|tool| {
+            let name = tool_wire_name(tool)?;
+            let transport = req.context.tool_transports.get(name)?;
+            (tool.namespace.is_none() && tool_call_type(tool) == Some(transport.wire_type))
+                .then_some((name, transport))
         })
-        .filter_map(tool_wire_name)
-        .map(ToOwned::to_owned)
+}
+
+fn messages_custom_bridge_names(req: &urp::UrpRequest) -> HashSet<String> {
+    active_tool_transports(req)
+        .filter(|(_, transport)| {
+            transport.protocol == urp::ProviderProtocol::Messages
+                && transport.original.tool_type == urp::ToolCallType::Custom
+                && transport.wire_type == urp::ToolCallType::Function
+        })
+        .map(|(name, _)| name.to_owned())
         .collect()
 }
 
@@ -1783,12 +1798,13 @@ pub(super) fn promote_responses_additional_tools(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,
 ) {
-    if !matches!(
-        provider_type,
-        ProviderType::ChatCompletion | ProviderType::Messages | ProviderType::Gemini
-    ) {
-        return;
-    }
+    let protocol = match provider_type {
+        ProviderType::ChatCompletion => urp::ProviderProtocol::ChatCompletion,
+        ProviderType::Messages => urp::ProviderProtocol::Messages,
+        ProviderType::Gemini => urp::ProviderProtocol::Gemini,
+        _ => return,
+    };
+    let previous_transports = std::mem::take(&mut req.context.tool_transports);
 
     fn append_explicit_tool(tool: urp::ToolDefinition, output: &mut Vec<urp::ToolDefinition>) {
         if tool.tool_type == "namespace" {
@@ -1825,12 +1841,25 @@ pub(super) fn promote_responses_additional_tools(
             promoted.push(tool);
             continue;
         }
-        let namespace = tool.namespace.take();
         let Some(name) = tool_wire_name(&tool).map(ToOwned::to_owned) else {
             promoted.push(tool);
             continue;
         };
-        if !identities.insert((namespace.clone(), name.clone())) {
+        let namespace = tool.namespace.take();
+        let original_type = tool_call_type(&tool).expect("client tool type was checked");
+        let existing_transport = previous_transports.get(&name).filter(|transport| {
+            transport.protocol == protocol
+                && namespace.is_none()
+                && transport.wire_type == original_type
+        });
+        let original = existing_transport
+            .map(|transport| transport.original.clone())
+            .unwrap_or_else(|| urp::ToolIdentity {
+                namespace: namespace.clone(),
+                name: name.clone(),
+                tool_type: original_type,
+            });
+        if !identities.insert((original.namespace.clone(), original.name.clone())) {
             continue;
         }
         if let Some(namespace) = namespace {
@@ -1853,21 +1882,25 @@ pub(super) fn promote_responses_additional_tools(
             if let Some(custom) = &mut tool.custom {
                 custom.name = alias;
             }
-            tool.extra_body.insert(
-                TOOL_NAMESPACE_BRIDGE_KEY.to_string(),
-                json!({"namespace": namespace, "name": name}),
-            );
         }
         if provider_type == ProviderType::Messages
             && tool.tool_type == "custom"
             && !custom_tool_has_messages_input_schema(&tool)
         {
-            let identity = tool.extra_body.get(TOOL_NAMESPACE_BRIDGE_KEY).cloned();
             tool = messages_custom_bridge_function(tool);
-            if let Some(identity) = identity {
-                tool.extra_body
-                    .insert(TOOL_NAMESPACE_BRIDGE_KEY.to_string(), identity);
-            }
+        }
+        let wire_type = tool_call_type(&tool).expect("adapted client tool type");
+        if let Some(transport) = existing_transport {
+            req.context.tool_transports.insert(name, transport.clone());
+        } else if original.namespace.is_some() || wire_type != original_type {
+            req.context.tool_transports.insert(
+                tool_wire_name(&tool).expect("adapted tool name").to_owned(),
+                urp::ToolTransport {
+                    protocol,
+                    wire_type,
+                    original,
+                },
+            );
         }
         promoted.push(tool);
     }
@@ -1883,8 +1916,7 @@ pub(super) fn promote_responses_additional_tools(
         } = node
             && let Some(current_namespace) = namespace.as_deref()
             && let Some((alias, _)) = aliases.iter().find(|(_, identity)| {
-                identity.get("namespace").and_then(Value::as_str) == Some(current_namespace)
-                    && identity.get("name").and_then(Value::as_str) == Some(name.as_str())
+                identity.namespace.as_deref() == Some(current_namespace) && identity.name == *name
             })
         {
             call_aliases.insert(call_id.clone(), alias.clone());
@@ -1902,9 +1934,8 @@ pub(super) fn promote_responses_additional_tools(
         {
             let alias = match (namespace.as_deref(), name.as_deref()) {
                 (Some(namespace), Some(name)) => aliases.iter().find_map(|(alias, identity)| {
-                    (identity.get("namespace").and_then(Value::as_str) == Some(namespace)
-                        && identity.get("name").and_then(Value::as_str) == Some(name))
-                    .then_some(alias)
+                    (identity.namespace.as_deref() == Some(namespace) && identity.name == name)
+                        .then_some(alias)
                 }),
                 (None, Some(_)) => call_aliases.get(call_id),
                 _ => None,
@@ -1923,21 +1954,14 @@ pub(super) fn promote_responses_additional_tools(
     }
 }
 
-pub(super) fn tool_namespace_aliases(req: &urp::UrpRequest) -> HashMap<String, Value> {
-    req.tools
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|tool| {
-            Some((
-                tool_wire_name(tool)?.to_string(),
-                tool.extra_body.get(TOOL_NAMESPACE_BRIDGE_KEY)?.clone(),
-            ))
-        })
+pub(super) fn tool_namespace_aliases(req: &urp::UrpRequest) -> HashMap<String, urp::ToolIdentity> {
+    active_tool_transports(req)
+        .filter(|(_, transport)| transport.original.namespace.is_some())
+        .map(|(name, transport)| (name.to_owned(), transport.original.clone()))
         .collect()
 }
 
-fn bridge_namespace_selector(value: &mut Value, aliases: &HashMap<String, Value>) {
+fn bridge_namespace_selector(value: &mut Value, aliases: &HashMap<String, urp::ToolIdentity>) {
     let Some(obj) = value.as_object_mut() else {
         return;
     };
@@ -1953,8 +1977,8 @@ fn bridge_namespace_selector(value: &mut Value, aliases: &HashMap<String, Value>
         if let Some(namespace) = namespace {
             let name = selector_name(obj, &kind);
             if let Some((alias, _)) = aliases.iter().find(|(_, identity)| {
-                identity.get("namespace") == Some(namespace)
-                    && identity.get("name").and_then(Value::as_str) == name
+                identity.namespace.as_deref() == namespace.as_str()
+                    && Some(identity.name.as_str()) == name
             }) {
                 obj.remove("namespace");
                 obj.remove("name");
@@ -1979,20 +2003,18 @@ fn bridge_namespace_selector(value: &mut Value, aliases: &HashMap<String, Value>
 fn restore_tool_namespace(
     name: &mut String,
     target_namespace: &mut Option<String>,
-    aliases: &HashMap<String, Value>,
+    aliases: &HashMap<String, urp::ToolIdentity>,
 ) {
     if let Some(identity) = aliases.get(name) {
-        if let (Some(original), Some(namespace)) = (
-            identity.get("name").and_then(Value::as_str),
-            identity.get("namespace").and_then(Value::as_str),
-        ) {
-            *name = original.to_string();
-            *target_namespace = Some(namespace.to_string());
-        }
+        *name = identity.name.clone();
+        *target_namespace = identity.namespace.clone();
     }
 }
 
-pub(super) fn restore_tool_namespace_node(node: &mut urp::Node, aliases: &HashMap<String, Value>) {
+pub(super) fn restore_tool_namespace_node(
+    node: &mut urp::Node,
+    aliases: &HashMap<String, urp::ToolIdentity>,
+) {
     if let urp::Node::ToolCall {
         name, namespace, ..
     } = node
@@ -2003,7 +2025,7 @@ pub(super) fn restore_tool_namespace_node(node: &mut urp::Node, aliases: &HashMa
 
 pub(super) fn restore_tool_namespace_event(
     event: &mut urp::UrpStreamEvent,
-    aliases: &HashMap<String, Value>,
+    aliases: &HashMap<String, urp::ToolIdentity>,
 ) {
     match event {
         urp::UrpStreamEvent::NodeStart {

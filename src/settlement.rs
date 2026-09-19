@@ -229,6 +229,7 @@ struct TokenQuantities {
 }
 
 fn token_quantities(usage: &urp::Usage) -> TokenQuantities {
+    let usage = usage.accounting();
     let details = usage.input_details.as_ref();
     let cache_read = details.map(|d| d.cache_read_tokens).unwrap_or(0);
     let cache_w_5m = details.map(|d| d.cache_creation_5m_tokens).unwrap_or(0);
@@ -651,7 +652,7 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
                             .ok_or_else(|| "tiered_expr row without billing_expr".to_string())?;
                         let (service_key, tiers) = select_applied_tiers(expr, inputs.service_tier)?;
                         applied_service_tier = service_key;
-                        let (index, tier) = select_tier(tiers, usage.input_tokens)?;
+                        let (index, tier) = select_tier(tiers, usage.accounting().input_tokens)?;
                         applied_tier_index = Some(index);
                         let prices = resolve_tier_prices(&tier)?;
                         let quantities = token_quantities(usage);

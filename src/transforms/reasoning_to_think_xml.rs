@@ -96,6 +96,7 @@ impl Transform for ReasoningToThinkXmlTransform {
                     } = node
                     {
                         *node = Node::Text {
+                            logprobs: None,
                             signature: None,
                             citations: Vec::new(),
                             id: None,
@@ -136,6 +137,7 @@ fn convert_stream_reasoning_to_xml(event: &mut UrpStreamEvent, tag: &str) {
             } = delta
             {
                 *delta = NodeDelta::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     content: format!("<{tag}>{content}</{tag}>"),

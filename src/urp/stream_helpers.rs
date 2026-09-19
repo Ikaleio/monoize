@@ -649,24 +649,27 @@ pub(crate) fn extract_chat_reasoning_delta_chunks(
         }
     }
 
-    if text_parts.is_empty() {
-        if let Some(reasoning) = delta.get("reasoning").and_then(|v| v.as_str()) {
-            if !reasoning.is_empty() {
-                text_parts.push(ChatReasoningDeltaChunk {
-                    text: reasoning.to_string(),
-                    format: None,
-                });
-            }
-        }
+    if let Some(reasoning) = delta.get("reasoning").and_then(Value::as_str)
+        && !reasoning.is_empty()
+        && !text_parts
+            .iter()
+            .chain(summary_parts.iter())
+            .any(|part| part.text == reasoning)
+    {
+        text_parts.push(ChatReasoningDeltaChunk {
+            text: reasoning.to_string(),
+            format: None,
+        });
     }
 
-    if let Some(reasoning) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
-        if !reasoning.is_empty() {
-            text_parts.push(ChatReasoningDeltaChunk {
-                text: reasoning.to_string(),
-                format: None,
-            });
-        }
+    if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str)
+        && !reasoning.is_empty()
+        && !text_parts.iter().any(|part| part.text == reasoning)
+    {
+        text_parts.push(ChatReasoningDeltaChunk {
+            text: reasoning.to_string(),
+            format: None,
+        });
     }
     if let Some(sig) = delta.get("reasoning_opaque").and_then(|v| v.as_str()) {
         if !sig.is_empty() {
@@ -679,6 +682,7 @@ pub(crate) fn extract_chat_reasoning_delta_chunks(
 
     (text_parts, summary_parts, sig_parts)
 }
+
 pub(crate) fn chat_reasoning_delta_from_text(text: &str, format: Option<&str>) -> Value {
     json!({
         "reasoning_details": [reasoning_text_detail_value(text, format)]
@@ -756,7 +760,7 @@ pub(crate) fn responses_text_delta_payload(
     }
     obj.insert("output_index".to_string(), Value::from(output_index));
     obj.insert("content_index".to_string(), Value::from(content_index));
-    obj.insert("logprobs".to_string(), json!([]));
+    obj.insert("logprobs".to_string(), Value::Null);
     insert_phase_if_present(&mut obj, phase);
     Value::Object(obj)
 }

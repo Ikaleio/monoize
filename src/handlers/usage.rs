@@ -196,12 +196,13 @@ pub(crate) async fn record_visible_stream_event_delta(
                 urp::NodeDelta::Text {
                     signature: _,
                     citations: _,
+                    logprobs: _,
                     content,
                 },
             ..
         }
         | urp::UrpStreamEvent::NodeDelta {
-            delta: urp::NodeDelta::Refusal { content },
+            delta: urp::NodeDelta::Refusal { content, .. },
             ..
         } => content.as_str(),
         _ => return,
@@ -241,6 +242,7 @@ pub(crate) async fn record_stream_terminal_error(
 }
 
 pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
+    let usage = usage.accounting();
     let mut obj = json!({
         "prompt_tokens": usage.input_tokens,
         "completion_tokens": usage.output_tokens,
@@ -280,13 +282,33 @@ pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
             if !k.starts_with("_monoize_")
                 && !matches!(
                     k.as_str(),
-                    "prompt_tokens_details" | "completion_tokens_details"
+                    "prompt_tokens_details"
+                        | "completion_tokens_details"
+                        | "total_tokens"
+                        | "prompt_tokens"
+                        | "completion_tokens"
+                        | "input_tokens"
+                        | "output_tokens"
                 )
             {
                 map.insert(k.clone(), v.clone());
             }
         }
     }
+    urp::usage::write_modality(
+        &mut obj["prompt_tokens_details"],
+        &usage
+            .input_details
+            .as_ref()
+            .and_then(|d| d.modality_breakdown.clone()),
+    );
+    urp::usage::write_modality(
+        &mut obj["completion_tokens_details"],
+        &usage
+            .output_details
+            .as_ref()
+            .and_then(|d| d.modality_breakdown.clone()),
+    );
     obj
 }
 
@@ -532,7 +554,7 @@ pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
         })
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let extra_body = split_usage_extra(
+    let mut extra_body = split_usage_extra(
         usage,
         &[
             "prompt_tokens",
@@ -541,7 +563,26 @@ pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
             "output_tokens",
         ],
     );
+    for key in [
+        "prompt_tokens_details",
+        "input_tokens_details",
+        "completion_tokens_details",
+        "output_tokens_details",
+    ] {
+        if let Some(Value::Object(details)) = extra_body.get_mut(key) {
+            for field in [
+                "text_tokens",
+                "image_tokens",
+                "audio_tokens",
+                "video_tokens",
+                "document_tokens",
+            ] {
+                details.remove(field);
+            }
+        }
+    }
     Some(urp::Usage {
+        iterations: None,
         input_tokens,
         output_tokens,
         input_details: make_input_details(
@@ -653,6 +694,7 @@ pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
         ],
     );
     Some(urp::Usage {
+        iterations: None,
         input_tokens,
         output_tokens,
         input_details: make_input_details(
@@ -756,6 +798,7 @@ pub(crate) fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> 
         ],
     );
     Some(urp::Usage {
+        iterations: None,
         input_tokens,
         output_tokens,
         input_details: make_input_details(
@@ -784,6 +827,7 @@ pub(super) fn parse_usage_from_embeddings_object(obj: &Value) -> Option<urp::Usa
     let mut extra_body = HashMap::new();
     extra_body.insert("total_tokens".to_string(), Value::from(total_tokens));
     Some(urp::Usage {
+        iterations: None,
         input_tokens,
         output_tokens: 0,
         input_details: None,

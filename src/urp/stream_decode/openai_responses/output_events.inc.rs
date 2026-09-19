@@ -92,6 +92,7 @@ fn map_response_completed_with_accumulated(
         _ => decoded.as_ref().and_then(|resp| resp.finish_reason),
     };
     events.push(UrpStreamEvent::ResponseDone {
+        outcome: crate::urp::ResponseOutcome::from_responses(&response_obj),
         finish_reason,
         usage: decoded
             .and_then(|resp| resp.usage)
@@ -107,6 +108,9 @@ fn map_response_completed_with_accumulated(
                 "model",
                 "output",
                 "usage",
+                "status",
+                "error",
+                "incomplete_details",
             ],
         ),
     });
@@ -155,6 +159,8 @@ fn text_delta_extra_body(data_val: Value) -> HashMap<String, Value> {
     split_known_fields(
         data_val,
         &[
+            "type",
+            "sequence_number",
             "delta",
             "text",
             "output_index",
@@ -188,8 +194,15 @@ fn decode_part_from_value(part: &Value) -> Part {
     let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match part_type {
         "input_text" | "output_text" | "text" => Part::Text {
+            logprobs: crate::urp::logprobs::decode(part.get("logprobs")),
             signature: None,
-            citations: part.get("annotations").and_then(Value::as_array).cloned().unwrap_or_default(),
+            citations: crate::urp::citations::decode(
+                part.get("annotations")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                crate::urp::ProviderProtocol::Responses,
+            ),
             content: part
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -248,6 +261,7 @@ fn decode_part_from_value(part: &Value) -> Part {
             extra_body: part_extra_body_from_value(part),
         },
         "refusal" => Part::Refusal {
+            logprobs: None,
             content: part
                 .get("refusal")
                 .or_else(|| part.get("text"))

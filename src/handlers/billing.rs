@@ -50,6 +50,7 @@ pub(super) fn map_get_u64(map: &Map<String, Value>, key: &str) -> Option<u64> {
 }
 
 pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
+    let usage = usage.accounting();
     let input_details = usage.input_details.as_ref();
     let output_details = usage.output_details.as_ref();
 

@@ -19,6 +19,10 @@ x-api-key: sk-...
 
 Chat 路由會保留 OpenRouter 的 `configuration_update` 訊息，包括空內容更新。檔案 data URI 轉成 Messages 文件時會保留 MIME 類型。Messages 串流會保留 `citations_delta` 引用。Responses 內容過濾終止會保留為未完成狀態，不會誤報為長度限制。
 
+Chat 與 Responses 會將支援的 URL 引用轉換為目標格式。無法表示的引用位置僅在原協定中保留。Token logprobs 與對應文字關聯；文字修改後，不再匹配的機率會被捨棄。Responses 失敗終態保留部分輸出、用量和錯誤詳情。Chat 與 Messages 將失敗或取消狀態輸出為錯誤。Messages 保留暫停、壓縮和上下文限制的停止原因。計費包含上游回報的所有壓縮迭代，不會重複計算主生成用量。
+
+協定轉換分別保留 raw 推理、可讀摘要和不透明的回傳載荷。刪除 raw 推理後，不會用摘要恢復它。Messages 的 thinking 文字映射為摘要，signature 保持不透明。無效的串流生命週期和格式錯誤的已知事件會回傳錯誤。完整 Messages 請求和回應拒絕截斷的工具 JSON；原生 max_tokens 串流可保留未完成的參數位元組。
+
 ## 列出模型
 
 ```bash

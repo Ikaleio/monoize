@@ -19,6 +19,10 @@ x-api-key: sk-...
 
 Chat 路由会保留 OpenRouter 的 `configuration_update` 消息，包括空内容更新。文件 data URI 转为 Messages 文档时会保留 MIME 类型。Messages 流会保留 `citations_delta` 引用。Responses 内容过滤终止会保留为未完成状态，不会误报为长度限制。
 
+Chat 与 Responses 会将支持的 URL 引用转换为目标格式。无法表示的引用位置仅在原协议中保留。Token logprobs 与对应文本关联；文本修改后，不再匹配的概率会被丢弃。Responses 失败终态保留部分输出、用量和错误详情。Chat 与 Messages 将失败或取消状态输出为错误。Messages 保留暂停、压缩和上下文限制的停止原因。计费包含上游报告的所有压缩迭代，不会重复计算主生成用量。
+
+协议转换分别保留 raw 推理、可读摘要和不透明的回传载荷。删除 raw 推理后，不会用摘要恢复它。Messages 的 thinking 文本映射为摘要，signature 保持不透明。非法流生命周期和格式错误的已知事件会返回错误。完整 Messages 请求和响应拒绝截断的工具 JSON；原生 max_tokens 流可保留未完成的参数字节。
+
 ## 列出模型
 
 ```bash

@@ -252,6 +252,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     });
 
     if let Some(usage) = &resp.usage {
+        let usage = usage.accounting();
         body["metrics"] = json!({
             "input_token_count": usage.input_tokens,
             "output_token_count": usage.output_tokens,

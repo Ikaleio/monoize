@@ -26,6 +26,8 @@ If approval is necessary, first prepare the authorized work for review.
 
 Preserve unrelated files and existing user changes.
 Keep ordinary code, test, and tooling writes inside the project root.
+Store one-off reports, diagnostic captures, design experiments, and machine-specific scripts under ignored `artifacts/` paths.
+Do not commit these outputs. Keep reusable tests, tools, specifications, and documentation assets in their maintained directories.
 
 Deploy only when the user explicitly requests deployment.
 For an authorized deployment, use project-owned scripts or commands.

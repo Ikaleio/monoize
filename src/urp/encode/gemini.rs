@@ -350,9 +350,10 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
         "rejectedPredictionOutputTokenCount": 0
     });
     if let Some(usage) = &resp.usage {
+        let usage = usage.accounting();
         if let Some(obj) = usage_metadata.as_object_mut() {
-            let input_details = usage_input_details(usage);
-            let output_details = usage_output_details(usage);
+            let input_details = usage_input_details(&usage);
+            let output_details = usage_output_details(&usage);
             for (key, details) in [
                 (
                     "promptTokensDetails",
@@ -462,7 +463,9 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
         .cloned()
         .collect();
     if !citations.is_empty() {
-        body["candidates"][0]["citationMetadata"]["citationSources"] = json!(citations);
+        body["candidates"][0]["citationMetadata"]["citationSources"] = json!(
+            crate::urp::citations::encode(&citations, crate::urp::ProviderProtocol::Gemini, 0)
+        );
     } else if let Some(metadata) = body["candidates"][0]
         .get_mut("citationMetadata")
         .and_then(Value::as_object_mut)

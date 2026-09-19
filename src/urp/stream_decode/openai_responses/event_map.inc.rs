@@ -394,16 +394,25 @@ fn map_content_part_added(
         Some(stable_message_item_id_for_output(index_state, output_index))
     };
     let mut node = node_from_part_value(part, role, item_id);
-    if let Node::ProviderItem {id,extra_body,..} = &mut node {
+    if let Node::ProviderItem { id, extra_body, .. } = &mut node {
         *id = part.get("id").and_then(Value::as_str).map(str::to_owned);
-        extra_body.insert(crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY.into(), Value::Bool(true));
+        extra_body.insert(
+            crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY.into(),
+            Value::Bool(true),
+        );
     }
-    if let Node::Text { phase, citations, .. } = &mut node {
+    if let Node::Text {
+        phase, citations, ..
+    } = &mut node
+    {
         let state = output_state_for(index_state, output_index);
         *phase = state.message_phase.clone();
-        *citations = state.text_citations.iter()
+        *citations = state
+            .text_citations
+            .iter()
             .filter(|((index, _), _)| *index == content_index)
-            .map(|(_, value)| value.clone()).collect();
+            .map(|(_, value)| value.clone())
+            .collect();
     }
     if !is_reasoning_part {
         output_state_for(index_state, output_index).content_nodes.insert(content_index, node.clone());
@@ -454,16 +463,25 @@ fn map_content_part_done(
         Some(stable_message_item_id_for_output(index_state, output_index))
     };
     let mut node = node_from_part_value(part, role, item_id);
-    if let Node::ProviderItem {id,extra_body,..} = &mut node {
+    if let Node::ProviderItem { id, extra_body, .. } = &mut node {
         *id = part.get("id").and_then(Value::as_str).map(str::to_owned);
-        extra_body.insert(crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY.into(), Value::Bool(true));
+        extra_body.insert(
+            crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY.into(),
+            Value::Bool(true),
+        );
     }
-    if let Node::Text { phase, citations, .. } = &mut node {
+    if let Node::Text {
+        phase, citations, ..
+    } = &mut node
+    {
         let state = output_state_for(index_state, output_index);
         *phase = state.message_phase.clone();
-        *citations = state.text_citations.iter()
+        *citations = state
+            .text_citations
+            .iter()
             .filter(|((index, _), _)| *index == content_index)
-            .map(|(_, value)| value.clone()).collect();
+            .map(|(_, value)| value.clone())
+            .collect();
     }
     if let Some(output_state) = index_state.output_state_by_index.get_mut(&output_index) {
         output_state.part_done_seen = true;

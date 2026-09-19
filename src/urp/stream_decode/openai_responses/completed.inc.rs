@@ -19,29 +19,68 @@ fn accumulate_message_content_event(
     let is_refusal = event_name.starts_with("response.refusal.");
     let node = state.content_nodes.entry(content_index).or_insert_with(|| {
         if is_refusal {
-            Node::Refusal { id: Some(item_id.clone()), content: String::new(), extra_body: HashMap::new() }
+            Node::Refusal {
+                logprobs: None,
+                id: Some(item_id.clone()),
+                content: String::new(),
+                extra_body: HashMap::new(),
+            }
         } else {
             Node::Text {
-                id: Some(item_id.clone()), role: state.role.unwrap_or(Role::Assistant).to_ordinary().unwrap_or(OrdinaryRole::Assistant),
-                content: String::new(), phase: state.message_phase.clone(), signature: None,
-                citations: Vec::new(), extra_body: HashMap::new(),
+                logprobs: None,
+                id: Some(item_id.clone()),
+                role: state
+                    .role
+                    .unwrap_or(Role::Assistant)
+                    .to_ordinary()
+                    .unwrap_or(OrdinaryRole::Assistant),
+                content: String::new(),
+                phase: state.message_phase.clone(),
+                signature: None,
+                citations: Vec::new(),
+                extra_body: HashMap::new(),
             }
         }
     });
     match node {
-        Node::Text {content, citations: stored_citations, phase, ..} => {
+        Node::Text {
+            logprobs,
+            content,
+            citations: stored_citations,
+            phase,
+            ..
+        } => {
             if event_name == "response.output_text.delta" {
                 content.push_str(output_text_delta_content(data));
+                crate::urp::logprobs::append(
+                    logprobs,
+                    &crate::urp::logprobs::decode(data.get("logprobs")),
+                );
             } else if event_name == "response.output_text.done" {
-                if let Some(text) = data.get("text").and_then(Value::as_str) { *content = text.to_owned(); }
+                if let Some(text) = data.get("text").and_then(Value::as_str) {
+                    *content = text.to_owned();
+                }
+                if let Some(scores) = crate::urp::logprobs::decode(data.get("logprobs")) {
+                    *logprobs = Some(scores);
+                }
             }
-            if let Some(value) = data.get("phase").and_then(Value::as_str) { *phase = Some(value.to_owned()); }
+            if let Some(value) = data.get("phase").and_then(Value::as_str) {
+                *phase = Some(value.to_owned());
+            }
             *stored_citations = citations;
         }
-        Node::Refusal {content, ..} if is_refusal => {
+        Node::Refusal {
+            logprobs, content, ..
+        } if is_refusal => {
             if event_name == "response.refusal.delta" {
-                content.push_str(data.get("delta").and_then(Value::as_str).unwrap_or_default());
-            } else if let Some(text) = data.get("refusal").and_then(Value::as_str) { *content = text.to_owned(); }
+                content.push_str(
+                    data.get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+            } else if let Some(text) = data.get("refusal").and_then(Value::as_str) {
+                *content = text.to_owned();
+            }
         }
         _ => {}
     }
@@ -58,19 +97,42 @@ fn accumulate_text_annotations(event_name: &str, data: &Value, index_state: &mut
         return;
     };
     let state = output_state_for(index_state, output_index);
-    let content_index = data.get("content_index").or_else(|| data.get("part_index"))
-        .and_then(Value::as_u64).unwrap_or(0);
+    let content_index = data
+        .get("content_index")
+        .or_else(|| data.get("part_index"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if event_name == "response.output_text.annotation.added" {
         if let Some(annotation) = data.get("annotation") {
-            let annotation_index = data.get("annotation_index").and_then(Value::as_u64)
-                .unwrap_or_else(|| state.text_citations.keys().filter(|(part, _)| *part == content_index).count() as u64);
-            state.text_citations.insert((content_index, annotation_index), annotation.clone());
+            let annotation_index = data
+                .get("annotation_index")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| {
+                    state
+                        .text_citations
+                        .keys()
+                        .filter(|(part, _)| *part == content_index)
+                        .count() as u64
+                });
+            state.text_citations.insert(
+                (content_index, annotation_index),
+                crate::urp::Citation::decode(
+                    annotation.clone(),
+                    crate::urp::ProviderProtocol::Responses,
+                ),
+            );
         }
     }
     let mut add_part = |part: &Value, part_index: u64| {
         if let Some(annotations) = part.get("annotations").and_then(Value::as_array) {
             for (annotation_index, annotation) in annotations.iter().enumerate() {
-                state.text_citations.insert((part_index, annotation_index as u64), annotation.clone());
+                state.text_citations.insert(
+                    (part_index, annotation_index as u64),
+                    crate::urp::Citation::decode(
+                        annotation.clone(),
+                        crate::urp::ProviderProtocol::Responses,
+                    ),
+                );
             }
         }
     };
@@ -369,7 +431,10 @@ fn build_accumulated_output_entries(
                             extra_body: item_extra_body,
                         },
                         Node::Text {
-                            citations: index_state.output_state_by_index.get(&output_index)
+                            logprobs: None,
+                            citations: index_state
+                                .output_state_by_index
+                                .get(&output_index)
                                 .map(|state| state.text_citations.values().cloned().collect())
                                 .unwrap_or_default(),
                             signature: None,

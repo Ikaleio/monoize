@@ -152,6 +152,11 @@ fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
     }
     merge_responses_text_config(obj, req.extra_body.get("text"));
     merge_extra(obj, &req.extra_body);
+    crate::urp::logprobs::encode_request(
+        &mut body,
+        &req.logprobs,
+        crate::urp::ProviderProtocol::Responses,
+    );
     body
 }
 
@@ -381,28 +386,12 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
             }
         }
     }
-    let native_status = resp.extra_body.get("status").and_then(Value::as_str);
-    let native_reason = match native_status {
-        Some("incomplete") => Some(crate::urp::decode::openai_responses::incomplete_finish_reason(
-            &resp.extra_body.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
-        )),
-        Some("failed" | "cancelled") => Some(FinishReason::Other),
-        Some("completed") => Some(if resp.output.iter().any(|node| matches!(node, Node::ToolCall { .. })) {
-            FinishReason::ToolCalls
-        } else { FinishReason::Stop }),
-        _ => None,
-    };
-    let retain_native_terminal = native_status.is_some() && native_reason == resp.finish_reason;
-    body["status"] = json!(if retain_native_terminal { native_status.unwrap() } else { status });
-    if !retain_native_terminal {
-        let reason = resp.finish_reason;
-        body["incomplete_details"] = match reason {
-            Some(FinishReason::Length) => json!({"reason": "max_output_tokens"}),
-            Some(FinishReason::ContentFilter) => json!({"reason": "content_filter"}),
-            _ => Value::Null,
-        };
-        body["error"] = Value::Null;
-    }
+    let outcome = resp
+        .outcome
+        .clone()
+        .unwrap_or_else(|| crate::urp::ResponseOutcome::from_finish(resp.finish_reason));
+    outcome.write_responses(&mut body);
+
     body
 }
 
@@ -503,6 +492,8 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
 }
 
 pub(crate) fn encode_usage(usage: &crate::urp::Usage) -> Value {
+    let aggregate = usage.accounting();
+    let usage = aggregate.as_ref();
     let input_details = usage_input_details(usage);
     let output_details = usage_output_details(usage);
     let mut usage_value = json!({

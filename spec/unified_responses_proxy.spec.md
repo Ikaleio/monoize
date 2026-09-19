@@ -1891,6 +1891,63 @@ PA1. A Chat message with an object-valued `configuration_update` MUST remain one
 
 PA2. Each Messages `citations_delta` MUST append exactly one citation to its active Text node. A Messages stream encoder MUST emit each citation exactly once on that text block before content_block_stop. It MUST preserve arrival order and support buffered blocks. Canonical terminal Text nodes MUST retain the complete citations array.
 
-PA3. A Responses incomplete reason of `content_filter` MUST map to ContentFilter. `max_output_tokens`, `max_messages`, and `model_context_window_exceeded` MUST map to Length. Other incomplete reasons MUST map to Other. Same-Responses replay MUST preserve the original status and details. When encoding a canonical ContentFilter or Length termination without native Responses status, Monoize MUST emit status=incomplete and incomplete_details.reason=content_filter or max_output_tokens, respectively.
+PA3. A Responses incomplete reason of `content_filter` MUST map to ContentFilter. `max_output_tokens` and `max_messages` MUST map to Length. `model_context_window_exceeded` and `context_length_exceeded` MUST map to ContextLimit. `pause_turn` and `compaction` MUST map to Paused and Compaction. Other incomplete reasons MUST map to Other. Same-Responses replay MUST preserve the original status and details. When encoding a canonical ContentFilter or Length termination without native Responses status, Monoize MUST emit status=incomplete and incomplete_details.reason=content_filter or max_output_tokens, respectively.
 
 PA4. Synthetic Responses streams MUST choose their terminal event from the encoded status: completed, incomplete, failed, or cancelled. They MUST NOT rewrite incomplete or failed status to a completed event.
+
+
+## Canonical semantic metadata mapping
+
+CSM-1. Canonical SEM-1 through SEM-6 supersede older native passthrough rules for represented citations, logprobs, response outcomes, and usage iterations.
+Chat URL citation wrappers and Responses flat URL citations MUST decode into the same typed URL citation.
+Messages source-location citations MUST retain document identity and range kind. They MUST NOT become answer offsets.
+
+CSM-2. Chat logprobs.content and logprobs.refusal map to their corresponding nodes.
+Responses output_text.logprobs and output_text.delta.logprobs map to text node and delta scores.
+Responses encoders MUST emit available canonical scores instead of an unconditional empty array.
+Chat logprobs and top_logprobs request controls map to LogprobConfig.
+Responses include member message.output_text.logprobs and top_logprobs map to the same configuration.
+Other include members remain native configuration.
+
+CSM-3. Responses status, error, and incomplete_details MUST decode into ResponseOutcome.
+A terminal response.failed event MUST retain its partial output, usage, and error through ResponseDone.
+Messages pause_turn, compaction, and model_context_window_exceeded MUST have distinct canonical finish reasons.
+Same-Messages encoding MUST preserve these reasons. Context-limit responses map to length in Chat and incomplete in Responses.
+
+CSM-4. Chat response_format with type text MUST decode to ResponseFormat::Text.
+Chat usage modality details MUST populate the existing typed ModalityBreakdown in both streaming and non-streaming paths.
+
+CSM-5. When a canonical outcome is failed or cancelled, Chat and Messages encoders MUST emit a native error envelope or error event.
+They MUST NOT emit a successful finish marker. Streamed output before the failure remains visible.
+
+### Protocol conformance error boundaries
+
+CONF-1. A Messages content_block_delta or content_block_stop MUST reference an active block index.
+Repeated content_block_start or content_block_stop for the same completed index MUST produce a terminal protocol error.
+A message_stop event with an active unclosed block MUST produce Error and MUST NOT produce ResponseDone.
+Unknown event types MAY be ignored. A valid nonzero or sparse provider block index MUST remain supported.
+
+CONF-2. A normally completed Messages function tool input MUST parse as a JSON object.
+A max_tokens termination MAY retain incomplete argument bytes with FinishReason::Length.
+It MUST NOT complete those bytes with invented JSON or report a normally completed tool call.
+
+CONF-3. Closed-model reasoning summaries and encrypted replay payloads MUST remain distinct from raw reasoning content.
+Messages thinking text maps to summary. Messages signature and redacted_thinking.data map to opaque encrypted values.
+A signature is not readable reasoning text. Its vendor-defined contents MUST NOT be parsed by Monoize.
+DeepSeek reasoning_content maps to content. OpenAI summary and encrypted_content map to summary and encrypted, respectively.
+
+CONF-4. A replayed assistant Responses output_text input part MUST preserve typed annotations and valid token logprobs.
+An input_text part MUST omit output-only annotations and token scores.
+
+CONF-5. Native reasoning_content shape metadata MUST NOT copy summary into content or suppress an independent encrypted field.
+Only an explicitly configured reasoning presentation transform may request a summary alias on a raw-content wire field.
+Deleting typed content MUST remove the native raw-content field when no such transform is active.
+
+CONF-6. Known Messages content or terminal events MUST follow exactly one message_start.
+Known delta payloads MUST have the required field type and match their active content block.
+A complete native request or response cannot represent incomplete tool JSON. Its Messages encoder MUST return an explicit error.
+
+CONF-7. Responses events MUST contain an object payload. Known terminal events MUST contain a response object.
+If response.status is present, it MUST match the terminal event type.
+Known text, summary, and function-argument delta events MUST contain their required string delta.
+Malformed known events MUST terminate conversion with Error. Later frames MUST NOT replace that failure with success.

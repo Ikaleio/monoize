@@ -15,21 +15,52 @@ fn responses_media_node_is_encodable(
 
 fn prepare_responses_media_event(event: &mut UrpStreamEvent) -> Result<(), String> {
     match event {
-        UrpStreamEvent::NodeStart { header: urp::NodeHeader::ProviderItem { item_type, .. }, .. }
-            if matches!(item_type.as_str(), "input_image" | "output_image" | "image_url" | "input_file" | "output_file" | "file" | "input_audio" | "audio" | "output_audio") =>
-            Err("Native response content cannot contain input-only media items".into()),
-        UrpStreamEvent::NodeStart { header: urp::NodeHeader::Image { .. }, extra_body, .. }
-            if extra_body.contains_key(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY) => Ok(()),
-        UrpStreamEvent::NodeStart { header: urp::NodeHeader::Image { .. } | urp::NodeHeader::File { .. } | urp::NodeHeader::Audio { .. }, .. }
-        | UrpStreamEvent::NodeDelta { delta: urp::NodeDelta::File { .. } | urp::NodeDelta::Audio { .. }, .. } =>
-            Err("Responses output cannot represent ordinary image, file, or audio media".into()),
-        UrpStreamEvent::NodeDelta { delta: urp::NodeDelta::Image { source }, .. }
-            if !matches!(&*source, urp::ImageSource::Base64 { media_type, .. } if matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp")) =>
-            Err("Responses image_generation_call requires supported Base64 image bytes".into()),
-        UrpStreamEvent::NodeDone { node, .. } =>
-            urp::encode::openai_responses::prepare_response_nodes(std::slice::from_mut(node)),
-        UrpStreamEvent::ResponseDone { output, .. } =>
-            urp::encode::openai_responses::prepare_response_nodes(output),
+        UrpStreamEvent::NodeStart {
+            header: urp::NodeHeader::ProviderItem { item_type, .. },
+            ..
+        } if matches!(
+            item_type.as_str(),
+            "input_image"
+                | "output_image"
+                | "image_url"
+                | "input_file"
+                | "output_file"
+                | "file"
+                | "input_audio"
+                | "audio"
+                | "output_audio"
+        ) =>
+        {
+            Err("Native response content cannot contain input-only media items".into())
+        }
+        UrpStreamEvent::NodeStart {
+            header: urp::NodeHeader::Image { .. },
+            extra_body,
+            ..
+        } if extra_body.contains_key(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY) => Ok(()),
+        UrpStreamEvent::NodeStart {
+            header:
+                urp::NodeHeader::Image { .. }
+                | urp::NodeHeader::File { .. }
+                | urp::NodeHeader::Audio { .. },
+            ..
+        }
+        | UrpStreamEvent::NodeDelta {
+            delta: urp::NodeDelta::File { .. } | urp::NodeDelta::Audio { .. },
+            ..
+        } => Err("Responses output cannot represent ordinary image, file, or audio media".into()),
+        UrpStreamEvent::NodeDelta {
+            delta: urp::NodeDelta::Image { source },
+            ..
+        } if !matches!(&*source, urp::ImageSource::Base64 { media_type, .. } if matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp")) => {
+            Err("Responses image_generation_call requires supported Base64 image bytes".into())
+        }
+        UrpStreamEvent::NodeDone { node, .. } => {
+            urp::encode::openai_responses::prepare_response_nodes(std::slice::from_mut(node))
+        }
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            urp::encode::openai_responses::prepare_response_nodes(output)
+        }
         _ => Ok(()),
     }
 }
@@ -599,6 +630,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
                 match delta {
                     urp::NodeDelta::Text {
+                        logprobs,
                         signature: _,
                         citations,
                         content,
@@ -611,41 +643,58 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         append_node_delta_to_completed_item(
                             node_state,
                             &urp::NodeDelta::Text {
+                                logprobs: logprobs.clone(),
                                 signature: None,
                                 citations: citations.clone(),
                                 content: content.clone(),
                             },
                             None,
                         );
-                        for (offset, annotation) in citations.iter().enumerate() {
-                            send_responses_event(&tx, &mut seq, "response.output_text.annotation.added", json!({
-                                "item_id": node_state.item_id,
-                                "output_index": node_state.output_index,
-                                "content_index": node_state.content_index.unwrap_or(0),
-                                "annotation_index": first_annotation + offset,
-                                "annotation": annotation,
-                            })).await?;
+                        for (offset, annotation) in crate::urp::citations::encode(
+                            &citations,
+                            crate::urp::ProviderProtocol::Responses,
+                            0,
+                        )
+                        .iter()
+                        .enumerate()
+                        {
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.output_text.annotation.added",
+                                json!({
+                                    "item_id": node_state.item_id,
+                                    "output_index": node_state.output_index,
+                                    "content_index": node_state.content_index.unwrap_or(0),
+                                    "annotation_index": first_annotation + offset,
+                                    "annotation": annotation,
+                                }),
+                            )
+                            .await?;
                         }
-                        send_responses_delta_string(
+                        send_responses_scored_text_delta(
                             &tx,
                             &mut seq,
-                            "response.output_text.delta",
                             responses_text_delta_payload(
                                 node_state.phase.as_deref(),
-                                &json!({ "id": node_state.item_id }),
+                                &json!({"id":node_state.item_id}),
                                 node_state.output_index as u64,
                                 node_state.content_index.unwrap_or(0) as u64,
                             ),
-                            "delta",
                             &content,
+                            crate::urp::logprobs::valid(&logprobs, &content),
                             sse_max_frame_length,
                         )
                         .await?;
                     }
-                    urp::NodeDelta::Refusal { content } => {
+                    urp::NodeDelta::Refusal {
+                        logprobs: _,
+                        content,
+                    } => {
                         append_node_delta_to_completed_item(
                             node_state,
                             &urp::NodeDelta::Refusal {
+                                logprobs: None,
                                 content: content.clone(),
                             },
                             None,
@@ -855,7 +904,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     .await?;
                 }
                 match &node {
-                    urp::Node::Text { content, .. } => {
+                    urp::Node::Text {
+                        logprobs, content, ..
+                    } => {
                         apply_node_done_to_stream_output_item_state(&mut node_state, &node);
                         let mut done_payload = responses_text_delta_payload(
                             node_state.phase.as_deref(),
@@ -865,6 +916,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         );
                         if let Some(obj) = done_payload.as_object_mut() {
                             obj.insert("text".to_string(), json!(content));
+                            obj.insert(
+                                "logprobs".into(),
+                                json!(
+                                    crate::urp::logprobs::valid(logprobs, content)
+                                        .unwrap_or_default()
+                                ),
+                            );
                         }
                         send_responses_event(
                             &tx,
@@ -874,7 +932,11 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         )
                         .await?;
                     }
-                    urp::Node::Refusal { content, .. } => {
+                    urp::Node::Refusal {
+                        logprobs: _,
+                        content,
+                        ..
+                    } => {
                         apply_node_done_to_stream_output_item_state(&mut node_state, &node);
                         send_responses_event(&tx, &mut seq, "response.refusal.done", json!({
                             "item_id": node_state.item_id, "output_index": node_state.output_index,
@@ -1086,6 +1148,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
             }
             UrpStreamEvent::ResponseDone {
+                outcome,
                 finish_reason,
                 usage,
                 output,
@@ -1142,10 +1205,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .await?;
                     }
                     match &node {
-                        urp::Node::Text { content, .. } => {
+                        urp::Node::Text {
+                            logprobs, content, ..
+                        } => {
                             append_node_delta_to_completed_item(
                                 &mut node_state,
                                 &urp::NodeDelta::Text {
+                                    logprobs: None,
                                     signature: None,
                                     citations: Vec::new(),
                                     content: content.clone(),
@@ -1160,6 +1226,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             );
                             if let Some(obj) = done_payload.as_object_mut() {
                                 obj.insert("text".to_string(), json!(content));
+                                obj.insert(
+                                    "logprobs".into(),
+                                    json!(
+                                        crate::urp::logprobs::valid(logprobs, content)
+                                            .unwrap_or_default()
+                                    ),
+                                );
                             }
                             send_responses_event(
                                 &tx,
@@ -1169,10 +1242,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             )
                             .await?;
                         }
-                        urp::Node::Refusal { content, .. } => {
+                        urp::Node::Refusal {
+                            logprobs: _,
+                            content,
+                            ..
+                        } => {
                             append_node_delta_to_completed_item(
                                 &mut node_state,
                                 &urp::NodeDelta::Refusal {
+                                    logprobs: None,
                                     content: content.clone(),
                                 },
                                 None,
@@ -1458,6 +1536,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
                 let mut response = urp::encode::openai_responses::encode_response(
                     &urp::UrpResponse {
+                        outcome,
                         id: response_id.clone(),
                         model: logical_model.to_string(),
                         created_at: created,
@@ -1545,7 +1624,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let mut completed_response = ensure_response_object_user_field(
                     sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length),
                 );
-                for key in ["status", "error", "incomplete_details", "completed_at"] {
+                for key in ["completed_at"] {
                     if let Some(value) = terminal_extra.get(key) {
                         completed_response[key] = value.clone();
                     }
@@ -1980,6 +2059,7 @@ fn encode_node_start_content_part(header: &urp::NodeHeader) -> Value {
 fn encode_node_done_content_part(node: &urp::Node) -> Option<Value> {
     match node {
         urp::Node::Text {
+            logprobs,
             citations,
             content,
             extra_body,
@@ -1988,8 +2068,18 @@ fn encode_node_done_content_part(node: &urp::Node) -> Option<Value> {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("output_text"));
             obj.insert("text".to_string(), json!(content));
-            obj.insert("annotations".to_string(), json!(citations));
-            obj.insert("logprobs".to_string(), json!([]));
+            obj.insert(
+                "annotations".to_string(),
+                json!(crate::urp::citations::encode(
+                    citations,
+                    crate::urp::ProviderProtocol::Responses,
+                    0
+                )),
+            );
+            obj.insert(
+                "logprobs".to_string(),
+                json!(crate::urp::logprobs::valid(logprobs, content).unwrap_or_default()),
+            );
             merge_json_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }
@@ -2039,6 +2129,7 @@ fn encode_responses_provider_output_item(
 fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
     match node {
         urp::Node::Text {
+            logprobs,
             citations,
             role,
             content,
@@ -2049,7 +2140,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert("content".to_string(), json!([{ "type": "output_text", "text": content, "annotations": citations, "logprobs": [] }]));
+            obj.insert("content".to_string(), json!([{ "type": "output_text", "text": content, "annotations": crate::urp::citations::encode(citations,crate::urp::ProviderProtocol::Responses,0), "logprobs": crate::urp::logprobs::valid(logprobs,content).unwrap_or_default() }]));
             let id = extra_body
                 .get("id")
                 .and_then(Value::as_str)
@@ -2329,23 +2420,57 @@ fn append_node_delta_to_completed_item(
         (
             ResponsesOutputZone::Message,
             urp::NodeDelta::Text {
+                logprobs,
                 signature: _,
                 citations,
                 content,
             },
         ) => {
             append_string_field_to_message_content(&mut item, "output_text", "text", content);
-            if let Some(part) = item.get_mut("content").and_then(Value::as_array_mut)
-                .and_then(|parts| parts.iter_mut().find(|part| part.get("type").and_then(Value::as_str) == Some("output_text")))
+            if let Some(part) = item
+                .get_mut("content")
+                .and_then(Value::as_array_mut)
+                .and_then(|parts| parts.iter_mut().find(|p| p["type"] == "output_text"))
             {
-                let annotations = part.as_object_mut().unwrap().entry("annotations")
+                if let Some(scores) = logprobs {
+                    part.as_object_mut()
+                        .unwrap()
+                        .entry("logprobs")
+                        .or_insert_with(|| json!([]))
+                        .as_array_mut()
+                        .map(|v| v.extend(scores.iter().map(|s| json!(s))));
+                }
+            }
+            if let Some(part) = item
+                .get_mut("content")
+                .and_then(Value::as_array_mut)
+                .and_then(|parts| {
+                    parts.iter_mut().find(|part| {
+                        part.get("type").and_then(Value::as_str) == Some("output_text")
+                    })
+                })
+            {
+                let annotations = part
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("annotations")
                     .or_insert_with(|| json!([]));
                 if let Some(annotations) = annotations.as_array_mut() {
-                    annotations.extend(citations.iter().cloned());
+                    annotations.extend(crate::urp::citations::encode(
+                        citations,
+                        crate::urp::ProviderProtocol::Responses,
+                        0,
+                    ));
                 }
             }
         }
-        (ResponsesOutputZone::Message, urp::NodeDelta::Refusal { content }) => {
+        (
+            ResponsesOutputZone::Message,
+            urp::NodeDelta::Refusal {
+                logprobs: _,
+                content,
+            },
+        ) => {
             append_string_field_to_message_content(&mut item, "refusal", "refusal", content);
         }
         (
@@ -3042,9 +3167,48 @@ async fn emit_missing_terminal_output_done_events(
     Ok(())
 }
 
+async fn send_responses_scored_text_delta(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    mut payload: Value,
+    text: &str,
+    scores: Option<&[urp::TokenLogprob]>,
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let Some(scores) = scores else {
+        payload["logprobs"] = Value::Null;
+        return send_responses_delta_string(
+            tx,
+            seq,
+            "response.output_text.delta",
+            payload,
+            "delta",
+            text,
+            max_frame_length,
+        )
+        .await;
+    };
+    payload["delta"] = json!(text);
+    payload["logprobs"] = json!(scores);
+    if max_frame_length.is_some_and(|limit| payload.to_string().len() + 80 > limit) {
+        for (text, scores) in urp::logprobs::fragments(scores) {
+            let mut part = payload.clone();
+            part["delta"] = json!(text);
+            part["logprobs"] = json!(scores);
+            send_responses_event(tx, seq, "response.output_text.delta", part).await?;
+        }
+    } else {
+        send_responses_event(tx, seq, "response.output_text.delta", payload).await?;
+    }
+    Ok(())
+}
+
 async fn emit_missing_terminal_message_child_lifecycles(
-    tx: &mpsc::Sender<Event>, seq: &mut u64, output_index: usize,
-    item: &Value, sse_max_frame_length: Option<usize>,
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    output_index: usize,
+    item: &Value,
+    sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     let Some(parts) = item.get("content").and_then(Value::as_array) else { return Ok(()); };
     for (content_index, part) in parts.iter().enumerate() {
@@ -3055,17 +3219,48 @@ async fn emit_missing_terminal_message_child_lifecycles(
             _ => None,
         };
         let mut added = part.clone();
-        if let Some((field, _, _)) = text_field { added[field] = json!(""); }
-        if part_type == "output_text" { added["annotations"] = json!([]); }
-        let coordinates = json!({"item_id":item["id"],"output_index":output_index,"content_index":content_index});
-        let mut added_payload = coordinates.clone(); added_payload["part"] = added;
+        if let Some((field, _, _)) = text_field {
+            added[field] = json!("");
+        }
+        if part_type == "output_text" {
+            added["annotations"] = json!([]);
+            added["logprobs"] = json!([]);
+        }
+        let coordinates =
+            json!({"item_id":item["id"],"output_index":output_index,"content_index":content_index});
+        let mut added_payload = coordinates.clone();
+        added_payload["part"] = added;
         send_responses_event(tx, seq, "response.content_part.added", added_payload).await?;
         if let Some((field, delta_event, done_event)) = text_field {
             let text = part.get(field).and_then(Value::as_str).unwrap_or_default();
             let mut payload = coordinates.clone();
-            if field == "text" { payload["logprobs"] = part.get("logprobs").cloned().unwrap_or(Value::Null); }
+            if field == "text" {
+                payload["logprobs"] = part.get("logprobs").cloned().unwrap_or(Value::Null);
+            }
             if !text.is_empty() {
-                send_responses_delta_string(tx, seq, delta_event, payload.clone(), "delta", text, sse_max_frame_length).await?;
+                if field == "text" {
+                    let scores = urp::logprobs::decode(part.get("logprobs"));
+                    send_responses_scored_text_delta(
+                        tx,
+                        seq,
+                        payload.clone(),
+                        text,
+                        urp::logprobs::valid(&scores, text),
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                } else {
+                    send_responses_delta_string(
+                        tx,
+                        seq,
+                        delta_event,
+                        payload.clone(),
+                        "delta",
+                        text,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
             }
             if let Some(annotations) = part.get("annotations").and_then(Value::as_array) {
                 for (index, annotation) in annotations.iter().enumerate() {

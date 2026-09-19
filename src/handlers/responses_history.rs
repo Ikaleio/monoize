@@ -1,6 +1,5 @@
 use super::*;
 
-const CONTEXT_KEY: &str = "_monoize_response_history";
 const MAX_NODES: usize = 4096;
 const MAX_ENTRY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
@@ -133,13 +132,12 @@ pub(super) async fn prepare(
     };
     req.extra_body
         .insert("store".to_string(), Value::Bool(false));
-    req.extra_body.insert(
-        CONTEXT_KEY.to_string(),
-        json!({
-            "id": format!("resp_monoize_{}", uuid::Uuid::new_v4().simple()),
-            "scope": scope, "store": store, "previous_response_id": previous,
-        }),
-    );
+    req.context.response_history = Some(urp::ResponseHistoryContext {
+        id: format!("resp_monoize_{}", uuid::Uuid::new_v4().simple()),
+        scope,
+        store,
+        previous_response_id: previous.as_str().map(str::to_owned),
+    });
     Ok(())
 }
 
@@ -149,7 +147,7 @@ pub(super) struct HistoryContext {
     id: String,
     scope: String,
     store: bool,
-    previous: Value,
+    previous: Option<String>,
     input: Vec<urp::Node>,
     model: String,
     downstream: DownstreamProtocol,
@@ -162,8 +160,8 @@ impl HistoryContext {
         req: &urp::UrpRequest,
         downstream: DownstreamProtocol,
     ) -> Option<Self> {
-        let context = req.extra_body.get(CONTEXT_KEY)?;
-        let store = context.get("store")?.as_bool()?;
+        let context = req.context.response_history.as_ref()?;
+        let store = context.store;
         let mut input = if store { req.input.clone() } else { Vec::new() };
         input.retain_mut(|node| {
             node.extra_body_mut()
@@ -173,13 +171,10 @@ impl HistoryContext {
         });
         Some(Self {
             cache: state.response_history.clone(),
-            id: context.get("id")?.as_str()?.to_string(),
-            scope: context.get("scope")?.as_str()?.to_string(),
+            id: context.id.clone(),
+            scope: context.scope.clone(),
             store,
-            previous: context
-                .get("previous_response_id")
-                .cloned()
-                .unwrap_or(Value::Null),
+            previous: context.previous_response_id.clone(),
             input,
             model: req.model.clone(),
             downstream,
@@ -193,26 +188,23 @@ impl HistoryContext {
     }
 
     fn decorate_extra(&self, extra: &mut HashMap<String, Value>) {
-        extra.insert("previous_response_id".to_string(), self.previous.clone());
+        extra.insert("previous_response_id".to_string(), json!(self.previous));
         extra.insert("store".to_string(), Value::Bool(self.store));
-        if let Some(source) = extra
-            .get_mut(urp::RESPONSES_STREAM_START_SOURCE_EXTRA_KEY)
-            .and_then(Value::as_object_mut)
-        {
-            source.insert("previous_response_id".to_string(), self.previous.clone());
-            source.insert("store".to_string(), Value::Bool(self.store));
-        }
     }
 
     pub(super) async fn retain_response(&self, response: &urp::UrpResponse) {
         if !self.store {
             return;
         }
-        let successful = match response.extra_body.get("status").and_then(Value::as_str) {
-            Some("completed" | "incomplete") => true,
-            Some(_) => false,
-            None => !matches!(response.finish_reason, Some(urp::FinishReason::Other)),
-        };
+        let successful = response.outcome.as_ref().map_or(
+            !matches!(response.finish_reason, Some(urp::FinishReason::Other)),
+            |outcome| {
+                matches!(
+                    outcome.status,
+                    urp::ResponseStatus::Completed | urp::ResponseStatus::Incomplete
+                )
+            },
+        );
         if !successful {
             return;
         }
@@ -266,12 +258,14 @@ impl HistoryContext {
                     self.decorate_extra(extra_body);
                 }
                 urp::UrpStreamEvent::ResponseDone {
+                    outcome,
                     output,
                     finish_reason,
                     extra_body,
                     ..
                 } => {
                     terminal = Some(urp::UrpResponse {
+                        outcome: outcome.clone(),
                         id: self.id.clone(),
                         model: self.model.clone(),
                         created_at: None,
@@ -293,7 +287,7 @@ impl HistoryContext {
 }
 
 pub(super) fn is_managed(req: &urp::UrpRequest) -> bool {
-    req.extra_body.contains_key(CONTEXT_KEY)
+    req.context.response_history.is_some()
 }
 
 #[cfg(test)]
@@ -315,7 +309,7 @@ mod media_history_tests {
             id: "resp_history_test".into(),
             scope: "tenant".into(),
             store: true,
-            previous: Value::Null,
+            previous: None,
             input,
             model: "test-model".into(),
             downstream: DownstreamProtocol::Responses,
@@ -344,6 +338,7 @@ mod media_history_tests {
 
     fn response(output: Vec<urp::Node>) -> urp::UrpResponse {
         urp::UrpResponse {
+            outcome: None,
             id: "upstream-id".into(),
             model: "test-model".into(),
             created_at: None,
@@ -456,6 +451,7 @@ mod media_history_tests {
                 .unwrap();
             }
             tx.send(urp::UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output,
                 finish_reason: Some(urp::FinishReason::Stop),
                 usage: None,

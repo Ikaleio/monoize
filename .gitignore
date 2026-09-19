@@ -7,4 +7,10 @@ deploy.sh
 .Sisyphus/
 .sisyphus/
 __pycache__/
-/artifacts/
+artifacts/
+/reports/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+*.tsbuildinfo

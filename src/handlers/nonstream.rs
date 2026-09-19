@@ -1081,12 +1081,14 @@ async fn collect_streamed_upstream_response(
     while let Some(event) = decoded_rx.recv().await {
         match event {
             crate::urp::UrpStreamEvent::ResponseDone {
+                outcome,
                 finish_reason,
                 usage,
                 output,
                 extra_body,
             } => {
                 final_response = Some(urp::UrpResponse {
+                    outcome,
                     id: extra_body
                         .get("id")
                         .and_then(|value| value.as_str())

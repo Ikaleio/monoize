@@ -52,9 +52,11 @@ fn fixture_stream(item: &Value, progress: Option<&str>) -> String {
         } else {
             "response.custom_tool_call_input.delta"
         };
+        let delta = item[field].as_str().map(str::to_owned)
+            .unwrap_or_else(|| item[field].to_string());
         wire.push_str(&frame(
             event,
-            json!({"output_index":0,"item_id":item["id"],"delta":item[field]}),
+            json!({"output_index":0,"item_id":item["id"],"delta":delta}),
         ));
     }
     if kind == "message" {
@@ -97,10 +99,20 @@ fn fixture_stream(item: &Value, progress: Option<&str>) -> String {
 }
 
 async fn decode_stream(wire: String) -> Vec<UrpStreamEvent> {
+    decode_stream_body(wire.into()).await
+}
+
+async fn decode_stream_body(body: reqwest::Body) -> Vec<UrpStreamEvent> {
+    let (result, events) = decode_stream_body_result(body, 1000).await;
+    result.unwrap();
+    events
+}
+
+async fn decode_stream_body_result(body: reqwest::Body, idle_timeout_ms: u64) -> (crate::error::AppResult<()>, Vec<UrpStreamEvent>) {
     let response = reqwest::Response::from(
         axum::http::Response::builder()
             .header("content-type", "text/event-stream")
-            .body(wire)
+            .body(body)
             .unwrap(),
     );
     let request = crate::handlers::UrpRequest {
@@ -113,19 +125,21 @@ async fn decode_stream(wire: String) -> Vec<UrpStreamEvent> {
         affinity_prefix_hash: String::new(),
     };
     let (tx, mut rx) = mpsc::channel(4096);
-    super::stream_decode::openai_responses::stream_responses_to_urp_events(
-        &request, None, response, tx, None, None, 1000,
-    )
-    .await
-    .unwrap();
-    let mut result = Vec::new();
+    let result = super::stream_decode::openai_responses::stream_responses_to_urp_events(
+        &request, None, response, tx, None, None, idle_timeout_ms,
+    ).await;
+    let mut events = Vec::new();
     while let Some(event) = rx.recv().await {
-        result.push(event);
+        events.push(event);
     }
-    result
+    (result, events)
 }
 
 async fn encode_events(events: Vec<UrpStreamEvent>) -> (String, Vec<Value>) {
+    encode_events_limit(events, None).await
+}
+
+async fn encode_events_limit(events: Vec<UrpStreamEvent>, limit: Option<usize>) -> (String, Vec<Value>) {
     let (tx, rx) = mpsc::channel(4096);
     for event in events {
         tx.send(event).await.unwrap();
@@ -137,7 +151,7 @@ async fn encode_events(events: Vec<UrpStreamEvent>) -> (String, Vec<Value>) {
         wire_tx,
         "feature-model",
         std::time::Instant::now(),
-        None,
+        limit,
         false,
     )
     .await
@@ -169,7 +183,9 @@ fn terminal_output(events: &[UrpStreamEvent]) -> &[Node] {
     events
         .iter()
         .find_map(|event| match event {
-            UrpStreamEvent::ResponseDone { output, .. } => Some(output.as_slice()),
+            UrpStreamEvent::ResponseDone {
+                outcome: _, output, ..
+            } => Some(output.as_slice()),
             _ => None,
         })
         .unwrap_or_else(|| panic!("terminal output missing: {events:#?}"))
@@ -184,6 +200,7 @@ async fn assert_provider_roundtrip(tool: Value, item: Value, progress: Option<&s
         assert_eq!(encoded["tools"][0], tool);
         assert_eq!(encoded["input"][0], item);
         assert_eq!(encoded["stream"], stream);
+        assert_eq!(encode::encode_request(&decode::decode_request(&encoded).unwrap(), "feature-model")["input"][0], item);
     }
     let decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
     assert!(
@@ -193,6 +210,10 @@ async fn assert_provider_roundtrip(tool: Value, item: Value, progress: Option<&s
         encode::encode_response(&decoded, "feature-model")["output"][0],
         item
     );
+    let (synthetic_wire, synthetic_frames) = synthetic_events(&decoded).await;
+    let synthetic_terminal = synthetic_frames.iter().find(|value| value["type"] == "response.completed").unwrap();
+    assert_eq!(synthetic_terminal["response"]["output"][0], item);
+    assert!(matches!(&terminal_output(&decode_stream(synthetic_wire).await)[0], Node::ProviderItem { body, .. } if body == &item));
     let events = decode_stream(fixture_stream(&item, progress)).await;
     assert!(
         matches!(&terminal_output(&events)[0], Node::ProviderItem { origin_protocol: ProviderProtocol::Responses, body, .. } if body == &item)
@@ -687,7 +708,7 @@ async fn generated_image_has_no_payload_snapshot() {
 }
 
 #[test]
-fn native_terminal_details_survive_only_compatible_finish_reason() {
+fn typed_outcome_owns_terminal_details_until_removed() {
     for (status, details) in [
         ("incomplete", json!({"reason":"max_messages","limit":4})),
         ("incomplete", json!({"reason":"future_reason"})),
@@ -707,6 +728,11 @@ fn native_terminal_details_survive_only_compatible_finish_reason() {
         assert_eq!(encoded["status"], status);
         assert_eq!(encoded["incomplete_details"], details);
         decoded.finish_reason = Some(FinishReason::Stop);
+        assert_eq!(
+            encode::encode_response(&decoded, "feature-model")["status"],
+            status
+        );
+        decoded.outcome = None;
         let encoded = encode::encode_response(&decoded, "feature-model");
         assert_eq!(encoded["status"], "completed");
         assert!(encoded["incomplete_details"].is_null());
@@ -715,12 +741,16 @@ fn native_terminal_details_survive_only_compatible_finish_reason() {
 }
 
 async fn synthetic_events(response: &UrpResponse) -> (String, Vec<Value>) {
+    synthetic_events_limit(response, None).await
+}
+
+async fn synthetic_events_limit(response: &UrpResponse, limit: Option<usize>) -> (String, Vec<Value>) {
     let (tx, mut rx) = mpsc::channel(4096);
     super::stream_encode::openai_responses::emit_synthetic_responses_stream(
         "feature-model",
         response,
         None,
-        None,
+        limit,
         tx,
     )
     .await
@@ -806,7 +836,7 @@ async fn refusal_uses_native_lifecycles_in_both_stream_encoders() {
         "cannot comply"
     );
     let stream = decode_stream(fixture_stream(&item, None)).await;
-    assert!(stream.iter().any(|event|matches!(event,UrpStreamEvent::NodeDelta { delta:super::NodeDelta::Refusal { content },.. } if content=="cannot comply")));
+    assert!(stream.iter().any(|event|matches!(event,UrpStreamEvent::NodeDelta { delta:super::NodeDelta::Refusal {logprobs: _, content },.. } if content=="cannot comply")));
     for (wire, frames) in [
         encode_events(stream).await,
         synthetic_events(&decoded).await,
@@ -842,6 +872,7 @@ async fn citations_are_typed_and_deleted_values_do_not_reappear() {
     let item = json!({"type":"message","id":"msg_cite","role":"assistant","status":"completed", "content":[{"type":"output_text","text":"answer","annotations":[citation.clone()]}]});
     let mut decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
     let Node::Text {
+        logprobs: _,
         citations,
         extra_body,
         ..
@@ -853,7 +884,13 @@ async fn citations_are_typed_and_deleted_values_do_not_reappear() {
     else {
         unreachable!()
     };
-    assert_eq!(citations, &vec![citation.clone()]);
+    assert_eq!(
+        citations,
+        &vec![crate::urp::Citation::decode(
+            citation.clone(),
+            crate::urp::ProviderProtocol::Responses
+        )]
+    );
     assert!(!extra_body.contains_key("annotations"));
     citations.clear();
     assert_eq!(
@@ -908,6 +945,7 @@ async fn missing_terminal_output_keeps_typed_phase_and_citations_without_replay_
         for node in terminal_output(&events) {
             match node {
                 Node::Text {
+                    logprobs: _,
                     id,
                     phase,
                     citations,
@@ -916,7 +954,13 @@ async fn missing_terminal_output_keeps_typed_phase_and_citations_without_replay_
                 } => {
                     assert_eq!(id.as_deref(), Some("msg_fallback"));
                     assert_eq!(phase.as_deref(), Some("final_answer"));
-                    assert_eq!(citations, &vec![citation.clone()]);
+                    assert_eq!(
+                        citations,
+                        &vec![crate::urp::Citation::decode(
+                            citation.clone(),
+                            crate::urp::ProviderProtocol::Responses
+                        )]
+                    );
                     assert!(!extra_body.contains_key("phase"));
                     assert!(!extra_body.contains_key("annotations"));
                 }
@@ -945,7 +989,10 @@ async fn missing_terminal_output_keeps_typed_phase_and_citations_without_replay_
 
         let clear_node = |node: &mut Node| {
             if let Node::Text {
-                phase, citations, ..
+                logprobs: _,
+                phase,
+                citations,
+                ..
             } = node
             {
                 *phase = None;
@@ -965,13 +1012,18 @@ async fn missing_terminal_output_keeps_typed_phase_and_citations_without_replay_
                     citations.clear();
                 }
                 UrpStreamEvent::NodeDelta {
-                    delta: super::NodeDelta::Text { citations, .. },
+                    delta:
+                        super::NodeDelta::Text {
+                            logprobs: _,
+                            citations,
+                            ..
+                        },
                     ..
                 } => citations.clear(),
                 UrpStreamEvent::NodeDone { node, .. } => clear_node(node),
-                UrpStreamEvent::ResponseDone { output, .. } => {
-                    output.iter_mut().for_each(clear_node)
-                }
+                UrpStreamEvent::ResponseDone {
+                    outcome: _, output, ..
+                } => output.iter_mut().for_each(clear_node),
                 _ => {}
             }
         }
@@ -1247,18 +1299,39 @@ async fn failed_and_error_events_prevent_later_success() {
             json!({"response":response(vec![])}),
         ));
         let events = decode_stream(wire).await;
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, UrpStreamEvent::Error { .. }))
-                .count(),
-            1
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, UrpStreamEvent::ResponseDone { .. }))
-        );
+        let errors = events
+            .iter()
+            .filter(|event| matches!(event, UrpStreamEvent::Error { .. }))
+            .count();
+        let terminals: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                UrpStreamEvent::ResponseDone { outcome, .. } => Some(outcome),
+                _ => None,
+            })
+            .collect();
+        if event_name == "error" {
+            assert_eq!(errors, 1);
+            assert!(terminals.is_empty());
+        } else {
+            assert_eq!(errors, 0);
+            assert_eq!(terminals.len(), 1);
+            assert_eq!(
+                terminals[0].as_ref().unwrap().status,
+                crate::urp::ResponseStatus::Failed
+            );
+            assert_eq!(
+                terminals[0]
+                    .as_ref()
+                    .unwrap()
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .code
+                    .as_deref(),
+                Some("tool_error")
+            );
+        }
         let (_, frames) = encode_events(events).await;
         assert!(frames.iter().any(|frame| frame["type"] == "response.failed"
             && frame["response"]["error"]["code"] == "tool_error"));
@@ -1332,9 +1405,9 @@ async fn signed_tool_calls_survive_responses_live_and_synthetic_client_loops() {
                 ..
             } => *signature = Some(json!("gemini-signature")),
             UrpStreamEvent::NodeDone { node, .. } => set_signature(node),
-            UrpStreamEvent::ResponseDone { output, .. } => {
-                output.iter_mut().for_each(set_signature)
-            }
+            UrpStreamEvent::ResponseDone {
+                outcome: _, output, ..
+            } => output.iter_mut().for_each(set_signature),
             _ => {}
         }
     }
@@ -1422,7 +1495,9 @@ async fn streaming_namespace_deletion_cannot_be_replayed_from_extras() {
                 *namespace = None;
                 assert!(!extra_body.contains_key("namespace"));
             }
-            UrpStreamEvent::ResponseDone { output, .. } => {
+            UrpStreamEvent::ResponseDone {
+                outcome: _, output, ..
+            } => {
                 for node in output {
                     if let Node::ToolCall { namespace, .. } = node {
                         *namespace = None;
@@ -1669,6 +1744,7 @@ async fn responses_tool_result_metadata_mutation_wins_in_all_output_modes() {
                 extra_body: Default::default(),
             },
             UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: decoded.output.clone(),
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
@@ -1897,7 +1973,12 @@ async fn responses_missing_terminal_content_keeps_duplicate_media_empty_text_and
     for node in &mut request.input {
         match node {
             Node::File { metadata, .. } => metadata.filename = None,
-            Node::Text { phase, content, .. } => {
+            Node::Text {
+                logprobs: _,
+                phase,
+                content,
+                ..
+            } => {
                 *phase = None;
                 if content == "before" {
                     *content = "changed".into();
@@ -1980,7 +2061,7 @@ async fn responses_missing_terminal_output_merges_done_media_with_unfinished_tex
             matches!(&nodes[0],Node::File {metadata,..} if metadata.filename.as_deref()==Some("partial.pdf"))
         );
         assert!(
-            matches!(&nodes[1],Node::Text {content,citations,phase,..} if content=="partial text" && citations==&vec![annotation] && phase.as_deref()==Some("final_answer"))
+            matches!(&nodes[1],Node::Text {content,citations,phase,..} if content=="partial text" && citations==&vec![crate::urp::Citation::decode(annotation,crate::urp::ProviderProtocol::Responses)] && phase.as_deref()==Some("final_answer"))
         );
         let text_starts = events
             .iter()
@@ -1995,5 +2076,953 @@ async fn responses_missing_terminal_output_merges_done_media_with_unfinished_tex
             })
             .count();
         assert_eq!(text_starts, 1, "{events:#?}");
+    }
+}
+
+fn reasoning_fields(node: &Node) -> (Option<&str>, Option<&str>, Option<&Value>) {
+    let Node::Reasoning {
+        content,
+        summary,
+        encrypted,
+        ..
+    } = node
+    else {
+        panic!("expected reasoning, got {node:?}")
+    };
+    (
+        content.as_deref().filter(|s| !s.is_empty()),
+        summary.as_deref().filter(|s| !s.is_empty()),
+        encrypted.as_ref(),
+    )
+}
+
+#[tokio::test]
+async fn documented_reasoning_surfaces_stay_distinct_in_every_direction() {
+    for (raw, summary, encrypted) in [
+        (Some("raw α\nexact"), None, None),
+        (None, Some("short summary"), Some("gAAAA:opaque+/=\n")),
+        (None, None, Some("opaque-only")),
+        (None, Some("summary-only"), None),
+        (
+            Some("raw reasoning"),
+            Some("summary, not raw"),
+            Some("encrypted-state"),
+        ),
+    ] {
+        let mut item = json!({"type":"reasoning","id":"rs_bound","summary":[],"status":"completed","future_reasoning":{"keep":true}});
+        if let Some(raw) = raw {
+            item["content"] = json!([{"type":"reasoning_text","text":raw}]);
+        }
+        if let Some(summary) = summary {
+            item["summary"] = json!([{"type":"summary_text","text":summary}]);
+        }
+        if let Some(encrypted) = encrypted {
+            item["encrypted_content"] = json!(encrypted);
+        }
+        let encrypted_value = encrypted.map(|value| json!(value));
+        let expected = (raw, summary, encrypted_value.as_ref());
+        let decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
+        assert_eq!(reasoning_fields(&decoded.output[0]), expected);
+        let back =
+            decode::decode_response(&encode::encode_response(&decoded, "feature-model")).unwrap();
+        assert_eq!(reasoning_fields(&back.output[0]), expected);
+        for stream in [false, true] {
+            for include in [false, true] {
+                let mut body = json!({"model":"feature-model","stream":stream,"store":false,"input":[item.clone()],"reasoning":{"effort":"high","summary":"auto","context":"all_turns"}});
+                if include {
+                    body["include"] = json!(["reasoning.encrypted_content"]);
+                }
+                let request = decode::decode_request(&body).unwrap();
+                assert_eq!(reasoning_fields(&request.input[0]), expected);
+                let replay = encode::encode_request(&request, "feature-model");
+                assert_eq!(replay["input"][0]["id"], "rs_bound");
+                assert_eq!(
+                    replay["input"][0]["encrypted_content"],
+                    item["encrypted_content"]
+                );
+                assert_eq!(replay["reasoning"]["context"], "all_turns");
+                assert_eq!(replay["store"], false);
+                assert_eq!(replay["stream"], stream);
+                assert_eq!(
+                    reasoning_fields(&decode::decode_request(&replay).unwrap().input[0]),
+                    expected
+                );
+            }
+        }
+        let mut wire = frame("response.created", json!({"response":response(vec![])}));
+        wire.push_str(&frame("response.output_item.added", json!({"output_index":0,"item":{"type":"reasoning","id":"rs_bound","summary":[],"status":"in_progress"}})));
+        if let Some(raw) = raw {
+            wire.push_str(&frame(
+                "response.reasoning_text.delta",
+                json!({"output_index":0,"content_index":0,"item_id":"rs_bound","delta":raw}),
+            ));
+        }
+        if let Some(summary) = summary {
+            wire.push_str(&frame("response.reasoning_summary_part.added", json!({"output_index":0,"summary_index":0,"item_id":"rs_bound","part":{"type":"summary_text","text":""}})));
+            wire.push_str(&frame(
+                "response.reasoning_summary_text.delta",
+                json!({"output_index":0,"summary_index":0,"item_id":"rs_bound","delta":summary}),
+            ));
+        }
+        wire.push_str(&frame(
+            "response.output_item.done",
+            json!({"output_index":0,"item":item}),
+        ));
+        wire.push_str(&frame(
+            "response.completed",
+            json!({"response":response(vec![item.clone()])}),
+        ));
+        let events = decode_stream(wire).await;
+        assert_eq!(reasoning_fields(&terminal_output(&events)[0]), expected);
+        for (wire, frames) in [
+            encode_events(events).await,
+            synthetic_events(&decoded).await,
+        ] {
+            let deltas = |kind: &str| {
+                frames
+                    .iter()
+                    .filter(|f| f["type"] == kind)
+                    .filter_map(|f| f["delta"].as_str())
+                    .collect::<String>()
+            };
+            assert_eq!(
+                deltas("response.reasoning_text.delta"),
+                raw.unwrap_or_default()
+            );
+            assert_eq!(
+                deltas("response.reasoning_summary_text.delta"),
+                summary.unwrap_or_default()
+            );
+            let terminal = frames
+                .iter()
+                .find(|f| f["type"] == "response.completed")
+                .unwrap();
+            assert_eq!(terminal["response"]["output"][0]["id"], "rs_bound");
+            assert_eq!(
+                terminal["response"]["output"][0]["encrypted_content"],
+                item["encrypted_content"]
+            );
+            assert_eq!(
+                reasoning_fields(&terminal_output(&decode_stream(wire).await)[0]),
+                expected
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn reasoning_field_deletions_cannot_restore_stale_native_copies() {
+    let item = json!({"type":"reasoning","id":"rs_delete","summary":[{"type":"summary_text","text":"summary"}],"content":[{"type":"reasoning_text","text":"raw"}],"encrypted_content":"ciphertext"});
+    for deleted in ["content", "summary", "encrypted_content"] {
+        let mut response = decode::decode_response(&response(vec![item.clone()])).unwrap();
+        let Node::Reasoning {
+            content,
+            summary,
+            encrypted,
+            extra_body,
+            ..
+        } = &mut response.output[0]
+        else {
+            unreachable!()
+        };
+        match deleted {
+            "content" => *content = None,
+            "summary" => *summary = None,
+            _ => *encrypted = None,
+        }
+        for key in ["content", "summary", "encrypted_content"] {
+            extra_body.insert(key.into(), item[key].clone());
+        }
+        let check = |nodes: &[Node]| {
+            let fields = reasoning_fields(&nodes[0]);
+            assert_eq!(
+                fields.0,
+                if deleted == "content" {
+                    None
+                } else {
+                    Some("raw")
+                }
+            );
+            assert_eq!(
+                fields.1,
+                if deleted == "summary" {
+                    None
+                } else {
+                    Some("summary")
+                }
+            );
+            assert_eq!(
+                fields.2,
+                if deleted == "encrypted_content" {
+                    None
+                } else {
+                    Some(&item["encrypted_content"])
+                }
+            );
+        };
+        check(
+            &decode::decode_response(&encode::encode_response(&response, "feature-model"))
+                .unwrap()
+                .output,
+        );
+        let (wire, _) = synthetic_events(&response).await;
+        check(terminal_output(&decode_stream(wire).await));
+        for stream in [false, true] {
+            let mut request = decode::decode_request(
+                &json!({"model":"feature-model","stream":stream,"input":[]}),
+            )
+            .unwrap();
+            request.input = response.output.clone();
+            check(
+                &decode::decode_request(&encode::encode_request(&request, "feature-model"))
+                    .unwrap()
+                    .input,
+            );
+        }
+    }
+}
+
+#[test]
+fn documented_request_controls_and_logprobs_roundtrip_without_duplicate_ownership() {
+    for stream in [false, true] {
+        let body = json!({"model":"feature-model","stream":stream,"input":"question","instructions":"policy","temperature":0.2,"top_p":0.8,"max_output_tokens":77,"parallel_tool_calls":false,"previous_response_id":"resp_previous","store":false,"background":true,"truncation":"auto","metadata":{"trace":"keep"},"service_tier":"flex","prompt_cache_key":"cache","max_tool_calls":4,"include":["message.output_text.logprobs","reasoning.encrypted_content","file_search_call.results"],"top_logprobs":2,"text":{"format":{"type":"json_schema","name":"result","schema":{"type":"object"},"strict":true},"verbosity":"low"}});
+        let mut request = decode::decode_request(&body).unwrap();
+        assert_eq!(
+            request.logprobs,
+            Some(super::LogprobConfig {
+                enabled: true,
+                top_k: Some(2)
+            })
+        );
+        assert!(!request.extra_body.contains_key("top_logprobs"));
+        let encoded = encode::encode_request(&request, "feature-model");
+        for key in [
+            "stream",
+            "temperature",
+            "top_p",
+            "max_output_tokens",
+            "parallel_tool_calls",
+            "previous_response_id",
+            "store",
+            "background",
+            "truncation",
+            "metadata",
+            "service_tier",
+            "prompt_cache_key",
+            "max_tool_calls",
+            "top_logprobs",
+            "text",
+        ] {
+            assert_eq!(encoded[key], body[key], "{key}");
+        }
+        assert_eq!(
+            decode::decode_request(&encoded).unwrap().logprobs,
+            request.logprobs
+        );
+        request.logprobs = None;
+        request.extra_body.insert("top_logprobs".into(), json!(99));
+        request
+            .extra_body
+            .insert("include".into(), body["include"].clone());
+        let cleared = encode::encode_request(&request, "feature-model");
+        assert!(cleared.get("top_logprobs").is_none());
+        assert_eq!(
+            cleared["include"],
+            json!(["reasoning.encrypted_content", "file_search_call.results"])
+        );
+        assert!(decode::decode_request(&cleared).unwrap().logprobs.is_none());
+    }
+}
+
+#[tokio::test]
+async fn token_probabilities_accumulate_and_invalidate_with_current_text() {
+    let scores = json!([{"token":"A","bytes":[65],"logprob":-0.1,"top_logprobs":[{"token":"B","bytes":[66],"logprob":-2.0}]},{"token":"你","bytes":[228,189,160],"logprob":-0.2,"top_logprobs":[]}]);
+    let item = json!({"type":"message","id":"msg_probs","role":"assistant","status":"completed","content":[{"type":"output_text","text":"A你","annotations":[],"logprobs":scores}]});
+    let decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
+    assert_eq!(
+        serde_json::to_value(decoded.output.iter().find_map(Node::token_scores)).unwrap(),
+        scores
+    );
+    let mut wire = frame(
+        "response.output_item.added",
+        json!({"output_index":0,"item":{"type":"message","id":"msg_probs","role":"assistant","content":[]}}),
+    );
+    for score in scores.as_array().unwrap() {
+        wire.push_str(&frame("response.output_text.delta", json!({"output_index":0,"content_index":0,"item_id":"msg_probs","delta":score["token"],"logprobs":[score]})));
+    }
+    wire.push_str(&frame(
+        "response.completed",
+        json!({"response":response(vec![])}),
+    ));
+    let events = decode_stream(wire).await;
+    assert_eq!(
+        serde_json::to_value(terminal_output(&events).iter().find_map(Node::token_scores)).unwrap(),
+        scores
+    );
+    for (wire, frames) in [
+        encode_events(events).await,
+        synthetic_events(&decoded).await,
+    ] {
+        let terminal = frames
+            .iter()
+            .find(|f| f["type"] == "response.completed")
+            .unwrap();
+        assert_eq!(
+            terminal["response"]["output"][0]["content"][0]["logprobs"],
+            scores
+        );
+        assert_eq!(
+            serde_json::to_value(
+                terminal_output(&decode_stream(wire).await)
+                    .iter()
+                    .find_map(Node::token_scores)
+            )
+            .unwrap(),
+            scores
+        );
+    }
+    let mut changed = decoded;
+    let Node::Text { content, .. } = changed
+        .output
+        .iter_mut()
+        .find(|node| matches!(node, Node::Text { .. }))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    *content = "edited".into();
+    assert_eq!(
+        encode::encode_response(&changed, "feature-model")["output"][0]["content"][0]["logprobs"],
+        json!([])
+    );
+    let (_, frames) = synthetic_events(&changed).await;
+    for frame in frames {
+        if frame["type"] == "response.output_text.delta"
+            || frame["type"] == "response.output_text.done"
+        {
+            assert!(frame["logprobs"].is_null() || frame["logprobs"] == json!([]));
+        }
+    }
+}
+
+#[tokio::test]
+async fn all_terminal_outcomes_preserve_partial_output_usage_and_error() {
+    let item = json!({"type":"message","id":"msg_partial","role":"assistant","status":"completed","content":[{"type":"output_text","text":"partial","annotations":[]}]});
+    for (status, reason) in [
+        ("completed", None),
+        ("incomplete", Some("max_output_tokens")),
+        ("incomplete", Some("content_filter")),
+        ("incomplete", Some("future_limit")),
+        ("failed", None),
+        ("cancelled", None),
+    ] {
+        let mut value = response(vec![item.clone()]);
+        value["status"] = json!(status);
+        if let Some(reason) = reason {
+            value["incomplete_details"] = json!({"reason":reason,"future":7});
+        }
+        if status == "failed" {
+            value["error"] = json!({"code":"server_error","message":"failed after text","param":"tools","future":"retained"});
+        }
+        value["usage"] = json!({"input_tokens":30,"output_tokens":7,"total_tokens":37,"input_tokens_details":{"cached_tokens":9},"output_tokens_details":{"reasoning_tokens":4},"future":1});
+        let decoded = decode::decode_response(&value).unwrap();
+        let check = |output: &Value| {
+            assert_eq!(output["status"], status);
+            assert_eq!(output["output"][0]["content"][0]["text"], "partial");
+            assert_eq!(output["error"], value["error"]);
+            assert_eq!(output["incomplete_details"], value["incomplete_details"]);
+            assert_eq!(
+                serde_json::to_value(decode::decode_response(output).unwrap().usage).unwrap(),
+                serde_json::to_value(&decoded.usage).unwrap()
+            );
+            assert_eq!(output["usage"]["future"], 1);
+        };
+        check(&encode::encode_response(&decoded, "feature-model"));
+        let wire = frame(&format!("response.{status}"), json!({"response":value}));
+        let events = decode_stream(wire).await;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, UrpStreamEvent::ResponseDone { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, UrpStreamEvent::Error { .. }))
+        );
+        for (wire, frames) in [
+            encode_events(events).await,
+            synthetic_events(&decoded).await,
+        ] {
+            let terminal = frames
+                .iter()
+                .find(|f| f["type"] == format!("response.{status}"))
+                .unwrap();
+            check(&terminal["response"]);
+            assert_eq!(
+                terminal_output(&decode_stream(wire).await)
+                    .iter()
+                    .filter(|node| matches!(node, Node::Text { .. }))
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_and_truncated_streams_never_synthesize_success() {
+    for (wire, code) in [
+        (
+            "event: response.output_text.delta\ndata: {broken\n\n".to_string(),
+            "responses_invalid_sse_json",
+        ),
+        (String::new(), "responses_stream_missing_terminal"),
+        (
+            "data: [DONE]\n\n".to_string(),
+            "responses_stream_missing_terminal",
+        ),
+        (
+            frame(
+                "response.output_text.delta",
+                json!({"output_index":0,"content_index":0,"delta":"partial"}),
+            ),
+            "responses_stream_missing_terminal",
+        ),
+        (
+            frame(
+                "response.output_item.done",
+                json!({"output_index":0,"item":{"type":"reasoning","id":"rs_cut","summary":[],"encrypted_content":"opaque"}}),
+            ),
+            "responses_stream_missing_terminal",
+        ),
+    ] {
+        let events = decode_stream(wire).await;
+        assert_eq!(events.iter().filter(|e| matches!(e, UrpStreamEvent::Error { code:Some(actual), .. } if actual == code)).count(), 1);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, UrpStreamEvent::ResponseDone { .. }))
+        );
+        let (_, frames) = encode_events(events).await;
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|f| f["type"] == "response.failed")
+                .count(),
+            1
+        );
+        assert!(!frames.iter().any(|f| f["type"] == "response.completed"));
+    }
+}
+
+#[test]
+fn invalid_request_roots_and_models_are_rejected_in_both_modes() {
+    for value in [
+        Value::Null,
+        json!([]),
+        json!("input"),
+        json!({}),
+        json!({"model":3}),
+    ] {
+        assert!(decode::decode_request(&value).is_err());
+    }
+    for stream in [false, true] {
+        for model in [Value::Null, json!(12), json!({})] {
+            assert!(
+                decode::decode_request(&json!({"model":model,"stream":stream,"input":"text"}))
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn provider_tool_failure_and_denied_approval_payloads_roundtrip() {
+    for (tool, item, event) in [
+        (
+            json!({"type":"mcp","server_label":"remote","server_url":"https://example.com"}),
+            json!({"type":"mcp_call","id":"mcp_failed","server_label":"remote","name":"lookup","arguments":"{}","error":{"type":"protocol_error","message":"denied"},"output":null,"status":"failed"}),
+            Some("response.mcp_call.failed"),
+        ),
+        (
+            json!({"type":"mcp","server_label":"remote","server_url":"https://example.com"}),
+            json!({"type":"mcp_list_tools","id":"mcpl_failed","server_label":"remote","tools":[],"error":{"type":"http_error","status":503}}),
+            Some("response.mcp_list_tools.failed"),
+        ),
+        (
+            json!({"type":"mcp","server_label":"remote","server_url":"https://example.com"}),
+            json!({"type":"mcp_approval_response","id":"mcpa_denied","approval_request_id":"mcpr_1","approve":false,"reason":"user denied"}),
+            None,
+        ),
+        (
+            json!({"type":"shell","environment":{"type":"local"}}),
+            json!({"type":"shell_call_output","id":"shell_failed","call_id":"call_shell","output":[{"stdout":"partial","stderr":"failure","outcome":{"type":"exit","exit_code":2}},{"stdout":"","stderr":"timeout","outcome":{"type":"timeout"}}]}),
+            None,
+        ),
+        (
+            json!({"type":"apply_patch"}),
+            json!({"type":"apply_patch_call_output","id":"patch_failed","call_id":"call_patch","status":"failed","output":"file missing"}),
+            None,
+        ),
+        (
+            json!({"type":"code_interpreter","container":{"type":"auto"}}),
+            json!({"type":"code_interpreter_call","id":"code_failed","container_id":"container","status":"failed","code":"raise Exception()","outputs":[{"type":"logs","logs":"Traceback"}]}),
+            None,
+        ),
+        (
+            json!({"type":"web_search"}),
+            json!({"type":"web_search_call","id":"search_failed","status":"failed","action":{"type":"search","query":"q"}}),
+            None,
+        ),
+        (
+            json!({"type":"file_search","vector_store_ids":["vs_1"]}),
+            json!({"type":"file_search_call","id":"file_failed","status":"failed","queries":["q"],"results":[]}),
+            None,
+        ),
+    ] {
+        assert_provider_roundtrip(tool, item, event).await;
+    }
+}
+
+#[tokio::test]
+async fn repeated_terminal_and_done_without_added_do_not_duplicate_items() {
+    let item = json!({"type":"function_call","id":"fc_late","call_id":"call_late","name":"lookup","arguments":"{\"q\":1}","status":"completed"});
+    let mut wire = frame(
+        "response.output_item.done",
+        json!({"output_index":3,"item":item}),
+    );
+    wire.push_str(&frame(
+        "response.output_item.done",
+        json!({"output_index":3,"item":item}),
+    ));
+    wire.push_str(&frame(
+        "response.completed",
+        json!({"response":response(vec![item.clone()])}),
+    ));
+    wire.push_str(&frame(
+        "response.failed",
+        json!({"response":{"status":"failed","error":{"message":"late"}}}),
+    ));
+    let events = decode_stream(wire).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(
+                e,
+                UrpStreamEvent::NodeDone {
+                    node: Node::ToolCall { .. },
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, UrpStreamEvent::ResponseDone { .. }))
+            .count(),
+        1
+    );
+    let (_, frames) = encode_events(events).await;
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|f| f["type"] == "response.output_item.done")
+            .count(),
+        1
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|f| f["type"] == "response.completed")
+            .count(),
+        1
+    );
+    assert!(!frames.iter().any(|f| f["type"] == "response.failed"));
+}
+
+#[tokio::test]
+async fn encrypted_snapshots_replace_atomically_and_independent_items_stay_separate() {
+    let mut items = Vec::new();
+    let mut wire = String::new();
+    for (index, (id, initial, final_value)) in [
+        ("rs_first", "old-prefix", "new-prefix+/=\n"),
+        ("rs_second", "old-second", "second-final"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let added = json!({"id":id,"type":"reasoning","summary":[],"encrypted_content":initial,"status":"in_progress"});
+        let done = json!({"id":id,"type":"reasoning","summary":[{"type":"summary_text","text":format!("summary {index}")}],"encrypted_content":final_value,"status":"completed"});
+        wire.push_str(&frame(
+            "response.output_item.added",
+            json!({"output_index":index,"item":added}),
+        ));
+        wire.push_str(&frame(
+            "response.output_item.done",
+            json!({"output_index":index,"item":done}),
+        ));
+        items.push(done);
+    }
+    wire.push_str(&frame(
+        "response.completed",
+        json!({"response":response(items.clone())}),
+    ));
+    let events = decode_stream(wire).await;
+    let check = |nodes: &[Node]| {
+        let nodes: Vec<_> = nodes
+            .iter()
+            .filter(|n| matches!(n, Node::Reasoning { .. }))
+            .collect();
+        assert_eq!(nodes.len(), 2);
+        for (index, node) in nodes.into_iter().enumerate() {
+            assert_eq!(reasoning_fields(node).0, None);
+            assert_eq!(
+                reasoning_fields(node).2,
+                Some(&items[index]["encrypted_content"])
+            );
+            assert_eq!(
+                reasoning_fields(node).1,
+                items[index]["summary"][0]["text"].as_str()
+            );
+        }
+    };
+    check(terminal_output(&events));
+    let (wire, frames) = encode_events(events).await;
+    check(terminal_output(&decode_stream(wire).await));
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|f| f["type"] == "response.output_item.done")
+            .count(),
+        2
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|f| f["type"] == "response.reasoning_text.delta")
+    );
+}
+
+#[tokio::test]
+async fn all_documented_annotation_variants_survive_native_and_synthetic_streams() {
+    for annotation in [
+        json!({"type":"url_citation","url":"https://example.com","title":"Example","start_index":1,"end_index":3,"future":true}),
+        json!({"type":"file_citation","file_id":"file_1","filename":"source.txt","index":2}),
+        json!({"type":"container_file_citation","file_id":"file_2","container_id":"cntr_1","filename":"result.csv","start_index":1,"end_index":3}),
+        json!({"type":"file_path","file_id":"file_3","index":4}),
+        json!({"type":"future_annotation","opaque":{"nested":[1,2]}}),
+    ] {
+        let item = json!({"type":"message","id":"msg_annotation","role":"assistant","status":"completed","content":[{"type":"output_text","text":"abcdef","annotations":[annotation.clone()]}]});
+        let decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
+        assert_eq!(
+            encode::encode_response(&decoded, "feature-model")["output"][0]["content"][0]["annotations"],
+            json!([annotation.clone()])
+        );
+        let events = decode_stream(fixture_stream(&item, None)).await;
+        for (wire, frames) in [
+            encode_events(events).await,
+            synthetic_events(&decoded).await,
+        ] {
+            let terminal = frames
+                .iter()
+                .find(|f| f["type"] == "response.completed")
+                .unwrap();
+            assert_eq!(
+                terminal["response"]["output"][0]["content"][0]["annotations"],
+                json!([annotation.clone()])
+            );
+            assert!(
+                terminal_output(&decode_stream(wire).await)
+                    .iter()
+                    .any(|node| matches!(node,Node::Text { citations,.. } if citations.len()==1))
+            );
+        }
+    }
+}
+
+#[test]
+fn assistant_output_history_preserves_typed_citations_and_logprobs() {
+    let scores = json!([{"token":"answer","bytes":[97,110,115,119,101,114],"logprob":-0.1,"top_logprobs":[]}]);
+    let annotation = json!({"type":"url_citation","url":"https://example.com","title":"Source","start_index":0,"end_index":6});
+    for stream in [false, true] {
+        let body = json!({"model":"feature-model","stream":stream,"input":[{"type":"message","id":"msg_history","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[annotation.clone()],"logprobs":scores}]}]});
+        let mut request = decode::decode_request(&body).unwrap();
+        let encoded = encode::encode_request(&request, "feature-model");
+        assert_eq!(
+            encoded["input"][0]["content"][0]["annotations"],
+            json!([annotation.clone()])
+        );
+        assert_eq!(encoded["input"][0]["content"][0]["logprobs"], scores);
+        let back = decode::decode_request(&encoded).unwrap();
+        assert_eq!(
+            serde_json::to_value(back.input.iter().find_map(Node::token_scores)).unwrap(),
+            scores
+        );
+        let Node::Text {
+            citations,
+            logprobs,
+            extra_body,
+            ..
+        } = request
+            .input
+            .iter_mut()
+            .find(|node| matches!(node, Node::Text { .. }))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        citations.clear();
+        *logprobs = None;
+        extra_body.insert("annotations".into(), json!([annotation.clone()]));
+        extra_body.insert("logprobs".into(), scores.clone());
+        let cleared = encode::encode_request(&request, "feature-model");
+        assert_eq!(cleared["input"][0]["content"][0]["annotations"], json!([]));
+        assert_eq!(cleared["input"][0]["content"][0]["logprobs"], json!([]));
+    }
+}
+
+#[tokio::test]
+async fn malformed_event_objects_do_not_become_successful_empty_output() {
+    for wire in [
+        "event: response.completed\ndata: null\n\n".to_string(),
+        "event: response.completed\ndata: []\n\n".to_string(),
+        frame("response.completed", json!({})),
+        frame("response.failed", json!({"response":"failure"})),
+        frame(
+            "response.failed",
+            json!({"response":{"status":"completed","output":[]}}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response":{"status":"completed","output":{}}}),
+        ),
+        frame(
+            "response.output_text.delta",
+            json!({"output_index":0,"content_index":0,"delta":42}),
+        ),
+        frame(
+            "response.reasoning_text.delta",
+            json!({"output_index":0,"content_index":0,"delta":{}}),
+        ),
+        frame(
+            "response.reasoning_summary_text.delta",
+            json!({"output_index":0,"summary_index":0,"delta":null}),
+        ),
+        frame(
+            "response.function_call_arguments.delta",
+            json!({"output_index":0}),
+        ),
+        frame(
+            "response.custom_tool_call_input.delta",
+            json!({"output_index":0,"delta":[]}),
+        ),
+    ] {
+        let wire = format!(
+            "{wire}{}",
+            frame("response.completed", json!({"response":response(vec![])}))
+        );
+        let events = decode_stream(wire).await;
+        assert_eq!(events.iter().filter(|event| matches!(event,UrpStreamEvent::Error { code:Some(code),.. } if code=="responses_invalid_event")).count(),1,"{events:?}");
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, UrpStreamEvent::ResponseDone { .. })),
+            "{events:?}"
+        );
+        let (_, frames) = encode_events(events).await;
+        assert!(
+            frames
+                .iter()
+                .any(|frame| frame["type"] == "response.failed")
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|frame| frame["type"] == "response.completed")
+        );
+    }
+}
+
+#[tokio::test]
+async fn byte_fragmented_crlf_sse_preserves_unicode_and_opaque_reasoning() {
+    let item = json!({"type":"reasoning","id":"rs_fragmented","summary":[{"type":"summary_text","text":"摘要 🦀"}],"content":[{"type":"reasoning_text","text":"原始思考"}],"encrypted_content":"opaque+/=\nexact"});
+    let wire = fixture_stream(&item, None).replace('\n', "\r\n");
+    for chunk_size in [1, 2, 3, 7, 64] {
+        let chunks: Vec<_> = wire
+            .as_bytes()
+            .chunks(chunk_size)
+            .map(|chunk| Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(chunk)))
+            .collect();
+        let events = decode_stream_body(reqwest::Body::wrap_stream(futures_util::stream::iter(
+            chunks,
+        )))
+        .await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, UrpStreamEvent::Error { .. }))
+        );
+        assert_eq!(
+            reasoning_fields(&terminal_output(&events)[0]),
+            (
+                Some("原始思考"),
+                Some("摘要 🦀"),
+                Some(&item["encrypted_content"])
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn unscored_text_delta_uses_null_probability_field() {
+    let item = json!({"type":"message","id":"msg_unscored","role":"assistant","content":[{"type":"output_text","text":"plain","annotations":[]}]});
+    let decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
+    let events = decode_stream(fixture_stream(&item, None)).await;
+    for (_, frames) in [
+        encode_events(events).await,
+        synthetic_events(&decoded).await,
+    ] {
+        let deltas: Vec<_> = frames
+            .iter()
+            .filter(|frame| frame["type"] == "response.output_text.delta")
+            .collect();
+        assert!(!deltas.is_empty());
+        assert!(
+            deltas
+                .iter()
+                .all(|frame| frame.get("logprobs") == Some(&Value::Null))
+        );
+        let completed = frames
+            .iter()
+            .find(|frame| frame["type"] == "response.completed")
+            .unwrap();
+        assert_eq!(
+            completed["response"]["output"][0]["content"][0]["logprobs"],
+            json!([])
+        );
+    }
+}
+
+#[tokio::test]
+async fn frame_splitting_keeps_utf8_token_bytes_and_scores_once() {
+    let scores = json!([{"token":"�","bytes":[228],"logprob":-0.1,"top_logprobs":[]},{"token":"�","bytes":[189,160],"logprob":-0.2,"top_logprobs":[]},{"token":"A","bytes":[65],"logprob":-0.3,"top_logprobs":[]}]);
+    let item = json!({"type":"message","id":"msg_fragment_scores","role":"assistant","content":[{"type":"output_text","text":"你A","annotations":[],"logprobs":scores}]});
+    let decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
+    for limit in [None, Some(128), Some(1)] {
+        let mut wire = frame(
+            "response.output_item.added",
+            json!({"output_index":0,"item":{"type":"message","id":"msg_fragment_scores","role":"assistant","content":[]}}),
+        );
+        wire.push_str(&frame("response.output_text.delta",json!({"output_index":0,"content_index":0,"item_id":"msg_fragment_scores","delta":"你A","logprobs":scores})));
+        wire.push_str(&frame(
+            "response.completed",
+            json!({"response":response(vec![item.clone()])}),
+        ));
+        let events = decode_stream(wire).await;
+        for (wire, frames) in [
+            encode_events_limit(events, limit).await,
+            synthetic_events_limit(&decoded, limit).await,
+        ] {
+            let deltas: Vec<_> = frames
+                .iter()
+                .filter(|frame| frame["type"] == "response.output_text.delta")
+                .collect();
+            assert_eq!(
+                deltas
+                    .iter()
+                    .filter_map(|frame| frame["delta"].as_str())
+                    .collect::<String>(),
+                "你A",
+                "limit={limit:?}, frames={frames:#?}"
+            );
+            let emitted_scores: Vec<_> = deltas
+                .iter()
+                .flat_map(|frame| frame["logprobs"].as_array().unwrap().clone())
+                .collect();
+            assert_eq!(json!(emitted_scores), scores);
+            assert_eq!(
+                serde_json::to_value(
+                    terminal_output(&decode_stream(wire).await)
+                        .iter()
+                        .find_map(Node::token_scores)
+                )
+                .unwrap(),
+                scores
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn transport_failure_invalid_utf8_and_idle_timeout_cannot_finish_successfully() {
+    let bodies = [
+        (
+            reqwest::Body::wrap_stream(futures_util::stream::iter(vec![Err::<bytes::Bytes, _>(
+                std::io::Error::other("fixture disconnected"),
+            )])),
+            "upstream_stream_decode_failed",
+        ),
+        (
+            reqwest::Body::from(vec![0xff_u8, 0xfe, b'\n', b'\n']),
+            "upstream_stream_decode_failed",
+        ),
+        (
+            reqwest::Body::wrap_stream(futures_util::stream::pending::<
+                Result<bytes::Bytes, std::io::Error>,
+            >()),
+            "upstream_idle_timeout",
+        ),
+    ];
+    for (body, code) in bodies {
+        let (result, events) = decode_stream_body_result(body, 10).await;
+        assert_eq!(result.unwrap_err().code, code);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, UrpStreamEvent::ResponseDone { .. }))
+        );
+    }
+}
+
+#[tokio::test]
+async fn streaming_typed_outcome_overrides_stale_native_terminal_extras() {
+    let mut native = response(vec![]);
+    native["status"] = json!("failed");
+    native["error"] = json!({"code":"actual","message":"actual failure"});
+    let mut decoded = decode::decode_response(&native).unwrap();
+    decoded
+        .extra_body
+        .insert("status".into(), json!("completed"));
+    decoded.extra_body.insert("error".into(), Value::Null);
+    decoded
+        .extra_body
+        .insert("incomplete_details".into(), json!({"reason":"stale"}));
+    let events = vec![UrpStreamEvent::ResponseDone {
+        outcome: decoded.outcome.clone(),
+        finish_reason: Some(FinishReason::Stop),
+        usage: None,
+        output: vec![],
+        extra_body: decoded.extra_body.clone(),
+    }];
+    for (_, frames) in [
+        encode_events(events).await,
+        synthetic_events(&decoded).await,
+    ] {
+        let terminal = frames
+            .iter()
+            .find(|frame| frame["type"] == "response.failed")
+            .unwrap_or_else(|| panic!("{frames:?}"));
+        assert_eq!(terminal["response"]["error"], native["error"]);
+        assert!(terminal["response"]["incomplete_details"].is_null());
+        assert!(
+            !frames
+                .iter()
+                .any(|frame| frame["type"] == "response.completed")
+        );
     }
 }

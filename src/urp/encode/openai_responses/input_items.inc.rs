@@ -136,7 +136,13 @@ fn merge_responses_text_config(obj: &mut Map<String, Value>, raw_text: Option<&V
 
 fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str {
     match finish_reason {
-        Some(FinishReason::Length | FinishReason::ContentFilter) => "incomplete",
+        Some(
+            FinishReason::Length
+            | FinishReason::ContentFilter
+            | FinishReason::ContextLimit
+            | FinishReason::Paused
+            | FinishReason::Compaction,
+        ) => "incomplete",
         Some(FinishReason::Other) => "failed",
         _ => "completed",
     }

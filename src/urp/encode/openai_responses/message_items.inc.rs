@@ -140,6 +140,7 @@ fn append_content_part_to_pending(
 fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Value> {
     match part {
         Part::Text {
+            logprobs,
             citations,
             content,
             extra_body,
@@ -159,21 +160,34 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
             );
             obj.insert("text".to_string(), Value::String(content.clone()));
             if output_text_type {
-                obj.entry("annotations".to_string())
-                    .or_insert_with(|| Value::Array(citations.clone()));
-                obj.entry("logprobs".to_string())
-                    .or_insert_with(|| Value::Array(Vec::new()));
+                obj.entry("annotations".to_string()).or_insert_with(|| {
+                    Value::Array(crate::urp::citations::encode(
+                        citations,
+                        crate::urp::ProviderProtocol::Responses,
+                        0,
+                    ))
+                });
+                obj.entry("logprobs".to_string()).or_insert_with(|| {
+                    json!(crate::urp::logprobs::valid(logprobs, content).unwrap_or_default())
+                });
             }
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }
-        Part::Image { metadata, source, extra_body, .. } if !output_text_type => {
-            encode_input_image(source, metadata, extra_body)
-        }
-        Part::File { metadata, source, extra_body, .. } if !output_text_type => {
-            encode_input_file(source, metadata, extra_body)
-        }
+        Part::Image {
+            metadata,
+            source,
+            extra_body,
+            ..
+        } if !output_text_type => encode_input_image(source, metadata, extra_body),
+        Part::File {
+            metadata,
+            source,
+            extra_body,
+            ..
+        } if !output_text_type => encode_input_file(source, metadata, extra_body),
         Part::Refusal {
+            logprobs: _,
             content,
             extra_body,
         } => {

@@ -34,6 +34,7 @@ struct AnthropicMessagesStreamState {
 
 #[derive(Debug, Default)]
 struct AnthropicStreamUsageAccumulator {
+    iterations: Option<Vec<crate::urp::UsageIteration>>,
     saw_usage: bool,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
@@ -59,6 +60,10 @@ impl AnthropicStreamUsageAccumulator {
             })?
             .as_object()?;
         self.saw_usage = true;
+        if usage.contains_key("iterations") {
+            self.iterations =
+                crate::urp::usage::decode_messages_iterations(usage.get("iterations"));
+        }
 
         replace_numeric_counter(
             usage,
@@ -152,6 +157,7 @@ impl AnthropicStreamUsageAccumulator {
         }
 
         const KNOWN_USAGE_KEYS: &[&str] = &[
+            "iterations",
             "input_tokens",
             "prompt_tokens",
             "output_tokens",
@@ -231,6 +237,7 @@ impl AnthropicStreamUsageAccumulator {
             });
 
         Some(Usage {
+            iterations: self.iterations.clone(),
             input_tokens: wire_input_tokens
                 .saturating_add(cache_read_tokens)
                 .saturating_add(cache_creation_tokens),
@@ -283,7 +290,7 @@ struct ActiveNodeState {
 enum ActiveNodeKind {
     Complete(Node),
     Text {
-        citations: Vec<Value>,
+        citations: Vec<crate::urp::Citation>,
         content: String,
         phase: Option<String>,
     },
@@ -641,6 +648,7 @@ pub(crate) async fn stream_messages_to_urp_events(
     let mut state = AnthropicMessagesStreamState::default();
     let mut explicit_terminal_event: Option<&'static str> = None;
     let mut downstream_closed = false;
+    let mut response_started = false;
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
@@ -699,7 +707,59 @@ pub(crate) async fn stream_messages_to_urp_events(
         let cumulative_usage = state.usage.merge_event(&data_val);
         record_cumulative_stream_usage_snapshot(&runtime_metrics, cumulative_usage).await;
 
-        match data_val.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+        let event_type = data_val.get("type").and_then(Value::as_str).unwrap_or("");
+        if (event_type == "message_start" && response_started)
+            || (matches!(
+                event_type,
+                "content_block_start"
+                    | "content_block_delta"
+                    | "content_block_stop"
+                    | "message_delta"
+                    | "message_stop"
+            ) && !response_started)
+        {
+            emit_messages_terminal_protocol_error(
+                &tx,
+                &runtime_metrics,
+                "messages_invalid_message_lifecycle",
+                format!("{event_type} occurred outside its message lifecycle"),
+                HashMap::new(),
+            )
+            .await;
+            return Ok(());
+        }
+        if matches!(
+            event_type,
+            "content_block_start" | "content_block_delta" | "content_block_stop"
+        ) {
+            let wire_index = data_val
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|index| u32::try_from(index).ok());
+            let valid = wire_index.is_some_and(|index| {
+                if event_type == "content_block_start" {
+                    !state.wire_to_node_index.contains_key(&index)
+                } else {
+                    state
+                        .wire_to_node_index
+                        .get(&index)
+                        .is_some_and(|index| state.active_nodes.contains_key(index))
+                }
+            });
+            if !valid {
+                emit_messages_terminal_protocol_error(
+                    &tx,
+                    &runtime_metrics,
+                    "messages_invalid_block_lifecycle",
+                    format!("{event_type} has an invalid, reused, or inactive content block index"),
+                    HashMap::new(),
+                )
+                .await;
+                return Ok(());
+            }
+        }
+
+        match event_type {
             "error" => {
                 let (code, message, extra_body, terminal_error) =
                     messages_stream_error_parts(&data_val);
@@ -714,6 +774,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                 return Ok(());
             }
             "message_start" => {
+                response_started = true;
                 let message = data_val.get("message").cloned().unwrap_or(Value::Null);
                 if let Some(id) = message.get("id").and_then(|v| v.as_str()) {
                     response_id = id.to_string();
@@ -861,28 +922,45 @@ pub(crate) async fn stream_messages_to_urp_events(
             .saw_terminal_delta
             .then_some("message_delta_stream_end")
     });
-    if terminal_event.is_some()
-        && !downstream_closed
-        && state.active_nodes.values().any(|node| {
-            matches!(
-                &node.kind,
-                ActiveNodeKind::ToolCall {
-                    custom_input_decoder: Some(_),
-                    ..
-                }
-            )
-        })
-    {
+    if terminal_event.is_some() && !downstream_closed && !state.active_nodes.is_empty() {
         emit_messages_terminal_protocol_error(
             &tx,
             &runtime_metrics,
-            "messages_custom_tool_input_invalid",
-            "upstream Messages stream ended before the custom tool content block closed"
-                .to_string(),
+            "messages_invalid_block_lifecycle",
+            "upstream Messages stream ended before a content block closed".to_string(),
             HashMap::new(),
         )
         .await;
         return Ok(());
+    }
+    if terminal_event.is_some() {
+        let invalid_arguments = state.completed_nodes.values().any(|node| {
+            let Node::ToolCall {
+                tool_type: ToolCallType::Function,
+                arguments,
+                ..
+            } = node
+            else {
+                return false;
+            };
+            match serde_json::from_str::<Value>(arguments) {
+                Ok(value) => !value.is_object(),
+                Err(error) => {
+                    !(state.finish_reason == Some(FinishReason::Length) && error.is_eof())
+                }
+            }
+        });
+        if invalid_arguments {
+            emit_messages_terminal_protocol_error(
+                &tx,
+                &runtime_metrics,
+                "messages_tool_input_invalid",
+                "completed Messages tool input must be a JSON object".to_string(),
+                HashMap::new(),
+            )
+            .await;
+            return Ok(());
+        }
     }
     if let Some(terminal_event) = terminal_event {
         let output_nodes = ordered_completed_nodes(&state);
@@ -1034,6 +1112,20 @@ fn handle_content_block_delta(
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let required_string = match delta_type {
+        "text_delta" => Some("text"),
+        "thinking_delta" => Some("thinking"),
+        "signature_delta" => Some("signature"),
+        "input_json_delta" => Some("partial_json"),
+        _ => None,
+    };
+    if required_string.is_some_and(|key| !delta_value.get(key).is_some_and(Value::is_string)) {
+        return Err(format!("Messages {delta_type} requires a string payload"));
+    }
+    if delta_type == "citations_delta" && !delta_value.get("citation").is_some_and(Value::is_object)
+    {
+        return Err("Messages citations_delta requires a citation object".to_string());
+    }
     let mut delta_extra = object_without_keys(
         &delta_value,
         &["type", "text", "thinking", "signature", "partial_json"],
@@ -1047,9 +1139,14 @@ fn handle_content_block_delta(
             else {
                 return Ok(Vec::new());
             };
+            let citation = crate::urp::Citation::decode(
+                citation.clone(),
+                crate::urp::ProviderProtocol::Messages,
+            );
             citations.push(citation.clone());
             delta_extra.remove("citation");
             NodeDelta::Text {
+                logprobs: None,
                 signature: None,
                 citations: vec![citation.clone()],
                 content: String::new(),
@@ -1064,6 +1161,7 @@ fn handle_content_block_delta(
             }
             content.push_str(text);
             NodeDelta::Text {
+                logprobs: None,
                 signature: None,
                 citations: Vec::new(),
                 content: text.to_string(),
@@ -1153,11 +1251,30 @@ fn handle_content_block_delta(
                 arguments: arguments_delta.to_string(),
             }
         }
-        (ActiveNodeKind::ProviderItem { input_json, .. }, _) => {
+        (
+            ActiveNodeKind::ProviderItem {
+                body, input_json, ..
+            },
+            _,
+        ) => {
+            if delta_type == "compaction_delta" {
+                if let Some(content) = delta_value.get("content") {
+                    body["content"] = content.clone();
+                }
+            }
             input_json.merge_delta(&delta_value);
             NodeDelta::ProviderItem {
                 data: delta_value.clone(),
             }
+        }
+        (
+            _,
+            "text_delta" | "thinking_delta" | "signature_delta" | "input_json_delta"
+            | "citations_delta" | "compaction_delta",
+        ) => {
+            return Err(format!(
+                "Messages {delta_type} does not match its active content block"
+            ));
         }
         _ => return Ok(Vec::new()),
     };
@@ -1227,11 +1344,14 @@ fn active_node_from_content_block(
                 object_without_keys(content_block, &["type", "text", "phase", "citations"]);
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Text {
-                    citations: content_block
-                        .get("citations")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default(),
+                    citations: crate::urp::citations::decode(
+                        content_block
+                            .get("citations")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                        crate::urp::ProviderProtocol::Messages,
+                    ),
                     content: content_block
                         .get("text")
                         .and_then(|v| v.as_str())
@@ -1368,6 +1488,7 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             content,
             phase,
         } => Node::Text {
+            logprobs: None,
             signature: None,
             citations: citations.clone(),
             id: None,
@@ -1549,6 +1670,7 @@ fn take_response_done(
         extra_body.insert("stop_sequence".to_string(), stop_sequence.clone());
     }
     Some(UrpStreamEvent::ResponseDone {
+        outcome: None,
         finish_reason: state.finish_reason.clone(),
         usage: state.usage.snapshot(),
         output: ordered_completed_nodes(state),
@@ -1694,6 +1816,9 @@ fn map_finish_reason(reason: &str) -> Option<FinishReason> {
     match reason {
         "end_turn" => Some(FinishReason::Stop),
         "max_tokens" => Some(FinishReason::Length),
+        "model_context_window_exceeded" => Some(FinishReason::ContextLimit),
+        "pause_turn" => Some(FinishReason::Paused),
+        "compaction" => Some(FinishReason::Compaction),
         "tool_use" => Some(FinishReason::ToolCalls),
         "refusal" => Some(FinishReason::ContentFilter),
         "stop_sequence" => Some(FinishReason::Stop),
@@ -1709,5 +1834,8 @@ fn finish_reason_name(reason: &FinishReason) -> &'static str {
         FinishReason::ToolCalls => "tool_calls",
         FinishReason::ContentFilter => "content_filter",
         FinishReason::Other => "other",
+        FinishReason::ContextLimit => "context_limit",
+        FinishReason::Paused => "paused",
+        FinishReason::Compaction => "compaction",
     }
 }

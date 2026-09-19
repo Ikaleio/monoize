@@ -2,6 +2,7 @@
 /// caller can dispatch the body upstream.
 pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
     let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Messages)?;
+    validate_complete_tool_inputs(&prepared.input)?;
     let body = encode_prepared_request(&prepared, upstream_model);
     validate_outbound_thinking_request(&body, upstream_model)?;
     Ok(body)

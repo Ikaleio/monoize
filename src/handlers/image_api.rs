@@ -88,6 +88,7 @@ pub async fn create_image_generation(
     let extra_body = build_extra_body(obj, &["prompt", "model", "n", "max_multiplier", "stream"]);
 
     let inputs = vec![urp::Node::Text {
+        logprobs: None,
         citations: Vec::new(),
         signature: None,
 
@@ -363,6 +364,7 @@ pub async fn create_image_edit(
 
     let mut inputs = Vec::new();
     inputs.push(urp::Node::Text {
+        logprobs: None,
         signature: None,
         citations: Vec::new(),
         id: None,
@@ -612,6 +614,7 @@ async fn run_image_stream_downstream(
     family: ImageStreamEventFamily,
 ) -> AppResult<Response> {
     let req = urp::UrpRequest {
+        logprobs: None,
         context: Default::default(),
         instructions_format: None,
         model,
@@ -800,6 +803,7 @@ async fn fan_out_subrequests(
         let state = state.clone();
         let auth = auth.clone();
         let req = urp::UrpRequest {
+            logprobs: None,
             context: Default::default(),
             instructions_format: None,
             model: model.to_string(),
@@ -1393,12 +1397,14 @@ async fn execute_stream_collected_image_typed(
                                 }
                             }
                             crate::urp::UrpStreamEvent::ResponseDone {
+                                outcome,
                                 finish_reason,
                                 usage,
                                 output,
                                 extra_body,
                             } => {
                                 final_response = Some(urp::UrpResponse {
+                                    outcome,
                                     id: extra_body
                                         .get("id")
                                         .and_then(|value| value.as_str())
@@ -1969,9 +1975,12 @@ fn collect_response_text(resp: &urp::UrpResponse) -> String {
     let mut parts = Vec::new();
     for item in &resp.output {
         match item {
-            urp::Node::Text { content, .. } | urp::Node::Refusal { content, .. }
-                if !content.trim().is_empty() =>
-            {
+            urp::Node::Text {
+                logprobs, content, ..
+            }
+            | urp::Node::Refusal {
+                logprobs, content, ..
+            } if !content.trim().is_empty() => {
                 parts.push(content.as_str());
             }
             _ => {}
@@ -2023,6 +2032,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                 urp::ImageSource::FileId { .. } => continue,
             },
             urp::Node::Text {
+                logprobs,
                 role: urp::OrdinaryRole::Assistant,
                 content,
                 ..

@@ -181,7 +181,18 @@ fn map_output_item_done(
         "message" => {
             let completed_nodes = nodes_from_item_value(item);
             if !completed_nodes.is_empty() {
-                output_state_for(index_state, output_index).content_nodes = completed_nodes.into_iter().enumerate().map(|(index,node)|(index as u64,node)).collect();
+                let state = output_state_for(index_state, output_index);
+                state.content_nodes = completed_nodes.into_iter().enumerate().map(|(index, node)| {
+                    let index = index as u64;
+                    let node = if node_is_empty_text(&node) {
+                        state.content_nodes.get(&index)
+                            .and_then(|previous| merge_output_node(previous, &node).ok())
+                            .unwrap_or(node)
+                    } else {
+                        node
+                    };
+                    (index, node)
+                }).collect();
             }
             let (part_done_seen, emitted_any_node) = index_state
                 .output_state_by_index
@@ -216,6 +227,7 @@ fn map_output_item_done(
                             events.push(UrpStreamEvent::NodeDelta {
                                 node_index,
                                 delta: NodeDelta::Text {
+                                    logprobs: None,
                                     signature: signature.clone(),
                                     citations: citations.clone(),
                                     content: content.clone(),
@@ -463,7 +475,13 @@ fn node_output_kind(node: &Node) -> Option<OutputEntryKind> {
         | Node::Refusal { .. } => Some(OutputEntryKind::Message),
         Node::ToolCall { .. } => Some(OutputEntryKind::ToolCall),
         Node::ToolResult { .. } => Some(OutputEntryKind::ToolResult),
-        Node::ProviderItem {extra_body,..} if extra_body.contains_key(crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY) => Some(OutputEntryKind::Message),
+        Node::ProviderItem { extra_body, .. }
+            if extra_body.contains_key(
+                crate::urp::decode::openai_responses::RESPONSES_CONTENT_PART_SHAPE_KEY,
+            ) =>
+        {
+            Some(OutputEntryKind::Message)
+        }
         Node::ProviderItem { .. } => Some(OutputEntryKind::ProviderItem),
         Node::NextDownstreamEnvelopeExtra { .. } => None,
     }
@@ -538,6 +556,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
         }),
         (
             Node::Text {
+                logprobs: left_logprobs,
                 signature: left_signature,
                 citations: left_citations,
                 id: left_id,
@@ -547,6 +566,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 extra_body: left_extra,
             },
             Node::Text {
+                logprobs: right_logprobs,
                 signature: right_signature,
                 citations: right_citations,
                 id: right_id,
@@ -560,6 +580,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 return Err("message role differs from completed output".to_string());
             }
             Ok(Node::Text {
+                logprobs: right_logprobs.clone().or_else(|| left_logprobs.clone()),
                 signature: right_signature.clone().or_else(|| left_signature.clone()),
                 citations: if right_citations.is_empty() {
                     left_citations.clone()

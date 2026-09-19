@@ -12,7 +12,11 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             }
             let mut block = json!({ "type": "text", "text": content });
             if !citations.is_empty() {
-                block["citations"] = json!(citations);
+                block["citations"] = json!(crate::urp::citations::encode(
+                    citations,
+                    crate::urp::ProviderProtocol::Messages,
+                    0
+                ));
             }
             if let Some(obj) = block.as_object_mut() {
                 if let Some(phase) = phase {
@@ -83,8 +87,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             if *tool_type == ToolCallType::Custom {
                 return None;
             }
-            let mut input = serde_json::from_str::<Value>(arguments)
-                .unwrap_or_else(|_| json!({ "_raw": arguments }));
+            let mut input = serde_json::from_str::<Value>(arguments).ok()?;
             crate::urp::integerize_json_floats(&mut input);
             let mut block = json!({
                 "type": "tool_use",
@@ -135,7 +138,11 @@ pub(crate) fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             }
             let mut block = json!({ "type": "text", "text": content });
             if !citations.is_empty() {
-                block["citations"] = json!(citations);
+                block["citations"] = json!(crate::urp::citations::encode(
+                    citations,
+                    crate::urp::ProviderProtocol::Messages,
+                    0
+                ));
             }
             if let Some(obj) = block.as_object_mut() {
                 if let Some(phase) = phase {
@@ -198,8 +205,7 @@ pub(crate) fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             if *tool_type == ToolCallType::Custom {
                 return None;
             }
-            let mut input = serde_json::from_str::<Value>(arguments)
-                .unwrap_or_else(|_| json!({ "_raw": arguments }));
+            let mut input = serde_json::from_str::<Value>(arguments).ok()?;
             crate::urp::integerize_json_floats(&mut input);
             let mut block = json!({
                 "type": "tool_use",

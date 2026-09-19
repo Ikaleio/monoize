@@ -65,6 +65,28 @@ Native non-stream error envelopes MUST fail decoding. A valid Responses response
 Native streaming errors MUST produce an Error event and MUST NOT produce successful terminal output.
 Error replay metadata MUST NOT restore an obsolete typed error code or message.
 
+URPV2-S13. Request runtime context MUST use typed fields for response-history state and tool transport mappings.
+It MUST NOT serialize into URP JSON, provider requests, or JavaScript transform inputs.
+JSON deserialization MUST NOT populate trusted context. A JavaScript transform MUST preserve the existing runtime context.
+Authentication injection and removal MUST NOT replace history state or tool mappings.
+
+URPV2-S14. A tool transport mapping MUST record its target protocol, wire call type, and original typed tool identity.
+The original identity consists of namespace, name, and call type. The map key is the emitted wire tool name.
+Mappings MUST apply only while a matching typed tool definition remains in the prepared request.
+Deleting, renaming, changing the namespace, or changing the wire call type MUST invalidate that mapping.
+Chat, Messages, and Gemini MAY flatten namespaces to collision-free names. Responses MUST retain native namespaces.
+Messages custom-tool conversion MUST use the mapping's call types, without protocol-private fields in tool extras.
+Restoration MUST preserve original names, namespaces, call IDs, and custom input bytes in non-stream and streaming paths.
+Repeated preparation for the same target MUST preserve existing aliases and MUST NOT duplicate promoted tool identities.
+
+URPV2-S15. Reasoning signature association MUST read typed node identity, typed metadata, or the current wire transport envelope.
+It MUST NOT read `_monoize_reasoning_envelope_item_id` or restore a deleted signature from that legacy field.
+Raw reasoning, summary, and encrypted values remain independent under these changes.
+
+URPV2-S16. Native shape markers and unknown native fields MAY remain protocol-scoped adapter extras.
+They MUST NOT acquire runtime authority or replace a typed semantic owner.
+Temporary adapter parts are local conversion values, not an alternative canonical request or response.
+
 URPV2-1. The canonical internal request object MUST be:
 
 ```text
@@ -78,6 +100,7 @@ UrpRequestV2 {
   top_p?: number,
   max_output_tokens?: integer,
   reasoning?: ReasoningConfig,
+  logprobs?: LogprobConfig,
   tools?: Vec<ToolDefinition>,
   tool_choice?: ToolChoice,
   parallel_tool_calls?: bool,
@@ -89,7 +112,8 @@ UrpRequestV2 {
 }
 ```
 
-`context` contains runtime identities and MUST NOT serialize into canonical JSON. `instructions_format` records native instruction placement without instruction content.
+`context` contains trusted runtime identities, history state, and tool transport mappings. It MUST NOT serialize into canonical JSON.
+`instructions_format` records native instruction placement without instruction content.
 
 URPV2-2. The canonical internal response object MUST be:
 
@@ -100,6 +124,7 @@ UrpResponseV2 {
   created_at?: integer,
   output: Vec<Node>,
   finish_reason?: FinishReason,
+  outcome?: ResponseOutcome,
   usage?: Usage,
   ...extra_body
 }
@@ -141,7 +166,7 @@ Node =
       content: String,
       phase?: String,
       signature?: JsonValue,
-      citations: Vec<JsonValue>,
+      citations: Vec<Citation>,
       ...extra_body
     }
   | Image {
@@ -433,6 +458,7 @@ UrpStreamEventV2 =
     }
   | ResponseDone {
       finish_reason?: FinishReason,
+      outcome?: ResponseOutcome,
       usage?: Usage,
       output: Vec<Node>,
       ...extra_body
@@ -456,7 +482,7 @@ STR-2. `NodeHeader` MUST be the discriminated union below.
 NodeHeader =
   | Text {
       id?: String, role: OrdinaryRole, phase?: String,
-      signature?: JsonValue, citations: Vec<JsonValue>
+      signature?: JsonValue, citations: Vec<Citation>
     }
   | Image { id?: String, role: OrdinaryRole, metadata: MediaMetadata }
   | Audio { id?: String, role: OrdinaryRole, metadata: MediaMetadata }
@@ -482,7 +508,7 @@ STR-3. `NodeDelta` MUST be the discriminated union below.
 
 ```text
 NodeDelta =
-  | Text { content: String, signature?: JsonValue, citations: Vec<JsonValue> }
+  | Text { content: String, signature?: JsonValue, citations: Vec<Citation> }
   | Reasoning {
       metadata: ReasoningMetadata,
       content?: String,
@@ -644,7 +670,10 @@ CHAT-4. Chat `reasoning_details[]` entries MUST preserve the OpenRouter-compatib
 
 CHAT-4a. Every `reasoning_details[]` entry MAY carry `id`, `format`, and `index`. It MAY also carry future entry-local fields. A decoder MUST preserve those fields on the owning reasoning node, and a same-Chat encoder MUST replay them on the same entry.
 
-CHAT-4b. Source detail order is canonical. A decoder MUST create one reasoning node per detail entry. An encoder MUST preserve repeated detail types and MUST NOT merge, reorder, or deduplicate entries. Scalar `reasoning` and `reasoning_content` fields are compatibility views and MUST NOT cause bytes already present in `reasoning_details[]` to be emitted twice.
+CHAT-4b. Source detail order is canonical. A decoder MUST create one reasoning node per detail entry. An encoder MUST preserve repeated detail types and MUST NOT merge, reorder, or deduplicate entries. Scalar `reasoning` is a compatibility view and MUST NOT duplicate matching content or summary details.
+Scalar `reasoning_content` is raw content. It MUST deduplicate only matching content, never a matching summary.
+If summary and raw content contain identical bytes, both typed meanings MUST remain present.
+A simultaneous `reasoning` field MUST NOT suppress a distinct `reasoning_content` value.
 
 CHAT-4c. Without an explicit response transform, non-empty `Reasoning.content` MUST encode as `reasoning.text` and MUST NOT encode as `reasoning.summary`.
 
@@ -686,3 +715,43 @@ CTRL-7. Removing a control removes that control only. Other explicit typed contr
 CTRL-8. Text citations and thought signatures MUST survive unchanged node conversion. A signature MUST stay associated with its original text node.
 CTRL-9. Responses source snapshots MUST exclude typed id, model, output, usage, status, and terminal details. Start events use typed usage.
 CTRL-10. Session affinity MUST derive instruction content from current instruction nodes. Historical instruction text MUST NOT affect the affinity key.
+
+
+## 9. Canonical annotations, probabilities, outcomes, and usage components
+
+SEM-1. Text citations MUST use typed citations. URL citations contain a URL, an optional title, and an optional answer range.
+Answer ranges use zero-based Unicode scalar offsets with an exclusive end, relative to the owning Text node.
+Document citations MUST distinguish source character, page, and block ranges from answer ranges.
+Unknown citation shapes MUST retain an exact origin protocol and MAY replay only to that protocol.
+Encoders MUST omit a citation when its target protocol cannot represent its source or required range.
+Chat message concatenation MUST shift answer ranges by the preceding text and inserted separators.
+
+SEM-2. Text and Refusal nodes and deltas MAY contain typed token logprobs.
+Each entry contains token text, optional bytes, a log probability, and ordered alternative tokens.
+Request logprob controls MUST have one typed owner for enabled state and alternative count.
+Decoders MUST remove recognized logprob fields from passthrough.
+Encoders MUST omit token scores when their concatenated bytes do not match the current owning text.
+Stream token scores MUST follow their text delta and MUST accumulate into terminal node scores in order.
+A protocol without token score support MUST omit scores without changing text.
+
+SEM-3. UrpResponse and ResponseDone MUST carry an optional typed outcome, separate from finish_reason.
+Outcome status distinguishes completed, incomplete, failed, cancelled, queued, and in_progress.
+An explicit outcome is authoritative. Encoders derive an outcome from finish_reason only when outcome is absent.
+Outcome owns structured error details and an optional incomplete reason. Native extras MUST NOT restore absent outcome fields.
+Finish reasons additionally distinguish context limits, paused server work, and compaction from unknown termination.
+Messages context limits MUST map to incomplete output. A paused or compaction-only response MUST NOT become successful completed output across protocols.
+Targets without pause semantics MUST emit incomplete or truncated output rather than claim a completed turn.
+A generation failure MAY contain partial output and usage. It MUST use a terminal outcome, not discard its snapshot as a transport error.
+Transport errors and malformed protocol events MUST remain Error events.
+
+SEM-4. Usage MAY contain ordered typed iterations. Each iteration records its kind and normalized inclusive token counters.
+Usage top-level counters retain their existing primary-generation meaning. Complete accounting MUST sum iterations when present, without adding top-level counters again.
+Each iteration normalizes cache buckets by the same rules as ordinary Usage.
+Messages wire encoders MUST reconstruct disjoint cache counters per iteration and preserve the primary-generation top-level counters.
+Other protocols MUST receive aggregate iteration totals where they have no iteration representation.
+Cumulative stream snapshots MUST replace iterations; they MUST NOT append repeated snapshots.
+
+SEM-5. Messages compaction_delta.content MUST replace the active compaction ProviderItem content.
+NodeDone and ResponseDone MUST retain that complete value, including stream-to-nonstream conversion.
+
+SEM-6. Reasoning content, summary, and encrypted remain independent typed fields. This change MUST NOT merge these meanings.

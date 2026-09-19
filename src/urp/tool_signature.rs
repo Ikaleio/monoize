@@ -49,7 +49,6 @@ pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) {
             content,
             summary,
             encrypted,
-            extra_body,
             ..
         } = node
         else {
@@ -68,12 +67,6 @@ pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) {
             .as_deref()
             .and_then(bound_call_id)
             .or_else(|| metadata.item_id.as_deref().and_then(bound_call_id))
-            .or_else(|| {
-                extra_body
-                    .get("_monoize_reasoning_envelope_item_id")
-                    .and_then(Value::as_str)
-                    .and_then(bound_call_id)
-            })
             .or_else(|| envelope_id.as_deref().and_then(bound_call_id));
         let Some(call_id) = call_id else {
             continue;
@@ -561,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_transport_moves_payload_and_typed_signature_wins() {
+    fn typed_transport_moves_payload_and_typed_signature_wins() {
         for binding in ["id", "metadata", "legacy_extra", "envelope"] {
             let mut call = response().output.remove(0);
             let Node::ToolCall {
@@ -610,6 +603,11 @@ mod tests {
             }
             let mut nodes = vec![transport, call];
             restore_request_call_signatures(&mut nodes);
+            if binding == "legacy_extra" {
+                assert_eq!(nodes.len(), 2);
+                assert_eq!(signature(&nodes[1]), None);
+                continue;
+            }
             assert_eq!(nodes.len(), 1, "{binding}");
             urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
                 &mut nodes,
@@ -714,6 +712,7 @@ mod tests {
                 extra_body: HashMap::new(),
             },
             UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: response.output,
                 finish_reason: Some(FinishReason::ToolCalls),
                 usage: None,
@@ -739,7 +738,9 @@ mod tests {
             .collect();
         assert_eq!(done_indices, vec![0, 1, 2, 3, 4, 5]);
         let UrpStreamEvent::ResponseDone {
-            output: mut nodes, ..
+            outcome: _,
+            output: mut nodes,
+            ..
         } = output.pop().unwrap()
         else {
             panic!()
@@ -814,13 +815,16 @@ mod tests {
             .collect();
         assert_eq!(indices, vec![1, 0]);
         projection.push(UrpStreamEvent::ResponseDone {
+            outcome: None,
             output: vec![call],
             finish_reason: Some(FinishReason::ToolCalls),
             usage: None,
             extra_body: HashMap::new(),
         });
         let UrpStreamEvent::ResponseDone {
-            output: mut nodes, ..
+            outcome: _,
+            output: mut nodes,
+            ..
         } = projection.pending.pop_front().unwrap()
         else {
             panic!()
@@ -860,13 +864,15 @@ mod tests {
             }
             projection.pending.clear();
             projection.push(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: canonical.clone(),
                 finish_reason: Some(FinishReason::Stop),
                 usage: None,
                 extra_body: HashMap::new(),
             });
-            let UrpStreamEvent::ResponseDone { output, .. } =
-                projection.pending.pop_front().unwrap()
+            let UrpStreamEvent::ResponseDone {
+                outcome: _, output, ..
+            } = projection.pending.pop_front().unwrap()
             else {
                 panic!()
             };
@@ -894,6 +900,7 @@ mod tests {
                 *signature = None;
             }
             projection.push(UrpStreamEvent::ResponseDone {
+                outcome: None,
                 output: vec![call],
                 finish_reason: Some(FinishReason::ToolCalls),
                 usage: None,
@@ -901,7 +908,9 @@ mod tests {
             });
             assert_eq!(projection.pending.len(), 1);
             let UrpStreamEvent::ResponseDone {
-                output: mut nodes, ..
+                outcome: _,
+                output: mut nodes,
+                ..
             } = projection.pending.pop_front().unwrap()
             else {
                 panic!()
@@ -946,6 +955,7 @@ mod tests {
 
     fn terminal(output: Vec<Node>) -> UrpStreamEvent {
         UrpStreamEvent::ResponseDone {
+            outcome: None,
             output,
             finish_reason: Some(FinishReason::ToolCalls),
             usage: None,
@@ -979,8 +989,9 @@ mod tests {
             }
             canonical.extend([second.clone(), first.clone()]);
             projection.push(terminal(canonical));
-            let UrpStreamEvent::ResponseDone { output, .. } =
-                projection.pending.pop_front().unwrap()
+            let UrpStreamEvent::ResponseDone {
+                outcome: _, output, ..
+            } = projection.pending.pop_front().unwrap()
             else {
                 panic!()
             };
@@ -1042,8 +1053,9 @@ mod tests {
             }
             assert_eq!(first_indices, vec![0, 1, 2], "{mode}");
             projection.push(terminal(vec![control.clone(), call.clone()]));
-            let UrpStreamEvent::ResponseDone { output, .. } =
-                projection.pending.pop_front().unwrap()
+            let UrpStreamEvent::ResponseDone {
+                outcome: _, output, ..
+            } = projection.pending.pop_front().unwrap()
             else {
                 panic!()
             };
@@ -1264,14 +1276,17 @@ mod tests {
                     let mut output = None;
                     while let Some(event) = decoded_rx.recv().await {
                         match event {
-                            UrpStreamEvent::ResponseDone { output: nodes, .. } => {
-                                output = Some(nodes)
-                            }
+                            UrpStreamEvent::ResponseDone {
+                                outcome: _,
+                                output: nodes,
+                                ..
+                            } => output = Some(nodes),
                             UrpStreamEvent::Error { message, .. } => panic!("{message}: {wire}"),
                             _ => {}
                         }
                     }
                     let response = UrpResponse {
+                        outcome: None,
                         id: "resp_projection".into(),
                         model: "client-model".into(),
                         created_at: None,
@@ -1378,6 +1393,7 @@ mod tests {
                         UrpStreamEvent::NodeDelta {
                             node_index: 0,
                             delta: NodeDelta::Text {
+                                logprobs: None,
                                 signature: None,
                                 citations: Vec::new(),
                                 content: "Action.".into(),
@@ -1419,6 +1435,7 @@ mod tests {
                             extra_body: HashMap::new(),
                         },
                         UrpStreamEvent::ResponseDone {
+                            outcome: None,
                             output: original.output.clone(),
                             finish_reason: Some(FinishReason::ToolCalls),
                             usage: None,
@@ -1480,6 +1497,7 @@ mod tests {
                 let mut decoded = None;
                 while let Some(event) = rx.recv().await {
                     if let UrpStreamEvent::ResponseDone {
+                        outcome: _,
                         output,
                         finish_reason,
                         usage,
@@ -1487,6 +1505,7 @@ mod tests {
                     } = event
                     {
                         decoded = Some(UrpResponse {
+                            outcome: None,
                             id: "r".into(),
                             model: "client-model".into(),
                             created_at: None,

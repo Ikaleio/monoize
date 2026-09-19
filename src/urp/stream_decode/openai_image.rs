@@ -175,6 +175,7 @@ pub(crate) async fn stream_image_to_urp_events(
 
     if started_response {
         tx.send(UrpStreamEvent::ResponseDone {
+            outcome: None,
             finish_reason: Some(FinishReason::Stop),
             usage,
             output,

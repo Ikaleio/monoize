@@ -195,6 +195,14 @@ async fn consume_responses_json_frames(
             event_name.clear();
             event_name.push_str(payload_type);
         }
+        if let Err(message) = validate_responses_event_shape(&event_name, &data_val) {
+            let (code, message, extra_body, terminal_error) = responses_stream_error_parts("error", json!({
+                "error": { "code":"responses_invalid_event", "type":"upstream_protocol_error", "message":message }
+            }));
+            let _ = tx.send(UrpStreamEvent::Error { code, message, extra_body }).await;
+            record_stream_terminal_error(&runtime_metrics, "responses_invalid_event", terminal_error).await;
+            return Ok(());
+        }
         let content_validation = match event_name.as_str() {
             "response.content_part.added" | "response.content_part.done" => data_val.get("part")
                 .map(crate::urp::decode::openai_responses::validate_compatible_content),
@@ -306,7 +314,7 @@ async fn consume_responses_json_frames(
 
         let bare_error = data_val.get("error").is_some_and(|error| !error.is_null())
             && data_val.get("response").is_none();
-        if matches!(event_name.as_str(), "error" | "response.failed") || bare_error {
+        if matches!(event_name.as_str(), "error") || bare_error {
             let (code, message, extra_body, terminal_error) =
                 responses_stream_error_parts(&event_name, data_val);
             let _ = tx
@@ -320,6 +328,11 @@ async fn consume_responses_json_frames(
             return Ok(());
         }
 
+        if event_name == "response.failed" {
+            let (_, _, _, terminal_error) =
+                responses_stream_error_parts(&event_name, data_val.clone());
+            record_stream_terminal_error(&runtime_metrics, &event_name, terminal_error).await;
+        }
         accumulate_text_annotations(&event_name, &data_val, &mut index_state);
         if event_name == "response.output_text.delta" {
             if let Some(text) = data_val.get("delta").and_then(|v| v.as_str()) {
@@ -736,5 +749,58 @@ async fn consume_responses_json_frames(
         None,
     )
     .await;
+    Ok(())
+}
+
+fn validate_responses_event_shape(event: &str, data: &Value) -> Result<(), String> {
+    if !data.is_object() {
+        return Err(format!("{event} payload must be an object"));
+    }
+    let required = match event {
+        "response.created"
+        | "response.in_progress"
+        | "response.queued"
+        | "response.completed"
+        | "response.incomplete"
+        | "response.failed"
+        | "response.cancelled" => Some("response"),
+        "response.output_item.added" | "response.output_item.done" => Some("item"),
+        "response.content_part.added" | "response.content_part.done" => Some("part"),
+        _ => None,
+    };
+    if let Some(field) = required {
+        let object = data
+            .get(field)
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("{event}.{field} must be an object"))?;
+        if field == "response" {
+            if object.get("output").is_some_and(|value| !value.is_array()) {
+                return Err(format!("{event}.response.output must be an array"));
+            }
+            if matches!(
+                event,
+                "response.completed"
+                    | "response.incomplete"
+                    | "response.failed"
+                    | "response.cancelled"
+            ) && let Some(status) = object.get("status")
+                && status.as_str() != event.strip_prefix("response.")
+            {
+                return Err(format!("{event} conflicts with response.status"));
+            }
+        }
+    }
+    if matches!(
+        event,
+        "response.output_text.delta"
+            | "response.refusal.delta"
+            | "response.reasoning_text.delta"
+            | "response.reasoning_summary_text.delta"
+            | "response.function_call_arguments.delta"
+            | "response.custom_tool_call_input.delta"
+    ) && !data.get("delta").is_some_and(Value::is_string)
+    {
+        return Err(format!("{event}.delta must be a string"));
+    }
     Ok(())
 }

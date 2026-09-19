@@ -19,6 +19,10 @@ Any endpoint can reach any upstream type. For example, a client can call `/v1/me
 
 Monoize preserves OpenRouter `configuration_update` messages on Chat routes, including updates with empty content. File data URIs retain their MIME type during conversion to Messages documents. Messages streams retain `citations_delta` citations. Responses content-filter termination remains an incomplete response rather than a length limit.
 
+Chat and Responses convert supported URL citations to the target format. Unsupported citation locations stay within their source protocol. Token logprobs remain attached to matching text. Text changes discard scores that no longer match. Responses failure snapshots retain partial output, usage, and error details. Chat and Messages report failed or cancelled outcomes as errors. Messages preserve pause, compaction, and context-limit stop reasons. Billing includes every reported compaction iteration without counting the primary generation twice.
+
+Raw reasoning, readable summaries, and opaque replay payloads remain separate during protocol conversion. Deleting raw reasoning does not restore it from a summary. Messages thinking text maps to a summary; its signature remains opaque. Invalid stream lifecycles and malformed known events produce errors. Complete Messages requests and responses reject truncated tool JSON; a native max_tokens stream may retain its incomplete argument bytes.
+
 ## List models
 
 ```bash

@@ -117,6 +117,7 @@ impl From<OpenAiChatUsage> for Usage {
                 if details.cached_tokens > 0
                     || cache_creation_tokens > 0
                     || details.tool_prompt_tokens > 0
+                    || crate::urp::usage::modality(&details.extra).is_some()
                 {
                     Some(InputDetails {
                         standard_tokens: 0,
@@ -126,7 +127,7 @@ impl From<OpenAiChatUsage> for Usage {
                         cache_creation_5m_tokens: 0,
                         cache_creation_1h_tokens: 0,
                         tool_prompt_tokens: details.tool_prompt_tokens,
-                        modality_breakdown: None,
+                        modality_breakdown: crate::urp::usage::modality(&details.extra),
                     })
                 } else {
                     None
@@ -140,13 +141,14 @@ impl From<OpenAiChatUsage> for Usage {
                 if details.reasoning_tokens > 0
                     || details.accepted_prediction_tokens > 0
                     || details.rejected_prediction_tokens > 0
+                    || crate::urp::usage::modality(&details.extra).is_some()
                 {
                     Some(OutputDetails {
                         standard_tokens: 0,
                         reasoning_tokens: details.reasoning_tokens,
                         accepted_prediction_tokens: details.accepted_prediction_tokens,
                         rejected_prediction_tokens: details.rejected_prediction_tokens,
-                        modality_breakdown: None,
+                        modality_breakdown: crate::urp::usage::modality(&details.extra),
                     })
                 } else {
                     None
@@ -157,9 +159,10 @@ impl From<OpenAiChatUsage> for Usage {
             ("prompt_tokens_details", prompt_tokens_details),
             ("input_tokens_details", input_tokens_details),
         ] {
-            if let Some(details) = details
+            if let Some(mut details) = details
                 && !details.extra.is_empty()
             {
+                crate::urp::usage::strip_modality(&mut details.extra);
                 extra.insert(
                     key.to_string(),
                     Value::Object(details.extra.into_iter().collect()),
@@ -170,9 +173,10 @@ impl From<OpenAiChatUsage> for Usage {
             ("completion_tokens_details", completion_tokens_details),
             ("output_tokens_details", output_tokens_details),
         ] {
-            if let Some(details) = details
+            if let Some(mut details) = details
                 && !details.extra.is_empty()
             {
+                crate::urp::usage::strip_modality(&mut details.extra);
                 extra.insert(
                     key.to_string(),
                     Value::Object(details.extra.into_iter().collect()),
@@ -181,6 +185,7 @@ impl From<OpenAiChatUsage> for Usage {
         }
 
         Usage {
+            iterations: None,
             input_tokens: prompt_tokens,
             output_tokens: completion_tokens,
             input_details,
@@ -199,6 +204,7 @@ fn text_part_with_phase(
         extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
     }
     Part::Text {
+        logprobs: None,
         signature: None,
         citations: Vec::new(),
         content: content.into(),
@@ -320,7 +326,10 @@ fn attach_chat_annotations(parts: &mut [Part], message: &Map<String, Value>) {
             .iter_mut()
             .find(|part| matches!(part, Part::Text { .. }))
     {
-        citations.extend(annotations.iter().cloned());
+        citations.extend(crate::urp::citations::decode(
+            annotations.clone(),
+            crate::urp::ProviderProtocol::ChatCompletion,
+        ));
     }
 }
 
@@ -632,6 +641,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(refusal) = msg_obj.get("refusal").and_then(|v| v.as_str()) {
             if !refusal.is_empty() {
                 parts.push(Part::Refusal {
+                    logprobs: None,
                     content: refusal.to_string(),
                     extra_body: HashMap::new(),
                 });
@@ -752,7 +762,12 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
 
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
+    crate::urp::logprobs::strip_request_extras(&mut extra_body);
     Ok(UrpRequest {
+        logprobs: crate::urp::logprobs::request_config(
+            obj,
+            crate::urp::ProviderProtocol::ChatCompletion,
+        ),
         context: Default::default(),
         instructions_format: None,
         model,
@@ -885,6 +900,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     if let Some(refusal) = msg_obj.get("refusal").and_then(|v| v.as_str()) {
         if !refusal.is_empty() {
             parts.push(Part::Refusal {
+                logprobs: None,
                 content: refusal.to_string(),
                 extra_body: HashMap::new(),
             });
@@ -900,6 +916,19 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         message_extra_body.clone(),
     );
 
+    if let Some(scores) = choice.get("logprobs") {
+        for node in &mut output_nodes {
+            match node {
+                Node::Text { logprobs, .. } => {
+                    *logprobs = crate::urp::logprobs::decode(scores.get("content"))
+                }
+                Node::Refusal { logprobs, .. } => {
+                    *logprobs = crate::urp::logprobs::decode(scores.get("refusal"))
+                }
+                _ => {}
+            }
+        }
+    }
     let finish_reason = native_finish_reason.as_deref().map(parse_finish_reason);
 
     let usage = obj
@@ -913,7 +942,12 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     );
     let choice_extra = choice
         .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "index" | "message" | "finish_reason"))
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                "index" | "message" | "finish_reason" | "logprobs"
+            )
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<Map<String, Value>>();
     if !choice_extra.is_empty() {
@@ -932,6 +966,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     }
 
     Ok(UrpResponse {
+        outcome: None,
         id: obj
             .get("id")
             .and_then(|v| v.as_str())
@@ -1094,20 +1129,25 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
         }
     }
 
-    let scalar = msg_obj
-        .get("reasoning")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(|value| (value, CHAT_REASONING_SURFACE_REASONING))
-        .or_else(|| {
-            msg_obj
-                .get("reasoning_content")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(|value| (value, CHAT_REASONING_SURFACE_REASONING_CONTENT))
-        });
-    if let Some((content, surface)) = scalar
-        && !parts.iter().any(|part| matches!(part, Part::Reasoning {content: existing,summary,..} if existing.as_deref()==Some(content) || summary.as_deref()==Some(content))) {
+    for (key, surface, summary_is_alias) in [
+        ("reasoning", CHAT_REASONING_SURFACE_REASONING, true),
+        (
+            "reasoning_content",
+            CHAT_REASONING_SURFACE_REASONING_CONTENT,
+            false,
+        ),
+    ] {
+        let Some(content) = msg_obj
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        if parts.iter().any(|part| matches!(part, Part::Reasoning { content: existing, summary, .. }
+            if existing.as_deref() == Some(content) || (summary_is_alias && summary.as_deref() == Some(content)))) {
+            continue;
+        }
         parts.push(Part::Reasoning {
             metadata: Default::default(),
             id: None,
@@ -1151,6 +1191,7 @@ fn tool_choice_from_value(mut v: Value) -> ToolChoice {
 fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
     if let Some(obj) = v.as_object() {
         match obj.get("type").and_then(|x| x.as_str()) {
+            Some("text") => return Some(crate::urp::ResponseFormat::Text),
             Some("json_object") => return Some(crate::urp::ResponseFormat::JsonObject),
             Some("json_schema") => {
                 let schema_obj = obj.get("json_schema")?.as_object()?;
@@ -1200,6 +1241,7 @@ fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
     serde_json::from_value::<OpenAiChatUsage>(Value::Object(obj.clone()))
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
+            iterations: None,
             input_tokens: 0,
             output_tokens: 0,
             input_details: None,

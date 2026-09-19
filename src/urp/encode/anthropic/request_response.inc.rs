@@ -5,7 +5,15 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
 
 /// Encodes a Messages response only when all output nodes have a legal response representation.
 pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Result<Value, String> {
+    if let Some(body) = resp
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.failure_body(true))
+    {
+        return Ok(body);
+    }
     validate_response_nodes(&resp.output)?;
+    validate_complete_tool_inputs(&resp.output)?;
     Ok(encode_supported_response(resp, logical_model))
 }
 
@@ -57,6 +65,7 @@ fn encode_supported_response(resp: &UrpResponse, logical_model: &str) -> Value {
     });
 
     let usage = resp.usage.clone().unwrap_or(Usage {
+        iterations: None,
         input_tokens: 0,
         output_tokens: 0,
         input_details: None,
@@ -190,6 +199,7 @@ fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
 fn encode_system_block(node: &Node) -> Option<Value> {
     match node {
         Node::Text {
+            logprobs,
             content,
             phase,
             extra_body,
@@ -217,4 +227,21 @@ fn encode_system_block(node: &Node) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// Rejects function arguments that a complete Messages input object cannot represent.
+pub(crate) fn validate_complete_tool_inputs(nodes: &[Node]) -> Result<(), String> {
+    for node in nodes {
+        if let Node::ToolCall {
+            tool_type: ToolCallType::Function,
+            arguments,
+            ..
+        } = node
+        {
+            if !serde_json::from_str::<Value>(arguments).is_ok_and(|value| value.is_object()) {
+                return Err("Messages tool input must be a complete JSON object".to_string());
+            }
+        }
+    }
+    Ok(())
 }

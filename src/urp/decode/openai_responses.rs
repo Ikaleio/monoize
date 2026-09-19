@@ -223,6 +223,7 @@ impl From<OpenAiResponsesUsage> for Usage {
         }
 
         Usage {
+            iterations: None,
             input_tokens,
             output_tokens,
             input_details,
@@ -245,8 +246,12 @@ fn text_part_with_phase(
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
     Part::Text {
+        logprobs: crate::urp::logprobs::decode(extra_body.remove("logprobs").as_ref()),
         signature: None,
-        citations,
+        citations: crate::urp::citations::decode(
+            citations,
+            crate::urp::ProviderProtocol::Responses,
+        ),
         content: content.into(),
         extra_body,
     }
@@ -461,6 +466,7 @@ fn compatible_content_parts(content: &Value, phase: Option<&str>) -> Vec<Part> {
             && let Some(text) = obj.get("refusal").and_then(Value::as_str)
         {
             parts.push(Part::Refusal {
+                logprobs: None,
                 content: text.into(),
                 extra_body: split_extra(obj, &["type", "refusal"]),
             });
@@ -567,7 +573,12 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
 
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
+    crate::urp::logprobs::strip_request_extras(&mut extra_body);
     Ok(UrpRequest {
+        logprobs: crate::urp::logprobs::request_config(
+            obj,
+            crate::urp::ProviderProtocol::Responses,
+        ),
         context: Default::default(),
         instructions_format: obj.get("instructions").map(|v| {
             if v.is_null() {
@@ -1234,6 +1245,9 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             "model",
             "output",
             "usage",
+            "status",
+            "error",
+            "incomplete_details",
         ],
     );
     extra_body.insert(
@@ -1242,6 +1256,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     );
 
     Ok(UrpResponse {
+        outcome: crate::urp::ResponseOutcome::from_responses(obj),
         id: obj
             .get("id")
             .and_then(|v| v.as_str())
@@ -1278,6 +1293,7 @@ pub(crate) fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
     serde_json::from_value::<OpenAiResponsesUsage>(Value::Object(obj.clone()))
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
+            iterations: None,
             input_tokens: 0,
             output_tokens: 0,
             input_details: None,
@@ -1389,9 +1405,12 @@ pub(crate) fn incomplete_finish_reason(obj: &Map<String, Value>) -> FinishReason
         .and_then(Value::as_str)
     {
         Some("content_filter") => FinishReason::ContentFilter,
-        Some("max_output_tokens" | "max_messages" | "model_context_window_exceeded") => {
-            FinishReason::Length
+        Some("model_context_window_exceeded" | "context_length_exceeded") => {
+            FinishReason::ContextLimit
         }
+        Some("pause_turn") => FinishReason::Paused,
+        Some("compaction") => FinishReason::Compaction,
+        Some("max_output_tokens" | "max_messages") => FinishReason::Length,
         _ => FinishReason::Other,
     }
 }

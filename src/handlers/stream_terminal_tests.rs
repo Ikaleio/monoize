@@ -99,6 +99,7 @@ async fn exercise_media_failure(synthetic: bool) {
                 .unwrap();
             event_tx
                 .send(urp::UrpStreamEvent::ResponseDone {
+                    outcome: None,
                     finish_reason: response.finish_reason,
                     usage: response.usage.clone(),
                     output: response.output.clone(),
@@ -238,6 +239,7 @@ async fn gemini_stream_failures_mark_the_emitted_terminal_error() {
                 .unwrap();
             event_tx
                 .send(urp::UrpStreamEvent::ResponseDone {
+                    outcome: None,
                     finish_reason: Some(urp::FinishReason::Stop),
                     usage: None,
                     output: vec![],

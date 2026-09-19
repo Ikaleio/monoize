@@ -61,6 +61,7 @@ impl GeminiStreamEncoder {
                 Ok(frames)
             }
             UrpStreamEvent::ResponseDone {
+                outcome,
                 finish_reason,
                 usage,
                 output,
@@ -74,6 +75,7 @@ impl GeminiStreamEncoder {
                     return Err("Gemini cannot delete a Part that was already emitted".into());
                 }
                 let response = UrpResponse {
+                    outcome,
                     id: self.id.clone(),
                     model: self.model.clone(),
                     created_at: None,

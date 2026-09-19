@@ -25,7 +25,7 @@ enum MessagesSurfaceKind {
 enum AnthropicBlockPayload {
     Text {
         content: String,
-        citations: Vec<Value>,
+        citations: Vec<crate::urp::Citation>,
         phase: Option<String>,
         extra: HashMap<String, Value>,
     },
@@ -675,6 +675,9 @@ fn messages_stop_reason<'a>(
     }
     match finish_reason {
         Some(FinishReason::Length) => "max_tokens",
+        Some(FinishReason::ContextLimit) => "model_context_window_exceeded",
+        Some(FinishReason::Paused) => "pause_turn",
+        Some(FinishReason::Compaction) => "compaction",
         Some(FinishReason::ToolCalls) => "tool_use",
         Some(FinishReason::ContentFilter) => "refusal",
         Some(FinishReason::Stop | FinishReason::Other) | None => "end_turn",
@@ -693,12 +696,19 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
         (
             AnthropicBlockPayload::Text { content, .. },
             NodeDelta::Text {
+                logprobs: _,
                 signature: _,
                 citations: _,
                 content: delta,
             },
         )
-        | (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Refusal { content: delta }) => {
+        | (
+            AnthropicBlockPayload::Text { content, .. },
+            NodeDelta::Refusal {
+                logprobs: _,
+                content: delta,
+            },
+        ) => {
             content.push_str(delta);
         }
         (
@@ -757,12 +767,19 @@ fn apply_emitted_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta:
         (
             AnthropicBlockPayload::Text { content, .. },
             NodeDelta::Text {
+                logprobs: _,
                 signature: _,
                 citations: _,
                 content: delta,
             },
         )
-        | (AnthropicBlockPayload::Text { content, .. }, NodeDelta::Refusal { content: delta }) => {
+        | (
+            AnthropicBlockPayload::Text { content, .. },
+            NodeDelta::Refusal {
+                logprobs: _,
+                content: delta,
+            },
+        ) => {
             content.push_str(delta);
         }
         (
@@ -903,12 +920,19 @@ async fn emit_live_delta_for_node_delta(
         (
             AnthropicBlockPayload::Text { .. },
             NodeDelta::Text {
+                logprobs: _,
                 signature: _,
                 citations: _,
                 content,
             },
         )
-        | (AnthropicBlockPayload::Text { .. }, NodeDelta::Refusal { content }) => {
+        | (
+            AnthropicBlockPayload::Text { .. },
+            NodeDelta::Refusal {
+                logprobs: _,
+                content,
+            },
+        ) => {
             if !content.is_empty() {
                 send_messages_delta_string(
                     tx,
@@ -1039,6 +1063,7 @@ async fn emit_accumulated_payload_deltas(
                 block_index,
                 &block_state.payload,
                 &NodeDelta::Text {
+                    logprobs: None,
                     signature: None,
                     citations: Vec::new(),
                     content: content.clone(),
@@ -1151,6 +1176,7 @@ async fn emit_terminal_suffix_before_stop(
                     block_index,
                     &block_state.payload,
                     &NodeDelta::Text {
+                        logprobs: None,
                         signature: None,
                         citations: Vec::new(),
                         content: suffix.to_string(),
@@ -1385,7 +1411,20 @@ pub(crate) async fn emit_synthetic_messages_stream(
     sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
+    if let Some(body) = resp
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.failure_body(true))
+    {
+        send_named_messages_event(&tx, body).await?;
+        return Ok(());
+    }
+
     if let Err(message) = crate::urp::encode::anthropic::validate_response_nodes(&resp.output) {
+        return emit_messages_media_error(&tx, message).await;
+    }
+    if let Err(message) = crate::urp::encode::anthropic::validate_complete_tool_inputs(&resp.output)
+    {
         return emit_messages_media_error(&tx, message).await;
     }
     let projected = crate::urp::tool_signature::project_response(resp);
@@ -1393,6 +1432,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
     let message_id = resp.id.clone();
     let mut saw_tool_use = false;
     let usage = resp.usage.clone().unwrap_or(urp::Usage {
+        iterations: None,
         input_tokens: 0,
         output_tokens: 0,
         input_details: None,
@@ -1506,6 +1546,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
             return Ok(());
         }
         let usage = response_usage.cloned().unwrap_or(Usage {
+            iterations: None,
             input_tokens: 0,
             output_tokens: 0,
             input_details: None,
@@ -1795,11 +1836,27 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 .await?;
             }
             UrpStreamEvent::ResponseDone {
+                outcome,
                 finish_reason,
                 usage,
                 output,
                 extra_body,
             } => {
+                if let Some(mut body) = outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.failure_body(true))
+                {
+                    if let Some(message) = body["error"]["message"].as_str() {
+                        body["error"]["message"] =
+                            json!(crate::error_sanitize::maybe_mask_sensitive_text(
+                                message,
+                                mask_sensitive_info
+                            ));
+                    }
+                    send_named_messages_event(&tx, body).await?;
+                    return Ok(());
+                }
+
                 if let Some(usage) = &usage {
                     response_usage = Some(usage.clone());
                 }
@@ -1888,6 +1945,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 .await?;
 
                 let usage = usage.or_else(|| response_usage.clone()).unwrap_or(Usage {
+                    iterations: None,
                     input_tokens: 0,
                     output_tokens: 0,
                     input_details: None,
@@ -2027,7 +2085,14 @@ async fn send_named_messages_event(tx: &mpsc::Sender<Event>, payload: Value) -> 
     send_named_sse_json(tx, &event_name, payload).await
 }
 
-async fn emit_citation(tx: &mpsc::Sender<Event>, index: u32, citation: &Value) -> AppResult<()> {
+async fn emit_citation(
+    tx: &mpsc::Sender<Event>,
+    index: u32,
+    citation: &crate::urp::Citation,
+) -> AppResult<()> {
+    let Some(citation) = citation.encode(crate::urp::ProviderProtocol::Messages, 0) else {
+        return Ok(());
+    };
     send_named_messages_event(tx, json!({"type":"content_block_delta", "index":index, "delta":{"type":"citations_delta", "citation":citation}})).await
 }
 

@@ -43,8 +43,10 @@ impl Role {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
     Text {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logprobs: Option<Vec<super::TokenLogprob>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        citations: Vec<Value>,
+        citations: Vec<crate::urp::Citation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<Value>,
         content: String,
@@ -104,6 +106,8 @@ pub enum Part {
         extra_body: HashMap<String, Value>,
     },
     Refusal {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logprobs: Option<Vec<super::TokenLogprob>>,
         content: String,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
@@ -152,6 +156,7 @@ impl Part {
     pub fn into_node(self, role: OrdinaryRole) -> Node {
         match self {
             Part::Text {
+                logprobs,
                 signature,
                 citations,
                 content,
@@ -161,6 +166,7 @@ impl Part {
                     .remove("phase")
                     .and_then(|value| value.as_str().map(str::to_string));
                 Node::Text {
+                    logprobs,
                     signature,
                     citations,
                     id: None,
@@ -245,9 +251,11 @@ impl Part {
                 extra_body,
             },
             Part::Refusal {
+                logprobs,
                 content,
                 extra_body,
             } => Node::Refusal {
+                logprobs,
                 id: None,
                 content,
                 extra_body,
@@ -429,6 +437,7 @@ fn bridge_zone_should_flush(current: Option<BridgeZone>, next: BridgeZone) -> bo
 fn node_to_part(node: &Node) -> Part {
     match node {
         Node::Text {
+            logprobs,
             signature,
             citations,
             content,
@@ -442,6 +451,7 @@ fn node_to_part(node: &Node) -> Part {
                 extra_body.insert("phase".to_string(), Value::String(phase.clone()));
             }
             Part::Text {
+                logprobs: logprobs.clone(),
                 signature: signature.clone(),
                 citations: citations.clone(),
                 content: content.clone(),
@@ -520,10 +530,12 @@ fn node_to_part(node: &Node) -> Part {
             extra_body: extra_body.clone(),
         },
         Node::Refusal {
+            logprobs,
             content,
             extra_body,
             ..
         } => Part::Refusal {
+            logprobs: logprobs.clone(),
             content: content.clone(),
             extra_body: extra_body.clone(),
         },
@@ -542,6 +554,7 @@ fn node_to_part(node: &Node) -> Part {
             extra_body: extra_body.clone(),
         },
         Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => Part::Text {
+            logprobs: None,
             signature: None,
             citations: Vec::new(),
             content: String::new(),
@@ -583,15 +596,20 @@ mod canonical_bridge_tests {
     fn phase_is_single_owned_and_deletion_is_authoritative() {
         for phase in [None, Some("current".to_string())] {
             let node = Node::Text {
+                logprobs: None,
                 id: None,
                 role: OrdinaryRole::Assistant,
                 content: "answer".into(),
                 phase: phase.clone(),
                 signature: Some(json!("sig")),
-                citations: vec![json!({"url":"https://example.com"})],
+                citations: vec![crate::urp::Citation::decode(
+                    json!({"url":"https://example.com"}),
+                    ProviderProtocol::Responses,
+                )],
                 extra_body: HashMap::from([("phase".into(), json!("stale"))]),
             };
             let Node::Text {
+                logprobs: _,
                 phase: actual,
                 extra_body,
                 citations,

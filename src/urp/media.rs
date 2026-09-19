@@ -581,6 +581,7 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                         document_prefix(metadata)
                     {
                         result.push(Node::Text {
+                            logprobs: None,
                             id: None,
                             role: *role,
                             content: text,
@@ -605,13 +606,17 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                                 text,
                                 mut extra_body,
                             } => Node::Text {
+                                logprobs: None,
                                 id: id.clone(),
                                 role: *role,
                                 content: text,
-                                citations: extra_body
-                                    .remove("citations")
-                                    .and_then(|value| value.as_array().cloned())
-                                    .unwrap_or_default(),
+                                citations: crate::urp::citations::decode(
+                                    extra_body
+                                        .remove("citations")
+                                        .and_then(|value| value.as_array().cloned())
+                                        .unwrap_or_default(),
+                                    ProviderProtocol::Messages,
+                                ),
                                 phase: None,
                                 signature: None,
                                 extra_body,

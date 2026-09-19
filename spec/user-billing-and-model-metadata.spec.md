@@ -308,3 +308,11 @@ UF4. The response MUST be `{ models: string[], compact_scheme: "same_model" | "o
 UF5. On upstream fetch or parse failure, endpoint MUST return `502` with code `upstream_fetch_failed`.
 
 UF3. Request timeout for the upstream call MUST be 15 seconds.
+
+
+## Iterated generation accounting
+
+CITER-1. If Usage.iterations is present and nonempty, billing and request usage projection MUST use the sum of those normalized iterations.
+They MUST NOT add the primary-generation top-level counters to that sum.
+Input cache buckets and reasoning output retain the existing inclusive accounting rules within each iteration.
+Messages top-level native usage excludes compaction iterations. Native replay MUST retain that distinction.

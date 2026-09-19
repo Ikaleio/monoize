@@ -210,7 +210,7 @@ async fn retain_decoded_terminal_output(
     mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
     tx: mpsc::Sender<urp::UrpStreamEvent>,
     terminal_output: Arc<Mutex<Vec<urp::Node>>>,
-    aliases: HashMap<String, Value>,
+    aliases: HashMap<String, urp::ToolIdentity>,
 ) -> AppResult<()> {
     while let Some(mut event) = rx.recv().await {
         restore_tool_namespace_event(&mut event, &aliases);
@@ -235,6 +235,7 @@ pub(super) async fn retain_reconstructed_urp_response(
 ) -> AppResult<()> {
     while let Some(event) = rx.recv().await {
         if let urp::UrpStreamEvent::ResponseDone {
+            outcome,
             finish_reason,
             usage,
             output,
@@ -242,6 +243,9 @@ pub(super) async fn retain_reconstructed_urp_response(
         } = &event
         {
             let mut object = serde_json::Map::new();
+            if let Some(outcome) = outcome {
+                object.insert("outcome".into(), json!(outcome));
+            }
             if let Some(finish_reason) = finish_reason {
                 object.insert("finish_reason".to_string(), json!(finish_reason));
             }
@@ -1560,6 +1564,7 @@ pub(super) async fn forward_stream_typed(
                                     );
                                     (
                                         Some(urp::Usage {
+                                            iterations: None,
                                             input_tokens: estimated_input_tokens,
                                             output_tokens: estimated_output_tokens,
                                             input_details: None,
