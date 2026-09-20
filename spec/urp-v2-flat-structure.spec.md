@@ -556,7 +556,7 @@ SACC-4. For `NodeDelta::Reasoning.summary`, terminal `Reasoning.summary` is the 
 
 SACC-4a. When a source protocol emits a later non-empty full-field done snapshot for `Reasoning.summary`, that snapshot replaces the delta concatenation for `NodeDone.node` and `ResponseDone.output`. A full-item done snapshot MAY also replace other non-empty reasoning fields. A non-empty terminal response-object summary is the final authoritative `ResponseDone.output` presentation and replaces any different accumulated summary without creating a terminal conflict. An empty done-snapshot or terminal-response field MUST NOT erase a non-empty accumulated field.
 
-SACC-5. If a source protocol defines streamed `Reasoning.encrypted` values as fragments and each fragment is a string, terminal `Reasoning.encrypted` is the ordered concatenation of those raw string fragments. Anthropic Messages `signature_delta.signature` and the legacy Chat scalar `reasoning_opaque` are fragment surfaces. A Chat `reasoning_details[]` entry is one ordered reasoning-sequence element and is not a fragment of another entry.
+SACC-5. If a source protocol defines streamed `Reasoning.encrypted` values as fragments and each fragment is a string, terminal `Reasoning.encrypted` is the ordered concatenation of those raw string fragments. Anthropic Messages `signature_delta.signature` and the legacy Chat scalar `reasoning_opaque` are fragment surfaces. Chat text and summary detail deltas with the same stable identity accumulate under CHAT-4d. Encrypted detail values remain opaque snapshots.
 
 SACC-5b. When reasoning envelopes are enabled, Monoize MUST NOT wrap each encrypted fragment independently. It MUST accumulate the raw fragments for one `node_index`, select the non-empty `NodeDone.node.encrypted` value as the authoritative complete value when present, and otherwise use the SACC-5 concatenation. Monoize MUST wrap that complete value exactly once before a response transform or downstream encoder observes it. A downstream encoder MAY split the one wrapped string only to satisfy the configured SSE frame limit. Concatenating all downstream string frames for that encrypted field MUST produce exactly one parseable `mz2.` envelope.
 
@@ -649,6 +649,12 @@ MSG-6. `Reasoning` nodes MUST reconstruct Anthropic `thinking` blocks. If adjace
 
 MSG-7. `ToolCall(tool_type = "function")` nodes MUST reconstruct Anthropic `tool_use` blocks. Streamed tool input JSON remains block-scoped and index-scoped. Messages has no specified freeform custom-call lifecycle; its encoder MUST omit `ToolCall(tool_type = "custom")` and `ToolResult(tool_type = "custom")` rather than reinterpret freeform input as JSON tool input.
 
+MSG-7a. The request encoder MUST convert a custom definition with `input_schema` into a function definition before applying MSG-7.
+The schema MUST be a JSON object with `type: "object"`; otherwise encoding MUST fail.
+Matching custom calls MUST contain complete JSON objects and MUST become function calls with unchanged `call_id` and arguments.
+Correlated custom results MUST become function results with unchanged `call_id` and content.
+Invalid arguments MUST fail encoding instead of removing history. Custom tools without `input_schema` retain the existing freeform bridge.
+
 MSG-8. `ToolResult` nodes MUST reconstruct Anthropic `tool_result` blocks as distinct tool-result protocol objects. They MUST NOT be rewritten as ordinary role-bearing nodes.
 
 MSG-8a. Consecutive `ToolResult` nodes MUST reconstruct as consecutive `tool_result` blocks inside one Anthropic user message envelope. A Messages encoder MUST NOT emit an empty text block solely to preserve an empty `Text.content` value.
@@ -670,12 +676,17 @@ CHAT-4. Chat `reasoning_details[]` entries MUST preserve the OpenRouter-compatib
 
 CHAT-4a. Every `reasoning_details[]` entry MAY carry `id`, `format`, and `index`. It MAY also carry future entry-local fields. A decoder MUST preserve those fields on the owning reasoning node, and a same-Chat encoder MUST replay them on the same entry.
 
-CHAT-4b. Source detail order is canonical. A decoder MUST create one reasoning node per detail entry. An encoder MUST preserve repeated detail types and MUST NOT merge, reorder, or deduplicate entries. Scalar `reasoning` is a compatibility view and MUST NOT duplicate matching content or summary details.
+CHAT-4b. Source detail order is canonical. A decoder MUST create one reasoning node per independent detail entry. Stream fragments follow CHAT-4d. An encoder MUST preserve repeated detail types and MUST NOT merge, reorder, or deduplicate entries. Scalar `reasoning` is a compatibility view and MUST NOT duplicate matching content or summary details.
 Scalar `reasoning_content` is raw content. It MUST deduplicate only matching content, never a matching summary.
 If summary and raw content contain identical bytes, both typed meanings MUST remain present.
 A simultaneous `reasoning` field MUST NOT suppress a distinct `reasoning_content` value.
 
 CHAT-4c. Without an explicit response transform, non-empty `Reasoning.content` MUST encode as `reasoning.text` and MUST NOT encode as `reasoning.summary`.
+
+CHAT-4d. In streams, text and summary deltas with the same non-empty `id` or integer `index` MUST accumulate in one node.
+The detail type and every supplied identity field MUST agree. Distinct identities and entries without stable identity MUST remain separate.
+A terminal snapshot MUST update the matching accumulated node and emit only its unsent text or summary suffix.
+Equal text alone MUST NOT identify a detail.
 
 CHAT-5. Opaque encrypted reasoning payloads MUST appear only in `reasoning_details[]` entries with `type = "reasoning.encrypted"` and field `data`.
 
@@ -713,6 +724,11 @@ CTRL-5. Gemini maps thinkingLevel to effort, nonnegative thinkingBudget to budge
 CTRL-6. Gemini includeThoughts maps to summary auto or none. Non-none summary modes request includeThoughts on output.
 CTRL-7. Removing a control removes that control only. Other explicit typed controls remain active. An empty reasoning configuration MUST NOT enable thinking.
 CTRL-8. Text citations and thought signatures MUST survive unchanged node conversion. A signature MUST stay associated with its original text node.
+
+CTRL-8a. A tool signature from NodeStart is provisional. Downstream signature envelopes MUST wait for NodeDone or ResponseDone before emitting a value.
+NodeDone replaces the provisional signature atomically, including deletion. Tool argument deltas MUST remain available before signature completion.
+Signatures MUST NOT use text suffix concatenation.
+A reserved signature node MAY finish after a later-indexed control node. Terminal output MUST preserve the signature association and projected node order.
 CTRL-9. Responses source snapshots MUST exclude typed id, model, output, usage, status, and terminal details. Start events use typed usage.
 CTRL-10. Session affinity MUST derive instruction content from current instruction nodes. Historical instruction text MUST NOT affect the affinity key.
 
@@ -743,6 +759,11 @@ Messages context limits MUST map to incomplete output. A paused or compaction-on
 Targets without pause semantics MUST emit incomplete or truncated output rather than claim a completed turn.
 A generation failure MAY contain partial output and usage. It MUST use a terminal outcome, not discard its snapshot as a transport error.
 Transport errors and malformed protocol events MUST remain Error events.
+
+SEM-3a. A non-stream Responses object with a non-null error and missing or invalid status MUST fail decoding.
+The `object: "response"` discriminator MUST NOT bypass this rule.
+An object without a recognized status MUST contain an output array; otherwise decoding MUST fail.
+Compatible responses with an output array MAY omit status when error is absent or null.
 
 SEM-4. Usage MAY contain ordered typed iterations. Each iteration records its kind and normalized inclusive token counters.
 Usage top-level counters retain their existing primary-generation meaning. Complete accounting MUST sum iterations when present, without adding top-level counters again.

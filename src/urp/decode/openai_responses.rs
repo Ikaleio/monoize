@@ -1198,13 +1198,9 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .as_object()
         .ok_or_else(|| "responses response must be object".to_string())?;
 
-    let is_response = obj.get("object").and_then(Value::as_str) == Some("response")
-        || matches!(
-            obj.get("status").and_then(Value::as_str),
-            Some("completed" | "incomplete" | "failed" | "cancelled" | "queued" | "in_progress")
-        );
+    let outcome = crate::urp::ResponseOutcome::from_responses(obj);
     if let Some(error) = obj.get("error").filter(|error| !error.is_null()) {
-        if !is_response {
+        if outcome.is_none() {
             return Err(error
                 .get("message")
                 .and_then(Value::as_str)
@@ -1212,6 +1208,9 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                 .unwrap_or("upstream Responses error")
                 .to_string());
         }
+    }
+    if outcome.is_none() && !obj.get("output").is_some_and(Value::is_array) {
+        return Err("Responses response requires a valid status or an output array".to_string());
     }
 
     let output_nodes = decode_response_nodes(obj);
@@ -1256,7 +1255,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     );
 
     Ok(UrpResponse {
-        outcome: crate::urp::ResponseOutcome::from_responses(obj),
+        outcome,
         id: obj
             .get("id")
             .and_then(|v| v.as_str())

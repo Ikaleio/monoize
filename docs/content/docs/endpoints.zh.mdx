@@ -23,6 +23,14 @@ Chat 与 Responses 会将支持的 URL 引用转换为目标格式。无法表�
 
 协议转换分别保留 raw 推理、可读摘要和不透明的回传载荷。删除 raw 推理后，不会用摘要恢复它。Messages 的 thinking 文本映射为摘要，signature 保持不透明。非法流生命周期和格式错误的已知事件会返回错误。完整 Messages 请求和响应拒绝截断的工具 JSON；原生 max_tokens 流可保留未完成的参数字节。
 
+Chat 中具有相同稳定身份的推理分片会累计到同一节点。最终快照只补充尚未发送的文本后缀，独立的 detail 保持分离。
+
+工具参数可以实时输出。工具签名信封等待工具终态确定后再输出，签名始终作为完整的不透明值处理。
+
+Messages 请求会一起转换带对象 `input_schema` 的 custom 工具、JSON 对象调用参数和关联结果，并保留 `call_id`。无效的 schema 或参数会返回错误。
+
+Responses 对象包含非 null 的 error 且缺少有效 status 时会返回错误。空对象会被拒绝。没有错误且包含 output 数组的兼容响应仍可省略 status。
+
 ## 列出模型
 
 ```bash

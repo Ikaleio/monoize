@@ -23,6 +23,14 @@ Chat and Responses convert supported URL citations to the target format. Unsuppo
 
 Raw reasoning, readable summaries, and opaque replay payloads remain separate during protocol conversion. Deleting raw reasoning does not restore it from a summary. Messages thinking text maps to a summary; its signature remains opaque. Invalid stream lifecycles and malformed known events produce errors. Complete Messages requests and responses reject truncated tool JSON; a native max_tokens stream may retain its incomplete argument bytes.
 
+Chat reasoning fragments with the same stable identity accumulate once. A final snapshot adds only the unsent text suffix. Independent details remain separate.
+
+Tool arguments can stream before completion. Tool signature envelopes wait for the completed tool value and preserve the signature as one opaque value.
+
+Messages requests convert custom tools with an object `input_schema`, their JSON-object calls, and correlated results together. The conversion preserves `call_id`. Invalid schemas or arguments produce an error.
+
+Responses objects with a non-null error and missing or invalid status produce an error. Empty objects are rejected. Error-free responses with an output array can omit status.
+
 ## List models
 
 ```bash

@@ -284,7 +284,10 @@ pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    match crate::urp::media::prepare_request(req, ProviderProtocol::Messages) {
+    match crate::urp::media::prepare_request(req, ProviderProtocol::Messages).and_then(|mut prepared| {
+        prepare_schema_custom_tools(&mut prepared)?;
+        Ok(prepared)
+    }) {
         Ok(prepared) => encode_prepared_request(&prepared, upstream_model),
         Err(message) => messages_media_error_body(&message),
     }

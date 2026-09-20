@@ -137,11 +137,13 @@ struct NodeMapping {
 struct SignatureEmission {
     index: u32,
     preceding_nodes: usize,
+    completed: bool,
 }
 
 /// Projects canonical stream events at the downstream encoder boundary with dense wire indices.
 #[derive(Default)]
 pub struct SignatureProjection {
+    defer_transport_start: bool,
     next_index: u32,
     mapping: HashMap<u32, NodeMapping>,
     ordinary_indices: Vec<u32>,
@@ -151,6 +153,14 @@ pub struct SignatureProjection {
 }
 
 impl SignatureProjection {
+    /// Keeps sequential Messages blocks available for tool argument deltas.
+    pub fn for_messages() -> Self {
+        Self {
+            defer_transport_start: true,
+            ..Self::default()
+        }
+    }
+
     pub async fn recv(
         &mut self,
         rx: &mut mpsc::Receiver<UrpStreamEvent>,
@@ -210,17 +220,28 @@ impl SignatureProjection {
         }
     }
 
-    fn prepare_node(&mut self, original: u32, signed: Option<(String, Value)>) -> u32 {
+    fn prepare_node(
+        &mut self,
+        original: u32,
+        signed: Option<(String, Value)>,
+        complete: bool,
+    ) -> u32 {
         let existing = self
             .mapping
             .get(&original)
             .map(|mapping| (mapping.node, mapping.transport));
         let transport = if let Some((call_id, signature)) = signed {
             if let Some((_, Some(transport))) = existing {
+                if complete {
+                    self.complete_transport(transport, &call_id, signature);
+                }
                 Some(transport)
             } else {
                 let index = self.allocate();
-                self.emit_transport(index, &call_id, signature);
+                self.start_transport(index, &call_id);
+                if complete {
+                    self.complete_transport(index, &call_id, signature);
+                }
                 Some(index)
             }
         } else {
@@ -236,12 +257,13 @@ impl SignatureProjection {
         }
     }
 
-    fn emit_transport(&mut self, index: u32, call_id: &str, signature: Value) {
+    fn start_transport(&mut self, index: u32, call_id: &str) {
         self.signatures.insert(
             call_id.to_owned(),
             SignatureEmission {
                 index,
                 preceding_nodes: self.ordinary_indices.len(),
+                completed: false,
             },
         );
         let id = signature_item_id(call_id);
@@ -253,11 +275,22 @@ impl SignatureProjection {
             },
             extra_body: HashMap::new(),
         });
+    }
+
+    fn complete_transport(&mut self, index: u32, call_id: &str, signature: Value) {
+        let emission = self
+            .signatures
+            .get_mut(call_id)
+            .expect("reserved signature transport");
+        if emission.completed {
+            return;
+        }
+        emission.completed = true;
         self.pending.push_back(UrpStreamEvent::NodeDelta {
             node_index: index,
             delta: NodeDelta::Reasoning {
                 metadata: ReasoningMetadata {
-                    item_id: Some(id),
+                    item_id: Some(signature_item_id(call_id)),
                     ..Default::default()
                 },
                 content: None,
@@ -392,22 +425,78 @@ impl SignatureProjection {
                 } else {
                     None
                 };
-                *node_index = self.prepare_node(original, signed);
+                *node_index = self.prepare_node(
+                    original,
+                    if self.defer_transport_start {
+                        None
+                    } else {
+                        signed
+                    },
+                    false,
+                );
                 self.mapping.get_mut(&original).unwrap().header = Some(header.clone());
             }
             UrpStreamEvent::NodeDelta { node_index, .. } => {
-                *node_index = self.prepare_node(*node_index, None);
+                *node_index = self.prepare_node(*node_index, None, false);
             }
             UrpStreamEvent::NodeDone {
                 node_index, node, ..
             } => {
                 let original = *node_index;
                 let signed = take_call_signature(node);
-                *node_index = self.prepare_node(original, signed);
+                *node_index = self.prepare_node(original, signed, true);
                 self.mapping.get_mut(&original).unwrap().completed = Some(node.clone());
             }
             UrpStreamEvent::ResponseDone { output, .. } => {
                 self.flush_controls();
+                let terminal_signatures: Vec<_> = self
+                    .ordinary_indices
+                    .iter()
+                    .filter_map(|original| {
+                        let mapping = &self.mapping[original];
+                        if mapping.transport.is_some() {
+                            return None;
+                        }
+                        output.iter().find_map(|node| {
+                            let Node::ToolCall {
+                                call_id,
+                                signature: Some(signature),
+                                ..
+                            } = node
+                            else {
+                                return None;
+                            };
+                            mapping
+                                .header
+                                .as_ref()
+                                .is_some_and(|header| header_matches_node(header, node))
+                                .then(|| (*original, call_id.clone(), signature.clone()))
+                        })
+                    })
+                    .collect();
+                for (original, call_id, signature) in terminal_signatures {
+                    self.prepare_node(original, Some((call_id, signature)), true);
+                }
+                let mut unfinished: Vec<_> = self
+                    .signatures
+                    .iter()
+                    .filter(|(_, emission)| !emission.completed)
+                    .map(|(call_id, emission)| (call_id.clone(), emission.index))
+                    .collect();
+                unfinished.sort_by_key(|(_, index)| *index);
+                for (call_id, index) in unfinished {
+                    let signature = output.iter().find_map(|node| match node {
+                        Node::ToolCall {
+                            call_id: id,
+                            signature,
+                            ..
+                        } if id == &call_id => signature.clone(),
+                        _ => None,
+                    });
+                    if let Some(signature) = signature {
+                        self.complete_transport(index, &call_id, signature);
+                    }
+                }
                 *output = self.terminal_projection(std::mem::take(output));
             }
             _ => self.flush_controls(),

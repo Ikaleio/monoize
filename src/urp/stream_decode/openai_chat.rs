@@ -1374,6 +1374,51 @@ async fn process_reasoning_detail_delta(
     };
 
     ensure_response_started(tx, response_id, model, response_started).await?;
+    if matches!(
+        detail.get("type").and_then(Value::as_str),
+        Some("reasoning.text" | "reasoning.summary")
+    ) && let Some((node_index, existing_node)) =
+        reasoning_detail_nodes.iter_mut().find(|(_, existing)| {
+            reasoning_detail_raw(existing)
+                .is_some_and(|existing| reasoning_detail_identity_matches(&existing, detail))
+        })
+    {
+        let mut accumulated = reasoning_detail_raw(existing_node).unwrap();
+        let payload_key = reasoning_detail_payload_key(detail["type"].as_str().unwrap()).unwrap();
+        let mut text = accumulated
+            .get(payload_key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        text.push_str(
+            detail
+                .get(payload_key)
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        accumulated.extend(detail.clone());
+        accumulated.insert(payload_key.to_string(), Value::String(text));
+        *existing_node = chat_reasoning_node_from_detail(&accumulated).unwrap();
+        let mut event_extra = extra_body.clone();
+        event_extra.extend(chat_delta_event_extra(std::mem::take(delta_extra)));
+        send_node_delta(
+            tx,
+            *node_index,
+            NodeDelta::Reasoning {
+                metadata: crate::urp::ReasoningMetadata {
+                    item_id: id.clone(),
+                    ..metadata.clone()
+                },
+                content: content.clone(),
+                encrypted: encrypted.clone(),
+                summary: summary.clone(),
+                source: source.clone(),
+            },
+            event_extra,
+        )
+        .await?;
+        return Ok(());
+    }
     let node_index = *next_node_index;
     *next_node_index += 1;
     send_event(
@@ -1630,45 +1675,29 @@ fn reasoning_detail_payload_key(detail_type: &str) -> Option<&'static str> {
     }
 }
 
-fn reasoning_detail_matches(existing: &Node, terminal: &Map<String, Value>) -> bool {
-    let Some(existing) = reasoning_detail_raw(existing) else {
-        return false;
-    };
-    if &existing == terminal {
-        return true;
-    }
-    let existing_type = existing.get("type").and_then(Value::as_str);
-    let terminal_type = terminal.get("type").and_then(Value::as_str);
-    if existing_type != terminal_type {
-        return false;
-    }
-    for identity_key in ["id", "index", "tool_call_id"] {
-        if (existing.contains_key(identity_key) || terminal.contains_key(identity_key))
-            && existing.get(identity_key) != terminal.get(identity_key)
-        {
-            return false;
+fn reasoning_detail_identity_matches(
+    existing: &Map<String, Value>,
+    terminal: &Map<String, Value>,
+) -> bool {
+    let has_identity = existing
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+        || existing.get("index").and_then(Value::as_u64).is_some();
+    has_identity
+        && existing.get("type") == terminal.get("type")
+        && ["id", "index", "tool_call_id"]
+            .iter()
+            .all(|key| existing.get(*key) == terminal.get(*key))
+        && match (existing.get("format"), terminal.get("format")) {
+            (Some(left), Some(right)) => left == right,
+            _ => true,
         }
-    }
-    if let (Some(existing_format), Some(terminal_format)) =
-        (existing.get("format"), terminal.get("format"))
-        && existing_format != terminal_format
-    {
-        return false;
-    }
+}
 
-    let Some(payload_key) = terminal_type.and_then(reasoning_detail_payload_key) else {
-        return false;
-    };
-    if payload_key == "data" {
-        return true;
-    }
-    match (existing.get(payload_key), terminal.get(payload_key)) {
-        (Some(Value::String(existing)), Some(Value::String(terminal))) => {
-            existing.starts_with(terminal) || terminal.starts_with(existing)
-        }
-        (None, _) | (_, None) => true,
-        (Some(existing), Some(terminal)) => existing == terminal,
-    }
+fn reasoning_detail_matches(existing: &Node, terminal: &Map<String, Value>) -> bool {
+    reasoning_detail_raw(existing)
+        .is_some_and(|existing| reasoning_detail_identity_matches(&existing, terminal))
 }
 
 fn reasoning_detail_completion(

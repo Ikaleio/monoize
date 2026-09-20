@@ -1516,7 +1516,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
     sse_max_frame_length: Option<usize>,
     mask_sensitive_info: bool,
 ) -> AppResult<()> {
-    let mut signature_projection = crate::urp::tool_signature::SignatureProjection::default();
+    let mut signature_projection = crate::urp::tool_signature::SignatureProjection::for_messages();
     let mut next_content_block_index = 0u32;
     let mut saw_tool_use = false;
     let mut response_usage: Option<Usage> = None;
