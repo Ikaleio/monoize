@@ -32,15 +32,64 @@ import {
   playgroundMessageId,
   usePlaygroundImages,
   type ComposerAttachment,
+  type ImageRequestInput,
 } from "@/components/playground/use-image-generation";
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("read failed"));
+    };
     reader.onerror = () => reject(reader.error ?? new Error("read failed"));
     reader.readAsDataURL(file);
   });
+}
+
+function isPlaygroundImageMessage(message: UIMessage | undefined): boolean {
+  if (!message || message.role !== "assistant" || message.metadata == null) return false;
+  if (typeof message.metadata !== "object" || !("playgroundImage" in message.metadata)) {
+    return false;
+  }
+  return message.metadata.playgroundImage === true;
+}
+
+async function attachmentFromFilePart(part: FileUIPart): Promise<ComposerAttachment | null> {
+  if (!part.mediaType.startsWith("image/") && !part.url.startsWith("data:image/")) {
+    return null;
+  }
+  try {
+    const response = await fetch(part.url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    const type = part.mediaType || blob.type || "image/png";
+    const file = new File([blob], part.filename || "reference.png", { type });
+    const url = part.url.startsWith("data:") ? part.url : await readAsDataUrl(file);
+    return { id: playgroundMessageId(), file, url };
+  } catch {
+    return null;
+  }
+}
+
+async function rebuildImageInput(
+  message: UIMessage | undefined,
+  fields: Omit<ImageRequestInput, "prompt" | "attachments">,
+): Promise<ImageRequestInput | null> {
+  if (!message || message.role !== "user" || !fields.model) return null;
+  const prompt = message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+  if (!prompt) return null;
+  const fileParts = message.parts.filter((part): part is FileUIPart => part.type === "file");
+  const staged = await Promise.all(fileParts.map(attachmentFromFilePart));
+  return {
+    ...fields,
+    prompt,
+    attachments: staged.filter((item): item is ComposerAttachment => item !== null),
+  };
 }
 
 export function PlaygroundPage() {
@@ -336,7 +385,7 @@ export function PlaygroundPage() {
         size: prefs.imageSize,
         group: prefs.group,
         apiKey: resolution.key?.key ?? null,
-        attachment: attachments[0] ?? null,
+        attachments,
       });
     } else {
       const files: FileUIPart[] = attachments.map((attachment) => ({
@@ -413,16 +462,47 @@ export function PlaygroundPage() {
 
   const handleRegenerate = useCallback(
     (messageId: string) => {
+      const message = messages.find((item) => item.id === messageId);
+      const imageRegeneration = mode === "image" || isPlaygroundImageMessage(message);
       if (images.regenerate(messageId)) {
         setMessages((prev) => {
-          const messageIndex = prev.findIndex((message) => message.id === messageId);
+          const messageIndex = prev.findIndex((item) => item.id === messageId);
           return messageIndex < 0 ? prev : prev.slice(0, messageIndex);
         });
         return;
       }
-      void regenerate({ messageId });
+      if (!imageRegeneration) {
+        void regenerate({ messageId });
+        return;
+      }
+      const messageIndex = messages.findIndex((item) => item.id === messageId);
+      const prior = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
+      void (async () => {
+        const rebuilt = await rebuildImageInput(prior, {
+          model: prefs.imageModel.trim(),
+          size: prefs.imageSize,
+          group: prefs.group,
+          apiKey: resolution.key?.key ?? null,
+        });
+        if (!rebuilt) return;
+        images.rerun(rebuilt);
+        setMessages((prev) => {
+          const messageIndex = prev.findIndex((item) => item.id === messageId);
+          return messageIndex < 0 ? prev : prev.slice(0, messageIndex);
+        });
+      })();
     },
-    [images, regenerate, setMessages],
+    [
+      images,
+      regenerate,
+      setMessages,
+      mode,
+      messages,
+      prefs.imageModel,
+      prefs.imageSize,
+      prefs.group,
+      resolution.key,
+    ],
   );
 
   const handleEditImage = useCallback(

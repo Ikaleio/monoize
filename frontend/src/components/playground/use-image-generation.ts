@@ -15,7 +15,7 @@ export interface ImageRequestInput {
   size: string;
   group: string;
   apiKey: string | null;
-  attachment: ComposerAttachment | null;
+  attachments: ComposerAttachment[];
 }
 
 export interface ImageJobState {
@@ -46,14 +46,14 @@ export function buildImageGenerationBody(input: ImageRequestInput): string {
   });
 }
 
-export function buildImageEditForm(
-  input: ImageRequestInput & { attachment: ComposerAttachment },
-): FormData {
+export function buildImageEditForm(input: ImageRequestInput): FormData {
   const form = new FormData();
   form.set("model", input.model);
   form.set("prompt", input.prompt);
   form.set("n", "1");
-  form.set("image", input.attachment.file);
+  for (const attachment of input.attachments) {
+    form.append("image", attachment.file, attachment.file.name || "reference.png");
+  }
   const size = normalizePlaygroundImageSize(input.size);
   if (size) form.set("size", size);
   return form;
@@ -63,20 +63,18 @@ export async function requestImages(
   input: ImageRequestInput,
   signal: AbortSignal,
 ): Promise<ImageApiDataItem[]> {
-  const authHeaders = input.apiKey
+  const authHeaders: Record<string, string> = input.apiKey
     ? { Authorization: `Bearer ${input.apiKey}` }
-    : {
-        "x-monoize-internal-source": "playground",
-        ...(input.group.trim()
-          ? { "x-monoize-playground-group": input.group.trim() }
-          : {}),
-      };
+    : { "x-monoize-internal-source": "playground" };
+  if (!input.apiKey && input.group.trim()) {
+    authHeaders["x-monoize-playground-group"] = input.group.trim();
+  }
   const internalCredentials = input.apiKey
     ? {}
     : ({ credentials: "include" } as const);
   let response: Response;
-  if (input.attachment) {
-    const form = buildImageEditForm({ ...input, attachment: input.attachment });
+  if (input.attachments.length > 0) {
+    const form = buildImageEditForm(input);
     response = await fetch("/api/v1/images/edits", {
       method: "POST",
       headers: authHeaders,
@@ -123,6 +121,7 @@ function buildAssistantImageMessage(items: ImageApiDataItem[]): UIMessage {
   return {
     id: playgroundMessageId(),
     role: "assistant",
+    metadata: { playgroundImage: true },
     parts: [
       ...(revised.length > 0
         ? [{ type: "text" as const, text: revised.join("\n\n") }]
@@ -187,16 +186,12 @@ export function usePlaygroundImages(appendMessage: (message: UIMessage) => void)
         id: playgroundMessageId(),
         role: "user",
         parts: [
-          ...(input.attachment
-            ? [
-                {
-                  type: "file" as const,
-                  mediaType: input.attachment.file.type || "image/png",
-                  filename: input.attachment.file.name,
-                  url: input.attachment.url,
-                },
-              ]
-            : []),
+          ...input.attachments.map((attachment) => ({
+            type: "file" as const,
+            mediaType: attachment.file.type || "image/png",
+            filename: attachment.file.name,
+            url: attachment.url,
+          })),
           { type: "text" as const, text: input.prompt },
         ],
       });
@@ -211,6 +206,13 @@ export function usePlaygroundImages(appendMessage: (message: UIMessage) => void)
       void run(current);
     }
   }, [run]);
+
+  const rerun = useCallback(
+    (input: ImageRequestInput) => {
+      void run({ id: playgroundMessageId(), status: "pending", input });
+    },
+    [run],
+  );
 
   const regenerate = useCallback(
     (messageId: string): boolean => {
@@ -238,5 +240,5 @@ export function usePlaygroundImages(appendMessage: (message: UIMessage) => void)
     setJob(null);
   }, [setJob]);
 
-  return { job, generate, retry, regenerate, abort, clear, reset };
+  return { job, generate, retry, regenerate, rerun, abort, clear, reset };
 }

@@ -1220,6 +1220,49 @@ async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::
     Ok(auth_result)
 }
 
+fn playground_group_permitted(
+    user_role_admin: bool,
+    user_group_id: &str,
+    group: &crate::users::Group,
+) -> bool {
+    user_role_admin || group.user_selectable || group.id == user_group_id
+}
+
+fn order_playground_auto_groups(user_group_id: &str, permitted_ids: &[String]) -> Vec<String> {
+    let mut ordered = Vec::new();
+    // Prefer the user's current group. Later groups remain eligible, so a model
+    // absent from the first group can still route through a later group.
+    if permitted_ids.iter().any(|id| id == user_group_id) {
+        ordered.push(user_group_id.to_string());
+    }
+    for id in permitted_ids {
+        if !ordered.iter().any(|existing| existing == id) {
+            ordered.push(id.clone());
+        }
+    }
+    ordered
+}
+
+async fn playground_plan_ceiling(
+    state: &AppState,
+    user_id: &str,
+) -> AppResult<Option<Vec<String>>> {
+    let subscription = state
+        .user_store
+        .get_active_billing_plan_subscription(user_id)
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+    Ok(subscription
+        .map(|subscription| subscription.group_ids)
+        .filter(|ids| !ids.is_empty()))
+}
+
+fn playground_group_forbidden(message: &'static str) -> AppError {
+    AppError::new(StatusCode::FORBIDDEN, "playground_group_forbidden", message)
+}
+
 async fn authenticate_playground_session(
     headers: &HeaderMap,
     state: &AppState,
@@ -1243,46 +1286,63 @@ async fn authenticate_playground_session(
         None => None,
     };
 
-    let group_id = selected_group
-        .clone()
-        .unwrap_or_else(|| user.group_id.clone());
-    let group = state
-        .user_store
-        .get_group_by_id(&group_id)
-        .await
-        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
-        .ok_or_else(|| {
-            AppError::new(
-                StatusCode::FORBIDDEN,
-                "playground_group_forbidden",
-                "playground routing group is unavailable",
-            )
-        })?;
+    let groups = state.user_store.list_groups().await.map_err(|error| {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+    })?;
+    let ceiling = playground_plan_ceiling(state, &user.id).await?;
+    let admin = user.role.can_manage_users();
+    let within_ceiling = |group_id: &str| {
+        ceiling
+            .as_ref()
+            .is_none_or(|ids| ids.iter().any(|id| id == group_id))
+    };
 
-    if selected_group.is_some()
-        && !user.role.can_manage_users()
-        && !group.user_selectable
-        && group.id != user.group_id
-    {
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "playground_group_forbidden",
-            "playground routing group is not selectable",
-        ));
-    }
+    let effective_groups = if let Some(selected) = selected_group {
+        let group = groups
+            .iter()
+            .find(|group| group.id == selected)
+            .ok_or_else(|| playground_group_forbidden("playground routing group is unavailable"))?;
+        if !playground_group_permitted(admin, &user.group_id, group) {
+            return Err(playground_group_forbidden(
+                "playground routing group is not selectable",
+            ));
+        }
+        if !within_ceiling(&selected) {
+            return Err(playground_group_forbidden(
+                "playground routing group is outside the billing plan",
+            ));
+        }
+        vec![selected]
+    } else {
+        let permitted_ids: Vec<String> = groups
+            .iter()
+            .filter(|group| {
+                playground_group_permitted(admin, &user.group_id, group)
+                    && within_ceiling(&group.id)
+            })
+            .map(|group| group.id.clone())
+            .collect();
+        let ordered = order_playground_auto_groups(&user.group_id, &permitted_ids);
+        if ordered.is_empty() {
+            return Err(playground_group_forbidden(
+                "playground routing group is unavailable",
+            ));
+        }
+        ordered
+    };
 
     Ok(crate::auth::AuthResult {
         tenant_id: user.id.clone(),
         user_id: Some(user.id),
         username: Some(user.username),
         user_role: user.role,
+        internal_source: Some(crate::auth::InternalRequestSource::Playground),
         api_key_id: None,
         api_key_name: None,
-        internal_source: Some(crate::auth::InternalRequestSource::Playground),
         max_multiplier: None,
         transforms: Vec::new(),
         model_redirects: Vec::new(),
-        effective_groups: Some(vec![group_id]),
+        effective_groups: Some(effective_groups),
         model_limits_enabled: false,
         model_limits: Vec::new(),
         ip_whitelist: Vec::new(),

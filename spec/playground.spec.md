@@ -88,10 +88,15 @@ non-auto group, sending MUST be disabled and an inline translated reason MUST id
 the incompatible model or group. The selected key id MUST remain unchanged. The frontend
 MUST NOT silently fall back to the built-in credential or another API key.
 
-PG-AUTH8. For a built-in auto-group request, the effective routing group list MUST equal
-the session user's current group after the billing-plan group ceiling is applied. For a
-built-in explicit-group request, the effective routing group list MUST equal only that
-group after the same billing-plan ceiling is applied.
+PG-AUTH8. A built-in auto-group request omits `x-monoize-playground-group`.
+The effective routing group list MUST equal every group that PG-AUTH9 permits and that
+remains after the billing-plan group ceiling.
+The session user's current group MUST be first when that group remains.
+Every other group MUST follow in registry order (`groups-registry.spec.md` GR-D5).
+A built-in explicit-group request MUST use only the selected group after the same ceiling.
+If the ceiling removes the selected group, Monoize MUST return HTTP `403` before upstream
+dispatch.
+If the auto-group list is empty, Monoize MUST return HTTP `403` before upstream dispatch.
 
 PG-AUTH9. For a built-in request, an explicit group is permitted iff the group exists and
 at least one condition is true: the session user is an administrator, the group has
@@ -320,9 +325,10 @@ PG-MSG5. Delete MUST remove exactly the targeted message via `setMessages` filte
 without issuing any request. The optimistic update is the operation itself (client-only
 state); no rollback path exists.
 
-PG-MSG6. Regenerate on an assistant message that was not created by PG-IMG5 MUST call
-`regenerate({ messageId })`. This removes that assistant message and everything after it,
-then requests a new text response with the current selector state.
+PG-MSG6. Regenerate on an assistant message that was not created by PG-IMG5, while image
+mode is inactive, MUST call `regenerate({ messageId })`. This removes that assistant
+message and everything after it, then requests a new text response with the current
+selector state.
 
 ## 7. Image Generation and Editing
 
@@ -339,12 +345,12 @@ the body MUST also contain `"size": <selected image size>`. If the selected imag
 `auto`, the body MUST omit `size`.
 
 PG-IMG3. Image send with at least one attachment MUST call
-`POST /api/v1/images/edits` as `multipart/form-data` with fields `model`, `prompt`,
-`n = 1`, and `image` = the first attachment file. Additional attachments beyond the
-first are ignored for the upstream call (the endpoint accepts a single source image).
-If the selected image size is explicit, the form MUST also contain `size` with its literal
-value. If the selected image size is `auto`, the form MUST omit `size`. The request MUST
-use the credentials and headers selected by PG-AUTH2 through PG-AUTH5.
+`POST /api/v1/images/edits` as `multipart/form-data`.
+The form MUST contain `model`, `prompt`, and `n = 1`.
+The form MUST contain one `image` file field for each attachment, in composer order.
+If the selected image size is explicit, the form MUST also contain `size`.
+If the selected image size is `auto`, the form MUST omit `size`.
+The request MUST use the credentials and headers selected by PG-AUTH2 through PG-AUTH5.
 
 PG-IMG4. On image send the frontend MUST synchronously append a user message (prompt
 text plus attachment file parts) to the chat state, and render a pending assistant
@@ -363,8 +369,14 @@ conversation.
 PG-IMG6a. Regenerate on an assistant message created by PG-IMG5 MUST remove that
 assistant message and all later messages. It MUST then re-issue the retained image request
 through `/api/v1/images/generations` or `/api/v1/images/edits`, according to whether the
-retained request has an attachment. It MUST NOT call the text-generation transport or
-append a second user message.
+retained request has at least one attachment. It MUST NOT call the text-generation
+transport or append a second user message.
+
+PG-IMG6b. While image mode is active, regenerate on an assistant message MUST NOT call
+the text-generation transport.
+If the retained image request is absent, rebuild the image request from the nearest
+preceding user message and the current image model, size, group, and credential.
+The rebuild MUST NOT append a second user message.
 
 PG-IMG7. Image requests MUST be abortable through the same stop control (an
 `AbortController` scoped to the in-flight image request). Aborting removes the pending
