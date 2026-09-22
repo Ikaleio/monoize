@@ -356,20 +356,28 @@ persisted). While image mode is active the image-model selector is visible, the
 chat-model selector is hidden, and the send action executes an image request instead of
 a chat request.
 
-PG-IMG2. Image send with no attachment MUST call
+PG-IMG2. Image send with no reference image selected by PG-IMG3a MUST call
 `POST /api/v1/images/generations` with JSON body
-`{ "model": <image model>, "prompt": <composer text>, "n": 1 }` and the credentials and
+`{ "model": <image model>, "prompt": <composer text>, "n": 1, "stream": true }` and the credentials and
 headers selected by PG-AUTH2 through PG-AUTH5. If the selected image size is explicit,
 the body MUST also contain `"size": <selected image size>`. If the selected image size is
 `auto`, the body MUST omit `size`.
 
-PG-IMG3. Image send with at least one attachment MUST call
+PG-IMG3. Image send with at least one reference image selected by PG-IMG3a MUST call
 `POST /api/v1/images/edits` as `multipart/form-data`.
-The form MUST contain `model`, `prompt`, and `n = 1`.
-The form MUST contain one `image` file field for each attachment, in composer order.
+The form MUST contain `model`, `prompt`, `n = 1`, and `stream = true`.
+The form MUST contain one `image` file field for each selected reference image, in order.
 If the selected image size is explicit, the form MUST also contain `size`.
 If the selected image size is `auto`, the form MUST omit `size`.
 The request MUST use the credentials and headers selected by PG-AUTH2 through PG-AUTH5.
+
+PG-IMG3a. Explicit composer attachments MUST supply the reference images when present.
+Otherwise, select all image file parts from the most recent conversation message that contains image file parts.
+Preserve their order, URLs, media types, and filenames.
+If no message contains image file parts, select no reference images.
+The selected references MUST enter the new user message and retained request input.
+Thus, a text-only follow-up after image generation MUST use the latest generated images through PG-IMG3.
+New chat MUST clear this reference context with the conversation.
 
 PG-IMG4. On image send the frontend MUST synchronously append a user message (prompt
 text plus attachment file parts) to the chat state, and render a pending assistant
@@ -380,6 +388,14 @@ parts are, in order: one text part with `revised_prompt` when present, then one 
 part per `data[]` entry — `url` used verbatim when present, otherwise
 `data:image/png;base64,<b64_json>`. The frontend MUST retain the request input in memory,
 keyed by the generated assistant message id, until the conversation is cleared.
+
+PG-IMG5a. Image requests MUST consume the SSE response defined by `image-api-proxy.spec.md` section 5.5.
+The parser MUST support chunk boundaries, UTF-8 decoding, LF or CRLF delimiters, and multiline `data` fields.
+Ignore comment heartbeats, unknown events, and partial-image events; retain the pending placeholder until completion.
+Collect images from `image_generation.completed` and `image_edit.completed` events in received order.
+An `error` event MUST enter PG-IMG6, including when HTTP status is 200.
+Success requires at least one completed image and the `[DONE]` sentinel.
+EOF before `[DONE]`, malformed data, or a completed event without image data MUST enter PG-IMG6.
 
 PG-IMG6. On failure, the placeholder MUST be replaced by an inline error state with a
 retry action that re-issues the same request. The user message remains in the

@@ -42,6 +42,7 @@ export function buildImageGenerationBody(input: ImageRequestInput): string {
     model: input.model,
     prompt: input.prompt,
     n: 1,
+    stream: true,
     ...(size ? { size } : {}),
   });
 }
@@ -53,12 +54,73 @@ export function buildImageEditForm(
   form.set("model", input.model);
   form.set("prompt", input.prompt);
   form.set("n", "1");
+  form.set("stream", "true");
   for (const attachment of input.attachments) {
     form.append("image", attachment.file, attachment.file.name || "reference.png");
   }
   const size = normalizePlaygroundImageSize(input.size);
   if (size) form.set("size", size);
   return form;
+}
+
+async function readImageStream(response: Response): Promise<ImageApiDataItem[]> {
+  if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+    throw new Error("expected an image event stream");
+  }
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  const items: ImageApiDataItem[] = [];
+  let buffer = "";
+  let completed = false;
+
+  const readFrame = (frame: string) => {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, ""))
+      .join("\n");
+    if (!data) return;
+    if (data === "[DONE]") {
+      completed = true;
+      return;
+    }
+    const event = JSON.parse(data) as ImageApiDataItem & {
+      type?: string;
+      error?: { message?: string; code?: string };
+    };
+    if (event.type === "error" || event.error) {
+      throw new Error(event.error?.message || event.error?.code || "image generation failed");
+    }
+    if (event.type === "image_generation.completed" || event.type === "image_edit.completed") {
+      if (!event.b64_json && !event.url) {
+        throw new Error("image stream completed without image data");
+      }
+      items.push({
+        b64_json: event.b64_json,
+        url: event.url,
+        revised_prompt: event.revised_prompt,
+      });
+    }
+  };
+
+  try {
+    while (!completed) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let boundary: RegExpExecArray | null;
+      while (!completed && (boundary = /\r?\n\r?\n/.exec(buffer))) {
+        const frame = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        readFrame(frame);
+      }
+    }
+    if (!completed) throw new Error("image stream ended before completion");
+    if (items.length === 0) throw new Error("empty image response");
+    return items;
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 export async function requestImages(
@@ -124,12 +186,7 @@ export async function requestImages(
     throw new Error(message);
   }
 
-  const body = (await response.json()) as { data?: ImageApiDataItem[] };
-  const items = Array.isArray(body.data) ? body.data : [];
-  if (items.length === 0) {
-    throw new Error("empty image response");
-  }
-  return items;
+  return readImageStream(response);
 }
 
 function buildAssistantImageMessage(items: ImageApiDataItem[]): UIMessage {

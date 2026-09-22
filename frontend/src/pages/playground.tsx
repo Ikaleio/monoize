@@ -19,7 +19,10 @@ import {
 } from "@/components/playground/chat-transport";
 import { Composer, type ComposerMode } from "@/components/playground/composer";
 import { MessageList } from "@/components/playground/message-list";
-import { filePartsForEditedUserMessage } from "@/components/playground/message-operations";
+import {
+  filePartsForEditedUserMessage,
+  latestImageParts,
+} from "@/components/playground/message-operations";
 import {
   resolvePlaygroundKey,
   type ResolvedPlaygroundKey,
@@ -362,7 +365,7 @@ export function PlaygroundPage() {
         size: prefs.imageSize,
         group: prefs.group,
         apiKey: resolution.key?.key ?? null,
-        attachments,
+        attachments: attachments.length > 0 ? attachments : latestImageParts(messages),
       });
     } else {
       const files: FileUIPart[] = attachments.map((attachment) => ({
@@ -387,6 +390,7 @@ export function PlaygroundPage() {
     prefs.group,
     resolution.key,
     attachments,
+    messages,
     sendMessage,
     clearError,
   ]);
