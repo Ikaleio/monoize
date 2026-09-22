@@ -18,7 +18,6 @@ import type { PlaygroundPrefs } from "./prefs";
 import type { ComposerAttachment } from "./use-image-generation";
 import { ApiKeyDropdown } from "./api-key-dropdown";
 import { GroupSelector } from "./group-selector";
-import { ImageSizeControl } from "./image-size-control";
 import { ModelCombobox } from "./model-combobox";
 import { SettingsPopover } from "./settings-popover";
 
@@ -243,14 +242,6 @@ export function Composer({
             kind={mode}
             isLoading={modelsLoading}
           />
-          {mode === "image" && (
-            <ImageSizeControl
-              value={prefs.imageSize}
-              onChange={(imageSize) => setPref("imageSize", imageSize)}
-              quality={prefs.imageQuality}
-              onQualityChange={(quality) => setPref("imageQuality", quality)}
-            />
-          )}
           <ApiKeyDropdown
             value={prefs.apiKeyId}
             onChange={(apiKeyId) => setPref("apiKeyId", apiKeyId)}
@@ -281,7 +272,7 @@ export function Composer({
               <Paperclip className="h-4 w-4" />
             </Button>
             <ModeToggle mode={mode} onModeChange={onModeChange} disabled={isBusy} />
-            <SettingsPopover prefs={prefs} setPref={setPref} />
+            <SettingsPopover mode={mode} prefs={prefs} setPref={setPref} />
             <Button
               size="icon"
               aria-label={isBusy ? t("playground.stop") : t("playground.send")}

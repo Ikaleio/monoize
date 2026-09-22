@@ -1,16 +1,29 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   normalizePlaygroundImageQuality,
   PLAYGROUND_IMAGE_QUALITIES,
@@ -34,6 +47,36 @@ interface ImageSizeControlProps {
 
 type Dimension = "width" | "height";
 
+const LANDSCAPE_PRESETS = [
+  { width: 1024, height: 768, ratio: "4:3" },
+  { width: 1280, height: 720, ratio: "16:9" },
+  { width: 1536, height: 1024, ratio: "3:2" },
+  { width: 1792, height: 1024, ratio: "7:4" },
+  { width: 1920, height: 1080, ratio: "16:9" },
+  { width: 2560, height: 1440, ratio: "16:9" },
+  { width: 3840, height: 2160, ratio: "16:9" },
+];
+
+const SIZE_PRESET_GROUPS = [
+  {
+    label: "playground.imageSizeSquare",
+    sizes: [512, 1024, 2048, 4096].map((size) => ({
+      width: size,
+      height: size,
+      ratio: "1:1",
+    })),
+  },
+  { label: "playground.imageSizeLandscape", sizes: LANDSCAPE_PRESETS },
+  {
+    label: "playground.imageSizePortrait",
+    sizes: LANDSCAPE_PRESETS.map(({ width, height, ratio }) => ({
+      width: height,
+      height: width,
+      ratio: ratio.split(":").reverse().join(":"),
+    })),
+  },
+];
+
 interface ImageSizeFieldsProps {
   width: number;
   height: number;
@@ -42,8 +85,8 @@ interface ImageSizeFieldsProps {
 
 function ImageSizeFields({ width, height, onChange }: ImageSizeFieldsProps) {
   const { t } = useTranslation();
-  const [widthInput, setWidthInput] = useState(String(width));
-  const [heightInput, setHeightInput] = useState(String(height));
+  const [widthInput, setWidthInput] = useState<string | null>(null);
+  const [heightInput, setHeightInput] = useState<string | null>(null);
 
   const updateSize = (dimension: Dimension, nextValue: number) => {
     const nextWidth = dimension === "width" ? nextValue : width;
@@ -72,8 +115,8 @@ function ImageSizeFields({ width, height, onChange }: ImageSizeFieldsProps) {
       ? clampPlaygroundImageDimension(numberValue)
       : fallback;
 
-    if (dimension === "width") setWidthInput(String(nextValue));
-    else setHeightInput(String(nextValue));
+    if (dimension === "width") setWidthInput(null);
+    else setHeightInput(null);
     if (nextValue !== fallback) updateSize(dimension, nextValue);
   };
 
@@ -94,7 +137,7 @@ function ImageSizeFields({ width, height, onChange }: ImageSizeFieldsProps) {
               min={PLAYGROUND_IMAGE_MIN_DIMENSION}
               max={PLAYGROUND_IMAGE_MAX_DIMENSION}
               step={1}
-              value={inputValue}
+              value={inputValue ?? String(currentValue)}
               onChange={(event) => updateInput(dimension, event.target.value)}
               onBlur={(event) => commitInput(dimension, event.target.value)}
               onKeyDown={(event) => {
@@ -113,7 +156,11 @@ function ImageSizeFields({ width, height, onChange }: ImageSizeFieldsProps) {
           min={PLAYGROUND_IMAGE_MIN_DIMENSION}
           max={PLAYGROUND_IMAGE_MAX_DIMENSION}
           step={PLAYGROUND_IMAGE_SLIDER_STEP}
-          onValueChange={([nextValue]) => updateSize(dimension, nextValue)}
+          onValueChange={([nextValue]) => {
+            if (dimension === "width") setWidthInput(null);
+            else setHeightInput(null);
+            updateSize(dimension, nextValue);
+          }}
           aria-label={label}
         />
       </Field>
@@ -143,73 +190,89 @@ export function ImageSizeControl({
     : t("playground.imageSizeAuto");
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={`${t("playground.imageSize")}: ${sizeLabel}`}
-          className="h-8 max-w-[9rem] shrink-0 px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+    <div>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="text-sm font-medium">{t("playground.imageSize")}</p>
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label={`${t("playground.imageSize")}: ${sizeLabel}`}
+              className="h-8 gap-1.5 px-2 tabular-nums"
+            >
+              {sizeLabel}
+              <ChevronDown data-icon="inline-end" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            collisionPadding={16}
+            className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] w-60"
+          >
+            <DropdownMenuRadioGroup
+              value={parsed ? formatPlaygroundImageSize(width, height) : ""}
+              onValueChange={onChange}
+            >
+              <DropdownMenuRadioItem value="">
+                {t("playground.imageSizeAuto")}
+              </DropdownMenuRadioItem>
+              {SIZE_PRESET_GROUPS.map(({ label, sizes }) => (
+                <DropdownMenuGroup key={label}>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>{t(label)}</DropdownMenuLabel>
+                  {sizes.map(({ width, height, ratio }) => {
+                    const size = formatPlaygroundImageSize(width, height);
+                    return (
+                      <DropdownMenuRadioItem
+                        key={size}
+                        value={size}
+                        className="gap-4"
+                      >
+                        <span className="flex-1 tabular-nums">
+                          {width} × {height}
+                        </span>
+                        <span className="text-muted-foreground">{ratio}</span>
+                      </DropdownMenuRadioItem>
+                    );
+                  })}
+                </DropdownMenuGroup>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <ImageSizeFields width={width} height={height} onChange={onChange} />
+      <p className="mt-4 text-xs text-muted-foreground">
+        {t("playground.imageSizeRange", {
+          min: PLAYGROUND_IMAGE_MIN_DIMENSION,
+          max: PLAYGROUND_IMAGE_MAX_DIMENSION,
+        })}
+      </p>
+      <Separator className="my-4" />
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="playground-image-quality">
+          {t("playground.imageQuality")}
+        </FieldLabel>
+        <Select
+          value={normalizePlaygroundImageQuality(quality)}
+          onValueChange={onQualityChange}
         >
-          {sizeLabel}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        sideOffset={8}
-        align="start"
-        collisionPadding={16}
-        className="max-h-[var(--radix-popover-content-available-height)] w-72 overflow-y-auto"
-      >
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <p className="text-sm font-medium">{t("playground.imageSize")}</p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange("")}
-            disabled={!parsed}
-            className="h-7 px-2 text-xs"
-          >
-            {t("playground.imageSizeAuto")}
-          </Button>
-        </div>
-        <ImageSizeFields
-          key={value || "auto"}
-          width={width}
-          height={height}
-          onChange={onChange}
-        />
-        <p className="mt-4 text-xs text-muted-foreground">
-          {t("playground.imageSizeRange", {
-            min: PLAYGROUND_IMAGE_MIN_DIMENSION,
-            max: PLAYGROUND_IMAGE_MAX_DIMENSION,
-          })}
-        </p>
-        <Separator className="my-4" />
-        <Field>
-          <FieldLabel id="playground-image-quality-label">
-            {t("playground.imageQuality")}
-          </FieldLabel>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            value={normalizePlaygroundImageQuality(quality)}
-            onValueChange={(value) => {
-              if (value) onQualityChange(value);
-            }}
-            aria-labelledby="playground-image-quality-label"
-            className="grid grid-cols-3"
-          >
-            {PLAYGROUND_IMAGE_QUALITIES.map((value) => (
-              <ToggleGroupItem key={value} value={value}>
-                {value}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </Field>
-      </PopoverContent>
-    </Popover>
+          <SelectTrigger id="playground-image-quality" className="h-8 w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent collisionPadding={16}>
+            <SelectGroup>
+              {PLAYGROUND_IMAGE_QUALITIES.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+    </div>
   );
 }

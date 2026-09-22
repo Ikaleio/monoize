@@ -171,17 +171,36 @@ MUST render as a skeleton pill instead of an interactive control. While `useApiK
 loading with no cached data, the credential picker MUST keep the built-in option available
 and render a skeleton in place of API-key rows.
 
-PG-SEL6. Image mode MUST render one compact shadcn `Popover` trigger for the output image
-size. The control MUST be hidden in chat mode. The trigger MUST show `auto` when
-`playground_image_size` is empty. Otherwise, it MUST show the selected width and height.
-The popover MUST contain separate width and height controls. Each dimension control MUST
+PG-SEL6. Image mode MUST show image settings inside the shared composer settings popover.
+The toolbar MUST NOT contain a separate image-size trigger.
+Image settings MUST remain hidden in chat mode.
+The image-size header MUST contain a dropdown showing `auto` for an empty size, or the selected width and height.
+The dropdown MUST offer `auto` first, followed by these grouped presets:
+
+| Group | Sizes in pixels, in menu order |
+|---|---|
+| Square | `512x512`, `1024x1024`, `2048x2048`, `4096x4096` |
+| Landscape | `1024x768`, `1280x720`, `1536x1024`, `1792x1024`, `1920x1080`, `2560x1440`, `3840x2160` |
+| Portrait | `768x1024`, `720x1280`, `1024x1536`, `1024x1792`, `1080x1920`, `1440x2560`, `2160x3840` |
+
+Each preset MUST show its width, height, and aspect ratio.
+Selecting a preset MUST update both dimensions, sliders, numeric inputs, and the header without closing the settings popover.
+Selecting `auto` MUST clear the stored size and display 1024 in both dimension controls.
+Custom dimensions MUST remain selectable through separate width and height controls. Each dimension control MUST
 contain a shadcn `Slider` and a numeric `Input`. Each dimension MUST accept every integer
 from 256 through 4096 pixels. Each slider MUST use a 64-pixel step. Changing either
 dimension MUST store `<width>x<height>` in `playground_image_size`. The `auto` action MUST
 store an empty value. An invalid persisted value MUST resolve to `auto` and MUST NOT reach
 an image request.
+During one pointer drag, each slider MUST continue updating until release, including after the first change from `auto`.
+Changing a dimension MUST NOT replace its slider or input DOM node.
+Numeric inputs MUST retain focus while typing and accept integers that are not multiples of 64.
+Non-numeric or empty input MUST restore the current dimension on blur.
+On blur, finite numeric input MUST round to the nearest integer and clamp to 256–4096.
 
-PG-SEL7. The image-size popover MUST include a single-selection Quality control below the dimensions.
+PG-SEL7. Image settings MUST include one horizontal Quality row below the dimensions.
+The row MUST contain its label and one shadcn `Select` trigger showing the selected quality.
+The options MUST appear in a dropdown, not a grid of buttons.
 Its options MUST be `default`, `low`, `medium`, `high`, `xhigh`, and `max`, in that order.
 The initial selection MUST be `default`.
 Changes MUST persist to `playground_image_quality` and apply without reopening the popover.
@@ -460,9 +479,17 @@ credential satisfies PG-AUTH2 and PG-AUTH7, `status` is `ready`/`error`, no imag
 is pending, and the trimmed text is non-empty (chat mode also allows empty text with ≥ 1
 attachment).
 
-PG-CMP4. The settings popover contains: system prompt (multiline), temperature (number,
-range 0–2, step 0.1, clearable), max tokens (positive integer, clearable), and the
-credential picker from PG-AUTH12. Each field persists per PG-STATE2 on change. The
+PG-CMP4. The composer MUST contain one settings trigger shared by both modes.
+In chat mode, the popover MUST contain only these fields:
+
+- System prompt: multiline text.
+- Temperature: a clearable number from 0 through 2, with step 0.1.
+- Max tokens: a clearable positive integer.
+
+In image mode, it MUST contain only the image-size and Quality controls from PG-SEL6 and PG-SEL7.
+Changing mode MUST select the corresponding settings content and preserve both modes' preferences.
+The credential picker MUST remain outside this popover, as PG-AUTH12 requires.
+Each field persists per PG-STATE2 on change. The
 popover MUST align its end edge to the trigger, prefer opening above the trigger, keep at
 least 16 CSS pixels from every viewport edge, and use internal vertical scrolling when its
 content exceeds the collision-computed available height.
