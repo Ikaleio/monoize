@@ -30,6 +30,7 @@ PG-STATE2. Exactly these preference keys MAY be persisted in `localStorage`:
 | `playground_chat_model` | string | Selected chat model id. |
 | `playground_image_model` | string | Selected image model id. |
 | `playground_image_size` | string | Selected image size as `<width>x<height>`. Empty/absent means `auto`. |
+| `playground_image_quality` | string | Selected image quality: `default`, `low`, `medium`, `high`, `xhigh`, or `max`. Empty/absent means `default`. |
 | `playground_api_key_id` | string | Explicitly selected API-key id; empty/absent means the built-in Playground credential. |
 | `playground_temperature` | string | Decimal string; empty/absent means "omit from request". |
 | `playground_max_tokens` | string | Integer string; empty/absent means "omit from request". |
@@ -179,6 +180,15 @@ from 256 through 4096 pixels. Each slider MUST use a 64-pixel step. Changing eit
 dimension MUST store `<width>x<height>` in `playground_image_size`. The `auto` action MUST
 store an empty value. An invalid persisted value MUST resolve to `auto` and MUST NOT reach
 an image request.
+
+PG-SEL7. The image-size popover MUST include a single-selection Quality control below the dimensions.
+Its options MUST be `default`, `low`, `medium`, `high`, `xhigh`, and `max`, in that order.
+The initial selection MUST be `default`.
+Changes MUST persist to `playground_image_quality` and apply without reopening the popover.
+An invalid persisted quality MUST resolve to `default`.
+Quality MUST remain independent of size and MUST remain hidden in chat mode.
+Focusing or blurring an unchanged dimension input MUST NOT replace the `auto` size.
+The popover MUST stay within the viewport and scroll when its content exceeds the available height.
 
 ## 5. Chat Execution (AI SDK)
 
@@ -378,6 +388,16 @@ If no message contains image file parts, select no reference images.
 The selected references MUST enter the new user message and retained request input.
 Thus, a text-only follow-up after image generation MUST use the latest generated images through PG-IMG3.
 New chat MUST clear this reference context with the conversation.
+
+PG-IMG3b. A selected quality other than `default` MUST enter generation JSON or edit multipart as the exact `quality` string.
+The `default` selection MUST omit `quality` from both request formats.
+Retained image requests MUST retain their quality for regeneration and error retry.
+Editing a user prompt MUST use the currently selected quality.
+
+PG-IMG3c. Loading an image reference from a base64 data URL MUST decode its bytes locally without a network request.
+Image editing, image staging, regeneration, and follow-up sends MUST work with `connect-src 'self'`.
+The decoded bytes and declared media type MUST remain unchanged.
+HTTP image URLs MUST use the existing fetch path and report failed loads.
 
 PG-IMG4. On image send the frontend MUST synchronously append a user message (prompt
 text plus attachment file parts) to the chat state, and render a pending assistant

@@ -19,6 +19,7 @@ import {
 } from "@/components/playground/chat-transport";
 import { Composer, type ComposerMode } from "@/components/playground/composer";
 import { MessageList } from "@/components/playground/message-list";
+import { loadPlaygroundImage } from "@/components/playground/image-source";
 import {
   filePartsForEditedUserMessage,
   latestImageParts,
@@ -363,6 +364,7 @@ export function PlaygroundPage() {
         prompt: trimmedText,
         model: prefs.imageModel.trim(),
         size: prefs.imageSize,
+        quality: prefs.imageQuality,
         group: prefs.group,
         apiKey: resolution.key?.key ?? null,
         attachments: attachments.length > 0 ? attachments : latestImageParts(messages),
@@ -387,6 +389,7 @@ export function PlaygroundPage() {
     trimmedText,
     prefs.imageModel,
     prefs.imageSize,
+    prefs.imageQuality,
     prefs.group,
     resolution.key,
     attachments,
@@ -432,6 +435,7 @@ export function PlaygroundPage() {
         prompt,
         model: prefs.imageModel.trim(),
         size: prefs.imageSize,
+        quality: prefs.imageQuality,
         group: prefs.group,
         apiKey: imageResolution.key?.key ?? null,
         attachments: imageAttachments,
@@ -441,6 +445,7 @@ export function PlaygroundPage() {
       busy,
       prefs.imageModel,
       prefs.imageSize,
+      prefs.imageQuality,
       prefs.group,
       imageResolution,
       imageBlockedHint,
@@ -549,8 +554,7 @@ export function PlaygroundPage() {
   const handleEditImage = useCallback(
     async (url: string) => {
       try {
-        const response = await fetch(url);
-        const blob = await response.blob();
+        const blob = await loadPlaygroundImage(url);
         const file = new File([blob], "playground-image.png", {
           type: blob.type || "image/png",
         });

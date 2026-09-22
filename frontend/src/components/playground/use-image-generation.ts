@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import type { FileUIPart, UIMessage } from "ai";
 import { normalizePlaygroundImageSize } from "./image-size";
+import { normalizePlaygroundImageQuality } from "./image-quality";
+import { loadPlaygroundImage } from "./image-source";
 
 export interface ComposerAttachment {
   id: string;
@@ -13,6 +15,7 @@ export interface ImageRequestInput {
   prompt: string;
   model: string;
   size: string;
+  quality: string;
   group: string;
   apiKey: string | null;
   attachments: (ComposerAttachment | FileUIPart)[];
@@ -38,12 +41,14 @@ export function playgroundMessageId(): string {
 
 export function buildImageGenerationBody(input: ImageRequestInput): string {
   const size = normalizePlaygroundImageSize(input.size);
+  const quality = normalizePlaygroundImageQuality(input.quality);
   return JSON.stringify({
     model: input.model,
     prompt: input.prompt,
     n: 1,
     stream: true,
     ...(size ? { size } : {}),
+    ...(quality !== "default" ? { quality } : {}),
   });
 }
 
@@ -60,6 +65,8 @@ export function buildImageEditForm(
   }
   const size = normalizePlaygroundImageSize(input.size);
   if (size) form.set("size", size);
+  const quality = normalizePlaygroundImageQuality(input.quality);
+  if (quality !== "default") form.set("quality", quality);
   return form;
 }
 
@@ -141,12 +148,11 @@ export async function requestImages(
     const attachments = await Promise.all(
       input.attachments.map(async (attachment): Promise<ComposerAttachment> => {
         if ("file" in attachment) return attachment;
-        const source = await fetch(attachment.url, { signal });
-        if (!source.ok) throw new Error(`HTTP ${source.status}`);
+        const source = await loadPlaygroundImage(attachment.url, signal);
         return {
           id: playgroundMessageId(),
           file: new File(
-            [await source.blob()],
+            [source],
             attachment.filename || "reference.png",
             { type: attachment.mediaType },
           ),

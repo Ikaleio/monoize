@@ -804,6 +804,7 @@
 		"chatModel": "チャットモデル",
 		"imageModel": "画像モデル",
 		"imageSize": "画像サイズ",
+		"imageQuality": "品質",
 		"imageSizeAuto": "自動",
 		"imageSizeWidth": "幅",
 		"imageSizeHeight": "高さ",

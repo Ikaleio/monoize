@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { normalizePlaygroundImageQuality } from "./image-quality";
 
 /** Preference keys persisted in localStorage (playground.spec.md PG-STATE2). */
 export const PLAYGROUND_PREF_KEYS = {
@@ -6,6 +7,7 @@ export const PLAYGROUND_PREF_KEYS = {
   chatModel: "playground_chat_model",
   imageModel: "playground_image_model",
   imageSize: "playground_image_size",
+  imageQuality: "playground_image_quality",
   apiKeyId: "playground_api_key_id",
   temperature: "playground_temperature",
   maxTokens: "playground_max_tokens",
@@ -23,6 +25,7 @@ export interface PlaygroundPrefs {
   chatModel: string;
   imageModel: string;
   imageSize: string;
+  imageQuality: string;
   apiKeyId: string;
   temperature: string;
   maxTokens: string;
@@ -70,6 +73,7 @@ export function usePlaygroundPrefs(): [
     chatModel: readPref("chatModel"),
     imageModel: readPref("imageModel"),
     imageSize: readPref("imageSize"),
+    imageQuality: normalizePlaygroundImageQuality(readPref("imageQuality")),
     apiKeyId: readPref("apiKeyId"),
     temperature: readPref("temperature"),
     maxTokens: readPref("maxTokens"),

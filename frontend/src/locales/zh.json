@@ -807,6 +807,7 @@
 		"chatModel": "聊天模型",
 		"imageModel": "图像模型",
 		"imageSize": "图像尺寸",
+		"imageQuality": "质量",
 		"imageSizeAuto": "自动",
 		"imageSizeWidth": "宽度",
 		"imageSizeHeight": "高度",

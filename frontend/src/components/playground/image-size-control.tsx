@@ -9,6 +9,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
+import { Separator } from "@/components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  normalizePlaygroundImageQuality,
+  PLAYGROUND_IMAGE_QUALITIES,
+} from "./image-quality";
 import {
   clampPlaygroundImageDimension,
   formatPlaygroundImageSize,
@@ -22,6 +28,8 @@ import {
 interface ImageSizeControlProps {
   value: string;
   onChange: (value: string) => void;
+  quality: string;
+  onQualityChange: (value: string) => void;
 }
 
 type Dimension = "width" | "height";
@@ -66,7 +74,7 @@ function ImageSizeFields({ width, height, onChange }: ImageSizeFieldsProps) {
 
     if (dimension === "width") setWidthInput(String(nextValue));
     else setHeightInput(String(nextValue));
-    updateSize(dimension, nextValue);
+    if (nextValue !== fallback) updateSize(dimension, nextValue);
   };
 
   const renderDimension = (dimension: Dimension, label: string) => {
@@ -120,7 +128,12 @@ function ImageSizeFields({ width, height, onChange }: ImageSizeFieldsProps) {
   );
 }
 
-export function ImageSizeControl({ value, onChange }: ImageSizeControlProps) {
+export function ImageSizeControl({
+  value,
+  onChange,
+  quality,
+  onQualityChange,
+}: ImageSizeControlProps) {
   const { t } = useTranslation();
   const parsed = parsePlaygroundImageSize(value);
   const width = parsed?.width ?? PLAYGROUND_IMAGE_DEFAULT_DIMENSION;
@@ -146,7 +159,7 @@ export function ImageSizeControl({ value, onChange }: ImageSizeControlProps) {
         sideOffset={8}
         align="start"
         collisionPadding={16}
-        className="w-72"
+        className="max-h-[var(--radix-popover-content-available-height)] w-72 overflow-y-auto"
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <p className="text-sm font-medium">{t("playground.imageSize")}</p>
@@ -173,6 +186,29 @@ export function ImageSizeControl({ value, onChange }: ImageSizeControlProps) {
             max: PLAYGROUND_IMAGE_MAX_DIMENSION,
           })}
         </p>
+        <Separator className="my-4" />
+        <Field>
+          <FieldLabel id="playground-image-quality-label">
+            {t("playground.imageQuality")}
+          </FieldLabel>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={normalizePlaygroundImageQuality(quality)}
+            onValueChange={(value) => {
+              if (value) onQualityChange(value);
+            }}
+            aria-labelledby="playground-image-quality-label"
+            className="grid grid-cols-3"
+          >
+            {PLAYGROUND_IMAGE_QUALITIES.map((value) => (
+              <ToggleGroupItem key={value} value={value}>
+                {value}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </Field>
       </PopoverContent>
     </Popover>
   );

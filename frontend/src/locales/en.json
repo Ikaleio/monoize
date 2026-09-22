@@ -807,6 +807,7 @@
 		"chatModel": "Chat model",
 		"imageModel": "Image model",
 		"imageSize": "Image size",
+		"imageQuality": "Quality",
 		"imageSizeAuto": "Auto",
 		"imageSizeWidth": "Width",
 		"imageSizeHeight": "Height",

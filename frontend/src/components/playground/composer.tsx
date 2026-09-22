@@ -247,6 +247,8 @@ export function Composer({
             <ImageSizeControl
               value={prefs.imageSize}
               onChange={(imageSize) => setPref("imageSize", imageSize)}
+              quality={prefs.imageQuality}
+              onQualityChange={(quality) => setPref("imageQuality", quality)}
             />
           )}
           <ApiKeyDropdown
