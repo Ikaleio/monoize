@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import type { UIMessage } from "ai";
+import type { FileUIPart, UIMessage } from "ai";
 import { normalizePlaygroundImageSize } from "./image-size";
 
 export interface ComposerAttachment {
@@ -15,7 +15,7 @@ export interface ImageRequestInput {
   size: string;
   group: string;
   apiKey: string | null;
-  attachments: ComposerAttachment[];
+  attachments: (ComposerAttachment | FileUIPart)[];
 }
 
 export interface ImageJobState {
@@ -46,7 +46,9 @@ export function buildImageGenerationBody(input: ImageRequestInput): string {
   });
 }
 
-export function buildImageEditForm(input: ImageRequestInput): FormData {
+export function buildImageEditForm(
+  input: Omit<ImageRequestInput, "attachments"> & { attachments: ComposerAttachment[] },
+): FormData {
   const form = new FormData();
   form.set("model", input.model);
   form.set("prompt", input.prompt);
@@ -74,7 +76,23 @@ export async function requestImages(
     : ({ credentials: "include" } as const);
   let response: Response;
   if (input.attachments.length > 0) {
-    const form = buildImageEditForm(input);
+    const attachments = await Promise.all(
+      input.attachments.map(async (attachment): Promise<ComposerAttachment> => {
+        if ("file" in attachment) return attachment;
+        const source = await fetch(attachment.url, { signal });
+        if (!source.ok) throw new Error(`HTTP ${source.status}`);
+        return {
+          id: playgroundMessageId(),
+          file: new File(
+            [await source.blob()],
+            attachment.filename || "reference.png",
+            { type: attachment.mediaType },
+          ),
+          url: attachment.url,
+        };
+      }),
+    );
+    const form = buildImageEditForm({ ...input, attachments });
     response = await fetch("/api/v1/images/edits", {
       method: "POST",
       headers: authHeaders,
@@ -186,12 +204,16 @@ export function usePlaygroundImages(appendMessage: (message: UIMessage) => void)
         id: playgroundMessageId(),
         role: "user",
         parts: [
-          ...input.attachments.map((attachment) => ({
-            type: "file" as const,
-            mediaType: attachment.file.type || "image/png",
-            filename: attachment.file.name,
-            url: attachment.url,
-          })),
+          ...input.attachments.map((attachment): FileUIPart =>
+            "file" in attachment
+              ? {
+                  type: "file",
+                  mediaType: attachment.file.type || "image/png",
+                  filename: attachment.file.name,
+                  url: attachment.url,
+                }
+              : attachment,
+          ),
           { type: "text" as const, text: input.prompt },
         ],
       });

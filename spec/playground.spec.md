@@ -289,8 +289,9 @@ assistant output as a normal message and MUST NOT surface an error.
 
 PG-CHAT5. When `useChat` reports an `error`, an inline dismissible banner MUST appear
 between the message list and the composer showing the error message, with a retry action
-that calls `regenerate()` and a dismiss action that calls `clearError()`. No toast is
-shown for chat request errors.
+that follows PG-MSG6 and a dismiss action that calls `clearError()`. The retry action
+MUST be disabled while a chat or image request is pending. No toast is shown for chat
+request errors.
 
 PG-CHAT6. User attachments: chat mode accepts images and ordinary files. Send MUST call
 `sendMessage({ text, files })` so attachments become user-message `file` parts with their
@@ -311,11 +312,20 @@ PG-MSG2. Edit is inline: the message body is replaced by a textarea initialized 
 concatenated text parts, with confirm and cancel actions. Preconditions: `status` is
 `ready` or `error`.
 
-PG-MSG3. Confirming a **user** message edit MUST call
-`sendMessage({ text: <edited>, messageId })`, which replaces that message, removes all
-later messages, and requests a new assistant response. If the original message contains
-`file` parts, the call MUST also pass those parts through `files`. Each file MUST preserve
-its original media type, file name, URL, provider reference, and provider metadata.
+PG-MSG3. Confirming a **user** message edit MUST replace that message and remove all
+later messages. The active composer mode determines the new request:
+
+1. Chat mode MUST call `sendMessage({ text: <edited>, messageId })`.
+   If the original message contains `file` parts, the call MUST also pass those parts
+   through `files`.
+2. Image mode MUST submit the edited text through PG-IMG2 or PG-IMG3, using all
+   image file parts from that user message in their original order.
+   Other file parts MUST NOT enter the image request.
+   The request MUST use the current image model, size, group, and credential.
+   It MUST NOT call the text transport or append another user message.
+
+Both modes MUST preserve the original user message id and file parts. Each file MUST
+preserve its media type, file name, URL, provider reference, and provider metadata.
 
 PG-MSG4. Confirming an **assistant** message edit MUST replace the message's text parts
 with a single text part containing the edited text via `setMessages`, in place, without
@@ -325,10 +335,19 @@ PG-MSG5. Delete MUST remove exactly the targeted message via `setMessages` filte
 without issuing any request. The optimistic update is the operation itself (client-only
 state); no rollback path exists.
 
-PG-MSG6. Regenerate on an assistant message that was not created by PG-IMG5, while image
-mode is inactive, MUST call `regenerate({ messageId })`. This removes that assistant
-message and everything after it, then requests a new text response with the current
-selector state.
+PG-MSG6. Regenerate on an assistant message that was not created by PG-IMG5 MUST call
+`regenerate({ messageId })` in chat mode. This removes that assistant message and all
+later messages, then requests a new text response with the current selector state.
+In image mode, it MUST use the text and all image attachments from the preceding user
+message through PG-IMG2 or PG-IMG3. It MUST use the current image model, size, group,
+and credential. It MUST remove the targeted assistant message and all later messages
+without appending another user message or calling the text transport.
+
+The chat-error retry action follows the same mode selection for the last message.
+If no assistant message exists for the failed request, it MUST use the last user message.
+Starting an image request MUST clear the previous chat error. Missing image models,
+empty prompts, or incompatible credentials MUST prevent dispatch and leave messages
+unchanged. Message operations MUST NOT start requests while a request is pending.
 
 ## 7. Image Generation and Editing
 

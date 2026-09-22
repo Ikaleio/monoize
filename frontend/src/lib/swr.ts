@@ -287,7 +287,7 @@ export function useCustomTransforms(config?: SWRConfiguration) {
 }
 
 export function useModelMetadata(config?: SWRConfiguration) {
-  return useSWR<MarketplaceModelRecord[]>(
+  return useSWR<ModelMetadataRecord[]>(
     SWR_KEYS.MODEL_METADATA,
     fetchers.modelMetadata,
     { ...defaultConfig, ...config },

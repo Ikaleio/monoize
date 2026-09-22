@@ -354,7 +354,7 @@ export function ApiKeysPage() {
   const canManageSystem = currentUser?.role === "admin" || currentUser?.role === "super_admin";
   // /transforms/registry is admin-only; skip it for non-admins to avoid a 403 loop.
   const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
-    useTransformRegistry(undefined, { isPaused: () => !canManageSystem });
+    useTransformRegistry({ isPaused: () => !canManageSystem });
   const apiKeyTransformRegistry = useMemo(
     () => transformRegistry.filter((item) => item.supported_scopes.includes("api_key")),
     [transformRegistry]

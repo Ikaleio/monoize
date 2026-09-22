@@ -32,7 +32,6 @@ import {
   playgroundMessageId,
   usePlaygroundImages,
   type ComposerAttachment,
-  type ImageRequestInput,
 } from "@/components/playground/use-image-generation";
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -53,43 +52,6 @@ function isPlaygroundImageMessage(message: UIMessage | undefined): boolean {
     return false;
   }
   return message.metadata.playgroundImage === true;
-}
-
-async function attachmentFromFilePart(part: FileUIPart): Promise<ComposerAttachment | null> {
-  if (!part.mediaType.startsWith("image/") && !part.url.startsWith("data:image/")) {
-    return null;
-  }
-  try {
-    const response = await fetch(part.url);
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    const type = part.mediaType || blob.type || "image/png";
-    const file = new File([blob], part.filename || "reference.png", { type });
-    const url = part.url.startsWith("data:") ? part.url : await readAsDataUrl(file);
-    return { id: playgroundMessageId(), file, url };
-  } catch {
-    return null;
-  }
-}
-
-async function rebuildImageInput(
-  message: UIMessage | undefined,
-  fields: Omit<ImageRequestInput, "prompt" | "attachments">,
-): Promise<ImageRequestInput | null> {
-  if (!message || message.role !== "user" || !fields.model) return null;
-  const prompt = message.parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
-  if (!prompt) return null;
-  const fileParts = message.parts.filter((part): part is FileUIPart => part.type === "file");
-  const staged = await Promise.all(fileParts.map(attachmentFromFilePart));
-  return {
-    ...fields,
-    prompt,
-    attachments: staged.filter((item): item is ComposerAttachment => item !== null),
-  };
 }
 
 export function PlaygroundPage() {
@@ -141,6 +103,19 @@ export function PlaygroundPage() {
       prefs.chatModel,
       user?.group_id,
     ],
+  );
+  const imageResolution = useMemo(
+    () =>
+      mode === "image"
+        ? resolution
+        : resolvePlaygroundKey(
+            apiKeys,
+            prefs.apiKeyId,
+            prefs.group,
+            user?.group_id ?? "",
+            prefs.imageModel.trim(),
+          ),
+    [mode, resolution, apiKeys, prefs.apiKeyId, prefs.group, prefs.imageModel, user?.group_id],
   );
   const selectableGroups = useMemo(() => {
     if (!groups || !user) return [];
@@ -283,6 +258,7 @@ export function PlaygroundPage() {
     resolution.reason === "key-unavailable" && !apiKeys
       ? null
       : resolutionError(resolution, modelForMode);
+  const imageBlockedHint = resolutionError(imageResolution, prefs.imageModel);
 
   const handleAddFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -379,6 +355,7 @@ export function PlaygroundPage() {
   const handleSend = useCallback(() => {
     if (!canSend) return;
     if (mode === "image") {
+      clearError();
       images.generate({
         prompt: trimmedText,
         model: prefs.imageModel.trim(),
@@ -411,6 +388,7 @@ export function PlaygroundPage() {
     resolution.key,
     attachments,
     sendMessage,
+    clearError,
   ]);
 
   const handleStop = useCallback(() => {
@@ -418,12 +396,78 @@ export function PlaygroundPage() {
     if (chatBusy) void stop();
   }, [imageBusy, chatBusy, images, stop]);
 
+  const generateImageFromMessages = useCallback(
+    (nextMessages: UIMessage[]) => {
+      if (busy) return;
+      const userMessage = [...nextMessages]
+        .reverse()
+        .find((message) => message.role === "user");
+      if (!userMessage) return;
+      const prompt = userMessage.parts
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n\n")
+        .trim();
+      if (!prompt) return;
+      if (!prefs.imageModel.trim()) {
+        toast.error(t("playground.errorNoModel"));
+        return;
+      }
+      if (imageResolution.reason !== "internal" && imageResolution.reason !== "ok") {
+        toast.error(imageBlockedHint ?? t("playground.apiKeyUnavailable"));
+        return;
+      }
+      const imageAttachments = userMessage.parts.filter(
+        (part): part is FileUIPart =>
+          part.type === "file" &&
+          (part.mediaType.startsWith("image/") || part.url.startsWith("data:image/")),
+      );
+      clearError();
+      setMessages(nextMessages);
+      images.rerun({
+        prompt,
+        model: prefs.imageModel.trim(),
+        size: prefs.imageSize,
+        group: prefs.group,
+        apiKey: imageResolution.key?.key ?? null,
+        attachments: imageAttachments,
+      });
+    },
+    [
+      busy,
+      prefs.imageModel,
+      prefs.imageSize,
+      prefs.group,
+      imageResolution,
+      imageBlockedHint,
+      t,
+      clearError,
+      setMessages,
+      images,
+    ],
+  );
+
   const handleEditUser = useCallback(
     (messageId: string, newText: string) => {
+      if (busy) return;
       const files = filePartsForEditedUserMessage(messages, messageId);
+      if (mode === "image") {
+        const messageIndex = messages.findIndex(
+          (message) => message.id === messageId && message.role === "user",
+        );
+        if (messageIndex < 0) return;
+        generateImageFromMessages([
+          ...messages.slice(0, messageIndex),
+          {
+            ...messages[messageIndex],
+            parts: [{ type: "text", text: newText }, ...files],
+          },
+        ]);
+        return;
+      }
       void sendMessage({ text: newText, files, messageId });
     },
-    [messages, sendMessage],
+    [busy, messages, mode, generateImageFromMessages, sendMessage],
   );
 
   const handleEditAssistant = useCallback(
@@ -461,47 +505,40 @@ export function PlaygroundPage() {
   );
 
   const handleRegenerate = useCallback(
-    (messageId: string) => {
+    (messageId?: string) => {
+      if (busy) return;
       const message = messages.find((item) => item.id === messageId);
-      const imageRegeneration = mode === "image" || isPlaygroundImageMessage(message);
-      if (images.regenerate(messageId)) {
+      if (messageId && images.regenerate(messageId)) {
+        clearError();
         setMessages((prev) => {
           const messageIndex = prev.findIndex((item) => item.id === messageId);
           return messageIndex < 0 ? prev : prev.slice(0, messageIndex);
         });
         return;
       }
-      if (!imageRegeneration) {
-        void regenerate({ messageId });
+      if (mode === "image" || isPlaygroundImageMessage(message)) {
+        const messageIndex = messageId
+          ? messages.findIndex((message) => message.id === messageId)
+          : messages.length - 1;
+        if (messageIndex < 0) return;
+        const end =
+          messages[messageIndex].role === "assistant"
+            ? messageIndex
+            : messageIndex + 1;
+        generateImageFromMessages(messages.slice(0, end));
         return;
       }
-      const messageIndex = messages.findIndex((item) => item.id === messageId);
-      const prior = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
-      void (async () => {
-        const rebuilt = await rebuildImageInput(prior, {
-          model: prefs.imageModel.trim(),
-          size: prefs.imageSize,
-          group: prefs.group,
-          apiKey: resolution.key?.key ?? null,
-        });
-        if (!rebuilt) return;
-        images.rerun(rebuilt);
-        setMessages((prev) => {
-          const messageIndex = prev.findIndex((item) => item.id === messageId);
-          return messageIndex < 0 ? prev : prev.slice(0, messageIndex);
-        });
-      })();
+      void regenerate(messageId ? { messageId } : undefined);
     },
     [
+      busy,
       images,
-      regenerate,
+      clearError,
       setMessages,
       mode,
       messages,
-      prefs.imageModel,
-      prefs.imageSize,
-      prefs.group,
-      resolution.key,
+      generateImageFromMessages,
+      regenerate,
     ],
   );
 
@@ -606,7 +643,8 @@ export function PlaygroundPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void regenerate()}
+                onClick={() => handleRegenerate()}
+                disabled={busy}
                 className="h-7 shrink-0 gap-1.5"
               >
                 <RefreshCcw className="h-3 w-3" />
