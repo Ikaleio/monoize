@@ -467,9 +467,17 @@ PG-IMG9. Generated images participate in later chat requests only through PG-CHA
 ## 8. Composer
 
 PG-CMP1. The composer is a single bordered surface containing, top to bottom: the
-attachment preview row (when attachments exist), the auto-growing textarea (1 to 8 lines),
+attachment preview row (when attachments exist), the auto-growing textarea,
 and a control row with the selectors (PG-SEL1), the attach action, the mode toggle, the
 settings popover trigger, and the send/stop action.
+
+PG-CMP1a. The textarea MUST reserve at least one complete line plus its vertical padding, including when empty.
+Its height MUST grow with explicit line breaks and wrapped text, up to 200 CSS pixels.
+It MUST scroll vertically only when its content exceeds that maximum.
+The textarea MUST recalculate its height before paint after text changes.
+It MUST recalculate after its width changes or fonts finish loading.
+Deleting text MUST reduce the height without clipping the remaining line or placeholder.
+These requirements MUST hold in Safari and Chromium in both composer modes.
 
 PG-CMP2. Enter submits and Shift+Enter inserts a newline on fine-pointer devices. On
 coarse-pointer devices Enter inserts a newline and only the send button submits.

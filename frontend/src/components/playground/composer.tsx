@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, useReducedMotion } from "framer-motion";
 import {
@@ -139,12 +139,43 @@ export function Composer({
     [],
   );
 
+  const resizeTextarea = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const style = getComputedStyle(el);
+    const minimumHeight = Math.ceil(
+      Number.parseFloat(style.lineHeight) +
+        Number.parseFloat(style.paddingTop) +
+        Number.parseFloat(style.paddingBottom),
+    );
+    // Safari can underreport scrollHeight while a one-row textarea resizes.
+    el.style.height = "0px";
+    const height = Math.max(el.scrollHeight, minimumHeight);
+    el.style.height = `${Math.min(height, MAX_TEXTAREA_HEIGHT_PX)}px`;
+    el.style.overflowY = height > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
+  }, []);
+
+  useLayoutEffect(() => resizeTextarea(), [text, resizeTextarea]);
+
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
-  }, [text]);
+    let width = el.clientWidth;
+    let resizeFrame = 0;
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(resizeTextarea);
+    });
+    observer.observe(el);
+    document.fonts.addEventListener("loadingdone", resizeTextarea);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(resizeFrame);
+      document.fonts.removeEventListener("loadingdone", resizeTextarea);
+    };
+  }, [resizeTextarea]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // PG-CMP2: Enter submits only on fine-pointer devices; Shift+Enter always newline.
@@ -222,7 +253,7 @@ export function Composer({
               : t("playground.chatPlaceholder")
           }
           aria-label={t("playground.composerLabel")}
-          className="max-h-[200px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
+          className="block min-h-[calc(1lh+1.125rem)] max-h-[200px] w-full resize-none overflow-y-hidden bg-transparent px-4 pb-1 pt-3.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
         />
 
         <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
