@@ -94,6 +94,7 @@ fn string_field(obj: &Map<String, Value>, key: &str) -> Option<String> {
 
 fn parse_function_definition(function_obj: &Map<String, Value>) -> Option<FunctionDefinition> {
     Some(FunctionDefinition {
+        response_schema: None,
         name: string_field(function_obj, "name")?,
         description: string_field(function_obj, "description"),
         parameters: normalize_tool_parameters(

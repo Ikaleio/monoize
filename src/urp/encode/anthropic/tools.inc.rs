@@ -25,6 +25,7 @@ fn prepare_schema_custom_tools(req: &mut UrpRequest) -> Result<(), String> {
         let custom = tool.custom.take().unwrap();
         tool.tool_type = "function".to_string();
         tool.function = Some(crate::urp::FunctionDefinition {
+            response_schema: None,
             name: custom.name,
             description: custom.description,
             parameters: Some(schema),

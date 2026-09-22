@@ -66,6 +66,7 @@ pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
         ProviderType::Messages => "/v1/messages",
         ProviderType::Gemini => "/v1beta/models",
         ProviderType::OpenaiImage => "/v1/images/generations",
+        ProviderType::OpenrouterImage => "/v1/images",
         ProviderType::Replicate => "/v1/predictions",
         ProviderType::Group => "/v1/responses",
     }

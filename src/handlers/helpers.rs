@@ -1276,6 +1276,7 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
             urp::Node::Image {
                 role: urp::OrdinaryRole::Assistant,
                 source,
+                metadata,
                 ..
             } => {
                 let md = match source {
@@ -1285,6 +1286,16 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
                     }
                     ImageSource::FileId { .. } => String::new(),
                 };
+                if !md.is_empty()
+                    && let Some(prompt) = metadata
+                        .image_generation
+                        .revised_prompt
+                        .as_deref()
+                        .filter(|prompt| !prompt.is_empty())
+                {
+                    pending_markdown.push_str("\n\n");
+                    pending_markdown.push_str(prompt);
+                }
                 pending_markdown.push_str(&md);
             }
             urp::Node::Text {
@@ -1446,6 +1457,20 @@ const EXTRA_WHITELIST_OPENAI_IMAGE: &[&str] = &[
     "input_fidelity",
 ];
 
+const EXTRA_WHITELIST_OPENROUTER_IMAGE: &[&str] = &[
+    "n",
+    "resolution",
+    "aspect_ratio",
+    "size",
+    "quality",
+    "output_format",
+    "background",
+    "output_compression",
+    "seed",
+    "user",
+    "provider",
+];
+
 fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static str] {
     match provider_type {
         ProviderType::ChatCompletion => EXTRA_WHITELIST_CHAT_COMPLETION,
@@ -1453,6 +1478,7 @@ fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static st
         ProviderType::Messages => EXTRA_WHITELIST_ANTHROPIC,
         ProviderType::Gemini => EXTRA_WHITELIST_GEMINI,
         ProviderType::OpenaiImage => EXTRA_WHITELIST_OPENAI_IMAGE,
+        ProviderType::OpenrouterImage => EXTRA_WHITELIST_OPENROUTER_IMAGE,
         ProviderType::Group => &[],
         // Replicate model input schemas are model-specific; whitelist is
         // handled inside the encoder by routing fields into `input`.
@@ -1470,11 +1496,11 @@ pub(super) struct ImageCapableStreamCall {
     pub result: Result<reqwest::Response, upstream::UpstreamCallError>,
 }
 
-/// Dispatch one streaming upstream call, honoring OIU-S7: an `openai_image`
-/// attempt whose URP request contains user image input goes to
-/// `POST /v1/images/edits` as `multipart/form-data` (with the `stream` text
-/// field from OIU-E5f); every other attempt posts the JSON `upstream_body` to
-/// the provider's streaming path. `Err` is returned only for request-encode
+/// Dispatch one raw upstream call, honoring OIU-S7: an `openai_image`
+/// attempt with user image input goes to `POST /v1/images/edits`.
+/// Inline Base64 edits use multipart; edits with references use JSON.
+/// Other attempts post JSON using the attempt's upstream stream mode.
+/// `Err` is returned only for request-encode
 /// failures that no retry can fix; upstream transport failures stay inside
 /// `result` so callers keep their existing retry classification.
 #[allow(clippy::too_many_arguments)]
@@ -1490,7 +1516,7 @@ pub(super) async fn call_streaming_image_capable_upstream(
     let provider = build_channel_provider_config(attempt);
     let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
         && urp::encode::openai_image::has_user_image_input(req_attempt);
-    if openai_image_edit {
+    if openai_image_edit && !urp::encode::openai_image::edit_requires_json(req_attempt) {
         let path = "/v1/images/edits".to_string();
         let fields = urp::encode::openai_image::multipart_fields(req_attempt, &req_attempt.model)
             .map_err(|message| {
@@ -1518,7 +1544,15 @@ pub(super) async fn call_streaming_image_capable_upstream(
             result,
         });
     }
-    let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
+    let path = if openai_image_edit {
+        "/v1/images/edits".to_string()
+    } else {
+        upstream_path_for_model(
+            attempt.provider_type,
+            &req_attempt.model,
+            req_attempt.stream != Some(false),
+        )
+    };
     let result = upstream::call_upstream_raw_with_timeout_and_headers(
         http,
         &provider,
@@ -1688,6 +1722,7 @@ fn messages_custom_bridge_function(tool: urp::ToolDefinition) -> urp::ToolDefini
         name: None,
         description: None,
         function: Some(urp::FunctionDefinition {
+            response_schema: None,
             name: custom.name,
             description: custom.description,
             parameters: Some(json!({

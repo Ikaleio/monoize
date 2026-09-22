@@ -21,7 +21,7 @@
 - **Downstream:** The client calling Monoize.
 - **Upstream:** A provider endpoint Monoize calls.
 - **Provider:** A configured upstream channel.
-- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `group`.
+- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, or `group`.
 - **URP v2 request:** The canonical internal request object `UrpRequestV2` defined by `spec/urp-v2-flat-structure.spec.md`.
 - **URP v2 response:** The canonical internal response object `UrpResponseV2` defined by `spec/urp-v2-flat-structure.spec.md`.
 - **Node sequence:** An ordered flat `Vec<Node>` sequence used by URP v2 `input` and `output`.
@@ -517,7 +517,7 @@ TRC6. A `ToolResultContent::ProviderItem` MAY be encoded only when its `origin_p
 
 PI1. `ProviderItem` is an opaque native item, block, or part preservation container. It is not a cross-protocol semantic node.
 
-PI2. `ProviderItem.origin_protocol` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `replicate`.
+PI2. `ProviderItem.origin_protocol` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, or `replicate`.
 
 PI3. A decoder MUST emit `ProviderItem` only for a native carrier unit that the source adapter cannot decode into a typed URP node. Required cases are:
 
@@ -1286,6 +1286,8 @@ PM12a. A Messages encoder MUST render both `message_start.message.usage` and ter
 
 ### 7.5 Provider adapter: `type=gemini`
 
+PG0. `gemini-codec.spec.md` defines the current detailed GenerateContent mapping contract and supersedes older codec restrictions in this section.
+
 PG1. Monoize MUST call Gemini native endpoints under base URL `https://generativelanguage.googleapis.com` using the API version path selected by provider configuration, default `v1beta`.
 
 PG2. For non-streaming requests, Monoize MUST call:
@@ -1350,7 +1352,8 @@ PG5c. Streaming and non-streaming Gemini Parts MUST use the same semantic decodi
 
 PG5d. The decoder MUST process `finishReason` even when candidate content or Parts are absent. A non-default `promptFeedback.blockReason` MUST produce a Refusal node and `ContentFilter` termination even when candidates are absent. Native feedback MUST remain in response passthrough. Safety, recitation, blocklist, prohibited-content, sensitive-information, and image-safety termination reasons MUST map to `ContentFilter`. `STOP` with tool calls MUST map to `ToolCalls`. A stream without a non-default finish reason or prompt block MUST fail with `upstream_stream_missing_terminal`; EOF and `[DONE]` alone MUST NOT establish success. Malformed JSON and upstream error objects MUST fail decoding.
 
-PG5e. The Gemini stream encoder MUST emit completed nodes in canonical order and emit terminal metadata once.
+PG5e. The Gemini stream encoder MUST emit available text and reasoning deltas in canonical order and emit terminal metadata once.
+It MAY buffer atomic tool calls, media, and signed Parts until their complete native payload is available.
 It MUST buffer out-of-order completions until lower node indices complete or authoritative terminal output supplies those nodes.
 It MUST reconcile terminal-only output without emitting an already emitted Part twice.
 If terminal state retracts or replaces an emitted Part, encoding MUST fail because Gemini cannot retract prior Parts.

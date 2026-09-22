@@ -9,6 +9,10 @@ This transform re-encodes base64 images in user messages and optionally resizes 
 
 With `skip_if_smaller` on (the default), an image keeps its original bytes when compression does not shrink it.
 
+When the selected output format is `jpg`, images with an alpha channel remain unchanged. The transform preserves their original bytes, media type, and dimensions. This applies even when every pixel is opaque. It overrides `max_edge_px` and `skip_if_smaller` to preserve transparency and image masks. Without a mask, formats that support alpha continue to use the configured compression settings.
+
+If an edit request contains a mask, the transform skips every user image in that request, including the mask. It preserves original bytes, formats, dimensions, and image/mask alignment. This rule applies before cache lookup and overrides all compression settings.
+
 ## Reference
 
 | Property | Value |

@@ -1,6 +1,7 @@
 use crate::urp::decode::gemini::{
-    GEMINI_CANDIDATE_EXTRA_KEY, GEMINI_PART_EXTRA_KEY, GEMINI_SYNTHETIC_CALL_PREFIX,
-    native_schema_types,
+    GEMINI_CANDIDATE_EXTRA_KEY, GEMINI_CONTENT_EXTRA_KEY, GEMINI_ENUM_FORMAT_KEY,
+    GEMINI_PART_EXTRA_KEY, GEMINI_SYNTHETIC_CALL_PREFIX, GEMINI_SYSTEM_EXTRA_KEY,
+    GEMINI_TEXT_FORMAT_KEY, native_schema_types, strip_text_response_format,
 };
 use crate::urp::encode::{
     merge_extra, sanitize_provider_item_wire_body, usage_input_details, usage_output_details,
@@ -19,10 +20,17 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
+    if req
+        .logprobs
+        .as_ref()
+        .is_some_and(|config| config.enabled && config.top_k.is_some_and(|count| count > 20))
+    {
+        return Err("Gemini logprobs must be in the range 0 through 20.".into());
+    }
     let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Gemini)?;
     validate_media_nodes(&prepared.input)?;
     for node in &prepared.input {
-        if matches!(node, Node::Image { role, .. } | Node::Audio { role, .. } | Node::File { role, .. }
+        if matches!(node, Node::Image { role, .. } | Node::Audio { role, .. } | Node::File { role, .. } | Node::ProviderItem { role, .. }
             if matches!(role, OrdinaryRole::System | OrdinaryRole::Developer))
         {
             return Err(
@@ -48,97 +56,63 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
 
     let mut pending_content: Option<GeminiMessageEnvelope> = None;
+    let mut next_extra = HashMap::new();
+    let mut system_extra = HashMap::new();
     for node in request_nodes {
-        match node {
-            Node::Text {
-                role: OrdinaryRole::System | OrdinaryRole::Developer,
-                content,
-                ..
-            } => {
-                flush_pending_gemini_message(&mut pending_content, &mut contents);
-                if !content.is_empty() {
-                    system_parts.push(json!({ "text": content }));
-                }
-            }
-            Node::Text {
-                role: OrdinaryRole::User | OrdinaryRole::Assistant,
-                ..
-            }
-            | Node::Image {
-                role: OrdinaryRole::User | OrdinaryRole::Assistant,
-                ..
-            }
-            | Node::File {
-                role: OrdinaryRole::User | OrdinaryRole::Assistant,
-                ..
-            }
-            | Node::Audio {
-                role: OrdinaryRole::User | OrdinaryRole::Assistant,
-                ..
-            }
-            | Node::ProviderItem {
-                role: OrdinaryRole::User | OrdinaryRole::Assistant,
-                ..
-            }
-            | Node::Reasoning { .. }
-            | Node::ToolCall { .. } => {
-                append_node_to_pending_gemini_message(&mut pending_content, &mut contents, node);
-            }
-            Node::ToolResult { .. } => {
-                let Some(part) = encode_tool_result(node, &tool_names_by_call_id) else {
-                    continue;
-                };
-                flush_pending_gemini_message(&mut pending_content, &mut contents);
-                if let Some(parts) = contents
-                    .last_mut()
-                    .filter(|content| content.get("role").and_then(Value::as_str) == Some("user"))
-                    .and_then(|content| content.get_mut("parts"))
-                    .and_then(Value::as_array_mut)
-                    .filter(|parts| {
-                        parts
-                            .iter()
-                            .all(|part| part.get("functionResponse").is_some())
-                    })
-                {
-                    parts.push(part);
-                } else {
-                    contents.push(json!({"role": "user", "parts": [part]}));
-                }
-            }
-            Node::NextDownstreamEnvelopeExtra { .. }
-            | Node::Image {
-                role: OrdinaryRole::System | OrdinaryRole::Developer,
-                ..
-            }
-            | Node::File {
-                role: OrdinaryRole::System | OrdinaryRole::Developer,
-                ..
-            }
-            | Node::Audio {
-                role: OrdinaryRole::System | OrdinaryRole::Developer,
-                ..
-            }
-            | Node::ProviderItem {
-                role: OrdinaryRole::System | OrdinaryRole::Developer,
-                ..
-            }
-            | Node::Refusal { .. } => {
-                flush_pending_gemini_message(&mut pending_content, &mut contents);
-            }
+        if let Node::NextDownstreamEnvelopeExtra { extra_body } = node {
+            flush_pending_gemini_message(&mut pending_content, &mut contents);
+            next_extra.extend(extra_body.clone());
+            continue;
         }
+        let encoded = if matches!(node, Node::ToolResult { .. }) {
+            encode_tool_result(node, &tool_names_by_call_id)
+                .map(|part| (OrdinaryRole::User, part, content_extra(node)))
+        } else {
+            encode_request_node_part(node)
+        };
+        let Some((role, part, mut extra)) = encoded else {
+            continue;
+        };
+        if node_extra(node).contains_key(GEMINI_CONTENT_EXTRA_KEY) || !next_extra.is_empty() {
+            flush_pending_gemini_message(&mut pending_content, &mut contents);
+        }
+        extra.extend(std::mem::take(&mut next_extra));
+        if matches!(role, OrdinaryRole::System | OrdinaryRole::Developer) {
+            flush_pending_gemini_message(&mut pending_content, &mut contents);
+            if let Some(native) = node_extra(node)
+                .get(GEMINI_SYSTEM_EXTRA_KEY)
+                .and_then(Value::as_object)
+            {
+                system_extra.extend(
+                    native
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+            }
+            system_extra.extend(extra);
+            system_parts.push(part);
+            continue;
+        }
+        if pending_content.as_ref().is_some_and(|pending| {
+            pending.role != role || (!extra.is_empty() && pending.extra_body != extra)
+        }) {
+            flush_pending_gemini_message(&mut pending_content, &mut contents);
+        }
+        let pending = pending_content.get_or_insert_with(|| GeminiMessageEnvelope {
+            role,
+            parts: Vec::new(),
+            extra_body: extra,
+        });
+        pending.parts.push(part);
     }
     flush_pending_gemini_message(&mut pending_content, &mut contents);
 
-    let mut body = json!({
-        "contents": contents,
-    });
+    let mut body = json!({ "contents": contents });
     let obj = body.as_object_mut().expect("gemini request object");
-
     if !system_parts.is_empty() {
-        obj.insert(
-            "systemInstruction".to_string(),
-            json!({ "parts": system_parts }),
-        );
+        let mut system = json!({"parts": system_parts});
+        merge_extra(system.as_object_mut().unwrap(), &system_extra);
+        obj.insert("systemInstruction".into(), system);
     }
 
     let mut generation_config = req
@@ -147,15 +121,53 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    for key in ["temperature", "topP", "maxOutputTokens", "stopSequences"] {
+    for key in [
+        "temperature",
+        "topP",
+        "maxOutputTokens",
+        "stopSequences",
+        "responseLogprobs",
+        "logprobs",
+        "topK",
+        "seed",
+        "presencePenalty",
+        "frequencyPenalty",
+    ] {
         generation_config.remove(key);
+    }
+    strip_text_response_format(&mut generation_config);
+    if let Some(sampling) = &req.sampling {
+        for (key, value) in [
+            ("topK", sampling.top_k.map(Value::from)),
+            ("seed", sampling.seed.map(Value::from)),
+            (
+                "presencePenalty",
+                sampling.presence_penalty.map(Value::from),
+            ),
+            (
+                "frequencyPenalty",
+                sampling.frequency_penalty.map(Value::from),
+            ),
+        ] {
+            if let Some(value) = value {
+                generation_config.insert(key.into(), value);
+            }
+        }
+    }
+    if let Some(config) = &req.logprobs {
+        generation_config.insert("responseLogprobs".into(), json!(config.enabled));
+        if config.enabled {
+            if let Some(count) = config.top_k {
+                generation_config.insert("logprobs".into(), json!(count));
+            }
+        }
     }
     if req.response_format.is_some()
         || matches!(
             generation_config
                 .get("responseMimeType")
                 .and_then(Value::as_str),
-            Some("text/plain" | "application/json")
+            Some("text/plain" | "application/json" | "text/x.enum")
         )
     {
         for key in ["responseMimeType", "responseJsonSchema", "responseSchema"] {
@@ -181,18 +193,65 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         );
     }
     if let Some(format) = &req.response_format {
+        let enum_format = matches!(format, ResponseFormat::JsonSchema { json_schema } if json_schema.extra_body.get(GEMINI_ENUM_FORMAT_KEY).and_then(Value::as_bool) == Some(true));
         generation_config.remove("responseSchema");
         generation_config.remove("responseJsonSchema");
         generation_config.insert(
             "responseMimeType".to_string(),
             json!(if matches!(format, ResponseFormat::Text) {
                 "text/plain"
+            } else if enum_format {
+                "text/x.enum"
             } else {
                 "application/json"
             }),
         );
         if let ResponseFormat::JsonSchema { json_schema } = format {
-            generation_config.insert("responseJsonSchema".to_string(), json_schema.schema.clone());
+            generation_config.insert(
+                if enum_format {
+                    "responseSchema"
+                } else {
+                    "responseJsonSchema"
+                }
+                .into(),
+                if enum_format {
+                    native_schema_types(&json_schema.schema, true)
+                } else {
+                    json_schema.schema.clone()
+                },
+            );
+        }
+        if req
+            .extra_body
+            .get(GEMINI_TEXT_FORMAT_KEY)
+            .and_then(Value::as_bool)
+            == Some(true)
+            && !enum_format
+        {
+            generation_config.remove("responseMimeType");
+            generation_config.remove("responseJsonSchema");
+            let native = generation_config
+                .entry("responseFormat")
+                .or_insert_with(|| json!({}));
+            if !native.is_object() {
+                *native = json!({});
+            }
+            let text = native
+                .as_object_mut()
+                .unwrap()
+                .entry("text")
+                .or_insert_with(|| json!({}));
+            if !text.is_object() {
+                *text = json!({});
+            }
+            text["mimeType"] = json!(if matches!(format, ResponseFormat::Text) {
+                "TEXT_PLAIN"
+            } else {
+                "APPLICATION_JSON"
+            });
+            if let ResponseFormat::JsonSchema { json_schema } = format {
+                text["schema"] = json_schema.schema.clone();
+            }
         }
     }
     let mut thinking = generation_config
@@ -208,7 +267,7 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         } else if let Some(budget) = reasoning.budget_tokens {
             thinking.insert("thinkingBudget".into(), json!(budget));
         } else if let Some(effort) = &reasoning.effort {
-            thinking.insert("thinkingLevel".into(), json!(effort));
+            thinking.insert("thinkingLevel".into(), json!(effort.to_ascii_uppercase()));
         } else if reasoning.mode.as_deref() == Some("adaptive") {
             thinking.insert("thinkingBudget".into(), json!(-1));
         }
@@ -295,14 +354,22 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
 }
 
 pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Result<Value, String> {
+    if let Some(body) = resp
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.failure_body(false))
+    {
+        return Ok(body);
+    }
     let mut prepared = resp.clone();
     prepared.output = crate::urp::media::prepare_nodes(&resp.output, ProviderProtocol::Gemini)?;
     validate_media_nodes(&prepared.output)?;
     for node in &prepared.output {
-        if matches!(node, Node::Image { role, .. } | Node::Audio { role, .. } | Node::File { role, .. }
-            if *role != OrdinaryRole::Assistant)
+        if node
+            .role()
+            .is_some_and(|role| role != OrdinaryRole::Assistant)
         {
-            return Err("Gemini response media must have the assistant role".into());
+            return Err("Gemini response content must have the assistant role".into());
         }
     }
     Ok(encode_prepared_response(&prepared, logical_model))
@@ -314,10 +381,11 @@ pub(crate) fn encode_response_node_parts(node: &Node) -> Result<Vec<Value>, Stri
     validate_media_nodes(&prepared)?;
     let mut parts = Vec::new();
     for node in &prepared {
-        if matches!(node, Node::Image { role, .. } | Node::Audio { role, .. } | Node::File { role, .. }
-            if *role != OrdinaryRole::Assistant)
+        if node
+            .role()
+            .is_some_and(|role| role != OrdinaryRole::Assistant)
         {
-            return Err("Gemini response media must have the assistant role".into());
+            return Err("Gemini response content must have the assistant role".into());
         }
         if let Some((_, part, _)) = encode_request_node_part(node) {
             if !part.is_null() {
@@ -329,15 +397,16 @@ pub(crate) fn encode_response_node_parts(node: &Node) -> Result<Vec<Value>, Stri
 }
 
 fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let parts: Vec<Value> = resp
-        .output
-        .iter()
-        .filter_map(|node| {
-            encode_request_node_part(node)
-                .filter(|(role, _, _)| *role == OrdinaryRole::Assistant)
-                .map(|(_, part, _)| part)
-        })
-        .collect();
+    let mut parts = Vec::new();
+    let mut emitted_nodes = Vec::new();
+    for node in &resp.output {
+        if let Some((OrdinaryRole::Assistant, part, _)) = encode_request_node_part(node) {
+            if !part.is_null() {
+                parts.push(part);
+                emitted_nodes.push(node.clone());
+            }
+        }
+    }
     let mut usage_metadata = json!({
         "promptTokenCount": 0,
         "candidatesTokenCount": 0,
@@ -362,6 +431,10 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 (
                     "cacheTokensDetails",
                     input_details.cache_read_modality_breakdown.as_ref(),
+                ),
+                (
+                    "toolUsePromptTokensDetails",
+                    input_details.tool_prompt_modality_breakdown.as_ref(),
                 ),
                 (
                     "candidatesTokensDetails",
@@ -417,7 +490,15 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 Value::from(output_details.rejected_prediction_tokens),
             );
             for (k, v) in &usage.extra_body {
-                if !k.starts_with("_monoize_") {
+                if !k.starts_with("_monoize_")
+                    && !matches!(
+                        k.as_str(),
+                        "promptTokensDetails"
+                            | "cacheTokensDetails"
+                            | "candidatesTokensDetails"
+                            | "toolUsePromptTokensDetails"
+                    )
+                {
                     obj.entry(k.clone()).or_insert_with(|| v.clone());
                 }
             }
@@ -430,12 +511,19 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 "role": "model",
                 "parts": parts,
             },
-            "finishReason": finish_reason_to_gemini(resp.finish_reason),
         }],
         "usageMetadata": usage_metadata,
         "modelVersion": logical_model,
         "responseId": resp.id,
     });
+    if let Some(reason) = response_finish_reason(resp) {
+        body["candidates"][0]["finishReason"] = json!(finish_reason_to_gemini(Some(reason)));
+    }
+    for node in &resp.output {
+        if let Some(content) = body["candidates"][0]["content"].as_object_mut() {
+            merge_extra(content, &content_extra(node));
+        }
+    }
     if resp.usage.is_none() {
         body.as_object_mut().unwrap().remove("usageMetadata");
     }
@@ -446,31 +534,51 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
     {
         let candidate = body["candidates"][0].as_object_mut().unwrap();
         for (key, value) in metadata {
-            if !matches!(key.as_str(), "content" | "finishReason") {
+            if !matches!(
+                key.as_str(),
+                "content" | "finishReason" | "logprobsResult" | "avgLogprobs"
+            ) {
                 candidate
                     .entry(key.clone())
                     .or_insert_with(|| value.clone());
             }
         }
     }
-    let citations: Vec<_> = resp
-        .output
-        .iter()
-        .flat_map(|node| match node {
-            Node::Text { citations, .. } => citations.as_slice(),
-            _ => &[],
-        })
-        .cloned()
-        .collect();
+    let citations = crate::urp::citations::encode_gemini(&emitted_nodes);
     if !citations.is_empty() {
-        body["candidates"][0]["citationMetadata"]["citationSources"] = json!(
-            crate::urp::citations::encode(&citations, crate::urp::ProviderProtocol::Gemini, 0)
-        );
+        body["candidates"][0]["citationMetadata"]["citationSources"] = json!(citations);
     } else if let Some(metadata) = body["candidates"][0]
         .get_mut("citationMetadata")
         .and_then(Value::as_object_mut)
     {
         metadata.remove("citationSources");
+    }
+    if let Some(metadata) = body["candidates"][0]
+        .get_mut("groundingMetadata")
+        .and_then(Value::as_object_mut)
+    {
+        if metadata.contains_key("groundingSupports") {
+            metadata.remove("groundingChunks");
+        }
+        metadata.remove("groundingSupports");
+    }
+    if let Some(Value::Object(grounding)) =
+        crate::urp::citations::encode_gemini_grounding(&emitted_nodes)
+    {
+        let candidate = body["candidates"][0].as_object_mut().unwrap();
+        let metadata = candidate
+            .entry("groundingMetadata")
+            .or_insert_with(|| json!({}));
+        if !metadata.is_object() {
+            *metadata = json!({});
+        }
+        metadata.as_object_mut().unwrap().extend(grounding);
+    }
+    if let Some(scores) = crate::urp::logprobs::encode_gemini(&emitted_nodes) {
+        body["candidates"][0]["logprobsResult"] = scores;
+        if let Some(average) = crate::urp::logprobs::gemini_summary(&emitted_nodes) {
+            body["candidates"][0]["avgLogprobs"] = json!(average);
+        }
     }
 
     if let Some(obj) = body.as_object_mut() {
@@ -488,7 +596,7 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
 }
 
 pub(crate) fn is_prompt_block_response(resp: &UrpResponse) -> bool {
-    if resp.finish_reason != Some(FinishReason::ContentFilter) {
+    if response_finish_reason(resp) != Some(FinishReason::ContentFilter) {
         return false;
     }
     let Some(reason) = resp
@@ -542,6 +650,26 @@ fn encode_function_declaration(function: &FunctionDefinition) -> Value {
             },
         );
     }
+    if let Some(schema) = &function.response_schema {
+        let native = function
+            .extra_body
+            .get("_monoize_gemini_response_json_schema")
+            .and_then(Value::as_bool)
+            == Some(false);
+        obj.insert(
+            if native {
+                "response"
+            } else {
+                "responseJsonSchema"
+            }
+            .into(),
+            if native {
+                native_schema_types(schema, true)
+            } else {
+                schema.clone()
+            },
+        );
+    }
     merge_extra(
         &mut obj,
         &function
@@ -550,7 +678,12 @@ fn encode_function_declaration(function: &FunctionDefinition) -> Value {
             .filter(|(key, _)| {
                 !matches!(
                     key.as_str(),
-                    "name" | "description" | "parameters" | "parametersJsonSchema"
+                    "name"
+                        | "description"
+                        | "parameters"
+                        | "parametersJsonSchema"
+                        | "response"
+                        | "responseJsonSchema"
                 )
             })
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -634,7 +767,7 @@ fn encode_audio_part(source: &AudioSource) -> Value {
 
 fn finish_reason_to_gemini(finish_reason: Option<FinishReason>) -> &'static str {
     match finish_reason {
-        Some(FinishReason::Length) => "MAX_TOKENS",
+        Some(FinishReason::Length | FinishReason::ContextLimit) => "MAX_TOKENS",
         Some(FinishReason::ToolCalls) => "STOP",
         Some(FinishReason::ContentFilter) => "SAFETY",
         Some(FinishReason::Stop) => "STOP",
@@ -668,26 +801,55 @@ fn flush_pending_gemini_message(pending: &mut Option<GeminiMessageEnvelope>, out
     out.push(Value::Object(obj));
 }
 
-fn append_node_to_pending_gemini_message(
-    pending: &mut Option<GeminiMessageEnvelope>,
-    out: &mut Vec<Value>,
-    node: &Node,
-) {
-    let Some((role, part, extra_body)) = encode_request_node_part(node) else {
-        return;
-    };
-    let should_flush = pending
-        .as_ref()
-        .is_some_and(|existing| existing.role != role || existing.extra_body != extra_body);
-    if should_flush {
-        flush_pending_gemini_message(pending, out);
+fn content_extra(node: &Node) -> HashMap<String, Value> {
+    node_extra(node)
+        .get(GEMINI_CONTENT_EXTRA_KEY)
+        .and_then(Value::as_object)
+        .map(|extra| {
+            extra
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn node_extra(node: &Node) -> &HashMap<String, Value> {
+    match node {
+        Node::Text { extra_body, .. }
+        | Node::Image { extra_body, .. }
+        | Node::Audio { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::Reasoning { extra_body, .. }
+        | Node::Refusal { extra_body, .. }
+        | Node::ToolCall { extra_body, .. }
+        | Node::ToolResult { extra_body, .. }
+        | Node::ProviderItem { extra_body, .. }
+        | Node::NextDownstreamEnvelopeExtra { extra_body } => extra_body,
     }
-    let entry = pending.get_or_insert_with(|| GeminiMessageEnvelope {
-        role,
-        parts: Vec::new(),
-        extra_body,
-    });
-    entry.parts.push(part);
+}
+
+fn response_finish_reason(response: &UrpResponse) -> Option<FinishReason> {
+    if let Some(outcome) = &response.outcome {
+        match outcome.status {
+            crate::urp::ResponseStatus::Queued | crate::urp::ResponseStatus::InProgress => {
+                return None;
+            }
+            crate::urp::ResponseStatus::Incomplete => {
+                return Some(match outcome.incomplete_reason.as_deref() {
+                    Some("max_output_tokens" | "context_length_exceeded") => FinishReason::Length,
+                    Some("content_filter") => FinishReason::ContentFilter,
+                    _ => match response.finish_reason {
+                        Some(FinishReason::ContentFilter) => FinishReason::ContentFilter,
+                        _ => FinishReason::Length,
+                    },
+                });
+            }
+            crate::urp::ResponseStatus::Completed => return Some(FinishReason::Stop),
+            _ => {}
+        }
+    }
+    response.finish_reason
 }
 
 pub(crate) fn encode_request_node_part(
@@ -809,7 +971,7 @@ pub(crate) fn encode_request_node_part(
         Node::ToolResult { .. } => Some((
             OrdinaryRole::Assistant,
             encode_tool_result(node, &Map::new())?,
-            HashMap::new(),
+            content_extra(node),
         )),
         Node::NextDownstreamEnvelopeExtra { .. } => None,
     }?;
@@ -876,6 +1038,10 @@ pub(crate) fn encode_request_node_part(
             }
         }
     }
+    if let Some(Value::Object(content)) = extra.remove(GEMINI_CONTENT_EXTRA_KEY) {
+        extra.extend(content);
+    }
+    extra.remove(GEMINI_SYSTEM_EXTRA_KEY);
     Some((role, part, extra))
 }
 
@@ -952,6 +1118,19 @@ fn validate_media_nodes(nodes: &[Node]) -> Result<(), String> {
                 ..
             } => {
                 return Err("Gemini does not support custom tool calls or results without a function bridge.".into());
+            }
+            Node::ToolCall {
+                name, arguments, ..
+            } => {
+                if name.is_empty() {
+                    return Err("Gemini function calls require a non-empty name.".into());
+                }
+                let args: Value = serde_json::from_str(arguments).map_err(|error| {
+                    format!("Gemini function arguments must be valid JSON: {error}")
+                })?;
+                if !args.is_object() {
+                    return Err("Gemini function arguments must be a JSON object.".into());
+                }
             }
             Node::Image {
                 source, metadata, ..
@@ -1108,6 +1287,7 @@ fn encode_tool_result(node: &Node, tool_names_by_call_id: &Map<String, Value>) -
     let Node::ToolResult {
         signature,
         name,
+        id,
         tool_type,
         call_id,
         content,
@@ -1168,7 +1348,10 @@ fn encode_tool_result(node: &Node, tool_names_by_call_id: &Map<String, Value>) -
     if !media.is_empty() {
         function_response["parts"] = json!(media);
     }
-    if !call_id.is_empty() && !call_id.starts_with(GEMINI_SYNTHETIC_CALL_PREFIX) {
+    if !call_id.is_empty()
+        && !call_id.starts_with(GEMINI_SYNTHETIC_CALL_PREFIX)
+        && !(id.is_none() && name.as_deref() == Some(call_id.as_str()))
+    {
         function_response["id"] = json!(call_id);
     }
     let mut part = json!({"functionResponse": function_response});

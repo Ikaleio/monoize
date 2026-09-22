@@ -288,7 +288,7 @@ Q2. `GET /api/dashboard/model-metadata/{model_id}` MUST return single row or `40
 
 UF1. Admin endpoint `POST /api/dashboard/fetch-channel-models` MUST accept:
 
-- `provider_type: responses | chat_completion | messages | gemini | openai_image | replicate`
+- `provider_type: responses | chat_completion | messages | gemini | openai_image | openrouter_image | replicate`
 - `base_url: string`
 - `api_key: string`
 
@@ -300,6 +300,8 @@ UF2. For `responses`, `chat_completion`, `messages`, `openai_image`, and `replic
    - otherwise `GET {base}/v1/models`.
 3. Include `Authorization: Bearer {api_key}`.
 4. Parse OpenAI-compatible `{ data: [{ id: string, ... }] }`.
+
+UF2a. For `openrouter_image`, apply UF2 with path `/v1/images/models`.
 
 UF3. For `gemini`, the endpoint MUST call the Gemini model-list API using `api_key` and parse model names as model IDs after removing a leading `models/` prefix.
 

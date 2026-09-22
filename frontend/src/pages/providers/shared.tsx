@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { Anthropic, Google, OpenAI } from '@lobehub/icons'
+import { Anthropic, Google, OpenAI, OpenRouter } from '@lobehub/icons'
 import { Box } from 'lucide-react'
 import { StatusBadge, StatusDot } from '@/components/ui/status'
 import type {
@@ -79,6 +79,7 @@ export const PROVIDER_TYPE_CONFIG: Record<
 	messages: { label: 'Messages', path: '/v1/messages', icon: Anthropic },
 	gemini: { label: 'Gemini', path: '/v1beta/models/{model}:generateContent', icon: Google },
 	openai_image: { label: 'OpenAI Image', path: '/v1/images/generations', icon: OpenAI },
+	openrouter_image: { label: 'OpenRouter Image', path: '/v1/images', icon: OpenRouter },
 	replicate: { label: 'Replicate', path: '/v1/replicate/predictions', icon: Box }
 }
 

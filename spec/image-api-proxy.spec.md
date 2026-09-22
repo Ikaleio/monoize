@@ -50,19 +50,19 @@ Request body MUST be JSON. Monoize MUST parse the following fields:
 | `n` | integer | NO | `1` | Number of images to generate. MUST be ≥ 1. |
 | `stream` | boolean | NO | `false` | When `true`, the downstream response is the SSE stream defined in §5.5. |
 
-IG1. All other fields present in the request body (including but not limited to `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `style`, `response_format`, `partial_images`, `user`) MUST be preserved as URP `extra_body` fields on the generated URP request. Monoize MUST NOT interpret, validate, or reject these fields.
+IG1. Known image options MUST map to typed `UrpRequest.image_generation` fields. These fields are `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `style`, `response_format`, `partial_images`, and `input_fidelity`. Monoize MUST remove their copies from `extra_body`. Unknown fields MUST remain in `extra_body`. `user` MUST map to `UrpRequest.user` and MUST NOT remain in `extra_body`.
 
-IG2. `response_format` field: Monoize MUST NOT interpret this field. It is preserved in `extra_body` and subject to the same whitelist filtering as other extra fields (per `unified_responses_proxy.spec.md` §7.7.1). The downstream non-streaming Image API response always uses `b64_json` format (see §5).
+IG2. `response_format` MUST map to `UrpRequest.image_generation.response_format`. Native OpenAI Image attempts MUST preserve this option. Downstream responses MUST preserve the source representation returned by the upstream under §5.
 
-IG3. `stream` field: if present and not a JSON boolean, Monoize MUST reject the request with HTTP 400. The parsed value MUST be excluded from `extra_body`.
+IG3. `stream` MUST be a JSON boolean or null. Missing and null values select `false`. Other types MUST return HTTP 400. The parsed field MUST be excluded from `extra_body`. A missing or null `n` selects `1`.
 
 IG4. When `stream = true`, `n` MUST equal 1. Monoize MUST reject `stream = true` with `n > 1` with HTTP 400.
 
-IG5. `partial_images` field: Monoize preserves it in `extra_body` per IG1. For attempts whose effective upstream type is `openai_image`, the field passes the OIU-E6 whitelist and is forwarded to the upstream request body.
+IG5. `partial_images` MUST map to the typed image options and MUST be an integer from 0 through 3 when non-null. `output_compression` MUST be an integer from 0 through 100 when non-null. Other known options MUST use their declared JSON types. Null options select absence. Invalid option types or ranges MUST return HTTP 400.
 
 ### 3.2 `POST /v1/images/edits`
 
-Request body MUST be `multipart/form-data`. Monoize MUST parse the following fields:
+The request body MUST use `multipart/form-data` or JSON. Other content types MUST return HTTP 415. For multipart requests, Monoize MUST parse these fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -73,9 +73,13 @@ Request body MUST be `multipart/form-data`. Monoize MUST parse the following fie
 | `n` | text field | NO | Number of images to generate. Default `1`. MUST be ≥ 1 when present. |
 | `stream` | text field | NO | `true` or `false`. Default `false`. When `true`, the downstream response is the SSE stream defined in §5.5. |
 
-IE1. All other text fields present in the multipart body (including but not limited to `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `input_fidelity`, `partial_images`, `user`) MUST be preserved as URP `extra_body` fields. String values that are valid JSON numbers or booleans MUST be preserved as their JSON-typed equivalents; all other string values MUST be preserved as JSON strings.
+IE1. Known image options MUST map to typed image options under IG1 and IG5. Multipart `user` MUST retain its exact text and map to `UrpRequest.user`. Other text values that are JSON numbers or booleans MUST use their JSON types. Remaining unknown text fields MUST remain in `extra_body`.
 
 IE2. File fields other than `image`, `image[]`, and `mask` MUST be ignored.
+
+IE2a. An edit request MUST contain 1 through 16 source images. A multipart request MUST NOT contain more than one mask part. These violations MUST return HTTP 400.
+
+IE2b. JSON edits MUST contain required string fields `prompt` and `model`, and a required `images` array. Each array item MUST contain exactly one non-empty string reference: `image_url` or `file_id`. `image_url` MUST be an HTTP(S) URL or a Base64 data URL. A non-null `mask` MUST use the same reference object shape. Invalid references MUST return HTTP 400. JSON `n`, `stream`, options, and `user` follow generation parsing rules. Unknown top-level JSON fields MUST remain in `extra_body`.
 
 IE4. `stream` text field: any value other than exactly `true` or `false` MUST be rejected with HTTP 400. The parsed value MUST be excluded from `extra_body`. When `stream = true`, `n` MUST equal 1 (same rule as IG4).
 
@@ -97,13 +101,13 @@ IM2. `prompt` → `UrpRequest.input` as one `Node::Text` with `role: User` and t
 
 IM3. When the downstream request has `stream` absent or `false`, the downstream contract is non-streaming. Monoize MAY use either `stream: Some(false)` or `stream: Some(true)` on the internal upstream URP request, provided the final downstream response remains a single non-streaming Image API JSON response. If a request-phase transform sets `stream = true`, Monoize MUST collect the upstream stream internally and MUST NOT return downstream SSE for a non-streaming downstream request.
 
-IM3a. When the downstream request has `stream = true`, the single sub-request (IG4) MUST be built with `UrpRequest.stream = Some(true)` and MUST execute through the URP streaming pipeline: upstream SSE decode, response-phase stream transforms, then the §5.5 downstream encoding. Request-phase transforms MUST NOT downgrade the sub-request to non-streaming output; `stream` is forced to `Some(true)` on the attempt request after request-phase transforms.
+IM3a. When the downstream request has `stream = true`, the single sub-request (IG4) MUST initially use `UrpRequest.stream = Some(true)`. Downstream SSE MUST remain active independently of upstream transport. Native upstream SSE and synthetic terminal events from upstream JSON MUST use the same response-phase stream transforms and §5.5 encoding. A request transform MAY select non-streaming upstream transport without changing downstream SSE.
 
-IM4. All remaining fields from the request body → `UrpRequest.extra_body`. The fields `prompt`, `model`, `n`, and `stream` MUST be excluded from `extra_body`.
+IM4. Unknown remaining request fields map to `UrpRequest.extra_body`. Known fields MUST use their typed mappings. Every Image API sub-request MUST contain `image_generation = Some(options)`, including empty options. The downstream `n` controls fan-out and MUST NOT set the upstream image count.
 
-IM5. `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `response_format`, and `user` on the URP request MUST be left as `None`/absent. Monoize MUST NOT inject any `tools` or `tool_choice` values at Image API request mapping time. Users who need specific tool injection (e.g. `image_generation` tool for OpenAI Responses upstream) MUST configure request-phase transforms on the provider or API key.
+IM5. `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, and URP structured `response_format` MUST remain absent. `user` uses the typed mapping under IG1. Monoize MUST NOT inject tools at ingress. Users who need Responses image tools MUST configure request transforms.
 
-IM5b. If the selected upstream attempt has effective upstream type `responses`, the Images API compatibility path SHOULD use a request-phase transform that inserts a Responses `image_generation` tool and forces a specific `tool_choice` for that tool. Without a forced tool choice, a text-capable Responses model MAY return only assistant text, which produces no Image API data item under §5.1.
+IM5b. A Responses attempt MUST have a configured `image_generation` tool after request transforms. If absent, Monoize MUST reject the attempt before dispatch. A forced tool choice is optional. Without it, assistant text without images fails §5.1 validation.
 
 IM5a. If a routed upstream provider only surfaces generated image outputs on the streaming Responses event channel and omits them from the terminal non-streaming response body, Monoize MAY internally execute the sub-request as a streaming upstream request, collect the emitted URP stream events into a final `UrpResponse`, and continue response extraction from that collected `UrpResponse`.
 
@@ -113,9 +117,9 @@ For each sub-request derived from `POST /v1/images/edits`:
 
 IM6. `model` → `UrpRequest.model`.
 
-IM7. The `image` file MUST be mapped to one `Node::Image` with `role: User` and `ImageSource::Base64 { media_type, data }`.
+IM7. Each multipart source file MUST map to a user `Node::Image` with a Base64 source. JSON HTTP(S) references MUST map to URL sources. JSON data URLs MUST map to Base64 sources. JSON file IDs MUST map to FileId sources with unbound `MediaResource` provenance for `ProviderProtocol::OpenaiImage`.
 
-IM8. If `mask` is present, the mask file MUST be mapped to a second `Node::Image` with `role: User` and `ImageSource::Base64 { media_type, data }`, after the source image.
+IM8. An optional mask MUST map to the final user image node. Its typed `MediaMetadata.image_mask` MUST be true. Node IDs MUST NOT encode mask semantics. Mask source representations follow IM7.
 
 IM9. `prompt` MUST be mapped to one `Node::Text` with `role: User`, before the image node(s).
 
@@ -123,7 +127,7 @@ IM10. Node order in `UrpRequest.input` MUST be: `[prompt_text, image, extra_imag
 
 IM11. When the downstream request has `stream` absent or `false`, IM3 applies to edit sub-requests unchanged. When the downstream request has `stream = true`, IM3a applies to the single edit sub-request.
 
-IM12. All remaining text fields → `UrpRequest.extra_body`. The fields `prompt`, `model`, `n`, `stream`, `image`, and `mask` MUST be excluded from `extra_body`.
+IM12. Remaining edit fields follow IM4. `prompt`, `model`, `n`, `stream`, `image`, `image[]`, `images`, and `mask` MUST NOT remain in `extra_body`.
 
 IM13. Same as IM5: no `tools`/`tool_choice` injection.
 
@@ -140,7 +144,7 @@ IM16. Partial success policy:
 
 IM17. The order of items in the response `data[]` array is not required to match the order of sub-requests. Results MAY appear in completion order.
 
-IM18. Request capture for Image API sub-requests follows `request-capture-dumps.spec.md` RCD-C16 (one capture session per sub-request), RCD-D4a (multipart `raw_input` for edits), RCD-D2c (`is_stream` equals the parsed downstream `stream` flag), and RCD-D10c (stream-collected reconstruction for the IM3 internal-stream path and the IM3a streaming path).
+IM18. Request capture for Image API sub-requests follows `request-capture-dumps.spec.md` RCD-C16 (one capture session per sub-request), RCD-D4a (multipart `raw_input` for multipart edits, original JSON for JSON edits), RCD-D2c (`is_stream` equals the parsed downstream `stream` flag), and RCD-D10c (stream-collected reconstruction for the IM3 internal-stream path and the IM3a streaming path).
 
 ## 5. Response mapping
 
@@ -157,7 +161,7 @@ IR3. If a sub-request succeeds but produces zero assistant `Node::Image` nodes, 
 
 IR3a. Image extraction MUST skip Base64 sources whose data is empty or whitespace-only, and URL sources whose URL is empty or whitespace-only. These nodes MUST NOT satisfy IR3 validation.
 
-IR4. `revised_prompt`: If the URP response contains assistant `Node::Text` nodes alongside assistant `Node::Image` nodes, the concatenated text content of those text nodes MUST be used as `revised_prompt` for the corresponding `data[]` entry. If no assistant text nodes exist alongside images, `revised_prompt` MUST be omitted.
+IR4. Each image's typed `image_generation.revised_prompt` MUST supply its `revised_prompt`, including an empty string. If absent, concatenated assistant text MAY supply the fallback. If both sources are absent, Monoize MUST omit `revised_prompt`. Identical images MUST remain separate data items.
 
 ### 5.2 Response envelope
 
@@ -243,7 +247,7 @@ IR13. HTTP status codes follow existing Monoize conventions:
 
 ### 5.5 Streaming response mapping (`stream = true`)
 
-IS1. When the downstream request has `stream = true` and passes §3 validation, authentication (IA-A1..IA-A3), and the model allowlist (IA-A4), Monoize MUST respond with HTTP 200 and `Content-Type: text/event-stream`, then execute the single sub-request per IM3a. Failures detected before the SSE response starts (parse errors, auth, allowlist) use the §5.4 JSON error responses.
+IS1. When `stream = true`, Monoize MUST validate the request, authenticate, enforce model permissions, and check candidate-route balance before opening SSE. Preflight failures MUST use §5.4 JSON errors. Only then MAY Monoize return HTTP 200 with `Content-Type: text/event-stream` and execute IM3a.
 
 IS2. Downstream SSE event names use the endpoint's image stream event family (§1): `image_generation.partial_image` / `image_generation.completed` for generations, `image_edit.partial_image` / `image_edit.completed` for edits. Every frame MUST carry the event name in both the SSE `event:` line and the `type` field of the JSON data.
 
@@ -259,6 +263,8 @@ IS4. Completed frames: when the sub-request reaches its terminal URP response (a
 
 - `type`: the event name;
 - `b64_json` for a `Base64` source, or `url` for a `Url` source;
+- `revised_prompt` when available under IR4, including an empty string;
+- upstream-reported generation fields from typed image metadata, with output format reconciled against the current source;
 - `created_at`: the Unix timestamp (seconds) at emission;
 - on the last completed frame only: `usage` in the IR10 shape, present iff the sub-request produced URP `Usage`.
 
@@ -270,7 +276,13 @@ IS7. Attempt failover for the streaming sub-request is allowed only until the fi
 
 IS8. The streaming sub-request is billed and request-logged as one request with `is_stream = true`, using the same billing pipeline as §6.3. `request_kind` follows RL2.
 
-IS9. Upstream transport for the streaming sub-request always uses upstream SSE (`UrpRequest.stream = Some(true)`), for every effective upstream type. For `openai_image` attempts the upstream request follows `openai-image-upstream.spec.md` OIU-E4 (generations JSON) or OIU-S7 (edits multipart).
+IS9. Streaming sub-requests SHOULD request upstream SSE. OpenRouter Image attempts with user image inputs MUST instead request non-streaming upstream transport. OpenAI Image generations use JSON. All-inline edits use multipart. Edits containing URL or FileId references use JSON under `openai-image-upstream.spec.md` OIU-S7.
+
+IS10. After successful preflight, Monoize MUST immediately send an SSE `heartbeat` comment. It MUST send another comment after 15 seconds without a data event. Responses MUST set `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. Heartbeats MUST NOT count as image frames for IS7.
+
+IS11. An upstream HTTP 400 or 422 that explicitly rejects streaming MAY trigger exactly one non-streaming resend of that attempt before any image frame. Recognized signals are `streaming_not_supported`, `unsupported_streaming`, an unsupported or unknown `stream` parameter, or an explicit message that streaming is unsupported. The resend MUST remove `stream` and `partial_images` from the wire request. It MUST preserve the model, prompt, images, other options, authentication, and transforms. This one transport negotiation is independent of configured retries. Each physical request MUST have its own attempt number and capture entry. Negotiation MUST NOT mark the Channel unhealthy. Other HTTP failures, network failures, empty outputs, and interrupted streams MUST NOT trigger this negotiation.
+
+IS12. A successful upstream `application/json` response MUST be decoded as a normal provider response, even when streaming was requested. The decoder MUST produce one typed terminal response for response transforms, validation, billing, and completion frames. It MUST NOT manufacture partial images. Synthetic streams MUST retain upstream usage, metadata, image multiplicity, and error handling. Downstream logs MUST retain `is_stream = true`, and billing MUST occur once.
 
 ## 6. Pipeline integration
 
@@ -293,7 +305,7 @@ RT1. Routing uses the `model` field from the Image API request as the logical mo
 
 RT2. The provider type determines which upstream adapter encodes the URP request. The same provider type resolution used for `/v1/responses` applies.
 
-RT3. If an Image API edit sub-request routes to an attempt with effective upstream type `openai_image`, Monoize MUST forward the source image node(s) and mask node, if present, as `multipart/form-data` to upstream `POST /v1/images/edits`. Monoize MUST NOT encode that upstream call as JSON and MUST NOT send it to upstream `POST /v1/images/generations`.
+RT3. OpenAI Image edit attempts MUST target `POST /v1/images/edits`. All-inline inputs use multipart. Inputs containing URL or FileId references use JSON, including data URLs for any accompanying inline images. The optional mask follows the same encoding choice.
 
 RT4. If an Image API generation sub-request routes to an attempt with effective upstream type `openai_image`, and the mapped URP request contains no user-role image nodes, Monoize MUST keep the existing JSON upstream encoding and upstream path `POST /v1/images/generations`.
 
@@ -307,7 +319,7 @@ BL2. For `n = 3`, the user is billed for 3 separate forwarding requests.
 
 RL1. Each sub-request MUST produce its own request log entry through the existing request logging pipeline.
 
-RL2. The `request_kind` field for Image API request logs MUST be `"image_generation"` for generations and `"image_edit"` for edits.
+RL2. API-key Image API requests MUST record `request_kind = "image_generation"` for generations and `"image_edit"` for edits. A pre-existing internal source, including Playground, MUST retain its classification.
 
 ## 7. Observability
 
@@ -316,7 +328,7 @@ OB1. Monoize MUST log the downstream Image API request shape at INFO level befor
 - logical model;
 - `n` value;
 - endpoint type (generations or edits);
-- for edits: source image byte size estimate and whether mask is present.
+- for edits: source image count, inline byte size estimate, reference count, and whether a mask is present. Logs MUST NOT include prompts, image content, URLs, file IDs, or credentials.
 
 OB2. Each sub-request's upstream call observability follows existing FP4b/FP4c requirements.
 
@@ -329,3 +341,7 @@ CO2. Monoize MUST NOT implement `POST /v1/images/variations`. Only generations a
 CO3. The configured HTTP body limit from `unified_responses_proxy.spec.md` §C5 applies to Image API endpoints.
 
 CO4. Image API endpoints MUST NOT be listed in `GET /v1/models` output (they are not model endpoints; they are adapters).
+
+RT5. An `openrouter_image` attempt MUST encode generation and edit sub-requests as JSON to `POST /v1/images`.
+It MUST map source images to `input_references` and reject masks according to `openrouter-image-upstream.spec.md`.
+The same rule applies to IS9 streaming attempts.

@@ -109,6 +109,21 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
+## Gemini 上游
+
+將 Channel 的上游類型設為 `gemini`，即可透過現有端點使用 Gemini。此支援不新增公開的 Gemini HTTP 端點，也不包含 Live API。
+
+Monoize 雙向轉換 `generateContent` 請求、回應和對話歷程。串流回應使用 `streamGenerateContent` SSE。
+
+- 文字、推理、函式呼叫、函式結果和支援的媒體保留順序與識別資訊。思考簽章始終關聯原始 Part。
+- 生成控制參數、結構化回應格式、工具和工具選擇轉換為目標協定支援的對應欄位。
+- Token logprobs 始終關聯相符的文字。文字變更後會捨棄失效的分數。Gemini 最多允許請求 20 個 top logprobs。
+- 可表示的引用和 grounding 來源連結轉換為目標格式。引用範圍保留文字中的位置，包括非 ASCII 文字。
+- 文字和推理在完成前持續輸出。需要完整內容的媒體和帶簽章的 Part 可以等到完成後輸出。失敗或截斷的串流傳回錯誤。
+- Monoize 優先傳回 index 為 0 的候選回應，否則傳回第一個候選回應。獨立候選回應不會合併。
+
+Gemini 專屬工具、Provider 執行的程式碼和無法轉換的中繼資料僅在 Gemini 內保留。目標協定只接收其能夠表示的功能。
+
 ## Embeddings
 
 ```bash
@@ -136,15 +151,39 @@ curl http://localhost:8080/v1/images/generations \
   }'
 ```
 
-編輯使用 `multipart/form-data`：
+使用 `multipart/form-data` 上傳圖片檔案：
 
 ```bash
 curl http://localhost:8080/v1/images/edits \
   -H "Authorization: Bearer sk-..." \
   -F model="my-image-model" \
   -F prompt="Add a red boat" \
-  -F image[]=@input.png
+  -F 'image[]=@input.png'
 ```
+
+加入 `-F mask=@mask.png` 可使用 PNG 遮罩。編輯請求接受 1–16 張來源圖片和最多一個遮罩。
+
+使用 JSON 提交圖片參照：
+
+```bash
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-image-model",
+    "prompt": "Add a red boat",
+    "images": [{ "image_url": "https://example.com/input.png" }],
+    "mask": { "image_url": "https://example.com/mask.png" }
+  }'
+```
+
+每個 `images` 項目和選用的 `mask` 物件必須恰好包含一個 `image_url` 或 `file_id`。`image_url` 接受 HTTP(S) URL 或 Base64 資料 URL。檔案 ID 必須能透過所選上游憑證存取。檔案 ID 不會在上游帳號或 Provider 之間轉移檔案。
+
+兩個端點都必須提供 `model` 和 `prompt`。非串流請求的 `n` 仍會拆分為獨立子請求。設定 `stream=true` 和 `n=1` 可接收圖像 SSE 事件。原生 `openai_image` 路由將內嵌圖片以 multipart 傳送。只要任一輸入或遮罩保留 HTTP(S) URL 或檔案參照，該路由就使用 JSON。
+
+設定 `stream=true` 後，Monoize 立即傳送 SSE 保活註解，並在連續 15 秒沒有資料事件時再次傳送。OpenRouter 圖片編輯自動使用非串流上游請求；其他路由收到明確拒絕串流的 HTTP 400 或 422 後，只回退一次。JSON 圖片回應轉換為完成事件，不會偽造預覽圖。計費與日誌仍計為一次串流請求，一般網路錯誤不會觸發此回退。這可以在生成期間維持下游連線，但不會延長上游請求逾時。
+
+對於 Responses 路由，設定 [image_enable_openai_generation_tool](/zh-TW/docs/transforms/image_enable_openai_generation_tool)。請求中的圖像參數優先於變換預設值，遮罩會映射到工具的 `input_image_mask`。圖像 `background` 用於設定工具，與 Responses 的布林值 `background` 不同。Responses 路由會明確拒絕圖像 `style` 和 `response_format="url"`。
 
 圖像回應保留上游回傳的 `quality`、`size`、`background`、`output_format` 和圖像 `model`。上游未回傳的值保持缺省；請求參數不能證明上游的實際執行結果。回傳多張圖像時，只有所有圖像都報告相同值，回應才會包含對應的頂層欄位。圖像串流的完成事件攜帶各自圖像的中繼資料。
 

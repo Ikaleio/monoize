@@ -120,10 +120,14 @@ pub fn protocol_matches(source: ProviderProtocol, target: ProviderProtocol) -> b
     source == target
         || (matches!(
             source,
-            ProviderProtocol::Responses | ProviderProtocol::ChatCompletion
+            ProviderProtocol::Responses
+                | ProviderProtocol::ChatCompletion
+                | ProviderProtocol::OpenaiImage
         ) && matches!(
             target,
-            ProviderProtocol::Responses | ProviderProtocol::ChatCompletion
+            ProviderProtocol::Responses
+                | ProviderProtocol::ChatCompletion
+                | ProviderProtocol::OpenaiImage
         ))
 }
 

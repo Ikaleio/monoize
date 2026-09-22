@@ -76,6 +76,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let stream = obj.get("stream").and_then(|v| v.as_bool());
 
     Ok(UrpRequest {
+        image_generation: None,
+        sampling: None,
         logprobs: None,
         context: Default::default(),
         instructions_format: None,

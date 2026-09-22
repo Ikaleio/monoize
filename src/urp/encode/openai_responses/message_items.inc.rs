@@ -168,7 +168,9 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
                     ))
                 });
                 obj.entry("logprobs".to_string()).or_insert_with(|| {
-                    json!(crate::urp::logprobs::valid(logprobs, content).unwrap_or_default())
+                    crate::urp::logprobs::encode_openai(
+                        crate::urp::logprobs::valid(logprobs, content).unwrap_or_default(),
+                    )
                 });
             }
             merge_extra(&mut obj, extra_body);

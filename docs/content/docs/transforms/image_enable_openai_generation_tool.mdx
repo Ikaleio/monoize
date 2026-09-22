@@ -7,6 +7,14 @@ description: Ensure the OpenAI Responses image_generation tool exists on the req
 
 This transform adds the OpenAI Responses `image_generation` tool descriptor to the request when it is missing. It can also force streaming and force the tool choice.
 
+Configure this transform when an Images API route uses a Responses upstream. Without a compatible image tool, the route returns an explicit error.
+
+Images API request values override tool defaults for `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `partial_images`, and `input_fidelity`. This also applies to an existing image tool. Image `background` stays inside the tool configuration. It does not replace the Responses top-level boolean `background`.
+
+An edit mask becomes the tool's `input_image_mask`, not an ordinary input image. URL, inline Base64, and file-reference masks are supported. File references must be accessible with the selected upstream credentials. Responses routes reject image `style` and `response_format="url"` because this tool cannot represent them.
+
+With `force_stream=true`, the transform defaults `partial_images` to `3` only when both the request and tool omit it. Explicit values, including `0`, remain unchanged.
+
 ## Reference
 
 | Property | Value |
@@ -24,11 +32,11 @@ This transform adds the OpenAI Responses `image_generation` tool descriptor to t
 
 | Option | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `output_format` | string | No | `"png"` | `png`, `webp`, or `jpeg`. Format requested from the image tool. |
+| `output_format` | string | No | `"png"` | `png`, `webp`, or `jpeg`. Default format when the image request omits it. |
 | `action` | string | No | — | Optional action value written into the tool descriptor. |
 | `force_stream` | boolean | No | `false` | Force the upstream request to stream with partial images. |
 | `force_tool_choice` | boolean | No | `false` | Force tool choice to the image generation tool. |
-| `extra` | object | No | `{}` | Extra fields merged into the tool descriptor. |
+| `extra` | object | No | `{}` | Additional tool defaults. Explicit image request values take precedence. |
 
 ### Example rule
 

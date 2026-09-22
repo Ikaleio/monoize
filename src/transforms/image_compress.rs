@@ -19,7 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::io::Cursor;
 
-const TRANSFORM_VERSION: &str = "compress_user_message_images:v5";
+const TRANSFORM_VERSION: &str = "compress_user_message_images:v6";
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -436,6 +436,15 @@ async fn compress_image_nodes(
     context: &TransformRuntimeContext,
     cfg: &Config,
 ) -> Result<(), TransformError> {
+    if role == OrdinaryRole::User
+        && nodes.iter().any(|node| {
+            matches!(node,
+                Node::Image { role: OrdinaryRole::User, metadata, .. } if metadata.image_mask
+            )
+        })
+    {
+        return Ok(());
+    }
     for node in nodes {
         compress_image_node(node, role, context, cfg).await?;
     }
@@ -693,7 +702,6 @@ fn compress_image_bytes_with_limit(
         Ok(image) => image,
         Err(_) => return Ok(None),
     };
-    let resized = resize_if_needed(decoded, cfg.max_edge_px);
     let output_format = match cfg.output_format {
         OutputFormat::Original => output_format_for_media_type(media_type),
         selected => Some(selected),
@@ -701,6 +709,10 @@ fn compress_image_bytes_with_limit(
     let Some(output_format) = output_format else {
         return Ok(None);
     };
+    if output_format == OutputFormat::Jpg && decoded.color().has_alpha() {
+        return Ok(None);
+    }
+    let resized = resize_if_needed(decoded, cfg.max_edge_px);
 
     let transformed = match output_format {
         OutputFormat::Original => unreachable!("original output format must be resolved"),

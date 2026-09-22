@@ -65,6 +65,10 @@ impl Usage {
                     &mut target.cache_read_modality_breakdown,
                     &source.cache_read_modality_breakdown,
                 );
+                add_modality(
+                    &mut target.tool_prompt_modality_breakdown,
+                    &source.tool_prompt_modality_breakdown,
+                );
             }
             if let Some(source) = &source.output_details {
                 let target = total

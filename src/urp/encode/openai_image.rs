@@ -1,36 +1,132 @@
-use crate::urp::{ImageSource, Node, OrdinaryRole, UrpRequest};
+use crate::urp::{ImageGenerationOptions, ImageSource, Node, OrdinaryRole, UrpRequest};
 use base64::Engine as _;
 use serde_json::{Map, Value};
 
 pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
-    let mut prompt_parts: Vec<String> = Vec::new();
-    for item in &req.input {
-        if let Node::Text {
-            role: OrdinaryRole::User,
-            content,
-            ..
-        } = item
-            && !content.trim().is_empty()
-        {
-            prompt_parts.push(content.clone());
+    encode_request_checked(req, model)
+        .unwrap_or_else(|message| crate::urp::media::error_body(&message))
+}
+
+pub fn encode_request_checked(req: &UrpRequest, model: &str) -> Result<Value, String> {
+    let prepared = prepare_request(req)?;
+    if has_user_image_input(&prepared) {
+        validate_edit_images(&prepared)?;
+        if edit_requires_json(req) {
+            return Ok(encode_edit_body(&prepared, model));
         }
     }
-    let prompt = prompt_parts.join("\n");
+    Ok(Value::Object(request_fields(&prepared, model)))
+}
 
+fn prepare_request(req: &UrpRequest) -> Result<UrpRequest, String> {
+    if let Some(options) = &req.image_generation {
+        options.validate()?;
+    }
+    crate::urp::media::prepare_request(req, crate::urp::ProviderProtocol::OpenaiImage)
+}
+
+fn request_fields(req: &UrpRequest, model: &str) -> Map<String, Value> {
     let mut body = Map::new();
+    for (key, value) in &req.extra_body {
+        if key.starts_with("_monoize_")
+            || matches!(
+                key.as_str(),
+                "model" | "prompt" | "stream" | "user" | "image" | "images" | "mask"
+            )
+            || (req.image_generation.is_some()
+                && ImageGenerationOptions::KEYS.contains(&key.as_str()))
+        {
+            continue;
+        }
+        body.insert(key.clone(), value.clone());
+    }
+    if let Some(options) = &req.image_generation {
+        body.extend(options.to_object());
+    }
     body.insert("model".to_string(), Value::String(model.to_string()));
-    body.insert("prompt".to_string(), Value::String(prompt));
+    body.insert("prompt".to_string(), Value::String(user_prompt(req)));
     if req.stream == Some(true) {
         body.insert("stream".to_string(), Value::Bool(true));
     }
+    if let Some(user) = &req.user {
+        body.insert("user".to_string(), Value::String(user.clone()));
+    }
+    body
+}
 
-    for (k, v) in &req.extra_body {
-        if !k.starts_with("_monoize_") && k != "model" && k != "prompt" && k != "stream" {
-            body.insert(k.clone(), v.clone());
+pub fn edit_requires_json(req: &UrpRequest) -> bool {
+    req.input.iter().any(|node| {
+        matches!(
+            node,
+            Node::Image {
+                role: OrdinaryRole::User,
+                source: ImageSource::Url { .. } | ImageSource::FileId { .. },
+                ..
+            }
+        )
+    })
+}
+
+pub fn encode_edit_request(req: &UrpRequest, model: &str) -> Result<Value, String> {
+    let prepared = prepare_request(req)?;
+    validate_edit_images(&prepared)?;
+    Ok(encode_edit_body(&prepared, model))
+}
+
+fn encode_edit_body(req: &UrpRequest, model: &str) -> Value {
+    let mut body = request_fields(req, model);
+    let mut images = Vec::new();
+    for node in &req.input {
+        let Node::Image {
+            role: OrdinaryRole::User,
+            source,
+            metadata,
+            ..
+        } = node
+        else {
+            continue;
+        };
+        let reference = match source {
+            ImageSource::Base64 { media_type, data } => {
+                serde_json::json!({ "image_url": format!("data:{media_type};base64,{data}") })
+            }
+            ImageSource::Url { url, .. } => serde_json::json!({ "image_url": url }),
+            ImageSource::FileId { file_id, .. } => serde_json::json!({ "file_id": file_id }),
+        };
+        if metadata.image_mask {
+            body.insert("mask".to_string(), reference);
+        } else {
+            images.push(reference);
         }
     }
-
+    body.insert("images".to_string(), Value::Array(images));
     Value::Object(body)
+}
+
+fn validate_edit_images(req: &UrpRequest) -> Result<usize, String> {
+    let mut images = 0;
+    let mut masks = 0;
+    for node in &req.input {
+        if let Node::Image {
+            role: OrdinaryRole::User,
+            metadata,
+            ..
+        } = node
+        {
+            if metadata.image_mask {
+                masks += 1;
+            } else {
+                images += 1;
+            }
+        }
+    }
+    if !(1..=16).contains(&images) {
+        return Err("image edits require 1 through 16 source images".to_string());
+    }
+    if masks > 1 {
+        return Err("image edits support at most one mask".to_string());
+    }
+    Ok(images)
 }
 
 pub fn has_user_image_input(req: &UrpRequest) -> bool {
@@ -63,6 +159,15 @@ pub enum MultipartField {
 }
 
 pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartField>, String> {
+    if edit_requires_json(req) {
+        return Err("image references require a JSON image edit request".to_string());
+    }
+    let prepared = prepare_request(req)?;
+    let req = &prepared;
+    let image_count = validate_edit_images(req)?;
+    let mut body = request_fields(req, model);
+    body.remove("model");
+    body.remove("prompt");
     let mut fields = vec![
         MultipartField::Text {
             name: "model".to_string(),
@@ -74,28 +179,18 @@ pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartFi
         },
     ];
 
-    if req.stream == Some(true) {
+    for (key, value) in body {
         fields.push(MultipartField::Text {
-            name: "stream".to_string(),
-            value: "true".to_string(),
-        });
-    }
-
-    for (k, v) in &req.extra_body {
-        if k.starts_with("_monoize_") || k == "model" || k == "prompt" || k == "stream" {
-            continue;
-        }
-        fields.push(MultipartField::Text {
-            name: k.clone(),
-            value: extra_value_to_text(v),
+            name: key,
+            value: extra_value_to_text(&value),
         });
     }
 
     for (idx, item) in req.input.iter().enumerate() {
         let Node::Image {
-            id,
             role: OrdinaryRole::User,
             source,
+            metadata,
             ..
         } = item
         else {
@@ -108,13 +203,14 @@ pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartFi
                     .map_err(|e| format!("invalid base64 image input: {e}"))?;
                 (media_type.clone(), bytes)
             }
-            ImageSource::Url { url, .. } => ("text/plain".to_string(), url.as_bytes().to_vec()),
-            ImageSource::FileId { .. } => {
-                return Err("file_id image input is unsupported by the image API".to_string());
+            ImageSource::Url { .. } | ImageSource::FileId { .. } => {
+                return Err("image references require a JSON image edit request".to_string());
             }
         };
-        let field_name = if id.as_deref() == Some("__monoize_image_api_mask") {
+        let field_name = if metadata.image_mask {
             "mask"
+        } else if image_count > 1 {
+            "image[]"
         } else {
             "image"
         };

@@ -102,10 +102,10 @@ impl Citation {
                 .zip(number(end))
                 .map(|(start, end)| TextRange { start, end })
         };
-        let source = if let Some(url) = string("url")
-            .or_else(|| string("uri"))
-            .filter(|_| matches!(kind, "url_citation" | "web_search_result_location"))
-        {
+        let source = if let Some(url) = string("url").or_else(|| string("uri")).filter(|_| {
+            protocol == ProviderProtocol::Gemini
+                || matches!(kind, "url_citation" | "web_search_result_location")
+        }) {
             Some(CitationSource::Url {
                 url,
                 title: string("title"),
@@ -158,9 +158,24 @@ impl Citation {
             None
         };
         let Some(source) = source else {
+            let answer_range = if protocol == ProviderProtocol::Gemini {
+                number("endIndex").map(|end| TextRange {
+                    start: number("startIndex").unwrap_or(0),
+                    end,
+                })
+            } else {
+                None
+            };
+            let mut body = value;
+            if protocol == ProviderProtocol::Gemini {
+                if let Some(object) = body.as_object_mut() {
+                    object.remove("startIndex");
+                    object.remove("endIndex");
+                }
+            }
             return Self {
-                source: CitationSource::ProviderNative { body: value },
-                answer_range: None,
+                source: CitationSource::ProviderNative { body },
+                answer_range,
                 cited_text: None,
                 origin_protocol: protocol,
                 extra_body: HashMap::new(),
@@ -206,7 +221,25 @@ impl Citation {
         let same = self.origin_protocol == protocol;
         let mut body = match &self.source {
             CitationSource::ProviderNative { body } => {
-                return same.then(|| super::encode::sanitize_provider_item_wire_body(body));
+                if !same {
+                    return None;
+                }
+                let mut body = super::encode::sanitize_provider_item_wire_body(body);
+                if protocol == ProviderProtocol::Gemini {
+                    if let Some(object) = body.as_object_mut() {
+                        object.remove("startIndex");
+                        object.remove("endIndex");
+                        if let Some(range) = &self.answer_range {
+                            object.insert(
+                                "startIndex".into(),
+                                json!(range.start.saturating_add(offset)),
+                            );
+                            object
+                                .insert("endIndex".into(), json!(range.end.saturating_add(offset)));
+                        }
+                    }
+                }
+                return Some(body);
             }
             CitationSource::Url { url, title } => {
                 let mut body = Map::new();
@@ -219,9 +252,6 @@ impl Citation {
                         body.insert("url".into(), json!(url));
                     }
                     ProviderProtocol::Gemini => {
-                        if !same {
-                            return None;
-                        }
                         body.insert("uri".into(), json!(url));
                     }
                     ProviderProtocol::Responses | ProviderProtocol::ChatCompletion => {
@@ -351,4 +381,292 @@ pub fn encode(values: &[Citation], protocol: ProviderProtocol, offset: u64) -> V
         .iter()
         .filter_map(|v| v.encode(protocol, offset))
         .collect()
+}
+
+const GEMINI_GROUNDING: &str = "_monoize_gemini_grounding";
+
+fn byte_range(text: &str, start: u64, end: u64) -> Option<TextRange> {
+    let start = usize::try_from(start).ok()?;
+    let end = usize::try_from(end).ok()?;
+    if start > end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return None;
+    }
+    Some(TextRange {
+        start: text[..start].chars().count() as u64,
+        end: text[..end].chars().count() as u64,
+    })
+}
+
+fn scalar_byte(text: &str, offset: u64) -> Option<usize> {
+    let offset = usize::try_from(offset).ok()?;
+    text.char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .nth(offset)
+}
+
+fn push_citation(citations: &mut Vec<Citation>, citation: Citation) {
+    if !citations.contains(&citation) {
+        citations.push(citation);
+    }
+}
+
+/// Maps Gemini byte ranges and grounding links onto current canonical text nodes.
+pub fn attach_gemini(candidate: &Map<String, Value>, nodes: &mut [super::Node]) {
+    if let Some(sources) = candidate
+        .get("citationMetadata")
+        .and_then(|value| value.get("citationSources"))
+        .and_then(Value::as_array)
+    {
+        for source in sources {
+            let decoded = Citation::decode(source.clone(), ProviderProtocol::Gemini);
+            let start = source
+                .get("startIndex")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let end = source.get("endIndex").and_then(Value::as_u64);
+            let mut offset = 0u64;
+            for node in nodes.iter_mut() {
+                let super::Node::Text {
+                    content, citations, ..
+                } = node
+                else {
+                    continue;
+                };
+                let limit = offset.saturating_add(content.len() as u64);
+                let mut citation = decoded.clone();
+                if let Some(end) = end {
+                    if end >= start && start < limit && end > offset {
+                        citation.answer_range = byte_range(
+                            content,
+                            start.saturating_sub(offset),
+                            end.min(limit) - offset,
+                        );
+                        if citation.answer_range.is_some() {
+                            push_citation(citations, citation);
+                        }
+                    }
+                } else {
+                    citation.answer_range = None;
+                    push_citation(citations, citation);
+                    break;
+                }
+                offset = limit;
+            }
+        }
+    }
+    let Some(grounding) = candidate.get("groundingMetadata") else {
+        return;
+    };
+    let Some(chunks) = grounding.get("groundingChunks").and_then(Value::as_array) else {
+        return;
+    };
+    let Some(supports) = grounding.get("groundingSupports").and_then(Value::as_array) else {
+        return;
+    };
+    for support in supports {
+        let Some(segment) = support.get("segment") else {
+            continue;
+        };
+        let part_index = segment
+            .get("partIndex")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let text_node_index = nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| !matches!(node, super::Node::NextDownstreamEnvelopeExtra { .. }))
+            .nth(part_index)
+            .map(|(index, _)| index);
+        let Some(super::Node::Text {
+            content, citations, ..
+        }) = text_node_index.and_then(|index| nodes.get_mut(index))
+        else {
+            continue;
+        };
+        let Some(range) = segment
+            .get("endIndex")
+            .and_then(Value::as_u64)
+            .and_then(|end| {
+                byte_range(
+                    content,
+                    segment
+                        .get("startIndex")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    end,
+                )
+            })
+        else {
+            continue;
+        };
+        let Some(indices) = support
+            .get("groundingChunkIndices")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for (position, index) in indices.iter().enumerate() {
+            let Some(chunk) = index.as_u64().and_then(|index| chunks.get(index as usize)) else {
+                continue;
+            };
+            let Some((kind, source)) = ["web", "retrievedContext", "maps", "image"]
+                .into_iter()
+                .find_map(|kind| chunk.get(kind).map(|source| (kind, source)))
+            else {
+                continue;
+            };
+            let uri_key = if kind == "image" { "sourceUri" } else { "uri" };
+            let Some(uri) = source.get(uri_key).and_then(Value::as_str) else {
+                continue;
+            };
+            let mut citation = Citation::decode(
+                json!({"uri":uri,"title":source.get("title")}),
+                ProviderProtocol::Gemini,
+            );
+            citation.answer_range = Some(range.clone());
+            let source_extra = source
+                .as_object()
+                .map(|source| super::decode::split_extra(source, &[uri_key, "title"]))
+                .unwrap_or_default();
+            let support_extra = support
+                .as_object()
+                .map(|support| {
+                    super::decode::split_extra(
+                        support,
+                        &["segment", "groundingChunkIndices", "confidenceScores"],
+                    )
+                })
+                .unwrap_or_default();
+            let confidence = support
+                .get("confidenceScores")
+                .and_then(Value::as_array)
+                .and_then(|scores| scores.get(position));
+            citation.wrapper_extra.insert(GEMINI_GROUNDING.into(), json!({"kind":kind,"source":source_extra,"support":support_extra,"confidence":confidence}));
+            push_citation(citations, citation);
+        }
+    }
+}
+
+/// Keeps provider presentation metadata without duplicate typed sources or answer text.
+pub fn gemini_metadata_extra(candidate: &Map<String, Value>) -> Option<Value> {
+    let mut metadata = candidate.get("groundingMetadata")?.as_object()?.clone();
+    if metadata
+        .get("groundingSupports")
+        .and_then(Value::as_array)
+        .is_some_and(|supports| !supports.is_empty())
+    {
+        metadata.remove("groundingSupports");
+        metadata.remove("groundingChunks");
+    }
+    (!metadata.is_empty()).then_some(Value::Object(metadata))
+}
+
+/// Converts node-relative Unicode scalar ranges to candidate-relative UTF-8 byte ranges.
+pub fn encode_gemini(nodes: &[super::Node]) -> Vec<Value> {
+    let mut sources = Vec::new();
+    let mut offset = 0u64;
+    for node in nodes {
+        let super::Node::Text {
+            content, citations, ..
+        } = node
+        else {
+            continue;
+        };
+        for citation in citations {
+            let mut citation = citation.clone();
+            if let Some(range) = &citation.answer_range {
+                let Some((start, end)) =
+                    scalar_byte(content, range.start).zip(scalar_byte(content, range.end))
+                else {
+                    continue;
+                };
+                if start > end {
+                    continue;
+                }
+                citation.answer_range = Some(TextRange {
+                    start: start as u64,
+                    end: end as u64,
+                });
+            }
+            if let Some(value) = citation.encode(ProviderProtocol::Gemini, offset) {
+                if !sources.contains(&value) {
+                    sources.push(value);
+                }
+            }
+        }
+        offset += content.len() as u64;
+    }
+    sources
+}
+
+/// Rebuilds native grounding links from typed citations and current text.
+pub fn encode_gemini_grounding(nodes: &[super::Node]) -> Option<Value> {
+    let mut chunks = Vec::<Value>::new();
+    let mut supports = Vec::new();
+    let mut part_index = 0;
+    for node in nodes {
+        if matches!(node, super::Node::NextDownstreamEnvelopeExtra { .. }) {
+            continue;
+        }
+        if let super::Node::Text {
+            content, citations, ..
+        } = node
+        {
+            for citation in citations {
+                let Some(shape) = citation.wrapper_extra.get(GEMINI_GROUNDING) else {
+                    continue;
+                };
+                let CitationSource::Url { url, title } = &citation.source else {
+                    continue;
+                };
+                let Some(range) = &citation.answer_range else {
+                    continue;
+                };
+                let Some((start, end)) =
+                    scalar_byte(content, range.start).zip(scalar_byte(content, range.end))
+                else {
+                    continue;
+                };
+                if start > end {
+                    continue;
+                }
+                let kind = shape.get("kind").and_then(Value::as_str).unwrap_or("web");
+                let mut source = shape
+                    .get("source")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                source.insert(
+                    if kind == "image" { "sourceUri" } else { "uri" }.into(),
+                    json!(url),
+                );
+                source.remove("title");
+                if let Some(title) = title {
+                    source.insert("title".into(), json!(title));
+                }
+                let chunk = json!({kind:source});
+                let index = chunks
+                    .iter()
+                    .position(|old| *old == chunk)
+                    .unwrap_or_else(|| {
+                        chunks.push(chunk);
+                        chunks.len() - 1
+                    });
+                let mut support = shape
+                    .get("support")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                support.insert("segment".into(), json!({"partIndex":part_index,"startIndex":start,"endIndex":end,"text":&content[start..end]}));
+                support.insert("groundingChunkIndices".into(), json!([index]));
+                if let Some(confidence) = shape.get("confidence").filter(|value| !value.is_null()) {
+                    support.insert("confidenceScores".into(), json!([confidence]));
+                }
+                supports.push(Value::Object(support));
+            }
+        }
+        part_index += 1;
+    }
+    (!supports.is_empty()).then(|| json!({"groundingChunks":chunks,"groundingSupports":supports}))
 }

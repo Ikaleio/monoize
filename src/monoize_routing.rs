@@ -21,6 +21,7 @@ pub enum MonoizeProviderType {
     Messages,
     Gemini,
     OpenaiImage,
+    OpenrouterImage,
     Replicate,
 }
 
@@ -33,6 +34,7 @@ impl MonoizeProviderType {
             "messages" => Some(Self::Messages),
             "gemini" => Some(Self::Gemini),
             "openai_image" => Some(Self::OpenaiImage),
+            "openrouter_image" => Some(Self::OpenrouterImage),
             "replicate" => Some(Self::Replicate),
             _ => None,
         }
@@ -45,6 +47,7 @@ impl MonoizeProviderType {
             Self::Messages => "messages",
             Self::Gemini => "gemini",
             Self::OpenaiImage => "openai_image",
+            Self::OpenrouterImage => "openrouter_image",
             Self::Replicate => "replicate",
         }
     }
@@ -56,6 +59,7 @@ impl MonoizeProviderType {
             Self::Messages => crate::config::ProviderType::Messages,
             Self::Gemini => crate::config::ProviderType::Gemini,
             Self::OpenaiImage => crate::config::ProviderType::OpenaiImage,
+            Self::OpenrouterImage => crate::config::ProviderType::OpenrouterImage,
             Self::Replicate => crate::config::ProviderType::Replicate,
         }
     }
@@ -2545,7 +2549,11 @@ pub async fn probe_channel_list_models(
     timeout_ms: u64,
 ) -> bool {
     let base = channel.base_url.trim_end_matches('/');
-    let url = format!("{base}/v1/models");
+    let url = if channel.provider_type == MonoizeProviderType::OpenrouterImage {
+        crate::upstream::join_url(base, "/v1/images/models")
+    } else {
+        format!("{base}/v1/models")
+    };
 
     let mut request = client.get(url).timeout(Duration::from_millis(timeout_ms));
     request = apply_provider_api_key(request, channel.provider_type, &channel.api_key);
@@ -2840,7 +2848,9 @@ async fn read_probe_stream(
                     };
                 }
             }
-            MonoizeProviderType::OpenaiImage | MonoizeProviderType::Replicate => {}
+            MonoizeProviderType::OpenaiImage
+            | MonoizeProviderType::OpenrouterImage
+            | MonoizeProviderType::Replicate => {}
         }
     }
 
@@ -2990,6 +3000,11 @@ fn build_probe_request(
                 "size": "1024x1024",
                 "n": 1,
             });
+            (url, body, &[][..])
+        }
+        MonoizeProviderType::OpenrouterImage => {
+            let url = crate::upstream::join_url(base, "/v1/images");
+            let body = serde_json::json!({"model": model, "prompt": "test", "n": 1});
             (url, body, &[][..])
         }
         MonoizeProviderType::Replicate => {

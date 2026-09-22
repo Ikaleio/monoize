@@ -23,7 +23,8 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
-    let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Responses)?;
+    let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Responses)?;
+    prepare_image_generation_request(&mut prepared)?;
     validate_stable_responses_audio(&prepared.input)?;
     Ok(encode_request_prepared(&prepared, upstream_model))
 }
@@ -155,6 +156,11 @@ fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
     crate::urp::logprobs::encode_request(
         &mut body,
         &req.logprobs,
+        crate::urp::ProviderProtocol::Responses,
+    );
+    crate::urp::sampling::encode_request(
+        &mut body,
+        &req.sampling,
         crate::urp::ProviderProtocol::Responses,
     );
     body

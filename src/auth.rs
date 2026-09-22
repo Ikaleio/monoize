@@ -7,12 +7,16 @@ use crate::users::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InternalRequestSource {
     Playground,
+    ImageGeneration,
+    ImageEdit,
 }
 
 impl InternalRequestSource {
     pub const fn request_kind(self) -> &'static str {
         match self {
             Self::Playground => "playground",
+            Self::ImageGeneration => "image_generation",
+            Self::ImageEdit => "image_edit",
         }
     }
 }

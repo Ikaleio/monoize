@@ -800,8 +800,10 @@ pub(super) async fn forward_stream_typed(
                             );
                             return Err(err);
                         }
-                        if attempt.provider_type == ProviderType::OpenaiImage
-                            && !matches!(downstream, DownstreamProtocol::Responses)
+                        if matches!(
+                            attempt.provider_type,
+                            ProviderType::OpenaiImage | ProviderType::OpenrouterImage
+                        ) && !matches!(downstream, DownstreamProtocol::Responses)
                         {
                             convert_assistant_images_to_markdown(&mut resp);
                         }
@@ -1115,8 +1117,7 @@ pub(super) async fn forward_stream_typed(
                 )
             } else {
                 let http = client_http_for_attempt(&state, &attempt)?;
-                // OIU-S7: openai_image edits stream through multipart
-                // `/v1/images/edits`; every other attempt posts the JSON body.
+                // Reference edits use JSON; inline Base64 edits use multipart.
                 let stream_call = match call_streaming_image_capable_upstream(
                     &http,
                     &attempt,

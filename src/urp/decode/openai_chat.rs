@@ -120,6 +120,7 @@ impl From<OpenAiChatUsage> for Usage {
                     || crate::urp::usage::modality(&details.extra).is_some()
                 {
                     Some(InputDetails {
+                        tool_prompt_modality_breakdown: None,
                         standard_tokens: 0,
                         cache_read_tokens: details.cached_tokens,
                         cache_read_modality_breakdown: None,
@@ -763,7 +764,16 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     crate::urp::logprobs::strip_request_extras(&mut extra_body);
+    crate::urp::sampling::strip_request_extras(
+        &mut extra_body,
+        crate::urp::ProviderProtocol::ChatCompletion,
+    );
     Ok(UrpRequest {
+        image_generation: None,
+        sampling: crate::urp::sampling::request_config(
+            obj,
+            crate::urp::ProviderProtocol::ChatCompletion,
+        ),
         logprobs: crate::urp::logprobs::request_config(
             obj,
             crate::urp::ProviderProtocol::ChatCompletion,

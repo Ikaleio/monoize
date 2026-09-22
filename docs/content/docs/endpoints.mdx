@@ -109,6 +109,21 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
+## Gemini upstreams
+
+Set the Channel upstream type to `gemini` to use Gemini through the existing endpoints. This support adds no public Gemini HTTP endpoint or Live API.
+
+Monoize converts `generateContent` requests, responses, and conversation history in both directions. Streaming uses `streamGenerateContent` SSE.
+
+- Text, reasoning, function calls, function results, and supported media retain their order and identity. Thought signatures remain attached to their original Parts.
+- Generation controls, structured response formats, tools, and tool choice convert to their supported equivalents.
+- Token logprobs remain attached to matching text. Changed text discards stale scores. Gemini permits at most 20 requested top logprobs.
+- Representable citations and grounding links convert to the target format. Citation ranges retain their text locations, including non-ASCII text.
+- Text and reasoning stream before completion. Atomic media and signed Parts can wait until complete. Failed or truncated streams produce errors.
+- Monoize returns candidate index zero when present, otherwise the first candidate. It does not combine independent candidates.
+
+Gemini-only tools, provider-executed code, and unsupported metadata stay within Gemini. A target protocol receives only the features it can represent.
+
 ## Embeddings
 
 ```bash
@@ -136,15 +151,39 @@ curl http://localhost:8080/v1/images/generations \
   }'
 ```
 
-Edits use `multipart/form-data`:
+Upload image files with `multipart/form-data`:
 
 ```bash
 curl http://localhost:8080/v1/images/edits \
   -H "Authorization: Bearer sk-..." \
   -F model="my-image-model" \
   -F prompt="Add a red boat" \
-  -F image[]=@input.png
+  -F 'image[]=@input.png'
 ```
+
+Add `-F mask=@mask.png` to apply a PNG mask. Edits accept 1–16 source images and at most one mask.
+
+Use JSON for image references:
+
+```bash
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-image-model",
+    "prompt": "Add a red boat",
+    "images": [{ "image_url": "https://example.com/input.png" }],
+    "mask": { "image_url": "https://example.com/mask.png" }
+  }'
+```
+
+Each `images` entry and optional `mask` object accepts exactly one `image_url` or `file_id`. An `image_url` accepts an HTTP(S) URL or a Base64 data URL. File IDs must be accessible with the selected upstream credentials. A file ID does not transfer a file between upstream accounts or Providers.
+
+Both endpoints require `model` and `prompt`. Non-streaming `n` requests still run as independent sub-requests. Set `stream=true` with `n=1` for image SSE events. Native `openai_image` routes send inline images as multipart. If any input or mask retains an HTTP(S) URL or file reference, those routes send JSON.
+
+With `stream=true`, Monoize sends an immediate SSE heartbeat and another after 15 seconds without a data event. OpenRouter image edits use non-streaming upstream requests automatically. Other routes retry once without streaming after an explicit HTTP 400 or 422 streaming rejection. JSON image responses become completed events without synthetic previews. Billing and logs remain one streaming request. Ordinary network errors do not trigger this transport fallback. This keeps downstream connections active during generation; it does not extend the upstream request timeout.
+
+For Responses routes, configure [image_enable_openai_generation_tool](/en/docs/transforms/image_enable_openai_generation_tool). Image settings override transform defaults, and masks become the tool's `input_image_mask`. Image `background` configures the tool; it is separate from the Responses boolean `background`. Responses routes reject image `style` and `response_format="url"` with an explicit error.
 
 Image responses preserve upstream-reported `quality`, `size`, `background`, `output_format`, and image `model`. Missing values remain absent; request values are not proof of upstream execution. For multiple images, a top-level field appears only when every image reports the same value. Completed image stream events report metadata for their own image.
 

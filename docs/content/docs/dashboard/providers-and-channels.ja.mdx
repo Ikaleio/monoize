@@ -33,12 +33,31 @@ RPM は、全ユーザーの保存済みリクエストをすべての終了ス�
 ## Channel を追加
 
 1. Provider を開き、**Channel を追加**をクリックします。
-2. 上流タイプを選択します：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`replicate`。
+2. 上流タイプを選択します：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image`、`replicate`。
 3. 上流のベース URL と API キーを入力します。
 4. 重みを設定します。トラフィックは対象 Channel 間で重みに比例して分配されます。既定 `1`。
 5. 任意：Channel ごとの `proxy_url` を設定して、プロセスレベルの上流プロキシを上書きします。
 
 後で Channel を編集するとき、API キー欄を空にすると保存済みのキーが維持されます。
+
+## OpenRouter の画像
+
+OpenRouter の画像モデルには **OpenRouter Image**（`openrouter_image`）を選択します。
+ベース URL を `https://openrouter.ai/api` に設定します。
+論理モデルを上流のモデル ID に対応付けます。例：`openai/gpt-image-2.5-sunburst`。
+
+生成と編集は、どちらも上流の `/api/v1/images` を呼び出します。
+Monoize は入力画像を JSON の `input_references` に変換します。
+下流では引き続き `/v1/images/generations` と `/v1/images/edits` を使用します。
+この Channel タイプは画像マスクとファイル ID 参照に対応していません。
+
+モデル取得では OpenRouter の画像モデル一覧を読み取ります。
+Channel テストは非ストリーミングの画像生成リクエストを 1 回送信します。上流で料金が発生する場合があります。
+選択したモデルがストリーミングに対応している場合、転送リクエストでも使用できます。
+画像編集で `stream=true` を指定すると、Monoize は OpenRouter に非ストリーミングのリクエストを送り、下流の SSE を維持します。
+待機中はハートビートコメントを送り、画像の取得後に完了イベントを送ります。
+
+![OpenRouter Image Channel](/images/en/openrouter-image-channel.webp)
 
 ## セッションキャッシュヘッダー
 

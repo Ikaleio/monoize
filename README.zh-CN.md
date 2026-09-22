@@ -195,7 +195,7 @@ curl http://localhost:8080/v1/chat/completions \
 | `POST` | `/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/embeddings` | Embeddings |
 | `POST` | `/v1/images/generations` | 图像生成 |
-| `POST` | `/v1/images/edits` | Multipart 图像编辑 |
+| `POST` | `/v1/images/edits` | 使用 multipart 上传或 JSON 引用编辑图像 |
 
 所有转发端点均有 `/api/v1/...` 别名。
 

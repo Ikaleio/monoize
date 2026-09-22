@@ -2,8 +2,8 @@
 
 ## Scope
 
-PCT-1. Tests cover Chat Completions, Responses, and Messages conversion boundaries.
-They verify native-to-URP-to-native and URP-to-native-to-URP mappings.
+PCT-1. Conformance requirements cover Chat Completions, Responses, Messages, and Gemini GenerateContent conversion boundaries.
+Checks verify native-to-URP-to-native and URP-to-native-to-URP mappings.
 They do not prove upstream service acceptance, cryptographic validity, or every possible input combination.
 Each documented feature MUST have a supported mapping, explicit omission, or explicit rejection assertion.
 
@@ -39,9 +39,20 @@ Token-score tests MUST bind scores to current text bytes, including UTF-8 fragme
 Outcome tests MUST assert typed authority over native extras.
 Usage iteration tests MUST assert complete accounting and absence of double counting.
 
+## Gemini GenerateContent
+
+PCT-7. Gemini conversion MUST satisfy `spec/gemini-codec.spec.md` for requests, responses, history, native SSE, and encoded SSE.
+Gemini conversion selects candidate index zero when present, otherwise the first candidate. It MUST NOT concatenate independent alternatives.
+Representable citations, grounding links, and token scores MUST use typed fields. Native-only data MUST remain restricted to Gemini.
+Available text and reasoning deltas MUST stream before completion. Native finish metadata, not EOF alone, establishes successful completion.
+Existing Gemini feature, protocol contract, cross-protocol, and streaming checks provide local verification evidence.
+Report behavior that those checks do not cover. This scope does not establish complete test coverage.
+Public Gemini HTTP endpoints, Live API, and file or cache management remain outside this scope.
+
 ## Documentation sources
 
-The source review date is 2026-09-19. Protocol agents maintain concrete test mappings in the coverage report.
+The source review date is 2026-09-19 for existing protocols and 2026-09-22 for Gemini.
+Protocol agents maintain concrete test mappings in the coverage report.
 
 - [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 - [OpenAI Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)
@@ -54,3 +65,7 @@ The source review date is 2026-09-19. Protocol agents maintain concrete test map
 - [Claude thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)
 - [Claude citations](https://platform.claude.com/docs/en/build-with-claude/citations)
 - [Claude compaction](https://platform.claude.com/docs/en/build-with-claude/compaction)
+- [Gemini GenerateContent](https://ai.google.dev/api/generate-content)
+- [Gemini Content and Part](https://ai.google.dev/api/caching#Content)
+- [Gemini function calling](https://ai.google.dev/gemini-api/docs/function-calling)
+- [Gemini thought signatures](https://ai.google.dev/gemini-api/docs/thought-signatures)

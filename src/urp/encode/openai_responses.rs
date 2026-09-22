@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 include!("openai_responses/message_items.inc.rs");
 include!("openai_responses/reasoning.inc.rs");
+include!("openai_responses/image_generation.inc.rs");
 
 fn merge_responses_usage_extra(usage: &mut Value, extra: &HashMap<String, Value>) {
     let Some(usage_obj) = usage.as_object_mut() else {

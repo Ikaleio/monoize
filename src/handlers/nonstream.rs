@@ -427,9 +427,8 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                 let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
-                // OIU-S7: openai_image edits stream through multipart
-                // `/v1/images/edits`; the helper keeps the JSON raw call for
-                // every other attempt shape.
+                // Streaming edits use the same JSON or multipart transport
+                // as non-streaming edits.
                 let call = match call_streaming_image_capable_upstream(
                     &http,
                     &attempt,
@@ -527,7 +526,9 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     },
                     Err(err) => Err(err),
                 }
-            } else if openai_image_edit {
+            } else if openai_image_edit
+                && !urp::encode::openai_image::edit_requires_json(&req_attempt)
+            {
                 let form = match urp::encode::openai_image::multipart_fields(
                     &req_attempt,
                     &req_attempt.model,
@@ -837,8 +838,10 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         )
                         .await);
                     }
-                    if attempt.provider_type == ProviderType::OpenaiImage
-                        && !matches!(downstream, DownstreamProtocol::Responses)
+                    if matches!(
+                        attempt.provider_type,
+                        ProviderType::OpenaiImage | ProviderType::OpenrouterImage
+                    ) && !matches!(downstream, DownstreamProtocol::Responses)
                     {
                         convert_assistant_images_to_markdown(&mut resp);
                     }
@@ -1024,7 +1027,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
 fn supports_nonstream_upstream_stream_collection(provider_type: ProviderType) -> bool {
     matches!(
         provider_type,
-        ProviderType::Responses | ProviderType::OpenaiImage
+        ProviderType::Responses | ProviderType::OpenaiImage | ProviderType::OpenrouterImage
     )
 }
 
@@ -1246,7 +1249,14 @@ pub(super) fn encode_request_for_provider(
                 AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message)
             })?
         }
-        ProviderType::OpenaiImage => urp::encode::openai_image::encode_request(req, &model),
+        ProviderType::OpenaiImage => urp::encode::openai_image::encode_request_checked(req, &model)
+            .map_err(|message| {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+            })?,
+        ProviderType::OpenrouterImage => urp::encode::openrouter_image::encode_request(req, &model)
+            .map_err(|message| {
+                AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message)
+            })?,
         ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model),
         ProviderType::Group => {
             return Err(AppError::new(
@@ -1290,7 +1300,9 @@ pub(super) fn decode_response_from_provider(
         ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),
         ProviderType::Messages => urp::decode::anthropic::decode_response(value),
         ProviderType::Gemini => urp::decode::gemini::decode_response(value),
-        ProviderType::OpenaiImage => urp::decode::openai_image::decode_response(value, model),
+        ProviderType::OpenaiImage | ProviderType::OpenrouterImage => {
+            urp::decode::openai_image::decode_response(value, model)
+        }
         ProviderType::Replicate => urp::decode::replicate::decode_response(value),
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
     }

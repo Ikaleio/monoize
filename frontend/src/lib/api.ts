@@ -626,6 +626,7 @@ export type ProviderType =
   | "messages"
   | "gemini"
   | "openai_image"
+  | "openrouter_image"
   | "replicate";
 export type AffinityFailbackMode = "sticky" | "prefer_higher_priority";
 

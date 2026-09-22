@@ -11,9 +11,145 @@ pub struct LogprobConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokenScore {
     pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<u64>,
     #[serde(default)]
     pub bytes: Option<Vec<u8>>,
     pub logprob: f64,
+}
+
+/// Attaches Gemini token scores only when complete tokens match each owning text node.
+pub fn attach_gemini(candidate: &serde_json::Map<String, Value>, nodes: &mut [super::Node]) {
+    let Some(result) = candidate.get("logprobsResult") else {
+        return;
+    };
+    let Some(chosen) = result.get("chosenCandidates").and_then(Value::as_array) else {
+        return;
+    };
+    let alternatives = result.get("topCandidates").and_then(Value::as_array);
+    let mut scores = Vec::with_capacity(chosen.len());
+    for (index, value) in chosen.iter().enumerate() {
+        let Some(score) = gemini_score(value) else {
+            return;
+        };
+        let top_logprobs = alternatives
+            .and_then(|values| values.get(index))
+            .and_then(|entry| entry.get("candidates"))
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(gemini_score).collect())
+            .unwrap_or_default();
+        scores.push(TokenLogprob {
+            score,
+            top_logprobs,
+        });
+    }
+    let text: String = nodes
+        .iter()
+        .filter_map(|node| match node {
+            super::Node::Text { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect();
+    if valid(&Some(scores.clone()), &text).is_none() {
+        return;
+    }
+    let mut cursor = 0;
+    let mut placements = Vec::new();
+    for (index, node) in nodes.iter().enumerate() {
+        let super::Node::Text { content, .. } = node else {
+            continue;
+        };
+        let start = cursor;
+        let mut bytes = 0;
+        while cursor < scores.len() && bytes < content.len() {
+            bytes += scores[cursor].score.token.len();
+            cursor += 1;
+        }
+        if bytes != content.len() {
+            return;
+        }
+        placements.push((index, start..cursor));
+    }
+    for (index, range) in placements {
+        if let super::Node::Text { logprobs, .. } = &mut nodes[index] {
+            *logprobs = Some(scores[range].to_vec());
+        }
+    }
+}
+
+fn gemini_score(value: &Value) -> Option<TokenScore> {
+    Some(TokenScore {
+        token: value.get("token")?.as_str()?.to_owned(),
+        token_id: value.get("tokenId").and_then(Value::as_u64),
+        bytes: None,
+        logprob: value.get("logProbability")?.as_f64()?,
+    })
+}
+
+fn encode_gemini_score(score: &TokenScore) -> Option<Value> {
+    let token = match &score.bytes {
+        Some(bytes) => std::str::from_utf8(bytes).ok()?,
+        None => &score.token,
+    };
+    let mut value = serde_json::json!({"token":token,"logProbability":score.logprob});
+    if let Some(id) = score.token_id {
+        value["tokenId"] = Value::from(id);
+    }
+    Some(value)
+}
+
+fn gemini_scores(nodes: &[super::Node]) -> Option<Vec<&TokenLogprob>> {
+    let mut result = Vec::new();
+    for node in nodes {
+        if let super::Node::Text {
+            content, logprobs, ..
+        } = node
+        {
+            if !content.is_empty() {
+                result.extend(valid(logprobs, content)?);
+            }
+        }
+    }
+    (!result.is_empty()).then_some(result)
+}
+
+/// Encodes candidate scores from current typed text, omitting invalidated token scores.
+pub fn encode_gemini(nodes: &[super::Node]) -> Option<Value> {
+    let scores = gemini_scores(nodes)?;
+    let chosen = scores
+        .iter()
+        .map(|v| encode_gemini_score(&v.score))
+        .collect::<Option<Vec<_>>>()?;
+    Some(serde_json::json!({
+        "chosenCandidates":chosen,
+        "topCandidates":scores.iter().map(|v| serde_json::json!({"candidates":v.top_logprobs.iter().filter_map(encode_gemini_score).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+        "logProbabilitySum":scores.iter().map(|v|v.score.logprob).sum::<f64>()
+    }))
+}
+
+pub fn gemini_summary(nodes: &[super::Node]) -> Option<f64> {
+    let scores = gemini_scores(nodes)?;
+    Some(scores.iter().map(|v| v.score.logprob).sum::<f64>() / scores.len() as f64)
+}
+
+/// Projects shared scores onto the OpenAI token-score fields.
+pub fn encode_openai(scores: &[TokenLogprob]) -> Value {
+    let score = |score: &TokenScore| {
+        serde_json::json!({
+            "token":score.token,"bytes":score.bytes,"logprob":score.logprob
+        })
+    };
+    Value::Array(
+        scores
+            .iter()
+            .map(|entry| {
+                let mut value = score(&entry.score);
+                value["top_logprobs"] =
+                    Value::Array(entry.top_logprobs.iter().map(&score).collect());
+                value
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

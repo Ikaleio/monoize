@@ -264,6 +264,7 @@ impl From<AnthropicUsage> for Usage {
             || value.tool_prompt_tokens > 0
         {
             Some(InputDetails {
+                tool_prompt_modality_breakdown: None,
                 standard_tokens: 0,
                 cache_read_tokens: value.cache_read_input_tokens,
                 cache_read_modality_breakdown: None,
@@ -450,7 +451,16 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
 
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
+    crate::urp::sampling::strip_request_extras(
+        &mut extra_body,
+        crate::urp::ProviderProtocol::Messages,
+    );
     Ok(UrpRequest {
+        image_generation: None,
+        sampling: crate::urp::sampling::request_config(
+            obj,
+            crate::urp::ProviderProtocol::Messages,
+        ),
         logprobs: None,
         context: Default::default(),
         instructions_format: None,

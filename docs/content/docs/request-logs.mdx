@@ -39,6 +39,8 @@ Each Image API sub-request writes one capture. When `n` is greater than 1, the c
 
 Monoize stores a `multipart/form-data` body as a structured JSON object. The object lists each part in wire order. A text part records the field name and the text. A file part records the field name, the file name, the content type, the byte length, and the base64 data. This rule applies to the received `POST /v1/images/edits` body and to the multipart form sent to an `openai_image` upstream.
 
+JSON image edits use normal JSON capture. Their `images` and `mask` references remain in the captured request body. For `openai_image`, upstream captures use JSON for retained URL or file references, or multipart for inline uploads.
+
 Capture keeps image and other multimodal payloads exactly as they appear in the source body. Monoize does not redact or re-encode them.
 
 ### Retention and rotation

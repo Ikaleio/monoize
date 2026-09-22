@@ -4,12 +4,16 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 pub mod citations;
+pub mod image_generation;
 pub mod logprobs;
 pub mod outcome;
+pub mod sampling;
 pub mod usage;
 pub use citations::Citation;
+pub use image_generation::ImageGenerationOptions;
 pub use logprobs::{LogprobConfig, TokenLogprob};
 pub use outcome::{ResponseOutcome, ResponseStatus};
+pub use sampling::SamplingConfig;
 pub use usage::UsageIteration;
 mod context;
 pub mod decode;
@@ -512,6 +516,7 @@ pub enum ProviderProtocol {
     Messages,
     Gemini,
     OpenaiImage,
+    OpenrouterImage,
     Replicate,
 }
 
@@ -523,6 +528,7 @@ impl ProviderProtocol {
             ProviderProtocol::Messages => "messages",
             ProviderProtocol::Gemini => "gemini",
             ProviderProtocol::OpenaiImage => "openai_image",
+            ProviderProtocol::OpenrouterImage => "openrouter_image",
             ProviderProtocol::Replicate => "replicate",
         }
     }
@@ -538,7 +544,11 @@ pub enum StopControl {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_generation: Option<ImageGenerationOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logprobs: Option<LogprobConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingConfig>,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions_format: Option<InstructionsFormat>,
@@ -822,6 +832,8 @@ pub enum InstructionsFormat {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MediaMetadata {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub image_mask: bool,
     #[serde(default, skip_serializing_if = "ImageGenerationMetadata::is_empty")]
     pub image_generation: ImageGenerationMetadata,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -851,6 +863,8 @@ pub struct MediaMetadata {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ImageGenerationMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revised_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
@@ -863,11 +877,19 @@ pub struct ImageGenerationMetadata {
 }
 
 impl ImageGenerationMetadata {
-    pub const KEYS: [&'static str; 5] = ["quality", "size", "background", "output_format", "model"];
+    pub const KEYS: [&'static str; 6] = [
+        "quality",
+        "size",
+        "background",
+        "output_format",
+        "model",
+        "revised_prompt",
+    ];
 
     pub fn from_object(obj: &serde_json::Map<String, Value>) -> Self {
         let string = |key| obj.get(key).and_then(Value::as_str).map(str::to_owned);
         Self {
+            revised_prompt: string("revised_prompt"),
             quality: string("quality"),
             size: string("size"),
             background: string("background"),
@@ -877,14 +899,15 @@ impl ImageGenerationMetadata {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.quality.is_none()
+        self.revised_prompt.is_none()
+            && self.quality.is_none()
             && self.size.is_none()
             && self.background.is_none()
             && self.output_format.is_none()
             && self.model.is_none()
     }
 
-    pub fn to_object(&self) -> serde_json::Map<String, Value> {
+    pub fn common_response_fields(&self) -> serde_json::Map<String, Value> {
         [
             ("quality", &self.quality),
             ("size", &self.size),
@@ -905,7 +928,10 @@ impl ImageGenerationMetadata {
         for key in Self::KEYS {
             obj.remove(key);
         }
-        obj.extend(self.to_object());
+        obj.extend(self.common_response_fields());
+        if let Some(prompt) = &self.revised_prompt {
+            obj.insert("revised_prompt".to_owned(), Value::String(prompt.clone()));
+        }
     }
 
     pub fn for_source(&self, source: &ImageSource) -> Self {
@@ -1045,6 +1071,8 @@ pub struct FunctionDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
     #[serde(default, flatten)]
     pub extra_body: HashMap<String, Value>,
@@ -1150,6 +1178,8 @@ pub struct InputDetails {
     pub cache_creation_1h_tokens: u64,
     #[serde(default)]
     pub tool_prompt_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_prompt_modality_breakdown: Option<ModalityBreakdown>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modality_breakdown: Option<ModalityBreakdown>,
 }

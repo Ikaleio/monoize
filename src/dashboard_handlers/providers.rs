@@ -643,7 +643,12 @@ pub async fn fetch_provider_models(
         .find(|c| c.enabled)
         .unwrap_or(&provider.channels[0]);
 
-    let url = build_models_list_url(&channel.base_url);
+    let url =
+        if channel.provider_type == crate::monoize_routing::MonoizeProviderType::OpenrouterImage {
+            crate::upstream::join_url(&channel.base_url, "/v1/images/models")
+        } else {
+            build_models_list_url(&channel.base_url)
+        };
 
     let mut request = state
         .http
@@ -782,6 +787,9 @@ pub async fn fetch_channel_models(
     let api_key = resolve_fetch_channel_api_key(&state, &body).await?;
 
     let url = match body.provider_type {
+        crate::monoize_routing::MonoizeProviderType::OpenrouterImage => {
+            crate::upstream::join_url(base_url, "/v1/images/models")
+        }
         crate::monoize_routing::MonoizeProviderType::Gemini => {
             build_gemini_models_list_url(base_url)
         }
@@ -1098,6 +1106,7 @@ pub async fn test_channel(
         && matches!(
             effective_type,
             crate::monoize_routing::MonoizeProviderType::OpenaiImage
+                | crate::monoize_routing::MonoizeProviderType::OpenrouterImage
                 | crate::monoize_routing::MonoizeProviderType::Replicate
         )
     {

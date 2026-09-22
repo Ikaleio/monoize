@@ -53,7 +53,7 @@ A request log row has:
   - `upstream_type: string?`
   - `upstream_param: string?`
   Historical rows MAY omit `provider_name`, `channel_name`, `attempt_number`, and the `upstream_*` fields.
-- `request_kind: string?` (classification of log source; null for normal API-key client requests, `"playground"` for dashboard Playground requests, and `"active_probe_connectivity"` for active health-probe model probes)
+- `request_kind: string?` (source classification: null for ordinary API-key requests, `"image_generation"` or `"image_edit"` for Image API requests, `"playground"` for Playground, and `"active_probe_connectivity"` for health probes)
 - `effective_provider_type: string?` (effective upstream type used for the selected attempt; null when no attempt was selected)
 - `affinity_hit: boolean?` (true when request routing used an eligible affinity binding; false when affinity was evaluated but no binding was used; null when affinity did not run)
 - `affinity_key_hash: string?` (short hash of the affinity cache key; raw affinity key material MUST NOT be stored)
@@ -244,6 +244,8 @@ RL20. Dashboard Playground forwarding requests MUST use the normal request-log l
 MUST persist `request_kind = "playground"`, and MUST persist `api_key_id = null`. The UI
 token column label for these rows MUST be rendered as a localized "Playground" string.
 Neither internal-source label may be exposed through the API-key management endpoints.
+
+RL21. API-key Image API generation and edit requests MUST record `image_generation` and `image_edit`, respectively. Each fan-out sub-request MUST retain that classification. An existing internal-source classification MUST take precedence.
 
 ## 3. Dashboard endpoint
 

@@ -78,10 +78,10 @@ A provider record MUST include:
 
 Implementation-specific extension:
 - A provider MUST NOT contain `provider_type`.
-- Each channel MUST contain `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","replicate")`; this value determines the channel default upstream request shape.
+- Each channel MUST contain `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate")`; this value determines the channel default upstream request shape.
 - Each Channel MUST contain `models: Record<string, ModelEntry>`.
 - Provider MUST NOT contain a `models` field.
-- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","replicate") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
+- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
 
 ### 2.4 API Type Resolution
 

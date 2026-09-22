@@ -195,7 +195,7 @@ curl http://localhost:8080/v1/chat/completions \
 | `POST` | `/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/embeddings` | Embeddings |
 | `POST` | `/v1/images/generations` | Image generation |
-| `POST` | `/v1/images/edits` | Multipart image edits |
+| `POST` | `/v1/images/edits` | Image edits with multipart uploads or JSON references |
 
 Every forwarding endpoint also has an `/api/v1/...` alias.
 

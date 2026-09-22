@@ -7,6 +7,14 @@ description: 确保请求携带 OpenAI Responses 的 image_generation 工具。
 
 此变换在请求缺少 OpenAI Responses `image_generation` 工具描述时添加它，还可以强制流式和强制 tool_choice。
 
+Images API 路由使用 Responses 上游时，请配置此变换。请求缺少兼容的图像工具时，路由会返回明确错误。
+
+Images API 请求中的 `size`、`quality`、`background`、`output_format`、`output_compression`、`moderation`、`partial_images` 和 `input_fidelity` 优先于工具默认值。已有图像工具也适用此规则。图像 `background` 保留在工具配置内，不会替换 Responses 顶层的布尔值 `background`。
+
+编辑蒙版会映射到工具的 `input_image_mask`，不会作为普通输入图片发送。蒙版支持 URL、内联 Base64 和文件引用。文件引用必须能通过所选上游凭据访问。Responses 路由会明确拒绝图像 `style` 和 `response_format="url"`，因为该工具无法表达这些选项。
+
+启用 `force_stream=true` 时，只有请求和工具都未指定 `partial_images`，此变换才将其默认为 `3`。显式值会保留，包括 `0`。
+
 ## 参考信息
 
 | 属性 | 值 |
@@ -24,11 +32,11 @@ description: 确保请求携带 OpenAI Responses 的 image_generation 工具。
 
 | 选项 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| `output_format` | string | 否 | `"png"` | `png`、`webp` 或 `jpeg`。向图像工具请求的格式。 |
+| `output_format` | string | 否 | `"png"` | `png`、`webp` 或 `jpeg`。图像请求未指定格式时使用的默认值。 |
 | `action` | string | 否 | — | 可选，写入工具描述的 action 值。 |
 | `force_stream` | boolean | 否 | `false` | 强制上游请求流式返回部分图像。 |
 | `force_tool_choice` | boolean | 否 | `false` | 强制 tool_choice 指向图像生成工具。 |
-| `extra` | object | 否 | `{}` | 合并进工具描述的额外字段。 |
+| `extra` | object | 否 | `{}` | 额外的工具默认值。显式图像请求参数优先。 |
 
 ### 示例规则
 

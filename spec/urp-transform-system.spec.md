@@ -50,7 +50,7 @@ DEC-9. Reasoning data from upstream or downstream wire formats MUST decode as or
 
 ENC-1. Upstream request construction MUST encode from URP v2 values only.
 
-ENC-2. URP v2 to upstream encoding MUST support provider types `responses`, `chat_completion`, `messages`, `gemini`, and `openai_image`.
+ENC-2. URP v2 to upstream encoding MUST support provider types `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, and `replicate`.
 
 ENC-3. If one `Reasoning` node carries both opaque reasoning payload in `encrypted` and plaintext fields in `content` and/or `summary`, an adapter MAY omit the plaintext fields only when the target wire format requires opaque reasoning exclusivity for that same reasoning node.
 
@@ -493,34 +493,35 @@ EOIGT-2. Config MAY contain:
 - `action` as a string; optional;
 - `force_stream` as a boolean; default `false`; and
 - `force_tool_choice` as a boolean; default `false`; and
-- `extra` as an object whose entries are copied verbatim into the inserted tool descriptor's `extra_body`.
+- `extra` as an object whose entries supply defaults in the inserted tool descriptor's typed `config`.
 
 EOIGT-3. The transform MUST inspect only top-level `request.tools`.
 
 EOIGT-4. If `request.tools` is absent, the transform MUST create it as a one-element array containing one tool descriptor with `type = "image_generation"`.
 
-EOIGT-5. If `request.tools` already contains at least one tool descriptor whose `type` is `image_generation` and `force_stream = false`, the transform MUST leave `request.tools` unchanged.
+EOIGT-5. If `request.tools` already contains an `image_generation` descriptor, the transform MUST NOT append another descriptor.
 
-EOIGT-5a. If `request.tools` already contains at least one tool descriptor whose `type` is `image_generation` and `force_stream = true`, the transform MUST NOT append another `image_generation` descriptor.
+EOIGT-5a. Existing tool configuration MUST retain its values. With `force_stream = true`, the transform MAY supply the missing `partial_images` default defined by EOIGT-6a.
 
 EOIGT-6. When the transform inserts a tool descriptor, it MUST set:
 1. `type = "image_generation"`;
-2. `extra_body.size = request.extra_body.size` when `request.extra_body` contains `size`;
-3. `extra_body.quality = request.extra_body.quality` when `request.extra_body` contains `quality`;
-4. all `extra` object entries into `extra_body` afterward, preserving their JSON values verbatim;
-5. `extra_body.output_format = <configured output_format>`;
-6. `extra_body.action = <configured action>` only when `action` is configured; and
-7. `extra_body.partial_images = 3` when `force_stream = true`.
+2. `config` from the configured `extra` object, preserving its JSON values;
+3. `config.output_format = <configured output_format>`;
+4. `config.action = <configured action>` only when `action` is configured; and
+5. `config.partial_images = 3` when EOIGT-6a permits that default.
 
-EOIGT-6a. If `force_stream = true`, the transform MUST set `request.stream = true` and MUST set `extra_body.partial_images = 3` on every `image_generation` tool descriptor in `request.tools`, including any descriptor inserted by the transform.
+EOIGT-6a. With `force_stream = true`, the transform MUST set `request.stream = true`. It MUST default `config.partial_images` to `3` only when the request and tool omit that field.
 
-EOIGT-6b. `partial_images` set by EOIGT-6a MUST override any preserved or configured `partial_images` value on the same tool descriptor.
+EOIGT-6b. Explicit `partial_images` values, including `0`, MUST override the transform default.
 
-EOIGT-6c. If `extra` contains keys `size` or `quality`, the transform MUST preserve the `extra` values in the inserted tool descriptor and MUST NOT overwrite them with same-named values from `request.extra_body`.
+EOIGT-6c. Typed `request.image_generation` values MUST remain authoritative. The Responses encoder MUST project them into each compatible `image_generation` tool after transform defaults.
 
-EOIGT-6d. If `extra` contains keys `output_format`, `action`, or `partial_images`, the transform MUST still apply EOIGT-6.5, EOIGT-6.6, and EOIGT-6.7 afterward so that the explicit transform-owned fields take precedence over colliding `extra` entries.
+EOIGT-6d. The transform MUST NOT create a second copy of typed image request values in adapter extras.
+When typed image options are absent, the transform MUST lift recognized image controls from `request.extra_body` into `request.image_generation`.
+It MUST preserve a boolean top-level `background` as a Responses control.
+When typed image options exist, the transform MUST remove duplicate image controls from extras without restoring absent typed values.
 
-EOIGT-7. The transform MUST preserve the source order of all pre-existing tool descriptors and MUST append the inserted `image_generation` tool after them. The only allowed mutation to a pre-existing `image_generation` descriptor is the `partial_images` assignment required by EOIGT-6a.
+EOIGT-7. The transform MUST preserve the source order of existing tools. It MUST append an inserted tool after them.
 
 EOIGT-8. If `force_stream = true`, the transform MUST set `request.stream = true` during request-phase application. This rule applies even when `request.tools` already contains an `image_generation` descriptor.
 
@@ -531,6 +532,25 @@ EOIGT-10. If `force_tool_choice = true`, the transform MUST set `request.tool_ch
 EOIGT-11. If `force_tool_choice = false`, the transform MUST NOT modify `request.tool_choice`.
 
 EOIGT-12. The transform MUST NOT modify `request.input` or any response-phase payload surface.
+
+EOIGT-13. The Responses encoder MUST map typed image settings into `image_generation` tool configuration, for inserted and existing tools.
+Supported settings are `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `partial_images`, and `input_fidelity`.
+These values MUST override same-named tool defaults and MUST NOT appear as image controls at the Responses request top level.
+An ordinary Responses `background` boolean MUST retain its top-level meaning.
+
+EOIGT-14. If `request.image_generation` is present without a compatible `image_generation` tool, Responses encoding MUST return an error before the upstream request.
+The encoder MUST NOT inject a tool or permit a text-only request to replace an Images request.
+
+EOIGT-15. Responses encoding MUST reject explicit image `style`, `n` other than `1`, and `response_format` other than `b64_json`.
+Images ingress fan-out owns multiple outputs. Responses image tools return Base64 data and cannot fulfill a requested hosted URL.
+
+EOIGT-16. A request image with typed `metadata.image_mask = true` MUST become `image_generation.config.input_image_mask`.
+Base64 sources MUST use a data URL in `image_url`. URL sources MUST use `image_url`. File references MUST use `file_id`.
+Existing media validation and provider provenance checks MUST run before this mapping.
+
+EOIGT-17. The encoder MUST exclude mask nodes from ordinary Responses input.
+It MUST reject multiple masks, non-user masks, masks without a source image, and masks without a compatible image generation tool.
+The typed mask MUST override any configured `input_image_mask` value.
 
 CUMI-1. `image_compress_input` is request-phase only.
 
@@ -547,6 +567,8 @@ When `max_edge_px` is absent, the transform MUST preserve the decoded image dime
 
 CUMI-3. The transform MUST inspect only ordinary `Image` nodes with `role = user`.
 
+CUMI-3a. If any user image has typed `metadata.image_mask = true`, the transform MUST leave every user image source unchanged. This check MUST precede cache lookup, decoding, resizing, and format conversion. Masked edits therefore preserve original image/mask alignment and alpha.
+
 CUMI-4. Eligible image sources are:
 1. `Image.source = Base64`; or
 2. `Image.source = Url` whose `url` is a `data:<image-media-type>;base64,<payload>` URL.
@@ -560,7 +582,7 @@ CUMI-7. On successful replacement:
 2. `data:` URL sources MUST remain `Url` with updated `url`; and
 3. provider-specific typed fields such as image detail hints MUST remain unchanged.
 
-CUMI-8. When `output_format = original`, the transform MUST emit the same supported image format as the source, normalizing the `image/jpg` alias to `image/jpeg`; source WebP MUST use the `webp_lossless` encoder path. When `output_format` is any other configured value, the transform MUST emit the explicitly selected image format. The exact encoder modes are:
+CUMI-8. When `output_format = original`, the transform MUST emit the same supported image format as the source, normalizing the `image/jpg` alias to `image/jpeg`; source WebP MUST use the `webp_lossless` encoder path. When `output_format` is any other configured value, the transform MUST emit the explicitly selected image format, except as required by CUMI-8a. The exact encoder modes are:
 1. `jpg` uses the mozjpeg fastest profile with `jpeg_quality`;
 2. `jpegxl_lossless` uses the reference libjxl encoder in lossless mode with `jpegxl_effort`;
 3. `jpegxl` uses the reference libjxl encoder in lossy mode with `jpegxl_quality` mapped through `JxlEncoderDistanceFromQuality` and `jpegxl_effort`;
@@ -570,8 +592,10 @@ CUMI-8. When `output_format = original`, the transform MUST emit the same suppor
 
 Both JPEG XL modes MUST emit media type `image/jxl`. Both WebP modes MUST emit media type `image/webp`.
 
+CUMI-8a. If the decoded source has an alpha channel and the selected output format is `jpg`, the transform MUST leave the image source unchanged. This rule applies even when all alpha samples are opaque. It takes precedence over `max_edge_px` and `skip_if_smaller`. The transform MUST preserve the original encoded bytes, media type, dimensions, and source representation. Formats that support alpha MUST continue to use CUMI-8. Cached results created before this rule MUST NOT replace the source.
+
 CUMI-9. The cache key material MUST be the ordered byte sequence:
-1. UTF-8 bytes of `compress_user_message_images:v5` (a version-frozen cache-key literal; it intentionally retains the historical transform name so existing cache entries stay valid across the TF-17 ID migration);
+1. UTF-8 bytes of `compress_user_message_images:v6` (a version-frozen cache-key literal; version 6 excludes cached results that predate CUMI-8a);
 2. one zero byte;
 3. UTF-8 bytes of the source media type;
 4. one zero byte;
@@ -850,7 +874,7 @@ CAOI-8. On successful replacement:
 2. `data:` URL sources MUST remain `Url` with updated `url`; and
 3. provider-specific typed fields such as image detail hints MUST remain unchanged.
 
-CAOI-9. The output format selection and encoding rules MUST be identical to CUMI-8.
+CAOI-9. The output format selection and encoding rules MUST be identical to CUMI-8 and CUMI-8a. The alpha-channel protection MUST apply to non-streaming images and all eligible streaming image sources.
 
 CAOI-10. The cache key material and cache key algorithm MUST be identical to CUMI-9 and CUMI-10.
 
@@ -987,3 +1011,5 @@ VALID-3. Control-node behavior is explicit only where stated in this specificati
 VALID-4. Response stream terminal state is authoritative. `ResponseDone.output` is the final flat node sequence.
 
 VALID-5. If faithful incremental stream rewriting is not possible, buffered synthetic streaming remains allowed.
+
+FS-5a. FS-5 also applies to `openrouter_image`, using `POST /v1/images` and the OpenRouter Image encoder.

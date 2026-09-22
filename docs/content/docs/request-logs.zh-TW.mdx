@@ -39,6 +39,8 @@ Image API 的每個子請求寫入一份擷取。當 `n` 大於 1 時，擷取�
 
 Monoize 把 `multipart/form-data` 請求主體儲存為結構化 JSON 物件。物件按傳輸順序列出每個部分。文字部分記錄欄位名稱和文字。檔案部分記錄欄位名稱、檔案名稱、內容類型、位元組長度和 base64 資料。此規則同時適用於接收到的 `POST /v1/images/edits` 請求主體和傳送給 `openai_image` 上游的 multipart 表單。
 
+JSON 圖像編輯使用一般 JSON 擷取格式，`images` 和 `mask` 參照保留在擷取的請求主體中。對於 `openai_image`，上游擷取在保留 URL 或檔案參照時使用 JSON，內嵌上傳使用 multipart。
+
 擷取按來源封包原樣保留圖像等多模態內容。Monoize 不做遮罩，也不重新編碼。
 
 ### 保留與輪替

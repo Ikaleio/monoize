@@ -29,6 +29,100 @@ struct StreamedChatNodeState {
     tool_call: Option<StreamedChatToolCall>,
     saw_node_start: bool,
     saw_node_done: bool,
+    text: String,
+    scored_bytes: usize,
+    scored_tokens: usize,
+}
+
+fn chat_delta_scores<'a>(
+    state: &mut StreamedChatNodeState,
+    content: &str,
+    scores: &'a Option<Vec<urp::TokenLogprob>>,
+) -> Option<&'a [urp::TokenLogprob]> {
+    let previous_len = state.text.len();
+    state.text.push_str(content);
+    let scores = scores.as_deref().filter(|scores| !scores.is_empty())?;
+    let bytes: Vec<u8> = scores
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .score
+                .bytes
+                .as_deref()
+                .unwrap_or(entry.score.token.as_bytes())
+                .iter()
+                .copied()
+        })
+        .collect();
+    let unscored = state.text.as_bytes().get(state.scored_bytes..)?;
+    if !unscored.starts_with(&bytes)
+        || (!content.is_empty()
+            && (previous_len != state.scored_bytes || bytes != content.as_bytes()))
+    {
+        return None;
+    }
+    state.scored_bytes += bytes.len();
+    state.scored_tokens += scores.len();
+    Some(scores)
+}
+
+async fn emit_chat_terminal_scores(
+    tx: &mpsc::Sender<Event>,
+    id: &str,
+    created: i64,
+    model: &str,
+    node: &Node,
+    state: &mut StreamedChatNodeState,
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let (content, delta, patch) = match node {
+        Node::Text { content, .. } => (
+            content,
+            json!({"content":""}),
+            chat_delta_path_content as fn(&mut Value, &str),
+        ),
+        Node::Refusal { content, .. } => (
+            content,
+            json!({"refusal":""}),
+            chat_delta_path_refusal as fn(&mut Value, &str),
+        ),
+        _ => return Ok(()),
+    };
+    let Some(scores) = node
+        .token_scores()
+        .filter(|scores| state.text == *content && scores.len() > state.scored_tokens)
+    else {
+        return Ok(());
+    };
+    let prefix_bytes = scores[..state.scored_tokens]
+        .iter()
+        .map(|entry| {
+            entry
+                .score
+                .bytes
+                .as_deref()
+                .unwrap_or(entry.score.token.as_bytes())
+                .len()
+        })
+        .sum::<usize>();
+    if prefix_bytes != state.scored_bytes {
+        return Ok(());
+    }
+    send_chat_text_chunk(
+        tx,
+        id,
+        created,
+        model,
+        delta,
+        "",
+        patch,
+        max_frame_length,
+        Some(&scores[state.scored_tokens..]),
+    )
+    .await?;
+    state.scored_bytes = content.len();
+    state.scored_tokens = scores.len();
+    Ok(())
 }
 
 fn merge_chat_delta_extra_preserving_typed(
@@ -772,6 +866,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         tool_call: Some(tool_call),
                         saw_node_start: true,
                         saw_node_done: false,
+                        ..Default::default()
                     },
                 );
             }
@@ -812,6 +907,11 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 }
                 let delta =
                     chat_delta_with_extras(native_delta, &extra_body, &mut pending_envelope_extra);
+                let scores = chat_delta_scores(
+                    node_states.entry(node_index).or_default(),
+                    &content,
+                    &logprobs,
+                );
                 send_chat_text_chunk(
                     &tx,
                     &chat_id,
@@ -821,7 +921,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &content,
                     chat_delta_path_content,
                     sse_max_frame_length,
-                    crate::urp::logprobs::valid(&logprobs, &content),
+                    scores,
                 )
                 .await?;
                 emitted_node_indices.insert(node_index);
@@ -837,6 +937,11 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &extra_body,
                     &mut pending_envelope_extra,
                 );
+                let scores = chat_delta_scores(
+                    node_states.entry(node_index).or_default(),
+                    &content,
+                    &logprobs,
+                );
                 send_chat_text_chunk(
                     &tx,
                     &chat_id,
@@ -846,7 +951,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &content,
                     chat_delta_path_refusal,
                     sse_max_frame_length,
-                    crate::urp::logprobs::valid(&logprobs, &content),
+                    scores,
                 )
                 .await?;
                 emitted_node_indices.insert(node_index);
@@ -949,6 +1054,16 @@ pub(crate) async fn encode_urp_stream_as_chat(
             } => {
                 let state = node_states.entry(node_index).or_default();
                 state.saw_node_done = true;
+                emit_chat_terminal_scores(
+                    &tx,
+                    &chat_id,
+                    created,
+                    logical_model,
+                    &node,
+                    state,
+                    sse_max_frame_length,
+                )
+                .await?;
                 if let Node::ToolCall {
                     tool_type,
                     call_id,
@@ -1065,13 +1180,24 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 }
                 for (node_index, node) in output.iter().enumerate() {
                     if emitted_node_indices.contains(&(node_index as u32)) {
+                        emit_chat_terminal_scores(
+                            &tx,
+                            &chat_id,
+                            created,
+                            logical_model,
+                            node,
+                            node_states.entry(node_index as u32).or_default(),
+                            sse_max_frame_length,
+                        )
+                        .await?;
                         continue;
                     }
                     if let Node::ToolCall { call_id, .. } = node
                         && node_states.values().any(|state| {
-                            state.tool_call.as_ref().is_some_and(|call| {
-                                call.header_sent && call.call_id == *call_id
-                            })
+                            state
+                                .tool_call
+                                .as_ref()
+                                .is_some_and(|call| call.header_sent && call.call_id == *call_id)
                         })
                     {
                         continue;
@@ -1676,13 +1802,13 @@ async fn send_chat_text_chunk(
         } else {
             "content"
         };
-        let mut chunk = json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null,"logprobs":{field:scores}}]});
+        let mut chunk = json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null,"logprobs":{field:urp::logprobs::encode_openai(scores)}}]});
         patch(&mut chunk, content);
         if max_frame_length.is_some_and(|limit| chunk.to_string().len() + 8 > limit) {
             for (text, scores) in urp::logprobs::fragments(scores) {
                 let mut part = chunk.clone();
-                patch(&mut part, &text);
-                part["choices"][0]["logprobs"][field] = json!(scores);
+                patch(&mut part, if content.is_empty() { "" } else { &text });
+                part["choices"][0]["logprobs"][field] = urp::logprobs::encode_openai(&scores);
                 send_plain_sse_data(tx, part.to_string()).await?;
             }
         } else {

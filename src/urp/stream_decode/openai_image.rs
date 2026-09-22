@@ -151,28 +151,38 @@ pub(crate) async fn stream_image_to_urp_events(
                 }
             }
             "error" => {
-                let message = serde_json::from_str::<Value>(&ev.data)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
+                let value = serde_json::from_str::<Value>(&ev.data).unwrap_or(Value::Null);
+                let error = value.get("error").unwrap_or(&value);
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
                     .unwrap_or(ev.data);
+                let code = error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("upstream_image_error")
+                    .to_string();
                 tx.send(UrpStreamEvent::Error {
-                    code: Some("upstream_image_error".to_string()),
+                    code: Some(code),
                     message,
                     extra_body: HashMap::new(),
                 })
                 .await
                 .map_err(send_failed)?;
-                break;
+                return Ok(());
             }
             _ => {}
         }
     }
 
+    if output.is_empty() {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_stream_missing_terminal",
+            "upstream image stream ended without a completed image",
+        ));
+    }
     if started_response {
         tx.send(UrpStreamEvent::ResponseDone {
             outcome: None,
@@ -213,14 +223,6 @@ fn resolve_event_name(sse_event: &str, data: &str) -> String {
         .unwrap_or_else(|| sse_event.to_string())
 }
 
-fn image_media_type(output_format: Option<&str>) -> &'static str {
-    match output_format.unwrap_or("png") {
-        "webp" => "image/webp",
-        "jpeg" => "image/jpeg",
-        _ => "image/png",
-    }
-}
-
 fn image_source_from_payload(payload: &Value) -> Option<ImageSource> {
     let data = payload
         .get("b64_json")
@@ -231,8 +233,10 @@ fn image_source_from_payload(payload: &Value) -> Option<ImageSource> {
         return None;
     }
     Some(ImageSource::Base64 {
-        media_type: image_media_type(payload.get("output_format").and_then(Value::as_str))
-            .to_string(),
+        media_type: crate::urp::decode::openai_image::image_media_type(
+            payload,
+            payload.get("output_format").and_then(Value::as_str),
+        ),
         data: data.to_string(),
     })
 }
@@ -264,6 +268,7 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
         "id",
         "b64_json",
         "result",
+        "media_type",
         "output_format",
         "partial_image_index",
         "usage",
@@ -287,7 +292,7 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
 /// and `output_format` (unlike terminal image nodes, where they are header
 /// data) so downstream encoders can rebuild the wire event.
 fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String, Value> {
-    let excluded = ["type", "b64_json", "result"];
+    let excluded = ["type", "b64_json", "result", "media_type"];
     let mut extra_body: HashMap<String, Value> = payload
         .as_object()
         .map(|obj| {
@@ -309,9 +314,10 @@ fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String
 
 fn node_header(node: &Node) -> NodeHeader {
     match node {
-        Node::Image { id, role, .. } => NodeHeader::Image {
-            metadata: Default::default(),
-
+        Node::Image {
+            id, role, metadata, ..
+        } => NodeHeader::Image {
+            metadata: metadata.clone(),
             id: id.clone(),
             role: *role,
         },

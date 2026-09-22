@@ -109,6 +109,21 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
+## Gemini 上游
+
+将 Channel 的上游类型设为 `gemini`，即可通过现有端点使用 Gemini。此支持不新增公开的 Gemini HTTP 端点，也不包含 Live API。
+
+Monoize 双向转换 `generateContent` 请求、响应和对话历史。流式响应使用 `streamGenerateContent` SSE。
+
+- 文本、推理、函数调用、函数结果和支持的媒体保留顺序与标识。思考签名始终关联原始 Part。
+- 生成控制参数、结构化响应格式、工具和工具选择转换为目标协议支持的对应字段。
+- Token logprobs 始终关联匹配的文本。文本变更后会丢弃失效的分数。Gemini 最多允许请求 20 个 top logprobs。
+- 可表示的引用和 grounding 来源链接转换为目标格式。引用范围保留文本中的位置，包括非 ASCII 文本。
+- 文本和推理在完成前持续输出。需要完整内容的媒体和带签名的 Part 可以等到完成后输出。失败或截断的流返回错误。
+- Monoize 优先返回 index 为 0 的候选响应，否则返回第一个候选响应。独立候选响应不会合并。
+
+Gemini 专属工具、Provider 执行的代码和无法转换的元数据仅在 Gemini 内保留。目标协议只接收其能够表示的功能。
+
 ## Embeddings
 
 ```bash
@@ -136,15 +151,39 @@ curl http://localhost:8080/v1/images/generations \
   }'
 ```
 
-编辑使用 `multipart/form-data`：
+使用 `multipart/form-data` 上传图片文件：
 
 ```bash
 curl http://localhost:8080/v1/images/edits \
   -H "Authorization: Bearer sk-..." \
   -F model="my-image-model" \
   -F prompt="Add a red boat" \
-  -F image[]=@input.png
+  -F 'image[]=@input.png'
 ```
+
+添加 `-F mask=@mask.png` 可使用 PNG 蒙版。编辑请求接受 1–16 张源图片和最多一个蒙版。
+
+使用 JSON 提交图片引用：
+
+```bash
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-image-model",
+    "prompt": "Add a red boat",
+    "images": [{ "image_url": "https://example.com/input.png" }],
+    "mask": { "image_url": "https://example.com/mask.png" }
+  }'
+```
+
+每个 `images` 条目和可选的 `mask` 对象必须恰好包含一个 `image_url` 或 `file_id`。`image_url` 接受 HTTP(S) URL 或 Base64 数据 URL。文件 ID 必须能通过所选上游凭据访问。文件 ID 不会在上游账号或 Provider 之间转移文件。
+
+两个端点都要求提供 `model` 和 `prompt`。非流式请求的 `n` 仍会拆分为独立子请求。设置 `stream=true` 和 `n=1` 可接收图像 SSE 事件。原生 `openai_image` 路由将内联图片作为 multipart 发送。只要任一输入或蒙版保留 HTTP(S) URL 或文件引用，该路由就使用 JSON。
+
+设置 `stream=true` 后，Monoize 立即发送 SSE 保活注释，并在连续 15 秒没有数据事件时再次发送。OpenRouter 图片编辑自动使用非流式上游请求；其他路由收到明确拒绝流式的 HTTP 400 或 422 后，只回退一次。JSON 图片响应转换为完成事件，不会伪造预览图。计费和日志仍计为一次流式请求，普通网络错误不会触发此回退。这可以在生成期间保持下游连接，但不会延长上游请求超时。
+
+对于 Responses 路由，配置 [image_enable_openai_generation_tool](/zh/docs/transforms/image_enable_openai_generation_tool)。请求中的图像参数优先于变换默认值，蒙版会映射到工具的 `input_image_mask`。图像 `background` 用于配置工具，与 Responses 的布尔值 `background` 不同。Responses 路由会明确拒绝图像 `style` 和 `response_format="url"`。
 
 图像响应保留上游返回的 `quality`、`size`、`background`、`output_format` 和图像 `model`。上游未返回的值保持缺省；请求参数不能证明上游的实际执行结果。返回多张图像时，只有所有图像都报告相同值，响应才会包含对应的顶层字段。图像流的完成事件携带各自图像的元数据。
 

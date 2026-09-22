@@ -7,6 +7,8 @@ description: Re-encode and optionally resize assistant output images in response
 
 This transform re-encodes assistant output images in the response or stream and optionally resizes them. The options match `image_compress_input`.
 
+When the selected output format is `jpg`, images with an alpha channel remain unchanged. The transform preserves their original bytes, media type, and dimensions. This applies even when every pixel is opaque. It overrides `max_edge_px` and `skip_if_smaller` in both responses and streams. Formats that support alpha continue to use the configured compression settings.
+
 ## Reference
 
 | Property | Value |

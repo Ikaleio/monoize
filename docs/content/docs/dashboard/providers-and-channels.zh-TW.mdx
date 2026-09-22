@@ -32,12 +32,31 @@ RPM 統計所有使用者、所有終止狀態的已儲存請求。TPM 加總輸
 ## 新增 Channel
 
 1. 開啟 Provider 並點擊**新增 Channel**。
-2. 選擇上游類型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image` 或 `replicate`。
+2. 選擇上游類型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image` 或 `replicate`。
 3. 填寫上游基底 URL 和 API 金鑰。
 4. 設定權重。流量按權重比例在符合條件的 Channel 之間分配。預設 `1`。
 5. 可選：為單個 Channel 設定 `proxy_url`，覆寫程序層級上游代理。
 
 之後編輯 Channel 時，API 金鑰留空則保持原有金鑰不變。
+
+## OpenRouter 圖片
+
+OpenRouter 圖片模型請選擇 **OpenRouter Image**（`openrouter_image`）。
+將基礎 URL 設為 `https://openrouter.ai/api`。
+將邏輯模型映射至上游模型 ID，例如 `openai/gpt-image-2.5-sunburst`。
+
+生成與編輯均呼叫上游 `/api/v1/images`。
+Monoize 將輸入圖片轉換為 JSON `input_references`。
+下游繼續使用 `/v1/images/generations` 和 `/v1/images/edits`。
+此 Channel 類型不支援圖片遮罩與檔案 ID 引用。
+
+取得模型功能讀取 OpenRouter 的圖片模型目錄。
+Channel 測試會傳送一次非串流圖片生成請求，可能產生上游費用。
+所選模型支援串流輸出時，轉送請求也支援串流輸出。
+圖片編輯設為 `stream=true` 時，Monoize 會向 OpenRouter 傳送非串流請求，並維持下游 SSE。
+等待期間傳送保活註解，取得圖片後傳送完成事件。
+
+![OpenRouter Image Channel](/images/en/openrouter-image-channel.webp)
 
 ## 工作階段快取標頭
 

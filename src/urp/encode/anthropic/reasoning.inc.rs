@@ -536,5 +536,6 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
     if let Some(format) = &req.response_format {
         apply_messages_response_format(obj, format);
     }
+    crate::urp::sampling::encode_request(&mut body, &req.sampling, ProviderProtocol::Messages);
     body
 }

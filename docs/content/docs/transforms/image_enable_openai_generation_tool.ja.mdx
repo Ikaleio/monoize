@@ -7,6 +7,14 @@ description: リクエストに OpenAI Responses の image_generation ツール�
 
 この変換は、リクエストに OpenAI Responses の `image_generation` ツール記述子がない場合に追加します。ストリーミングの強制や tool_choice の強制も可能です。
 
+Images API ルートで Responses 上流を使う場合は、この変換を設定します。互換性のある画像ツールがないリクエストは、明示的なエラーになります。
+
+Images API リクエストの `size`、`quality`、`background`、`output_format`、`output_compression`、`moderation`、`partial_images`、`input_fidelity` は、ツールのデフォルト値より優先されます。既存の画像ツールにも適用します。画像の `background` はツール設定内に保持します。Responses のトップレベルにある真偽値の `background` は置き換えません。
+
+編集マスクはツールの `input_image_mask` に変換し、通常の入力画像としては送信しません。マスクには URL、インライン Base64、ファイル参照を使えます。ファイル参照は、選択した上流の認証情報でアクセスできる必要があります。Responses ルートは画像の `style` と `response_format="url"` を明示的なエラーで拒否します。このツールでは、これらの設定を表現できません。
+
+`force_stream=true` の場合、リクエストとツールの両方が `partial_images` を省略したときだけ、デフォルト値の `3` を設定します。`0` を含め、明示した値は維持します。
+
 ## リファレンス
 
 | 項目 | 値 |
@@ -24,11 +32,11 @@ description: リクエストに OpenAI Responses の image_generation ツール�
 
 | オプション | 型 | 必須 | デフォルト | 説明 |
 | --- | --- | --- | --- | --- |
-| `output_format` | string | いいえ | `"png"` | `png`、`webp`、`jpeg` のいずれか。画像ツールに要求するフォーマット。 |
+| `output_format` | string | いいえ | `"png"` | `png`、`webp`、`jpeg` のいずれか。画像リクエストが形式を省略した場合のデフォルト値。 |
 | `action` | string | いいえ | — | 任意。ツール記述子に書き込む action 値。 |
 | `force_stream` | boolean | いいえ | `false` | 上流リクエストを部分画像付きストリーミングに強制します。 |
 | `force_tool_choice` | boolean | いいえ | `false` | tool_choice を画像生成ツールに強制します。 |
-| `extra` | object | いいえ | `{}` | ツール記述子にマージする追加フィールド。 |
+| `extra` | object | いいえ | `{}` | ツールの追加デフォルト値。画像リクエストで明示した値を優先します。 |
 
 ### ルール例
 

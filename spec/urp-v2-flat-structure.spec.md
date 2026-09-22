@@ -18,8 +18,8 @@
   - `responses`: downstream `/v1/responses` or upstream provider type `responses`
   - `chat_completion`: downstream `/v1/chat/completions` or upstream provider type `chat_completion`
   - `messages`: downstream `/v1/messages` or upstream provider type `messages`
-- **Cross-family hop**: Any encode step whose source family differs from its target family. Any hop involving `gemini` or `openai_image` is cross-family.
-- **Provider protocol**: One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `replicate`.
+- **Cross-family hop**: Any encode step whose source family differs from its target family. Any hop involving `gemini`, `openai_image`, or `openrouter_image` is cross-family.
+- **Provider protocol**: One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, or `replicate`.
 - **Same-protocol hop**: An encode step whose target provider protocol exactly equals the source protocol recorded on an opaque provider item.
 
 ## 2. Canonical non-stream objects
@@ -93,6 +93,7 @@ URPV2-1. The canonical internal request object MUST be:
 UrpRequestV2 {
   model: String,
   input: Vec<Node>,
+  image_generation?: ImageGenerationOptions,
   instructions_format?: InstructionsFormat,
   context: RequestContext,
   stream?: bool,
@@ -293,7 +294,7 @@ FileSource =
     }
 ```
 
-URPV2-13a. A file-ID decoder MUST set `MediaMetadata.resource.protocol`. OpenAI file IDs use the Responses/Chat namespace; Anthropic file IDs use Messages.
+URPV2-13a. A file-ID decoder MUST set `MediaMetadata.resource.protocol`. OpenAI file IDs use the Responses/Chat/Images namespace; Anthropic file IDs use Messages. Protocol compatibility MUST NOT bypass Provider, Channel, or credential-scope binding.
 
 URPV2-13b. File references MUST satisfy the protocol and resource-scope checks in media-transport.spec.md. Unsupported or ambiguous references MUST produce explicit errors. Encoders MUST NOT infer portability from prefixes.
 
@@ -744,11 +745,20 @@ Chat message concatenation MUST shift answer ranges by the preceding text and in
 
 SEM-2. Text and Refusal nodes and deltas MAY contain typed token logprobs.
 Each entry contains token text, optional bytes, a log probability, and ordered alternative tokens.
+An optional token_id retains a provider token identifier; targets without that field omit it.
 Request logprob controls MUST have one typed owner for enabled state and alternative count.
 Decoders MUST remove recognized logprob fields from passthrough.
 Encoders MUST omit token scores when their concatenated bytes do not match the current owning text.
 Stream token scores MUST follow their text delta and MUST accumulate into terminal node scores in order.
+A metadata-only Text delta MAY append scores for previously emitted, unscored text in the same open node.
+Encoders MUST validate those scores against that text and MUST NOT repeat text when emitting score-only wire updates.
 A protocol without token score support MUST omit scores without changing text.
+
+SEM-2a. Optional UrpRequest.sampling owns top_k, seed, presence_penalty, and frequency_penalty controls.
+Each control is optional. Omission differs from an explicit zero. Unsupported target controls are omitted.
+FunctionDefinition.response_schema owns an optional function result JSON Schema, independently of parameters.
+InputDetails.tool_prompt_modality_breakdown owns optional tool-prompt modality counts, independently of ordinary prompt and cache modalities.
+Recognized native values MUST be removed from extras. Typed mutation and deletion MUST control subsequent encoding.
 
 SEM-3. UrpResponse and ResponseDone MUST carry an optional typed outcome, separate from finish_reason.
 Outcome status distinguishes completed, incomplete, failed, cancelled, queued, and in_progress.

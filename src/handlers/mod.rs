@@ -969,6 +969,7 @@ fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str
         ProviderType::Messages => "messages",
         ProviderType::Gemini => "gemini",
         ProviderType::OpenaiImage => "openai_image",
+        ProviderType::OpenrouterImage => "openrouter_image",
         ProviderType::Replicate => "replicate",
         ProviderType::Group => "group",
     }
@@ -1146,6 +1147,7 @@ pub(crate) fn provider_type_protocol(provider_type: ProviderType) -> Option<urp:
         ProviderType::Messages => Some(urp::ProviderProtocol::Messages),
         ProviderType::Gemini => Some(urp::ProviderProtocol::Gemini),
         ProviderType::OpenaiImage => Some(urp::ProviderProtocol::OpenaiImage),
+        ProviderType::OpenrouterImage => Some(urp::ProviderProtocol::OpenrouterImage),
         ProviderType::Replicate => Some(urp::ProviderProtocol::Replicate),
         ProviderType::Group => None,
     }

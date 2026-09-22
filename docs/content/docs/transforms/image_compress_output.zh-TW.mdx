@@ -7,6 +7,8 @@ description: 對回應和串流中 assistant 輸出的圖片重新編碼並可�
 
 此變換對回應或串流中 assistant 輸出的圖片重新編碼並可選縮放。選項與 `image_compress_input` 相同。
 
+如果圖片帶有 alpha 通道，且選定的輸出格式為 `jpg`，此變換會保留原始位元組、媒體類型和尺寸。即使所有像素均不透明，也適用此規則。此規則優先於 `max_edge_px` 和 `skip_if_smaller`，同時適用於一般回應和串流回應。支援 alpha 通道的格式仍依設定壓縮。
+
 ## 參考資訊
 
 | 屬性 | 值 |

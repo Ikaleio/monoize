@@ -288,6 +288,7 @@ fn convert_tool_to_function(tool: &mut ToolDefinition, cfg: &Config) {
     tool.tool_type = "function".to_string();
     tool.name = Some(name.clone());
     tool.function = Some(FunctionDefinition {
+        response_schema: None,
         name,
         description,
         parameters: Some(function_parameters()),

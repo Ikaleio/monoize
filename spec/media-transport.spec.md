@@ -15,9 +15,13 @@ MT7. Messages custom document strings MUST normalize to an ordered one-element t
 MT8. File reference provenance MUST use typed MediaResource metadata. It MUST identify the source protocol and optionally its provider, channel, and credential scope.
 MT9. Resource metadata MUST NOT appear as native wire fields. Protocol-family compatibility alone MUST NOT authorize a bound resource on another credential scope.
 
-MT9a. `MediaMetadata.image_generation` MUST retain upstream-reported quality, dimensions, background, output format, and image model as optional typed strings. Empty generation metadata MUST be omitted from serialized URP. Nodes, headers, bridge parts, and terminal stream reconstruction MUST preserve it. Encoders MUST use the typed values rather than native extras or request values.
+MT9a. `MediaMetadata.image_generation` MUST retain upstream-reported quality, dimensions, background, output format, image model, and per-image `revised_prompt` as optional typed strings. Empty generation metadata MUST be omitted from serialized URP. Nodes, headers, bridge parts, and terminal stream reconstruction MUST preserve it. Encoders MUST use the typed values rather than native extras or request values. `revised_prompt` belongs to its image and MUST NOT enter the common response envelope or a duplicate text node.
 
 MT9b. When `output_format` is present and the current Base64 source has a supported MIME, output encoders MUST reconcile the format with that source. A source changed to WebP MUST NOT retain an obsolete PNG format. An absent `output_format` MUST remain absent.
+
+MT9c. `MediaMetadata.image_mask` MUST identify an input mask with a boolean. Its default is false. An adapter MUST NOT infer mask identity from node position or a synthetic ID. Input compression MUST preserve all user image sources when any user image is a mask. This rule preserves mask alignment, dimensions, format, and alpha without requiring a paired resampling policy.
+
+MT9d. `UrpRequest.image_generation` MUST own Images request controls as `ImageGenerationOptions`. Its optional fields are `n`, `size`, `quality`, `style`, `response_format`, `background`, `output_format`, `output_compression`, `moderation`, `partial_images`, and `input_fidelity`. `user` remains owned by `UrpRequest.user`. Recognized controls MUST be removed from request extras. Null option values mean absence. When the typed options object exists, typed values and absence MUST override colliding extras. `n` MUST be a positive integer, `output_compression` MUST be an integer in [0,100], and `partial_images` MUST be an integer in [0,3]. String options MUST remain strings; the selected upstream validates model-specific values.
 
 ## Request preparation
 

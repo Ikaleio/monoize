@@ -650,6 +650,11 @@ fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
         &req.logprobs,
         crate::urp::ProviderProtocol::ChatCompletion,
     );
+    crate::urp::sampling::encode_request(
+        &mut body,
+        &req.sampling,
+        crate::urp::ProviderProtocol::ChatCompletion,
+    );
     body
 }
 
@@ -818,8 +823,10 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
     if content_scores.is_some_and(|v| !v.is_empty())
         || refusal_scores.is_some_and(|v| !v.is_empty())
     {
-        result["choices"][0]["logprobs"] =
-            json!({"content":content_scores,"refusal":refusal_scores});
+        result["choices"][0]["logprobs"] = json!({
+            "content": content_scores.map(crate::urp::logprobs::encode_openai),
+            "refusal": refusal_scores.map(crate::urp::logprobs::encode_openai),
+        });
     }
     if let Some(usage) = &resp.usage {
         let aggregate = usage.accounting();

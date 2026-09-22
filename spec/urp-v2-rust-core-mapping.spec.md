@@ -43,6 +43,7 @@ RTYPE-4. If the Rust item names remain unsuffixed, they MUST still use these exa
 
 ```text
 UrpRequest {
+  image_generation: Option<ImageGenerationOptions>,
   model: String,
   input: Vec<Node>,
   instructions_format: Option<InstructionsFormat>,
@@ -235,6 +236,7 @@ The metadata types MUST use these fields:
 
 ```text
 MediaMetadata {
+  image_mask: bool,
   image_generation: ImageGenerationMetadata,
   filename: Option<String>,
   detail: Option<String>,
@@ -257,6 +259,7 @@ MediaResource {
 }
 
 ImageGenerationMetadata {
+  revised_prompt: Option<String>,
   quality: Option<String>,
   size: Option<String>,
   background: Option<String>,
@@ -282,7 +285,7 @@ ReasoningTextPart {
 
 RTYPE-6. `OrdinaryRole` in the Rust core layer MUST contain exactly `System`, `Developer`, `User`, and `Assistant`.
 
-RTYPE-6a. `ProviderProtocol` in the Rust core layer MUST contain exactly `Responses`, `ChatCompletion`, `Messages`, `Gemini`, `OpenaiImage`, and `Replicate`, serialized as `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, and `replicate`.
+RTYPE-6a. `ProviderProtocol` in the Rust core layer MUST contain exactly `Responses`, `ChatCompletion`, `Messages`, `Gemini`, `OpenaiImage`, `OpenrouterImage`, and `Replicate`, serialized as `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, and `replicate`.
 
 RTYPE-6b. The Rust core layer MUST define `ToolCallType` with exactly `Function` and `Custom`, serialized as `function` and `custom`. Its serde default MUST be `Function` for legacy internal payloads that predate the discriminator.
 
@@ -658,3 +661,9 @@ Rust citations MUST use Citation values. Text and Refusal nodes, bridge parts, a
 UrpRequest MUST expose optional LogprobConfig. UrpResponse and ResponseDone MUST expose optional ResponseOutcome.
 Usage MUST expose optional ordered UsageIteration values. Constructors that omit these optional semantic fields MUST default to absence during deserialization.
 Existing final audio and reasoning representations remain unchanged.
+
+RSEM-2. UrpRequest MUST expose optional SamplingConfig with optional top_k, seed, presence_penalty, and frequency_penalty fields.
+FunctionDefinition MUST expose optional response_schema for a function result JSON Schema.
+TokenScore MUST expose optional token_id. OpenAI wire projections MUST omit token_id.
+InputDetails MUST expose optional tool_prompt_modality_breakdown and preserve it during usage iteration aggregation.
+These additions follow GEM-4a in gemini-codec.spec.md and SEM-2a in urp-v2-flat-structure.spec.md.

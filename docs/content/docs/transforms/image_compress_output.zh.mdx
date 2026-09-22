@@ -7,6 +7,8 @@ description: 对响应和流中 assistant 输出的图片重新编码并可选�
 
 此变换对响应或流中 assistant 输出的图片重新编码并可选缩放。选项与 `image_compress_input` 相同。
 
+如果图片带有 alpha 通道，且选定的输出格式为 `jpg`，此变换会保留原始字节、媒体类型和尺寸。即使所有像素均不透明，也适用此规则。此规则优先于 `max_edge_px` 和 `skip_if_smaller`，同时适用于普通响应和流式响应。支持 alpha 通道的格式仍按配置压缩。
+
 ## 参考信息
 
 | 属性 | 值 |

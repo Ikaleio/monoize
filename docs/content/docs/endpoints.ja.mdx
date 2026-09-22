@@ -109,6 +109,21 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
+## Gemini 上流
+
+Channel の上流タイプを `gemini` に設定すると、既存のエンドポイントから Gemini を利用できます。この対応には、公開 Gemini HTTP エンドポイントの追加や Live API は含まれません。
+
+Monoize は `generateContent` のリクエスト、レスポンス、会話履歴を双方向に変換します。ストリーミングには `streamGenerateContent` SSE を使います。
+
+- テキスト、推論、関数呼び出し、関数の結果、対応するメディアは、順序と識別情報を保持します。思考署名は元の Part との対応を保持します。
+- 生成パラメーター、構造化レスポンス形式、ツール、ツール選択を、変換先が対応するフィールドに変換します。
+- Token logprobs は一致するテキストに関連付けられます。テキストが変わると、無効になったスコアを破棄します。Gemini で要求できる top logprobs は最大 20 個です。
+- 表現可能な引用と grounding の参照リンクを変換先の形式に変換します。引用範囲は、非 ASCII テキストを含めて元の位置を保持します。
+- テキストと推論は完了前から順次出力します。完全な内容が必要なメディアや署名付き Part は、完了まで待つ場合があります。失敗または途中終了したストリームはエラーを返します。
+- Monoize は index が 0 の候補を優先し、なければ最初の候補を返します。独立した候補は結合しません。
+
+Gemini 専用ツール、Provider が実行するコード、変換できないメタデータは Gemini 内でのみ保持します。変換先のプロトコルには、表現可能な機能だけを送信します。
+
 ## Embeddings
 
 ```bash
@@ -136,15 +151,39 @@ curl http://localhost:8080/v1/images/generations \
   }'
 ```
 
-編集は `multipart/form-data` を使います。
+画像ファイルのアップロードには `multipart/form-data` を使います。
 
 ```bash
 curl http://localhost:8080/v1/images/edits \
   -H "Authorization: Bearer sk-..." \
   -F model="my-image-model" \
   -F prompt="Add a red boat" \
-  -F image[]=@input.png
+  -F 'image[]=@input.png'
 ```
+
+PNG マスクを使う場合は `-F mask=@mask.png` を追加します。編集リクエストには 1〜16 枚の元画像と、最大 1 個のマスクを指定できます。
+
+画像の参照を送る場合は JSON を使います。
+
+```bash
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-image-model",
+    "prompt": "Add a red boat",
+    "images": [{ "image_url": "https://example.com/input.png" }],
+    "mask": { "image_url": "https://example.com/mask.png" }
+  }'
+```
+
+各 `images` 要素と任意の `mask` オブジェクトには、`image_url` または `file_id` のどちらか一方だけを指定します。`image_url` は HTTP(S) URL と Base64 データ URL に対応します。ファイル ID は、選択した上流の認証情報でアクセスできる必要があります。ファイル ID によって上流アカウントや Provider 間でファイルを転送することはできません。
+
+両エンドポイントで `model` と `prompt` が必要です。非ストリーミングの `n` は、従来どおり独立したサブリクエストに分割します。画像 SSE イベントを受け取るには `stream=true` と `n=1` を指定します。ネイティブの `openai_image` ルートはインライン画像を multipart で送信します。入力またはマスクに HTTP(S) URL やファイル参照が残る場合は JSON を使います。
+
+`stream=true` を指定すると、Monoize は直ちに SSE ハートビートコメントを送ります。データイベントが 15 秒間ない場合は再送します。OpenRouter の画像編集には非ストリーミングの上流リクエストを自動で使用します。ほかのルートでは、ストリーミングを明示的に拒否する HTTP 400 または 422 に対して一度だけ非ストリーミングで再送します。JSON の画像レスポンスは完了イベントに変換し、プレビュー画像は合成しません。課金とログは 1 回のストリーミングリクエストとして処理します。通常のネットワークエラーはこの再送の対象外です。生成中の下流接続を維持できますが、上流リクエストのタイムアウトは延長しません。
+
+Responses ルートでは [image_enable_openai_generation_tool](/ja/docs/transforms/image_enable_openai_generation_tool) を設定します。リクエストの画像設定が変換のデフォルト値より優先され、マスクはツールの `input_image_mask` に変換されます。画像の `background` はツールの設定です。Responses の真偽値 `background` とは別に扱います。Responses ルートは画像の `style` と `response_format="url"` を明示的なエラーで拒否します。
 
 画像レスポンスは、上流が返した `quality`、`size`、`background`、`output_format`、画像の `model` を保持します。上流が返さない値は省略します。リクエストの値を実行結果として補完しません。複数の画像では、すべての画像が同じ値を報告したフィールドだけをトップレベルに返します。画像ストリームの完了イベントは、その画像のメタデータを返します。
 

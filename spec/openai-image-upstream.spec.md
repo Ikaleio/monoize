@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Subsystem:** OpenAI Image upstream channel type.
-- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/images/generations`, `/v1/images/edits`) and forwards them through an attempt whose effective upstream type is `openai_image`. Text-only requests are sent to `POST /v1/images/generations` as JSON. Requests that contain user image inputs are sent to `POST /v1/images/edits` as `multipart/form-data`.
+- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/images/generations`, `/v1/images/edits`) and forwards them through an attempt whose effective upstream type is `openai_image`. Text-only requests are sent to `POST /v1/images/generations` as JSON. Requests with user image inputs use `POST /v1/images/edits`. Inline Base64 inputs use multipart. URL or file-reference inputs use JSON.
 - **Dependency:** This spec extends `unified_responses_proxy.spec.md` §7 (Adapters) and `monoize-upstream-routing.spec.md` §2.3 (Provider).
 
 ## 1. Terminology
@@ -31,27 +31,35 @@ OIU-E2. The upstream request body MUST include:
 - `model`: from `UrpRequest.model` (after redirect).
 - `prompt`: concatenation of all `Node::Text.content` from user-role nodes in `UrpRequest.input`, joined by newline.
 
-OIU-E3. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be merged into the upstream request body as top-level fields. Adapter-generated keys (`model`, `prompt`) take precedence over `extra_body` keys.
+OIU-E3. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be merged into the upstream request body as top-level fields. Adapter-generated keys (`model`, `prompt`, `stream`, `images`, `image`, and `mask`) take precedence over extra fields.
+
+OIU-E3a. When `UrpRequest.image_generation` is present, its typed fields MUST supply the image options. The encoder MUST ignore same-named extra fields, including when a typed field is absent. `UrpRequest.user` MUST supply `user`; an absent typed user MUST remove any extra-body user value.
+
+OIU-E3b. Every native Images encoding path MUST validate typed option ranges and media references after request transforms. Invalid data URLs, Base64 data, MIME types, and incompatible file provenance MUST fail before upstream dispatch.
 
 OIU-E4. If `UrpRequest.stream == Some(true)`, Monoize MUST include top-level JSON field `stream: true` in the upstream image request body. If `UrpRequest.stream != Some(true)`, Monoize MUST NOT include a `stream` field in the upstream image request body.
 
-OIU-E5. URP fields `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `response_format`, and `user` MUST be ignored and MUST NOT appear in the upstream image request body.
+OIU-E5. URP fields `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, and the text `response_format` MUST be ignored. The typed image `response_format` option MUST remain independent of the text response format.
 
 ### 3.2 URP to Upstream Image Edit Request
 
-OIU-E5a. When `provider_type` resolves to `openai_image` and `UrpRequest.input` contains one or more user-role `Node::Image` items, Monoize MUST send the upstream request as `multipart/form-data` to `POST /v1/images/edits`.
+OIU-E5a. When the request contains user-role image nodes, Monoize MUST send the request to `POST /v1/images/edits`. If every image source is Base64, the body MUST use `multipart/form-data`. If any source is a URL or file reference, the body MUST use JSON.
 
 OIU-E5b. The upstream edit multipart body MUST include text field `model` from `UrpRequest.model` after redirect.
 
 OIU-E5c. The upstream edit multipart body MUST include text field `prompt` equal to the concatenation of all user-role `Node::Text.content` values in `UrpRequest.input`, joined by newline, excluding empty text after trim.
 
-OIU-E5d. Each user-role `Node::Image` whose source is `ImageSource::Base64 { media_type, data }` MUST be decoded from base64 and included as a file field. The field name MUST be `image` unless the node has `id = "__monoize_image_api_mask"`; a node with that id MUST use field name `mask`. Monoize MUST NOT infer a mask from image position alone. The file part content type MUST equal `media_type`.
+OIU-E5d. For multipart edits, the encoder MUST decode each Base64 image into a file part. A node with `MediaMetadata.image_mask = true` MUST use field name `mask`. Other nodes MUST use `image` for one source image, or `image[]` for multiple source images. The file part content type MUST equal the source media type. The encoder MUST NOT infer a mask from node identity or position.
 
-OIU-E5e. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be included in the upstream edit multipart body as text fields, except `model`, `prompt`, and `stream`. JSON string values MUST be written without quotes. JSON number, boolean, object, array, and null values MUST be written as their JSON serialization.
+OIU-E5e. Multipart text fields MUST use the same option selection and typed precedence as generation requests. JSON string values MUST be written without quotes. JSON number, boolean, object, array, and null values MUST be written as their JSON serialization.
 
 OIU-E5f. If `UrpRequest.stream == Some(true)`, Monoize MUST include text field `stream` with value `true` in the upstream edit multipart body. If `UrpRequest.stream != Some(true)`, Monoize MUST NOT include a `stream` field in the upstream edit multipart body.
 
 OIU-E5g. When a request capture session is active for the attempt, the sent multipart body MUST be recorded as the attempt's `upstream_request` in the multipart capture representation of `request-capture-dumps.spec.md` RCD-D6a/RCD-D16, with part order, field names, file names, part content types, and part bytes equal to the sent form.
+
+OIU-E5h. JSON edits MUST place source images in an `images` array, in source order. Each entry MUST contain `image_url` for a URL or `file_id` for a file reference. Base64 sources in the same request MUST become `image_url` data URLs. A mask MUST use a separate `mask` object with the same reference representation. JSON edits MUST use the same model, prompt, options, user, and stream rules as generation requests. Request capture MUST record the sent JSON body.
+
+OIU-E5i. The encoder MUST require 1 through 16 source images and at most one mask. Multipart encoding MUST reject URL and file-reference sources instead of uploading their text as files.
 
 ### 3.3 Extra Body Whitelist
 
@@ -77,7 +85,7 @@ OIU-D2. For each entry in `data[]`:
 - Otherwise, if `url` is a string with non-whitespace content, create an assistant `Node::Image` with `ImageSource::Url`. Preserve its value and set `detail` to `None`.
 - Otherwise, skip the entry. If no image nodes remain, return an error instead of a successful response.
 
-OIU-D3. If `revised_prompt` is present in any `data[]` entry, Monoize MUST create a `Node::Text` with `role: Assistant` and the `revised_prompt` content, placed before image nodes in source order.
+OIU-D3. Each `data[]` entry's `revised_prompt` MUST map to that image's typed `MediaMetadata.image_generation.revised_prompt`. An empty string MUST remain present. The decoder MUST NOT create a duplicate text node or associate one entry's prompt with another image.
 
 OIU-D4. All extracted assistant nodes MUST be placed directly into `UrpResponse.output` in source order.
 
@@ -92,7 +100,7 @@ OIU-D6. If the upstream response contains a top-level `usage` object, Monoize MU
 
 OIU-D7. For `gpt-image-2`, decoded usage MUST preserve text input tokens, image input tokens, cached input tokens, and image output tokens as structured URP usage fields when upstream provides them.
 
-OIU-D8. Decoders MUST copy upstream-reported `quality`, `size`, `background`, `output_format`, and `model` strings into each generated image's typed `MediaMetadata.image_generation`. Non-streaming Images responses use top-level fields. Completed Images SSE events and Responses `image_generation_call` items use their own fields. These recognized fields MUST NOT remain duplicate semantic values in adapter extras. Base64 image MIME MUST follow an explicit `output_format` (`png`, `jpeg`, or `webp`); absent format retains the existing PNG fallback without inventing response metadata.
+OIU-D8. Decoders MUST copy upstream-reported `quality`, `size`, `background`, `output_format`, and `model` strings into each generated image's typed `MediaMetadata.image_generation`. Non-streaming Images responses use top-level fields. Completed Images SSE events and Responses `image_generation_call` items use their own fields. These recognized fields MUST NOT remain duplicate semantic values in adapter extras. Base64 image MIME MUST follow an explicit `output_format` (`png`, `jpeg`, or `webp`), subject to the Images `media_type` precedence in OIU-D10. Absent format retains the existing PNG fallback without inventing response metadata.
 
 OIU-D9. Non-streaming and streaming Responses encoders MUST project generated-image metadata from the current typed fields. Native replay extras MUST NOT restore deleted metadata. The response envelope's text-model identifier MUST NOT be used as the generated image's model.
 
@@ -107,6 +115,8 @@ OIU-R1. When the downstream protocol is Responses, the URP response MUST be enco
 OIU-R2. When the downstream protocol is Chat Completions or Anthropic Messages, Monoize MUST automatically convert assistant `Node::Image` outputs to inline markdown base64 images appended to assistant text content before encoding the downstream response.
 
 OIU-R3. The markdown format MUST be: `![image](data:{media_type};base64,{data})` for base64 images, and `![image]({url})` for URL images.
+
+OIU-R3a. When converting an image to markdown, the renderer MUST place its nonempty typed `revised_prompt` before that image. This projection MUST consume the image node and MUST NOT retain a second semantic copy in URP.
 
 OIU-R4. This automatic conversion MUST occur after response-phase transforms have been applied, so user-configured transforms can still operate on the raw `Node::Image` data.
 
@@ -134,7 +144,7 @@ OIU-S5a. When the downstream protocol is Responses streaming, partial-image `Nod
 
 OIU-S6. When the downstream request is non-streaming but the selected attempt has `UrpRequest.stream == Some(true)` after request-phase transforms, Monoize MUST call the upstream image endpoint with streaming enabled, collect canonical URP stream events into one `UrpResponse`, apply response transforms, and return a normal non-streaming downstream response.
 
-OIU-S7. Whenever an `openai_image` attempt whose URP request contains at least one user-role `Node::Image` executes with `UrpRequest.stream == Some(true)` — from the downstream streaming pipeline, from the OIU-S6 internal collection path, or from the Image API streaming path (`image-api-proxy.spec.md` §5.5) — the upstream call MUST be sent as `multipart/form-data` to `POST /v1/images/edits` per OIU-E5a..OIU-E5g, including text field `stream` with value `true` (OIU-E5f), and the upstream response MUST be decoded as SSE. Monoize MUST NOT send a JSON body to `/v1/images/edits`.
+OIU-S7. Streaming edits MUST use the same transport selection as non-streaming edits under OIU-E5a. This rule applies to downstream streaming, internal stream collection, and the Image API streaming path. Multipart edits MUST include text field `stream=true`. JSON edits MUST include boolean `stream=true`. The upstream response MUST be decoded as SSE.
 
 ## 7. Routing Integration
 
@@ -183,4 +193,14 @@ OIU-C1. `openai_image` is a concrete upstream type, not virtual. Providers with 
 
 OIU-C2. `openai_image` MUST appear in the `stream_upstream_to_urp_events` streaming decoder dispatch and MUST NOT return `provider_type_not_supported` for streaming image generation attempts.
 
-OIU-C3. `n` field handling: if `n` is present in `extra_body`, it is forwarded to the upstream as-is. Monoize does NOT perform fan-out for this upstream type (unlike the Image API proxy endpoints which do their own fan-out). The upstream provider handles `n` natively.
+OIU-C3. The encoder MUST forward `image_generation.n` when present. If typed image options are absent, an allowed `extra_body.n` MAY supply this value. This upstream adapter MUST NOT perform fan-out. The upstream provider handles `n` natively; Image API ingress fan-out remains a separate operation.
+
+## 10. Shared Images decoding
+
+OIU-D10. The shared Images decoder MUST honor nonblank per-image `media_type` before the existing `output_format` inference.
+This rule applies to non-streaming responses and partial or completed SSE image events.
+The decoder MUST map `media_type` to the typed image source and MUST NOT retain a second copy in image extras.
+
+OIU-S8. The shared stream decoder MUST decode nested `error.message` and `error.code`, with the existing top-level error shape as fallback.
+An error MUST terminate decoding without a successful response terminal event.
+A stream that ends without a completed image MUST fail with `upstream_stream_missing_terminal`.

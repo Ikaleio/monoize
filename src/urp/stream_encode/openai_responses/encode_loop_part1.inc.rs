@@ -918,9 +918,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             obj.insert("text".to_string(), json!(content));
                             obj.insert(
                                 "logprobs".into(),
-                                json!(
+                                crate::urp::logprobs::encode_openai(
                                     crate::urp::logprobs::valid(logprobs, content)
-                                        .unwrap_or_default()
+                                        .unwrap_or_default(),
                                 ),
                             );
                         }
@@ -1228,9 +1228,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 obj.insert("text".to_string(), json!(content));
                                 obj.insert(
                                     "logprobs".into(),
-                                    json!(
+                                    crate::urp::logprobs::encode_openai(
                                         crate::urp::logprobs::valid(logprobs, content)
-                                            .unwrap_or_default()
+                                            .unwrap_or_default(),
                                     ),
                                 );
                             }
@@ -2078,7 +2078,9 @@ fn encode_node_done_content_part(node: &urp::Node) -> Option<Value> {
             );
             obj.insert(
                 "logprobs".to_string(),
-                json!(crate::urp::logprobs::valid(logprobs, content).unwrap_or_default()),
+                crate::urp::logprobs::encode_openai(
+                    crate::urp::logprobs::valid(logprobs, content).unwrap_or_default(),
+                ),
             );
             merge_json_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
@@ -2140,7 +2142,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert("content".to_string(), json!([{ "type": "output_text", "text": content, "annotations": crate::urp::citations::encode(citations,crate::urp::ProviderProtocol::Responses,0), "logprobs": crate::urp::logprobs::valid(logprobs,content).unwrap_or_default() }]));
+            obj.insert("content".to_string(), json!([{ "type": "output_text", "text": content, "annotations": crate::urp::citations::encode(citations,crate::urp::ProviderProtocol::Responses,0), "logprobs": crate::urp::logprobs::encode_openai(crate::urp::logprobs::valid(logprobs,content).unwrap_or_default()) }]));
             let id = extra_body
                 .get("id")
                 .and_then(Value::as_str)
@@ -2438,7 +2440,11 @@ fn append_node_delta_to_completed_item(
                         .entry("logprobs")
                         .or_insert_with(|| json!([]))
                         .as_array_mut()
-                        .map(|v| v.extend(scores.iter().map(|s| json!(s))));
+                        .map(|values| {
+                            if let Value::Array(scores) = urp::logprobs::encode_openai(scores) {
+                                values.extend(scores);
+                            }
+                        });
                 }
             }
             if let Some(part) = item
@@ -3189,12 +3195,12 @@ async fn send_responses_scored_text_delta(
         .await;
     };
     payload["delta"] = json!(text);
-    payload["logprobs"] = json!(scores);
+    payload["logprobs"] = urp::logprobs::encode_openai(scores);
     if max_frame_length.is_some_and(|limit| payload.to_string().len() + 80 > limit) {
         for (text, scores) in urp::logprobs::fragments(scores) {
             let mut part = payload.clone();
             part["delta"] = json!(text);
-            part["logprobs"] = json!(scores);
+            part["logprobs"] = urp::logprobs::encode_openai(&scores);
             send_responses_event(tx, seq, "response.output_text.delta", part).await?;
         }
     } else {

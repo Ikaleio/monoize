@@ -427,6 +427,7 @@ fn make_input_details(
         || modality_breakdown.is_some()
     {
         Some(urp::InputDetails {
+            tool_prompt_modality_breakdown: None,
             standard_tokens,
             cache_read_tokens,
             cache_read_modality_breakdown,

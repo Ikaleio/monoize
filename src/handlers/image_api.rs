@@ -1,5 +1,5 @@
 use super::*;
-use axum::extract::Multipart;
+use axum::extract::{FromRequest, Multipart, Request};
 use base64::Engine as _;
 use futures_util::StreamExt as _;
 use std::collections::HashMap;
@@ -9,7 +9,9 @@ pub async fn create_image_generation(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
-    let auth = auth_tenant(&headers, &state).await?;
+    let mut auth = auth_tenant(&headers, &state).await?;
+    auth.internal_source
+        .get_or_insert(crate::auth::InternalRequestSource::ImageGeneration);
     // RCD-C9/RCD-C16 pre-check: the raw-input clone is skipped entirely when
     // no sub-request session could start.
     let capture_eligible = state
@@ -56,18 +58,7 @@ pub async fn create_image_generation(
 
     let n = parse_n_field(obj.get("n"))?;
 
-    // IG3: `stream` must be a JSON boolean when present.
-    let stream_requested = match obj.get("stream") {
-        None => false,
-        Some(Value::Bool(flag)) => *flag,
-        Some(_) => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "stream must be a boolean",
-            ));
-        }
-    };
+    let stream_requested = parse_image_stream(obj.get("stream"))?;
     if stream_requested && n != 1 {
         // IG4: streaming responses carry no image index, so fan-out is
         // rejected instead of producing an ambiguous interleaved stream.
@@ -85,7 +76,11 @@ pub async fn create_image_generation(
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
 
-    let extra_body = build_extra_body(obj, &["prompt", "model", "n", "max_multiplier", "stream"]);
+    let options = ImageRequestOptions::parse(build_extra_body(
+        obj,
+        &["prompt", "model", "n", "max_multiplier", "stream"],
+    ))?;
+    tracing::info!(model = %model, n, stream = stream_requested, endpoint = "generations", "image API request");
 
     let inputs = vec![urp::Node::Text {
         logprobs: None,
@@ -105,7 +100,7 @@ pub async fn create_image_generation(
             auth,
             model,
             inputs,
-            extra_body,
+            options,
             max_multiplier_val,
             request_id,
             request_ip,
@@ -122,7 +117,7 @@ pub async fn create_image_generation(
         &auth,
         &model,
         &inputs,
-        &extra_body,
+        &options,
         max_multiplier_val,
         n,
         request_id,
@@ -139,231 +134,71 @@ pub async fn create_image_generation(
 pub async fn create_image_edit(
     State(state): State<AppState>,
     headers: HeaderMap,
-    mut multipart: Multipart,
+    request: Request,
 ) -> AppResult<Response> {
-    let auth = auth_tenant(&headers, &state).await?;
-    // RCD-C9/RCD-C16 pre-check: the RCD-D4a multipart capture parts are only
-    // recorded when a sub-request session could start.
+    let mut auth = auth_tenant(&headers, &state).await?;
+    auth.internal_source
+        .get_or_insert(crate::auth::InternalRequestSource::ImageEdit);
     let capture_eligible = state
         .request_capture
         .would_start_session(&state.monoize_runtime, &auth)
         .await;
-
-    let mut prompt: Option<String> = None;
-    let mut model: Option<String> = None;
-    let mut n_raw: Option<String> = None;
-    let mut stream_raw: Option<String> = None;
-    let mut image_data: Option<(String, String)> = None;
-    let mut extra_images: Vec<(String, String)> = Vec::new();
-    let mut mask_data: Option<(String, String)> = None;
-    let mut max_multiplier_raw: Option<String> = None;
-    let mut extra_text_fields: HashMap<String, Value> = HashMap::new();
-    // RCD-D4a: consumed parts in wire order, exact wire text and raw bytes.
-    let mut capture_parts: Vec<crate::request_capture::CapturedMultipartPart> = Vec::new();
-
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string()))?
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let edit = if content_type == "application/json"
+        || content_type.starts_with("application/") && content_type.ends_with("+json")
     {
-        let field_name = field.name().unwrap_or("").to_string();
-        match field_name.as_str() {
-            "prompt" => {
-                let text = field.text().await.map_err(|e| {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?;
-                if capture_eligible {
-                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
-                        name: field_name,
-                        text: text.clone(),
-                    });
-                }
-                prompt = Some(text);
-            }
-            "model" => {
-                let text = field.text().await.map_err(|e| {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?;
-                if capture_eligible {
-                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
-                        name: field_name,
-                        text: text.clone(),
-                    });
-                }
-                model = Some(text);
-            }
-            "n" => {
-                let text = field.text().await.map_err(|e| {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?;
-                if capture_eligible {
-                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
-                        name: field_name,
-                        text: text.clone(),
-                    });
-                }
-                n_raw = Some(text);
-            }
-            "stream" => {
-                let text = field.text().await.map_err(|e| {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?;
-                if capture_eligible {
-                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
-                        name: field_name,
-                        text: text.clone(),
-                    });
-                }
-                stream_raw = Some(text);
-            }
-            "max_multiplier" => {
-                let text = field.text().await.map_err(|e| {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?;
-                if capture_eligible {
-                    capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
-                        name: field_name,
-                        text: text.clone(),
-                    });
-                }
-                max_multiplier_raw = Some(text);
-            }
-            "image" | "image[]" => {
-                let wire_filename = field.file_name().map(|s| s.to_string());
-                let wire_content_type = field.content_type().map(|s| s.to_string());
-                let media_type = wire_content_type
-                    .clone()
-                    .unwrap_or_else(|| infer_media_type_from_filename(wire_filename.as_deref()));
-                let bytes = field.bytes().await.map_err(|e| {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                if capture_eligible {
-                    capture_parts.push(crate::request_capture::CapturedMultipartPart::File {
-                        name: field_name,
-                        filename: wire_filename,
-                        content_type: wire_content_type,
-                        data_base64: b64.clone(),
-                        byte_length: bytes.len(),
-                    });
-                }
-                if image_data.is_none() {
-                    image_data = Some((media_type, b64));
-                } else {
-                    extra_images.push((media_type, b64));
-                }
-            }
-            "mask" => {
-                let wire_filename = field.file_name().map(|s| s.to_string());
-                let wire_content_type = field.content_type().map(|s| s.to_string());
-                let media_type = wire_content_type
-                    .clone()
-                    .unwrap_or_else(|| infer_media_type_from_filename(wire_filename.as_deref()));
-                let bytes = field.bytes().await.map_err(|e| {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
-                })?;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                if capture_eligible {
-                    capture_parts.push(crate::request_capture::CapturedMultipartPart::File {
-                        name: field_name,
-                        filename: wire_filename,
-                        content_type: wire_content_type,
-                        data_base64: b64.clone(),
-                        byte_length: bytes.len(),
-                    });
-                }
-                mask_data = Some((media_type, b64));
-            }
-            _ => {
-                // RCD-D4a: unknown parts appear iff the parser consumed them
-                // as text fields (IE1); ignored file parts (IE2) are absent.
-                if let Ok(text) = field.text().await {
-                    if capture_eligible {
-                        capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
-                            name: field_name.clone(),
-                            text: text.clone(),
-                        });
-                    }
-                    extra_text_fields.insert(field_name, coerce_text_to_json_value(&text));
-                }
-            }
-        }
-    }
-
-    let capture_raw_input = std::sync::Arc::new(if capture_eligible {
-        crate::request_capture::multipart_capture_object(&capture_parts)
+        let Json(body) = Json::<Value>::from_request(request, &state)
+            .await
+            .map_err(|err| AppError::new(err.status(), "invalid_request", err.body_text()))?;
+        parse_json_image_edit(body, capture_eligible)?
+    } else if content_type == "multipart/form-data" {
+        let multipart = Multipart::from_request(request, &state)
+            .await
+            .map_err(|err| AppError::new(err.status(), "invalid_request", err.body_text()))?;
+        parse_multipart_image_edit(multipart, capture_eligible).await?
     } else {
-        Value::Null
-    });
-
-    let prompt = prompt.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
-        AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "missing or empty prompt",
-        )
-    })?;
-
-    let mut model = model.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
-        AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing model")
-    })?;
-
-    apply_configured_model_redirects_to_model(&state, &mut model, &auth).await;
-
-    let (image_media_type, image_b64) = image_data.ok_or_else(|| {
-        AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "missing image file",
-        )
-    })?;
-
-    let n = match &n_raw {
-        Some(s) => parse_n_field(Some(&Value::String(s.clone())))?,
-        None => 1,
-    };
-
-    // IE4: `stream` text field accepts exactly `true` or `false`.
-    let stream_requested = match stream_raw.as_deref() {
-        None => false,
-        Some("true") => true,
-        Some("false") => false,
-        Some(_) => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "stream must be true or false",
-            ));
-        }
-    };
-    if stream_requested && n != 1 {
         return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "invalid_request",
-            "stream=true requires n=1",
+            "image edits require application/json or multipart/form-data",
         ));
-    }
-
-    ensure_model_allowed(&auth, &model)?;
-
-    let max_multiplier_val = {
-        let ceiling = auth.max_multiplier;
-        let requested = max_multiplier_raw
-            .and_then(|value| parse_positive_multiplier(&value))
-            .or_else(|| parse_max_multiplier_header(&headers));
-        match (ceiling, requested) {
-            (Some(c), Some(r)) => Some(r.min(c)),
-            (Some(c), None) => Some(c),
-            (None, Some(r)) => Some(r),
-            (None, None) => None,
-        }
     };
 
-    let request_id = extract_request_id(&headers);
-    let request_ip = extract_client_ip(&headers);
+    let mut model = required_image_text(&edit.fields, "model")?;
+    let prompt = required_image_text(&edit.fields, "prompt")?;
+    let n = parse_n_field(edit.fields.get("n"))?;
+    let stream_requested = parse_image_stream(edit.fields.get("stream"))?;
+    if stream_requested && n != 1 {
+        return Err(image_request_error("stream=true requires n=1"));
+    }
+    apply_configured_model_redirects_to_model(&state, &mut model, &auth).await;
+    ensure_model_allowed(&auth, &model)?;
+    let max_multiplier_val =
+        resolve_image_max_multiplier(edit.fields.get("max_multiplier"), &headers, &auth);
+    let options = ImageRequestOptions::parse(build_extra_body(
+        &edit.fields,
+        &[
+            "prompt",
+            "model",
+            "n",
+            "stream",
+            "max_multiplier",
+            "image",
+            "image[]",
+            "images",
+            "mask",
+        ],
+    ))?;
 
-    let mut inputs = Vec::new();
-    inputs.push(urp::Node::Text {
+    let image_count = edit.images.len();
+    let has_mask = edit.mask.is_some();
+    let mut inputs = vec![urp::Node::Text {
         logprobs: None,
         signature: None,
         citations: Vec::new(),
@@ -372,80 +207,315 @@ pub async fn create_image_edit(
         content: prompt,
         phase: None,
         extra_body: HashMap::new(),
-    });
-    inputs.push(urp::Node::Image {
-        metadata: Default::default(),
-
-        id: None,
-        role: urp::OrdinaryRole::User,
-        source: urp::ImageSource::Base64 {
-            media_type: image_media_type,
-            data: image_b64,
-        },
-        extra_body: HashMap::new(),
-    });
-    for (extra_media_type, extra_b64) in extra_images {
-        inputs.push(urp::Node::Image {
-            metadata: Default::default(),
-
-            id: None,
-            role: urp::OrdinaryRole::User,
-            source: urp::ImageSource::Base64 {
-                media_type: extra_media_type,
-                data: extra_b64,
-            },
-            extra_body: HashMap::new(),
-        });
+    }];
+    inputs.extend(edit.images);
+    inputs.extend(edit.mask);
+    let mut inline_bytes_estimate = 0usize;
+    let mut reference_count = 0usize;
+    for node in &inputs {
+        if let urp::Node::Image { source, .. } = node {
+            match source {
+                urp::ImageSource::Base64 { data, .. } => {
+                    inline_bytes_estimate =
+                        inline_bytes_estimate.saturating_add(data.len() / 4 * 3);
+                }
+                _ => reference_count += 1,
+            }
+        }
     }
-    if let Some((mask_media_type, mask_b64)) = mask_data {
-        inputs.push(urp::Node::Image {
-            metadata: Default::default(),
+    tracing::info!(model = %model, n, stream = stream_requested, endpoint = "edits", image_count,
+        inline_bytes_estimate, reference_count, has_mask, "image API request");
 
-            id: Some("__monoize_image_api_mask".to_string()),
-            role: urp::OrdinaryRole::User,
-            source: urp::ImageSource::Base64 {
-                media_type: mask_media_type,
-                data: mask_b64,
-            },
-            extra_body: HashMap::new(),
-        });
-    }
-
+    let request_id = extract_request_id(&headers);
+    let request_ip = extract_client_ip(&headers);
     if stream_requested {
         return run_image_stream_downstream(
             state,
             auth,
             model,
             inputs,
-            extra_text_fields,
+            options,
             max_multiplier_val,
             request_id,
             request_ip,
             extract_client_session_id(&headers),
-            capture_raw_input,
+            edit.capture_raw_input,
             crate::request_capture::CaptureDownstreamProtocol::ImageEdits,
             ImageStreamEventFamily::Edit,
         )
         .await;
     }
-
     let results = fan_out_subrequests(
         &state,
         &auth,
         &model,
         &inputs,
-        &extra_text_fields,
+        &options,
         max_multiplier_val,
         n,
         request_id,
         request_ip,
         extract_client_session_id(&headers),
-        capture_raw_input,
+        edit.capture_raw_input,
         crate::request_capture::CaptureDownstreamProtocol::ImageEdits,
     )
     .await;
-
     assemble_image_response(results)
+}
+
+struct ParsedImageEdit {
+    fields: Map<String, Value>,
+    images: Vec<urp::Node>,
+    mask: Option<urp::Node>,
+    capture_raw_input: Arc<Value>,
+}
+
+fn image_request_error(message: impl Into<String>) -> AppError {
+    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+}
+
+fn required_image_text(fields: &Map<String, Value>, key: &str) -> AppResult<String> {
+    fields
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| image_request_error(format!("missing or empty {key}")))
+}
+
+fn validate_edit_image_count(count: usize) -> AppResult<()> {
+    if (1..=16).contains(&count) {
+        Ok(())
+    } else {
+        Err(image_request_error(
+            "image edits require 1 through 16 source images",
+        ))
+    }
+}
+
+fn parse_json_image_edit(body: Value, capture_eligible: bool) -> AppResult<ParsedImageEdit> {
+    let fields = body
+        .as_object()
+        .ok_or_else(|| image_request_error("body must be object"))?;
+    let references = fields
+        .get("images")
+        .and_then(Value::as_array)
+        .ok_or_else(|| image_request_error("images must be an array"))?;
+    validate_edit_image_count(references.len())?;
+    let images = references
+        .iter()
+        .map(|reference| parse_image_reference(reference, false))
+        .collect::<AppResult<Vec<_>>>()?;
+    let mask = fields
+        .get("mask")
+        .filter(|value| !value.is_null())
+        .map(|reference| parse_image_reference(reference, true))
+        .transpose()?;
+    Ok(ParsedImageEdit {
+        fields: fields.clone(),
+        images,
+        mask,
+        capture_raw_input: Arc::new(if capture_eligible { body } else { Value::Null }),
+    })
+}
+
+fn parse_image_reference(value: &Value, image_mask: bool) -> AppResult<urp::Node> {
+    let reference = value
+        .as_object()
+        .ok_or_else(|| image_request_error("each image reference must be an object"))?;
+    let url = reference.get("image_url").filter(|value| !value.is_null());
+    let file_id = reference.get("file_id").filter(|value| !value.is_null());
+    let mut resource = None;
+    let source = match (url, file_id) {
+        (Some(Value::String(url)), None) if !url.trim().is_empty() => {
+            if url.starts_with("data:") {
+                let (media_type, data) = urp::media::parse_data_url(url).ok_or_else(|| {
+                    image_request_error("image_url must contain a Base64 image data URL")
+                })?;
+                if !media_type.starts_with("image/")
+                    || data.is_empty()
+                    || base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .is_err()
+                {
+                    return Err(image_request_error(
+                        "image_url must contain a Base64 image data URL",
+                    ));
+                }
+                urp::ImageSource::Base64 {
+                    media_type: media_type.to_owned(),
+                    data: data.to_owned(),
+                }
+            } else {
+                let parsed = reqwest::Url::parse(url).map_err(|_| {
+                    image_request_error("image_url must be an HTTP(S) URL or a Base64 data URL")
+                })?;
+                if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                    return Err(image_request_error(
+                        "image_url must be an HTTP(S) URL or a Base64 data URL",
+                    ));
+                }
+                urp::ImageSource::Url {
+                    url: url.clone(),
+                    detail: None,
+                }
+            }
+        }
+        (None, Some(Value::String(file_id))) if !file_id.trim().is_empty() => {
+            resource = Some(urp::MediaResource {
+                protocol: urp::ProviderProtocol::OpenaiImage,
+                provider_id: None,
+                channel_id: None,
+                credential_scope: None,
+            });
+            urp::ImageSource::FileId {
+                file_id: file_id.clone(),
+                detail: None,
+            }
+        }
+        _ => {
+            return Err(image_request_error(
+                "each image reference requires exactly one non-empty image_url or file_id",
+            ));
+        }
+    };
+    Ok(urp::Node::Image {
+        id: None,
+        role: urp::OrdinaryRole::User,
+        source,
+        metadata: urp::MediaMetadata {
+            image_mask,
+            resource,
+            ..Default::default()
+        },
+        extra_body: HashMap::new(),
+    })
+}
+
+async fn parse_multipart_image_edit(
+    mut multipart: Multipart,
+    capture_eligible: bool,
+) -> AppResult<ParsedImageEdit> {
+    let mut fields = Map::new();
+    let mut images = Vec::new();
+    let mut mask = None;
+    let mut capture_parts = Vec::new();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| image_request_error(err.to_string()))?
+    {
+        let name = field.name().unwrap_or("").to_owned();
+        if matches!(name.as_str(), "image" | "image[]" | "mask") {
+            let image_mask = name == "mask";
+            if image_mask && mask.is_some() {
+                return Err(image_request_error("image edits accept at most one mask"));
+            }
+            if !image_mask && images.len() >= 16 {
+                return Err(image_request_error(
+                    "image edits require 1 through 16 source images",
+                ));
+            }
+            let filename = field.file_name().map(str::to_owned);
+            let content_type = field.content_type().map(str::to_owned);
+            let media_type = content_type
+                .clone()
+                .unwrap_or_else(|| infer_media_type_from_filename(filename.as_deref()));
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|err| image_request_error(err.to_string()))?;
+            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            if capture_eligible {
+                capture_parts.push(crate::request_capture::CapturedMultipartPart::File {
+                    name,
+                    filename: filename.clone(),
+                    content_type,
+                    data_base64: data.clone(),
+                    byte_length: bytes.len(),
+                });
+            }
+            let image = urp::Node::Image {
+                id: None,
+                role: urp::OrdinaryRole::User,
+                source: urp::ImageSource::Base64 { media_type, data },
+                metadata: urp::MediaMetadata {
+                    image_mask,
+                    filename,
+                    ..Default::default()
+                },
+                extra_body: HashMap::new(),
+            };
+            if image_mask {
+                mask = Some(image);
+            } else {
+                images.push(image);
+            }
+        } else if field.file_name().is_none() {
+            let text = field
+                .text()
+                .await
+                .map_err(|err| image_request_error(err.to_string()))?;
+            if capture_eligible {
+                capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
+                    name: name.clone(),
+                    text: text.clone(),
+                });
+            }
+            let value = match name.as_str() {
+                "prompt" | "model" | "n" | "user" | "max_multiplier" => Value::String(text),
+                "stream" => match text.as_str() {
+                    "true" => Value::Bool(true),
+                    "false" => Value::Bool(false),
+                    _ => return Err(image_request_error("stream must be true or false")),
+                },
+                _ => coerce_text_to_json_value(&text),
+            };
+            fields.insert(name, value);
+        }
+    }
+    validate_edit_image_count(images.len())?;
+    Ok(ParsedImageEdit {
+        fields,
+        images,
+        mask,
+        capture_raw_input: Arc::new(if capture_eligible {
+            crate::request_capture::multipart_capture_object(&capture_parts)
+        } else {
+            Value::Null
+        }),
+    })
+}
+
+struct ImageRequestOptions {
+    generation: urp::ImageGenerationOptions,
+    user: Option<String>,
+    extra_body: HashMap<String, Value>,
+}
+
+impl ImageRequestOptions {
+    fn parse(mut extra_body: HashMap<String, Value>) -> AppResult<Self> {
+        let generation = urp::ImageGenerationOptions::take_from_extra(&mut extra_body)
+            .map_err(image_request_error)?;
+        let user = match extra_body.remove("user") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(user)) => Some(user),
+            Some(_) => return Err(image_request_error("user must be a string or null")),
+        };
+        Ok(Self {
+            generation,
+            user,
+            extra_body,
+        })
+    }
+}
+
+fn parse_image_stream(value: Option<&Value>) -> AppResult<bool> {
+    match value {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(flag)) => Ok(*flag),
+        Some(_) => Err(image_request_error("stream must be a boolean or null")),
+    }
 }
 
 /// Downstream SSE event family for one streaming Image API request
@@ -544,7 +614,10 @@ impl ImageStreamSink {
         for (position, image) in images.into_iter().enumerate() {
             let event_name = self.family.completed_event_name();
             let mut payload = Map::new();
-            payload.extend(image.generation.to_object());
+            payload.extend(image.generation.common_response_fields());
+            if let Some(revised_prompt) = image.revised_prompt {
+                payload.insert("revised_prompt".to_string(), Value::String(revised_prompt));
+            }
             payload.insert("type".to_string(), Value::String(event_name.to_string()));
             if let Some(b64) = image.b64_json {
                 payload.insert("b64_json".to_string(), Value::String(b64));
@@ -595,6 +668,80 @@ fn sink_frames_emitted(sink: &Option<&mut ImageStreamSink>) -> bool {
     sink.as_ref().is_some_and(|sink| sink.frames_emitted())
 }
 
+fn upstream_rejects_image_streaming(error: &upstream::UpstreamCallError) -> bool {
+    if !matches!(error.status.map(|status| status.as_u16()), Some(400 | 422)) {
+        return false;
+    }
+    if matches!(
+        error.code.as_deref(),
+        Some("streaming_not_supported" | "unsupported_streaming")
+    ) {
+        return true;
+    }
+    let message = error.message.to_ascii_lowercase();
+    let unsupported_parameter = error.param.as_deref() == Some("stream")
+        && (message.contains("not support")
+            || message.contains("unsupported")
+            || message.contains("unknown parameter")
+            || message.contains("unrecognized"));
+    unsupported_parameter
+        || [
+            "streaming is not supported",
+            "stream is not supported",
+            "streaming not supported",
+            "does not support streaming",
+            "streaming is unsupported",
+            "unsupported parameter: 'stream'",
+            "unknown parameter: 'stream'",
+        ]
+        .iter()
+        .any(|signal| message.contains(signal))
+}
+
+async fn decode_image_json_as_stream(
+    provider_type: ProviderType,
+    upstream_response: reqwest::Response,
+    request: &urp::UrpRequest,
+    mask_sensitive_info: bool,
+    tx: mpsc::Sender<urp::UrpStreamEvent>,
+) -> AppResult<()> {
+    let value = upstream_response.json::<Value>().await.map_err(|error| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "invalid_upstream_response",
+            format!("invalid upstream image JSON: {error}"),
+        )
+    })?;
+    let response = decode_response_from_provider(
+        provider_type,
+        &value,
+        &request.model,
+        mask_sensitive_info,
+        request,
+    )?;
+    let mut extra_body = response.extra_body;
+    extra_body.insert("id".to_string(), Value::String(response.id));
+    extra_body.insert("model".to_string(), Value::String(response.model));
+    if let Some(created_at) = response.created_at {
+        extra_body.insert("created_at".to_string(), Value::from(created_at));
+    }
+    tx.send(urp::UrpStreamEvent::ResponseDone {
+        outcome: response.outcome,
+        finish_reason: response.finish_reason,
+        usage: response.usage,
+        output: response.output,
+        extra_body,
+    })
+    .await
+    .map_err(|error| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "stream_send_failed",
+            error.to_string(),
+        )
+    })
+}
+
 /// IS1/IM3a: run the single streaming Image API sub-request and answer with
 /// the §5.5 SSE stream. Billing and request logging happen inside the
 /// executor (IS8); this function only owns the downstream frame encoding.
@@ -604,7 +751,7 @@ async fn run_image_stream_downstream(
     auth: crate::auth::AuthResult,
     model: String,
     inputs: Vec<urp::Node>,
-    extra_body: HashMap<String, Value>,
+    options: ImageRequestOptions,
     max_multiplier: Option<Multiplier>,
     request_id: Option<String>,
     request_ip: Option<String>,
@@ -614,6 +761,7 @@ async fn run_image_stream_downstream(
     family: ImageStreamEventFamily,
 ) -> AppResult<Response> {
     let req = urp::UrpRequest {
+        sampling: None,
         logprobs: None,
         context: Default::default(),
         instructions_format: None,
@@ -630,9 +778,16 @@ async fn run_image_stream_downstream(
         stop: None,
         verbosity: None,
         response_format: None,
-        user: None,
-        extra_body,
+        user: options.user,
+        image_generation: Some(options.generation),
+        extra_body: options.extra_body,
     };
+    let mut preflight_req = req.clone();
+    resolve_model_suffix(&state, &mut preflight_req).await?;
+    let routing_stub = build_routing_stub(&preflight_req, max_multiplier);
+    let mut attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
+    bind_media_request_routes(&mut preflight_req, &mut attempts)?;
+    ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
     // RCD-C16/RCD-D2c: one capture session for the single streaming
     // sub-request, recorded with is_stream true.
     let capture_session = state
@@ -650,6 +805,7 @@ async fn run_image_stream_downstream(
         session: capture_session,
     };
     let (tx, rx) = mpsc::channel::<Event>(64);
+    let _ = tx.send(Event::default().comment("heartbeat")).await;
     tokio::spawn(async move {
         let task_state = AdmittedRequestTaskState::new(std::time::Instant::now());
         task_state.set_stream(true);
@@ -678,9 +834,18 @@ async fn run_image_stream_downstream(
     });
     let stream =
         tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
-    Ok(Sse::new(stream)
+    let mut response = Sse::new(stream)
         .keep_alive(api_stream_keep_alive())
-        .into_response())
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response.headers_mut().insert(
+        "x-accel-buffering",
+        axum::http::HeaderValue::from_static("no"),
+    );
+    Ok(response)
 }
 
 fn parse_n_field(value: Option<&Value>) -> AppResult<usize> {
@@ -688,6 +853,7 @@ fn parse_n_field(value: Option<&Value>) -> AppResult<usize> {
         return Ok(1);
     };
     let n = match v {
+        Value::Null => return Ok(1),
         Value::Number(num) => num.as_u64().ok_or_else(|| {
             AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -787,7 +953,7 @@ async fn fan_out_subrequests(
     auth: &crate::auth::AuthResult,
     model: &str,
     input: &[urp::Node],
-    extra_body: &HashMap<String, Value>,
+    options: &ImageRequestOptions,
     max_multiplier: Option<Multiplier>,
     n: usize,
     request_id: Option<String>,
@@ -803,6 +969,7 @@ async fn fan_out_subrequests(
         let state = state.clone();
         let auth = auth.clone();
         let req = urp::UrpRequest {
+            sampling: None,
             logprobs: None,
             context: Default::default(),
             instructions_format: None,
@@ -819,8 +986,9 @@ async fn fan_out_subrequests(
             stop: None,
             verbosity: None,
             response_format: None,
-            user: None,
-            extra_body: extra_body.clone(),
+            user: options.user.clone(),
+            image_generation: Some(options.generation.clone()),
+            extra_body: options.extra_body.clone(),
         };
         let rid = request_id
             .clone()
@@ -1075,10 +1243,11 @@ async fn execute_stream_collected_image_typed(
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = task_state.started_at();
     let transform_match_model = resolve_model_suffix(state, &mut req).await?;
-    let original_req = req.clone();
+    let mut original_req = req.clone();
     let logical_model = req.model.clone();
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let mut attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
+    bind_media_request_routes(&mut original_req, &mut attempts)?;
     attach_client_session_id(&mut attempts, client_session_id, Some(&req));
     ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
     let pending_request_log_guard = insert_pending_request_log(
@@ -1108,7 +1277,7 @@ async fn execute_stream_collected_image_typed(
                 break;
             }
 
-            let attempt_number = execution_state.record_upstream_attempt(&attempt);
+            let mut attempt_number = execution_state.record_upstream_attempt(&attempt);
             task_state.set_attempt(&attempt);
             let mut req_attempt = original_req.clone();
             if let Some(target_protocol) = super::provider_type_protocol(attempt.provider_type) {
@@ -1204,62 +1373,127 @@ async fn execute_stream_collected_image_typed(
                 &auth.transforms,
                 &transform_match_model,
             );
-            req_attempt.stream = Some(true);
-
-            let upstream_body = match encode_request_for_provider(
-                &mut req_attempt,
-                &attempt,
-                super::DownstreamProtocol::Responses,
-            ) {
-                Ok(body) => body,
-                Err(err) => {
-                    return Err(finish_image_stream_error(
-                        state,
-                        auth,
-                        &attempt,
-                        &logical_model,
-                        started_at,
-                        &request_id,
-                        &request_ip,
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                        tried_providers,
-                        &capture,
-                        err,
-                    )
-                    .await);
-                }
-            };
-            let http = client_http_for_attempt(state, &attempt)?;
-            // OIU-S7/IS9: openai_image edits stream through multipart
-            // `/v1/images/edits`; every other attempt posts the JSON body.
-            let stream_call = match call_streaming_image_capable_upstream(
-                &http,
-                &attempt,
-                &req_attempt,
-                &upstream_body,
-                attempt.request_timeout_ms.saturating_mul(10).max(600_000),
-                &attempt_extra_headers(&attempt, &upstream_body),
-                capture.session.is_some(),
-            )
-            .await
+            if attempt.provider_type == ProviderType::OpenrouterImage
+                && urp::encode::openai_image::has_user_image_input(&req_attempt)
             {
-                Ok(stream_call) => stream_call,
-                Err(err) => {
-                    return Err(finish_image_stream_error(
-                        state,
-                        auth,
+                req_attempt.stream = Some(false);
+            }
+            let http = client_http_for_attempt(state, &attempt)?;
+            let mut negotiate_nonstream = false;
+            let (stream_call, upstream_body) = loop {
+                if negotiate_nonstream || req_attempt.stream == Some(false) {
+                    req_attempt.stream = Some(false);
+                    req_attempt.extra_body.remove("partial_images");
+                    if let Some(options) = &mut req_attempt.image_generation {
+                        options.partial_images = None;
+                    }
+                    for tool in req_attempt.tools.iter_mut().flatten() {
+                        if tool.tool_type == "image_generation" {
+                            tool.extra_body.remove("partial_images");
+                            if let Some(config) =
+                                tool.config.as_mut().and_then(Value::as_object_mut)
+                            {
+                                config.remove("partial_images");
+                            }
+                        }
+                    }
+                }
+                let mut upstream_body = match encode_request_for_provider(
+                    &mut req_attempt,
+                    &attempt,
+                    super::DownstreamProtocol::Responses,
+                ) {
+                    Ok(body) => body,
+                    Err(err) => {
+                        return Err(finish_image_stream_error(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            started_at,
+                            &request_id,
+                            &request_ip,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                            &capture,
+                            err,
+                        )
+                        .await);
+                    }
+                };
+                if req_attempt.stream == Some(false)
+                    && let Some(body) = upstream_body.as_object_mut()
+                {
+                    body.remove("stream");
+                    body.remove("partial_images");
+                }
+                // Inline image edits use multipart. Reference edits use JSON.
+                let stream_call = match call_streaming_image_capable_upstream(
+                    &http,
+                    &attempt,
+                    &req_attempt,
+                    &upstream_body,
+                    attempt.request_timeout_ms.saturating_mul(10).max(600_000),
+                    &attempt_extra_headers(&attempt, &upstream_body),
+                    capture.session.is_some(),
+                )
+                .await
+                {
+                    Ok(stream_call) => stream_call,
+                    Err(err) => {
+                        return Err(finish_image_stream_error(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            started_at,
+                            &request_id,
+                            &request_ip,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                            &capture,
+                            err,
+                        )
+                        .await);
+                    }
+                };
+                if !negotiate_nonstream
+                    && req_attempt.stream != Some(false)
+                    && !sink_frames_emitted(&sink)
+                    && let Err(error) = &stream_call.result
+                    && upstream_rejects_image_streaming(error)
+                {
+                    let mask_sensitive_info =
+                        state.monoize_runtime.read().await.mask_sensitive_info;
+                    let error = upstream_error_to_app(error.clone(), mask_sensitive_info);
+                    push_image_stream_attempt(
+                        &capture,
+                        attempt_number,
                         &attempt,
                         &logical_model,
-                        started_at,
-                        &request_id,
-                        &request_ip,
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                        tried_providers,
-                        &capture,
-                        err,
+                        &req_attempt,
+                        &stream_call.path,
+                        stream_call
+                            .capture_multipart_request
+                            .as_ref()
+                            .unwrap_or(&upstream_body),
+                        None,
+                        capture_transform_chain.clone(),
+                        Some(&error),
                     )
-                    .await);
+                    .await;
+                    tried_providers.push(TriedProvider::from_app_error(
+                        attempt_number,
+                        &attempt,
+                        &error,
+                        execution_state.last_attempt_duration_ms(),
+                        mask_sensitive_info,
+                    ));
+                    attempt_number = execution_state.record_upstream_attempt(&attempt);
+                    negotiate_nonstream = true;
+                    continue;
                 }
+                break (stream_call, upstream_body);
             };
             let path = stream_call.path;
             // RCD-D6a/OIU-E5g: a multipart edit attempt records the sent form
@@ -1325,7 +1559,31 @@ async fn execute_stream_collected_image_typed(
                     let decode_handle = {
                         let runtime_metrics = runtime_metrics.clone();
                         let provider_type = attempt.provider_type;
+                        let request = req_attempt.clone();
+                        let mask_sensitive_info =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
                         tokio::spawn(async move {
+                            let json_response = upstream_resp
+                                .headers()
+                                .get(axum::http::header::CONTENT_TYPE)
+                                .and_then(|value| value.to_str().ok())
+                                .is_some_and(|value| {
+                                    value.split(';').next().is_some_and(|mime| {
+                                        mime.trim().eq_ignore_ascii_case("application/json")
+                                    })
+                                });
+                            if provider_type != ProviderType::Replicate
+                                && (request.stream == Some(false) || json_response)
+                            {
+                                return decode_image_json_as_stream(
+                                    provider_type,
+                                    upstream_resp,
+                                    &request,
+                                    mask_sensitive_info,
+                                    decoded_tx,
+                                )
+                                .await;
+                            }
                             crate::urp::stream_decode::stream_upstream_to_urp_events(
                                 &legacy,
                                 pending_request_envelope_extra,
@@ -1999,33 +2257,34 @@ struct ExtractedImage {
 fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> {
     let mut images = Vec::new();
     let mut text_parts = Vec::new();
-    let mut seen_base64 = std::collections::HashSet::new();
-    let mut seen_urls = std::collections::HashSet::new();
 
     for item in &resp.output {
         match item {
             urp::Node::Image {
-                source, metadata, ..
+                role: urp::OrdinaryRole::Assistant,
+                source,
+                metadata,
+                ..
             } => match source {
                 urp::ImageSource::Base64 { data, .. } => {
-                    if data.trim().is_empty() || !seen_base64.insert(data.clone()) {
+                    if data.trim().is_empty() {
                         continue;
                     }
                     images.push(ExtractedImage {
                         b64_json: Some(data.clone()),
                         url: None,
-                        revised_prompt: None,
+                        revised_prompt: metadata.image_generation.revised_prompt.clone(),
                         generation: metadata.image_generation.for_source(source),
                     });
                 }
                 urp::ImageSource::Url { url, .. } => {
-                    if url.trim().is_empty() || !seen_urls.insert(url.clone()) {
+                    if url.trim().is_empty() {
                         continue;
                     }
                     images.push(ExtractedImage {
                         b64_json: None,
                         url: Some(url.clone()),
-                        revised_prompt: None,
+                        revised_prompt: metadata.image_generation.revised_prompt.clone(),
                         generation: metadata.image_generation.for_source(source),
                     });
                 }
@@ -2046,7 +2305,9 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
     if !text_parts.is_empty() && !images.is_empty() {
         let revised = text_parts.join("");
         for img in &mut images {
-            img.revised_prompt = Some(revised.clone());
+            if img.revised_prompt.is_none() {
+                img.revised_prompt = Some(revised.clone());
+            }
         }
     }
 
@@ -2087,7 +2348,7 @@ fn assemble_image_response(
                 }
                 let images = extract_images_from_response(&resp);
                 for img in images {
-                    let generation = img.generation.to_object();
+                    let generation = img.generation.common_response_fields();
                     if let Some(common) = &mut common_generation {
                         common.retain(|key, value| generation.get(key) == Some(value));
                     } else {

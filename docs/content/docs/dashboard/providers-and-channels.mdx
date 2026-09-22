@@ -32,12 +32,31 @@ The screenshot uses local example traffic.
 ## Add a Channel
 
 1. Open the Provider and click **Add Channel**.
-2. Select the upstream type: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `replicate`.
+2. Select the upstream type: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, or `replicate`.
 3. Enter the upstream base URL and API key.
 4. Set a weight. Traffic splits between eligible Channels in proportion to weight. Default `1`.
 5. Optional: set a per-Channel `proxy_url` to override the process-level upstream proxy.
 
 When you edit a Channel later, leave the API key field empty to keep the stored key.
+
+## OpenRouter images
+
+Select **OpenRouter Image** (`openrouter_image`) for OpenRouter image models.
+Set the base URL to `https://openrouter.ai/api`.
+Map the logical model to its upstream slug, such as `openai/gpt-image-2.5-sunburst`.
+
+Generation and editing both use the upstream `/api/v1/images` endpoint.
+Monoize converts source images to JSON `input_references`.
+The downstream endpoints remain `/v1/images/generations` and `/v1/images/edits`.
+Image masks and file-ID references are not supported by this Channel type.
+
+Fetch models uses OpenRouter's image model catalog.
+Channel tests send one non-streaming image generation request and can incur upstream charges.
+Forwarded requests support streaming when the selected model supports it.
+For streaming Image API edits, Monoize uses a non-streaming OpenRouter request and keeps downstream SSE active.
+It sends heartbeat comments while waiting, then emits the completed image.
+
+![OpenRouter Image Channel](/images/en/openrouter-image-channel.webp)
 
 ## Session cache headers
 

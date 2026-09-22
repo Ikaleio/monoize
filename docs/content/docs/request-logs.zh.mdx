@@ -39,6 +39,8 @@ Image API 的每个子请求写入一份捕获。当 `n` 大于 1 时，捕获�
 
 Monoize 把 `multipart/form-data` 请求体保存为结构化 JSON 对象。对象按传输顺序列出每个部分。文本部分记录字段名和文本。文件部分记录字段名、文件名、内容类型、字节长度和 base64 数据。此规则同时适用于接收到的 `POST /v1/images/edits` 请求体和发送给 `openai_image` 上游的 multipart 表单。
 
+JSON 图像编辑使用普通 JSON 捕获格式，`images` 和 `mask` 引用保留在捕获的请求体中。对于 `openai_image`，上游捕获在保留 URL 或文件引用时使用 JSON，内联上传使用 multipart。
+
 捕获按源报文原样保留图像等多模态内容。Monoize 不做脱敏，也不重新编码。
 
 ### 保留与轮转

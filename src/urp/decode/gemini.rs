@@ -4,8 +4,8 @@ use crate::urp::decode::{
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FinishReason, InputDetails, JsonSchemaDefinition, Node, OrdinaryRole, OutputDetails,
-    ProviderProtocol, ResponseFormat, StopControl, ToolChoice, ToolResultContent, UrpRequest,
-    UrpResponse, Usage,
+    ProviderProtocol, ResponseFormat, ResponseOutcome, StopControl, ToolChoice, ToolResultContent,
+    UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -99,6 +99,10 @@ impl TryFrom<GeminiUsage> for Usage {
             .extra
             .remove("candidatesTokensDetails")
             .and_then(parse_modality);
+        let tool_prompt_modality = value
+            .extra
+            .remove("toolUsePromptTokensDetails")
+            .and_then(parse_modality);
         let input_tokens = value
             .prompt_token_count
             .checked_add(value.tool_prompt_tokens)
@@ -112,6 +116,7 @@ impl TryFrom<GeminiUsage> for Usage {
             || value.tool_prompt_tokens > 0
             || input_modality.is_some()
             || cache_modality.is_some()
+            || tool_prompt_modality.is_some()
         {
             Some(InputDetails {
                 standard_tokens: 0,
@@ -121,6 +126,7 @@ impl TryFrom<GeminiUsage> for Usage {
                 cache_creation_5m_tokens: 0,
                 cache_creation_1h_tokens: 0,
                 tool_prompt_tokens: value.tool_prompt_tokens,
+                tool_prompt_modality_breakdown: tool_prompt_modality,
                 modality_breakdown: input_modality,
             })
         } else {
@@ -188,6 +194,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let mut input_nodes = Vec::new();
 
     if let Some(system_instruction) = obj.get("systemInstruction") {
+        let first_node = input_nodes.len();
         let parts = system_instruction
             .get("parts")
             .unwrap_or(system_instruction);
@@ -199,11 +206,24 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 DecodedInput::ToolResult(node) => input_nodes.push(node),
             }
         }
+        if let Some(node) = input_nodes.get_mut(first_node) {
+            if let Some(system) = system_instruction
+                .as_object()
+                .filter(|system| system.contains_key("parts"))
+            {
+                let extra = split_extra(system, &["parts"]);
+                if !extra.is_empty() {
+                    node.extra_body_mut()
+                        .insert(GEMINI_SYSTEM_EXTRA_KEY.into(), json!(extra));
+                }
+            }
+        }
     }
 
     let mut resolved_results = std::collections::HashSet::new();
     if let Some(contents) = obj.get("contents").and_then(|v| v.as_array()) {
         for content in contents {
+            let first_node = input_nodes.len();
             let Some(content_obj) = content.as_object() else {
                 continue;
             };
@@ -214,7 +234,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 Some("developer") => Role::Developer,
                 _ => Role::User,
             };
-            let message_extra = split_extra(content_obj, &["role", "parts"]);
+            let message_extra = HashMap::new();
             let mut message_parts = Vec::new();
             if let Some(parts) = content_obj.get("parts") {
                 for part in content_parts(parts) {
@@ -264,6 +284,12 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 }
             }
             push_message_item(&mut input_nodes, role, &mut message_parts, message_extra);
+            if let Some(node) = input_nodes.get_mut(first_node) {
+                node.extra_body_mut().insert(
+                    GEMINI_CONTENT_EXTRA_KEY.into(),
+                    json!(split_extra(content_obj, &["role", "parts"])),
+                );
+            }
         }
     }
 
@@ -290,16 +316,38 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             "streamGenerateContent",
         ],
     );
+    if obj
+        .get("generationConfig")
+        .and_then(|cfg| cfg.get("responseFormat"))
+        .and_then(|format| format.get("text"))
+        .and_then(|text| text.get("mimeType"))
+        .and_then(Value::as_str)
+        .is_some_and(|mime| matches!(mime, "TEXT_PLAIN" | "APPLICATION_JSON"))
+    {
+        request_extra.insert(GEMINI_TEXT_FORMAT_KEY.into(), json!(true));
+    }
     if let Some(cfg) = request_extra
         .get_mut("generationConfig")
         .and_then(Value::as_object_mut)
     {
-        for key in ["temperature", "topP", "maxOutputTokens", "stopSequences"] {
+        for key in [
+            "temperature",
+            "topP",
+            "maxOutputTokens",
+            "stopSequences",
+            "responseLogprobs",
+            "logprobs",
+            "topK",
+            "seed",
+            "presencePenalty",
+            "frequencyPenalty",
+        ] {
             cfg.remove(key);
         }
+        strip_text_response_format(cfg);
         if matches!(
             cfg.get("responseMimeType").and_then(Value::as_str),
-            Some("text/plain" | "application/json")
+            Some("text/plain" | "application/json" | "text/x.enum")
         ) {
             for key in ["responseMimeType", "responseJsonSchema", "responseSchema"] {
                 cfg.remove(key);
@@ -328,7 +376,39 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     Ok(UrpRequest {
-        logprobs: None,
+        image_generation: None,
+        sampling: obj
+            .get("generationConfig")
+            .and_then(Value::as_object)
+            .and_then(|cfg| {
+                let sampling = crate::urp::SamplingConfig {
+                    top_k: cfg
+                        .get("topK")
+                        .and_then(Value::as_u64)
+                        .and_then(|n| u32::try_from(n).ok()),
+                    seed: cfg.get("seed").and_then(Value::as_i64),
+                    presence_penalty: cfg.get("presencePenalty").and_then(Value::as_f64),
+                    frequency_penalty: cfg.get("frequencyPenalty").and_then(Value::as_f64),
+                };
+                (sampling.top_k.is_some()
+                    || sampling.seed.is_some()
+                    || sampling.presence_penalty.is_some()
+                    || sampling.frequency_penalty.is_some())
+                .then_some(sampling)
+            }),
+        logprobs: obj
+            .get("generationConfig")
+            .and_then(Value::as_object)
+            .and_then(|cfg| {
+                let enabled = cfg.get("responseLogprobs").and_then(Value::as_bool);
+                let top_k = cfg
+                    .get("logprobs")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok());
+                enabled
+                    .or(top_k.map(|_| true))
+                    .map(|enabled| crate::urp::LogprobConfig { enabled, top_k })
+            }),
         context: Default::default(),
         instructions_format: None,
         model,
@@ -357,7 +437,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 effort: cfg
                     .get("thinkingLevel")
                     .and_then(Value::as_str)
-                    .map(str::to_string),
+                    .filter(|effort| !effort.eq_ignore_ascii_case("THINKING_LEVEL_UNSPECIFIED"))
+                    .map(str::to_ascii_lowercase),
                 budget_tokens: cfg.get("thinkingBudget").and_then(Value::as_u64),
                 mode: cfg
                     .get("thinkingBudget")
@@ -389,32 +470,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
             .map(StopControl::Multiple),
         verbosity: None,
-        response_format: obj.get("generationConfig").and_then(|cfg| {
-            match cfg.get("responseMimeType").and_then(Value::as_str) {
-                Some("text/plain") => return Some(ResponseFormat::Text),
-                Some("application/json") => {}
-                _ => return None,
-            }
-            match cfg
-                .get("responseJsonSchema")
-                .or_else(|| cfg.get("responseSchema"))
-            {
-                Some(schema) => Some(ResponseFormat::JsonSchema {
-                    json_schema: JsonSchemaDefinition {
-                        name: "gemini_response".to_string(),
-                        description: None,
-                        schema: if cfg.get("responseJsonSchema").is_some() {
-                            schema.clone()
-                        } else {
-                            native_schema_types(schema, false)
-                        },
-                        strict: None,
-                        extra_body: HashMap::new(),
-                    },
-                }),
-                None => Some(ResponseFormat::JsonObject),
-            }
-        }),
+        response_format: obj.get("generationConfig").and_then(decode_response_format),
         user: None,
         extra_body: request_extra,
     })
@@ -425,11 +481,10 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .as_object()
         .ok_or_else(|| "gemini response must be object".to_string())?;
 
-    let candidate = obj
-        .get("candidates")
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(Value::as_object);
+    if let Some(error) = native_error(value) {
+        return Err(error);
+    }
+    let candidate = selected_candidate(value);
     let blocked = prompt_block_reason(value);
     if candidate.is_none() && blocked.is_none() {
         return Err("missing candidates[0]".to_string());
@@ -442,10 +497,12 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     let mut output_nodes = decode_response_nodes(&content)?;
     if let Some(candidate) = candidate {
         attach_candidate_citations(candidate, &mut output_nodes);
+        crate::urp::logprobs::attach_gemini(candidate, &mut output_nodes);
     }
     let mut finish_reason = candidate
         .and_then(|candidate| candidate.get("finishReason"))
         .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty() && *reason != "FINISH_REASON_UNSPECIFIED")
         .map(parse_finish_reason);
     if let Some(reason) = blocked {
         output_nodes.push(prompt_refusal(reason));
@@ -464,7 +521,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     };
 
     Ok(UrpResponse {
-        outcome: None,
+        outcome: response_outcome(candidate, finish_reason),
         id: obj
             .get("responseId")
             .or_else(|| obj.get("id"))
@@ -523,12 +580,25 @@ fn decode_tools(tools: &[Value]) -> Vec<crate::urp::ToolDefinition> {
                 };
                 let mut extra = split_extra(
                     decl,
-                    &["name", "description", "parameters", "parametersJsonSchema"],
+                    &[
+                        "name",
+                        "description",
+                        "parameters",
+                        "parametersJsonSchema",
+                        "response",
+                        "responseJsonSchema",
+                    ],
                 );
                 if decl.contains_key("parametersJsonSchema") || decl.contains_key("parameters") {
                     extra.insert(
                         "_monoize_gemini_parameters_json_schema".into(),
                         json!(decl.contains_key("parametersJsonSchema")),
+                    );
+                }
+                if decl.contains_key("responseJsonSchema") || decl.contains_key("response") {
+                    extra.insert(
+                        "_monoize_gemini_response_json_schema".into(),
+                        json!(decl.contains_key("responseJsonSchema")),
                     );
                 }
                 out.push(crate::urp::ToolDefinition {
@@ -541,6 +611,10 @@ fn decode_tools(tools: &[Value]) -> Vec<crate::urp::ToolDefinition> {
                     description: None,
                     custom: None,
                     function: Some(crate::urp::FunctionDefinition {
+                        response_schema: decl.get("responseJsonSchema").cloned().or_else(|| {
+                            decl.get("response")
+                                .map(|schema| native_schema_types(schema, false))
+                        }),
                         name: name.into(),
                         description: decl
                             .get("description")
@@ -672,6 +746,10 @@ fn parts_to_nodes(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Valu
 
 pub(crate) const GEMINI_PART_EXTRA_KEY: &str = "_monoize_gemini_part";
 pub(crate) const GEMINI_CANDIDATE_EXTRA_KEY: &str = "_monoize_gemini_candidate";
+pub(crate) const GEMINI_CONTENT_EXTRA_KEY: &str = "_monoize_gemini_content";
+pub(crate) const GEMINI_SYSTEM_EXTRA_KEY: &str = "_monoize_gemini_system";
+pub(crate) const GEMINI_TEXT_FORMAT_KEY: &str = "_monoize_gemini_text_response_format";
+pub(crate) const GEMINI_ENUM_FORMAT_KEY: &str = "_monoize_gemini_enum_response";
 pub(crate) const GEMINI_SYNTHETIC_CALL_PREFIX: &str = "call_gemini_";
 fn part_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, Value> {
     let native = split_extra(obj, known);
@@ -1078,13 +1156,22 @@ fn decode_response_nodes(content: &Map<String, Value>) -> Result<Vec<Node>, Stri
                             let extra =
                                 take_output_extra(&content_extra, &mut did_attach_content_extra);
                             if !extra.is_empty() {
-                                node.extra_body_mut().extend(extra);
+                                node.extra_body_mut()
+                                    .insert(GEMINI_CONTENT_EXTRA_KEY.into(), json!(extra));
                             }
                         }
                         output_nodes.push(node);
                     }
                 }
-                DecodedOutput::ToolResult(node) => {
+                DecodedOutput::ToolResult(mut node) => {
+                    if !did_attach_content_extra {
+                        let extra =
+                            take_output_extra(&content_extra, &mut did_attach_content_extra);
+                        if !extra.is_empty() {
+                            node.extra_body_mut()
+                                .insert(GEMINI_CONTENT_EXTRA_KEY.into(), json!(extra));
+                        }
+                    }
                     output_nodes.push(node);
                 }
             }
@@ -1131,7 +1218,20 @@ pub(crate) fn parse_usage(obj: &Map<String, Value>) -> Result<Usage, String> {
 }
 
 pub(crate) fn candidate_extra(candidate: &Map<String, Value>) -> HashMap<String, Value> {
-    let mut extra = split_extra(candidate, &["content", "finishReason", "citationMetadata"]);
+    let mut extra = split_extra(
+        candidate,
+        &[
+            "content",
+            "finishReason",
+            "citationMetadata",
+            "logprobsResult",
+            "avgLogprobs",
+            "groundingMetadata",
+        ],
+    );
+    if let Some(metadata) = crate::urp::citations::gemini_metadata_extra(candidate) {
+        extra.insert("groundingMetadata".into(), metadata);
+    }
     if let Some(citations) = candidate.get("citationMetadata").and_then(Value::as_object) {
         let unknown = split_extra(citations, &["citationSources"]);
         if !unknown.is_empty() {
@@ -1142,22 +1242,7 @@ pub(crate) fn candidate_extra(candidate: &Map<String, Value>) -> HashMap<String,
 }
 
 pub(crate) fn attach_candidate_citations(candidate: &Map<String, Value>, nodes: &mut [Node]) {
-    let Some(sources) = candidate
-        .get("citationMetadata")
-        .and_then(|value| value.get("citationSources"))
-        .and_then(Value::as_array)
-    else {
-        return;
-    };
-    if let Some(Node::Text { citations, .. }) = nodes
-        .iter_mut()
-        .find(|node| matches!(node, Node::Text { .. }))
-    {
-        citations.extend(crate::urp::citations::decode(
-            sources.clone(),
-            crate::urp::ProviderProtocol::Gemini,
-        ));
-    }
+    crate::urp::citations::attach_gemini(candidate, nodes);
 }
 
 pub(crate) fn prompt_block_reason(value: &Value) -> Option<&str> {
@@ -1178,35 +1263,203 @@ pub(crate) fn prompt_refusal(reason: &str) -> Node {
 }
 
 pub(crate) fn native_schema_types(schema: &Value, uppercase: bool) -> Value {
-    match schema {
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .map(|(key, value)| {
-                    let value = if key == "type" {
-                        value
-                            .as_str()
-                            .map(|kind| {
-                                json!(if uppercase {
-                                    kind.to_ascii_uppercase()
-                                } else {
-                                    kind.to_ascii_lowercase()
-                                })
-                            })
-                            .unwrap_or_else(|| native_schema_types(value, uppercase))
+    let Some(object) = schema.as_object() else {
+        return schema.clone();
+    };
+    let mut result = object.clone();
+    if let Some(kind) = object.get("type").and_then(Value::as_str) {
+        result.insert(
+            "type".into(),
+            json!(if uppercase {
+                kind.to_ascii_uppercase()
+            } else {
+                kind.to_ascii_lowercase()
+            }),
+        );
+    }
+    for key in [
+        "properties",
+        "patternProperties",
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+    ] {
+        if let Some(properties) = object.get(key).and_then(Value::as_object) {
+            result.insert(
+                key.into(),
+                Value::Object(
+                    properties
+                        .iter()
+                        .map(|(name, schema)| {
+                            (name.clone(), native_schema_types(schema, uppercase))
+                        })
+                        .collect(),
+                ),
+            );
+        }
+    }
+    for key in [
+        "items",
+        "additionalProperties",
+        "additionalItems",
+        "contains",
+        "not",
+        "if",
+        "then",
+        "else",
+        "propertyNames",
+        "unevaluatedProperties",
+        "unevaluatedItems",
+    ] {
+        if let Some(schema) = object.get(key) {
+            result.insert(
+                key.into(),
+                if let Some(items) = schema.as_array() {
+                    Value::Array(
+                        items
+                            .iter()
+                            .map(|schema| native_schema_types(schema, uppercase))
+                            .collect(),
+                    )
+                } else {
+                    native_schema_types(schema, uppercase)
+                },
+            );
+        }
+    }
+    for key in ["anyOf", "allOf", "oneOf", "prefixItems"] {
+        if let Some(items) = object.get(key).and_then(Value::as_array) {
+            result.insert(
+                key.into(),
+                Value::Array(
+                    items
+                        .iter()
+                        .map(|schema| native_schema_types(schema, uppercase))
+                        .collect(),
+                ),
+            );
+        }
+    }
+    Value::Object(result)
+}
+
+pub(crate) fn selected_candidate(value: &Value) -> Option<&Map<String, Value>> {
+    let candidates = value.get("candidates")?.as_array()?;
+    candidates
+        .iter()
+        .find(|candidate| candidate.get("index").and_then(Value::as_u64) == Some(0))
+        .or_else(|| candidates.first())?
+        .as_object()
+}
+
+pub(crate) fn native_error(value: &Value) -> Option<String> {
+    value
+        .get("error")
+        .filter(|error| !error.is_null())
+        .map(|error| {
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Gemini API error: {error}"))
+        })
+}
+
+pub(crate) fn response_outcome(
+    candidate: Option<&Map<String, Value>>,
+    finish: Option<FinishReason>,
+) -> Option<ResponseOutcome> {
+    let mut outcome = ResponseOutcome::from_finish(Some(finish?));
+    if finish == Some(FinishReason::Other) {
+        outcome.error = Some(crate::urp::outcome::ResponseError {
+            code: candidate
+                .and_then(|candidate| candidate.get("finishReason"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            message: candidate
+                .and_then(|candidate| candidate.get("finishMessage"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            extra_body: HashMap::new(),
+        });
+    }
+    Some(outcome)
+}
+
+fn decode_response_format(config: &Value) -> Option<ResponseFormat> {
+    let modern = config
+        .get("responseFormat")
+        .and_then(|format| format.get("text"));
+    let mime = modern
+        .and_then(|format| format.get("mimeType"))
+        .and_then(Value::as_str)
+        .or_else(|| config.get("responseMimeType").and_then(Value::as_str))?;
+    match mime {
+        "text/plain" | "TEXT_PLAIN" => return Some(ResponseFormat::Text),
+        "application/json" | "APPLICATION_JSON" | "text/x.enum" => {}
+        _ => return None,
+    }
+    let schema = modern
+        .and_then(|format| format.get("schema"))
+        .or_else(|| config.get("responseJsonSchema"))
+        .or_else(|| config.get("responseSchema"));
+    Some(match schema {
+        Some(schema) => {
+            let native = modern.and_then(|format| format.get("schema")).is_none()
+                && config.get("responseJsonSchema").is_none();
+            ResponseFormat::JsonSchema {
+                json_schema: JsonSchemaDefinition {
+                    name: "gemini_response".into(),
+                    description: None,
+                    schema: if native {
+                        native_schema_types(schema, false)
                     } else {
-                        native_schema_types(value, uppercase)
-                    };
-                    (key.clone(), value)
+                        schema.clone()
+                    },
+                    strict: None,
+                    extra_body: if mime == "text/x.enum" {
+                        HashMap::from([(GEMINI_ENUM_FORMAT_KEY.into(), json!(true))])
+                    } else {
+                        HashMap::new()
+                    },
+                },
+            }
+        }
+        None if mime == "text/x.enum" => ResponseFormat::JsonSchema {
+            json_schema: JsonSchemaDefinition {
+                name: "gemini_response".into(),
+                description: None,
+                schema: json!({"type":"string"}),
+                strict: None,
+                extra_body: HashMap::from([(GEMINI_ENUM_FORMAT_KEY.into(), json!(true))]),
+            },
+        },
+        None => ResponseFormat::JsonObject,
+    })
+}
+
+pub(crate) fn strip_text_response_format(config: &mut Map<String, Value>) {
+    if let Some(format) = config
+        .get_mut("responseFormat")
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(text) = format.get_mut("text").and_then(Value::as_object_mut) {
+            if text
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .is_some_and(|mime| {
+                    matches!(mime, "TEXT_PLAIN" | "APPLICATION_JSON" | "text/x.enum")
                 })
-                .collect(),
-        ),
-        Value::Array(items) => json!(
-            items
-                .iter()
-                .map(|item| native_schema_types(item, uppercase))
-                .collect::<Vec<_>>()
-        ),
-        _ => schema.clone(),
+            {
+                text.remove("mimeType");
+                text.remove("schema");
+            }
+            if text.is_empty() {
+                format.remove("text");
+            }
+        }
+        if format.is_empty() {
+            config.remove("responseFormat");
+        }
     }
 }

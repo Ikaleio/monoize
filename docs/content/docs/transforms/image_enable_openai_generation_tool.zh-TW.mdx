@@ -7,6 +7,14 @@ description: 確保請求攜帶 OpenAI Responses 的 image_generation 工具。
 
 此變換在請求缺少 OpenAI Responses `image_generation` 工具描述時新增它，還可以強制串流和強制 tool_choice。
 
+Images API 路由使用 Responses 上游時，請設定此變換。請求缺少相容的圖像工具時，路由會回傳明確錯誤。
+
+Images API 請求中的 `size`、`quality`、`background`、`output_format`、`output_compression`、`moderation`、`partial_images` 和 `input_fidelity` 優先於工具預設值。既有圖像工具也適用此規則。圖像 `background` 保留在工具設定內，不會取代 Responses 頂層的布林值 `background`。
+
+編輯遮罩會映射到工具的 `input_image_mask`，不會作為一般輸入圖片傳送。遮罩支援 URL、內嵌 Base64 和檔案參照。檔案參照必須能透過所選上游憑證存取。Responses 路由會明確拒絕圖像 `style` 和 `response_format="url"`，因為該工具無法表達這些選項。
+
+啟用 `force_stream=true` 時，只有請求和工具都未指定 `partial_images`，此變換才將其預設為 `3`。明確指定的值會保留，包括 `0`。
+
 ## 參考資訊
 
 | 屬性 | 值 |
@@ -24,11 +32,11 @@ description: 確保請求攜帶 OpenAI Responses 的 image_generation 工具。
 
 | 選項 | 類型 | 必填 | 預設值 | 說明 |
 | --- | --- | --- | --- | --- |
-| `output_format` | string | 否 | `"png"` | `png`、`webp` 或 `jpeg`。向圖像工具請求的格式。 |
+| `output_format` | string | 否 | `"png"` | `png`、`webp` 或 `jpeg`。圖像請求未指定格式時使用的預設值。 |
 | `action` | string | 否 | — | 可選，寫入工具描述的 action 值。 |
 | `force_stream` | boolean | 否 | `false` | 強制上游請求串流返回部分圖像。 |
 | `force_tool_choice` | boolean | 否 | `false` | 強制 tool_choice 指向圖像生成工具。 |
-| `extra` | object | 否 | `{}` | 合併進工具描述的額外欄位。 |
+| `extra` | object | 否 | `{}` | 額外的工具預設值。明確指定的圖像請求參數優先。 |
 
 ### 範例規則
 

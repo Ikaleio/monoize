@@ -8,11 +8,6 @@ use std::collections::HashMap;
 pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String> {
     let obj = value.as_object().ok_or("response is not an object")?;
     let generation = crate::urp::ImageGenerationMetadata::from_object(obj);
-    let metadata = crate::urp::MediaMetadata {
-        image_generation: generation.clone(),
-        ..Default::default()
-    };
-
     let id = obj
         .get("created")
         .and_then(|v| v.as_i64())
@@ -25,16 +20,17 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         .ok_or("missing data array in image response")?;
 
     let mut output: Vec<Node> = Vec::new();
-    let mut revised_prompt: Option<String> = None;
-
     for item in data {
         let item_obj = item.as_object().ok_or("data item is not an object")?;
-
-        if let Some(rp) = item_obj.get("revised_prompt").and_then(|v| v.as_str()) {
-            if revised_prompt.is_none() && !rp.trim().is_empty() {
-                revised_prompt = Some(rp.to_string());
-            }
-        }
+        let mut image_generation = generation.clone();
+        image_generation.revised_prompt = item_obj
+            .get("revised_prompt")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let metadata = crate::urp::MediaMetadata {
+            image_generation,
+            ..Default::default()
+        };
 
         if let Some(b64) = item_obj
             .get("b64_json")
@@ -47,12 +43,7 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
                 id: None,
                 role: OrdinaryRole::Assistant,
                 source: ImageSource::Base64 {
-                    media_type: match generation.output_format.as_deref() {
-                        Some("jpeg") => "image/jpeg",
-                        Some("webp") => "image/webp",
-                        _ => "image/png",
-                    }
-                    .to_string(),
+                    media_type: image_media_type(item, generation.output_format.as_deref()),
                     data: b64.to_string(),
                 },
                 extra_body: HashMap::new(),
@@ -80,22 +71,6 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         return Err("no images found in upstream response".to_string());
     }
 
-    if let Some(rp) = revised_prompt {
-        output.insert(
-            0,
-            Node::Text {
-                logprobs: None,
-                signature: None,
-                citations: Vec::new(),
-                id: None,
-                role: OrdinaryRole::Assistant,
-                content: rp,
-                phase: None,
-                extra_body: HashMap::new(),
-            },
-        );
-    }
-
     let usage = obj.get("usage").and_then(parse_image_usage);
 
     Ok(UrpResponse {
@@ -108,6 +83,20 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         usage,
         extra_body: HashMap::new(),
     })
+}
+
+pub(crate) fn image_media_type(payload: &Value, output_format: Option<&str>) -> String {
+    payload
+        .get("media_type")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(match output_format {
+            Some("jpeg" | "jpg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            Some("svg") => "image/svg+xml",
+            _ => "image/png",
+        })
+        .to_string()
 }
 
 /// Parse an OpenAI Image API `usage` object (non-streaming response body or

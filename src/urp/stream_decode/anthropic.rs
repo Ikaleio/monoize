@@ -216,6 +216,7 @@ impl AnthropicStreamUsageAccumulator {
             || cache_creation_1h_tokens > 0
             || tool_prompt_tokens > 0)
             .then_some(InputDetails {
+                tool_prompt_modality_breakdown: None,
                 standard_tokens: 0,
                 cache_read_tokens,
                 cache_read_modality_breakdown: None,

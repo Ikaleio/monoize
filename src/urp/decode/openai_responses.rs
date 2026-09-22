@@ -161,6 +161,7 @@ impl From<OpenAiResponsesUsage> for Usage {
                     || details.tool_prompt_tokens > 0
                 {
                     Some(InputDetails {
+                        tool_prompt_modality_breakdown: None,
                         standard_tokens: 0,
                         cache_read_tokens: details.cached_tokens,
                         cache_read_modality_breakdown: None,
@@ -575,6 +576,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
     crate::urp::logprobs::strip_request_extras(&mut extra_body);
     Ok(UrpRequest {
+        image_generation: None,
+        sampling: None,
         logprobs: crate::urp::logprobs::request_config(
             obj,
             crate::urp::ProviderProtocol::Responses,

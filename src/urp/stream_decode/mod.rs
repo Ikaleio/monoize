@@ -71,7 +71,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
             )
             .await
         }
-        ProviderType::OpenaiImage => {
+        ProviderType::OpenaiImage | ProviderType::OpenrouterImage => {
             openai_image::stream_image_to_urp_events(
                 urp,
                 upstream_resp,
