@@ -190,6 +190,8 @@ curl http://localhost:8080/v1/chat/completions \
 | `GET` | `/v1/models` | OpenAI-compatible model list |
 | `POST` | `/v1/responses` | OpenAI Responses, streaming or non-streaming |
 | `GET` | `/v1/responses` | OpenAI Responses WebSocket transport |
+| `POST` | `/v1/codex/responses` | Alias of the Responses HTTP endpoint |
+| `GET` | `/v1/codex/responses` | Alias of the Responses WebSocket endpoint |
 | `POST` | `/v1/responses/compact` | Responses compaction |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |

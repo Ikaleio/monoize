@@ -52,6 +52,8 @@ Monoize MUST implement:
 
 - `POST /v1/responses`
 - `GET /v1/responses` when the request is a WebSocket upgrade
+- `POST /v1/codex/responses` (alias of `POST /v1/responses`)
+- `GET /v1/codex/responses` when the request is a WebSocket upgrade (alias of `GET /v1/responses`)
 - `POST /v1/responses/compact`
 - `POST /v1/chat/completions` (adapter)
 - `POST /v1/messages` (adapter)
@@ -65,6 +67,8 @@ AP1. For every endpoint above, Monoize MUST also accept the same request at `/ap
 ### 2.2.1 Responses WebSocket downstream
 
 WS1. Monoize MUST accept a WebSocket upgrade at `GET /v1/responses` and `GET /api/v1/responses`. The upgrade request MUST use the same API-key authentication and IP-whitelist checks as `POST /v1/responses`. An unauthenticated or unauthorized upgrade MUST fail as an HTTP response before status `101` is sent.
+
+WS1a. `GET /v1/codex/responses` and its `/api` alias MUST use the same authentication, WebSocket protocol, limits, and forwarding pipeline as `GET /v1/responses`. `POST /v1/codex/responses` and its `/api` alias MUST use the same HTTP/SSE pipeline as `POST /v1/responses`.
 
 WS2. Downstream WebSocket is a client transport. Request assembly, Channel selection, adaptation, retry, transform, billing, request-log, and Responses stream decoding MUST remain the existing pipeline. Continuation state MUST stay on the Monoize connection. Monoize MUST NOT send `previous_response_id` to an upstream WebSocket and MUST NOT keep an upstream WebSocket across turns.
 

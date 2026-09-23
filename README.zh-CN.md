@@ -190,6 +190,8 @@ curl http://localhost:8080/v1/chat/completions \
 | `GET` | `/v1/models` | OpenAI 兼容模型列表 |
 | `POST` | `/v1/responses` | OpenAI Responses，流式或非流式 |
 | `GET` | `/v1/responses` | OpenAI Responses WebSocket 传输 |
+| `POST` | `/v1/codex/responses` | Responses HTTP 端点别名 |
+| `GET` | `/v1/codex/responses` | Responses WebSocket 端点别名 |
 | `POST` | `/v1/responses/compact` | Responses 上下文压缩 |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |

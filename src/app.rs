@@ -1584,6 +1584,10 @@ fn build_v1_router() -> Router<AppState> {
             get(crate::handlers::responses_websocket).post(crate::handlers::create_response),
         )
         .route(
+            "/v1/codex/responses",
+            get(crate::handlers::responses_websocket).post(crate::handlers::create_response),
+        )
+        .route(
             "/v1/responses/compact",
             post(crate::handlers::compact_response),
         )
