@@ -75,6 +75,7 @@ curl http://localhost:8080/v1/responses \
 - 设置 `store=false` 可关闭 HTTP 历史保留。未知或过期的 id 返回 `400 previous_response_not_found`。收到该错误后，请重新发送完整历史。
 - 每次请求都应提供当前 instructions 和控制参数。前一请求的顶层 `instructions` 不会自动继承。
 - `GET /v1/responses` 支持 Codex WebSocket v1 和 v2。v1 发送 `response.done`，v2 发送 `response.completed`。`store=false` 不影响连接内续接。
+- `GET /v1/codex/responses` 与 `GET /v1/responses` 使用同一个 WebSocket 处理器。`POST /v1/codex/responses` 与 `POST /v1/responses` 使用同一个 HTTP 处理器。两个新路径也有 `/api` 别名。
 - Responses WebSocket 客户端可以对 Responses Channel 打开上游 WebSocket。`POST /v1/responses` 仍使用 HTTP。握手失败时，同一 attempt 回退到 HTTP SSE。
 - `POST /v1/responses/compact` 压缩一段会话。
 - Monoize 将原生 compact 请求体转发到上游 `POST /v1/responses/compact`。

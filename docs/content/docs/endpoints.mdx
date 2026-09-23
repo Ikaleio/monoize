@@ -75,6 +75,7 @@ Notes:
 - Set `store=false` to disable HTTP history retention. Unknown or expired ids return `400 previous_response_not_found`. Resend complete history after this error.
 - Supply current instructions and request controls on each call. Previous top-level `instructions` are not inherited.
 - `GET /v1/responses` supports Codex WebSocket v1 and v2. V1 emits `response.done`; v2 emits `response.completed`. Connection-local continuation also works with `store=false`.
+- `GET /v1/codex/responses` uses the same WebSocket handler. `POST /v1/codex/responses` uses the same HTTP handler. Both paths also have `/api` aliases.
 - A Responses WebSocket client may open an upstream WebSocket to a Responses Channel. `POST /v1/responses` still uses HTTP. Handshake failure falls back to HTTP SSE on the same attempt.
 - `POST /v1/responses/compact` compacts a conversation.
 - Monoize forwards the native compact body to upstream `POST /v1/responses/compact`.

@@ -75,6 +75,7 @@ curl http://localhost:8080/v1/responses \
 - `store=false` を指定すると HTTP 履歴を保持しません。不明または期限切れの id は `400 previous_response_not_found` を返します。その場合は履歴全体を再送してください。
 - 毎回、現在の instructions と制御パラメーターを指定してください。前回のトップレベル `instructions` は継承されません。
 - `GET /v1/responses` は Codex WebSocket v1 と v2 に対応します。v1 は `response.done`、v2 は `response.completed` を送信します。`store=false` でも接続内の継続は利用できます。
+- `GET /v1/codex/responses` は `GET /v1/responses` と同じ WebSocket ハンドラーを使います。`POST /v1/codex/responses` は `POST /v1/responses` と同じ HTTP ハンドラーを使います。両方の新しいパスには `/api` エイリアスもあります。
 - Responses WebSocket クライアントは Responses Channel に対して上流 WebSocket を開くことがあります。`POST /v1/responses` は HTTP のままです。ハンドシェイク失敗時は、同じ attempt で HTTP SSE に戻します。
 - `POST /v1/responses/compact` は会話をコンパクト化します。
 - Monoize はネイティブの compact ボディを上流の `POST /v1/responses/compact` に転送します。
