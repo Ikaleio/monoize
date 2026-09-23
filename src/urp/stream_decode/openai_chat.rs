@@ -1,7 +1,8 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_chat_object,
-    record_stream_done_sentinel, record_stream_response_service_tier, record_stream_terminal_error,
+    record_observed_upstream_response_model, record_stream_done_sentinel,
+    record_stream_response_service_tier, record_stream_terminal_error,
     record_stream_terminal_event, record_stream_usage_if_present, record_visible_output_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
@@ -142,6 +143,9 @@ pub(crate) async fn stream_chat_to_urp_events(
             latest_usage = Some(usage);
         }
         record_stream_response_service_tier(&runtime_metrics, &data_val).await;
+        if let Some(model) = data_val.get("model").and_then(Value::as_str) {
+            record_observed_upstream_response_model(&runtime_metrics, model, false).await;
+        }
         record_stream_usage_if_present(&runtime_metrics, parse_usage_from_chat_object(&data_val))
             .await;
 

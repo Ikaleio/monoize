@@ -1,6 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
-    mark_stream_ttfb_if_needed, parse_usage_from_gemini_object, record_stream_done_sentinel,
+    mark_stream_ttfb_if_needed, parse_usage_from_gemini_object,
+    record_observed_upstream_response_model, record_stream_done_sentinel,
     record_stream_terminal_error, record_stream_terminal_event, record_stream_usage_if_present,
     record_visible_stream_event_delta,
 };
@@ -76,6 +77,9 @@ pub(crate) async fn stream_gemini_to_urp_events(
         }
         record_stream_usage_if_present(&runtime_metrics, parse_usage_from_gemini_object(&data))
             .await;
+        if let Some(model) = data.get("modelVersion").and_then(Value::as_str) {
+            record_observed_upstream_response_model(&runtime_metrics, model, true).await;
+        }
         extra_body.extend(crate::urp::decode::split_extra(
             obj,
             &["candidates", "usageMetadata", "responseId", "modelVersion"],

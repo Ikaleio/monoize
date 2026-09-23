@@ -855,6 +855,7 @@ export interface RequestLog {
   is_stream: boolean;
   model: string;
   upstream_model?: string;
+  upstream_response_model?: string;
   effective_provider_type?: string;
   request_kind?: string;
   reasoning_effort?: string;

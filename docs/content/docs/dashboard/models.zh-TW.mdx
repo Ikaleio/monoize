@@ -15,7 +15,8 @@ description: 邏輯模型、上游重新導向、中繼資料與定價。
 
 Channel 的模型條目可以用 `redirect` 指定真實的上游模型名稱。
 
-範例：客戶端呼叫 `my-fast-model`。Channel A 將其重新導向到 `gpt-4o-mini`，Channel B 將其重新導向到 `claude-3-5-haiku-20241022`。計費和日誌始終顯示邏輯名稱。
+範例：客戶端呼叫 `my-fast-model`。Channel A 將其重新導向到 `gpt-4o-mini`，Channel B 將其重新導向到 `claude-3-5-haiku-20241022`。計費和請求日誌中的模型始終使用邏輯名。
+當上游回應模型與發送模型不一致時，管理員日誌顯示該回應模型。
 
 ## 模型定價
 

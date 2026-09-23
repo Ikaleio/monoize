@@ -474,6 +474,7 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> Result<RequestLogRow, Strin
         is_stream,
         model: request_log_row_value(row, "model")?,
         upstream_model: request_log_row_value(row, "upstream_model")?,
+        upstream_response_model: request_log_row_value(row, "upstream_response_model")?,
         effective_provider_type: request_log_row_value(row, "effective_provider_type")?,
         request_kind: request_log_row_value(row, "request_kind")?,
         reasoning_effort: request_log_row_value(row, "reasoning_effort")?,
@@ -821,7 +822,7 @@ impl UserStore {
         let total_charge_nano_usd = decode_charge_aggregate(&aggregates_row, is_postgres)?;
 
         // Rows query
-        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model, rl.upstream_response_model,
                       rl.channel_id, rl.is_stream,
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
@@ -950,7 +951,7 @@ impl UserStore {
         let total_charge_nano_usd = decode_charge_aggregate(&aggregates_row, is_postgres)?;
 
         // Rows query
-        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model, rl.upstream_response_model,
                       rl.channel_id, rl.is_stream,
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
@@ -1574,8 +1575,9 @@ impl UserStore {
                 let rpm = row.try_get("", "rpm").map_err(|e| e.to_string())?;
                 let input_tokens: i64 =
                     row.try_get("", "input_tokens").map_err(|e| e.to_string())?;
-                let output_tokens: i64 =
-                    row.try_get("", "output_tokens").map_err(|e| e.to_string())?;
+                let output_tokens: i64 = row
+                    .try_get("", "output_tokens")
+                    .map_err(|e| e.to_string())?;
                 let tpm = input_tokens
                     .checked_add(output_tokens)
                     .ok_or_else(|| "live usage token aggregate overflow".to_string())?;

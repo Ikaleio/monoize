@@ -1060,6 +1060,7 @@
 		"affinityTarget": "绑定目标",
 		"reasoningEffort": "推理强度",
 		"upstreamModel": "上游模型",
+		"upstreamResponseModel": "实际模型",
 		"modelProvider": "供应商",
 		"tps": "TPS",
 		"modelProbe": "模型探测",

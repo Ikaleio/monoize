@@ -684,6 +684,8 @@ pub(super) async fn forward_stream_typed(
                                 break 'channel_attempts;
                             }
                         };
+                        let upstream_response_model =
+                            mismatched_upstream_response_model(&nonstream_req.model, &resp.model);
                         // MP-F3: a fail-closed missing-usage billable success
                         // rejects with 403 before the synthetic stream starts.
                         if resp.usage.is_none() && missing_usage_rejects(&auth, &attempt) {
@@ -873,6 +875,7 @@ pub(super) async fn forward_stream_typed(
                                             reasoning_effort_for_log,
                                             tried_providers_for_log,
                                             tx_err.is_closed(),
+                                            upstream_response_model,
                                         ),
                                         Err(err) => {
                                             tracing::error!(
@@ -1198,6 +1201,8 @@ pub(super) async fn forward_stream_typed(
                         usage: None,
                         response_id: None,
                         response_service_tier: None,
+                        response_model: None,
+                        response_model_terminal: false,
                         terminal: StreamTerminalDiagnostics::default(),
                         estimated_output_tokens: 0,
                         visible_output_bytes: 0,
@@ -1537,6 +1542,7 @@ pub(super) async fn forward_stream_typed(
                             is_estimated,
                             terminal_diagnostics,
                             response_service_tier,
+                            response_model,
                         ) = {
                             let guard = runtime_metrics.lock().await;
                             let actual_upstream_usage = guard.usage.clone();
@@ -1583,6 +1589,7 @@ pub(super) async fn forward_stream_typed(
                                 is_estimated,
                                 guard.terminal.clone(),
                                 guard.response_service_tier.clone(),
+                                guard.response_model.clone(),
                             )
                         };
 
@@ -1795,6 +1802,10 @@ pub(super) async fn forward_stream_typed(
                             reasoning_effort_for_log,
                             tried_providers_for_log,
                             tx_err.is_closed(),
+                            mismatched_upstream_response_model(
+                                &capture_upstream_model,
+                                response_model.as_deref().unwrap_or(""),
+                            ),
                         );
 
                         if let Some(session) = capture_session.as_ref() {

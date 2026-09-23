@@ -1208,6 +1208,7 @@ fn build_active_probe_interrupted_log(
         model: logical_model.to_string(),
         provider_id: Some(provider_id.to_string()),
         upstream_model: Some(upstream_model.to_string()),
+        upstream_response_model: None,
         channel_id: Some(channel_id.to_string()),
         names: crate::users::RequestLogNameSnapshots {
             username: Some(ACTIVE_PROBE_SYSTEM_USER.to_string()),
@@ -1331,6 +1332,7 @@ async fn persist_active_probe_request_log(
         model: logical_model,
         provider_id: Some(provider_id),
         upstream_model: Some(upstream_model),
+        upstream_response_model: None,
         channel_id: Some(channel_id),
         names: crate::users::RequestLogNameSnapshots {
             username: Some(ACTIVE_PROBE_SYSTEM_USER.to_string()),

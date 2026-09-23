@@ -19,6 +19,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub upstream_model: Option<String>,
     #[sea_orm(column_type = "Text")]
+    pub upstream_response_model: Option<String>,
+    #[sea_orm(column_type = "Text")]
     pub channel_id: Option<String>,
     pub is_stream: i32,
     pub input_tokens: Option<i64>,

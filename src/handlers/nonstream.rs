@@ -476,7 +476,9 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     )
                     .await
                     {
-                        Ok(resp) => Ok((None, Some(resp))),
+                        Ok((resp, observed_response_model)) => {
+                            Ok((None, Some((resp, observed_response_model))))
+                        }
                         Err(CollectedUpstreamError::Internal(err)) => {
                             return Err(finish_nonstream_error(
                                 state,
@@ -625,9 +627,10 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         // RCD-D10c: a stream-collected attempt has no provider
                         // JSON body, so the pre-response-transform collected
                         // terminal event substitutes for it.
-                        let reconstructed_urp_response = collected_resp
-                            .as_ref()
-                            .map(crate::request_capture::reconstructed_response_json);
+                        let reconstructed_urp_response =
+                            collected_resp.as_ref().map(|(response, _)| {
+                                crate::request_capture::reconstructed_response_json(response)
+                            });
                         session
                             .push_attempt(crate::request_capture::build_attempt_dump(
                                 attempt_number,
@@ -661,8 +664,12 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         started_at,
                     )
                     .await;
+                    let mut stream_observed_model: Option<Option<String>> = None;
                     let mut resp = match collected_resp {
-                        Some(resp) => resp,
+                        Some((resp, observed_response_model_from_stream)) => {
+                            stream_observed_model = Some(observed_response_model_from_stream);
+                            resp
+                        }
                         None => match value.as_ref() {
                             Some(value) => match decode_response_from_provider(
                                 attempt.provider_type,
@@ -728,6 +735,20 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             }
                         },
                     };
+                    let observed_response_model = match stream_observed_model {
+                        Some(observed) => observed.unwrap_or_default(),
+                        None => value
+                            .as_ref()
+                            .and_then(|body| body.get("model"))
+                            .and_then(Value::as_str)
+                            .filter(|model| !model.trim().is_empty())
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| resp.model.clone()),
+                    };
+                    let upstream_response_model = mismatched_upstream_response_model(
+                        &req_attempt.model,
+                        &observed_response_model,
+                    );
                     // MP-F3: a fail-closed missing-usage billable success
                     // rejects with 403 before response delivery.
                     if resp.usage.is_none() && missing_usage_rejects(auth, &attempt) {
@@ -913,6 +934,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                         client_gone_flag(task_state),
+                        upstream_response_model,
                     );
                     if let Some(session) = capture.session.as_ref() {
                         session
@@ -1044,7 +1066,7 @@ async fn collect_streamed_upstream_response(
     started_at: std::time::Instant,
     logical_model: &str,
     stream_idle_timeout_ms: u64,
-) -> Result<urp::UrpResponse, CollectedUpstreamError> {
+) -> Result<(urp::UrpResponse, Option<String>), CollectedUpstreamError> {
     let legacy = typed_request_to_legacy(req_attempt, max_multiplier)
         .map_err(CollectedUpstreamError::Internal)?;
     let pending_request_envelope_extra =
@@ -1134,13 +1156,16 @@ async fn collect_streamed_upstream_response(
     if let Some(err) = stream_error {
         return Err(CollectedUpstreamError::Upstream(err));
     }
-    final_response.ok_or_else(|| {
-        CollectedUpstreamError::Upstream(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_stream_error",
-            "stream completed without terminal response",
-        ))
-    })
+    let observed_response_model = runtime_metrics.lock().await.response_model.clone();
+    final_response
+        .map(|response| (response, observed_response_model))
+        .ok_or_else(|| {
+            CollectedUpstreamError::Upstream(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_error",
+                "stream completed without terminal response",
+            ))
+        })
 }
 
 #[allow(dead_code)]

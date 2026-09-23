@@ -246,6 +246,10 @@ pub async fn compact_response(
                         }
                         return Err(err);
                     }
+                    let upstream_response_model = mismatched_upstream_response_model(
+                        &wire_model,
+                        value.get("model").and_then(Value::as_str).unwrap_or(""),
+                    );
                     let response_service_tier =
                         usage::response_service_tier(&value).map(str::to_string);
                     mark_channel_success(&state, &attempt).await;
@@ -305,6 +309,7 @@ pub async fn compact_response(
                         None,
                         tried_providers,
                         false,
+                        upstream_response_model,
                     );
                     if let Some(session) = capture.session.as_ref() {
                         session.persist_with_result(usage.as_ref(), false).await;

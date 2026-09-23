@@ -15,7 +15,8 @@ description: 逻辑模型、上游重定向、元数据与定价。
 
 Channel 的模型条目可以用 `redirect` 指定真实的上游模型名。
 
-示例：客户端调用 `my-fast-model`。Channel A 将其重定向到 `gpt-4o-mini`，Channel B 将其重定向到 `claude-3-5-haiku-20241022`。计费和日志始终显示逻辑名。
+示例：客户端调用 `my-fast-model`。Channel A 将其重定向到 `gpt-4o-mini`，Channel B 将其重定向到 `claude-3-5-haiku-20241022`。计费和请求日志中的模型始终使用逻辑名。
+当上游响应模型与发送模型不一致时，管理员日志显示该响应模型。
 
 ## 模型定价
 

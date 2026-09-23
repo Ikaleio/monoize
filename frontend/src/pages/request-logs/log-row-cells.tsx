@@ -664,7 +664,7 @@ export function LogRowCells({
           <TooltipProvider delayDuration={200}>
             <Tooltip onOpenChange={modelTooltipOpenChange}>
               <TooltipTrigger asChild>
-                <span className="h-5 cursor-default whitespace-nowrap">
+                <span className="inline-flex h-5 cursor-default items-center gap-1 whitespace-nowrap">
                   <ModelBadge
                     model={log.model}
                     multiplier={log.provider?.multiplier}
@@ -672,6 +672,11 @@ export function LogRowCells({
                     truncateModelText={false}
                     className="h-5 min-w-max px-1.5 text-[10px]"
                   />
+                  {isAdmin && log.upstream_response_model ? (
+                    <span className="font-mono text-[10px] text-warning-foreground">
+                      ↳ {log.upstream_response_model}
+                    </span>
+                  ) : null}
                 </span>
               </TooltipTrigger>
               <TooltipContent>
@@ -686,6 +691,12 @@ export function LogRowCells({
                       <span className="font-mono">{log.upstream_model}</span>
                     </div>
                   )}
+                  {isAdmin && log.upstream_response_model ? (
+                    <div className="flex items-center justify-between gap-3">
+                      <span>{t("requestLogs.upstreamResponseModel")}</span>
+                      <span className="font-mono">{log.upstream_response_model}</span>
+                    </div>
+                  ) : null}
                   {log.provider?.id && (
                     <div className="flex items-center justify-between gap-3">
                       <span>{t("requestLogs.modelProvider")}</span>
@@ -769,6 +780,12 @@ export function LogRowCells({
                         {t("requestLogs.upstreamModel")}: {log.upstream_model}
                       </div>
                     )}
+                    {isAdmin && log.upstream_response_model ? (
+                      <div>
+                        {t("requestLogs.upstreamResponseModel")}:{" "}
+                        {log.upstream_response_model}
+                      </div>
+                    ) : null}
                   </div>
                 </TooltipContent>
               </Tooltip>

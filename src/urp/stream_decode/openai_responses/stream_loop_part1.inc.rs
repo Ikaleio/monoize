@@ -238,6 +238,15 @@ async fn consume_responses_json_frames(
             event_name.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
         );
+        if let Some(model) = data_val
+            .get("response")
+            .and_then(|response| response.get("model"))
+            .and_then(Value::as_str)
+            .or_else(|| data_val.get("model").and_then(Value::as_str))
+        {
+            record_observed_upstream_response_model(&runtime_metrics, model, terminal_response_event)
+                .await;
+        }
         let output_event = event_name.starts_with("response.output_")
             || event_name.starts_with("response.content_part.")
             || event_name.starts_with("response.reasoning_")

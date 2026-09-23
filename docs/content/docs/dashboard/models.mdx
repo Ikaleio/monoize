@@ -15,7 +15,8 @@ One logical model can map to several Channels across several Providers. This giv
 
 A Channel model entry can set `redirect` to the real upstream model name.
 
-Example: clients call `my-fast-model`. Channel A redirects it to `gpt-4o-mini`. Channel B redirects it to `claude-3-5-haiku-20241022`. Billing and logs always show the logical name.
+Example: clients call `my-fast-model`. Channel A redirects it to `gpt-4o-mini`. Channel B redirects it to `claude-3-5-haiku-20241022`. Billing and the request-log model always use the logical name.
+The admin log shows the upstream response model when it differs from the sent model.
 
 ## Model pricing
 

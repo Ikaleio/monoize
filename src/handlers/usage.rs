@@ -128,6 +128,28 @@ pub(crate) async fn record_stream_response_service_tier(
     runtime_metrics.lock().await.response_service_tier = Some(service_tier.to_string());
 }
 
+pub(crate) async fn record_observed_upstream_response_model(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    model: &str,
+    terminal: bool,
+) {
+    let model = model.trim();
+    if model.is_empty() {
+        return;
+    }
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    let mut metrics = runtime_metrics.lock().await;
+    if metrics.response_model_terminal && !terminal {
+        return;
+    }
+    if terminal || metrics.response_model.is_none() {
+        metrics.response_model = Some(model.to_string());
+        metrics.response_model_terminal = terminal;
+    }
+}
+
 pub(crate) async fn record_cumulative_stream_usage_snapshot(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     usage: Option<urp::Usage>,

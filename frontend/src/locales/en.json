@@ -1060,6 +1060,7 @@
 		"affinityTarget": "Sticky target",
 		"reasoningEffort": "Reasoning Effort",
 		"upstreamModel": "Upstream Model",
+		"upstreamResponseModel": "Actual Model",
 		"modelProvider": "Provider",
 		"tps": "TPS",
 		"modelProbe": "Model Probe",

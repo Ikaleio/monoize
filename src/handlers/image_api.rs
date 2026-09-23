@@ -2071,6 +2071,12 @@ async fn execute_stream_collected_image_typed(
                     )
                     .await;
                     mark_channel_success(state, &attempt).await;
+                    let observed_response_model =
+                        runtime_metrics.lock().await.response_model.clone();
+                    let upstream_response_model = mismatched_upstream_response_model(
+                        &req_attempt.model,
+                        observed_response_model.as_deref().unwrap_or(""),
+                    );
                     refresh_channel_affinity(state, &attempt).await;
                     let charge = match maybe_charge_response(
                         state,
@@ -2118,6 +2124,7 @@ async fn execute_stream_collected_image_typed(
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                         task_state.client_gone(),
+                        upstream_response_model,
                     );
                     if let Some(session) = capture.session.as_ref() {
                         session

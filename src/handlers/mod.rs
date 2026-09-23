@@ -709,6 +709,10 @@ pub async fn create_embeddings(
                         );
                         return Err(err);
                     }
+                    let upstream_response_model = mismatched_upstream_response_model(
+                        &attempt.upstream_model,
+                        value.get("model").and_then(Value::as_str).unwrap_or(""),
+                    );
                     let response_service_tier =
                         usage::response_service_tier(&value).map(str::to_string);
                     mark_channel_success(&state, &attempt).await;
@@ -769,6 +773,7 @@ pub async fn create_embeddings(
                         None,
                         tried_providers,
                         false,
+                        upstream_response_model,
                     );
 
                     return Ok(Json(value).into_response());
@@ -1177,6 +1182,8 @@ pub(crate) struct StreamRuntimeMetrics {
     usage: Option<urp::Usage>,
     response_id: Option<String>,
     response_service_tier: Option<String>,
+    response_model: Option<String>,
+    response_model_terminal: bool,
     terminal: StreamTerminalDiagnostics,
     pub(crate) estimated_output_tokens: u64,
     // Feeds the usage-less billing estimate only; TPS is derived at display

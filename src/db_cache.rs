@@ -186,7 +186,7 @@ pub(crate) fn last_used_bulk_update(
 // RequestLogBatcher: buffers InsertRequestLog entries, flushes as batch INSERT
 // ---------------------------------------------------------------------------
 
-const REQUEST_LOG_INSERT_COLUMNS: usize = 38;
+const REQUEST_LOG_INSERT_COLUMNS: usize = 39;
 pub(crate) const REQUEST_LOG_INSERT_CHUNK_ENTRIES: usize = 20;
 pub(crate) const REQUEST_LOG_MIN_ENTRY_BYTES: u64 = 4_096;
 const REQUEST_LOG_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(10);
@@ -199,7 +199,7 @@ const REQUEST_LOG_RESERVATION_CONSUMED: u8 = 4;
 const REQUEST_LOG_RESERVATION_CANCELING: u8 = 5;
 const REQUEST_LOG_UNARMED_MARKER: &[u8] = b"monoize-request-log-reservation\n";
 const REQUEST_LOG_INSERT_PREFIX: &str = r#"INSERT INTO request_logs
-       (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
+       (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, upstream_response_model, channel_id, is_stream,
         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tool_prompt_tokens, reasoning_tokens,
         accepted_prediction_tokens, rejected_prediction_tokens,
         provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
@@ -234,6 +234,8 @@ pub struct SpoolRequestLog {
     pub model: String,
     pub provider_id: Option<String>,
     pub upstream_model: Option<String>,
+    #[serde(default)]
+    pub upstream_response_model: Option<String>,
     pub channel_id: Option<String>,
     pub is_stream: bool,
     pub input_tokens: Option<u64>,
@@ -277,6 +279,7 @@ impl SpoolRequestLog {
             model: log.model.clone(),
             provider_id: log.provider_id.clone(),
             upstream_model: log.upstream_model.clone(),
+            upstream_response_model: log.upstream_response_model.clone(),
             channel_id: log.channel_id.clone(),
             is_stream: log.is_stream,
             input_tokens: log.input_tokens,
@@ -325,6 +328,7 @@ impl SpoolRequestLog {
             model: self.model.clone(),
             provider_id: self.provider_id.clone(),
             upstream_model: self.upstream_model.clone(),
+            upstream_response_model: self.upstream_response_model.clone(),
             channel_id: self.channel_id.clone(),
             names: crate::users::RequestLogNameSnapshots::default(),
             is_stream: self.is_stream,
@@ -388,6 +392,7 @@ fn request_log_insert_values(log: &SpoolRequestLog) -> Vec<sea_orm::Value> {
         log.model.clone().into(),
         log.provider_id.clone().into(),
         log.upstream_model.clone().into(),
+        log.upstream_response_model.clone().into(),
         log.channel_id.clone().into(),
         SeaValue::Int(Some(if log.is_stream { 1 } else { 0 })),
         request_log_u64_value("input_tokens", log.input_tokens, log.request_id.as_deref()),

@@ -1057,6 +1057,7 @@
 		"affinityTarget": "Sticky target",
 		"reasoningEffort": "推論強度",
 		"upstreamModel": "上流モデル",
+		"upstreamResponseModel": "実際のモデル",
 		"modelProvider": "プロバイダー",
 		"tps": "TPS",
 		"modelProbe": "モデルプローブ",

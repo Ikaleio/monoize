@@ -1,7 +1,8 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, record_cumulative_stream_usage_snapshot,
-    record_stream_done_sentinel, record_stream_response_service_tier, record_stream_terminal_error,
+    record_observed_upstream_response_model, record_stream_done_sentinel,
+    record_stream_response_service_tier, record_stream_terminal_error,
     record_stream_terminal_event, record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
@@ -782,6 +783,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                 }
                 if let Some(model) = message.get("model").and_then(|v| v.as_str()) {
                     response_model = model.to_string();
+                    record_observed_upstream_response_model(&runtime_metrics, model, false).await;
                 }
                 response_extra = object_without_keys(
                     &message,

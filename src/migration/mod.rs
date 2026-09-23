@@ -61,6 +61,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260912_000052_billing_plan_subscription_revocation::Migration),
             Box::new(m20260913_000053_billing_plan_admin_grants::Migration),
             Box::new(m20260914_000054_channel_websocket_supported::Migration),
+            Box::new(m20260924_000055_request_log_upstream_response_model::Migration),
         ]
     }
 }
@@ -251,3 +252,4 @@ mod m20260911_000051_billing_plan_sliding_windows;
 mod m20260912_000052_billing_plan_subscription_revocation;
 mod m20260913_000053_billing_plan_admin_grants;
 mod m20260914_000054_channel_websocket_supported;
+mod m20260924_000055_request_log_upstream_response_model;
