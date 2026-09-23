@@ -19,7 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::io::Cursor;
 
-const TRANSFORM_VERSION: &str = "compress_user_message_images:v6";
+const TRANSFORM_VERSION: &str = "compress_user_message_images:v7";
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -592,7 +592,14 @@ async fn compress_base64_image(
     if original.len() > limits.max_encoded_bytes {
         return Ok(None);
     }
-    let cache_key = build_cache_key(&media_type, &cfg, &original);
+    let source_media_type = detected_media_type(&original).unwrap_or(media_type.as_str());
+    let corrected_source = || {
+        (source_media_type != media_type).then(|| ImageSource::Base64 {
+            media_type: source_media_type.to_string(),
+            data: base64_data.clone(),
+        })
+    };
+    let cache_key = build_cache_key(source_media_type, &cfg, &original);
     if let Some(hit) = context
         .image_transform_cache
         .read_if_fresh(&cache_key)
@@ -611,7 +618,7 @@ async fn compress_base64_image(
         .acquire_transform_permit()
         .await
         .map_err(TransformError::Apply)?;
-    let media_type_for_task = media_type.clone();
+    let media_type_for_task = source_media_type.to_string();
     let cfg_for_task = cfg.clone();
     let original_for_task = original.clone();
     let max_pixels = limits.max_pixels;
@@ -631,7 +638,7 @@ async fn compress_base64_image(
     };
 
     if cfg.skip_if_smaller && transformed.bytes.len() >= original_len {
-        return Ok(None);
+        return Ok(corrected_source());
     }
 
     let payload = CachedImagePayload {
@@ -656,6 +663,15 @@ fn is_supported_media_type(media_type: &str) -> bool {
         media_type,
         "image/jpeg" | "image/jpg" | "image/png" | "image/webp"
     )
+}
+
+fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
+    match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Jpeg => Some("image/jpeg"),
+        image::ImageFormat::Png => Some("image/png"),
+        image::ImageFormat::WebP => Some("image/webp"),
+        _ => None,
+    }
 }
 
 fn build_cache_key(media_type: &str, cfg: &Config, original: &[u8]) -> String {

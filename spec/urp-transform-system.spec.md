@@ -577,12 +577,14 @@ CUMI-5. Non-`data:` URL sources MUST remain unchanged.
 
 CUMI-6. If the media type is not decodable by the image codec stack, the node MUST remain unchanged.
 
+CUMI-6a. For an eligible source within the encoded-byte limit, the transform MUST detect JPEG, PNG, or WebP from the source bytes. The detected format MUST determine `output_format = original` and the cache key. If `skip_if_smaller` retains a decoded image, the transform MUST replace a mismatched declared media type with the detected media type. It MUST preserve the image bytes and source representation. If the source exceeds a CUMI-12 limit or fails image decoding, the transform MUST leave it unchanged. A source without a detected JPEG, PNG, or WebP format retains its existing behavior.
+
 CUMI-7. On successful replacement:
 1. `Base64` sources MUST remain `Base64` with updated `media_type` and `data`;
 2. `data:` URL sources MUST remain `Url` with updated `url`; and
 3. provider-specific typed fields such as image detail hints MUST remain unchanged.
 
-CUMI-8. When `output_format = original`, the transform MUST emit the same supported image format as the source, normalizing the `image/jpg` alias to `image/jpeg`; source WebP MUST use the `webp_lossless` encoder path. When `output_format` is any other configured value, the transform MUST emit the explicitly selected image format, except as required by CUMI-8a. The exact encoder modes are:
+CUMI-8. When `output_format = original`, the transform MUST use the detected format from CUMI-6a when available. Otherwise, it MUST use the declared supported format. It MUST normalize the `image/jpg` alias to `image/jpeg`. Source WebP MUST use the `webp_lossless` encoder path. When `output_format` is any other configured value, the transform MUST emit the explicitly selected image format, except as required by CUMI-8a. The exact encoder modes are:
 1. `jpg` uses the mozjpeg fastest profile with `jpeg_quality`;
 2. `jpegxl_lossless` uses the reference libjxl encoder in lossless mode with `jpegxl_effort`;
 3. `jpegxl` uses the reference libjxl encoder in lossy mode with `jpegxl_quality` mapped through `JxlEncoderDistanceFromQuality` and `jpegxl_effort`;
@@ -595,9 +597,9 @@ Both JPEG XL modes MUST emit media type `image/jxl`. Both WebP modes MUST emit m
 CUMI-8a. If the decoded source has an alpha channel and the selected output format is `jpg`, the transform MUST leave the image source unchanged. This rule applies even when all alpha samples are opaque. It takes precedence over `max_edge_px` and `skip_if_smaller`. The transform MUST preserve the original encoded bytes, media type, dimensions, and source representation. Formats that support alpha MUST continue to use CUMI-8. Cached results created before this rule MUST NOT replace the source.
 
 CUMI-9. The cache key material MUST be the ordered byte sequence:
-1. UTF-8 bytes of `compress_user_message_images:v6` (a version-frozen cache-key literal; version 6 excludes cached results that predate CUMI-8a);
+1. UTF-8 bytes of `compress_user_message_images:v7` (a version-frozen cache-key literal; version 7 excludes cached results that predate CUMI-6a);
 2. one zero byte;
-3. UTF-8 bytes of the source media type;
+3. UTF-8 bytes of the source media type after CUMI-6a normalization;
 4. one zero byte;
 5. `max_edge_px` encoded as little-endian `u32`, using `0` when it is absent;
 6. `jpeg_quality` encoded as one byte;
