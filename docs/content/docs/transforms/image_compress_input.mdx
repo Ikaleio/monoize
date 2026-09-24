@@ -1,17 +1,19 @@
 ---
 title: "Image: compress request images"
-description: Re-encode and optionally resize base64 user images before upstream encoding.
+description: Re-encode inline user images and tool images before upstream encoding.
 ---
 
 ## What it does
 
-This transform re-encodes base64 images in user messages and optionally resizes them to `max_edge_px`. Smaller payloads upload faster and can reduce image token cost.
+This transform re-encodes inline user images and typed images in tool results. It also processes image data URLs and image blocks in JSON function-tool arguments. It can resize eligible images to `max_edge_px`. It leaves custom-tool input and unrelated Base64 unchanged.
 
 With `skip_if_smaller` on (the default), an image keeps its original bytes when compression does not shrink it.
 
+For JPEG, PNG, and WebP bytes, the transform detects the actual format. It corrects a mismatched MIME type even when `skip_if_smaller` keeps the bytes.
+
 When the selected output format is `jpg`, images with an alpha channel remain unchanged. The transform preserves their original bytes, media type, and dimensions. This applies even when every pixel is opaque. It overrides `max_edge_px` and `skip_if_smaller` to preserve transparency and image masks. Without a mask, formats that support alpha continue to use the configured compression settings.
 
-If an edit request contains a mask, the transform skips every user image in that request, including the mask. It preserves original bytes, formats, dimensions, and image/mask alignment. This rule applies before cache lookup and overrides all compression settings.
+If an edit request contains a mask, the transform skips all request images, including tool images. It preserves image and mask bytes, dimensions, and alignment before cache lookup.
 
 ## Reference
 

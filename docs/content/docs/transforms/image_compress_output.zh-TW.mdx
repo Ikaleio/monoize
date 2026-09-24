@@ -1,11 +1,13 @@
 ---
 title: "圖像：壓縮回應圖片"
-description: 對回應和串流中 assistant 輸出的圖片重新編碼並可選縮放。
+description: 重新編碼回應及串流中的 assistant 圖片和工具圖片。
 ---
 
 ## 行為
 
-此變換對回應或串流中 assistant 輸出的圖片重新編碼並可選縮放。選項與 `image_compress_input` 相同。
+此變換重新編碼 assistant 圖片和工具結果中的圖片。它也處理函式工具參數 JSON 中的圖片 data URL 和圖片區塊。設定選項與 `image_compress_input` 相同。
+
+串流中的不完整函式參數片段保持不變。完整的最終參數使用壓縮後的圖片。自訂工具的自由文字及其他 Base64 保持不變。
 
 如果圖片帶有 alpha 通道，且選定的輸出格式為 `jpg`，此變換會保留原始位元組、媒體類型和尺寸。即使所有像素均不透明，也適用此規則。此規則優先於 `max_edge_px` 和 `skip_if_smaller`，同時適用於一般回應和串流回應。支援 alpha 通道的格式仍依設定壓縮。
 

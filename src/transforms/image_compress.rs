@@ -3,7 +3,10 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{
+    ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, ToolCallType, ToolResultContent,
+    UrpStreamEvent,
+};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
@@ -98,7 +101,14 @@ pub struct ImageCompressInputTransform;
 
 #[derive(Default)]
 struct AssistantStreamState {
-    assistant_image_nodes: HashMap<u32, bool>,
+    node_kinds: HashMap<u32, StreamImageKind>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamImageKind {
+    AssistantImage,
+    FunctionToolCall,
+    Other,
 }
 
 impl TransformState for AssistantStreamState {
@@ -126,11 +136,11 @@ impl Transform for ImageCompressInputTransform {
         &[
             (
                 "en",
-                "Re-encodes and optionally resizes base64 user-message images in the request to reduce upstream payload size.",
+                "Re-encodes and optionally resizes request images, including tool results and function-tool image arguments.",
             ),
             (
                 "zh",
-                "对请求中 user 消息的 base64 图片重新编码并可选缩放，以减小上游请求体积。",
+                "对请求图片重新编码并可选缩放，包括工具结果和函数工具参数中的图片。",
             ),
         ]
     }
@@ -150,7 +160,7 @@ impl Transform for ImageCompressInputTransform {
                 "max_edge_px": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Optional maximum width or height of compressed user-message images. Omit to preserve the original dimensions."
+                    "description": "Optional maximum width or height of compressed request images. Omit to preserve the original dimensions."
                 },
                 "jpeg_quality": {
                     "type": "integer",
@@ -271,11 +281,11 @@ impl Transform for ImageCompressOutputTransform {
         &[
             (
                 "en",
-                "Re-encodes and optionally resizes assistant output images in the response or stream.",
+                "Re-encodes and optionally resizes response images, including tool results and function-tool image arguments.",
             ),
             (
                 "zh",
-                "对响应或流中 assistant 输出的图片重新编码并可选缩放。",
+                "对响应图片重新编码并可选缩放，包括工具结果和函数工具参数中的图片。",
             ),
         ]
     }
@@ -436,13 +446,7 @@ async fn compress_image_nodes(
     context: &TransformRuntimeContext,
     cfg: &Config,
 ) -> Result<(), TransformError> {
-    if role == OrdinaryRole::User
-        && nodes.iter().any(|node| {
-            matches!(node,
-                Node::Image { role: OrdinaryRole::User, metadata, .. } if metadata.image_mask
-            )
-        })
-    {
+    if role == OrdinaryRole::User && nodes.iter().any(has_request_image_mask) {
         return Ok(());
     }
     for node in nodes {
@@ -457,21 +461,56 @@ async fn compress_image_node(
     context: &TransformRuntimeContext,
     cfg: &Config,
 ) -> Result<(), TransformError> {
-    let Node::Image {
-        role: node_role,
-        source,
-        ..
-    } = node
-    else {
-        return Ok(());
-    };
-    if *node_role != role {
-        return Ok(());
-    }
-    if let Some(next_source) = compress_image_source(context, cfg, source).await? {
-        *source = next_source;
+    match node {
+        Node::Image {
+            role: node_role,
+            source,
+            ..
+        } if *node_role == role => {
+            if let Some(next_source) = compress_image_source(context, cfg, source).await? {
+                *source = next_source;
+            }
+        }
+        Node::ToolResult { content, .. } => {
+            for item in content {
+                if let ToolResultContent::Image {
+                    source, metadata, ..
+                } = item
+                {
+                    if !metadata.image_mask {
+                        if let Some(next_source) =
+                            compress_image_source(context, cfg, source).await?
+                        {
+                            *source = next_source;
+                        }
+                    }
+                }
+            }
+        }
+        Node::ToolCall {
+            tool_type: ToolCallType::Function,
+            arguments,
+            ..
+        } => {
+            compress_tool_call_arguments(context, cfg, arguments).await?;
+        }
+        _ => {}
     }
     Ok(())
+}
+
+fn has_request_image_mask(node: &Node) -> bool {
+    match node {
+        Node::Image {
+            role: OrdinaryRole::User,
+            metadata,
+            ..
+        } => metadata.image_mask,
+        Node::ToolResult { content, .. } => content.iter().any(
+            |item| matches!(item, ToolResultContent::Image { metadata, .. } if metadata.image_mask),
+        ),
+        _ => false,
+    }
 }
 
 async fn compress_image_source(
@@ -498,6 +537,68 @@ async fn compress_image_source(
     }
 }
 
+async fn compress_tool_call_arguments(
+    context: &TransformRuntimeContext,
+    cfg: &Config,
+    arguments: &mut String,
+) -> Result<(), TransformError> {
+    if !arguments.contains("data:image/") && !arguments.contains("base64") {
+        return Ok(());
+    }
+    let Ok(mut value) = serde_json::from_str::<Value>(arguments) else {
+        return Ok(());
+    };
+    let mut changed = false;
+    let mut pending = vec![&mut value];
+    while let Some(item) = pending.pop() {
+        match item {
+            Value::String(url) if url.starts_with("data:image/") => {
+                let source = ImageSource::Url {
+                    url: url.clone(),
+                    detail: None,
+                };
+                if let Some(ImageSource::Url { url: next, .. }) =
+                    compress_image_source(context, cfg, &source).await?
+                {
+                    *url = next;
+                    changed = true;
+                }
+            }
+            Value::Array(items) => pending.extend(items.iter_mut()),
+            Value::Object(object) => {
+                if matches!(
+                    object.get("type").and_then(Value::as_str),
+                    Some("image" | "input_image" | "output_image" | "image_url")
+                ) && let Some(source) = object.get_mut("source").and_then(Value::as_object_mut)
+                    && source.get("type").and_then(Value::as_str) == Some("base64")
+                    && let (Some(media_type), Some(data)) = (
+                        source.get("media_type").and_then(Value::as_str),
+                        source.get("data").and_then(Value::as_str),
+                    )
+                    && let Some(ImageSource::Base64 { media_type, data }) = compress_base64_image(
+                        context,
+                        cfg.clone(),
+                        media_type.to_owned(),
+                        data.to_owned(),
+                    )
+                    .await?
+                {
+                    source.insert("media_type".into(), Value::String(media_type));
+                    source.insert("data".into(), Value::String(data));
+                    changed = true;
+                }
+                pending.extend(object.values_mut());
+            }
+            _ => {}
+        }
+    }
+    if changed {
+        *arguments = serde_json::to_string(&value)
+            .map_err(|err| TransformError::Apply(format!("serialize tool arguments: {err}")))?;
+    }
+    Ok(())
+}
+
 async fn compress_stream_event(
     event: &mut UrpStreamEvent,
     stream_state: &mut AssistantStreamState,
@@ -508,42 +609,44 @@ async fn compress_stream_event(
         UrpStreamEvent::NodeStart {
             node_index, header, ..
         } => {
-            let is_assistant_image = matches!(
-                header,
+            let kind = match header {
                 NodeHeader::Image {
                     role: OrdinaryRole::Assistant,
                     ..
-                }
-            );
-            stream_state
-                .assistant_image_nodes
-                .insert(*node_index, is_assistant_image);
+                } => StreamImageKind::AssistantImage,
+                NodeHeader::ToolCall {
+                    tool_type: ToolCallType::Function,
+                    ..
+                } => StreamImageKind::FunctionToolCall,
+                _ => StreamImageKind::Other,
+            };
+            stream_state.node_kinds.insert(*node_index, kind);
         }
         UrpStreamEvent::NodeDelta {
             node_index, delta, ..
-        } => {
-            if stream_state
-                .assistant_image_nodes
-                .get(&*node_index)
-                .copied()
-                .unwrap_or(false)
-            {
-                if let NodeDelta::Image { source } = delta {
-                    if let Some(next_source) = compress_image_source(context, cfg, source).await? {
-                        *source = next_source;
-                    }
+        } => match (stream_state.node_kinds.get(&*node_index), delta) {
+            (Some(StreamImageKind::AssistantImage), NodeDelta::Image { source }) => {
+                if let Some(next_source) = compress_image_source(context, cfg, source).await? {
+                    *source = next_source;
                 }
             }
-        }
+            (
+                Some(StreamImageKind::FunctionToolCall),
+                NodeDelta::ToolCallArguments { arguments },
+            ) => {
+                compress_tool_call_arguments(context, cfg, arguments).await?;
+            }
+            _ => {}
+        },
         UrpStreamEvent::NodeDone {
             node_index, node, ..
         } => {
             compress_image_node(node, OrdinaryRole::Assistant, context, cfg).await?;
-            stream_state.assistant_image_nodes.remove(&*node_index);
+            stream_state.node_kinds.remove(&*node_index);
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
             compress_image_nodes(output, OrdinaryRole::Assistant, context, cfg).await?;
-            stream_state.assistant_image_nodes.clear();
+            stream_state.node_kinds.clear();
         }
         _ => {}
     }

@@ -565,13 +565,15 @@ CUMI-2. Config MAY contain:
 
 When `max_edge_px` is absent, the transform MUST preserve the decoded image dimensions. When it is present, it MUST be at least `1`, and the transform MUST resize the decoded image only when its width or height exceeds that value.
 
-CUMI-3. The transform MUST inspect only ordinary `Image` nodes with `role = user`.
+CUMI-3. The transform MUST inspect ordinary `Image` nodes with `role = user`, `ToolResultContent::Image` entries in request `ToolResult` nodes, and complete JSON arguments of function `ToolCall` nodes. Custom-tool freeform input MUST remain unchanged.
 
-CUMI-3a. If any user image has typed `metadata.image_mask = true`, the transform MUST leave every user image source unchanged. This check MUST precede cache lookup, decoding, resizing, and format conversion. Masked edits therefore preserve original image/mask alignment and alpha.
+CUMI-3a. If any user image or tool-result image has typed `metadata.image_mask = true`, the transform MUST leave every request image source unchanged. This check MUST precede cache lookup, decoding, resizing, and format conversion.
 
 CUMI-4. Eligible image sources are:
 1. `Image.source = Base64`; or
 2. `Image.source = Url` whose `url` is a `data:<image-media-type>;base64,<payload>` URL.
+
+CUMI-4a. In a function `ToolCall.arguments` JSON value, the transform MUST inspect complete `data:<image-media-type>;base64,<payload>` string values and `source = { type: "base64", media_type, data }` inside objects with `type = "image"`, `"input_image"`, `"output_image"`, or `"image_url"`. It MUST apply CUMI-4 through CUMI-12 to those image sources, preserve other object fields and array order, and serialize the JSON only if a source changes. Invalid JSON, other strings, custom-tool input, and non-image base64 objects MUST remain unchanged.
 
 CUMI-5. Non-`data:` URL sources MUST remain unchanged.
 
@@ -581,8 +583,9 @@ CUMI-6a. For an eligible source within the encoded-byte limit, the transform MUS
 
 CUMI-7. On successful replacement:
 1. `Base64` sources MUST remain `Base64` with updated `media_type` and `data`;
-2. `data:` URL sources MUST remain `Url` with updated `url`; and
-3. provider-specific typed fields such as image detail hints MUST remain unchanged.
+2. `data:` URL sources MUST remain `Url` with updated `url`;
+3. tool-call JSON carriers MUST retain their original shape with only image MIME and bytes changed; and
+4. typed image metadata and provider-specific fields such as image detail hints MUST remain unchanged.
 
 CUMI-8. When `output_format = original`, the transform MUST use the detected format from CUMI-6a when available. Otherwise, it MUST use the declared supported format. It MUST normalize the `image/jpg` alias to `image/jpeg`. Source WebP MUST use the `webp_lossless` encoder path. When `output_format` is any other configured value, the transform MUST emit the explicitly selected image format, except as required by CUMI-8a. The exact encoder modes are:
 1. `jpg` uses the mozjpeg fastest profile with `jpeg_quality`;
@@ -613,7 +616,7 @@ CUMI-9. The cache key material MUST be the ordered byte sequence:
 
 CUMI-10. The cache key MUST be SHA-256 over the cache key material, formatted as 64 lowercase hexadecimal characters.
 
-CUMI-11. The cache persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary `Image` nodes rather than to nested message parts.
+CUMI-11. Cache persistence, eviction, and failure isolation MUST apply equally to eligible ordinary, tool-result, and tool-call image sources.
 
 CUMI-12. The decoded source payload MUST be bounded before allocation and image decode. Defaults are 20971520 encoded bytes and 40000000 pixels, configured by `MONOIZE_IMAGE_TRANSFORM_MAX_ENCODED_BYTES` and `MONOIZE_IMAGE_TRANSFORM_MAX_PIXELS`. A source exceeding either limit MUST remain unchanged.
 
@@ -856,12 +859,14 @@ CAOI-2. Config MAY contain:
 
 When `max_edge_px` is absent, the transform MUST preserve the decoded image dimensions. When it is present, it MUST be at least `1`, and the transform MUST resize the decoded image only when its width or height exceeds that value.
 
-CAOI-3. On non-stream responses, the transform MUST inspect only ordinary `Image` nodes with `role = assistant` in `response.output`.
+CAOI-3. On non-stream responses, the transform MUST inspect ordinary `Image` nodes with `role = assistant`, `ToolResultContent::Image` entries in `ToolResult` nodes, and complete JSON arguments of function `ToolCall` nodes in `response.output`. Tool-result and tool-call images follow CUMI-4a and the same source eligibility and preservation rules as request images.
 
 CAOI-4. On stream responses, the transform MUST inspect:
 1. `NodeDelta` image sources only when a preceding `NodeStart` for the same `node_index` has `header.type = image` and `header.role = assistant`;
-2. `NodeDone.node` only when it is an ordinary `Image` node with `role = assistant`; and
-3. ordinary `Image` nodes with `role = assistant` in `ResponseDone.output`.
+2. complete JSON `NodeDelta::ToolCallArguments` values only when the matching `NodeStart` is a function `ToolCall`; incomplete argument fragments MUST remain unchanged;
+3. `NodeDone.node` and `ResponseDone.output` ordinary `Image` nodes with `role = assistant`, function `ToolCall` arguments, and `ToolResultContent::Image` entries; and
+4. no custom-tool freeform input or non-image tool content.
+Terminal tool-call arguments MUST use the transformed complete value even when earlier fragments could not be transformed.
 
 CAOI-5. Eligible image sources are:
 1. `Image.source = Base64`; or
@@ -871,16 +876,13 @@ CAOI-6. Non-`data:` URL sources MUST remain unchanged.
 
 CAOI-7. If the media type is not decodable by the image codec stack, the node or delta MUST remain unchanged.
 
-CAOI-8. On successful replacement:
-1. `Base64` sources MUST remain `Base64` with updated `media_type` and `data`;
-2. `data:` URL sources MUST remain `Url` with updated `url`; and
-3. provider-specific typed fields such as image detail hints MUST remain unchanged.
+CAOI-8. Successful replacements MUST preserve source representation, tool-call JSON shape, typed metadata, and provider-specific fields under CUMI-7.
 
 CAOI-9. The output format selection and encoding rules MUST be identical to CUMI-8 and CUMI-8a. The alpha-channel protection MUST apply to non-streaming images and all eligible streaming image sources.
 
 CAOI-10. The cache key material and cache key algorithm MUST be identical to CUMI-9 and CUMI-10.
 
-CAOI-11. The cache persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary assistant `Image` nodes and eligible assistant image deltas.
+CAOI-11. Cache persistence, eviction, and failure isolation MUST apply equally to eligible ordinary, tool-result, and tool-call image sources and assistant image deltas.
 
 ### 4.9 `prompt_strip_anthropic_billing_header`
 

@@ -1,11 +1,13 @@
 ---
 title: "Image: compress response images"
-description: Re-encode and optionally resize assistant output images in responses and streams.
+description: Re-encode assistant images and tool images in responses and streams.
 ---
 
 ## What it does
 
-This transform re-encodes assistant output images in the response or stream and optionally resizes them. The options match `image_compress_input`.
+This transform re-encodes assistant images and typed images in tool results. It also processes image data URLs and image blocks in JSON function-tool arguments. The options match `image_compress_input`.
+
+In streams, incomplete function argument fragments stay unchanged. The complete terminal arguments use the compressed image. Custom-tool input and unrelated Base64 stay unchanged.
 
 When the selected output format is `jpg`, images with an alpha channel remain unchanged. The transform preserves their original bytes, media type, and dimensions. This applies even when every pixel is opaque. It overrides `max_edge_px` and `skip_if_smaller` in both responses and streams. Formats that support alpha continue to use the configured compression settings.
 
