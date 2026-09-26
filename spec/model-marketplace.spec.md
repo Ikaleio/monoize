@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-The Model Marketplace page presents all registered model metadata to logged-in dashboard users in a read-only, searchable card catalog. It differs from the Model Database (admin-only, CRUD) in that it exposes no mutation controls and is accessible to every authenticated role (`user`, `admin`, `super_admin`).
+The Model Marketplace page presents all registered model metadata to logged-in dashboard users in a read-only, searchable catalog list. It differs from the Model Database (admin-only, CRUD) in that it exposes no mutation controls and is accessible to every authenticated role (`user`, `admin`, `super_admin`).
 
 ## 2. Routing
 
@@ -30,48 +30,47 @@ The Model Marketplace page presents all registered model metadata to logged-in d
 
 ```
 PageWrapper
-├── motion.div (header)
-│   └── PageHeader
-│       ├── h1: page title
-│       ├── p: page description
-│       └── Badge: filtered and total model counts
-├── Search Field
-│   ├── sr-only label
-│   └── Input
-└── motion.div (catalog, delay=0.1)
-    ├── EmptyState (when filtered.length === 0)
-    └── section (when filtered.length > 0)
-        └── ModelMarketplaceCard[]
+├── PageHeader
+│   ├── h1: page title (display font)
+│   └── p: page description
+├── QueryError (when the fetch failed; MM-ERR1, MM-ERR2)
+└── DataTableShell (when data exists)
+    ├── toolbar
+    │   ├── TableToolbarSearch (inline start)
+    │   └── p: filtered and total model counts (inline end)
+    ├── EmptyState card (when the catalog is empty)
+    └── DataList (when the catalog is non-empty)
+        ├── inline EmptyState (when zero records match the query)
+        └── one DataListRow per filtered record
 ```
 
-### 4.2 Card Content
+MM-UI1. The page header MUST NOT contain actions or badges. The title MUST use the shared display font (`frontend-design-system.spec.md` DS38).
 
-Each card MUST use `Card`, `CardHeader`, `CardContent`, `Separator`, and
-`CardFooter`. The card MUST render the following fields.
+MM-UI2. The result count MUST render as muted plain text, not as a badge.
 
-| Region  | Label key                     | Data accessor                | Format                                     |
-| ------- | ----------------------------- | ---------------------------- | ------------------------------------------ |
-| Header  | `modelMarketplace.modelId`    | `record.model_id`            | Model icon plus complete model ID          |
-| Header  | `modelMarketplace.mode`       | `record.mode`                | Outline Badge; em dash when absent         |
-| Header  | `modelMarketplace.provider`   | `record.models_dev_provider` | Text; em dash when absent                  |
-| Content | `modelMarketplace.inputCost`  | `record.input_usd_per_1m`    | `$X / 1M`; em dash when null               |
-| Content | `modelMarketplace.outputCost` | `record.output_usd_per_1m`   | `$X / 1M`; em dash when null               |
-| Footer  | `modelMarketplace.context`    | `record.max_tokens`          | Human-readable, for example `128K` or `1M` |
-| Footer  | `modelMarketplace.maxOutput`  | `record.max_output_tokens`   | Human-readable, for example `16K`          |
+### 4.2 Row Content
 
-The model icon container and the mode Badge in the card header MUST share one visual vertical center. The loaded card and its skeleton MUST use the same alignment.
+Each row MUST render through the `DataList` primitives (`frontend-design-system.spec.md` §6.1). In wide mode, the columns MUST be, in order:
 
-### 4.3 Non-linear Grid Contract
+| Column | Label key | Data accessor | Format | Alignment |
+| ------ | --------- | ------------- | ------ | --------- |
+| Model | `modelMarketplace.modelId` | `record.model_id`, `record.models_dev_provider` | Line 1: model icon, complete model ID in monospace, copy button. Line 2: provider as muted text; em dash when absent | start |
+| Mode | `modelMarketplace.mode` | `record.mode` | Plain text; em dash when absent | start |
+| Input | `modelMarketplace.inputPerMillion` | `record.input_usd_per_1m` | `$X` with 3 fractional digits; em dash when null | end |
+| Output | `modelMarketplace.outputPerMillion` | `record.output_usd_per_1m` | `$X` with 3 fractional digits; em dash when null | end |
+| Context | `modelMarketplace.context` | `record.max_tokens` | Human-readable, for example `128K` or `1M`; em dash when null | end |
+| Max output | `modelMarketplace.maxOutput` | `record.max_output_tokens` | Human-readable, for example `16K`; em dash when null | end |
+
+MM-UI3. The model icon MUST render without a background plate and MUST be hidden from assistive technology.
+
+MM-UI4. The copy button MUST copy the complete `model_id` to the clipboard. Its accessible name MUST include the model ID. After a successful copy, its icon MUST change to a check mark for 2 seconds. The copy button is the only row action.
+
+### 4.3 List Contract
 
 - The DOM order MUST equal the endpoint result order.
-- At viewport widths below `768px`, the grid MUST contain one column.
-- At viewport widths from `768px` through `1023px`, the grid MUST contain two
-  equal columns. Items at repeating-pattern positions 0, 5, and 6 MUST span both
-  columns. Other items MUST span one column.
-- At viewport widths at or above `1024px`, the grid MUST contain 12 equal
-  columns. Card spans MUST repeat in this order: `7, 5, 4, 4, 4, 5, 7`.
-- The layout MUST NOT use CSS dense packing. Visual order MUST equal DOM order.
+- In wide mode, every row MUST align to the same column tracks, so that the input price cells of all rows share one left edge.
 - The page MUST render the finite result set without pagination or infinite scroll.
+- The list MUST NOT establish its own scroll container (`frontend-design-system.spec.md` DS22j).
 
 ### 4.4 Search
 
@@ -80,34 +79,28 @@ The model icon container and the mode Badge in the card header MUST share one vi
 
 ### 4.5 Loading State
 
-When `isLoading` is true, render:
-
-```
-Page title and description skeletons
-Search field skeleton
-Seven card skeletons using the same responsive span pattern as the catalog
-```
+When `isLoading` is true and no data exists, render inside `PageWrapper`: a page header skeleton, a toolbar skeleton, and a list surface with six row skeletons.
 
 ### 4.6 Empty State
 
-When `filtered.length === 0`:
+When the successful catalog is empty:
 
-- Icon: muted `Store` icon (or `Database`)
+- Icon: muted `Store` icon
 - Primary text: `modelMarketplace.noModels`
 - Secondary text: `modelMarketplace.noModelsDesc`
 
 ## 5. Invariants
 
-1. The page MUST NOT expose any mutation controls (no create, edit, delete, sync buttons).
+1. The page MUST NOT expose any mutation controls (no create, edit, delete, sync buttons). Copying a model ID is not a mutation.
 2. The page MUST use `useMarketplaceModels()` from `@/lib/swr` — which calls `GET /api/dashboard/marketplace/models`.
 3. The backend endpoint MUST only return models present in at least one enabled Provider and at least one enabled Channel whose weight is greater than zero.
-4. The page MUST render the card grid defined in sections 4.2 and 4.3.
+4. The page MUST render the catalog list defined in sections 4.2 and 4.3.
 5. All user-visible strings MUST go through `t()` (i18next). Keys live under `modelMarketplace.*`.
 6. Navigation entry MUST appear in the common `navItems` array (visible to all roles).
 
 ## 6. i18n Keys
 
-Keys to add under `modelMarketplace`:
+Keys under `modelMarketplace`:
 
 | Key                 | en                                                                           | zh                                             |
 | ------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------- |
@@ -116,14 +109,14 @@ Keys to add under `modelMarketplace`:
 | `searchPlaceholder` | Search models...                                                             | 搜索模型...                                    |
 | `modelId`           | Model                                                                        | 模型                                           |
 | `mode`              | Mode                                                                         | 模式                                           |
-| `inputCost`         | Input Cost                                                                   | 输入价格                                       |
-| `outputCost`        | Output Cost                                                                  | 输出价格                                       |
 | `context`           | Context                                                                      | 上下文                                         |
 | `maxOutput`         | Max Output                                                                   | 最大输出                                       |
-| `provider`          | Provider                                                                     | 提供者                                         |
 | `resultCount`       | Showing {{filtered}} of {{total}} models                                     | 显示 {{filtered}} / {{total}} 个模型           |
 | `noModels`          | No models available                                                          | 暂无可用模型                                   |
 | `noModelsDesc`      | Model data will appear here once the administrator syncs the model database. | 管理员同步模型数据库后，模型数据将显示在此处。 |
+| `inputPerMillion`   | Input (per 1M tokens)                                                        | 输入（每 1M tokens）                           |
+| `outputPerMillion`  | Output (per 1M tokens)                                                       | 输出（每 1M tokens）                           |
+| `copyModelId`       | Copy {{model}}                                                               | 复制 {{model}}                                 |
 
 Nav key `nav.marketplace`: en = `Models`, zh = `模型广场`
 

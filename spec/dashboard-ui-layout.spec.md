@@ -155,6 +155,11 @@ DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pa
 
 DL7a. The right main pane MUST receive a definite remaining viewport height (`flex-1` and `min-height: 0` inside the `h-dvh` shell). Fill-height pages such as request logs MAY consume that height with an internal scroll region. Other pages MAY grow and scroll inside the same main pane.
 
+DL7b. The shell MUST expose the right main pane element to pages through
+`DashboardScrollParentContext` from `frontend/src/lib/dashboard-scroll.ts`, provided by `frontend/src/pages/layout.tsx`. The context value
+MUST be `null` until the element mounts. A virtualized page list MUST use this element
+as its scroll parent and MUST NOT create a second vertical scroll container.
+
 ## 2. Providers Page
 
 PL1. `/providers` page MUST be provider-centric.
@@ -495,12 +500,12 @@ AK10. API key restriction indicators in `/dashboard/tokens` MUST render as a non
 - The restriction preview MUST NOT render long help text inside the table cell.
 - The complete popover list MUST include model-limit, IP whitelist, max-multiplier, and request-capture badges when those restrictions are active.
 
-AK11. In the `/dashboard/tokens` list table, the API key name and its group badge collection MUST render in a single non-wrapping inline row inside the name cell.
+AK11. In the `/dashboard/tokens` list, the API key name and its group badge collection MUST render in a single non-wrapping inline row inside the name cell.
 
 - A key with `use_user_group = true` MUST NOT render group badges (it follows the owner's group).
 - A key with `use_user_group = false` MUST render its `group_ids` in stored order as name badges resolved from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to the raw id.
 - The group badge collection MUST remain adjacent to the API key name and MUST NOT move below the name.
-- If the inline row exceeds the available viewport width, the table container MUST handle overflow through horizontal scrolling.
+- If the inline row exceeds the cell width, the name MUST truncate with an ellipsis and expose the full name through its `title` attribute. The list MUST NOT scroll horizontally.
 
 ## 5. Dashboard Home Page
 
@@ -600,12 +605,27 @@ reflect a later `auth/me` refresh.
 
 ## 7. Token Management Page (UI)
 
-AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized rendering via `react-virtuoso` (`TableVirtuoso`) instead of rendering all rows as plain DOM rows.
+AK4. The API key list body in `/dashboard/tokens` MUST use virtualized rendering via `react-virtuoso` (`Virtuoso`) instead of rendering all rows as plain DOM rows.
 
-- Table header MUST be rendered via `fixedHeaderContent` (sticky header).
-- Table body rows MUST be rendered via `itemContent` callback.
-- Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
-- Select-all checkbox MUST remain in the fixed header; per-row checkboxes MUST remain in `itemContent`.
+- The list MUST render through the `DataList` primitives (`frontend-design-system.spec.md` §6.1). `Virtuoso` MUST receive `DataListBody` as its list component and `DataListRow` as its item component.
+- `Virtuoso` MUST receive the DL7b main pane element as `customScrollParent`. The list height MUST equal the height of its rendered rows. The page MUST NOT set a fixed viewport-relative list height.
+- In wide mode, the header row MUST be sticky at the top of the main pane.
+- The select-all checkbox MUST render in the toolbar with a localized visible label in every mode. Per-row checkboxes MUST remain in each row. The header row MUST NOT contain interactive controls.
+
+AK-UI-LIST-1. `/dashboard/tokens` MUST render, in order: the page header, a toolbar, and the list surface. The page MUST NOT render a section heading or a key-count paragraph between the header and the toolbar.
+
+- The toolbar MUST contain the select-all checkbox and a search input at the inline start, and a localized key count at the inline end. The count MUST equal the number of keys that match the current search query.
+- In wide mode, the list columns MUST be, in order: name with key, balance, restrictions, expiry, status, and actions. The row checkbox MUST render at the inline start of the name cell, so that it shares the primary line below wide mode.
+- The name cell MUST render the AK11 name row on its first line and the key prefix with its copy action on its second line.
+- A key with `sub_account_enabled = false` MUST render the balance cell as plain muted text equivalent to "Uses account balance". It MUST NOT render a badge.
+- A key whose `expires_at` is earlier than the current time MUST render a warning status badge equivalent to "Expired" in the expiry cell.
+- A disabled or expired key MUST render its name in `text-muted-foreground`. The row opacity MUST remain 1.
+
+AK-UI-SEARCH-1. The token search MUST filter the loaded key list on the client. A key matches when its `name` or its displayed key prefix contains the trimmed query, compared case-insensitively. An empty query matches every key.
+
+- When the query changes, the selection MUST drop every key that no longer matches.
+- The select-all checkbox MUST be checked exactly when at least one key matches and every matching key is selected. Activating it MUST select or deselect only matching keys.
+- When keys exist and none match, the list surface MUST render an inline empty state that names the query. It MUST NOT render the no-keys empty state.
 
 AK-UI-BATCH-1. When one or more API keys are selected, the page header MUST show a destructive batch-delete action with a localized label equivalent to "Delete selected". The frontend MUST render the translated label and MUST NOT render an untranslated locale-key identifier.
 
@@ -638,25 +658,41 @@ and MUST keep the dialog open with the current draft state intact.
 
 ## 9. Billing Plans Page
 
-BP-UI1. Each plan row on `/dashboard/plans` MUST include a Reset action in addition to
-edit and delete.
+PLN-UI1. The data and mutation contract of `/dashboard/plans` is defined by
+`billing-plan-subscriptions.spec.md` §9 (BP-UI1, BP-UI2). No plan reset action or reset
+endpoint exists.
 
-BP-UI2. Activating Reset MUST open a confirmation dialog that names the plan. Confirming
-MUST call `POST /api/dashboard/billing-plans/{plan_id}/reset`. Cancel MUST call nothing.
+PLN-UI2. The page MUST render, in order: the page header with the create action, a
+toolbar whose inline end shows a localized plan count, and the list surface. The list MUST
+use the `DataList` primitives (`frontend-design-system.spec.md` §6.1). In wide mode, the
+columns MUST be, in order: name with description, sliding-window limits, eligible groups,
+prices, multiplier, listed state, and actions.
 
-BP-UI3. After a successful reset, the users-list SWR cache and the session user cache
-MUST be revalidated so `/dashboard/users` and the sidebar balance reflect the new
-balances without a page close/reopen. On failure, the dialog MUST remain available and
-the UI MUST surface the server error.
+- The name cell MUST render the plan name on its first line and the description on a
+  second muted line.
+- The limits cell MUST render one line per configured window, labeled `5h`, `24h`, `7d`,
+  or `30d`. Each amount MUST render as `$` followed by the exact decimal value with
+  trailing fractional zeros removed. The value MUST NOT be rounded.
+- The prices cell MUST render one line per price as "$price / N days" in the active
+  locale. A plan without prices MUST render `—`.
+- The multiplier cell MUST be end-aligned and render `{multiplier}×`.
+- A listed plan MUST render `StatusBadge variant="success"`; an unlisted plan MUST render
+  muted plain text.
+- The action group MUST contain edit and delete buttons whose accessible names include
+  the plan name.
+- Header and body cells MUST use start alignment, except the multiplier column and the
+  action group, which MUST use end alignment.
 
-BP-UI4. Plan create and edit dialogs MUST select `group_ids` through the shared
+PLN-UI3. Plan create and edit dialogs MUST select `group_ids` through the shared
 unordered multi-select group selector (GS rules, §11) instead of freeform text. The plan
 list MUST render `group_ids` as group-name badges; an empty array renders the localized
 unrestricted label.
 
-BP-UI5. Every header cell and data cell in the plan table MUST center its content on the
-horizontal and vertical axes. When a cell contains multiple text lines, the complete text
-block MUST remain centered within the cell.
+PLN-UI4. Every plan form input MUST have an associated label. Each price row MUST expose
+labeled price and duration inputs and a remove button with an accessible name.
+
+PLN-UI5. The loading state MUST render inside `PageWrapper`. An empty plan list MUST
+render the shared empty state with the create action.
 
 ## 11. Groups Management Page and Shared Group Selector
 
@@ -667,8 +703,18 @@ from `GET /api/dashboard/groups` in the returned order and MUST render a skeleto
 placeholder while the list is loading.
 
 GP2. Each row MUST display: name, description (muted, truncated with title attribute),
-a default-group badge when `is_default` is true, a user-selectable indicator, and
+a default-group badge when `is_default` is true, a user-selectable switch, and
 `sort_order`.
+
+GP2a. The page MUST render, in order: the page header with the create action, a toolbar
+whose inline end shows a localized group count, and the list surface. The list MUST use
+the `DataList` primitives (`frontend-design-system.spec.md` §6.1). In wide mode, the
+columns MUST be, in order: position, name with description, user-selectable, and actions.
+
+- The position cell MUST contain the drag handle and `sort_order`.
+- The name cell MUST render the name and default badge on its first line and the
+  description on its second line. An empty description MUST render as `—`.
+- The action group MUST contain, in order: move up, move down, edit, and delete.
 
 GP3. The page MUST offer create, edit, and delete actions bound to
 `POST /api/dashboard/groups`, `PUT /api/dashboard/groups/{id}`, and
@@ -686,7 +732,7 @@ cache is stale). After a successful delete the groups cache MUST be revalidated 
 with the users, tokens, providers, billing-plans, and current-user caches, because the
 server-side deletion cascade rewrites group references in those entities.
 
-GP6. Each group row MUST provide move-up and move-down buttons in the sort-order cell.
+GP6. Each group row MUST provide move-up and move-down buttons in its action group.
 The first row's move-up button and the last row's move-down button MUST be disabled. Native
 HTML drag-and-drop reordering MUST be available through a drag handle when the browser
 matches `(pointer: fine)`; coarse-pointer users MUST retain the move buttons. A completed

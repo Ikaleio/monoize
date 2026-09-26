@@ -30,7 +30,10 @@
 		"unavailable": "無法使用",
 		"close": "關閉",
 		"loadFailed": "此區域載入失敗，請重試。",
-		"refreshFailed": "此區域重新整理失敗，目前仍顯示上次的資料。"
+		"refreshFailed": "此區域重新整理失敗，目前仍顯示上次的資料。",
+		"enableItem": "啟用 {{name}}",
+		"editItem": "編輯 {{name}}",
+		"deleteItem": "刪除 {{name}}"
 	},
 	"auth": {
 		"signIn": "登入",
@@ -301,10 +304,6 @@
 		"createKey": "建立金鑰",
 		"createApiKey": "建立 API 金鑰",
 		"createDescription": "建立新的 API 金鑰以存取 Monoize API",
-		"yourApiKeys": "您的 API 金鑰",
-		"keysCreated": "已建立 {{count}} 把 API 金鑰",
-		"keysCreated_plural": "已建立 {{count}} 把 API 金鑰",
-		"noKeys": "尚無 API 金鑰。建立一把開始使用。",
 		"keyPrefix": "金鑰",
 		"expires": "到期時間",
 		"expiresInDays": "有效天數（選填）",
@@ -320,7 +319,6 @@
 		"editDescription": "更新 API 金鑰設定",
 		"balance": "餘額",
 		"subAccountEnabled": "獨立餘額",
-		"inheritsUser": "繼承用戶",
 		"transferTitle": "轉帳",
 		"transferDescription": "從你的帳戶轉帳到 {{name}}",
 		"transferAmount": "金額 (USD)",
@@ -373,7 +371,15 @@
 		"useUserGroupHelpNamed": "開啟後，此金鑰跟隨擁有者的群組（目前：{{name}}）。",
 		"groups": "自選群組",
 		"groupsHelp": "依序嘗試所選群組，第 1 位優先。可拖曳調整順序。",
-		"groupsRequired": "關閉「使用使用者預設群組」後，至少需選擇一個群組。"
+		"groupsRequired": "關閉「使用使用者預設群組」後，至少需選擇一個群組。",
+		"selectAll": "全選",
+		"keyCount_other": "共 {{count}} 把",
+		"noKeysTitle": "尚無 API 金鑰",
+		"noKeysDescription": "建立金鑰後即可呼叫 Monoize API。",
+		"noMatchesTitle": "沒有符合的金鑰",
+		"noMatchesDescription": "沒有名稱或金鑰前綴包含「{{query}}」的金鑰。",
+		"usesAccountBalance": "使用帳戶餘額",
+		"expired": "已過期"
 	},
 	"settings": {
 		"title": "系統設定",
@@ -923,17 +929,17 @@
 		"searchPlaceholder": "搜尋模型...",
 		"modelId": "模型",
 		"mode": "模式",
-		"inputCost": "輸入價格",
-		"outputCost": "輸出價格",
 		"context": "上下文",
 		"maxOutput": "最大輸出",
-		"provider": "供應商",
 		"resultCount": "顯示 {{filtered}} / {{total}} 個模型",
 		"noModels": "尚無可用模型",
 		"noModelsDesc": "管理員同步模型資料庫後，模型資料將顯示在此處。",
 		"noMatches": "沒有符合條件的模型",
 		"noMatchesDesc": "沒有模型符合搜尋條件。清除搜尋即可查看可用模型。",
-		"clearSearch": "清除搜尋"
+		"clearSearch": "清除搜尋",
+		"inputPerMillion": "輸入（每 1M tokens）",
+		"outputPerMillion": "輸出（每 1M tokens）",
+		"copyModelId": "複製 {{model}}"
 	},
 	"requestLogs": {
 		"title": "請求日誌",
@@ -1118,7 +1124,7 @@
 	},
 	"billingPlans": {
 		"title": "訂閱方案",
-		"description": "週期性重置訂閱使用者餘額的方案計畫",
+		"description": "管理依滑動視窗限額的訂閱方案及其價格。",
 		"create": "建立方案",
 		"edit": "編輯方案",
 		"name": "名稱",
@@ -1137,9 +1143,9 @@
 		"invalidPeriod": "週期必須為正整數秒",
 		"nameRequired": "請填寫方案名稱",
 		"emptyTitle": "還沒有訂閱方案",
-		"emptyDescription": "建立一個方案，為使用者提供週期性餘額。",
+		"emptyDescription": "建立方案後，使用者可以在錢包中購買已上架的方案，管理員也可以為使用者指派任意方案。",
 		"deleteTitle": "刪除訂閱方案？",
-		"deleteDescription": "將永久刪除 {{name}}。已指派給使用者的方案無法刪除。",
+		"deleteDescription": "將永久刪除 {{name}} 及其價格。現有訂閱保留目前快照，直到到期。",
 		"reset": "RESET",
 		"resetTitle": "重置週期額度？",
 		"resetDescription": "將 {{name}} 下所有符合條件的訂閱使用者餘額重置為方案發放額度。已停用和無限額使用者不會被重置。",
@@ -1162,8 +1168,13 @@
 		"invalidPrices": "每個價格都需要有效的 USD 金額和正整數天數。上架套餐必須設定價格。",
 		"created": "套餐已建立",
 		"updated": "套餐已更新",
-		"groups": "群組上限",
-		"groupsUnrestricted": "不限制"
+		"groups": "可用群組",
+		"groupsUnrestricted": "不限制",
+		"count_other": "共 {{count}} 個",
+		"listedState": "上架狀態",
+		"unlisted": "未上架",
+		"priceOption_other": "{{price}} / {{count}} 天",
+		"removePrice": "刪除價格 {{index}}"
 	},
 	"wallet": {
 		"title": "錢包",
@@ -1196,7 +1207,6 @@
 		"loadErrorDescription": "請重試。錢包的其他區域仍可使用。",
 		"retry": "重試",
 		"activityTitle": "資金紀錄",
-		"activityDescription": "查看付款訂單和每筆錢包餘額異動。",
 		"ordersTab": "儲值訂單",
 		"ledgerTab": "餘額明細",
 		"ordersTitle": "儲值訂單",
@@ -1324,11 +1334,13 @@
 			"manual_refund_required": "請先確認已線下退款",
 			"refund_failed": "支付服務商退款失敗",
 			"not_found": "找不到"
-		}
+		},
+		"rate": "匯率",
+		"rateValue": "1 USD = {{rate}} {{currency}}"
 	},
 	"adminDashboard": {
 		"title": "系統儀表板",
-		"subtitle": "系統狀態、使用者用量排行、模型/渠道健康度與從機狀態",
+		"subtitle": "Channel 健康度、消耗、使用者用量排行與節點狀態",
 		"systemStatus": "系統狀態",
 		"nodeRole": "節點角色",
 		"version": "版本",
@@ -1362,8 +1374,8 @@
 		"calls": "呼叫數",
 		"cost": "費用",
 		"noUsage": "最近 24 小時無用量",
-		"channelHealth": "模型 / 渠道健康度",
-		"channel": "渠道",
+		"channelHealth": "模型 / Channel 健康度",
+		"channel": "Channel",
 		"weight": "權重",
 		"affinity": "親和",
 		"status": "狀態",
@@ -1371,15 +1383,18 @@
 		"healthy": "健康",
 		"unhealthy": "不健康",
 		"coolingDown": "冷卻中",
-		"noChannels": "未設定渠道",
+		"noChannels": "未設定 Channel",
 		"healthEntries": "健康狀態條目",
 		"affinityEntries": "親和綁定",
 		"refresh": "重新整理",
-		"retry": "重試",
 		"autoRefresh": "10 秒自動重新整理",
 		"unauthorized": "需要管理員權限",
 		"unauthorizedDescription": "此頁面僅管理員可存取。",
-		"loadFailed": "系統概覽載入失敗"
+		"channelSummary_other": "{{count}} 個 Channel · {{unhealthy}} 個異常",
+		"callsCount_other": "{{count}} 次呼叫",
+		"systemDescription": "目前節點的執行設定與內部佇列。",
+		"rankingDescription": "依費用排序，最多顯示 20 名使用者。",
+		"replicaDescription": "從機心跳與待上報的計量檔案。"
 	},
 	"groups": {
 		"title": "群組管理",
@@ -1409,7 +1424,9 @@
 		"emptyDescription": "系統會在初始化時建立預設群組。",
 		"invalidName": "名稱須為 1-64 個字元",
 		"invalidDescription": "描述最多 256 個字元",
-		"invalidSortOrder": "排序必須是整數"
+		"invalidSortOrder": "排序必須是整數",
+		"count_other": "共 {{count}} 個",
+		"userSelectableItem": "允許使用者自選 {{name}}"
 	},
 	"groupPicker": {
 		"selectPlaceholder": "選擇群組",

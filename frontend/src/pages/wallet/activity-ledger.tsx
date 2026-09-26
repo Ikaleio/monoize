@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, useReducedMotion } from "framer-motion";
+import { BookOpenText } from "lucide-react";
 import {
-  ArrowDownLeft,
-  ArrowUpRight,
-  BookOpenText,
-  CalendarClock,
-} from "lucide-react";
+  DataList,
+  DataListBody,
+  DataListCell,
+  DataListHead,
+  DataListHeader,
+  DataListRow,
+} from "@/components/ui/data-list";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   Select,
@@ -56,9 +59,9 @@ export function ActivityLedger({
       initial={false}
       animate={active || reduced ? { opacity: 1, x: 0 } : { opacity: 0, x: 20 }}
       transition={reduced ? { duration: 0 } : springs.gentle}
-      className="flex flex-col gap-4 p-5"
+      className="flex flex-col"
     >
-      <div className="flex justify-end">
+      <div className="flex justify-end p-4">
         <Select
           value={kind}
           onValueChange={(value) => {
@@ -86,13 +89,15 @@ export function ActivityLedger({
       </div>
 
       {isLoading ? (
-        <div className="flex flex-col gap-2" aria-busy="true">
+        <div className="flex flex-col gap-2 px-4 pb-4" aria-busy="true">
           {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-20 w-full lg:h-14" />
+            <Skeleton key={index} className="h-14 w-full" />
           ))}
         </div>
       ) : error && !data ? (
-        <WalletFeedback onRetry={mutate} />
+        <div className="px-4 pb-4">
+          <WalletFeedback onRetry={mutate} />
+        </div>
       ) : !data?.entries.length ? (
         <EmptyState
           variant="inline"
@@ -101,93 +106,70 @@ export function ActivityLedger({
           title={t("wallet.noLedger")}
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.6fr)_minmax(9rem,0.7fr)_minmax(10rem,0.75fr)] gap-4 border-b px-3 pb-2 text-xs font-medium text-muted-foreground lg:grid">
-            <span>{t("wallet.kind")}</span>
-            <span className="text-right">{t("wallet.delta")}</span>
-            <span className="text-right">{t("wallet.balanceAfter")}</span>
-            <span>{t("wallet.createdAt")}</span>
+        <>
+          <DataList columns="minmax(0,1.4fr) 9rem 9rem 10rem" className="border-t">
+            <DataListHeader>
+              <DataListHead>{t("wallet.kind")}</DataListHead>
+              <DataListHead align="end">{t("wallet.delta")}</DataListHead>
+              <DataListHead align="end">{t("wallet.balanceAfter")}</DataListHead>
+              <DataListHead>{t("wallet.createdAt")}</DataListHead>
+            </DataListHeader>
+            <DataListBody aria-label={t("wallet.ledgerTitle")}>
+              {data.entries.map((entry, index) => {
+                const positive = !entry.delta_nano_usd.startsWith("-");
+                return (
+                  <DataListRow key={entry.id} asChild>
+                    <motion.li
+                      layout={!reduced}
+                      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={
+                        reduced
+                          ? { duration: 0 }
+                          : { ...springs.gentle, delay: Math.min(index * 0.03, 0.18) }
+                      }
+                    >
+                      <DataListCell primary>
+                        <span className="font-medium">{kindLabel(entry.kind)}</span>
+                      </DataListCell>
+                      <DataListCell label={t("wallet.delta")} align="end">
+                        <span
+                          className={cn(
+                            "font-medium tabular-nums",
+                            positive ? "text-success" : "text-error-foreground",
+                          )}
+                        >
+                          {positive ? "+" : ""}
+                          {formatNanoUsd(entry.delta_nano_usd, 4)}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("wallet.balanceAfter")} align="end">
+                        <span className="tabular-nums">
+                          {entry.balance_after_nano_usd !== null
+                            ? formatNanoUsd(entry.balance_after_nano_usd, 4)
+                            : "—"}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("wallet.createdAt")}>
+                        <span className="tabular-nums text-muted-foreground">
+                          {formatTime(entry.created_at)}
+                        </span>
+                      </DataListCell>
+                    </motion.li>
+                  </DataListRow>
+                );
+              })}
+            </DataListBody>
+          </DataList>
+          <div className="border-t px-4 pb-3 empty:hidden">
+            <PaginationFooter
+              total={data.total}
+              pageSize={PAGE_SIZE}
+              offset={offset}
+              onOffsetChange={setOffset}
+            />
           </div>
-
-          <motion.ul layout={!reduced} className="divide-y">
-            {data.entries.map((entry, index) => {
-              const positive = !entry.delta_nano_usd.startsWith("-");
-              const EntryIcon = positive ? ArrowDownLeft : ArrowUpRight;
-
-              return (
-                <motion.li
-                  key={entry.id}
-                  layout={!reduced}
-                  initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={
-                    reduced
-                      ? { duration: 0 }
-                      : {
-                          ...springs.gentle,
-                          delay: Math.min(index * 0.03, 0.18),
-                        }
-                  }
-                  className="grid gap-3 rounded-md px-3 py-3 transition-colors hover:bg-muted/50 lg:grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.6fr)_minmax(9rem,0.7fr)_minmax(10rem,0.75fr)] lg:items-center lg:gap-4"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span
-                      className={cn(
-                        "flex size-9 shrink-0 items-center justify-center rounded-md",
-                        positive
-                          ? "bg-success-soft text-success-foreground"
-                          : "bg-destructive/10 text-destructive",
-                      )}
-                    >
-                      <EntryIcon className="size-4" aria-hidden="true" />
-                    </span>
-                    <span className="min-w-0 text-pretty text-sm font-medium">
-                      {kindLabel(entry.kind)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-baseline justify-between gap-3 lg:block lg:text-right">
-                    <span className="text-sm text-muted-foreground lg:hidden">
-                      {t("wallet.delta")}
-                    </span>
-                    <span
-                      className={cn(
-                        "font-display text-lg font-semibold tabular-nums",
-                        positive ? "text-success" : "text-destructive",
-                      )}
-                    >
-                      {positive ? "+" : ""}
-                      {formatNanoUsd(entry.delta_nano_usd, 4)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-baseline justify-between gap-3 lg:block lg:text-right">
-                    <span className="text-sm text-muted-foreground lg:hidden">
-                      {t("wallet.balanceAfter")}
-                    </span>
-                    <span className="text-sm tabular-nums">
-                      {entry.balance_after_nano_usd !== null
-                        ? formatNanoUsd(entry.balance_after_nano_usd, 4)
-                        : "—"}
-                    </span>
-                  </div>
-
-                  <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
-                    <CalendarClock className="size-4" aria-hidden="true" />
-                    {formatTime(entry.created_at)}
-                  </span>
-                </motion.li>
-              );
-            })}
-          </motion.ul>
-
-          <PaginationFooter
-            total={data.total}
-            pageSize={PAGE_SIZE}
-            offset={offset}
-            onOffsetChange={setOffset}
-          />
-        </div>
+        </>
       )}
     </motion.section>
   );

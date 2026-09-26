@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { PageWrapper, springs } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { rechargeOrdersSWRKey } from "@/lib/swr";
 import { WalletBalance } from "./wallet/wallet-balance";
@@ -45,15 +46,9 @@ export function WalletPage() {
   };
 
   return (
-    <PageWrapper className="max-w-6xl pb-8">
-      <h1 className="font-display text-3xl font-semibold tracking-tight">
-        {t("wallet.title")}
-      </h1>
-      <WalletBalance
-        user={user}
-        onRecharge={openRecharge}
-        className="mt-5 mb-6"
-      />
+    <PageWrapper className="space-y-6 pb-8">
+      <PageHeader title={t("wallet.title")} description={t("wallet.description")} />
+      <WalletBalance user={user} onRecharge={openRecharge} />
       <Tabs value={activeTab} onValueChange={selectTab} className="min-w-0">
         <div className="border-b">
           <TabsList

@@ -126,7 +126,8 @@ pub async fn get_admin_overview(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     let health = state.channel_health.lock().await;
-    let now_ms = crate::handlers::routing::now_ts();
+    // Health state stores unix seconds; AD-2 serializes these timestamps as unix milliseconds.
+    let now_secs = crate::handlers::routing::now_ts();
     let mut channel_health: Vec<Value> = Vec::new();
     for provider in providers {
         for channel in provider.channels {
@@ -145,7 +146,7 @@ pub async fn get_admin_overview(
                         continue;
                     };
                     healthy &= entry.healthy;
-                    if entry.cooldown_until.is_some_and(|until| until > now_ms) || !entry.healthy {
+                    if entry.cooldown_until.is_some_and(|until| until > now_secs) || !entry.healthy {
                         unhealthy_models.push(model.clone());
                     }
                     cooldown_until = match (cooldown_until, entry.cooldown_until) {
@@ -177,11 +178,11 @@ pub async fn get_admin_overview(
                 "weight": channel.weight,
                 "session_affinity_auto": channel.session_affinity_auto.unwrap_or(false),
                 "healthy": healthy,
-                "last_success_at": last_success_at,
-                "cooldown_until": cooldown_until,
+                "last_success_at": last_success_at.map(|secs| secs.saturating_mul(1000)),
+                "cooldown_until": cooldown_until.map(|secs| secs.saturating_mul(1000)),
                 "probe_success_count": probe_success_count,
-                "last_probe_at": last_probe_at,
-                "cooldown_active": cooldown_until.is_some_and(|until| until > now_ms),
+                "last_probe_at": last_probe_at.map(|secs| secs.saturating_mul(1000)),
+                "cooldown_active": cooldown_until.is_some_and(|until| until > now_secs),
                 "unhealthy_models": unhealthy_models,
                 "window_calls": window.map(|row| row.window_calls).unwrap_or(0),
                 "window_cost_nano_usd": window

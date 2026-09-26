@@ -26,10 +26,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { PageWrapper } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { DataTableShell } from "@/components/ui/data-table-shell";
+import {
+  DataList,
+  DataListActions,
+  DataListBody,
+  DataListCell,
+  DataListHead,
+  DataListHeader,
+  DataListRow,
+} from "@/components/ui/data-list";
 import {
   useDashboardGroups,
   createGroupOptimistic,
@@ -281,214 +291,223 @@ export function GroupsPage() {
     </>
   );
 
-  return (
-    <PageWrapper>
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={transitions.normal}
-        className="space-y-6"
-      >
-        <PageHeader
-          title={t("groups.title")}
-          description={t("groups.description")}
-          actions={
-            <Button onClick={openCreate}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t("groups.create")}
-            </Button>
-          }
-        />
+  const createButton = (
+    <Button onClick={openCreate}>
+      <Plus aria-hidden="true" />
+      {t("groups.create")}
+    </Button>
+  );
 
-        {isLoading ? (
-          <TablePageSkeleton />
-        ) : groups.length === 0 ? (
+  if (isLoading) {
+    return (
+      <PageWrapper>
+        <TablePageSkeleton rows={5} columns={4} />
+      </PageWrapper>
+    );
+  }
+
+  return (
+    <PageWrapper className="space-y-6">
+      <PageHeader
+        title={t("groups.title")}
+        description={t("groups.description")}
+        actions={createButton}
+      />
+
+      <DataTableShell
+        toolbar={
+          <p className="ml-auto text-sm tabular-nums text-muted-foreground">
+            {t("groups.count", { count: groups.length })}
+          </p>
+        }
+        isEmpty={groups.length === 0}
+        emptyState={
           <EmptyState
-            variant="card"
-            icon={<Boxes className="h-10 w-10 text-muted-foreground" />}
+            icon={<Boxes className="size-10" aria-hidden="true" />}
             title={t("groups.emptyTitle")}
             description={t("groups.emptyDescription")}
+            action={createButton}
           />
-        ) : (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[48rem] text-sm">
-              <thead className="bg-muted/50 text-left text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">{t("groups.name")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("groups.descriptionLabel")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("groups.userSelectable")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("groups.sortOrder")}</th>
-                  <th className="px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map((group, index) => (
-                  <tr
-                    key={group.id}
-                    className={cn(
-                      "border-t transition-colors hover:bg-accent/40",
-                      draggingGroupId === group.id && "bg-accent/50 opacity-60"
+        }
+      >
+        <DataList columns="5.5rem minmax(0,1fr) 9rem 10rem">
+          <DataListHeader>
+            <DataListHead>{t("groups.sortOrder")}</DataListHead>
+            <DataListHead>{t("groups.name")}</DataListHead>
+            <DataListHead>{t("groups.userSelectable")}</DataListHead>
+            <DataListHead align="end">{t("common.actions")}</DataListHead>
+          </DataListHeader>
+          <DataListBody aria-label={t("groups.title")}>
+            {groups.map((group, index) => (
+              <DataListRow
+                key={group.id}
+                className={cn(draggingGroupId === group.id && "bg-muted/50 opacity-60")}
+                onDragOver={(event) => {
+                  if (canDrag && !reordering) event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (canDrag) void handleDrop(group.id);
+                }}
+              >
+                <DataListCell label={t("groups.sortOrder")}>
+                  <span className="inline-flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="hidden size-9 cursor-grab touch-manipulation active:cursor-grabbing [@media(pointer:fine)]:inline-flex"
+                      draggable={canDrag && !reordering}
+                      disabled={!canDrag || reordering}
+                      aria-label={t("groups.dragToReorder")}
+                      title={t("groups.dragToReorder")}
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", group.id);
+                        setDraggingGroupId(group.id);
+                      }}
+                      onDragEnd={() => setDraggingGroupId(null)}
+                    >
+                      <GripVertical />
+                    </Button>
+                    <span className="min-w-6 tabular-nums text-muted-foreground">
+                      {group.sort_order}
+                    </span>
+                  </span>
+                </DataListCell>
+                <DataListCell primary>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium" title={group.name}>
+                      {group.name}
+                    </span>
+                    {group.is_default && (
+                      <Badge variant="secondary">{t("groups.defaultBadge")}</Badge>
                     )}
-                    onDragOver={(event) => {
-                      if (canDrag && !reordering) event.preventDefault();
-                    }}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      if (canDrag) void handleDrop(group.id);
+                  </div>
+                  <p
+                    className="mt-0.5 truncate text-muted-foreground"
+                    title={group.description || undefined}
+                  >
+                    {group.description || "—"}
+                  </p>
+                </DataListCell>
+                <DataListCell label={t("groups.userSelectable")}>
+                  <Switch
+                    className="align-middle"
+                    checked={group.user_selectable}
+                    aria-label={t("groups.userSelectableItem", { name: group.name })}
+                    onCheckedChange={(checked) => toggleUserSelectable(group, checked)}
+                  />
+                </DataListCell>
+                <DataListActions>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 touch-manipulation sm:size-9"
+                    disabled={index === 0 || reordering}
+                    aria-label={t("groups.moveUp")}
+                    title={t("groups.moveUp")}
+                    onClick={() => void moveGroup(index, index - 1)}
+                  >
+                    <ArrowUp />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 touch-manipulation sm:size-9"
+                    disabled={index === groups.length - 1 || reordering}
+                    aria-label={t("groups.moveDown")}
+                    title={t("groups.moveDown")}
+                    onClick={() => void moveGroup(index, index + 1)}
+                  >
+                    <ArrowDown />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 touch-manipulation sm:size-9"
+                    aria-label={t("common.editItem", { name: group.name })}
+                    onClick={() => {
+                      setForm(formFromGroup(group));
+                      setEditTarget(group);
                     }}
                   >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{group.name}</span>
-                        {group.is_default && (
-                          <Badge variant="secondary">{t("groups.defaultBadge")}</Badge>
-                        )}
-                      </div>
-                    </td>
-                    <td className="max-w-[20rem] px-4 py-3">
-                      <span className="block truncate text-muted-foreground">
-                        {group.description || "—"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Switch
-                        checked={group.user_selectable}
-                        onCheckedChange={(checked) => toggleUserSelectable(group, checked)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="hidden size-8 cursor-grab touch-manipulation active:cursor-grabbing [@media(pointer:fine)]:inline-flex"
-                          draggable={canDrag && !reordering}
-                          disabled={!canDrag || reordering}
-                          aria-label={t("groups.dragToReorder")}
-                          title={t("groups.dragToReorder")}
-                          onDragStart={(event) => {
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData("text/plain", group.id);
-                            setDraggingGroupId(group.id);
-                          }}
-                          onDragEnd={() => setDraggingGroupId(null)}
-                        >
-                          <GripVertical className="h-4 w-4" />
-                        </Button>
-                        <span className="min-w-6 text-center tabular-nums">
-                          {group.sort_order}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 touch-manipulation sm:size-8"
-                          disabled={index === 0 || reordering}
-                          aria-label={t("groups.moveUp")}
-                          title={t("groups.moveUp")}
-                          onClick={() => void moveGroup(index, index - 1)}
-                        >
-                          <ArrowUp className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 touch-manipulation sm:size-8"
-                          disabled={index === groups.length - 1 || reordering}
-                          aria-label={t("groups.moveDown")}
-                          title={t("groups.moveDown")}
-                          onClick={() => void moveGroup(index, index + 1)}
-                        >
-                          <ArrowDown className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 touch-manipulation sm:size-9"
-                          aria-label={t("common.edit")}
-                          onClick={() => {
-                            setForm(formFromGroup(group));
-                            setEditTarget(group);
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 touch-manipulation sm:size-9"
-                          aria-label={t("common.delete")}
-                          disabled={group.is_default}
-                          title={group.is_default ? t("groups.cannotDeleteDefault") : undefined}
-                          onClick={() => setDeleteTarget(group)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                    <Pencil />
+                  </Button>
+                  {/* Disabled buttons ignore pointer events, so the reason lives on a wrapper. */}
+                  <span
+                    className="inline-flex"
+                    title={group.is_default ? t("groups.cannotDeleteDefault") : undefined}
+                  >
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-11 touch-manipulation sm:size-9"
+                      aria-label={t("common.deleteItem", { name: group.name })}
+                      disabled={group.is_default}
+                      onClick={() => setDeleteTarget(group)}
+                    >
+                      <Trash2 className="text-error-foreground" />
+                    </Button>
+                  </span>
+                </DataListActions>
+              </DataListRow>
+            ))}
+          </DataListBody>
+        </DataList>
+      </DataTableShell>
 
-        {/* Create dialog */}
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("groups.create")}</DialogTitle>
-              <DialogDescription>{t("groups.createDescription")}</DialogDescription>
-            </DialogHeader>
-            {renderForm(handleCreate)}
-          </DialogContent>
-        </Dialog>
+      {/* Create dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("groups.create")}</DialogTitle>
+            <DialogDescription>{t("groups.createDescription")}</DialogDescription>
+          </DialogHeader>
+          {renderForm(handleCreate)}
+        </DialogContent>
+      </Dialog>
 
-        {/* Edit dialog */}
-        <Dialog open={editTarget !== null} onOpenChange={(open) => !open && setEditTarget(null)}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("groups.edit")}</DialogTitle>
-              <DialogDescription>
-                {editTarget?.is_default
-                  ? t("groups.editDefaultDescription")
-                  : editTarget?.name}
-              </DialogDescription>
-            </DialogHeader>
-            {renderForm(handleUpdate)}
-          </DialogContent>
-        </Dialog>
+      {/* Edit dialog */}
+      <Dialog open={editTarget !== null} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("groups.edit")}</DialogTitle>
+            <DialogDescription>
+              {editTarget?.is_default
+                ? t("groups.editDefaultDescription")
+                : editTarget?.name}
+            </DialogDescription>
+          </DialogHeader>
+          {renderForm(handleUpdate)}
+        </DialogContent>
+      </Dialog>
 
-        {/* Delete confirm */}
-        <AlertDialog
-          open={deleteTarget !== null}
-          onOpenChange={(open) => !open && setDeleteTarget(null)}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("groups.deleteTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("groups.deleteDescription", { name: deleteTarget?.name })}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                onClick={handleDelete}
-              >
-                {t("common.delete")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </motion.div>
+      {/* Delete confirm */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("groups.deleteTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("groups.deleteDescription", { name: deleteTarget?.name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleDelete}
+            >
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </PageWrapper>
   );
 }

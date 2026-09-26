@@ -22,7 +22,7 @@ const statusClasses: Record<StatusVariant, { badge: string; dot: string; alert: 
     alert: "border-info-border bg-info-soft text-info-foreground [&>svg]:text-info",
   },
   destructive: {
-    badge: "border-destructive/30 bg-destructive/10 text-destructive",
+    badge: "border-error-border bg-error-soft text-error-foreground",
     dot: "bg-destructive",
     alert: "border-destructive/30 bg-destructive/10 text-destructive [&>svg]:text-destructive",
   },

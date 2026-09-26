@@ -30,7 +30,10 @@
 		"unavailable": "利用不可",
 		"close": "閉じる",
 		"loadFailed": "このセクションを読み込めませんでした。再試行してください。",
-		"refreshFailed": "このセクションを更新できませんでした。前回のデータを表示しています。"
+		"refreshFailed": "このセクションを更新できませんでした。前回のデータを表示しています。",
+		"enableItem": "{{name}} を有効化",
+		"editItem": "{{name}} を編集",
+		"deleteItem": "{{name}} を削除"
 	},
 	"auth": {
 		"signIn": "ログイン",
@@ -301,10 +304,6 @@
 		"createKey": "キーを作成",
 		"createApiKey": "API キーを作成",
 		"createDescription": "Monoize API にアクセスするための新しい API キーを作成",
-		"yourApiKeys": "あなたの API キー",
-		"keysCreated": "{{count}} 件の API キー",
-		"keysCreated_plural": "{{count}} 件の API キー",
-		"noKeys": "API キーがありません。作成して始めましょう。",
 		"keyPrefix": "キー",
 		"expires": "有効期限",
 		"expiresInDays": "有効日数（任意）",
@@ -320,7 +319,6 @@
 		"editDescription": "API キーの設定を更新",
 		"balance": "残高",
 		"subAccountEnabled": "独立残高",
-		"inheritsUser": "ユーザーから継承",
 		"transferTitle": "残高の振替",
 		"transferDescription": "あなたのアカウントから {{name}} に振替",
 		"transferAmount": "金額 (USD)",
@@ -373,7 +371,15 @@
 		"useUserGroupHelpNamed": "有効にすると、このキーは所有ユーザーのグループに従います（現在：{{name}}）。",
 		"groups": "カスタムグループ",
 		"groupsHelp": "選択したグループは順番に試行され、1 番目が最優先です。ドラッグで並べ替えできます。",
-		"groupsRequired": "デフォルトグループを使用しない場合は、少なくとも 1 つのグループを選択してください。"
+		"groupsRequired": "デフォルトグループを使用しない場合は、少なくとも 1 つのグループを選択してください。",
+		"selectAll": "すべて選択",
+		"keyCount_other": "{{count}} 件",
+		"noKeysTitle": "API キーはまだありません",
+		"noKeysDescription": "キーを作成すると Monoize API を呼び出せます。",
+		"noMatchesTitle": "一致するキーはありません",
+		"noMatchesDescription": "名前またはプレフィックスに「{{query}}」を含むキーはありません。",
+		"usesAccountBalance": "アカウント残高を使用",
+		"expired": "期限切れ"
 	},
 	"settings": {
 		"title": "設定",
@@ -923,17 +929,17 @@
 		"searchPlaceholder": "モデルを検索...",
 		"modelId": "モデル",
 		"mode": "モード",
-		"inputCost": "入力コスト",
-		"outputCost": "出力コスト",
 		"context": "コンテキスト",
 		"maxOutput": "最大出力",
-		"provider": "プロバイダー",
 		"resultCount": "{{total}} 件中 {{filtered}} 件のモデルを表示",
 		"noModels": "利用可能なモデルがありません",
 		"noModelsDesc": "管理者がモデルデータベースを同期すると、モデルデータがここに表示されます。",
 		"noMatches": "一致するモデルがありません",
 		"noMatchesDesc": "検索条件に一致するモデルがありません。検索をクリアして利用可能なモデルを表示してください。",
-		"clearSearch": "検索をクリア"
+		"clearSearch": "検索をクリア",
+		"inputPerMillion": "入力（1M tokens あたり）",
+		"outputPerMillion": "出力（1M tokens あたり）",
+		"copyModelId": "{{model}} をコピー"
 	},
 	"requestLogs": {
 		"title": "リクエストログ",
@@ -1118,7 +1124,7 @@
 	},
 	"billingPlans": {
 		"title": "課金プラン",
-		"description": "サブスクライバーの残高を定期的にリセットするプラン",
+		"description": "スライディングウィンドウ制限のサブスクリプションプランと価格を管理します。",
 		"create": "プランを作成",
 		"edit": "プランを編集",
 		"name": "名前",
@@ -1137,9 +1143,9 @@
 		"invalidPeriod": "期間は正の整数秒である必要があります",
 		"nameRequired": "プラン名は必須です",
 		"emptyTitle": "課金プランはまだありません",
-		"emptyDescription": "プランを作成して、ユーザーに定期的な残高を提供しましょう。",
+		"emptyDescription": "プランを作成すると、ユーザーは公開中のプランをウォレットで購入でき、管理者は任意のプランを割り当てられます。",
 		"deleteTitle": "課金プランを削除しますか？",
-		"deleteDescription": "{{name}} を完全に削除します。ユーザーに割り当てられているプランは削除できません。",
+		"deleteDescription": "{{name}} と価格を完全に削除します。既存のサブスクリプションは期限まで現在のスナップショットを保持します。",
 		"reset": "RESET",
 		"resetTitle": "期間クォータをリセットしますか？",
 		"resetDescription": "{{name}} の対象サブスクライバーの残高をプラン付与額にリセットします。無効なユーザーと無制限ユーザーは対象外です。",
@@ -1162,8 +1168,13 @@
 		"invalidPrices": "各価格には有効な USD 金額と正の日数が必要です。公開プランには価格が必要です。",
 		"created": "プランを作成しました",
 		"updated": "プランを更新しました",
-		"groups": "グループ上限",
-		"groupsUnrestricted": "制限なし"
+		"groups": "利用可能なグループ",
+		"groupsUnrestricted": "制限なし",
+		"count_other": "{{count}} 件",
+		"listedState": "公開状態",
+		"unlisted": "非公開",
+		"priceOption_other": "{{price}} / {{count}} 日",
+		"removePrice": "価格 {{index}} を削除"
 	},
 	"wallet": {
 		"title": "ウォレット",
@@ -1196,7 +1207,6 @@
 		"loadErrorDescription": "再試行してください。ウォレットの他のセクションは利用できます。",
 		"retry": "再試行",
 		"activityTitle": "取引履歴",
-		"activityDescription": "支払い注文とウォレット残高の変更を確認します。",
 		"ordersTab": "チャージ注文",
 		"ledgerTab": "残高明細",
 		"ordersTitle": "チャージ注文",
@@ -1324,11 +1334,13 @@
 			"manual_refund_required": "先に手動返金を確認してください",
 			"refund_failed": "決済プロバイダの返金に失敗しました",
 			"not_found": "見つかりません"
-		}
+		},
+		"rate": "レート",
+		"rateValue": "1 USD = {{rate}} {{currency}}"
 	},
 	"adminDashboard": {
 		"title": "システムダッシュボード",
-		"subtitle": "システム状態、ユーザー使用ランキング、モデル/チャンネル健全性、レプリカ状態",
+		"subtitle": "Channel の健全性、消費、ユーザー使用量ランキング、ノード状態",
 		"systemStatus": "システム状態",
 		"nodeRole": "ノードロール",
 		"version": "バージョン",
@@ -1362,8 +1374,8 @@
 		"calls": "呼び出し数",
 		"cost": "コスト",
 		"noUsage": "過去24時間の使用なし",
-		"channelHealth": "モデル / チャンネル健全性",
-		"channel": "チャンネル",
+		"channelHealth": "モデル / Channel の健全性",
+		"channel": "Channel",
 		"weight": "重み",
 		"affinity": "アフィニティ",
 		"status": "状態",
@@ -1371,15 +1383,18 @@
 		"healthy": "正常",
 		"unhealthy": "異常",
 		"coolingDown": "クールダウン",
-		"noChannels": "チャンネル未設定",
+		"noChannels": "Channel が未設定です",
 		"healthEntries": "健全性エントリ",
 		"affinityEntries": "アフィニティバインディング",
 		"refresh": "更新",
-		"retry": "再試行",
 		"autoRefresh": "10秒ごとに自動更新",
 		"unauthorized": "管理者権限が必要",
 		"unauthorizedDescription": "このページは管理者のみアクセスできます。",
-		"loadFailed": "システム概要の読み込みに失敗"
+		"channelSummary_other": "{{count}} 件の Channel · 異常 {{unhealthy}} 件",
+		"callsCount_other": "{{count}} 回",
+		"systemDescription": "このノードの実行設定と内部キュー。",
+		"rankingDescription": "費用の高い順に最大 20 人を表示します。",
+		"replicaDescription": "レプリカのハートビートと送信待ちの計測ファイル。"
 	},
 	"groups": {
 		"title": "グループ管理",
@@ -1409,7 +1424,9 @@
 		"emptyDescription": "デフォルトグループは初期化時に作成されます。",
 		"invalidName": "名前は 1〜64 文字で入力してください",
 		"invalidDescription": "説明は 256 文字以内で入力してください",
-		"invalidSortOrder": "並び順は整数で入力してください"
+		"invalidSortOrder": "並び順は整数で入力してください",
+		"count_other": "{{count}} 件",
+		"userSelectableItem": "ユーザーが {{name}} を選択できるようにする"
 	},
 	"groupPicker": {
 		"selectPlaceholder": "グループを選択",

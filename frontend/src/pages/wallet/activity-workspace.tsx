@@ -1,13 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BookOpenText, ReceiptText } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActivityOrders } from "./activity-orders";
 import { ActivityLedger } from "./activity-ledger";
@@ -30,17 +24,9 @@ export function ActivityWorkspace({
       value={activeTab}
       onValueChange={(value) => setActiveTab(value as ActivityTab)}
     >
-      <Card role="region" aria-labelledby="wallet-activity-heading">
-        <CardHeader className="grid gap-4 border-b p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-          <div className="flex min-w-0 flex-col gap-1">
-            <CardTitle id="wallet-activity-heading" className="text-base">
-              {t("wallet.activityTitle")}
-            </CardTitle>
-            <CardDescription className="text-pretty leading-relaxed">
-              {t("wallet.activityDescription")}
-            </CardDescription>
-          </div>
-          <TabsList className="grid h-auto w-full grid-cols-2 sm:w-auto">
+      <Card role="region" aria-label={t("wallet.activityTitle")}>
+        <CardHeader className="border-b p-4">
+          <TabsList className="grid h-auto w-full grid-cols-2 sm:w-fit">
             <TabsTrigger
               value="orders"
               className="h-11 gap-2 [&_svg]:size-4 [&_svg]:shrink-0"

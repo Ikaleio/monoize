@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { motion, useReducedMotion } from "framer-motion";
-import { Undo2 } from "lucide-react";
+import { ReceiptText, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +8,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
+import { DataTableShell } from "@/components/ui/data-table-shell";
+import {
+  DataList,
+  DataListActions,
+  DataListBody,
+  DataListCell,
+  DataListHead,
+  DataListHeader,
+  DataListRow,
+} from "@/components/ui/data-list";
 import {
   Select,
   SelectContent,
@@ -31,7 +40,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { springs } from "@/components/ui/motion";
 import { OrderStatusBadge } from "@/components/recharge/order-status-badge";
 import { PaginationFooter } from "@/pages/wallet/pagination-footer";
 import { formatTime } from "@/pages/request-logs/utils";
@@ -46,31 +54,90 @@ import {
 
 const PAGE_SIZE = 20;
 
-/**
- * RC-M3 Orders tab: the admin view of all users' orders with status/username
- * filters and a per-row full refund limited to `succeeded` orders. Channels
- * without provider-side refund require the RC-R4 manual acknowledgment.
- */
-export function OrdersTab() {
+export interface OrderFilterState {
+  status: RechargeOrderStatus | "all";
+  username: string;
+}
+
+interface OrderFiltersProps {
+  value: OrderFilterState;
+  onChange: (next: OrderFilterState) => void;
+}
+
+/** RC-M3 status and username filters, rendered in the Payments toolbar row. */
+export function OrderFilters({ value, onChange }: OrderFiltersProps) {
   const { t } = useTranslation();
-  const reduced = useReducedMotion();
-  const [status, setStatus] = useState<string>("all");
-  const [usernameInput, setUsernameInput] = useState("");
-  const [username, setUsername] = useState("");
-  const [offset, setOffset] = useState(0);
+  const [usernameInput, setUsernameInput] = useState(value.username);
+
+  const applyUsername = () => {
+    const username = usernameInput.trim();
+    if (username !== value.username) onChange({ ...value, username });
+  };
+
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+      <Select
+        value={value.status}
+        onValueChange={(status) =>
+          onChange({
+            ...value,
+            status: ORDER_STATUSES.find((candidate) => candidate === status) ?? "all",
+          })
+        }
+      >
+        <SelectTrigger className="w-full sm:w-40" aria-label={t("payments.statusFilter")}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t("payments.statusAll")}</SelectItem>
+          {ORDER_STATUSES.map((status) => (
+            <SelectItem key={status} value={status}>
+              {t(`wallet.status.${status}`)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Input
+        value={usernameInput}
+        onChange={(event) => setUsernameInput(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") applyUsername();
+        }}
+        onBlur={applyUsername}
+        placeholder={t("payments.usernameFilterPlaceholder")}
+        aria-label={t("payments.usernameFilter")}
+        className="w-full sm:w-56"
+      />
+    </div>
+  );
+}
+
+interface OrdersTabProps {
+  filters: OrderFilterState;
+  offset: number;
+  onOffsetChange: (offset: number) => void;
+}
+
+/**
+ * RC-M3 Orders tab: the admin view of all users' orders with a per-row full
+ * refund limited to `succeeded` orders. Channels without provider-side refund
+ * require the RC-R4 manual acknowledgment.
+ */
+export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
+  const { t } = useTranslation();
   const [refundTarget, setRefundTarget] = useState<RechargeOrder | null>(null);
   const [manualChecked, setManualChecked] = useState(false);
   const [refunding, setRefunding] = useState(false);
 
-  const filters = useMemo(
+  const queryFilters = useMemo(
     () => ({
-      status: status === "all" ? undefined : (status as RechargeOrderStatus),
-      username: username || undefined,
+      status: filters.status === "all" ? undefined : filters.status,
+      username: filters.username || undefined,
     }),
-    [status, username],
+    [filters],
   );
-  const pageKey = rechargeOrdersSWRKey(PAGE_SIZE, offset, filters);
-  const { data, isLoading } = useRechargeOrders(PAGE_SIZE, offset, filters);
+  const pageKey = rechargeOrdersSWRKey(PAGE_SIZE, offset, queryFilters);
+  const { data, isLoading } = useRechargeOrders(PAGE_SIZE, offset, queryFilters);
 
   const needsManual = refundTarget
     ? !SUPPORTS_REFUND[refundTarget.channel_type_id]
@@ -103,151 +170,124 @@ export function OrdersTab() {
     }
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={status}
-          onValueChange={(value) => {
-            setStatus(value);
-            setOffset(0);
-          }}
-        >
-          <SelectTrigger className="h-9 w-40" aria-label={t("payments.statusFilter")}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">{t("payments.statusAll")}</SelectItem>
-            {ORDER_STATUSES.map((value) => (
-              <SelectItem key={value} value={value}>
-                {t(`wallet.status.${value}`)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          value={usernameInput}
-          onChange={(e) => setUsernameInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              setUsername(usernameInput.trim());
-              setOffset(0);
-            }
-          }}
-          onBlur={() => {
-            setUsername(usernameInput.trim());
-            setOffset(0);
-          }}
-          placeholder={t("payments.usernameFilterPlaceholder")}
-          aria-label={t("payments.usernameFilter")}
-          className="h-9 w-56"
-        />
-      </div>
-
-      {isLoading && !data ? (
-        <div className="flex flex-col gap-3" aria-busy="true">
+  if (isLoading && !data) {
+    return (
+      <DataTableShell aria-busy="true">
+        <div className="divide-y">
           {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-10 w-full" />
+            <div key={index} className="px-4 py-3">
+              <Skeleton className="h-6 w-full" />
+            </div>
           ))}
         </div>
-      ) : !data || data.orders.length === 0 ? (
-        <EmptyState variant="card" title={t("payments.noOrders")} />
-      ) : (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: reduced ? 0 : 0.25 }}
-          className="overflow-hidden rounded-lg border"
-        >
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-left text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">{t("common.created")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("payments.user")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("wallet.channelCol")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("wallet.credit")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("wallet.payment")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("common.status")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("wallet.orderId")}</th>
-                  <th className="px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {data.orders.map((order) => (
-                  <motion.tr
-                    key={order.id}
-                    layout={!reduced}
-                    initial={reduced ? { opacity: 0 } : { opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={reduced ? { duration: 0.15 } : springs.smooth}
-                    className="border-t transition-colors hover:bg-accent/40"
-                  >
-                    <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-muted-foreground">
+      </DataTableShell>
+    );
+  }
+
+  return (
+    <>
+      <DataTableShell
+        isEmpty={!data || data.orders.length === 0}
+        emptyState={
+          <EmptyState
+            icon={<ReceiptText className="size-10" aria-hidden="true" />}
+            title={t("payments.noOrders")}
+          />
+        }
+      >
+        <DataList columns="9.5rem minmax(0,1fr) minmax(0,1fr) 5.5rem 7rem 5rem 5.5rem 6.5rem">
+          <DataListHeader>
+            <DataListHead>{t("common.created")}</DataListHead>
+            <DataListHead>{t("payments.user")}</DataListHead>
+            <DataListHead>{t("wallet.channelCol")}</DataListHead>
+            <DataListHead align="end">{t("wallet.credit")}</DataListHead>
+            <DataListHead align="end">{t("wallet.payment")}</DataListHead>
+            <DataListHead>{t("common.status")}</DataListHead>
+            <DataListHead>{t("wallet.orderId")}</DataListHead>
+            <DataListHead align="end">{t("common.actions")}</DataListHead>
+          </DataListHeader>
+          <TooltipProvider delayDuration={200}>
+            <DataListBody aria-label={t("payments.ordersTab")}>
+              {data?.orders.map((order) => (
+                <DataListRow key={order.id}>
+                  <DataListCell label={t("common.created")}>
+                    <span className="tabular-nums text-muted-foreground">
                       {formatTime(order.created_at)}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      {order.username ?? (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5">{order.channel_name}</td>
-                    <td className="px-4 py-2.5 tabular-nums">${order.credit_usd}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 tabular-nums">
+                    </span>
+                  </DataListCell>
+                  <DataListCell primary>
+                    {order.username ? (
+                      <span className="block truncate font-medium" title={order.username}>
+                        {order.username}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </DataListCell>
+                  <DataListCell label={t("wallet.channelCol")}>
+                    <span className="block truncate" title={order.channel_name}>
+                      {order.channel_name}
+                    </span>
+                  </DataListCell>
+                  <DataListCell label={t("wallet.credit")} align="end">
+                    <span className="tabular-nums">${order.credit_usd}</span>
+                  </DataListCell>
+                  <DataListCell label={t("wallet.payment")} align="end">
+                    <span className="whitespace-nowrap tabular-nums">
                       {order.pay_amount} {order.pay_currency}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <OrderStatusBadge status={order.status} />
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <TooltipProvider delayDuration={200}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {order.id.slice(0, 8)}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <span className="font-mono">{order.id}</span>
-                            {order.error_code && (
-                              <span className="ml-2 text-destructive">
-                                {order.error_code}
-                              </span>
-                            )}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 px-2"
-                        disabled={order.status !== "succeeded"}
-                        onClick={() => {
-                          setManualChecked(false);
-                          setRefundTarget(order);
-                        }}
-                      >
-                        <Undo2 className="mr-1 h-4 w-4" />
-                        {t("payments.refund")}
-                      </Button>
-                    </td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-4 pb-3">
+                    </span>
+                  </DataListCell>
+                  <DataListCell label={t("common.status")}>
+                    <OrderStatusBadge status={order.status} />
+                  </DataListCell>
+                  <DataListCell label={t("wallet.orderId")}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="rounded-sm font-mono text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          {order.id.slice(0, 8)}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <span className="font-mono">{order.id}</span>
+                        {order.error_code && (
+                          <span className="ml-2 text-error-foreground">{order.error_code}</span>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </DataListCell>
+                  <DataListActions>
+                    <Button
+                      variant="ghost"
+                      className="h-11 px-3 sm:h-9"
+                      disabled={order.status !== "succeeded"}
+                      onClick={() => {
+                        setManualChecked(false);
+                        setRefundTarget(order);
+                      }}
+                    >
+                      <Undo2 aria-hidden="true" />
+                      {t("payments.refund")}
+                    </Button>
+                  </DataListActions>
+                </DataListRow>
+              ))}
+            </DataListBody>
+          </TooltipProvider>
+        </DataList>
+        <div className="border-t px-4 pb-3 empty:hidden">
+          {data ? (
             <PaginationFooter
               total={data.total}
               pageSize={PAGE_SIZE}
               offset={offset}
-              onOffsetChange={setOffset}
+              onOffsetChange={onOffsetChange}
             />
-          </div>
-        </motion.div>
-      )}
+          ) : null}
+        </div>
+      </DataTableShell>
 
       <AlertDialog
         open={refundTarget !== null}
@@ -294,6 +334,6 @@ export function OrdersTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Navigate, Outlet, Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -48,6 +49,7 @@ import { cn } from "@/lib/utils";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { UserCenterMenu } from "@/components/user-center-menu";
 import { springs } from "@/components/ui/motion";
+import { DashboardScrollParentContext } from "@/lib/dashboard-scroll";
 
 const navTransition = springs.snappy;
 
@@ -262,6 +264,7 @@ function AppSidebar() {
 export function DashboardLayout() {
   const { user, loading } = useAuth();
   const { t } = useTranslation();
+  const [mainPane, setMainPane] = useState<HTMLElement | null>(null);
 
   if (loading) {
     return (
@@ -293,8 +296,13 @@ export function DashboardLayout() {
       </SidebarTrigger>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 py-6 pt-16 lg:px-8 lg:pt-6">
-        <main className="mx-auto flex min-h-0 min-w-0 w-full max-w-6xl flex-1 flex-col overflow-y-auto">
-          <Outlet />
+        <main
+          ref={setMainPane}
+          className="mx-auto flex min-h-0 min-w-0 w-full max-w-6xl flex-1 flex-col overflow-y-auto"
+        >
+          <DashboardScrollParentContext.Provider value={mainPane}>
+            <Outlet />
+          </DashboardScrollParentContext.Provider>
         </main>
       </div>
     </SidebarProvider>

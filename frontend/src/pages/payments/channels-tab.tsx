@@ -1,12 +1,21 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { motion, useReducedMotion } from "framer-motion";
 import { CreditCard, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { DataTableShell } from "@/components/ui/data-table-shell";
+import {
+  DataList,
+  DataListActions,
+  DataListBody,
+  DataListCell,
+  DataListHead,
+  DataListHeader,
+  DataListRow,
+} from "@/components/ui/data-list";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,27 +26,27 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { springs } from "@/components/ui/motion";
 import type { PaymentChannel } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import {
   deletePaymentChannelOptimistic,
   updatePaymentChannelOptimistic,
   usePaymentChannels,
 } from "@/lib/swr";
-import { ChannelDialog } from "./channel-dialog";
+
+interface ChannelsTabProps {
+  onCreate: () => void;
+  onEdit: (channel: PaymentChannel) => void;
+}
 
 /**
- * RC-M2 Channels tab: full §9.2 listing with optimistic enabled toggle,
- * create/edit dialogs, and a delete confirmation naming the channel.
+ * RC-M2 Channels tab: full §9.2 listing with optimistic enabled toggle and a
+ * delete confirmation naming the channel. The page owns the create/edit dialog.
  */
-export function ChannelsTab() {
+export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
   const { t } = useTranslation();
-  const reduced = useReducedMotion();
   const { data, isLoading } = usePaymentChannels();
   const channels = useMemo(() => data ?? [], [data]);
-
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editTarget, setEditTarget] = useState<PaymentChannel | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PaymentChannel | null>(null);
 
   const toggleEnabled = async (channel: PaymentChannel, enabled: boolean) => {
@@ -63,116 +72,106 @@ export function ChannelsTab() {
     }
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button
-          onClick={() => {
-            setEditTarget(null);
-            setDialogOpen(true);
-          }}
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          {t("payments.create")}
-        </Button>
-      </div>
-
-      {isLoading ? (
-        <div className="flex flex-col gap-3" aria-busy="true">
+  if (isLoading) {
+    return (
+      <DataTableShell aria-busy="true">
+        <div className="divide-y">
           {Array.from({ length: 3 }).map((_, index) => (
-            <Skeleton key={index} className="h-12 w-full" />
+            <div key={index} className="px-4 py-3">
+              <Skeleton className="h-6 w-full" />
+            </div>
           ))}
         </div>
-      ) : channels.length === 0 ? (
-        <EmptyState
-          variant="card"
-          icon={<CreditCard className="h-10 w-10 text-muted-foreground" />}
-          title={t("payments.noChannelsTitle")}
-          description={t("payments.noChannelsDescription")}
-        />
-      ) : (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: reduced ? 0 : 0.25 }}
-          className="overflow-hidden rounded-lg border"
-        >
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-left text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">{t("payments.name")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("payments.type")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("payments.currency")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("payments.usdRate")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("payments.creditBounds")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("payments.enabled")}</th>
-                  <th className="px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {channels.map((channel) => (
-                  <motion.tr
-                    key={channel.id}
-                    layout={!reduced}
-                    initial={reduced ? { opacity: 0 } : { opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={reduced ? { duration: 0.15 } : springs.smooth}
-                    className="border-t transition-colors hover:bg-accent/40"
-                  >
-                    <td className="px-4 py-3 font-medium">{channel.name}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{channel.type_id}</td>
-                    <td className="px-4 py-3">{channel.currency}</td>
-                    <td className="px-4 py-3 tabular-nums">{channel.usd_rate}</td>
-                    <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                      ${channel.min_credit_usd} – ${channel.max_credit_usd}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Switch
-                        checked={channel.enabled}
-                        aria-label={t("payments.enabled")}
-                        onCheckedChange={(checked) => toggleEnabled(channel, checked)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-9"
-                          aria-label={t("common.edit")}
-                          onClick={() => {
-                            setEditTarget(channel);
-                            setDialogOpen(true);
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-9"
-                          aria-label={t("common.delete")}
-                          onClick={() => setDeleteTarget(channel)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </motion.div>
-      )}
+      </DataTableShell>
+    );
+  }
 
-      <ChannelDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        channel={editTarget}
-        channels={channels}
-      />
+  return (
+    <>
+      <DataTableShell
+        isEmpty={channels.length === 0}
+        emptyState={
+          <EmptyState
+            icon={<CreditCard className="size-10" aria-hidden="true" />}
+            title={t("payments.noChannelsTitle")}
+            description={t("payments.noChannelsDescription")}
+            action={
+              <Button onClick={onCreate}>
+                <Plus aria-hidden="true" />
+                {t("payments.create")}
+              </Button>
+            }
+          />
+        }
+      >
+        <DataList columns="minmax(0,1.2fr) 5rem 4.5rem minmax(0,1fr) minmax(0,1fr) 4.5rem 5rem">
+          <DataListHeader>
+            <DataListHead>{t("payments.name")}</DataListHead>
+            <DataListHead>{t("payments.type")}</DataListHead>
+            <DataListHead>{t("payments.currency")}</DataListHead>
+            <DataListHead align="end">{t("payments.rate")}</DataListHead>
+            <DataListHead align="end">{t("payments.creditBounds")}</DataListHead>
+            <DataListHead>{t("payments.enabled")}</DataListHead>
+            <DataListHead align="end">{t("common.actions")}</DataListHead>
+          </DataListHeader>
+          <DataListBody aria-label={t("payments.channelsTab")}>
+            {channels.map((channel) => (
+              <DataListRow key={channel.id}>
+                <DataListCell primary>
+                  <span
+                    className={cn("block truncate font-medium", !channel.enabled && "text-muted-foreground")}
+                    title={channel.name}
+                  >
+                    {channel.name}
+                  </span>
+                </DataListCell>
+                <DataListCell label={t("payments.type")}>
+                  <span className="font-mono">{channel.type_id}</span>
+                </DataListCell>
+                <DataListCell label={t("payments.currency")}>{channel.currency}</DataListCell>
+                <DataListCell label={t("payments.rate")} align="end">
+                  <span className="tabular-nums">
+                    {t("payments.rateValue", { rate: channel.usd_rate, currency: channel.currency })}
+                  </span>
+                </DataListCell>
+                <DataListCell label={t("payments.creditBounds")} align="end">
+                  <span className="tabular-nums">
+                    ${channel.min_credit_usd} – ${channel.max_credit_usd}
+                  </span>
+                </DataListCell>
+                <DataListCell label={t("payments.enabled")}>
+                  <Switch
+                    className="align-middle"
+                    checked={channel.enabled}
+                    aria-label={t("common.enableItem", { name: channel.name })}
+                    onCheckedChange={(checked) => toggleEnabled(channel, checked)}
+                  />
+                </DataListCell>
+                <DataListActions>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 touch-manipulation sm:size-9"
+                    aria-label={t("common.editItem", { name: channel.name })}
+                    onClick={() => onEdit(channel)}
+                  >
+                    <Pencil />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 touch-manipulation sm:size-9"
+                    aria-label={t("common.deleteItem", { name: channel.name })}
+                    onClick={() => setDeleteTarget(channel)}
+                  >
+                    <Trash2 className="text-error-foreground" />
+                  </Button>
+                </DataListActions>
+              </DataListRow>
+            ))}
+          </DataListBody>
+        </DataList>
+      </DataTableShell>
 
       <AlertDialog
         open={deleteTarget !== null}
@@ -193,6 +192,6 @@ export function ChannelsTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }

@@ -1,22 +1,18 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Activity,
-  AlertTriangle,
-  CopyPlus,
-  Network,
-  RefreshCw,
-} from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useAdminOverview } from "@/lib/swr";
 import { DEFAULT_SPEND_WINDOW, type SpendWindow } from "@/lib/spend-window";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
-import { PageWrapper, motion, transitions } from "@/components/ui/motion";
-import { CardsPageSkeleton } from "@/components/ui/page-skeleton";
-import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
+import { PageWrapper } from "@/components/ui/motion";
+import { PageHeaderSkeleton } from "@/components/ui/page-skeleton";
+import { QueryError } from "@/components/ui/query-error";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChannelHealthCard,
   ReplicaStatusCard,
@@ -24,8 +20,20 @@ import {
   UsageRankingCard,
 } from "@/pages/admin-dashboard/dashboard-sections";
 
-function formatNumber(value: number): string {
-  return value.toLocaleString("en-US");
+function SectionSkeleton({ rows, className }: { rows: number; className?: string }) {
+  return (
+    <Card className={className}>
+      <div className="flex flex-col gap-2 p-5">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-4 w-64 max-w-full" />
+      </div>
+      <div className="flex flex-col gap-3 border-t p-5">
+        {Array.from({ length: rows }, (_, index) => (
+          <Skeleton key={index} className="h-8 w-full" />
+        ))}
+      </div>
+    </Card>
+  );
 }
 
 export function AdminDashboardPage() {
@@ -33,28 +41,18 @@ export function AdminDashboardPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
   const [spendWindow, setSpendWindow] = useState<SpendWindow>(DEFAULT_SPEND_WINDOW);
-  const { data, error, isLoading, mutate } = useAdminOverview(spendWindow, {
+  const [refreshing, setRefreshing] = useState(false);
+  const { data, error, isLoading, isValidating, mutate } = useAdminOverview(spendWindow, {
     isPaused: () => !isAdmin,
   });
 
-  const tt = (key: string, fallback?: string): string => {
-    const translated = t(key, { defaultValue: fallback ?? key } as never);
-    return typeof translated === "string" ? translated : (fallback ?? key);
-  };
-
   if (!isAdmin) {
     return (
-      <PageWrapper className="h-full min-h-0 overflow-hidden">
+      <PageWrapper className="space-y-6">
+        <PageHeader title={t("adminDashboard.title")} />
         <EmptyState
-          title={tt(
-            "adminDashboard.unauthorized",
-            "Administrator access required",
-          )}
-          description={tt(
-            "adminDashboard.unauthorizedDescription",
-            "This page is only available to administrators.",
-          )}
-          className="h-full py-0"
+          title={t("adminDashboard.unauthorized")}
+          description={t("adminDashboard.unauthorizedDescription")}
         />
       </PageWrapper>
     );
@@ -62,102 +60,64 @@ export function AdminDashboardPage() {
 
   if (isLoading && !data) {
     return (
-      <PageWrapper className="h-full min-h-0 overflow-hidden space-y-4">
-        <CardsPageSkeleton />
-      </PageWrapper>
-    );
-  }
-
-  if (error && !data) {
-    return (
-      <PageWrapper className="h-full min-h-0 overflow-hidden">
-        <EmptyState
-          variant="card"
-          icon={<AlertTriangle className="h-8 w-8 text-destructive" />}
-          title={tt(
-            "adminDashboard.loadFailed",
-            "Failed to load system overview",
-          )}
-          description={
-            <span className="font-mono text-xs break-all">
-              {error instanceof Error
-                ? error.message
-                : tt("common.error", "Error")}
-            </span>
-          }
-          className="h-full py-0"
-        />
-        <div className="mt-3 flex justify-center">
-          <Button variant="outline" onClick={() => void mutate()}>
-            <RefreshCw data-icon />
-            {tt("adminDashboard.retry", "Retry")}
-          </Button>
+      <PageWrapper>
+        <div className="space-y-6" aria-busy="true">
+          <PageHeaderSkeleton />
+          <SectionSkeleton rows={5} />
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
+            <SectionSkeleton rows={4} className="lg:col-span-7" />
+            <SectionSkeleton rows={6} className="lg:col-span-5" />
+          </div>
         </div>
       </PageWrapper>
     );
   }
 
-  if (!data) return null;
+  // The 10-second poll also sets isValidating, so the button tracks only its own request.
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await mutate();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   return (
-    <PageWrapper className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <motion.header
-        initial={{ opacity: 0, y: -12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={transitions.normal}
-        className="shrink-0"
-      >
-        <PageHeader
-          title={tt("adminDashboard.title", "System Dashboard")}
-          description={tt(
-            "adminDashboard.subtitle",
-            "System status, user usage ranking, model/channel health and replica status",
-          )}
-        />
-      </motion.header>
+    <PageWrapper className="space-y-6">
+      <PageHeader
+        title={t("adminDashboard.title")}
+        description={t("adminDashboard.subtitle")}
+        actions={
+          <>
+            <span className="text-sm text-muted-foreground">{t("adminDashboard.autoRefresh")}</span>
+            <Button variant="outline" disabled={refreshing} onClick={() => void refresh()}>
+              <RefreshCw className={cn(refreshing && "motion-safe:animate-spin")} aria-hidden="true" />
+              {t("adminDashboard.refresh")}
+            </Button>
+          </>
+        }
+      />
 
-      <main className="min-h-0 flex-1 overflow-y-auto pr-1">
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <div className="contents lg:col-span-5 lg:flex lg:flex-col lg:gap-4">
-            <SystemStatusCard data={data} t={tt} />
-            <ReplicaStatusCard data={data} t={tt} />
-          </div>
-          <div className="contents lg:col-span-7 lg:flex lg:flex-col lg:gap-4">
-            <UsageRankingCard data={data} t={tt} />
-            <ChannelHealthCard
-              data={data}
-              t={tt}
-              spendWindow={spendWindow}
-              onSpendWindowChange={setSpendWindow}
-              pending={data.spend?.window !== spendWindow}
-            />
-          </div>
-        </div>
-      </main>
+      {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
 
-      <footer className="flex shrink-0 flex-col gap-3">
-        <Separator />
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
-          <Activity className="size-4" aria-hidden="true" />
-          <span>
-            {tt("adminDashboard.healthEntries", "Tracked health entries")}:{" "}
-            {formatNumber(data.system.channel_health_entries)}
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>
-            {tt("adminDashboard.affinityEntries", "Affinity bindings")}:{" "}
-            {formatNumber(data.system.channel_affinity_entries)}
-          </span>
-          <Button variant="ghost" size="sm" onClick={() => void mutate()}>
-            <CopyPlus data-icon="inline-start" />
-            {tt("adminDashboard.refresh", "Refresh")}
-          </Button>
-          <span className={cn("ml-auto hidden items-center gap-2 sm:flex")}>
-            <Network className="size-4" aria-hidden="true" />
-            {tt("adminDashboard.autoRefresh", "Auto refresh 10s")}
-          </span>
-        </div>
-      </footer>
+      {data ? (
+        <>
+          <ChannelHealthCard
+            data={data}
+            spendWindow={spendWindow}
+            onSpendWindowChange={setSpendWindow}
+            pending={data.spend?.window !== spendWindow}
+          />
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
+            <UsageRankingCard data={data} className="lg:col-span-7" />
+            <div className="flex flex-col gap-6 lg:col-span-5">
+              <SystemStatusCard data={data} />
+              <ReplicaStatusCard data={data} />
+            </div>
+          </div>
+        </>
+      ) : null}
     </PageWrapper>
   );
 }

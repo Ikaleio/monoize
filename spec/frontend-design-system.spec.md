@@ -42,7 +42,7 @@ DS4. Semantic status tokens MUST provide at least these forms:
 - soft background color;
 - border color.
 
-DS4b. Text rendered on semantic soft backgrounds MUST have a contrast ratio of at least 4.5:1 in both light and dark themes. This rule applies to `text-success-foreground` on `bg-success-soft`, `text-warning-foreground` on `bg-warning-soft`, and `text-info-foreground` on `bg-info-soft`.
+DS4b. Text rendered on semantic soft backgrounds MUST have a contrast ratio of at least 4.5:1 in both light and dark themes. This rule applies to `text-success-foreground` on `bg-success-soft`, `text-warning-foreground` on `bg-warning-soft`, and `text-info-foreground` on `bg-info-soft`. `StatusBadge variant="destructive"` MUST render with `border-error-border bg-error-soft text-error-foreground`. The `destructive` token is a solid-button background. It MUST NOT color text or icons in a data row.
 
 DS4c. Dark-theme semantic foreground tokens MUST be lighter than their matching soft background tokens when the soft token is a dark surface. A dark foreground on a dark semantic soft surface is invalid.
 
@@ -110,6 +110,8 @@ DS19. Repeated table surfaces MUST use shared table shell components when the la
 
 DS19a. A table shell with `isEmpty = true` and `emptyState` provided MUST render the empty state instead of the table surface.
 
+DS19c. The table shell surface MUST clip its content with `overflow: clip` so that it does not establish a scroll container. A sticky descendant MUST remain sticky relative to the dashboard main pane.
+
 DS19b. Table toolbar search controls MUST support an inline leading search icon without changing the responsive width requirement in DS22.
 
 DS20. Standard table rows MUST use `hover:bg-muted/50` for hover feedback.
@@ -121,6 +123,31 @@ DS22. Search inputs in table toolbars MUST use responsive width: full width belo
 DS22a. Shared virtual table header cells SHOULD use `h-9 px-3 text-xs font-medium text-muted-foreground`.
 
 DS22b. Shared virtual table body cells SHOULD use `px-3 py-2 align-middle` unless the table is explicitly high-density.
+
+### 6.1 Responsive Data Lists
+
+DS22c. `components/ui/data-list.tsx` MUST export `DataList`, `DataListHeader`, `DataListHead`, `DataListBody`, `DataListRow`, `DataListCell`, and `DataListActions`. `DataList` MUST accept a `columns` string. The header and every row MUST use that string as their `grid-template-columns` value in wide mode. Because the header and each row are independent grids, every track in `columns` MUST be either a fixed length or `minmax(0, <flex>)`. Content-sized tracks (`auto`, `min-content`, `max-content`, `fit-content()`) MUST NOT appear. In wide mode, the header cell and every body cell of one column MUST share the same left edge (±1 CSS pixel).
+
+DS22d. `DataList` MUST set `container-type: inline-size` on its root. Let `w` be the root content width.
+
+- If `w < 36rem`, every cell MUST occupy its own line.
+- If `36rem <= w < 56rem`, primary cells and action groups MUST span the full row. Other cells MUST flow into two equal columns.
+- Below wide mode, a primary cell MUST render before every other cell of its row, and the action group MUST render after every other cell.
+- If `w >= 56rem` (wide mode), cells MUST align to `columns`, and the header MUST be visible.
+
+DS22e. Below wide mode, the header MUST NOT render. A `DataListCell` with a `label` MUST render the label before its value on the same line, with the value at the inline end. In wide mode, the label MUST be visually hidden and remain available to assistive technology. The header MUST be hidden from assistive technology in every mode.
+
+DS22f. `DataListHead` and `DataListCell` MUST accept `align = "start" | "end"`. In wide mode, a header cell and the body cells of the same column MUST use the same text alignment.
+
+DS22g. Header labels MUST use `text-xs font-medium text-muted-foreground`. Row cells MUST use `text-sm`. Rows MUST use `px-4 py-3`, `divide-y` separators, and `hover:bg-muted/50`. Call sites MUST NOT override row padding or cell font size.
+
+DS22h. `DataListBody` and `DataListRow` MUST forward refs and unknown props to `ul` and `li` elements, so that a virtualization library can supply them as list and item components. `DataListRow` MUST support `asChild` composition.
+
+DS22i. `DataListActions` MUST end-align its controls in every mode. Below wide mode, it MUST occupy the last line of the row.
+
+DS22j. A `DataList` MUST NOT establish a horizontal or vertical scroll container. Content that exceeds its column MUST truncate or wrap inside the cell.
+
+DS22k. `components/ui/data-list-virtual.tsx` MUST export `virtualDataListComponents`, a `Virtuoso` `components` object whose `List` renders `DataListBody` and whose `Item` renders `DataListRow`. `Item` MUST forward only `style`, `data-index`, `data-item-index`, `data-known-size`, and `children` to the row element. `List` MUST set the list's accessible name from `context.label`. Every virtualized `DataList` MUST use this object instead of page-local adapters.
 
 ## 7. Dialogs and Confirmation
 

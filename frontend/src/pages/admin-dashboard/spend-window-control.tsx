@@ -16,7 +16,7 @@ interface SpendWindowControlProps {
 export function SpendWindowControl({ value, onChange }: SpendWindowControlProps) {
   const { t } = useTranslation();
   return (
-    <ButtonGroup aria-label={t("adminDashboard.spendWindowAria", "Spend window")}>
+    <ButtonGroup aria-label={t("adminDashboard.spendWindowAria")}>
       {SPEND_WINDOWS.map((window) => (
         <Button
           key={window}
@@ -25,10 +25,7 @@ export function SpendWindowControl({ value, onChange }: SpendWindowControlProps)
           variant="outline"
           aria-pressed={value === window}
           onClick={() => onChange(window)}
-          className={cn(
-            "h-7 px-2.5 text-xs tabular-nums",
-            value === window && "bg-accent text-accent-foreground"
-          )}
+          className={cn("px-3 tabular-nums", value === window && "bg-accent text-accent-foreground")}
         >
           {window}
         </Button>

@@ -15,7 +15,7 @@ const DataTableShell = React.forwardRef<HTMLDivElement, DataTableShellProps>(
   ({ className, toolbar, emptyState, isEmpty = false, children, ...props }, ref) => (
     <div ref={ref} className={cn("space-y-3", className)} {...props}>
       {toolbar ? <div className="flex flex-wrap items-center justify-between gap-3">{toolbar}</div> : null}
-      {isEmpty && emptyState ? emptyState : <Card className="overflow-hidden">{children}</Card>}
+      {isEmpty && emptyState ? emptyState : <Card className="overflow-clip">{children}</Card>}
     </div>
   )
 );

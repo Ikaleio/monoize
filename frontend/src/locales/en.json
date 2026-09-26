@@ -30,7 +30,10 @@
 		"unavailable": "Unavailable",
 		"close": "Close",
 		"loadFailed": "Could not load this section. Try again.",
-		"refreshFailed": "Could not refresh this section. Previous data is still shown."
+		"refreshFailed": "Could not refresh this section. Previous data is still shown.",
+		"enableItem": "Enable {{name}}",
+		"editItem": "Edit {{name}}",
+		"deleteItem": "Delete {{name}}"
 	},
 	"auth": {
 		"signIn": "Sign In",
@@ -301,10 +304,6 @@
 		"createKey": "Create Key",
 		"createApiKey": "Create API Key",
 		"createDescription": "Create a new API key for accessing the Monoize API",
-		"yourApiKeys": "Your API Keys",
-		"keysCreated": "{{count}} API key created",
-		"keysCreated_plural": "{{count}} API keys created",
-		"noKeys": "No API keys yet. Create one to get started.",
 		"keyPrefix": "Key",
 		"expires": "Expires",
 		"expiresInDays": "Expires in (days, optional)",
@@ -320,7 +319,6 @@
 		"editDescription": "Update API key settings",
 		"balance": "Balance",
 		"subAccountEnabled": "Independent Balance",
-		"inheritsUser": "Inherits User",
 		"transferTitle": "Transfer Balance",
 		"transferDescription": "Transfer balance from your account to {{name}}",
 		"transferAmount": "Amount (USD)",
@@ -376,7 +374,16 @@
 		"useUserGroupHelpNamed": "When enabled, this key follows its owner's group (currently: {{name}}).",
 		"groups": "Custom groups",
 		"groupsHelp": "Selected groups are tried in order; position 1 first. Drag to reorder.",
-		"groupsRequired": "Select at least one group when not using the user's default group."
+		"groupsRequired": "Select at least one group when not using the user's default group.",
+		"selectAll": "Select all",
+		"keyCount_one": "{{count}} key",
+		"keyCount_other": "{{count}} keys",
+		"noKeysTitle": "No API keys yet",
+		"noKeysDescription": "Create a key to call the Monoize API.",
+		"noMatchesTitle": "No matching keys",
+		"noMatchesDescription": "No key name or prefix contains “{{query}}”.",
+		"usesAccountBalance": "Uses account balance",
+		"expired": "Expired"
 	},
 	"settings": {
 		"title": "Settings",
@@ -926,17 +933,17 @@
 		"searchPlaceholder": "Search models...",
 		"modelId": "Model",
 		"mode": "Mode",
-		"inputCost": "Input Cost",
-		"outputCost": "Output Cost",
 		"context": "Context",
 		"maxOutput": "Max Output",
-		"provider": "Provider",
 		"resultCount": "Showing {{filtered}} of {{total}} models",
 		"noModels": "No models available",
 		"noModelsDesc": "Model data will appear here once the administrator syncs the model database.",
 		"noMatches": "No matching models",
 		"noMatchesDesc": "No model matches your search. Clear the search to see available models.",
-		"clearSearch": "Clear search"
+		"clearSearch": "Clear search",
+		"inputPerMillion": "Input (per 1M tokens)",
+		"outputPerMillion": "Output (per 1M tokens)",
+		"copyModelId": "Copy {{model}}"
 	},
 	"requestLogs": {
 		"title": "Request Logs",
@@ -1121,7 +1128,7 @@
 	},
 	"billingPlans": {
 		"title": "Billing Plans",
-		"description": "Subscription plans that periodically reset subscriber balances",
+		"description": "Manage sliding-window subscription plans and their prices.",
 		"create": "Create Plan",
 		"edit": "Edit Plan",
 		"name": "Name",
@@ -1140,9 +1147,9 @@
 		"invalidPeriod": "Period must be a positive integer number of seconds",
 		"nameRequired": "Plan name is required",
 		"emptyTitle": "No billing plans yet",
-		"emptyDescription": "Create a plan to give users a recurring balance.",
+		"emptyDescription": "Create a plan. Users can buy listed plans in the wallet, and administrators can assign any plan.",
 		"deleteTitle": "Delete billing plan?",
-		"deleteDescription": "This will permanently delete {{name}}. Plans assigned to users cannot be deleted.",
+		"deleteDescription": "This permanently deletes {{name}} and its prices. Existing subscriptions keep their current snapshot until they expire.",
 		"reset": "RESET",
 		"resetTitle": "Reset period quota?",
 		"resetDescription": "Reset every eligible subscriber of {{name}} to the plan grant amount. Disabled and unlimited users are skipped.",
@@ -1165,8 +1172,15 @@
 		"invalidPrices": "Each price needs a valid USD amount and a positive whole-day duration. Listed plans need a price.",
 		"created": "Plan created",
 		"updated": "Plan updated",
-		"groups": "Group ceiling",
-		"groupsUnrestricted": "Unrestricted"
+		"groups": "Eligible groups",
+		"groupsUnrestricted": "Unrestricted",
+		"count_one": "{{count}} plan",
+		"count_other": "{{count}} plans",
+		"listedState": "Listing",
+		"unlisted": "Unlisted",
+		"priceOption_one": "{{price}} / {{count}} day",
+		"priceOption_other": "{{price}} / {{count}} days",
+		"removePrice": "Remove price {{index}}"
 	},
 	"wallet": {
 		"title": "Wallet",
@@ -1199,7 +1213,6 @@
 		"loadErrorDescription": "Try again. The other wallet sections remain available.",
 		"retry": "Try again",
 		"activityTitle": "Wallet activity",
-		"activityDescription": "Track payments and every wallet balance change.",
 		"ordersTab": "Recharge orders",
 		"ledgerTab": "Balance ledger",
 		"ordersTitle": "Recharge orders",
@@ -1327,11 +1340,13 @@
 			"manual_refund_required": "Confirm the manual refund first",
 			"refund_failed": "The payment provider refund failed",
 			"not_found": "Not found"
-		}
+		},
+		"rate": "Rate",
+		"rateValue": "1 USD = {{rate}} {{currency}}"
 	},
 	"adminDashboard": {
 		"title": "System Dashboard",
-		"subtitle": "System status, user usage ranking, model/channel health and replica status",
+		"subtitle": "Channel health, spend, user usage ranking, and node status",
 		"systemStatus": "System Status",
 		"nodeRole": "Node role",
 		"version": "Version",
@@ -1378,11 +1393,16 @@
 		"healthEntries": "Tracked health entries",
 		"affinityEntries": "Affinity bindings",
 		"refresh": "Refresh",
-		"retry": "Retry",
 		"autoRefresh": "Auto refresh 10s",
 		"unauthorized": "Administrator access required",
 		"unauthorizedDescription": "This page is only available to administrators.",
-		"loadFailed": "Failed to load system overview"
+		"channelSummary_one": "{{count}} Channel · {{unhealthy}} unhealthy",
+		"channelSummary_other": "{{count}} Channels · {{unhealthy}} unhealthy",
+		"callsCount_one": "{{count}} call",
+		"callsCount_other": "{{count}} calls",
+		"systemDescription": "Runtime configuration and internal queues of this node.",
+		"rankingDescription": "Sorted by cost; shows at most 20 users.",
+		"replicaDescription": "Replica heartbeats and metering files waiting to ship."
 	},
 	"groups": {
 		"title": "Groups",
@@ -1412,7 +1432,10 @@
 		"emptyDescription": "The system creates the default group during initialization.",
 		"invalidName": "Name must be 1-64 characters",
 		"invalidDescription": "Description must be at most 256 characters",
-		"invalidSortOrder": "Sort order must be an integer"
+		"invalidSortOrder": "Sort order must be an integer",
+		"count_one": "{{count}} group",
+		"count_other": "{{count}} groups",
+		"userSelectableItem": "Allow users to select {{name}}"
 	},
 	"groupPicker": {
 		"selectPlaceholder": "Select a group",

@@ -2,10 +2,18 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
-import { CalendarClock, CreditCard, ReceiptText } from "lucide-react";
+import { ReceiptText } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DataList,
+  DataListBody,
+  DataListCell,
+  DataListHead,
+  DataListHeader,
+  DataListRow,
+} from "@/components/ui/data-list";
 import { springs } from "@/components/ui/motion";
 import {
   Tooltip,
@@ -79,16 +87,17 @@ export function ActivityOrders({
         active || reduced ? { opacity: 1, x: 0 } : { opacity: 0, x: -20 }
       }
       transition={reduced ? { duration: 0 } : springs.gentle}
-      className="p-5"
     >
       {isLoading ? (
-        <div className="flex flex-col gap-2" aria-busy="true">
+        <div className="flex flex-col gap-2 p-4" aria-busy="true">
           {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-20 w-full lg:h-14" />
+            <Skeleton key={index} className="h-14 w-full" />
           ))}
         </div>
       ) : error && !data ? (
-        <WalletFeedback onRetry={mutate} />
+        <div className="p-4">
+          <WalletFeedback onRetry={mutate} />
+        </div>
       ) : !data?.orders.length ? (
         <EmptyState
           variant="inline"
@@ -97,93 +106,82 @@ export function ActivityOrders({
           title={t("wallet.noOrders")}
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          <div className="hidden grid-cols-[minmax(0,1.35fr)_minmax(7rem,0.55fr)_minmax(7rem,0.55fr)_minmax(9rem,0.75fr)_5rem] gap-4 border-b px-3 pb-2 text-xs font-medium text-muted-foreground lg:grid">
-            <span>{t("wallet.payment")}</span>
-            <span className="text-right">{t("wallet.credit")}</span>
-            <span>{t("wallet.statusCol")}</span>
-            <span>{t("wallet.createdAt")}</span>
-            <span>{t("wallet.orderId")}</span>
+        <>
+          <DataList columns="minmax(0,1.35fr) 7rem 6.5rem 10rem 5.5rem">
+            <DataListHeader>
+              <DataListHead>{t("wallet.payment")}</DataListHead>
+              <DataListHead align="end">{t("wallet.credit")}</DataListHead>
+              <DataListHead>{t("wallet.statusCol")}</DataListHead>
+              <DataListHead>{t("wallet.createdAt")}</DataListHead>
+              <DataListHead>{t("wallet.orderId")}</DataListHead>
+            </DataListHeader>
+            <TooltipProvider delayDuration={200}>
+              <DataListBody aria-label={t("wallet.ordersTitle")}>
+                {data.orders.map((order, index) => (
+                  <DataListRow
+                    key={order.id}
+                    asChild
+                    className={cn(order.id === highlightedOrderId && "bg-info-soft")}
+                  >
+                    <motion.li
+                      layout={!reduced}
+                      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={
+                        reduced
+                          ? { duration: 0 }
+                          : { ...springs.gentle, delay: Math.min(index * 0.03, 0.18) }
+                      }
+                    >
+                      <DataListCell primary>
+                        <span className="block truncate font-medium" title={order.channel_name}>
+                          {order.channel_name}
+                        </span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {order.pay_amount} {order.pay_currency}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("wallet.credit")} align="end">
+                        <span className="font-medium tabular-nums">${order.credit_usd}</span>
+                      </DataListCell>
+                      <DataListCell label={t("wallet.statusCol")}>
+                        <OrderStatusBadge status={order.status} />
+                      </DataListCell>
+                      <DataListCell label={t("wallet.createdAt")}>
+                        <span className="tabular-nums text-muted-foreground">
+                          {formatTime(order.created_at)}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("wallet.orderId")}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              className="inline-flex min-h-11 items-center rounded-sm font-mono text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-0"
+                            >
+                              {order.id.slice(0, 8)}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <span className="font-mono">{order.id}</span>
+                          </TooltipContent>
+                        </Tooltip>
+                      </DataListCell>
+                    </motion.li>
+                  </DataListRow>
+                ))}
+              </DataListBody>
+            </TooltipProvider>
+          </DataList>
+          <div className="border-t px-4 pb-3 empty:hidden">
+            <PaginationFooter
+              total={data.total}
+              pageSize={pageSize}
+              offset={offset}
+              onOffsetChange={onOffsetChange}
+            />
           </div>
-
-          <motion.ul layout={!reduced} className="divide-y">
-            {data.orders.map((order, index) => (
-              <motion.li
-                key={order.id}
-                layout={!reduced}
-                initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={
-                  reduced
-                    ? { duration: 0 }
-                    : { ...springs.gentle, delay: Math.min(index * 0.03, 0.18) }
-                }
-                className={cn(
-                  "grid gap-3 rounded-md px-3 py-3 transition-colors hover:bg-muted/50 lg:grid-cols-[minmax(0,1.35fr)_minmax(7rem,0.55fr)_minmax(7rem,0.55fr)_minmax(9rem,0.75fr)_5rem] lg:items-center lg:gap-4",
-                  order.id === highlightedOrderId && "bg-info-soft",
-                )}
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                    <CreditCard className="size-4" aria-hidden="true" />
-                  </span>
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate text-sm font-medium">
-                      {order.channel_name}
-                    </span>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {order.pay_amount} {order.pay_currency}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-baseline justify-between gap-3 lg:block lg:text-right">
-                  <span className="text-sm text-muted-foreground lg:hidden">
-                    {t("wallet.credit")}
-                  </span>
-                  <span className="font-display text-lg font-semibold tabular-nums">
-                    +${order.credit_usd}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 lg:block">
-                  <span className="text-sm text-muted-foreground lg:hidden">
-                    {t("wallet.statusCol")}
-                  </span>
-                  <OrderStatusBadge status={order.status} />
-                </div>
-
-                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
-                  <CalendarClock className="size-4" aria-hidden="true" />
-                  {formatTime(order.created_at)}
-                </span>
-
-                <TooltipProvider delayDuration={200}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="inline-flex min-h-11 items-center font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:min-h-0"
-                      >
-                        {order.id.slice(0, 8)}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <span className="font-mono">{order.id}</span>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </motion.li>
-            ))}
-          </motion.ul>
-
-          <PaginationFooter
-            total={data.total}
-            pageSize={pageSize}
-            offset={offset}
-            onOffsetChange={onOffsetChange}
-          />
-        </div>
+        </>
       )}
     </motion.section>
   );

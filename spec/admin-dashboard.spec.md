@@ -111,6 +111,12 @@ empty string or any other value MUST return HTTP 400, code
 `invalid_spend_window`, and `param = "spend_window"` before executing any
 usage-aggregation database query.
 
+AD-2b. The in-memory channel health state stores unix seconds. The endpoint MUST
+multiply `last_success_at`, `cooldown_until`, and `last_probe_at` by 1000 before
+serialization, so that every AD-2 health timestamp is in unix milliseconds.
+`cooldown_active` MUST be true exactly when `cooldown_until` is later than the
+request time.
+
 AD-3. The endpoint MUST NOT expose credentials: no channel API keys, no
 provider API keys, no database passwords, no replica tokens.
 
@@ -129,86 +135,104 @@ exclusively for admin-role sessions (same role predicate as the existing admin
 nav items). Direct navigation by a non-admin MUST show an unauthorized/empty
 state without calling the admin endpoint.
 
-ADF-2. The page MUST render four card sections. At viewport widths below the
-`lg` breakpoint, the cards MUST use this single-column order: System status,
-User usage ranking, Model/channel health, Replica status.
+ADF-2. The page MUST render inside the dashboard main pane (`dashboard-ui-layout.spec.md`
+DL7). It MUST NOT render an additional `main` element, an internal vertical scroll
+container, or a fixed footer. It MUST render, in order:
 
-At viewport widths at or above the `lg` breakpoint, the cards MUST use two
-independently stacked columns. The left column MUST occupy 5 of 12 grid columns
-and MUST contain System status followed by Replica status. The right column
-MUST occupy 7 of 12 grid columns and MUST contain User usage ranking followed by
-Model/channel health. A short card MUST NOT force the next card in the same
-column to align below a taller card in the other column.
+1. the shared `PageHeader` with the localized title and description. Its action area
+   MUST contain an outline Refresh button and the muted localized text "Auto refresh
+   10s". The button MUST revalidate the overview SWR key and MUST be disabled while the
+   revalidation it started is in flight. The 10-second poll MUST NOT disable the button;
+2. the Model/channel health card, spanning the full content width;
+3. a grid. At viewport widths at or above `lg`, the grid MUST have 12 columns. The left
+   column MUST occupy 7 columns and contain User usage ranking. The right column MUST
+   occupy 5 columns and contain System status followed by Replica status. Each column
+   MUST stack independently.
 
-ADF-3. System status card MUST show: node role, version, uptime (humanized,
-e.g. `2d 4h 12m`), listen address, metrics path, database backend, redacted
-DSN, and upstream proxy presence.
+At viewport widths below `lg`, the cards MUST use this single-column order:
+Model/channel health, User usage ranking, System status, Replica status.
 
-ADF-4. User usage ranking card MUST render a table of at most 20 rows with
-columns: rank, username (or user id when username is null), call count, and
-cost formatted as USD with 6 fractional digits. Rows MUST be ordered as the
-endpoint returns them.
+ADF-2a. Each card MUST render a `CardTitle`, a localized `CardDescription`, and its
+content. The System status, User usage ranking, and Replica status descriptions MUST be
+one sentence each; the health card description is the ADF-5 summary. A card title MUST
+NOT contain an icon. A card description MUST NOT repeat a value shown inside the card.
 
-ADF-4a. The User usage ranking table MUST have a fixed header and a bounded
-data-row viewport. The viewport MUST virtualize its rows and MUST scroll
-vertically when the rendered row height exceeds its bound. The table MUST
-preserve horizontal scrolling when its columns do not fit the card width.
-The table height MUST equal `min(40 + users_ranking.length * 44, 260)` CSS
-pixels. The fixed header height MUST be 40 CSS pixels. Each data row height
-MUST be 44 CSS pixels.
+ADF-3. The System status card MUST render key-value rows in this order: node role,
+version, uptime (humanized, e.g. `2d 4h 12m`), started at, listen address, metrics
+path, database (backend and redacted DSN), egress proxy (URL or `—`), pending request
+logs, SSE connections, routing config revision, tracked health entries, and affinity
+bindings. Values that are technical identifiers (version, listen address, metrics
+path, database, egress proxy, routing revision) MUST use the monospace font. Counts
+and durations MUST use the body font with tabular numerals.
 
-ADF-5. Model/channel health card MUST render one row per channel with six
-columns: Channel, Weight, Affinity, Status, Spend, and Last probe. The
-Channel column MUST show the channel name and provider name. The Affinity
-column MUST show `auto` when auto session affinity is enabled and `-` otherwise.
-The Status column MUST show disabled, healthy, unhealthy, or cooling-down. The
-Spend column MUST show the selected-window cost formatted as USD with 2
-fractional digits and the selected-window call count. The Last probe column
-MUST show the probe time.
-Health status MUST derive from `enabled`, `healthy`, and `cooldown_until`: a channel with
-`cooldown_until > now` renders as cooling-down regardless of `healthy`. When
-`unhealthy_models` is non-empty, the status cell MUST list those model ids.
-The card header MUST show the process-wide `spend.cost_nano_usd` and
-`spend.calls` totals for the selected window. The title row MUST include a
-segmented spend-window control with the literal ASCII labels `24h`, `3d`,
-`7d`, `14d`, and `30d`, in that order, defaulting to `24h`. These labels are
-canonical product tokens and MUST NOT be translated. The selection MUST be
-held only in React component state. The header MUST also show a localized
-note that the window is rolling and ends now, and that it does not reset at
-midnight. The title row MUST wrap (`flex-wrap`) so the control remains usable
-on narrow widths.
+ADF-4. The User usage ranking card title MUST state the 24-hour window. Its description
+MUST state the sort order and the 20-user limit without repeating the window. The card
+MUST render a semantic table built from the shared `Table` primitives with columns:
+rank, username (or user id in monospace when username is null), call count, and cost
+formatted as USD with 6 fractional digits. Call count and cost MUST be end-aligned in
+both header and body cells. Rows MUST be ordered as the endpoint returns them and MUST
+use `user_id` as their key. The table MUST NOT have a bounded viewport or virtualized
+rows, because AD-2 bounds the ranking to 20 rows. An empty ranking MUST render the
+localized no-usage state.
 
-ADF-5a. The Model/channel health table MUST have a fixed header and a bounded
-data-row viewport. The viewport MUST virtualize its rows and MUST scroll
-vertically when the rendered row height exceeds its bound. The table MUST
-preserve horizontal scrolling when its columns do not fit the card width.
-The table height MUST equal `min(40 + channel_health.length * 64, 360)` CSS
-pixels. The fixed header height MUST be 40 CSS pixels. Each data row height
-MUST be 64 CSS pixels.
+ADF-5. The Model/channel health card header MUST render, on its first row, the title,
+the summary "{total} channels · {unhealthy} unhealthy", and at the inline end the
+segmented spend-window control. `unhealthy` counts channels whose derived status is
+unhealthy or cooling-down. The control MUST use the literal ASCII labels `24h`, `3d`,
+`7d`, `14d`, and `30d`, in that order, default to `24h`, expose `aria-pressed` on each
+button, and render labels at 0.875rem or larger. These labels MUST NOT be translated.
+The selection MUST be held only in React component state. The first row MUST wrap so
+the control remains usable on narrow widths. The second row MUST show the process-wide
+`spend.cost_nano_usd` (USD, 2 fractional digits), `spend.calls`, and a localized note
+that the window is rolling, ends now, and does not reset at midnight.
 
-ADF-5b. Each virtualized table MUST render semantic `table`, `thead`, `tbody`,
-`tr`, `th`, and `td` elements. Each row MUST use a stable endpoint identifier
-as its virtual item key. The User usage ranking table MUST use `user_id`. The
-Model/channel health table MUST use `channel_id`.
+ADF-5a. The health rows MUST render through the `DataList` primitives
+(`frontend-design-system.spec.md` §6.1). In wide mode, the columns MUST be, in order:
+Channel (channel name, and provider name on a second muted line), Weight (end-aligned),
+Affinity (`auto` as plain text when auto session affinity is enabled, `—` otherwise),
+Status, Spend (end-aligned; selected-window cost with 2 fractional digits, and the call
+count on a second muted line), and Last probe (end-aligned timestamp or `—`). At a
+content width of 1118 CSS pixels, every column MUST be visible without horizontal scrolling.
 
-ADF-6. Replica status card MUST render the node role, ingest-enabled state,
-spool pending count, and spool pending bytes. When the node is a primary and
-ingest is disabled, the card MUST state that no replica token is configured
-and there is nothing to monitor. When ingest is enabled, the card MUST list
-every object in `replica.replicas` with hostname, listen address, version,
-uptime, last-seen time, spool pending files/bytes, and a stale/live badge.
-An enabled ingest with an empty `replicas` array MUST state that no replica
-has heartbeated yet.
+ADF-5b. Status MUST derive from `cooldown_active`, `enabled`, and `healthy`, in this order.
+The client MUST use the server-computed `cooldown_active` (AD-2b) instead of comparing
+`cooldown_until` with the client clock. `cooldown_active = true` renders cooling-down
+(`StatusBadge variant="warning"`);
+otherwise `enabled = false` renders disabled (`Badge variant="secondary"`); otherwise
+`healthy` renders healthy (`StatusBadge variant="success"`) or unhealthy
+(`StatusBadge variant="destructive"`). When `unhealthy_models` is non-empty, the status
+cell MUST list those model ids in monospace `text-error-foreground`, truncated to one
+line with the full list in the `title` attribute.
 
-ADF-7. Data fetching MUST use SWR with a 10-second refresh interval, skeleton
-fallbacks on first load, and an error state with retry on failure. Mutations
-do not exist on this page. The SWR cache key MUST include the selected
-`spend_window`. The hook MUST set `keepPreviousData: true`. A spend-window
-switch MUST NOT show a skeleton. While a fetch for a newly selected window is
-in flight, only the Model/channel health card content MUST dim (`opacity-60`);
-the spend-window control MUST remain fully opaque. Dim MUST apply only when
-`data.spend.window` differs from the selected window so a same-window
+ADF-5c. The health list MUST be virtualized with `Virtuoso`, using
+`virtualDataListComponents` and the DL7b main pane as `customScrollParent`. Its height
+MUST equal the height of its rendered rows. In wide mode, its header row MUST be sticky
+at the top of the main pane. Each row MUST use `channel_id` as its virtual item key. An
+empty `channel_health` array MUST render the localized no-channels state.
+
+ADF-6. The Replica status card MUST render key-value rows for node role, replica ingest
+(`StatusBadge variant="success"` when enabled, muted text when disabled), spool pending
+count, and spool pending bytes. On a replica node, it MUST render only node role and the
+two spool rows. When the node is a primary and ingest is disabled, the card MUST state
+that no replica token is configured and there is nothing to monitor. When ingest is
+enabled, the card MUST list every object in `replica.replicas` with hostname (or id),
+listen address, a live (`StatusBadge variant="success"`) or stale
+(`StatusBadge variant="warning"`) badge, and key-value rows for version, uptime,
+last-seen time, spool pending files, and spool pending bytes. An enabled ingest with an
+empty `replicas` array MUST state that no replica has heartbeated yet.
+
+ADF-7. Data fetching MUST use SWR with a 10-second refresh interval. The first load MUST
+render a skeleton with the ready layout: page header, a full-width card, and the
+two-column grid. A failure without cached data MUST render the shared `QueryError`; its
+retry MUST revalidate the overview SWR key, MUST be disabled while pending, and MUST NOT
+show the raw error message. A failed refresh with cached data MUST keep the cached page
+and render `QueryError` with `stale` above the health card. Mutations do not exist on
+this page. The SWR cache key MUST include the selected `spend_window`. The hook MUST set
+`keepPreviousData: true`. A spend-window switch MUST NOT show a skeleton. While a fetch
+for a newly selected window is in flight, only the health list MUST dim (`opacity-60`);
+the header, totals, and spend-window control MUST remain fully opaque. Dim MUST apply
+only when `data.spend.window` differs from the selected window, so a same-window
 10-second refresh does not dim.
 
-ADF-8. The page MUST NOT throw when any optional field is missing; missing
-timestamps MUST render as `-`.
+ADF-8. The page MUST NOT throw when any optional field is missing. Missing timestamps
+and missing values MUST render as `—`.

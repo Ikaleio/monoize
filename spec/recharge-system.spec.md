@@ -600,7 +600,8 @@ HTTP `404`, code `not_found`.
 ## 10. Wallet page (`/dashboard/wallet`)
 
 RC-W1. `/dashboard/wallet` is available to every authenticated user. It renders
-a page heading and three tabs, in order: account overview, recharge, and activity.
+the shared `PageHeader` with the localized wallet title and a one-sentence
+description, followed by three tabs, in order: account overview, recharge, and activity.
 The overview tab is selected on a normal entry. The `tab` query parameter accepts
 `overview`, `recharge`, or `activity`; an invalid value selects the overview.
 If `order_id` is present without `tab`, the activity tab is selected for the payment return.
@@ -666,6 +667,8 @@ state correctness MUST rely on polling, never on return-URL parameters.
 When the order load fails, the section MUST render a localized compact error
 state with a retry action and no raw error message. A failed revalidation that
 retains cached order data MUST keep rendering the cached data.
+Each order row MUST render the credit as `$` followed by `credit_usd` in
+`text-foreground`, without a plus or minus sign, for every status.
 
 RC-W5. The activity card's `ledger` tab lists the caller's RC-A5 entries. Each
 ledger item shows created time, kind (localized label), delta (`delta_usd`,
@@ -678,6 +681,13 @@ they remain on `/dashboard/logs` (§12).
 When the ledger load fails, the section MUST render a localized compact error
 state with a retry action and no raw error message. A failed revalidation that
 retains cached ledger data MUST keep rendering the cached data.
+
+RC-W5a. Order and ledger rows MUST NOT render a leading icon plate or a calendar
+icon. Amounts in these rows MUST use the body sans-serif font, `text-sm
+font-medium tabular-nums`. A negative ledger delta MUST use `text-error-foreground`.
+The activity card header MUST contain only the
+orders/ledger switch; it MUST NOT repeat the activity tab label or add a
+description paragraph.
 
 RC-W6. Both activity tabs remain mounted after the page renders. They render
 skeleton rows while loading and load further pages with `limit`/`offset`
@@ -700,7 +710,7 @@ Ordinary users MUST NOT see these administrator actions.
 At or above `lg`, the recharge form and summary use a 3:2 column ratio.
 At or above `sm`, custom amount and payment method share a row.
 Below `sm`, these fields stack in source order.
-Order and ledger rows stack below `lg` and use aligned columns at or above `lg`.
+Order and ledger rows MUST use the `DataList` primitives (`frontend-design-system.spec.md` §6.1).
 At 390 CSS pixels, the page, tabs, and controls MUST fit without horizontal page scrolling.
 Tab triggers, recharge controls, purchase actions, and pagination buttons have a minimum height of 44 CSS pixels.
 The page uses the shared grid background, neutral surfaces, blue actions, and display title font.
@@ -720,11 +730,21 @@ transitions MUST use no x-offset, y-offset, scale, or rotation animation.
 ## 11. Payments admin page (`/dashboard/payments`)
 
 RC-M1. `/dashboard/payments` is an admin-navigation page (RC-S2 amendment 2)
-with two tabs: Channels and Orders.
+with two tabs: Channels and Orders. The page MUST render, in order: the shared
+`PageHeader` without actions, a toolbar row, and the active tab panel. The
+toolbar row MUST place the tab list at the inline start. At the inline end it
+MUST show the create-channel action while Channels is active, and the status and
+username filters while Orders is active. Both panels MUST render their rows with
+the `DataList` primitives (`frontend-design-system.spec.md` §6.1). At 390 CSS
+pixels, every switch and row action MUST be visible without horizontal scrolling.
 
 RC-M2. The Channels tab lists every §9.2 row (name, `type_id`, currency,
 `usd_rate`, credit bounds, enabled switch) and offers create, edit, and delete
-dialogs. The enabled switch applies an SWR optimistic update and rolls back
+dialogs. The rate MUST render as `1 USD = {usd_rate} {currency}`. The credit
+bounds MUST render as `${min_credit_usd} – ${max_credit_usd}` in `text-foreground`.
+`type_id` MUST render in the row font size. A disabled channel MUST render its name
+in `text-muted-foreground`.
+The enabled switch applies an SWR optimistic update and rolls back
 with a toast on error. Secret config inputs render empty with a localized
 "stored, enter to replace" placeholder (RC-P6). The create/edit dialog derives
 its config fields from the RC-P5 schema of the selected `type_id`. Delete

@@ -30,7 +30,10 @@
 		"unavailable": "不可用",
 		"close": "关闭",
 		"loadFailed": "此区域加载失败，请重试。",
-		"refreshFailed": "此区域刷新失败，当前仍显示上次的数据。"
+		"refreshFailed": "此区域刷新失败，当前仍显示上次的数据。",
+		"enableItem": "启用 {{name}}",
+		"editItem": "编辑 {{name}}",
+		"deleteItem": "删除 {{name}}"
 	},
 	"auth": {
 		"signIn": "登录",
@@ -301,10 +304,6 @@
 		"createKey": "创建密钥",
 		"createApiKey": "创建 API 密钥",
 		"createDescription": "创建一个新的 API 密钥以访问 Monoize API",
-		"yourApiKeys": "您的 API 密钥",
-		"keysCreated": "已创建 {{count}} 个 API 密钥",
-		"keysCreated_plural": "已创建 {{count}} 个 API 密钥",
-		"noKeys": "暂无 API 密钥。创建一个开始使用。",
 		"keyPrefix": "密钥",
 		"expires": "过期时间",
 		"expiresInDays": "有效天数（可选）",
@@ -320,7 +319,6 @@
 		"editDescription": "更新 API 密钥设置",
 		"balance": "余额",
 		"subAccountEnabled": "独立余额",
-		"inheritsUser": "继承用户",
 		"transferTitle": "转账",
 		"transferDescription": "从你的账户转账到 {{name}}",
 		"transferAmount": "金额 (USD)",
@@ -376,7 +374,15 @@
 		"useUserGroupHelpNamed": "开启后，此密钥跟随所属用户的分组（当前：{{name}}）。",
 		"groups": "自选分组",
 		"groupsHelp": "按顺序尝试所选分组，第 1 位优先。可拖动调整顺序。",
-		"groupsRequired": "关闭“使用用户默认分组”后，至少需要选择一个分组。"
+		"groupsRequired": "关闭“使用用户默认分组”后，至少需要选择一个分组。",
+		"selectAll": "全选",
+		"keyCount_other": "共 {{count}} 个",
+		"noKeysTitle": "还没有 API 密钥",
+		"noKeysDescription": "创建密钥后即可调用 Monoize API。",
+		"noMatchesTitle": "没有匹配的密钥",
+		"noMatchesDescription": "没有名称或密钥前缀包含“{{query}}”的密钥。",
+		"usesAccountBalance": "使用账户余额",
+		"expired": "已过期"
 	},
 	"settings": {
 		"title": "系统设置",
@@ -926,17 +932,17 @@
 		"searchPlaceholder": "搜索模型...",
 		"modelId": "模型",
 		"mode": "模式",
-		"inputCost": "输入价格",
-		"outputCost": "输出价格",
 		"context": "上下文",
 		"maxOutput": "最大输出",
-		"provider": "提供者",
 		"resultCount": "显示 {{filtered}} / {{total}} 个模型",
 		"noModels": "暂无可用模型",
 		"noModelsDesc": "管理员同步模型数据库后，模型数据将显示在此处。",
 		"noMatches": "没有匹配的模型",
 		"noMatchesDesc": "没有模型符合搜索条件。清除搜索后可查看可用模型。",
-		"clearSearch": "清除搜索"
+		"clearSearch": "清除搜索",
+		"inputPerMillion": "输入（每 1M tokens）",
+		"outputPerMillion": "输出（每 1M tokens）",
+		"copyModelId": "复制 {{model}}"
 	},
 	"requestLogs": {
 		"title": "请求日志",
@@ -1121,7 +1127,7 @@
 	},
 	"billingPlans": {
 		"title": "订阅套餐",
-		"description": "周期性重置订阅用户余额的套餐计划",
+		"description": "管理按滑动窗口限额的订阅套餐及其价格。",
 		"create": "新建套餐",
 		"edit": "编辑套餐",
 		"name": "名称",
@@ -1140,9 +1146,9 @@
 		"invalidPeriod": "周期必须为正整数秒",
 		"nameRequired": "请填写套餐名称",
 		"emptyTitle": "还没有订阅套餐",
-		"emptyDescription": "创建一个套餐，为用户提供周期性余额。",
+		"emptyDescription": "创建套餐后，用户可以在钱包中购买已上架的套餐，管理员也可以为用户分配任意套餐。",
 		"deleteTitle": "删除订阅套餐？",
-		"deleteDescription": "将永久删除 {{name}}。已分配给用户的套餐无法删除。",
+		"deleteDescription": "将永久删除 {{name}} 及其价格。现有订阅保留当前快照，直到到期。",
 		"reset": "RESET",
 		"resetTitle": "重置周期额度？",
 		"resetDescription": "将 {{name}} 下所有符合条件的订阅用户余额重置为套餐发放额度。已禁用和无限额用户不会被重置。",
@@ -1165,8 +1171,13 @@
 		"invalidPrices": "每个价格都需要有效的 USD 金额和正整数天数。上架套餐必须设置价格。",
 		"created": "套餐已创建",
 		"updated": "套餐已更新",
-		"groups": "分组上限",
-		"groupsUnrestricted": "不限制"
+		"groups": "可用分组",
+		"groupsUnrestricted": "不限制",
+		"count_other": "共 {{count}} 个",
+		"listedState": "上架状态",
+		"unlisted": "未上架",
+		"priceOption_other": "{{price}} / {{count}} 天",
+		"removePrice": "删除价格 {{index}}"
 	},
 	"wallet": {
 		"title": "钱包",
@@ -1199,7 +1210,6 @@
 		"loadErrorDescription": "请重试。钱包的其他区域仍可使用。",
 		"retry": "重试",
 		"activityTitle": "资金记录",
-		"activityDescription": "查看支付订单和每笔钱包余额变动。",
 		"ordersTab": "充值订单",
 		"ledgerTab": "余额流水",
 		"ordersTitle": "充值订单",
@@ -1327,11 +1337,13 @@
 			"manual_refund_required": "请先确认已线下退款",
 			"refund_failed": "支付服务商退款失败",
 			"not_found": "未找到"
-		}
+		},
+		"rate": "汇率",
+		"rateValue": "1 USD = {{rate}} {{currency}}"
 	},
 	"adminDashboard": {
 		"title": "系统仪表盘",
-		"subtitle": "系统状态、用户使用排名、模型/渠道健康度与从机状态",
+		"subtitle": "Channel 健康度、消耗、用户使用排名与节点状态",
 		"systemStatus": "系统状态",
 		"nodeRole": "节点角色",
 		"version": "版本",
@@ -1365,8 +1377,8 @@
 		"calls": "调用数",
 		"cost": "费用",
 		"noUsage": "最近 24 小时无用量",
-		"channelHealth": "模型 / 渠道健康度",
-		"channel": "渠道",
+		"channelHealth": "模型 / Channel 健康度",
+		"channel": "Channel",
 		"weight": "权重",
 		"affinity": "亲和",
 		"status": "状态",
@@ -1374,15 +1386,18 @@
 		"healthy": "健康",
 		"unhealthy": "不健康",
 		"coolingDown": "冷却中",
-		"noChannels": "未配置渠道",
+		"noChannels": "未配置 Channel",
 		"healthEntries": "健康状态条目",
 		"affinityEntries": "亲和绑定",
 		"refresh": "刷新",
-		"retry": "重试",
 		"autoRefresh": "10 秒自动刷新",
 		"unauthorized": "需要管理员权限",
 		"unauthorizedDescription": "此页面仅管理员可访问。",
-		"loadFailed": "系统概览加载失败"
+		"channelSummary_other": "{{count}} 个 Channel · {{unhealthy}} 个异常",
+		"callsCount_other": "{{count}} 次调用",
+		"systemDescription": "当前节点的运行配置与内部队列。",
+		"rankingDescription": "按费用排序，最多显示 20 名用户。",
+		"replicaDescription": "从机心跳与待上报的计量文件。"
 	},
 	"groups": {
 		"title": "分组管理",
@@ -1412,7 +1427,9 @@
 		"emptyDescription": "系统会在初始化时创建默认分组。",
 		"invalidName": "名称须为 1-64 个字符",
 		"invalidDescription": "描述最多 256 个字符",
-		"invalidSortOrder": "排序必须是整数"
+		"invalidSortOrder": "排序必须是整数",
+		"count_other": "共 {{count}} 个",
+		"userSelectableItem": "允许用户自选 {{name}}"
 	},
 	"groupPicker": {
 		"selectPlaceholder": "选择分组",
