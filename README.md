@@ -127,6 +127,9 @@ The package manager installs only the native binary for the current OS and CPU. 
 
 ### Docker
 
+Use `ghcr.io/ikaleio/monoize:nightly` for the latest published image from `master`.
+Each published nightly image also has a `nightly-<full commit SHA>` tag. [Nightly GitHub prereleases](https://github.com/Ikaleio/monoize/releases) provide native binaries for their commits.
+
 ```bash
 docker run -d \
   --name monoize \

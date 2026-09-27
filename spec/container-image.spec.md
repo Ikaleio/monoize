@@ -59,7 +59,7 @@ CI-P1. The publication workflow MUST publish to `ghcr.io/<lowercase github.repos
 
 CI-P2. The workflow MUST use `GITHUB_TOKEN` with `contents: read` and `packages: write`. It MUST NOT require a personal access token.
 
-CI-P3. The container jobs MUST be part of `.github/workflows/release.yml`. They MUST run on a published GitHub Release. A manual workflow run MUST run the container jobs only when `publish_container` is true.
+CI-P3. The versioned container jobs MUST be part of `.github/workflows/release.yml`. They MUST run on a published GitHub Release or a manual run with `publish_container = true`. Nightly container jobs MUST be part of `.github/workflows/nightly.yml`.
 
 CI-P4. For a GitHub Release, the workflow MUST check out `github.event.release.tag_name`. The tag MUST pass the release-tag and Cargo-version validation in `scripts/package_release.py` before a container build starts.
 
@@ -69,11 +69,15 @@ CI-P5a. The container build MUST use the immutable source commit SHA resolved by
 
 CI-P6. A manual container tag MUST match `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`.
 
-CI-P7. Concurrent workflow runs that target the same publication tag MUST execute sequentially. A newer run MUST NOT cancel an active run.
+CI-P7. Concurrent versioned Release or manual workflow runs that target the same publication tag MUST execute sequentially. A newer run MUST NOT cancel an active run. Nightly runs follow CI-P11 instead.
 
 CI-P8. For a GitHub Release, a container platform build MUST start after its matching Linux native archive exists as an Actions artifact. The job MUST checksum that archive before copying the executable. It MUST NOT wait for other native rows, verification, or GitHub Release asset upload. A missing native archive MUST skip only the matching container platform.
 
 CI-P9. For a manual run with `publish_container = true`, a container platform build MUST start after its matching Linux native archive exists as an Actions artifact and MUST checksum that archive. It MUST NOT wait for other native rows.
+
+CI-P10. The nightly workflow MUST build each container platform from its matching verified nightly native archive. It MUST use the pushed commit SHA for each checkout. After it verifies the native archive and before it pushes a platform image digest, each platform job MUST compare its commit SHA with the current `master` head. It MUST skip the digest push when the SHAs differ.
+
+CI-P11. Immediately before publishing nightly image tags, the workflow MUST compare its commit SHA with the current `master` head. If they differ, it MUST skip tag publication. A newer `master` push MUST cancel an active or pending older nightly workflow.
 
 ## 4. Platforms and tags
 
@@ -100,6 +104,8 @@ CI-M4. A Release tag `vMAJOR.MINOR.PATCH` MUST publish these tags:
 
 CI-M5. The workflow MUST inspect the published manifest after it creates all tags. A manifest creation or inspection failure MUST fail the workflow.
 
+CI-M6. A current nightly workflow MUST publish both `nightly` and `nightly-<40-character lowercase commit SHA>` tags. Both tags MUST reference the same manifest assembled from one or two successful native-platform image digests. It MUST inspect the published manifest. A failed platform MUST NOT block publication when the other platform succeeds.
+
 ## 5. User documentation
 
 CI-D1. Both READMEs MUST document the same `docker run` command.
@@ -107,3 +113,5 @@ CI-D1. Both READMEs MUST document the same `docker run` command.
 CI-D2. The documented command MUST publish host port `8080`, mount a named volume at `/app/data`, and use `ghcr.io/ikaleio/monoize:latest`.
 
 CI-D3. Both READMEs MUST identify `MONOIZE_DATABASE_DSN` as the method to select PostgreSQL or a non-default SQLite location.
+
+CI-D4. Both READMEs MUST identify the rolling `nightly` image tag and the commit-specific nightly GitHub Releases.

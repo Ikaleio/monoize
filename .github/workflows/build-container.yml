@@ -30,6 +30,10 @@ on:
       release_tag:
         required: true
         type: string
+      latest_branch:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -79,8 +83,25 @@ jobs:
           install -m 0755 "dist/monoize-${RELEASE_TAG}-${NATIVE_TARGET}/monoize" docker-pack/monoize
           cp Dockerfile docker-pack/Dockerfile
 
+      - name: Check current branch before pushing a nightly image
+        if: ${{ steps.native.outcome == 'success' && inputs.latest_branch != '' }}
+        id: head
+        shell: bash
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/branches/$LATEST_BRANCH" --jq '.commit.sha')
+          if [[ "$current" == "$SOURCE_REVISION" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping image for $SOURCE_REVISION because $LATEST_BRANCH is now $current"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST_BRANCH: ${{ inputs.latest_branch }}
+          SOURCE_REVISION: ${{ inputs.revision }}
+
       - name: Log in to GHCR
-        if: ${{ steps.native.outcome == 'success' }}
+        if: ${{ steps.native.outcome == 'success' && (inputs.latest_branch == '' || steps.head.outputs.current == 'true') }}
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
         with:
           registry: ghcr.io
@@ -88,11 +109,11 @@ jobs:
           password: ${{ github.token }}
 
       - name: Set up Docker Buildx
-        if: ${{ steps.native.outcome == 'success' }}
+        if: ${{ steps.native.outcome == 'success' && (inputs.latest_branch == '' || steps.head.outputs.current == 'true') }}
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
 
       - name: Build and push platform image
-        if: ${{ steps.native.outcome == 'success' }}
+        if: ${{ steps.native.outcome == 'success' && (inputs.latest_branch == '' || steps.head.outputs.current == 'true') }}
         id: container
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.0.0
         with:
@@ -106,7 +127,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ inputs.cache_scope }}
 
       - name: Stage platform digest
-        if: ${{ steps.native.outcome == 'success' }}
+        if: ${{ steps.container.outcome == 'success' }}
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/digests"
@@ -114,7 +135,7 @@ jobs:
           touch "$RUNNER_TEMP/digests/${digest#sha256:}"
 
       - name: Upload platform digest
-        if: ${{ steps.native.outcome == 'success' }}
+        if: ${{ steps.container.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: container-digest-${{ inputs.artifact }}

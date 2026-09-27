@@ -127,6 +127,9 @@ monoize
 
 ### Docker
 
+`ghcr.io/ikaleio/monoize:nightly` 指向 `master` 上最近一次发布的镜像。
+每个已发布的 nightly 镜像还有 `nightly-<完整 commit SHA>` 标签。[GitHub nightly 预发布版](https://github.com/Ikaleio/monoize/releases)包含对应 commit 的原生二进制文件。
+
 ```bash
 docker run -d \
   --name monoize \

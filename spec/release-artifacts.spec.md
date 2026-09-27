@@ -2,8 +2,8 @@
 
 ## 0. Status
 
-- **Purpose:** Build and attach native Monoize binaries when a GitHub Release is published.
-- **Scope:** Applies to `.github/workflows/release.yml`, `scripts/package_release.py`, and the native inputs used by the npm package set.
+- **Purpose:** Build native Monoize binaries for versioned Releases and nightly prereleases.
+- **Scope:** Applies to `.github/workflows/release.yml`, `.github/workflows/nightly.yml`, `scripts/package_release.py`, and the native inputs used by the npm package set.
 
 ## 1. Trigger and authority
 
@@ -24,6 +24,12 @@ RA-T5. Build jobs MUST have `contents: read` permission. Only the asset-publishi
 RA-T5a. Native build jobs MAY have `actions: write` solely to restore and save the GitHub Actions caches defined by RA-M8. They MUST NOT have `contents: write`.
 
 RA-T6. Every third-party or GitHub-provided action reference MUST use a full commit SHA. A comment on the same line MUST identify the corresponding release tag or major version.
+
+RA-T7. Each push to `master` MUST start one nightly workflow for the pushed commit. A newer `master` push MUST cancel an active or pending older nightly workflow. The nightly workflow MUST NOT cancel a versioned Release workflow.
+
+RA-T8. Before a nightly build starts, the workflow MUST compare the pushed commit SHA with the current `master` head from GitHub. If they differ, the workflow MUST skip builds and publication. The workflow MUST use the pushed SHA for every build checkout.
+
+RA-T9. A nightly workflow MUST use the Cargo version tag `v<version>` only for native archive packaging and verification. It MUST NOT publish npm packages or invoke the versioned Release workflow.
 
 ## 2. Native build matrix
 
@@ -117,6 +123,12 @@ RA-S6a. A failed target MUST contribute no native archive, checksum, or npm plat
 
 RA-S7. The release workflow MUST NOT run `deploy.sh`, copy files to `/opt/monoize`, restart PM2, or mutate a Monoize database.
 
-RA-S8. Each native build row MUST make its compiled executable available to the matching npm platform-package staging step. npm packaging and publication MUST follow `spec/npm-cli-distribution.spec.md`.
+RA-S8. Each versioned Release native build row MUST make its compiled executable available to the matching npm platform-package staging step. npm packaging and publication MUST follow `spec/npm-cli-distribution.spec.md`.
 
 RA-S9. Failure to publish an npm package MUST NOT delete or replace a verified native GitHub Release asset.
+
+RA-S10. After verification and immediately before uploading nightly assets, the workflow MUST compare its commit SHA with the current `master` head. If they differ, it MUST skip upload.
+
+RA-S11. A current nightly workflow MUST create a prerelease with tag `nightly-<40-character lowercase commit SHA>`, target that commit, and attach every verified native archive and checksum. It MUST set the Release's latest flag to false. A rerun for the same commit MAY replace assets on that prerelease.
+
+RA-S12. A nightly workflow MUST NOT move or replace a versioned Release tag or asset.

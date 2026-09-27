@@ -18,14 +18,18 @@ on:
       tag:
         required: true
         type: string
+      stage_npm:
+        required: false
+        type: boolean
+        default: true
       linker:
         required: false
         type: string
         default: ""
       static_libgcc:
         required: false
-        type: string
-        default: "false"
+        type: boolean
+        default: false
       builder_image:
         required: false
         type: string
@@ -156,6 +160,7 @@ jobs:
           compression-level: 0
 
       - name: Stage npm platform package
+        if: ${{ inputs.stage_npm }}
         shell: bash
         run: |
           binary="target/$TARGET/release/monoize"
@@ -172,6 +177,7 @@ jobs:
             --output-dir npm-dist
 
       - name: Upload npm platform package
+        if: ${{ inputs.stage_npm }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npm-${{ inputs.target }}

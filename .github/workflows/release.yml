@@ -39,6 +39,7 @@ env:
 jobs:
   validate:
     name: Validate release ref
+    if: ${{ github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'nightly-') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -85,7 +86,7 @@ jobs:
       target: x86_64-unknown-linux-musl
       python: python3
       linker: x86_64-unknown-linux-musl-gcc
-      static_libgcc: "false"
+      static_libgcc: false
       builder_image: ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:ce75e9174325d4fbb3de85c309e2d7ca29f7500169bc4b5d2c611ff7e86d549a
       revision: ${{ needs.validate.outputs.revision }}
       tag: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
@@ -102,7 +103,7 @@ jobs:
       target: aarch64-unknown-linux-musl
       python: python3
       linker: aarch64-unknown-linux-musl-gcc
-      static_libgcc: "true"
+      static_libgcc: true
       builder_image: ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:ecae5dd62d1c938c14f8071d36c16fa699860aace03bfb5284fb1216474d2643
       revision: ${{ needs.validate.outputs.revision }}
       tag: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
