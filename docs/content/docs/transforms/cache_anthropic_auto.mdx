@@ -1,0 +1,34 @@
+---
+title: "Auto-cache: Anthropic request"
+description: Enable top-level automatic caching for Anthropic Messages requests.
+---
+
+## What it does
+
+This transform adds `cache_control` to the request JSON. The upstream moves the cache point to the last eligible content block as the conversation grows. Existing `cache_control` values remain unchanged.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `cache_anthropic_auto` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+Use it when a Channel accepts Anthropic automatic caching. Keep `cache_anthropic_system` enabled for the stable system prefix. Confirm that any relay accepts the top-level field.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+```json
+{
+  "transform": "cache_anthropic_auto",
+  "enabled": true,
+  "phase": "request",
+  "models": ["claude-*"],
+  "config": {}
+}
+```

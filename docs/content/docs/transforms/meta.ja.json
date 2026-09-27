@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "---自動キャッシュ---",
+    "cache_anthropic_auto",
     "cache_anthropic_system",
     "cache_anthropic_tool_use",
     "cache_openai_prompt",

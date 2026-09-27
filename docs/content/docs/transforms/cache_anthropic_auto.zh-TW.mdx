@@ -1,0 +1,34 @@
+---
+title: "自動快取：Anthropic 請求"
+description: 為 Anthropic Messages 請求啟用頂層自動快取。
+---
+
+## 行為
+
+此變換會在請求 JSON 頂層加入 `cache_control`。上游會在對話增長時，將快取斷點移到最後一個可快取內容區塊。既有的 `cache_control` 值保持不變。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| Type ID | `cache_anthropic_auto` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## 適用場景
+
+當 Channel 接受 Anthropic 自動快取時使用。保留 `cache_anthropic_system` 以快取穩定的系統前綴。確認透傳服務接受頂層欄位。
+
+## 配置
+
+此變換沒有設定項。`config` 使用空物件。
+
+```json
+{
+  "transform": "cache_anthropic_auto",
+  "enabled": true,
+  "phase": "request",
+  "models": ["claude-*"],
+  "config": {}
+}
+```

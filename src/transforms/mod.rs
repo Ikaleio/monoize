@@ -6,6 +6,7 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub mod cache_anthropic_auto;
 pub mod cache_anthropic_system;
 pub mod cache_anthropic_tool_use;
 pub mod cache_openai_prompt;
@@ -345,6 +346,7 @@ pub type TransformRegistry = HashMap<&'static str, Arc<dyn Transform>>;
 
 fn builtin_transforms() -> Vec<Box<dyn Transform>> {
     vec![
+        Box::new(cache_anthropic_auto::CacheAnthropicAutoTransform),
         Box::new(cache_anthropic_system::CacheAnthropicSystemTransform),
         Box::new(cache_anthropic_tool_use::CacheAnthropicToolUseTransform),
         Box::new(cache_openai_prompt::CacheOpenAiPromptTransform),

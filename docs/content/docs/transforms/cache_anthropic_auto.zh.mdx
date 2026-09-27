@@ -1,0 +1,34 @@
+---
+title: "自动缓存：Anthropic 请求"
+description: 为 Anthropic Messages 请求启用顶层自动缓存。
+---
+
+## 行为
+
+此变换向请求 JSON 顶层添加 `cache_control`。上游会在对话增长时，将缓存断点移到最后一个可缓存内容块。已有的 `cache_control` 值保持不变。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| Type ID | `cache_anthropic_auto` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## 适用场景
+
+当 Channel 接受 Anthropic 自动缓存时使用。保留 `cache_anthropic_system` 来缓存稳定的系统前缀。确认透传服务接受顶层字段。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+```json
+{
+  "transform": "cache_anthropic_auto",
+  "enabled": true,
+  "phase": "request",
+  "models": ["claude-*"],
+  "config": {}
+}
+```

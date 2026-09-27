@@ -118,6 +118,7 @@ fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
         .iter()
         .filter(|node| node_has_cache_control(node))
         .count()
+        + usize::from(req.extra_body.contains_key("cache_control"))
 }
 
 fn node_has_cache_control(node: &Node) -> bool {

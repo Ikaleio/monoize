@@ -172,6 +172,7 @@ TM-TF-3. Allowed API-key request-phase transforms are exactly:
 - `image_compress_input`
 - `image_enable_openai_generation_tool`
 - `prompt_strip_anthropic_billing_header`
+- `cache_anthropic_auto`
 - `cache_anthropic_system`
 - `cache_anthropic_tool_use`
 - `cache_openai_tool_use`

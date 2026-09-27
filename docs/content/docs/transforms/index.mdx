@@ -47,7 +47,7 @@ Model matching always uses the logical model name that the client requested, not
 
 | Family | Purpose | Transforms |
 | --- | --- | --- |
-| Auto-cache | Improve provider-side prompt caching | `cache_anthropic_system`, `cache_anthropic_tool_use`, `cache_openai_prompt`, `cache_openai_tool_use`, `cache_user_id` |
+| Auto-cache | Improve provider-side prompt caching | `cache_anthropic_auto`, `cache_anthropic_system`, `cache_anthropic_tool_use`, `cache_openai_prompt`, `cache_openai_tool_use`, `cache_user_id` |
 | Field | Set, remove, or cap raw request/response fields | `field_alias_reserved_tool_names`, `field_custom_tools_to_function`, `field_override_max_tokens`, `field_remove`, `field_set` |
 | Image | Compress, convert, or resolve images | `image_compress_input`, `image_compress_output`, `image_enable_openai_generation_tool`, `image_markdown_to_output`, `image_output_to_markdown`, `image_resolve_urls` |
 | Prompt | Reshape the message list | `prompt_append_empty_user`, `prompt_inject_system`, `prompt_strip_anthropic_billing_header`, `prompt_strip_orphaned_tool_calls` |

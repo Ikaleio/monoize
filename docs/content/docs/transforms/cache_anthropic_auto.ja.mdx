@@ -1,0 +1,34 @@
+---
+title: "自動キャッシュ: Anthropic リクエスト"
+description: Anthropic Messages リクエストでトップレベルの自動キャッシュを有効にします。
+---
+
+## 動作
+
+この変換はリクエスト JSON のトップレベルに `cache_control` を追加します。会話が伸びると、上流はキャッシュ位置を最後の対象ブロックへ移します。既存の `cache_control` は変更しません。
+
+## 参照情報
+
+| 項目 | 値 |
+| --- | --- |
+| Type ID | `cache_anthropic_auto` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## 使用する場面
+
+Channel が Anthropic の自動キャッシュを受け付ける場合に使います。安定した system プレフィックスには `cache_anthropic_system` を維持します。中継サービスがトップレベルの項目を受け付けることを確認してください。
+
+## 設定
+
+この変換に設定項目はありません。`config` には空のオブジェクトを指定します。
+
+```json
+{
+  "transform": "cache_anthropic_auto",
+  "enabled": true,
+  "phase": "request",
+  "models": ["claude-*"],
+  "config": {}
+}
+```

@@ -2,7 +2,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Node, OrdinaryRole};
+use crate::urp::Node;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -19,9 +19,7 @@ impl TransformConfig for Config {
 
 pub struct CacheAnthropicToolUseTransform;
 
-/// When the user returns tool results, find the last User message before
-/// the Assistant's ToolCall and add cache_control to its last part.
-/// This makes long tool-call chains benefit from caching.
+/// Mark the last tool result so the cache point follows a growing tool loop.
 /// Respects the max-4 cache breakpoint limit.
 #[async_trait]
 impl Transform for CacheAnthropicToolUseTransform {
@@ -40,11 +38,11 @@ impl Transform for CacheAnthropicToolUseTransform {
         &[
             (
                 "en",
-                "On tool-result submissions, inserts an Anthropic ephemeral cache_control breakpoint on the latest user node before the tool-call run.",
+                "On tool-result submissions, inserts an Anthropic ephemeral cache_control breakpoint on the final tool result.",
             ),
             (
                 "zh",
-                "在提交工具结果时，于工具调用串前最近的 user 节点插入 Anthropic ephemeral cache_control 缓存断点。",
+                "在提交工具结果时，于最后一个工具结果插入 Anthropic ephemeral cache_control 缓存断点。",
             ),
         ]
     }
@@ -87,7 +85,6 @@ impl Transform for CacheAnthropicToolUseTransform {
             return Ok(());
         };
 
-        // Check if the last message is a Tool result
         if !matches!(req.input.last(), Some(Node::ToolResult { .. })) {
             return Ok(());
         }
@@ -96,44 +93,12 @@ impl Transform for CacheAnthropicToolUseTransform {
             return Ok(());
         }
 
-        // Walk backwards to find: Tool(result) <- Assistant(ToolCall) <- User(the target)
-        // Find the last Assistant message with a ToolCall before the trailing tool results
-        let mut assistant_tool_call_idx: Option<usize> = None;
-        for (i, node) in req.input.iter().enumerate().rev() {
-            if matches!(node, Node::ToolResult { .. }) {
-                continue;
-            }
-            if matches!(node, Node::ToolCall { .. }) {
-                assistant_tool_call_idx = Some(i);
-                break;
-            }
-            break;
-        }
-
-        let Some(assistant_idx) = assistant_tool_call_idx else {
-            return Ok(());
-        };
-
-        // Find the last User message before the assistant's tool call
-        let mut target_user_idx: Option<usize> = None;
-        for i in (0..assistant_idx).rev() {
-            if req.input[i].role() == Some(OrdinaryRole::User) {
-                target_user_idx = Some(i);
-                break;
-            }
-        }
-
-        let Some(user_idx) = target_user_idx else {
-            return Ok(());
-        };
-
-        // Check if that User message already has cache_control
-        let already_has_cache = node_has_cache_control(&req.input[user_idx]);
-        if already_has_cache {
+        let last_node = req.input.last_mut().expect("checked trailing tool result");
+        if node_has_cache_control(last_node) {
             return Ok(());
         }
 
-        req.input[user_idx]
+        last_node
             .extra_body_mut()
             .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
 
@@ -146,6 +111,7 @@ fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
         .iter()
         .filter(|node| node_has_cache_control(node))
         .count()
+        + usize::from(req.extra_body.contains_key("cache_control"))
 }
 
 fn node_has_cache_control(node: &Node) -> bool {

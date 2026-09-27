@@ -1,11 +1,11 @@
 ---
 title: "Auto-cache: Anthropic tool results"
-description: Insert a cache_control breakpoint before each tool-call run in agent loops.
+description: Insert a cache_control breakpoint on the final tool result.
 ---
 
 ## What it does
 
-When the request submits tool results, this transform inserts an Anthropic ephemeral `cache_control` breakpoint on the latest user node before the tool-call run. In an agent loop, the growing conversation prefix then stays cached between iterations.
+When the request submits tool results, this transform inserts an Anthropic ephemeral `cache_control` breakpoint on the final tool result. The cache point moves forward with each tool-result submission.
 
 Requests without tool results pass through unchanged.
 

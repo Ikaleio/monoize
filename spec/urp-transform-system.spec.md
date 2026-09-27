@@ -165,6 +165,7 @@ TF-6. Adding a new transform file with a valid inventory submission MUST be suff
 TF-6a. In addition to built-in transforms, administrator-authored custom JavaScript transforms exist under the reserved id prefix `js:`. Their identity, persistence, sandbox, registry exposure, and lookup semantics are defined by `spec/custom-js-transforms.spec.md`. Rules TF-7, TF-7a, TF-7b, and TF-14 apply to built-in canonical IDs only.
 
 TF-7. Built-ins that MUST exist are exactly:
+- `cache_anthropic_auto`
 - `cache_anthropic_system`
 - `cache_anthropic_tool_use`
 - `cache_openai_prompt`

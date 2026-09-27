@@ -2,8 +2,8 @@
 
 ## 0. Status
 
-- Version: `1.3.0`
-- Scope: Five request-phase `cache_*` domain transforms that automatically optimize provider prompt caching by injecting Anthropic `cache_control` markers, OpenAI prompt-cache request fields and content breakpoints, and user identity fields.
+- Version: `1.4.0`
+- Scope: Six request-phase `cache_*` domain transforms that optimize provider prompt caching by injecting Anthropic `cache_control` markers or request fields, OpenAI prompt-cache request fields and content breakpoints, and user identity fields.
 - Dependency: URP Transform System (see `urp-transform-system.spec.md`, TF-1 through TF-7b; historical IDs map to the canonical `cache_*` IDs through TF-17).
 
 ## 1. Shared Definitions
@@ -12,7 +12,7 @@ DEF-1. An **Anthropic cache breakpoint** is any `Node` in `req.input` whose `ext
 
 DEF-2. The **Anthropic cache breakpoint count** of a request is the total number of Anthropic cache breakpoints across all nodes in `req.input`.
 
-DEF-3. The **Anthropic max cache breakpoint limit** is `4`. No transform in this specification SHALL increase the Anthropic cache breakpoint count beyond `4`.
+DEF-3. The **Anthropic cache slot count** is the Anthropic cache breakpoint count plus one when `req.extra_body` contains top-level `"cache_control"`. The maximum is `4`. No transform in this specification SHALL increase the slot count beyond `4`.
 
 DEF-4. The **Monoize username** is the string value of `req.extra_body["__monoize_username"]`, if present and non-null. The **Monoize API key ID** is the string value of `req.extra_body["__monoize_api_key_id"]`, if present and non-null. These fields are injected by the request handler before transforms run and stripped after transforms complete. Transforms MUST NOT assume their presence.
 
@@ -64,7 +64,7 @@ ACS-3. Config schema: empty object, no configuration parameters.
 
 ### 3.2 Preconditions
 
-ACS-4. If the Anthropic cache breakpoint count is `>= 4`, the transform is a no-op.
+ACS-4. If the Anthropic cache slot count is `>= 4`, the transform is a no-op.
 
 ACS-5. If `req.input` contains no node with `role == System` or `role == Developer`, the transform is a no-op.
 
@@ -92,28 +92,39 @@ ACTU-3. Config schema: empty object, no configuration parameters.
 
 ### 4.2 Preconditions
 
-ACTU-4. Let `last_node` = the last element of `req.input`. If `last_node` is not `Node::ToolResult`, the transform is a no-op. (The request is not a tool-result submission.)
+ACTU-4. Let `last_node` = the last element of `req.input`. If `last_node` is not `Node::ToolResult`, the transform is a no-op.
 
-ACTU-5. If the Anthropic cache breakpoint count is `>= 4`, the transform is a no-op.
+ACTU-5. If the Anthropic cache slot count is `>= 4`, the transform is a no-op.
 
 ### 4.3 Target Resolution
 
-ACTU-6. Starting from `last_node` and scanning backwards through `req.input`:
-1. Skip contiguous trailing `Node::ToolResult` entries.
-2. The first non-skipped node MUST be `Node::ToolCall` with assistant role. If this condition is not met, the transform is a no-op.
-3. Let `tool_call_idx` = the index of this assistant tool-call node.
+ACTU-6. The target is `last_node`. A trailing run of tool results MUST be marked only at its final node.
 
-ACTU-7. Scan backwards from `tool_call_idx - 1` to find the first node with `role == User`. Let `user_idx` = that index. If no such node exists, the transform is a no-op.
-
-ACTU-8. If `req.input[user_idx]` already contains a `"cache_control"` key in its `extra_body`, the transform is a no-op.
+ACTU-7. If `last_node.extra_body` already contains `"cache_control"`, the transform is a no-op.
 
 ### 4.4 Behavior
 
-ACTU-9. The transform MUST insert `"cache_control": {"type": "ephemeral"}` into the `extra_body` of `req.input[user_idx]`.
+ACTU-9. The transform MUST insert `"cache_control": {"type": "ephemeral"}` into `last_node.extra_body`.
 
 ACTU-10. After insertion, the Anthropic cache breakpoint count increases by exactly `1`.
 
 ACTU-11. The transform MUST NOT modify any other node, any node content, `req.model`, or `req.user`.
+
+## 4a. `cache_anthropic_auto`
+
+ACAA-1. Transform type ID: `"cache_anthropic_auto"`. Phase: `Request` only. Supported scopes: `Provider` and `ApiKey`. Config schema: empty object.
+
+ACAA-2. If the selected upstream provider type is not `messages`, the transform is a no-op.
+
+ACAA-3. If `req.extra_body` already contains `"cache_control"`, the transform is a no-op.
+
+ACAA-4. If the Anthropic cache breakpoint count is `>= 4`, the transform is a no-op.
+
+ACAA-5. Otherwise, the transform MUST set `req.extra_body["cache_control"]` to `{"type": "ephemeral"}`. The Messages encoder MUST emit this field at the top level of the upstream request JSON.
+
+ACAA-6. The transform MUST NOT modify `req.input`, `req.tools`, `req.model`, or `req.user`.
+
+ACAA-7. A gateway that does not accept top-level `cache_control` may reject the upstream request. Operators MUST enable this transform only on Channels that support Anthropic automatic caching.
 
 ## 5. Context Injection Lifecycle
 
@@ -255,10 +266,10 @@ ORD-7. `cache_openai_tool_use` SHOULD run before `cache_openai_prompt` when `cac
 
 ## 9. Invariants
 
-INV-1. No transform in this specification shall produce a request whose Anthropic cache breakpoint count exceeds `4`.
+INV-1. No transform in this specification shall produce a request whose Anthropic cache slot count exceeds `4`.
 
 INV-2. No transform in this specification shall produce a request whose OpenAI explicit cache breakpoint count exceeds the limit defined by DEF-9.
 
 INV-3. No transform in this specification shall overwrite an existing `cache_control`, `prompt_cache_breakpoint`, `metadata.user_id`, `req.user`, `prompt_cache_key`, or `prompt_cache_retention` value.
 
-INV-4. All five transforms are idempotent: applying the same transform twice to the same request produces the same result as applying it once.
+INV-4. All six transforms are idempotent: applying the same transform twice to the same request produces the same result as applying it once.
