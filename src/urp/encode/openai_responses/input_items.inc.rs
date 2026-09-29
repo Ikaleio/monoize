@@ -30,6 +30,8 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
             }
             if let Some(strict) = function.strict {
                 item.insert("strict".to_string(), Value::Bool(strict));
+            } else if tool.origin_protocol != Some(ProviderProtocol::Responses) {
+                item.insert("strict".to_string(), Value::Bool(false));
             }
             merge_extra(&mut item, &function.extra_body);
             merge_extra(&mut item, &tool.extra_body);

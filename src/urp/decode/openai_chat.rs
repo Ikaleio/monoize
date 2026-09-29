@@ -237,6 +237,7 @@ fn parse_legacy_function_definition(value: &Value) -> Option<ToolDefinition> {
     wrapper.insert("type".to_string(), Value::String("function".to_string()));
     wrapper.insert("function".to_string(), value.clone());
     let mut tool = parse_tool_definition(&Value::Object(wrapper))?;
+    tool.origin_protocol = Some(ProviderProtocol::ChatCompletion);
     tool.extra_body.insert(
         CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY.to_string(),
         Value::Bool(true),
@@ -692,7 +693,13 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             modern_tools
                 .into_iter()
                 .flatten()
-                .filter_map(parse_tool_definition)
+                .filter_map(|raw| {
+                    let mut tool = parse_tool_definition(raw)?;
+                    if tool.function.is_some() {
+                        tool.origin_protocol = Some(ProviderProtocol::ChatCompletion);
+                    }
+                    Some(tool)
+                })
                 .chain(
                     legacy_functions
                         .into_iter()

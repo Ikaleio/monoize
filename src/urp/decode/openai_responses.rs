@@ -391,7 +391,7 @@ fn mark_responses_tool_origin(tool: &mut crate::urp::ToolDefinition) {
             mark_responses_tool_origin(child);
         }
     }
-    if tool.function.is_none() && tool.custom.is_none() && tool.tools.is_none() {
+    if tool.function.is_some() || (tool.custom.is_none() && tool.tools.is_none()) {
         tool.origin_protocol = Some(ProviderProtocol::Responses);
     }
 }
