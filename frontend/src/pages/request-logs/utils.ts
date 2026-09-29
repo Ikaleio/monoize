@@ -377,3 +377,18 @@ export function retryAttemptRows(log: RequestLog): RetryAttemptRow[] {
 	}
 	return rows
 }
+
+// FL9c: equality ignores ASCII case only, matching request-log storage (RL1l).
+export function sameAsciiModelName(left: string, right: string): boolean {
+	const a = left.trim()
+	const b = right.trim()
+	if (a.length !== b.length) return false
+	for (let i = 0; i < a.length; i += 1) {
+		const leftCode = a.charCodeAt(i)
+		const rightCode = b.charCodeAt(i)
+		const leftAscii = leftCode >= 65 && leftCode <= 90 ? leftCode + 32 : leftCode
+		const rightAscii = rightCode >= 65 && rightCode <= 90 ? rightCode + 32 : rightCode
+		if (leftAscii !== rightAscii) return false
+	}
+	return true
+}

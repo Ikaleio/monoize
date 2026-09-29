@@ -31,6 +31,7 @@ import {
   readTokenCount,
   readableAffinityTarget,
   retryAttemptRows,
+  sameAsciiModelName,
   triedProvidersOf,
   type RetryAttemptRow,
 } from "./utils";
@@ -120,6 +121,11 @@ export function LogRowCells({
     log,
     affinityTargetNames,
   );
+  const showUpstreamResponseModel =
+    isAdmin &&
+    typeof log.upstream_response_model === "string" &&
+    log.upstream_response_model.trim() !== "" &&
+    !sameAsciiModelName(log.model, log.upstream_response_model);
   const costDisplay = formatCost(log.billing?.charge_nano_usd);
   const usageSnapshot = asObject(log.usage);
   const usageInput = asObject(usageSnapshot?.input);
@@ -672,7 +678,7 @@ export function LogRowCells({
                     truncateModelText={false}
                     className="h-5 min-w-max px-1.5 text-[10px]"
                   />
-                  {isAdmin && log.upstream_response_model ? (
+                  {showUpstreamResponseModel ? (
                     <span className="font-mono text-[10px] text-warning-foreground">
                       ↳ {log.upstream_response_model}
                     </span>
@@ -691,7 +697,7 @@ export function LogRowCells({
                       <span className="font-mono">{log.upstream_model}</span>
                     </div>
                   )}
-                  {isAdmin && log.upstream_response_model ? (
+                  {showUpstreamResponseModel ? (
                     <div className="flex items-center justify-between gap-3">
                       <span>{t("requestLogs.upstreamResponseModel")}</span>
                       <span className="font-mono">{log.upstream_response_model}</span>
@@ -780,7 +786,7 @@ export function LogRowCells({
                         {t("requestLogs.upstreamModel")}: {log.upstream_model}
                       </div>
                     )}
-                    {isAdmin && log.upstream_response_model ? (
+                    {showUpstreamResponseModel ? (
                       <div>
                         {t("requestLogs.upstreamResponseModel")}:{" "}
                         {log.upstream_response_model}

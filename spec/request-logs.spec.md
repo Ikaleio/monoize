@@ -493,9 +493,11 @@ FL9. The merged `model/[channel]` cell MUST use a non-wrapping column layout ins
 
 FL9c. Actual upstream response model, admin only:
 
-- When the viewer is not an admin, the model cell, model tooltip, and channel tooltip MUST NOT render `upstream_response_model`.
-- When the viewer is an admin and `upstream_response_model` is non-empty, the first line of the merged model cell MUST show that value after the ModelBadge on the same non-wrapping line.
-- The admin model tooltip and the admin channel tooltip MUST each show the same value with a localized label.
+- Trim `model` and `upstream_response_model`. Compare the trimmed values with ASCII case-insensitive equality.
+- Render `upstream_response_model` only when the viewer is an admin, the trimmed response value is non-empty, and the trimmed values differ.
+- On that condition, the first line of the merged model cell MUST show the stored `upstream_response_model` after the ModelBadge on the same non-wrapping line.
+- On that condition, the admin model tooltip and the admin channel tooltip MUST each show the stored value with a localized label.
+- Otherwise the model cell, model tooltip, and channel tooltip MUST NOT render `upstream_response_model`.
 - The value MUST NOT add a third visible line and MUST NOT change the 44-pixel row height.
 
 FL9a. Compact retry-chain hops:
