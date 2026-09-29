@@ -507,7 +507,6 @@
 		"allowFreeWhenUnpricedDescription": "模型没有价格记录时按零费用结算，而不是拒绝请求。默认关闭（失败即拒绝）。",
 		"allowFreeWhenMissingUsage": "缺失 Usage 允许免费结算",
 		"allowFreeWhenMissingUsageDescription": "上游在计费响应中未返回 Usage 时按零费用结算，而不是拒绝。默认关闭（失败即拒绝）。",
-		"dashboardPerformanceKicker": "仪表盘",
 		"dashboardPerformanceTitle": "首页性能目标",
 		"dashboardPerformanceDescription": "选择在用户仪表盘性能面板中展示的分组与 Model。指标为近 24 小时的全局聚合。",
 		"dashboardPerformanceGroups": "分组",
@@ -519,7 +518,14 @@
 		"dashboardPerformanceModelsEmptyDescription": "请启用带有模型的 Channel，或清空搜索。",
 		"rechargePublicOrigin": "充值公网 Origin",
 		"rechargePublicOriginPlaceholder": "https://api.example.com",
-		"rechargePublicOriginDescription": "用于生成支付回调与跳转地址的公网 Origin（http/https，不含路径）。留空时无法创建充值订单。"
+		"rechargePublicOriginDescription": "用于生成支付回调与跳转地址的公网 Origin（http/https，不含路径）。留空时无法创建充值订单。",
+		"searchPlaceholder": "搜索设置",
+		"searchResultCount_other": "{{count}} 项匹配",
+		"searchNoMatchTitle": "没有匹配的设置",
+		"searchNoMatchDescription": "没有设置名称、说明或字段名包含“{{query}}”。",
+		"unsavedChanges": "有未保存的修改",
+		"discardChanges": "放弃修改",
+		"saved": "设置已保存"
 	},
 	"providers": {
 		"title": "服务提供者",

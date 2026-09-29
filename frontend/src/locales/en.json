@@ -508,7 +508,6 @@
 		"allowFreeWhenUnpricedDescription": "When no model price row exists, settle at zero charge instead of rejecting the request. Default off (fail closed).",
 		"allowFreeWhenMissingUsage": "Allow free settlement when usage is missing",
 		"allowFreeWhenMissingUsageDescription": "When the upstream omits usage on a billable response, settle at zero charge instead of rejecting. Default off (fail closed).",
-		"dashboardPerformanceKicker": "Dashboard",
 		"dashboardPerformanceTitle": "Home performance targets",
 		"dashboardPerformanceDescription": "Choose groups and models shown on the user dashboard performance panel. Metrics are global aggregates for the last 24 hours.",
 		"dashboardPerformanceGroups": "Groups",
@@ -520,7 +519,15 @@
 		"dashboardPerformanceModelsEmptyDescription": "Enable a Channel with models, or clear the search.",
 		"rechargePublicOrigin": "Recharge Public Origin",
 		"rechargePublicOriginPlaceholder": "https://api.example.com",
-		"rechargePublicOriginDescription": "Public http/https origin (no path) used to build payment notify and return URLs. Order creation requires a non-empty value."
+		"rechargePublicOriginDescription": "Public http/https origin (no path) used to build payment notify and return URLs. Order creation requires a non-empty value.",
+		"searchPlaceholder": "Search settings",
+		"searchResultCount_one": "{{count}} matching setting",
+		"searchResultCount_other": "{{count}} matching settings",
+		"searchNoMatchTitle": "No matching settings",
+		"searchNoMatchDescription": "No setting name, description, or field name contains “{{query}}”.",
+		"unsavedChanges": "Unsaved changes",
+		"discardChanges": "Discard",
+		"saved": "Settings saved"
 	},
 	"providers": {
 		"title": "Providers",

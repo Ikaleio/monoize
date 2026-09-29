@@ -118,7 +118,7 @@ export function CodexModelSelector({
         <div className="max-h-96 overflow-y-auto rounded-md border">
           <FieldSet>
             <FieldLegend className="sr-only">{t("settings.codexModelsLegend")}</FieldLegend>
-            <FieldGroup data-slot="checkbox-group" className="gap-0">
+            <FieldGroup data-slot="checkbox-group" className="data-[slot=checkbox-group]:gap-0">
               {filteredModelIds.map((modelId, index) => {
                 const checkboxId = `codex-model-${index}`;
                 const isAvailable = availableSet.has(modelId);

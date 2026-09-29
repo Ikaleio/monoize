@@ -1,34 +1,54 @@
-import { PageHeaderSkeleton } from "@/components/ui/page-skeleton";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SettingsBody } from "./settings-layout";
 
 /**
- * Loading skeleton mirroring the settings page shape: header, horizontal
- * category rail chips, and one category panel (title band + field grid).
- * Contract: SSU-21.
+ * Loading skeleton with the ready page geometry: header, search and category
+ * navigation, then one category title above a card of setting rows (SSU-23).
  */
 export function SettingsPageSkeleton() {
   return (
     <div className="flex flex-col gap-6">
-      <PageHeaderSkeleton />
-      <div className="flex min-w-0 items-end gap-1 overflow-hidden border-b pb-3">
-        {Array.from({ length: 6 }).map((_, index) => (
-          <Skeleton key={index} className="h-9 w-28 shrink-0" />
-        ))}
+      <div className="flex flex-col gap-2 pb-1">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-4 w-64 max-w-full" />
       </div>
-      <div className="flex flex-col gap-8 pt-2">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-12">
-          <Skeleton className="h-10 w-64 max-w-full" />
-          <Skeleton className="h-4 w-full max-w-md" />
-        </div>
-        <div className="grid gap-6 sm:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="flex flex-col gap-2">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-9 w-full" />
+      <SettingsBody
+        aside={
+          <>
+            <Skeleton className="h-9 w-full" />
+            <div className="flex gap-1 overflow-hidden [@container(min-width:56rem)]:flex-col">
+              {Array.from({ length: 9 }, (_, index) => (
+                <Skeleton
+                  key={index}
+                  className="h-11 w-28 shrink-0 sm:h-9 [@container(min-width:56rem)]:w-full"
+                />
+              ))}
             </div>
-          ))}
+          </>
+        }
+      >
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-6 w-44" />
+            <Skeleton className="h-4 w-full max-w-md" />
+          </div>
+          <Card className="divide-y [container-type:inline-size]">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div
+                key={index}
+                className="grid gap-3 px-4 py-4 sm:px-6 [@container(min-width:40rem)]:grid-cols-[minmax(0,1fr)_20rem] [@container(min-width:40rem)]:gap-x-8"
+              >
+                <div className="flex flex-col gap-2">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-4 w-3/4" />
+                </div>
+                <Skeleton className="h-9 w-full" />
+              </div>
+            ))}
+          </Card>
         </div>
-      </div>
+      </SettingsBody>
     </div>
   );
 }

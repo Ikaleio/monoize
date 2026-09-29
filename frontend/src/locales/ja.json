@@ -504,7 +504,6 @@
 		"allowFreeWhenUnpricedDescription": "モデル価格行が無い場合、リクエストを拒否せず費用ゼロで決済します。既定はオフ（フェイルクローズ）。",
 		"allowFreeWhenMissingUsage": "Usage 欠落時の無料決済を許可",
 		"allowFreeWhenMissingUsageDescription": "課金対象レスポンスで上流が Usage を返さない場合、拒否せず費用ゼロで決済します。既定はオフ（フェイルクローズ）。",
-		"dashboardPerformanceKicker": "ダッシュボード",
 		"dashboardPerformanceTitle": "ホームのパフォーマンス対象",
 		"dashboardPerformanceDescription": "ユーザーダッシュボードのパフォーマンスパネルに表示するグループと Model を選択します。指標は直近 24 時間のグローバル集計です。",
 		"dashboardPerformanceGroups": "グループ",
@@ -516,7 +515,14 @@
 		"dashboardPerformanceModelsEmptyDescription": "モデル付きの Channel を有効にするか、検索をクリアしてください。",
 		"rechargePublicOrigin": "チャージ公開オリジン",
 		"rechargePublicOriginPlaceholder": "https://api.example.com",
-		"rechargePublicOriginDescription": "決済通知とリダイレクト URL の生成に使う公開オリジン（http/https、パスなし）。未設定の間はチャージ注文を作成できません。"
+		"rechargePublicOriginDescription": "決済通知とリダイレクト URL の生成に使う公開オリジン（http/https、パスなし）。未設定の間はチャージ注文を作成できません。",
+		"searchPlaceholder": "設定を検索",
+		"searchResultCount_other": "{{count}} 件一致",
+		"searchNoMatchTitle": "一致する設定はありません",
+		"searchNoMatchDescription": "「{{query}}」を含む設定名、説明、フィールド名はありません。",
+		"unsavedChanges": "未保存の変更があります",
+		"discardChanges": "変更を破棄",
+		"saved": "設定を保存しました"
 	},
 	"providers": {
 		"title": "プロバイダー",

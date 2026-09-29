@@ -504,7 +504,6 @@
 		"allowFreeWhenUnpricedDescription": "模型沒有價格記錄時以零費用結算，而不是拒絕請求。預設關閉（失敗即拒絕）。",
 		"allowFreeWhenMissingUsage": "缺少 Usage 允許免費結算",
 		"allowFreeWhenMissingUsageDescription": "上游在計費回應中未回傳 Usage 時以零費用結算，而不是拒絕。預設關閉（失敗即拒絕）。",
-		"dashboardPerformanceKicker": "儀表板",
 		"dashboardPerformanceTitle": "首頁效能目標",
 		"dashboardPerformanceDescription": "選擇在使用者儀表板效能面板中顯示的群組與 Model。指標為近 24 小時的全域彙總。",
 		"dashboardPerformanceGroups": "群組",
@@ -516,7 +515,14 @@
 		"dashboardPerformanceModelsEmptyDescription": "請啟用帶有模型的 Channel，或清空搜尋。",
 		"rechargePublicOrigin": "儲值公開 Origin",
 		"rechargePublicOriginPlaceholder": "https://api.example.com",
-		"rechargePublicOriginDescription": "用於產生付款回呼與返回網址的公開 Origin（http/https，不含路徑）。留空時無法建立儲值訂單。"
+		"rechargePublicOriginDescription": "用於產生付款回呼與返回網址的公開 Origin（http/https，不含路徑）。留空時無法建立儲值訂單。",
+		"searchPlaceholder": "搜尋設定",
+		"searchResultCount_other": "{{count}} 項符合",
+		"searchNoMatchTitle": "沒有符合的設定",
+		"searchNoMatchDescription": "沒有設定名稱、說明或欄位名稱包含「{{query}}」。",
+		"unsavedChanges": "有未儲存的變更",
+		"discardChanges": "捨棄變更",
+		"saved": "設定已儲存"
 	},
 	"providers": {
 		"title": "服務供應商",

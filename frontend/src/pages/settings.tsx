@@ -1,10 +1,15 @@
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save, Settings2 } from "lucide-react";
+import { SearchX } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
-import { Tabs } from "@/components/ui/tabs";
+import { TableToolbarSearch } from "@/components/ui/data-table-shell";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
+import { QueryError } from "@/components/ui/query-error";
+import { useReducedMotionPreference } from "@/hooks/use-reduced-motion";
+import { DashboardScrollParentContext } from "@/lib/dashboard-scroll";
 import {
   useProviders,
   useSettings,
@@ -12,8 +17,6 @@ import {
   useTransformRegistry,
 } from "@/lib/swr";
 import type { SystemSettings } from "@/lib/api";
-import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
-import { PageHeader } from "@/components/ui/page-header";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
 import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
 import { CodexModelSelector } from "@/components/settings/codex-model-selector";
@@ -21,10 +24,22 @@ import { ModelRedirectsEditor } from "@/components/settings/model-redirects-edit
 import { SuffixMapEditor } from "@/components/settings/suffix-map-editor";
 import {
   SETTINGS_CATEGORIES,
+  type SettingsCategory,
   type SettingsCategoryId,
 } from "@/components/settings/settings-categories";
-import { SettingsCategoryRail } from "@/components/settings/settings-category-rail";
-import { SettingsCategoryPanel } from "@/components/settings/settings-category-panel";
+import {
+  SettingsSearchContext,
+  matchSettingEntries,
+  normalizeSettingsQuery,
+} from "@/components/settings/settings-search";
+import {
+  SettingBlock,
+  SettingsBody,
+  SettingsCategorySection,
+  SettingsGroup,
+} from "@/components/settings/settings-layout";
+import { SettingsCategoryNav } from "@/components/settings/settings-category-nav";
+import { SettingsSaveBar } from "@/components/settings/settings-save-bar";
 import { SettingsPageSkeleton } from "@/components/settings/settings-skeleton";
 import { SiteSection } from "@/components/settings/site-section";
 import { AccessSection } from "@/components/settings/access-section";
@@ -34,7 +49,7 @@ import { ExtraFieldsSection } from "@/components/settings/extra-fields-section";
 
 export function SettingsPage() {
   const { t } = useTranslation();
-  const { data: settings, isLoading, mutate } = useSettings();
+  const { data: settings, isLoading, isValidating, mutate } = useSettings();
   const {
     data: providers,
     error: providersError,
@@ -43,10 +58,13 @@ export function SettingsPage() {
   } = useProviders();
   const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
     useTransformRegistry();
+  const scrollParent = useContext(DashboardScrollParentContext);
+  const reduceMotion = useReducedMotionPreference();
+  const contentRef = useRef<HTMLDivElement>(null);
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>("site");
+  const [query, setQuery] = useState("");
 
   // Use local state if user has made changes, otherwise use SWR data
   const currentSettings = localSettings ?? settings;
@@ -66,6 +84,38 @@ export function SettingsPage() {
     }
     return Array.from(modelIds).sort();
   }, [providers]);
+
+  const normalizedQuery = normalizeSettingsQuery(query);
+  const search = useMemo(
+    () => (normalizedQuery ? matchSettingEntries(normalizedQuery, t) : null),
+    [normalizedQuery, t]
+  );
+
+  // SSU-10: keep the top of the content column visible after it is replaced.
+  const revealContentTop = () => {
+    const content = contentRef.current;
+    if (!scrollParent || !content) return;
+    const offset = content.getBoundingClientRect().top - scrollParent.getBoundingClientRect().top;
+    if (offset < 0) scrollParent.scrollTo({ top: scrollParent.scrollTop + offset });
+  };
+
+  const handleQueryChange = (next: string) => {
+    // Entering or leaving search mode replaces the whole content column.
+    if (!normalizedQuery !== !normalizeSettingsQuery(next)) revealContentTop();
+    setQuery(next);
+  };
+
+  const handleSelectCategory = (id: SettingsCategoryId) => {
+    setActiveCategory(id);
+    if (search) {
+      document.getElementById(`settings-category-${id}`)?.scrollIntoView({
+        block: "start",
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+    } else {
+      revealContentTop();
+    }
+  };
 
   const handleChange = (updates: Partial<SystemSettings>) => {
     if (!currentSettings) return;
@@ -96,8 +146,7 @@ export function SettingsPage() {
       };
       await updateSettingsOptimistic(settingsToSave);
       setLocalSettings(null); // Clear local state to use SWR data
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      toast.success(t("settings.saved"));
       mutate();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("settings.failedSave"));
@@ -106,7 +155,7 @@ export function SettingsPage() {
     }
   };
 
-  const hasChanges = localSettings !== null;
+  const header = <PageHeader title={t("settings.title")} description={t("settings.description")} />;
 
   if (isLoading) {
     return (
@@ -118,9 +167,10 @@ export function SettingsPage() {
 
   if (!currentSettings) {
     return (
-      <div className="py-8 text-center text-muted-foreground">
-        {t("settings.failedLoad")}
-      </div>
+      <PageWrapper className="flex min-w-0 flex-col gap-6">
+        {header}
+        <QueryError onRetry={() => mutate()} retrying={isValidating} />
+      </PageWrapper>
     );
   }
 
@@ -132,49 +182,54 @@ export function SettingsPage() {
         return <AccessSection settings={currentSettings} onChange={handleChange} />;
       case "codex":
         return (
-          <CodexModelSelector
-            availableModelIds={availableCodexModelIds}
-            selectedModelIds={currentSettings.codex_model_ids ?? []}
-            isLoading={providersLoading}
-            loadError={providersError}
-            onRetry={() => void mutateProviders()}
-            onChange={(codex_model_ids) => handleChange({ codex_model_ids })}
-          />
+          <SettingsGroup id="codex">
+            <SettingBlock id="codex_model_ids">
+              <CodexModelSelector
+                availableModelIds={availableCodexModelIds}
+                selectedModelIds={currentSettings.codex_model_ids ?? []}
+                isLoading={providersLoading}
+                loadError={providersError}
+                onRetry={() => void mutateProviders()}
+                onChange={(codex_model_ids) => handleChange({ codex_model_ids })}
+              />
+            </SettingBlock>
+          </SettingsGroup>
         );
       case "suffix":
         return (
-          <SuffixMapEditor
-            value={currentSettings.reasoning_suffix_map}
-            onChange={(map) => handleChange({ reasoning_suffix_map: map })}
-          />
+          <SettingsGroup id="suffix">
+            <SettingBlock id="reasoning_suffix_map">
+              <SuffixMapEditor
+                value={currentSettings.reasoning_suffix_map}
+                onChange={(map) => handleChange({ reasoning_suffix_map: map })}
+              />
+            </SettingBlock>
+          </SettingsGroup>
         );
       case "redirects":
         return (
-          <ModelRedirectsEditor
-            value={currentSettings.global_model_redirects ?? []}
-            disabled={saving}
-            onChange={(global_model_redirects) =>
-              handleChange({ global_model_redirects })
-            }
-          />
+          <SettingsGroup id="redirects">
+            <SettingBlock id="global_model_redirects">
+              <ModelRedirectsEditor
+                value={currentSettings.global_model_redirects ?? []}
+                disabled={saving}
+                onChange={(global_model_redirects) => handleChange({ global_model_redirects })}
+              />
+            </SettingBlock>
+          </SettingsGroup>
         );
       case "transforms":
         return (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <Settings2 className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-medium">{t("transforms.titleGlobal")}</h3>
-            </div>
-            <TransformChainEditor
-              value={currentSettings.global_transforms ?? []}
-              registry={globalTransformRegistry}
-              loading={transformRegistryLoading}
-              onChange={(next) => handleChange({ global_transforms: next })}
-            />
-            <p className="text-sm text-muted-foreground">
-              {t("settings.globalTransformsHelp")}
-            </p>
-          </div>
+          <SettingsGroup id="transforms" footer={t("settings.globalTransformsHelp")}>
+            <SettingBlock id="global_transforms">
+              <TransformChainEditor
+                value={currentSettings.global_transforms ?? []}
+                registry={globalTransformRegistry}
+                loading={transformRegistryLoading}
+                onChange={(next) => handleChange({ global_transforms: next })}
+              />
+            </SettingBlock>
+          </SettingsGroup>
         );
       case "affinity":
         return <AffinitySection settings={currentSettings} onChange={handleChange} />;
@@ -194,33 +249,86 @@ export function SettingsPage() {
     }
   };
 
-  return (
-    <PageWrapper className="flex min-w-0 flex-col gap-6">
+  const renderCategory = (category: SettingsCategory) => (
+    <SettingsCategorySection key={category.id} category={category}>
+      {renderCategoryContent(category.id)}
+    </SettingsCategorySection>
+  );
+
+  let content;
+  if (!search) {
+    const category = SETTINGS_CATEGORIES.find((item) => item.id === activeCategory)!;
+    content = (
       <motion.div
-        initial={{ opacity: 0, y: -10 }}
+        key={category.id}
+        initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
       >
-        <PageHeader title={t("settings.title")} description={t("settings.description")} actions={(<AnimatedButton>
-          <Button onClick={handleSave} disabled={saving || !hasChanges}>
-            <Save className="mr-2 h-4 w-4" />
-            {saving ? t("common.saving") : saved ? t("common.saved") : t("common.saveChanges")}
-          </Button>
-        </AnimatedButton>)} />
+        {renderCategory(category)}
       </motion.div>
+    );
+  } else {
+    content = (
+      <div className="flex flex-col gap-4">
+        <p aria-live="polite" className="text-sm text-muted-foreground">
+          {t("settings.searchResultCount", { count: search.entryIds.size })}
+        </p>
+        {search.entryIds.size === 0 ? (
+          <EmptyState
+            icon={<SearchX className="size-6" aria-hidden="true" />}
+            title={t("settings.searchNoMatchTitle")}
+            description={t("settings.searchNoMatchDescription", { query: query.trim() })}
+          />
+        ) : (
+          <div className="flex flex-col gap-10">
+            {SETTINGS_CATEGORIES.filter((category) =>
+              search.countByCategory.has(category.id)
+            ).map(renderCategory)}
+          </div>
+        )}
+      </div>
+    );
+  }
 
-      <Tabs
-        value={activeCategory}
-        onValueChange={(value) => setActiveCategory(value as SettingsCategoryId)}
-        className="flex min-w-0 flex-col gap-8"
+  return (
+    <PageWrapper className="flex min-w-0 flex-col gap-6">
+      {header}
+      <SettingsBody
+        aside={
+          <>
+            <TableToolbarSearch
+              type="search"
+              value={query}
+              onChange={(event) => handleQueryChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") handleQueryChange("");
+              }}
+              placeholder={t("settings.searchPlaceholder")}
+              aria-label={t("settings.searchPlaceholder")}
+              autoComplete="off"
+              containerClassName="sm:w-full"
+            />
+            <SettingsCategoryNav
+              activeId={activeCategory}
+              matchCounts={search?.countByCategory ?? null}
+              onSelect={handleSelectCategory}
+            />
+          </>
+        }
       >
-        <SettingsCategoryRail activeId={activeCategory} />
-        {SETTINGS_CATEGORIES.map((category, index) => (
-          <SettingsCategoryPanel key={category.id} category={category} index={index}>
-            {renderCategoryContent(category.id)}
-          </SettingsCategoryPanel>
-        ))}
-      </Tabs>
+        <SettingsSearchContext.Provider value={search?.entryIds ?? null}>
+          <div ref={contentRef} className="min-w-0">
+            {content}
+          </div>
+        </SettingsSearchContext.Provider>
+        <SettingsSaveBar
+          open={localSettings !== null || saving}
+          saving={saving}
+          onDiscard={() => setLocalSettings(null)}
+          onSave={handleSave}
+        />
+      </SettingsBody>
     </PageWrapper>
   );
 }

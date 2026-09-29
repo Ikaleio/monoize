@@ -72,12 +72,7 @@ export function DashboardPerformanceTargets({
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <FieldLabel>{t("settings.dashboardPerformanceTitle")}</FieldLabel>
-        <FieldDescription>
-          {t("settings.dashboardPerformanceDescription")}
-        </FieldDescription>
-      </div>
+      <FieldDescription>{t("settings.dashboardPerformanceDescription")}</FieldDescription>
 
       <div className="space-y-2">
         <FieldLabel>{t("settings.dashboardPerformanceGroups")}</FieldLabel>
@@ -116,9 +111,7 @@ export function DashboardPerformanceTargets({
           <Alert variant="destructive">
             <AlertTitle>{t("settings.dashboardPerformanceModelsLoadFailed", "Failed to load models")}</AlertTitle>
             <AlertDescription className="flex items-center justify-between gap-2">
-              <span className="text-xs">
-                {modelsError instanceof Error ? modelsError.message : String(modelsError)}
-              </span>
+              <span>{t("common.loadFailed")}</span>
               <Button type="button" size="sm" variant="outline" onClick={onRetryModels}>
                 <RefreshCw className="mr-1 h-3.5 w-3.5" />
                 {t("common.retry", "Retry")}
@@ -155,9 +148,9 @@ export function DashboardPerformanceTargets({
                     checked={checked}
                     onCheckedChange={(value) => toggleModel(modelId, value === true)}
                   />
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{modelId}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-sm">{modelId}</span>
                   {unavailable ? (
-                    <Badge variant="outline" className="shrink-0 text-[10px]">
+                    <Badge variant="outline" className="shrink-0">
                       {t("common.unavailable", "Unavailable")}
                     </Badge>
                   ) : null}

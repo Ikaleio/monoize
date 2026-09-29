@@ -393,10 +393,11 @@ PL25. Provider editor MUST use an explicit workbench information architecture.
 
 ## 3. Playground Page
 
-ST0. The page-level layout of `/dashboard/admin-settings` (horizontal category rail,
-category panels, skeleton, and motion) is governed by `spec/system-settings-ui.spec.md`.
-ST1-ST7 below define field-level behavior; where an ST statement calls the container a
-"card", the container is the corresponding category panel/section defined there.
+ST0. The page-level layout of `/dashboard/admin-settings` (category navigation, search,
+category sections, save bar, skeleton, and motion) is governed by
+`spec/system-settings-ui.spec.md`. ST1-ST7 below define field-level behavior; where an ST
+statement calls the container a "card" or "section", the container is the corresponding
+category section defined there.
 
 ST1. `/dashboard/admin-settings` MUST include a "Health Monitoring" section for Monoize active probe settings.
 
@@ -443,7 +444,7 @@ ST6c. A configured model absent from the available model set MUST remain visible
 
 ST6d. The section MUST state that standard OpenAI `data` continues to include every available model and that `codex_model_ids` controls only the extended Codex `models` catalog.
 
-ST6e. At viewport widths below `640px`, the settings category rail and the active category panel MUST shrink to the available content width without creating page-level horizontal overflow; the rail scrolls inside its own container per `system-settings-ui.spec.md` SSU-5.
+ST6e. At viewport widths below `640px`, the settings category navigation and the rendered category sections MUST shrink to the available content width without creating page-level horizontal overflow; the navigation row scrolls inside its own container per `system-settings-ui.spec.md` SSU-5.
 
 ST7. `/dashboard/admin-settings` MUST include a "Global Model Redirects" section
 bound to `GET/PUT /api/dashboard/settings` field `global_model_redirects`.

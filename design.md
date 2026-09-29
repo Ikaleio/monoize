@@ -1,7 +1,7 @@
 ---
 name: monoize-dashboard-design
-description: 用于 Monoize 控制台的管理列表页、目录页、概览页与钱包页：Provider 列表的 RPM/TPM 区域、令牌管理、支付管理、分组、订阅套餐、模型广场、系统仪表盘和钱包。读者是管理员与普通用户；目标是在明暗主题及 390–1440px 视口中查找、比较、判断并操作条目。
-version: 2026-09-26
+description: 用于 Monoize 控制台的管理列表页、目录页、概览页、设置页与钱包页：Provider 列表的 RPM/TPM 区域、令牌管理、支付管理、分组、订阅套餐、模型广场、系统仪表盘、系统设置和钱包。读者是管理员与普通用户；目标是在明暗主题及 390–1440px 视口中查找、比较、判断并操作条目。
+version: 2026-09-28
 ---
 
 # 1. 范围与优先级
@@ -18,15 +18,16 @@ version: 2026-09-26
 |订阅套餐|`/dashboard/plans`|管理员|
 |模型广场|`/dashboard/marketplace`|全部用户|
 |系统仪表盘|`/dashboard/admin`|管理员|
+|系统设置|`/dashboard/admin-settings`|管理员|
 
-[必须] 不将本文件用于登录页、文档站、Playground、请求日志、首页仪表盘、系统设置和其他未列出页面。
+[必须] 不将本文件用于登录页、文档站、Playground、请求日志、首页仪表盘、用户设置（`/settings`）和其他未列出页面。
 [必须] 沿用 `DESIGN_SYSTEM.md` 与 `spec/frontend-design-system.spec.md` 的全局规则。
-[必须] 以 `spec/dashboard-ui-layout.spec.md`、`spec/recharge-system.spec.md`、`spec/admin-dashboard.spec.md`、`spec/model-marketplace.spec.md`、`spec/billing-plan-subscriptions.spec.md` 的页面条目为行为依据。
+[必须] 以 `spec/dashboard-ui-layout.spec.md`、`spec/recharge-system.spec.md`、`spec/admin-dashboard.spec.md`、`spec/model-marketplace.spec.md`、`spec/billing-plan-subscriptions.spec.md`、`spec/system-settings-ui.spec.md` 的页面条目为行为依据。
 [必须] 冲突时依次保护：spec 与用户要求、无障碍与可用性、读者任务、本文件、装饰细节。
 
 # 2. 品牌与读者
 
-[必须] 让读者在首屏看到条目列表或余额，并能直接执行一次操作：启停、编辑、删除、复制、退款或充值。
+[必须] 让读者在首屏看到条目列表或余额，并能直接执行一次操作：启停、编辑、删除、复制、退款或充值。设置页的首屏要求见第 3.7 节。
 [必须] 系统仪表盘首屏回答“是否有异常渠道”：渠道健康区块排在第一位，并在区块头给出渠道总数与异常数。
 [建议] 以“克制的控制台”呈现品牌。可观察表现：
 
@@ -102,6 +103,20 @@ version: 2026-09-26
 [必须] 系统状态与从机状态使用键值行：每行左侧标签、右侧值，行间 `divide-y`。
 [必须] 页面不使用固定页脚；原页脚的健康状态条目与亲和绑定数并入系统状态。
 
+## 3.7 设置页（系统设置）
+
+[必须] 按以下顺序组成页面：`PageHeader`（标题与说明，无操作）、设置主体。
+[必须] 设置主体宽度 ≥ 56rem 时分两列：左列 13rem，依次放搜索框与分类导航，并在 `<main>` 内 `sticky top-0`；右列放分类区块与保存条。宽度 < 56rem 时单列：搜索框、单行横向滚动的分类导航、分类区块、保存条。
+[必须] 首屏同时出现搜索框、全部分类入口（宽屏）和当前分类的第一组设置项。
+[必须] 分类导航只写分类名；不加序号、图标或描述。
+[必须] 分类区块依次为：`h2` 分类名、一句分类说明、各分组。分组有标题时，标题是分组 `Card` 上方的 `h3`。
+[必须] 表单类分组把设置项放在一张 `Card` 内，行间 `divide-y`；编辑器类分组（Codex 模型、推理后缀、模型重定向、全局变换、首页性能目标）不加 `Card`，因为编辑器自带边框。
+[必须] 设置行：开关行左侧放标签与说明，右侧放 `Switch`；其他行在分组宽度 ≥ 40rem 时分两列 `minmax(0,1fr) 20rem`，控件在右列，窄时上下堆叠。
+[必须] 数值字段每行一个；不再排成 2–3 列网格。原因：多列网格让说明文字高度不同，标签与输入框无法逐行对齐。
+[必须] 搜索在全部分类中逐项过滤设置行；结果行保留可编辑控件。导航显示各分类的匹配数，零匹配的分类按钮 `disabled`。
+[必须] 保存条只在有未保存修改时出现，`sticky bottom-0`，放“未保存的修改”文字、“放弃修改”`outline` 按钮与“保存修改”默认按钮。它是本页唯一的实心主要操作。来源：基线在 1440 × 900 下健康监测分类高 2100px，页首保存按钮在编辑底部字段时不可见。
+[建议] 不为分类区块再加卡片或大号衬线标题。来源：基线 36px 衬线分类标题与导航中已选分类名重复。
+
 # 4. 视觉规则
 
 ## 4.1 字体
@@ -119,6 +134,11 @@ version: 2026-09-26
 |余额主数值|`text-4xl font-semibold tabular-nums`|钱包余额摘要|
 |键值行|标签 `text-sm text-muted-foreground`；值 `text-sm text-end`|系统状态、从机状态|
 |分段控件|`Button size="sm"`，`text-sm tabular-nums`|消费窗口|
+|设置分类标题|`text-lg font-semibold`|设置页分类区块 `h2`|
+|设置分组标题|`text-sm font-semibold`|分组 `Card` 上方的 `h3`|
+|设置项标签|`Label`：`text-sm font-medium`|设置行|
+|设置项说明|`text-sm text-muted-foreground`|设置行标签下方|
+|设置导航项|`text-sm`；当前项 `font-medium text-foreground`|分类导航|
 
 [必须] 页面标题一律通过 `PageHeader` 渲染；钱包页不再使用 30px 自写 `h1`。
 [必须] 列表行内除徽标外全部使用 `text-sm`；不在行内使用 `text-xs`、`text-[10px]` 或 `text-[11px]`。
@@ -186,6 +206,7 @@ version: 2026-09-26
 [必须] 启停使用 `Switch`，其 `aria-label` 包含条目名称。
 [必须] 行内图标按钮使用 `variant="ghost" size="icon"`，尺寸 `size-11 sm:size-9`，并提供 `aria-label`。
 [必须] 每个可聚焦元素保留 `focus-visible:ring-2 ring-ring`。
+[必须] 横向滚动容器内的可聚焦元素加 `focus-visible:ring-inset`。原因：`overflow-x-auto` 同时裁掉纵向溢出，外扩焦点环的外沿不可见。来源：设置页分类导航在 1024 × 800 下的键盘焦点检查。适用：所有横向滚动的导航与 Tab 行。
 [必须] 首次加载显示与就绪布局相同结构的骨架；后台刷新时保留缓存数据。
 [必须] 空列表使用 `EmptyState`，并在有权限时提供创建操作。
 [必须] 不可执行的操作使用 `disabled`，并用 `title` 或提示说明原因。
@@ -199,6 +220,7 @@ version: 2026-09-26
 [必须] 沿用 `PageWrapper` 的页面进入动效和 `AnimatedButton` 的按钮缩放。
 [必须] 钱包资金记录行保留 RC-W8 的弹簧进入动效。
 [必须] 管理列表行不添加进入位移或缩放动效。
+[必须] 设置页保存条与分类切换只使用透明度与 ≤ 8px 纵向位移。
 [必须] 减少动效时只允许透明度变化。
 
 # 5. 可用原语
@@ -227,7 +249,12 @@ version: 2026-09-26
 |切换|`Tabs`、`TabsList`、`TabsTrigger`、`TabsContent`|`frontend/src/components/ui/tabs.tsx`|支付管理、钱包|已实现|
 |对话框|`Dialog`、`AlertDialog`|`frontend/src/components/ui/`|编辑与破坏性确认|已实现|
 |颜色与字体|语义 token、`font-display`、`font-mono`|`frontend/src/index.css`、`tailwind.config.cjs`|全部页面|已实现|
-|取数|`useApiKeys`、`usePaymentChannels`、`useRechargeOrders`、`useDashboardGroups`、`useProviders`、`useBillingPlans`、`useMarketplaceModels`、`useAdminOverview` 与对应乐观更新函数|`frontend/src/lib/swr.ts`|数据与变更|已实现|
+|设置模型|`SETTINGS_CATEGORIES`、`SETTINGS_GROUPS`、`SETTING_ENTRIES`|`frontend/src/components/settings/settings-categories.ts`|设置分类、分组与可搜索设置项的唯一来源|已实现|
+|设置搜索|`SettingsSearchContext`、`matchSettingEntries`、`normalizeSettingsQuery`|`frontend/src/components/settings/settings-search.ts`|过滤设置行|已实现|
+|设置布局|`SettingsBody`、`SettingsCategorySection`、`SettingsGroup`、`SettingRow`（`switchControl`）、`SettingBlock`|`frontend/src/components/settings/settings-layout.tsx`|设置页分类区块、分组、设置行与编辑器|已实现|
+|设置导航|`SettingsCategoryNav`|`frontend/src/components/settings/settings-category-nav.tsx`|设置页分类导航|已实现|
+|保存条|`SettingsSaveBar`|`frontend/src/components/settings/settings-save-bar.tsx`|设置页未保存修改|已实现|
+|取数|`useApiKeys`、`usePaymentChannels`、`useRechargeOrders`、`useDashboardGroups`、`useProviders`、`useBillingPlans`、`useMarketplaceModels`、`useAdminOverview`、`useSettings`、`useTransformRegistry` 与对应乐观更新函数|`frontend/src/lib/swr.ts`|数据与变更|已实现|
 
 `DataList` 最小用法：
 
@@ -321,3 +348,5 @@ version: 2026-09-26
 |模型广场中的一条模型记录|目录条目（代码 `MarketplaceModelRecord`）|
 |消费统计的滚动时间段|消费窗口|
 |≤ 4 列的紧凑表原语|`Table`|
+|系统设置中可单独搜索的最小单元|设置项（代码 `SettingEntry`）|
+|设置项的一级归类|设置分类（代码 `SettingsCategory`）|
