@@ -1,22 +1,12 @@
 use crate::config::ProviderType;
+use crate::transforms::anthropic_cache::CacheConfig;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::Node;
+use crate::urp::{AnthropicCacheTarget, Node};
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde_json::{Value, json};
-use std::any::Any;
-
-#[derive(Debug, Deserialize)]
-struct Config {}
-
-impl TransformConfig for Config {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+use serde_json::Value;
 
 pub struct CacheAnthropicAutoTransform;
 
@@ -55,13 +45,11 @@ impl Transform for CacheAnthropicAutoTransform {
     }
 
     fn config_schema(&self) -> Value {
-        json!({"type": "object", "properties": {}, "additionalProperties": false})
+        CacheConfig::schema()
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config = serde_json::from_value(raw)
-            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
-        Ok(Box::new(cfg))
+        CacheConfig::parse(raw)
     }
 
     fn init_state(&self) -> Box<dyn TransformState> {
@@ -73,15 +61,13 @@ impl Transform for CacheAnthropicAutoTransform {
         data: UrpData<'_>,
         _phase: Phase,
         context: &TransformRuntimeContext,
-        _config: &dyn TransformConfig,
+        config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
-        if context.upstream_provider_type != Some(ProviderType::Messages)
-            || req.extra_body.contains_key("cache_control")
-        {
+        if context.upstream_provider_type != Some(ProviderType::Messages) {
             return Ok(());
         }
 
@@ -103,12 +89,12 @@ impl Transform for CacheAnthropicAutoTransform {
                 }
             })
             .count();
-        if explicit_breakpoints >= 4 {
-            return Ok(());
-        }
-
-        req.extra_body
-            .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+        CacheConfig::from_dyn(config)?.apply_marker(
+            &mut req.extra_body,
+            &mut req.context.anthropic_cache_markers,
+            AnthropicCacheTarget::Request,
+            explicit_breakpoints < 4,
+        );
         Ok(())
     }
 }

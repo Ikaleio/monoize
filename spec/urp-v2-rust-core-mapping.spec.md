@@ -640,7 +640,7 @@ RTYPE-NEW-7. `UrpRequest.context` MUST hold runtime identities independently of 
 
 RTYPE-NEW-7a. Serialization MUST omit `UrpRequest.context`. Deserialization MUST consume and discard any JSON `context` value.
 The discarded value MUST NOT enter flattened `extra_body`. Missing context MUST produce the default runtime context.
-`RequestContext` MUST hold optional `ResponseHistoryContext` and a map from wire tool names to `ToolTransport`.
+`RequestContext` MUST hold optional `ResponseHistoryContext`, a map from wire tool names to `ToolTransport`, and the set of Monoize-owned Anthropic cache targets defined by `auto-cache-transforms.spec.md` DEF-13.
 `ResponseHistoryContext` MUST contain typed response ID, authorization scope, storage flag, and optional previous response ID.
 `ToolTransport` MUST contain a target `ProviderProtocol`, a wire `ToolCallType`, and an original `ToolIdentity`.
 `ToolIdentity` MUST contain optional namespace, name, and `ToolCallType`.

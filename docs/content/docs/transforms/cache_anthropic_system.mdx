@@ -24,7 +24,15 @@ The transform changes nothing when the request has no system or developer node.
 
 ## Configuration
 
-This transform has no options. Use an empty `config` object.
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `ttl` | string | No | `"5m"` | `5m` or `1h`. Cache lifetime of the inserted breakpoint. `5m` sends `{"type": "ephemeral"}`. `1h` adds `"ttl": "1h"`. |
+
+A 1-hour cache write costs 2x the base input price. A 5-minute cache write costs 1.25x.
+
+Anthropic rejects a request when a `1h` breakpoint follows a `5m` breakpoint. Use the same `ttl` in all Anthropic `cache_*` rules, or use `1h` only on earlier breakpoints.
+
+Provider rules run before API key rules. A later rule retunes the TTL of a breakpoint that Monoize inserted, so an API key rule overrides a Provider rule. Monoize never changes a `cache_control` that the client sent.
 
 ### Example rule
 

@@ -1,6 +1,6 @@
 use super::{ProviderProtocol, ToolCallType};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Trusted request state that stays outside serialized URP and provider payloads.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -9,6 +9,16 @@ pub struct RequestContext {
     pub api_key_id: Option<String>,
     pub response_history: Option<ResponseHistoryContext>,
     pub tool_transports: HashMap<String, ToolTransport>,
+    /// Anthropic cache targets whose `cache_control` a Monoize rule inserted in this attempt.
+    /// Later rules may retune these markers; markers sent by the client are never touched.
+    pub anthropic_cache_markers: HashSet<AnthropicCacheTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnthropicCacheTarget {
+    System,
+    LastToolResult,
+    Request,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

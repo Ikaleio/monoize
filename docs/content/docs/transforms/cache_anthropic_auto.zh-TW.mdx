@@ -21,7 +21,15 @@ description: 為 Anthropic Messages 請求啟用頂層自動快取。
 
 ## 配置
 
-此變換沒有設定項。`config` 使用空物件。
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `ttl` | string | 否 | `"5m"` | `5m` 或 `1h`。插入的快取斷點的有效期。`5m` 發送 `{"type": "ephemeral"}`，`1h` 額外加入 `"ttl": "1h"`。 |
+
+1 小時快取寫入按基礎輸入價的 2 倍計費，5 分鐘快取寫入按 1.25 倍計費。
+
+`1h` 斷點位於 `5m` 斷點之後時，Anthropic 會拒絕請求。所有 Anthropic `cache_*` 規則應使用相同的 `ttl`，或只在靠前的斷點上使用 `1h`。最後一個區塊已有 TTL 不同的顯式 `cache_control` 時，Anthropic 也會拒絕請求。
+
+Provider 規則先於 API 金鑰規則執行。後執行的規則會改寫 Monoize 已插入斷點的 TTL，因此 API 金鑰規則覆蓋 Provider 規則。用戶端自帶的 `cache_control` 始終保持不變。
 
 ```json
 {

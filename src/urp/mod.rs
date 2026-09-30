@@ -20,7 +20,9 @@ pub mod decode;
 pub mod encode;
 pub mod greedy;
 pub(crate) mod internal_legacy_bridge;
-pub use context::{RequestContext, ResponseHistoryContext, ToolIdentity, ToolTransport};
+pub use context::{
+    AnthropicCacheTarget, RequestContext, ResponseHistoryContext, ToolIdentity, ToolTransport,
+};
 pub mod media;
 #[cfg(test)]
 mod media_transport_tests;

@@ -1,21 +1,11 @@
+use crate::transforms::anthropic_cache::CacheConfig;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::Node;
+use crate::urp::{AnthropicCacheTarget, Node};
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde_json::{Value, json};
-use std::any::Any;
-
-#[derive(Debug, Deserialize)]
-struct Config {}
-
-impl TransformConfig for Config {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+use serde_json::Value;
 
 pub struct CacheAnthropicToolUseTransform;
 
@@ -56,17 +46,11 @@ impl Transform for CacheAnthropicToolUseTransform {
     }
 
     fn config_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        })
+        CacheConfig::schema()
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config = serde_json::from_value(raw)
-            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
-        Ok(Box::new(cfg))
+        CacheConfig::parse(raw)
     }
 
     fn init_state(&self) -> Box<dyn TransformState> {
@@ -78,7 +62,7 @@ impl Transform for CacheAnthropicToolUseTransform {
         data: UrpData<'_>,
         _phase: Phase,
         _context: &TransformRuntimeContext,
-        _config: &dyn TransformConfig,
+        config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         let UrpData::Request(req) = data else {
@@ -89,18 +73,14 @@ impl Transform for CacheAnthropicToolUseTransform {
             return Ok(());
         }
 
-        if count_cache_breakpoints(req) >= 4 {
-            return Ok(());
-        }
-
+        let slot_free = count_cache_breakpoints(req) < 4;
         let last_node = req.input.last_mut().expect("checked trailing tool result");
-        if node_has_cache_control(last_node) {
-            return Ok(());
-        }
-
-        last_node
-            .extra_body_mut()
-            .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+        CacheConfig::from_dyn(config)?.apply_marker(
+            last_node.extra_body_mut(),
+            &mut req.context.anthropic_cache_markers,
+            AnthropicCacheTarget::LastToolResult,
+            slot_free,
+        );
 
         Ok(())
     }

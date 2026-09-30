@@ -1,21 +1,11 @@
+use crate::transforms::anthropic_cache::CacheConfig;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Node, OrdinaryRole};
+use crate::urp::{AnthropicCacheTarget, Node, OrdinaryRole};
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde_json::{Value, json};
-use std::any::Any;
-
-#[derive(Debug, Deserialize)]
-struct Config {}
-
-impl TransformConfig for Config {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+use serde_json::Value;
 
 pub struct CacheAnthropicSystemTransform;
 
@@ -57,17 +47,11 @@ impl Transform for CacheAnthropicSystemTransform {
     }
 
     fn config_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        })
+        CacheConfig::schema()
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config = serde_json::from_value(raw)
-            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
-        Ok(Box::new(cfg))
+        CacheConfig::parse(raw)
     }
 
     fn init_state(&self) -> Box<dyn TransformState> {
@@ -79,16 +63,12 @@ impl Transform for CacheAnthropicSystemTransform {
         data: UrpData<'_>,
         _phase: Phase,
         _context: &TransformRuntimeContext,
-        _config: &dyn TransformConfig,
+        config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
-
-        if count_cache_breakpoints(req) >= 4 {
-            return Ok(());
-        }
 
         let system_idx = req.input.iter().rposition(|node| {
             matches!(
@@ -100,14 +80,13 @@ impl Transform for CacheAnthropicSystemTransform {
             return Ok(());
         };
 
-        let already_has_cache = node_has_cache_control(&req.input[idx]);
-        if already_has_cache {
-            return Ok(());
-        }
-
-        req.input[idx]
-            .extra_body_mut()
-            .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+        let slot_free = count_cache_breakpoints(req) < 4;
+        CacheConfig::from_dyn(config)?.apply_marker(
+            req.input[idx].extra_body_mut(),
+            &mut req.context.anthropic_cache_markers,
+            AnthropicCacheTarget::System,
+            slot_free,
+        );
 
         Ok(())
     }

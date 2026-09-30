@@ -21,7 +21,15 @@ description: 为 Anthropic Messages 请求启用顶层自动缓存。
 
 ## 配置
 
-此变换没有配置项。`config` 使用空对象。
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `ttl` | string | 否 | `"5m"` | `5m` 或 `1h`。插入的缓存断点的有效期。`5m` 发送 `{"type": "ephemeral"}`，`1h` 额外添加 `"ttl": "1h"`。 |
+
+1 小时缓存写入按基础输入价的 2 倍计费，5 分钟缓存写入按 1.25 倍计费。
+
+`1h` 断点位于 `5m` 断点之后时，Anthropic 会拒绝请求。所有 Anthropic `cache_*` 规则应使用相同的 `ttl`，或只在靠前的断点上使用 `1h`。最后一个块已有 TTL 不同的显式 `cache_control` 时，Anthropic 也会拒绝请求。
+
+Provider 规则先于 API 密钥规则运行。后运行的规则会改写 Monoize 已插入断点的 TTL，因此 API 密钥规则覆盖 Provider 规则。客户端自带的 `cache_control` 始终保持不变。
 
 ```json
 {
