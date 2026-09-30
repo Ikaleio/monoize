@@ -662,6 +662,8 @@ pub async fn create_embeddings(
                     Value::String(attempt.upstream_model.clone()),
                 );
             }
+            let request_body = upstream::JsonBody::new(&upstream_body);
+            drop(upstream_body);
 
             let provider = build_channel_provider_config(&attempt);
             let http = client_http_for_attempt(&state, &attempt)?;
@@ -670,7 +672,7 @@ pub async fn create_embeddings(
                 &provider,
                 &attempt.api_key,
                 "/v1/embeddings",
-                &upstream_body,
+                request_body,
                 attempt.request_timeout_ms,
                 &[],
             )

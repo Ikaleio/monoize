@@ -5,11 +5,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Records TTFB on the first call only: `pending_started_at` is taken so later events skip the
+/// metrics lock entirely.
 pub(crate) async fn mark_stream_ttfb_if_needed(
-    started_at: Option<std::time::Instant>,
+    pending_started_at: &mut Option<std::time::Instant>,
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) {
-    let Some(started_at) = started_at else {
+    let Some(started_at) = pending_started_at.take() else {
         return;
     };
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
@@ -19,6 +21,67 @@ pub(crate) async fn mark_stream_ttfb_if_needed(
     if guard.ttfb_ms.is_none() {
         guard.ttfb_ms = Some(started_at.elapsed().as_millis() as u64);
     }
+}
+
+/// Runtime-metric updates observed for one upstream stream event, applied by
+/// `record_stream_chunk_metrics` under a single lock acquisition.
+#[derive(Default)]
+pub(crate) struct StreamChunkMetrics<'a> {
+    pub(crate) ttfb_ms: Option<u64>,
+    pub(crate) done_sentinel: bool,
+    pub(crate) response_service_tier: Option<&'a str>,
+    /// Non-terminal observation; same semantics as `record_observed_upstream_response_model(.., false)`.
+    pub(crate) response_model: Option<&'a str>,
+    pub(crate) usage: Option<urp::Usage>,
+    pub(crate) visible_output_bytes: u64,
+}
+
+pub(crate) async fn record_stream_chunk_metrics(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    chunk: StreamChunkMetrics<'_>,
+) {
+    let StreamChunkMetrics {
+        ttfb_ms,
+        done_sentinel,
+        response_service_tier,
+        response_model,
+        usage,
+        visible_output_bytes,
+    } = chunk;
+    let response_model = response_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    if ttfb_ms.is_none()
+        && !done_sentinel
+        && response_service_tier.is_none()
+        && response_model.is_none()
+        && usage.is_none()
+        && visible_output_bytes == 0
+    {
+        return;
+    }
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    let mut guard = runtime_metrics.lock().await;
+    if guard.ttfb_ms.is_none() {
+        guard.ttfb_ms = ttfb_ms;
+    }
+    if done_sentinel {
+        guard.terminal.saw_done_sentinel = true;
+    }
+    if let Some(service_tier) = response_service_tier {
+        apply_response_service_tier(&mut guard, service_tier);
+    }
+    if let Some(model) = response_model {
+        apply_observed_upstream_response_model(&mut guard, model, false);
+    }
+    if let Some(usage) = usage {
+        apply_stream_usage(&mut guard, usage);
+    }
+    guard.visible_output_bytes = guard
+        .visible_output_bytes
+        .saturating_add(visible_output_bytes);
 }
 
 pub(crate) async fn record_stream_usage_if_present(
@@ -31,17 +94,16 @@ pub(crate) async fn record_stream_usage_if_present(
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
         return;
     };
-    let mut guard = runtime_metrics.lock().await;
-    let new_total = usage.total_tokens();
-    let replace = match guard.usage.as_ref() {
-        Some(existing) => {
-            let existing_total = existing.total_tokens();
-            new_total >= existing_total
-        }
+    apply_stream_usage(&mut *runtime_metrics.lock().await, usage);
+}
+
+fn apply_stream_usage(metrics: &mut StreamRuntimeMetrics, usage: urp::Usage) {
+    let replace = match metrics.usage.as_ref() {
+        Some(existing) => usage.total_tokens() >= existing.total_tokens(),
         None => true,
     };
     if replace {
-        guard.usage = Some(usage);
+        metrics.usage = Some(usage);
     }
 }
 
@@ -125,7 +187,13 @@ pub(crate) async fn record_stream_response_service_tier(
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
         return;
     };
-    runtime_metrics.lock().await.response_service_tier = Some(service_tier.to_string());
+    apply_response_service_tier(&mut *runtime_metrics.lock().await, service_tier);
+}
+
+fn apply_response_service_tier(metrics: &mut StreamRuntimeMetrics, service_tier: &str) {
+    if metrics.response_service_tier.as_deref() != Some(service_tier) {
+        metrics.response_service_tier = Some(service_tier.to_string());
+    }
 }
 
 pub(crate) async fn record_observed_upstream_response_model(
@@ -140,7 +208,15 @@ pub(crate) async fn record_observed_upstream_response_model(
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
         return;
     };
-    let mut metrics = runtime_metrics.lock().await;
+    apply_observed_upstream_response_model(&mut *runtime_metrics.lock().await, model, terminal);
+}
+
+/// `model` must already be trimmed and non-empty.
+fn apply_observed_upstream_response_model(
+    metrics: &mut StreamRuntimeMetrics,
+    model: &str,
+    terminal: bool,
+) {
     if metrics.response_model_terminal && !terminal {
         return;
     }

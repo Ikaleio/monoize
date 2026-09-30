@@ -473,6 +473,11 @@ pub struct UserStore {
     pub(crate) request_log_batcher: crate::db_cache::RequestLogBatcher,
     pub(crate) api_key_cache: crate::db_cache::ApiKeyCache,
     pub(crate) balance_cache: crate::db_cache::BalanceCache,
+    /// DPT-BP2: sub-account balances keyed by API-key id.
+    pub(crate) sub_account_balance_cache: crate::db_cache::BalanceCache,
+    /// DPT-RC8: `group_id -> billing_ratio` for every registry row.
+    pub(crate) group_ratio_cache:
+        crate::db_cache::SnapshotCache<std::collections::HashMap<String, String>>,
     pub(crate) registration_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub(crate) api_key_creation_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     /// Enabled custom-transform snapshot used for CJS-AKV-2 rule checks.

@@ -408,22 +408,22 @@ pub(super) async fn forward_stream_typed(
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
     let transform_match_model = resolve_model_suffix(&state, &mut req).await?;
-    // Preserve the suffix-normalized request so each per-attempt iteration can
-    // re-derive the transformed request from a pristine base (see the matching
-    // comment in `execute_nonstream_typed`).
-    let mut original_req = req.clone();
     let logical_model = req.model.clone();
+    let reasoning_effort = req.reasoning.as_ref().and_then(|r| r.effort.clone());
+    let pending_request_envelope_extra = find_pending_request_envelope_extra(&req.input);
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let mut attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
-    bind_media_request_routes(&mut original_req, &mut attempts)?;
-    let history_context =
-        responses_history::HistoryContext::from_request(&state, &original_req, downstream);
+    // Session affinity derives from the request as decoded, before media
+    // routes are bound into its input nodes.
     attach_client_session_id(&mut attempts, client_session_id, Some(&req));
+    bind_media_request_routes(&mut req, &mut attempts)?;
+    let mut history_context =
+        responses_history::HistoryContext::from_request(&state, &req, downstream);
     ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
     let pending_request_log_guard = insert_pending_request_log(
         &state,
         &auth,
-        &req.model,
+        &logical_model,
         true,
         request_id.as_deref(),
         request_ip.as_deref(),
@@ -431,9 +431,14 @@ pub(super) async fn forward_stream_typed(
     )
     .await?;
 
+    // FP6j-2: the suffix-normalized request is the pristine base every attempt
+    // re-derives its transformed request from (see
+    // `execute_nonstream_typed_with_validator`).
+    let mut original_req = Some(req);
+    let attempt_count = attempts.len();
     let mut execution_state = AttemptExecutionState::default();
 
-    for mut attempt in attempts {
+    for (attempt_index, mut attempt) in attempts.into_iter().enumerate() {
         if execution_state.should_skip(&attempt) {
             continue;
         }
@@ -461,10 +466,13 @@ pub(super) async fn forward_stream_typed(
             }
 
             let attempt_number = execution_state.record_upstream_attempt(&attempt);
-            // Clone from the pristine original request (pre-transforms) so
-            // that the cross-family strip runs BEFORE provider, global, and
-            // API-key transforms; see `execute_nonstream_typed`.
-            let mut req_attempt = original_req.clone();
+            // Derive from the pristine request (pre-transforms) so that the
+            // cross-family strip runs BEFORE provider, global, and API-key
+            // transforms; see `execute_nonstream_typed_with_validator`.
+            let mut req_attempt = attempt_request_from_original(
+                &mut original_req,
+                attempt_index + 1 == attempt_count && channel_attempt + 1 == max_channel_attempts,
+            );
             if matches!(downstream, DownstreamProtocol::Responses) {
                 promote_responses_additional_tools(&mut req_attempt, attempt.provider_type);
             }
@@ -509,7 +517,7 @@ pub(super) async fn forward_stream_typed(
                     request_ip.clone(),
                     None,
                     &err,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    reasoning_effort.clone(),
                     tried_providers.clone(),
                 );
                 return Err(err);
@@ -533,7 +541,7 @@ pub(super) async fn forward_stream_typed(
                     request_ip.clone(),
                     None,
                     &err,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    reasoning_effort.clone(),
                     tried_providers.clone(),
                 );
                 return Err(err);
@@ -557,7 +565,7 @@ pub(super) async fn forward_stream_typed(
                     request_ip.clone(),
                     None,
                     &err,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    reasoning_effort.clone(),
                     tried_providers.clone(),
                 );
                 return Err(err);
@@ -571,7 +579,9 @@ pub(super) async fn forward_stream_typed(
             );
 
             if requires_buffered_stream {
-                let mut nonstream_req = req_attempt.clone();
+                // Every exit of this block ends the slot, so the attempt
+                // request moves instead of being copied.
+                let mut nonstream_req = req_attempt;
                 nonstream_req.stream = Some(false);
                 let upstream_body =
                     match encode_request_for_provider(&mut nonstream_req, &attempt, downstream) {
@@ -587,31 +597,39 @@ pub(super) async fn forward_stream_typed(
                                 request_ip.clone(),
                                 None,
                                 &err,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                reasoning_effort.clone(),
                                 tried_providers.clone(),
                             );
                             return Err(err);
                         }
                     };
+                release_encoded_input(&mut nonstream_req, &capture);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
                 let provider = build_channel_provider_config(&attempt);
                 let path =
-                    upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
+                    upstream_path_for_model(attempt.provider_type, &nonstream_req.model, false);
                 let http = client_http_for_attempt(&state, &attempt)?;
+                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
+                // FP6j-2: only a capture dump reads the encoded value after
+                // serialization.
+                let body = upstream::JsonBody::new(&upstream_body);
+                let capture_upstream_body = capture.session.is_some().then_some(upstream_body);
                 let call = upstream::call_upstream_with_timeout_and_headers(
                     &http,
                     &provider,
                     &attempt.api_key,
                     &path,
-                    &upstream_body,
+                    body,
                     attempt.request_timeout_ms,
-                    &attempt_extra_headers(&attempt, &upstream_body),
+                    &extra_headers,
                 )
                 .await;
                 match call {
                     Ok(value) => {
-                        if let Some(session) = capture.session.as_ref() {
+                        if let (Some(session), Some(upstream_body)) =
+                            (capture.session.as_ref(), capture_upstream_body)
+                        {
                             session
                                 .push_attempt(crate::request_capture::build_attempt_dump(
                                     attempt_number,
@@ -623,7 +641,7 @@ pub(super) async fn forward_stream_typed(
                                     &path,
                                     capture.raw_input.as_ref().clone(),
                                     &nonstream_req,
-                                    upstream_body.clone(),
+                                    upstream_body,
                                     Some(value.clone()),
                                     // RCD-D10b: buffered synthetic streams keep
                                     // the provider payload in downstream_response.
@@ -703,7 +721,7 @@ pub(super) async fn forward_stream_typed(
                                 request_ip.clone(),
                                 None,
                                 &err,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                reasoning_effort.clone(),
                                 tried_providers.clone(),
                             );
                             return Err(err);
@@ -743,7 +761,7 @@ pub(super) async fn forward_stream_typed(
                                 request_ip.clone(),
                                 None,
                                 &err,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                reasoning_effort.clone(),
                                 tried_providers.clone(),
                             );
                             return Err(err);
@@ -770,7 +788,7 @@ pub(super) async fn forward_stream_typed(
                                 request_ip.clone(),
                                 None,
                                 &err,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                reasoning_effort.clone(),
                                 tried_providers.clone(),
                             );
                             return Err(err);
@@ -797,7 +815,7 @@ pub(super) async fn forward_stream_typed(
                                 request_ip.clone(),
                                 None,
                                 &err,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                reasoning_effort.clone(),
                                 tried_providers.clone(),
                             );
                             return Err(err);
@@ -809,7 +827,7 @@ pub(super) async fn forward_stream_typed(
                         {
                             convert_assistant_images_to_markdown(&mut resp);
                         }
-                        let history_for_stream = history_context.clone().map(|history| {
+                        let history_for_stream = history_context.take().map(|history| {
                             history.with_resource_scope(media_resource_scope(&attempt))
                         });
                         if let Some(history) = &history_for_stream {
@@ -822,8 +840,7 @@ pub(super) async fn forward_stream_typed(
                         let attempt_for_log = attempt.clone();
                         let request_id_for_log = request_id.clone();
                         let request_ip_for_log = request_ip.clone();
-                        let reasoning_effort_for_log =
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone());
+                        let reasoning_effort_for_log = reasoning_effort.clone();
                         let tried_providers_for_log = tried_providers;
                         let capture_session = capture.session.clone();
                         let pending_request_log_guard_for_stream = pending_request_log_guard;
@@ -842,11 +859,22 @@ pub(super) async fn forward_stream_typed(
                                     tx,
                                 )
                                 .await;
+                            if let Err(err) = &stream_result {
+                                emit_stream_error_if_needed(downstream, err, &tx_err, None).await;
+                            }
+                            // Retained before EOF so a client chaining
+                            // `previous_response_id` right after EOF finds it.
+                            if stream_result.is_ok()
+                                && let Some(history) = &history_for_stream
+                            {
+                                history.retain_response(&resp).await;
+                            }
+                            // FP6j-1: dropping the last sender ends the
+                            // downstream SSE before settlement and logging.
+                            let downstream_closed = tx_err.is_closed();
+                            drop(tx_err);
                             match stream_result {
                                 Ok(()) => {
-                                    if let Some(history) = &history_for_stream {
-                                        history.retain_response(&resp).await;
-                                    }
                                     match maybe_charge_response(
                                         &state_for_log,
                                         &auth_for_log,
@@ -874,7 +902,7 @@ pub(super) async fn forward_stream_typed(
                                             None,
                                             reasoning_effort_for_log,
                                             tried_providers_for_log,
-                                            tx_err.is_closed(),
+                                            downstream_closed,
                                             upstream_response_model,
                                         ),
                                         Err(err) => {
@@ -929,8 +957,6 @@ pub(super) async fn forward_stream_typed(
                                         reasoning_effort_for_log,
                                         tried_providers_for_log,
                                     );
-                                    emit_stream_error_if_needed(downstream, &err, &tx_err, None)
-                                        .await;
                                     if let Some(session) = capture_session.as_ref() {
                                         session.persist_with_result(None, true).await;
                                     }
@@ -940,7 +966,9 @@ pub(super) async fn forward_stream_typed(
                         return Ok(receiver_event_stream(rx));
                     }
                     Err(err) => {
-                        if let Some(session) = capture.session.as_ref() {
+                        if let (Some(session), Some(upstream_body)) =
+                            (capture.session.as_ref(), capture_upstream_body)
+                        {
                             session
                                 .push_attempt(crate::request_capture::build_attempt_dump(
                                     attempt_number,
@@ -952,7 +980,7 @@ pub(super) async fn forward_stream_typed(
                                     &path,
                                     capture.raw_input.as_ref().clone(),
                                     &nonstream_req,
-                                    upstream_body.clone(),
+                                    upstream_body,
                                     None,
                                     None,
                                     None,
@@ -1013,7 +1041,7 @@ pub(super) async fn forward_stream_typed(
                             request_ip.clone(),
                             None,
                             &err,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers.clone(),
                         );
                         return Err(err);
@@ -1022,9 +1050,12 @@ pub(super) async fn forward_stream_typed(
             attempt.session_affinity_value =
                 resolve_session_affinity_value(&attempt, &upstream_body);
             let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
-                u64::try_from(upstream_body.to_string().len()).unwrap_or(u64::MAX),
+                u64::try_from(upstream::serialized_json_len(&upstream_body)).unwrap_or(u64::MAX),
             );
             let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
+            // FP6j-2: the encoded value is released once serialized for dispatch;
+            // it stays `Some` after dispatch only for a capture session.
+            let mut upstream_body = Some(upstream_body);
             let mut websocket_source = None;
             let mut websocket_send_error = None;
             if prefer_upstream_websocket
@@ -1052,10 +1083,17 @@ pub(super) async fn forward_stream_typed(
                 {
                     Ok(mut ws) => {
                         remember_websocket_supported(&state, &mut attempt, true).await;
-                        let payload = crate::upstream_websocket::responses_ws_create_payload(
-                            upstream_body.clone(),
-                        );
-                        match ws.send_text(payload.to_string()).await {
+                        let create_body = if capture.session.is_some() {
+                            upstream_body.clone()
+                        } else {
+                            upstream_body.take()
+                        }
+                        .expect("the encoded body is present until dispatch");
+                        let payload =
+                            crate::upstream_websocket::responses_ws_create_payload(create_body);
+                        let text = upstream::JsonBody::new(&payload).into_string();
+                        drop(payload);
+                        match ws.send_text(text).await {
                             Ok(()) => websocket_source = Some(ws),
                             Err(err) => websocket_send_error = Some(err),
                         }
@@ -1081,7 +1119,7 @@ pub(super) async fn forward_stream_typed(
                     request_ip.clone(),
                     None,
                     &app_err,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    reasoning_effort.clone(),
                     tried_providers.clone(),
                 );
                 let same_channel_retryable = is_same_channel_retryable_app_error(&app_err);
@@ -1115,7 +1153,7 @@ pub(super) async fn forward_stream_typed(
             let (path, capture_upstream_request, call) = if let Some(ws) = websocket_source {
                 (
                     "/v1/responses".to_string(),
-                    upstream_body.clone(),
+                    upstream_body,
                     Ok(StreamUpstreamSource::ResponsesWebSocket(ws)),
                 )
             } else {
@@ -1125,7 +1163,9 @@ pub(super) async fn forward_stream_typed(
                     &http,
                     &attempt,
                     &req_attempt,
-                    &upstream_body,
+                    upstream_body
+                        .take()
+                        .expect("the encoded body is present until dispatch"),
                     attempt.request_timeout_ms.saturating_mul(10).max(600_000),
                     &extra_headers,
                     capture.session.is_some(),
@@ -1144,30 +1184,30 @@ pub(super) async fn forward_stream_typed(
                             request_ip.clone(),
                             None,
                             &err,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers.clone(),
                         );
                         return Err(err);
                     }
                 };
-                let path = stream_call.path;
-                // RCD-D6a/OIU-E5g: a multipart edit attempt records the sent form
-                // as `upstream_request` instead of the unused JSON encoding.
-                let capture_upstream_request = stream_call
-                    .capture_multipart_request
-                    .unwrap_or_else(|| upstream_body.clone());
                 (
-                    path,
-                    capture_upstream_request,
-                    stream_call
-                        .result
-                        .map(StreamUpstreamSource::Http)
-                        .map_err(|err| err),
+                    stream_call.path,
+                    stream_call.capture_upstream_request,
+                    stream_call.result.map(StreamUpstreamSource::Http),
                 )
             };
+            let upstream_model = req_attempt.model.clone();
+            let legacy = typed_request_to_legacy(&req_attempt, max_multiplier);
+            let namespace_aliases = tool_namespace_aliases(&req_attempt);
+            // FP6j-2: only a capture session reads the transformed request or its
+            // encoding after dispatch; without one both are freed here, before
+            // the pre-output window. RCD-D6a/OIU-E5g: a multipart edit attempt
+            // records the sent form as `upstream_request`.
+            let capture_request =
+                capture_upstream_request.map(move |upstream| (req_attempt, upstream));
             match call {
                 Ok(upstream_source) => {
-                    let legacy = match typed_request_to_legacy(&req_attempt, max_multiplier) {
+                    let legacy = match legacy {
                         Ok(legacy) => legacy,
                         Err(err) => {
                             spawn_stream_attempt_error(
@@ -1180,21 +1220,13 @@ pub(super) async fn forward_stream_typed(
                                 request_ip.clone(),
                                 None,
                                 &err,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                reasoning_effort.clone(),
                                 tried_providers.clone(),
                             );
                             return Err(err);
                         }
                     };
-                    let pending_request_envelope_extra =
-                        req.input.clone().into_iter().find_map(|node| match node {
-                            crate::urp::Node::NextDownstreamEnvelopeExtra { extra_body }
-                                if !extra_body.is_empty() =>
-                            {
-                                Some(extra_body)
-                            }
-                            _ => None,
-                        });
+                    let pending_request_envelope_extra = pending_request_envelope_extra.clone();
                     let provider_type = attempt.provider_type;
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                         ttfb_ms: None,
@@ -1265,7 +1297,9 @@ pub(super) async fn forward_stream_typed(
                                 "upstream stream failed before its first output event: {}",
                                 failure.error.message
                             );
-                            if let Some(session) = capture.session.as_ref() {
+                            if let (Some(session), Some((captured_req, captured_upstream))) =
+                                (capture.session.as_ref(), capture_request)
+                            {
                                 session
                                     .push_attempt(crate::request_capture::build_attempt_dump(
                                         attempt_number,
@@ -1273,11 +1307,11 @@ pub(super) async fn forward_stream_typed(
                                         Some(&attempt.channel_id),
                                         attempt.provider_type,
                                         &logical_model,
-                                        &req_attempt.model,
+                                        &upstream_model,
                                         &path,
                                         capture.raw_input.as_ref().clone(),
-                                        &req_attempt,
-                                        capture_upstream_request.clone(),
+                                        &captured_req,
+                                        captured_upstream,
                                         None,
                                         None,
                                         None,
@@ -1335,7 +1369,7 @@ pub(super) async fn forward_stream_typed(
                         .map(|_| crate::request_capture::SseFrameCapture::new());
                     let decoded_terminal_output = Arc::new(Mutex::new(Vec::<urp::Node>::new()));
                     let history_for_stream = history_context
-                        .clone()
+                        .take()
                         .map(|history| history.with_resource_scope(media_resource_scope(&attempt)));
                     let state_for_log = state.clone();
                     let auth_for_log = auth.clone();
@@ -1349,32 +1383,28 @@ pub(super) async fn forward_stream_typed(
                     let capture_session = capture.session.clone();
                     let capture_raw_input = capture.raw_input.clone();
                     let capture_transform_chain_for_task = capture_transform_chain.clone();
-                    let capture_req_attempt = req_attempt.clone();
-                    let capture_upstream_body = capture_upstream_request.clone();
                     let capture_path = path.clone();
                     let capture_provider_id = attempt.provider_id.clone();
                     let capture_channel_id = attempt.channel_id.clone();
                     let capture_provider_type = attempt.provider_type;
                     let transform_provider_type = attempt.provider_type;
-                    let capture_upstream_model = req_attempt.model.clone();
+                    let reasoning_envelope_for_transform =
+                        auth.reasoning_envelope_enabled.then(|| {
+                            (
+                                reasoning_envelope_provider_type(attempt.provider_type).to_string(),
+                                upstream_model.clone(),
+                            )
+                        });
+                    let capture_upstream_model = upstream_model;
                     let capture_logical_model = logical_model.clone();
                     let capture_attempt_number = attempt_number;
                     let capture_frames_for_task = capture_frames.clone();
-                    let reasoning_effort_for_log =
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone());
+                    let reasoning_effort_for_log = reasoning_effort.clone();
                     let tried_providers_for_log = tried_providers.clone();
                     let state_for_transform = state.clone();
                     let provider_rules_for_transform = attempt.provider_transforms.clone();
                     let global_rules_for_transform = global_transforms.clone();
                     let auth_rules_for_transform = auth.transforms.clone();
-                    let reasoning_envelope_for_transform =
-                        auth.reasoning_envelope_enabled.then(|| {
-                            (
-                                reasoning_envelope_provider_type(attempt.provider_type).to_string(),
-                                req_attempt.model.clone(),
-                            )
-                        });
-                    let namespace_aliases = tool_namespace_aliases(&req_attempt);
                     let pending_request_log_guard_for_stream = pending_request_log_guard;
                     tokio::spawn(async move {
                         let _pending_request_log_guard = pending_request_log_guard_for_stream;
@@ -1510,20 +1540,21 @@ pub(super) async fn forward_stream_typed(
                                     })
                                 }),
                             );
-                            if result.is_ok() {
-                                if let (Some(history), Some(response)) =
-                                    (history_for_commit, history_response)
-                                {
-                                    history.retain_response(&response).await;
-                                }
-                            }
-                            result
+                            // FP6j-1: history retention runs after downstream EOF.
+                            let history_commit = match (&result, history_for_commit, history_response)
+                            {
+                                (Ok(()), Some(history), Some(response)) => Some((history, response)),
+                                _ => None,
+                            };
+                            (result, history_commit)
                         };
-                        let stream_result = if let Some(frames) = capture_frames_for_task.clone() {
-                            crate::request_capture::with_sse_capture(frames, stream_future).await
-                        } else {
-                            stream_future.await
-                        };
+                        let (stream_result, history_commit) =
+                            if let Some(frames) = capture_frames_for_task.clone() {
+                                crate::request_capture::with_sse_capture(frames, stream_future)
+                                    .await
+                            } else {
+                                stream_future.await
+                            };
                         let settled_output = decoded_terminal_output.lock().await.clone();
                         let terminal_visible_output_bytes =
                             decoded_visible_output_bytes(&settled_output);
@@ -1593,6 +1624,29 @@ pub(super) async fn forward_stream_typed(
                             )
                         };
 
+                        // SE2: a stage failure without an upstream terminal
+                        // error ends the wire with a Monoize error frame.
+                        if terminal_diagnostics.terminal_error.is_none()
+                            && let Err(err) = &stream_result
+                        {
+                            emit_stream_error_if_needed(
+                                downstream,
+                                err,
+                                &tx_err,
+                                capture_frames_for_task.as_ref(),
+                            )
+                            .await;
+                        }
+                        // Retained before EOF so a client chaining
+                        // `previous_response_id` right after EOF finds it.
+                        if let Some((history, response)) = history_commit {
+                            history.retain_response(&response).await;
+                        }
+                        // FP6j-1: dropping the last sender ends the downstream
+                        // SSE before settlement, logging, and capture persistence.
+                        let downstream_closed = tx_err.is_closed();
+                        drop(tx_err);
+
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {
                             if let Some(failure_class) = midstream_terminal_failure_class(
                                 terminal_error.http_status,
@@ -1620,7 +1674,9 @@ pub(super) async fn forward_stream_typed(
                                 tried_providers_for_log,
                                 actual_upstream_usage.clone(),
                             );
-                            if let Some(session) = capture_session.as_ref() {
+                            if let (Some(session), Some((captured_req, captured_upstream))) =
+                                (capture_session.as_ref(), capture_request)
+                            {
                                 let frames = if let Some(frames) = capture_frames_for_task.as_ref()
                                 {
                                     Some(frames.snapshot().await)
@@ -1645,8 +1701,8 @@ pub(super) async fn forward_stream_typed(
                                         &capture_upstream_model,
                                         &capture_path,
                                         capture_raw_input.as_ref().clone(),
-                                        &capture_req_attempt,
-                                        capture_upstream_body,
+                                        &captured_req,
+                                        captured_upstream,
                                         None,
                                         reconstructed_urp_response_value.clone(),
                                         frames,
@@ -1684,15 +1740,9 @@ pub(super) async fn forward_stream_typed(
                                 reasoning_effort_for_log,
                                 tried_providers_for_log,
                             );
-
-                            emit_stream_error_if_needed(
-                                downstream,
-                                err,
-                                &tx_err,
-                                capture_frames_for_task.as_ref(),
-                            )
-                            .await;
-                            if let Some(session) = capture_session.as_ref() {
+                            if let (Some(session), Some((captured_req, captured_upstream))) =
+                                (capture_session.as_ref(), capture_request)
+                            {
                                 let frames = if let Some(frames) = capture_frames_for_task.as_ref()
                                 {
                                     Some(frames.snapshot().await)
@@ -1709,8 +1759,8 @@ pub(super) async fn forward_stream_typed(
                                         &capture_upstream_model,
                                         &capture_path,
                                         capture_raw_input.as_ref().clone(),
-                                        &capture_req_attempt,
-                                        capture_upstream_body,
+                                        &captured_req,
+                                        captured_upstream,
                                         None,
                                         reconstructed_urp_response_value.clone(),
                                         frames,
@@ -1801,14 +1851,16 @@ pub(super) async fn forward_stream_typed(
                             Some(terminal_diagnostics),
                             reasoning_effort_for_log,
                             tried_providers_for_log,
-                            tx_err.is_closed(),
+                            downstream_closed,
                             mismatched_upstream_response_model(
                                 &capture_upstream_model,
                                 response_model.as_deref().unwrap_or(""),
                             ),
                         );
 
-                        if let Some(session) = capture_session.as_ref() {
+                        if let (Some(session), Some((captured_req, captured_upstream))) =
+                            (capture_session.as_ref(), capture_request)
+                        {
                             let frames = if let Some(frames) = capture_frames_for_task.as_ref() {
                                 Some(frames.snapshot().await)
                             } else {
@@ -1824,8 +1876,8 @@ pub(super) async fn forward_stream_typed(
                                     &capture_upstream_model,
                                     &capture_path,
                                     capture_raw_input.as_ref().clone(),
-                                    &capture_req_attempt,
-                                    capture_upstream_body,
+                                    &captured_req,
+                                    captured_upstream,
                                     None,
                                     reconstructed_urp_response_value.clone(),
                                     frames,
@@ -1841,7 +1893,9 @@ pub(super) async fn forward_stream_typed(
                     return Ok(receiver_event_stream(rx));
                 }
                 Err(err) => {
-                    if let Some(session) = capture.session.as_ref() {
+                    if let (Some(session), Some((captured_req, captured_upstream))) =
+                        (capture.session.as_ref(), capture_request)
+                    {
                         session
                             .push_attempt(crate::request_capture::build_attempt_dump(
                                 attempt_number,
@@ -1849,11 +1903,11 @@ pub(super) async fn forward_stream_typed(
                                 Some(&attempt.channel_id),
                                 attempt.provider_type,
                                 &logical_model,
-                                &req_attempt.model,
+                                &upstream_model,
                                 &path,
                                 capture.raw_input.as_ref().clone(),
-                                &req_attempt,
-                                capture_upstream_request.clone(),
+                                &captured_req,
+                                captured_upstream,
                                 None,
                                 None,
                                 None,
@@ -1913,7 +1967,7 @@ pub(super) async fn forward_stream_typed(
             request_ip,
             None,
             terminal_error,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            reasoning_effort,
             tried_providers,
             None,
         );
@@ -1927,7 +1981,7 @@ pub(super) async fn forward_stream_typed(
             request_id,
             request_ip,
             &final_err,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            reasoning_effort,
             tried_providers,
         );
     }

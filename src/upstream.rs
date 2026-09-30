@@ -80,53 +80,42 @@ pub struct UpstreamErrorInfo {
     pub message: Option<String>,
 }
 
-pub async fn call_upstream(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    path: &str,
-    body: &Value,
-) -> Result<Value, UpstreamCallError> {
-    let resp =
-        call_upstream_raw_with_timeout(client, provider, auth_value, path, body, 30_000).await?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(|err| {
-        UpstreamCallError::new(UpstreamErrorKind::Network, Some(status), err.to_string())
-    })?;
-    let value: Value = serde_json::from_str(&text).map_err(|err| {
-        UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), err.to_string())
-    })?;
-    Ok(value)
+/// Byte length of `value` serialized as compact JSON, computed without
+/// allocating the serialized text.
+pub fn serialized_json_len(value: &Value) -> usize {
+    struct ByteCounter(usize);
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(buf.len());
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value)
+        .expect("serializing a JSON value into an infallible writer cannot fail");
+    counter.0
 }
 
-pub async fn call_upstream_raw(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    path: &str,
-    body: &Value,
-) -> Result<reqwest::Response, UpstreamCallError> {
-    call_upstream_raw_with_timeout(client, provider, auth_value, path, body, 30_000).await
-}
+/// An upstream JSON request body serialized once into an exactly sized
+/// buffer (FP6j-2). The bytes equal `serde_json::to_vec` of the source value,
+/// so the caller can drop that value before awaiting the upstream response.
+pub struct JsonBody(Vec<u8>);
 
-pub async fn call_upstream_with_timeout(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    path: &str,
-    body: &Value,
-    timeout_ms: u64,
-) -> Result<Value, UpstreamCallError> {
-    call_upstream_with_timeout_and_headers(
-        client,
-        provider,
-        auth_value,
-        path,
-        body,
-        timeout_ms,
-        &[],
-    )
-    .await
+impl JsonBody {
+    pub fn new(value: &Value) -> Self {
+        let mut bytes = Vec::with_capacity(serialized_json_len(value));
+        serde_json::to_writer(&mut bytes, value)
+            .expect("serializing a JSON value into memory cannot fail");
+        Self(bytes)
+    }
+
+    /// UTF-8 text of the body, for transports that send text frames.
+    pub fn into_string(self) -> String {
+        String::from_utf8(self.0).expect("serde_json always writes UTF-8")
+    }
 }
 
 pub async fn call_upstream_with_timeout_and_headers(
@@ -134,7 +123,7 @@ pub async fn call_upstream_with_timeout_and_headers(
     provider: &ProviderConfig,
     auth_value: &str,
     path: &str,
-    body: &Value,
+    body: JsonBody,
     timeout_ms: u64,
     extra_headers: &[(String, String)],
 ) -> Result<Value, UpstreamCallError> {
@@ -158,32 +147,12 @@ pub async fn call_upstream_with_timeout_and_headers(
     Ok(value)
 }
 
-pub async fn call_upstream_raw_with_timeout(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    path: &str,
-    body: &Value,
-    timeout_ms: u64,
-) -> Result<reqwest::Response, UpstreamCallError> {
-    call_upstream_raw_with_timeout_and_headers(
-        client,
-        provider,
-        auth_value,
-        path,
-        body,
-        timeout_ms,
-        &[],
-    )
-    .await
-}
-
 pub async fn call_upstream_raw_with_timeout_and_headers(
     client: &reqwest::Client,
     provider: &ProviderConfig,
     auth_value: &str,
     path: &str,
-    body: &Value,
+    body: JsonBody,
     timeout_ms: u64,
     extra_headers: &[(String, String)],
 ) -> Result<reqwest::Response, UpstreamCallError> {
@@ -195,10 +164,12 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
         )
     })?;
     let url = join_url(base, path);
+    // Same header and bytes that `RequestBuilder::json` sets on a fresh request.
     let mut req = client
         .post(url)
         .timeout(std::time::Duration::from_millis(timeout_ms))
-        .json(body);
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.0);
     let auth = provider.auth.as_ref().ok_or_else(|| {
         UpstreamCallError::new(UpstreamErrorKind::Http, None, "missing auth".to_string())
     })?;
@@ -278,33 +249,6 @@ pub async fn call_upstream_multipart_with_timeout_and_headers(
         return Err(non_success_upstream_error(resp, status).await);
     }
     Ok(resp)
-}
-
-pub async fn call_responses(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    body: &Value,
-) -> Result<Value, UpstreamCallError> {
-    call_upstream(client, provider, auth_value, "/v1/responses", body).await
-}
-
-pub async fn call_chat_completions(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    body: &Value,
-) -> Result<Value, UpstreamCallError> {
-    call_upstream(client, provider, auth_value, "/v1/chat/completions", body).await
-}
-
-pub async fn call_messages(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    body: &Value,
-) -> Result<Value, UpstreamCallError> {
-    call_upstream(client, provider, auth_value, "/v1/messages", body).await
 }
 
 #[allow(clippy::result_large_err)]

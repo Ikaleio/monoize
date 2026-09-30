@@ -164,6 +164,10 @@ F2. Known fields are identified by key name only. No type-checking reclassificat
 
 ## 4. Runtime Parameters
 
+C0. If the first command-line argument equals `--version` or `-V`, the executable MUST write exactly `monoize <version>\n` to standard output, where `<version>` equals `[package].version` in `Cargo.toml`, and MUST exit with status `0`. It MUST NOT initialize logging, read configuration, open the database, or bind a listener in that case. Other command-line arguments MUST NOT change behavior.
+
+C0a. The executable MUST use mimalloc as its Rust global allocator on every release target. The musl system allocator serializes concurrent allocations: a 16-thread benchmark of Chat Completions request parse, deep clone, and serialize ran 35 times slower with it than with glibc or mimalloc.
+
 C1. Monoize MUST NOT read forwarding, auth, provider, or model-registry data from `config.yml` or `config.yaml`.
 
 C2. Monoize MUST resolve database DSN by precedence:
@@ -305,9 +309,22 @@ FP6i. A pass-through stream whose decoder, retained-output stage, response-trans
 
 FP6j. Buffered synthetic streaming MUST not finalize success or execute billing settlement until synthetic downstream encoding returns success. If synthetic encoding fails, Monoize MUST skip billing and finalize the admitted request as error. If encoding succeeds and billing settlement then fails, Monoize MUST finalize the request as `billing_settlement_failed`.
 
+FP6j-1. On every streaming path (pass-through and buffered synthetic), after Monoize hands the last downstream frame of the stream to the downstream channel, it MUST close the downstream SSE body before it runs billing settlement, midstream failure recording, affinity refresh, request-log scheduling, or capture persistence. The last frame is the protocol terminal event, the `[DONE]` sentinel where the protocol uses one, or the Monoize-generated error frame of SE2. Downstream EOF MUST NOT wait for any of those steps. Those steps MUST still run to completion after EOF with the outcomes defined by FP6f, FP6i, FP6j, FP6k, and STRM-3. Responses history retention (S2, S3a) is excluded: it MUST complete before downstream EOF, so a client that sends `previous_response_id` immediately after EOF finds the retained entry. The RL1h client-disconnect determination for the terminal request log MUST be read when the downstream channel is closed, not after settlement.
+
+FP6j-2. Request retention per forwarding request:
+
+1. Monoize MUST hold at most one pristine copy of the decoded downstream request (suffix-normalized, media routes bound), and only while another upstream attempt can still follow. The final planned attempt slot (last route candidate, last same-channel slot) MUST take the pristine request instead of cloning it.
+2. The transformed attempt request and its encoded upstream body MUST NOT be copied solely to keep them for request-capture dumps. Without an active capture session, a streaming attempt MUST release the transformed attempt request once the upstream call returns response headers (or the WebSocket `response.create` send completes), before the STRM-2a pre-output window.
+3. Without an active capture session, a buffered synthetic stream attempt and a non-stream JSON attempt MUST release the attempt's input nodes after encoding the upstream body and before waiting for the upstream response. Upstream response decoding MUST NOT read attempt input nodes.
+4. A committed stream (STRM-2c) MUST NOT retain a full copy of the request input for the stream's duration, except the Responses history input kept for `store = true` and the copies owned by an active capture session.
+5. Monoize MUST serialize each upstream JSON request body (HTTP JSON requests and the WebSocket `response.create` text frame) exactly once, into a buffer whose capacity equals the serialized byte length. The bytes MUST equal the compact `serde_json` serialization of the encoded upstream JSON value, and an HTTP JSON request MUST carry `content-type: application/json`.
+6. Without an active capture session, Monoize MUST release the encoded upstream JSON value right after that serialization, before it awaits the upstream response headers or body. A multipart upstream request MUST release the encoded JSON value before sending the form. With an active capture session, Monoize MAY keep the encoded value for the attempt dump.
+
 FP6k. A forwarding request becomes admitted when `insert_pending_request_log` returns `Ok(Some(PendingRequestLogGuard))`. From that point until the handler returns, exactly one terminal request log MUST be scheduled for that admitted request. `Ok(None)` does not create a request-log lifecycle.
 
 FP6k.1. A handler MUST schedule the terminal success log only after every required request transform, upstream-request encoding step, upstream-response collection and decode step, response transform, downstream typed conversion, usage validation, and billing operation has succeeded.
+
+FP6k.1a. A non-stream handler without a caller-supplied response validator MUST encode the downstream response body once, before billing, and MUST deliver that same encoded body. It MUST NOT encode the response again for delivery. Responses history decoration (`id`, `previous_response_id`, `store`) MUST be applied before that encoding. An encoding failure MUST fail the request before billing under FP6k.2.
 
 FP6k.2. If any step in FP6k.1 fails after admission, including an asynchronous task join failure, the handler MUST schedule one terminal error log before it returns the error. The terminal log `error_code`, `error_http_status`, and error message MUST describe the same `AppError` returned by the handler. The terminal error log MUST contain no token usage and no billing charge.
 

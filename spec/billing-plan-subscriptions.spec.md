@@ -40,6 +40,27 @@ minimum `created_at + W` among the usage rows counted by BP-U4. It is `null` whe
 window usage is zero. This timestamp identifies the next instant when current usage exits
 the sliding window; it does not define a fixed calendar reset.
 
+BP-U7. The server MUST compute BP-U4 and BP-U6 from the prefix sums of BP-D9 and MUST
+NOT load or sum the individual usage rows of a window. Let `C(t)` be the
+`cumulative_nano_usd` of the last row of the subscription, in the BP-D9 order, whose
+`created_at <= t`, or `0` when no such row exists. Then:
+
+1. Window usage for `(T - W, T]` is `C(T) - C(T - W)`, computed with checked `i128`
+   subtraction.
+2. Let `F` be the first row of the subscription, in the BP-D9 order, whose
+   `created_at > T - W`. When `F` does not exist or `F.created_at > T`, window usage is
+   `0` and `next_reset_at` is `null`. Otherwise `C(T - W) = F.cumulative_nano_usd -
+   F.amount_nano_usd` and `next_reset_at = F.created_at + W`.
+3. `C(T)` is shared by all windows. One usage snapshot therefore reads at most one row for
+   `C(T)` plus one row `F` per configured window: at most 5 rows, each located by one
+   ordered lookup on the BP-D10 index. The cost MUST NOT grow with the number of usage rows
+   in any window.
+4. The snapshot MUST fail closed with an internal error when a read `amount_nano_usd` does
+   not parse as a positive `i128`, a read `cumulative_nano_usd` does not parse as an
+   `i128`, `cumulative_nano_usd - amount_nano_usd` of a read row is negative or
+   overflows, `F` exists without a `C(T)` row, or the computed usage of a non-empty window
+   is less than `F.amount_nano_usd`.
+
 ## 2. Data model
 
 ### 2.1 `billing_plans`
@@ -121,10 +142,37 @@ columns. The subscription API MUST serialize both columns as nullable strings.
 | `request_id` | TEXT | required and unique |
 | `group_id` | TEXT | required historical group id |
 | `amount_nano_usd` | TEXT | canonical positive i128 |
+| `cumulative_nano_usd` | TEXT | NOT NULL, canonical positive i128, prefix sum defined by BP-D9 |
 | `created_at` | TEXT | RFC 3339 UTC |
 
 BP-D8. One terminal request MUST create at most one usage row. User, API key, group, plan,
 or subscription deletion MUST NOT delete historical usage rows.
+
+BP-D9. The rows of one subscription are totally ordered by `(created_at, id)` ascending.
+The ordering, the BP-U4 window predicates, and the BP-U7 lookups MUST all use the
+database's comparison of the stored TEXT values, so that they agree with each other. Each
+row's `cumulative_nano_usd` MUST equal the checked `i128` sum of `amount_nano_usd` of every
+row of the same subscription at or before that row in this order.
+
+BP-D10. Index `idx_billing_plan_usage_subscription_order` on
+`(subscription_id, created_at, id)` MUST exist. It serves the BP-U7 lookups and the BP-D11
+predecessor and successor lookups as single ordered index seeks.
+
+BP-D11. Inserting a usage row `N` with amount `A` and `created_at = T` MUST run in the
+settlement transaction of BP-C3 and MUST perform these steps:
+
+1. Let `P` be the last row of the subscription with `(created_at, id) < (T, N.id)`.
+   `N.cumulative_nano_usd = P.cumulative_nano_usd + A`, or `A` when `P` does not exist.
+2. Every row of the subscription with `(created_at, id) > (T, N.id)` MUST have its
+   `cumulative_nano_usd` increased by `A` in the same transaction. This set is empty when
+   settlement timestamps are monotonic; it is non-empty only after a clock step back or a
+   `created_at` tie with a greater `id`.
+3. A parse failure or checked-arithmetic overflow in step 1 or step 2 MUST fail the
+   settlement closed as in BP-C7, and the transaction MUST commit no usage row and no
+   cumulative change.
+
+The BP-C3 active-subscription lock (and the single SQLite writer) serializes inserts for
+one subscription, so BP-D9 holds at every commit.
 
 ## 3. Destructive schema cutover
 
@@ -139,6 +187,26 @@ BP-M2. The migration MUST NOT convert or preserve an old billing plan. Existing 
 `users.balance_nano_usd` values and existing `billing_ledger` rows MUST remain unchanged.
 
 BP-M3. The application MUST NOT start the old plan-grant scheduler after this migration.
+
+BP-M4. Migration `m20260930_000056_billing_plan_usage_cumulative` MUST add
+`billing_plan_usage.cumulative_nano_usd` to tables created by BP-M1. In one transaction it
+MUST perform these actions:
+
+1. Add `cumulative_nano_usd TEXT NOT NULL DEFAULT '0'`. SQLite `ALTER TABLE` cannot add a
+   NOT NULL column without a default and cannot drop a default later, so SQLite keeps
+   `DEFAULT '0'`. PostgreSQL MUST drop the default after step 3. Every application insert
+   MUST write the column explicitly.
+2. Create the BP-D10 index and drop `idx_billing_plan_usage_subscription_time`
+   (`(subscription_id, created_at)`), which is a prefix of the BP-D10 index.
+3. Backfill every existing row in `(subscription_id, created_at, id)` order. The backfill
+   MUST read keyset pages of at most 5,000 rows, keep a running checked `i128` sum per
+   subscription, and write each row's BP-D9 value with batched updates of at most 500 rows
+   per statement.
+4. Abort with an error and commit nothing when an `amount_nano_usd` does not parse as a
+   positive `i128` or a running sum overflows `i128`.
+
+The down migration MUST recreate `idx_billing_plan_usage_subscription_time`, drop the
+BP-D10 index, and drop the column.
 
 ## 4. Plan administration API
 

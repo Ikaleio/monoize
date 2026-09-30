@@ -3,7 +3,8 @@ use super::store::parse_group_ids_json;
 use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, QueryResult, TransactionTrait, Value as SeaValue};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// One `monoize_groups` registry row (`groups-registry.spec.md` §1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,41 +218,28 @@ impl UserStore {
             .collect()
     }
 
-    /// MP-G2 (`model-pricing.spec.md`): billing ratios of the given registry
-    /// rows in one set-based query. Missing ids are absent from the result.
-    pub async fn list_group_billing_ratios(
-        &self,
-        ids: &[String],
-    ) -> Result<std::collections::HashMap<String, String>, String> {
-        let mut ratios = std::collections::HashMap::new();
-        for chunk in ids.chunks(100) {
-            if chunk.is_empty() {
-                continue;
-            }
-            let placeholders = (1..=chunk.len())
-                .map(|index| format!("${index}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let rows = self
-                .db
-                .read()
-                .query_all(self.db.stmt(
-                    &format!(
-                        "SELECT id, billing_ratio FROM monoize_groups WHERE id IN ({placeholders})"
-                    ),
-                    chunk.iter().map(|id| id.clone().into()).collect(),
-                ))
-                .await
-                .map_err(|e| e.to_string())?;
-            for row in rows {
-                let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-                let ratio: String = row
-                    .try_get("", "billing_ratio")
+    /// MP-G2 / DPT-RC8: `group_id -> billing_ratio` for every registry row,
+    /// served from the request-path snapshot cache.
+    pub async fn group_billing_ratios(&self) -> Result<Arc<HashMap<String, String>>, String> {
+        let db = self.db.clone();
+        self.group_ratio_cache
+            .get_or_load(move || async move {
+                let rows = db
+                    .read()
+                    .query_all(db.stmt("SELECT id, billing_ratio FROM monoize_groups", vec![]))
+                    .await
                     .map_err(|e| e.to_string())?;
-                ratios.insert(id, ratio);
-            }
-        }
-        Ok(ratios)
+                rows.iter()
+                    .map(|row| {
+                        Ok((
+                            row.try_get::<String>("", "id").map_err(|e| e.to_string())?,
+                            row.try_get::<String>("", "billing_ratio")
+                                .map_err(|e| e.to_string())?,
+                        ))
+                    })
+                    .collect()
+            })
+            .await
     }
 
     pub async fn get_group_by_id(&self, id: &str) -> Result<Option<Group>, String> {
@@ -338,6 +326,7 @@ impl UserStore {
             return Err(GroupStoreError::Storage(message));
         }
 
+        self.group_ratio_cache.invalidate();
         Ok(Group {
             id,
             name,
@@ -439,6 +428,7 @@ impl UserStore {
 
         // GR-A6: cached authentication results are keyed to registry state.
         self.api_key_cache.invalidate_all();
+        self.group_ratio_cache.invalidate();
 
         Ok(Group {
             id: existing.id,
@@ -526,6 +516,7 @@ impl UserStore {
         .map_err(storage)?;
         tx.commit().await.map_err(storage)?;
         self.api_key_cache.invalidate_all();
+        self.group_ratio_cache.invalidate();
         Ok(())
     }
 
@@ -670,6 +661,7 @@ impl UserStore {
 
         tx.commit().await.map_err(storage)?;
         self.api_key_cache.invalidate_all();
+        self.group_ratio_cache.invalidate();
         Ok(())
     }
 

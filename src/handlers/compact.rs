@@ -177,12 +177,14 @@ pub async fn compact_response(
             let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
             attempt.session_affinity_value =
                 resolve_session_affinity_value(&attempt, &upstream_body);
+            let request_body = upstream::JsonBody::new(&upstream_body);
+            let capture_upstream_body = capture.session.is_some().then_some(upstream_body);
             let result = upstream::call_upstream_with_timeout_and_headers(
                 &http,
                 &provider,
                 &attempt.api_key,
                 "/v1/responses/compact",
-                &upstream_body,
+                request_body,
                 attempt.request_timeout_ms,
                 &extra_headers,
             )
@@ -190,7 +192,9 @@ pub async fn compact_response(
 
             match result {
                 Ok(value) => {
-                    if let Some(session) = capture.session.as_ref() {
+                    if let (Some(session), Some(upstream_body)) =
+                        (capture.session.as_ref(), capture_upstream_body)
+                    {
                         session
                             .push_attempt(crate::request_capture::build_attempt_dump(
                                 attempt_number,
@@ -317,7 +321,9 @@ pub async fn compact_response(
                     return Ok(Json(value).into_response());
                 }
                 Err(err) => {
-                    if let Some(session) = capture.session.as_ref() {
+                    if let (Some(session), Some(upstream_body)) =
+                        (capture.session.as_ref(), capture_upstream_body)
+                    {
                         session
                             .push_attempt(crate::request_capture::build_attempt_dump(
                                 attempt_number,

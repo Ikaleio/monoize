@@ -1090,6 +1090,13 @@ pub async fn apply_metering_batch(
     }
 
     tx.commit().await.map_err(|error| error.to_string())?;
+    // DPT-BP3: primary spend preflight reads balances through these caches.
+    for delta in &batch.balance_deltas {
+        user_store.balance_cache.invalidate(&delta.user_id);
+        if let Some(api_key_id) = delta.api_key_id.as_deref() {
+            user_store.sub_account_balance_cache.invalidate(api_key_id);
+        }
+    }
     metrics::counter!("monoize_primary_metering_applied_total").increment(applied_balance_deltas);
     Ok(MeteringAck {
         applied_request_logs,

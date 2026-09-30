@@ -293,7 +293,7 @@ async fn emit_chat_choice_extra_chunk(
         "model": model,
         "choices": [choice]
     });
-    send_plain_sse_data(tx, chunk.to_string()).await
+    send_plain_sse_json(tx, &chunk).await
 }
 
 fn chat_delta_with_raw_extras(
@@ -377,8 +377,8 @@ fn validate_chat_media_event(event: &UrpStreamEvent) -> Result<(), String> {
 }
 
 async fn emit_chat_media_error(tx: &mpsc::Sender<Event>, message: &str) -> AppResult<()> {
-    send_plain_sse_data(tx, urp::media::error_body(message).to_string()).await?;
-    send_plain_sse_data(tx, "[DONE]".into()).await?;
+    send_plain_sse_json(tx, &urp::media::error_body(message)).await?;
+    send_plain_sse_data(tx, "[DONE]").await?;
     Err(crate::error::AppError::new(
         axum::http::StatusCode::BAD_GATEWAY,
         "unsupported_media",
@@ -398,8 +398,8 @@ pub(crate) async fn emit_synthetic_chat_stream(
         .as_ref()
         .and_then(|outcome| outcome.failure_body(false))
     {
-        send_plain_sse_data(&tx, body.to_string()).await?;
-        send_plain_sse_data(&tx, "[DONE]".into()).await?;
+        send_plain_sse_json(&tx, &body).await?;
+        send_plain_sse_data(&tx, "[DONE]").await?;
         return Ok(());
     }
 
@@ -712,7 +712,7 @@ async fn emit_chat_terminal_sequence(
             }
         }
     }
-    send_plain_sse_data(tx, finish.to_string()).await?;
+    send_plain_sse_json(tx, &finish).await?;
 
     if let Some(usage) = usage {
         let usage_chunk = json!({
@@ -723,10 +723,10 @@ async fn emit_chat_terminal_sequence(
             "choices": [],
             "usage": usage_to_chat_usage_json(usage),
         });
-        send_plain_sse_data(tx, usage_chunk.to_string()).await?;
+        send_plain_sse_json(tx, &usage_chunk).await?;
     }
 
-    send_plain_sse_data(tx, "[DONE]".to_string()).await
+    send_plain_sse_data(tx, "[DONE]").await
 }
 
 pub(crate) async fn encode_urp_stream_as_chat(
@@ -806,7 +806,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         "finish_reason": Value::Null
                     }]
                 });
-                send_plain_sse_data(&tx, chunk.to_string()).await?;
+                send_plain_sse_json(&tx, &chunk).await?;
             }
             UrpStreamEvent::NodeStart {
                 node_index,
@@ -1170,8 +1170,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                 mask_sensitive_info
                             ));
                     }
-                    send_plain_sse_data(&tx, body.to_string()).await?;
-                    send_plain_sse_data(&tx, "[DONE]".into()).await?;
+                    send_plain_sse_json(&tx, &body).await?;
+                    send_plain_sse_data(&tx, "[DONE]").await?;
                     return Ok(());
                 }
 
@@ -1364,7 +1364,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             "finish_reason": Value::Null
                         }]
                     });
-                    send_plain_sse_data(&tx, chunk.to_string()).await?;
+                    send_plain_sse_json(&tx, &chunk).await?;
                 }
                 let native_finish_reason = extra_body
                     .get(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY)
@@ -1414,8 +1414,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &message,
                     &extra_body,
                 );
-                send_plain_sse_data(&tx, payload.to_string()).await?;
-                send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
+                send_plain_sse_json(&tx, &payload).await?;
+                send_plain_sse_data(&tx, "[DONE]").await?;
                 finished = true;
             }
         }
@@ -1466,7 +1466,7 @@ async fn emit_chat_provider_content_part(
             "finish_reason": Value::Null
         }]
     });
-    send_plain_sse_data(tx, chunk.to_string()).await
+    send_plain_sse_json(tx, &chunk).await
 }
 
 async fn emit_tool_call_header(
@@ -1523,7 +1523,7 @@ async fn emit_tool_call_header(
             "finish_reason": Value::Null
         }]
     });
-    send_plain_sse_data(tx, chunk.to_string()).await?;
+    send_plain_sse_json(tx, &chunk).await?;
     tool_call.header_sent = true;
     Ok(())
 }
@@ -1600,7 +1600,7 @@ async fn emit_native_chat_reasoning_detail(
             "finish_reason": Value::Null
         }]
     });
-    send_plain_sse_data(tx, chunk.to_string()).await
+    send_plain_sse_json(tx, &chunk).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1658,7 +1658,7 @@ async fn emit_reasoning_delta(
             let delta = json!({ "reasoning_details": [detail] });
             let delta =
                 chat_delta_with_raw_extras(delta, &mut event_delta_extra, pending_envelope_extra);
-            send_plain_sse_data(tx, json!({"id":chat_id,"object":"chat.completion.chunk","created":created,"model":logical_model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]}).to_string()).await?;
+            send_plain_sse_json(tx, &json!({"id":chat_id,"object":"chat.completion.chunk","created":created,"model":logical_model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]})).await?;
         }
         return Ok(());
     }
@@ -1737,7 +1737,7 @@ async fn emit_reasoning_delta(
                 "finish_reason": Value::Null
             }]
         });
-        send_plain_sse_data(tx, chunk.to_string()).await?;
+        send_plain_sse_json(tx, &chunk).await?;
     }
     Ok(())
 }
@@ -1779,7 +1779,7 @@ async fn emit_chat_semantic_node(
     let delta = crate::urp::encode::openai_chat::encode_assistant_chat_message_from_nodes(
         std::slice::from_ref(node),
     );
-    send_plain_sse_data(tx,json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]}).to_string()).await
+    send_plain_sse_json(tx, &json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]})).await
 }
 
 async fn send_chat_text_chunk(
@@ -1809,10 +1809,10 @@ async fn send_chat_text_chunk(
                 let mut part = chunk.clone();
                 patch(&mut part, if content.is_empty() { "" } else { &text });
                 part["choices"][0]["logprobs"][field] = urp::logprobs::encode_openai(&scores);
-                send_plain_sse_data(tx, part.to_string()).await?;
+                send_plain_sse_json(tx, &part).await?;
             }
         } else {
-            send_plain_sse_data(tx, chunk.to_string()).await?;
+            send_plain_sse_json(tx, &chunk).await?;
         }
     } else {
         send_chat_chunk_string(
@@ -1832,7 +1832,7 @@ async fn send_chat_text_chunk(
         .and_then(|value| value.as_array().cloned())
         .filter(|values| !values.is_empty())
     {
-        send_plain_sse_data(tx,json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":{"annotations":annotations},"finish_reason":null}]}).to_string()).await?;
+        send_plain_sse_json(tx, &json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":{"annotations":annotations},"finish_reason":null}]})).await?;
     }
     Ok(())
 }

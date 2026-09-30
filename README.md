@@ -123,6 +123,8 @@ bun add --global monoize
 monoize
 ```
 
+Run `monoize --version` to print the installed version.
+
 The package manager installs only the native binary for the current OS and CPU. Supported targets: Linux x86-64 and ARM64 (glibc and musl), Windows x86-64.
 
 ### Docker

@@ -640,7 +640,7 @@ pub(crate) async fn stream_messages_to_urp_events(
     urp: &HandlerUrpRequest,
     upstream_resp: reqwest::Response,
     tx: mpsc::Sender<UrpStreamEvent>,
-    started_at: Option<std::time::Instant>,
+    mut started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
@@ -681,7 +681,7 @@ pub(crate) async fn stream_messages_to_urp_events(
         if tx.is_closed() {
             downstream_closed = true;
         }
-        mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
+        mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;
             explicit_terminal_event = Some("[DONE]");

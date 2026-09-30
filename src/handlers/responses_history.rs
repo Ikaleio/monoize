@@ -235,11 +235,6 @@ impl HistoryContext {
             .insert(self.id.clone(), self.scope.clone(), nodes);
     }
 
-    pub(super) async fn finish_response(&self, resp: &mut urp::UrpResponse) {
-        self.retain_response(resp).await;
-        self.decorate_response(resp);
-    }
-
     pub(super) fn decorate_response(&self, resp: &mut urp::UrpResponse) {
         resp.id = self.id.clone();
         self.decorate_extra(&mut resp.extra_body);
@@ -359,7 +354,8 @@ mod media_history_tests {
     async fn retained_input_and_output_keep_the_successful_resource_scope() {
         let history = context(vec![file_input()]);
         let mut resp = response(vec![file_output(None)]);
-        history.finish_response(&mut resp).await;
+        history.decorate_response(&mut resp);
+        history.retain_response(&resp).await;
         let cache = history.cache.lock().await;
         let entry = cache.entries.get(&history.id).unwrap();
         let resources = urp::media::resources(&entry.nodes).unwrap();
@@ -377,7 +373,8 @@ mod media_history_tests {
     async fn output_scope_is_never_rebound_to_the_successful_attempt() {
         let history = context(vec![file_input()]);
         let mut resp = response(vec![file_output(Some(resource("B")))]);
-        history.finish_response(&mut resp).await;
+        history.decorate_response(&mut resp);
+        history.retain_response(&resp).await;
         assert!(history.cache.lock().await.entries.is_empty());
         assert_eq!(
             urp::media::resources(&resp.output).unwrap(),
@@ -389,7 +386,8 @@ mod media_history_tests {
     async fn invalid_output_is_decorated_without_retention() {
         let history = context(vec![file_input()]);
         let mut resp = response(vec![invalid_audio()]);
-        history.finish_response(&mut resp).await;
+        history.decorate_response(&mut resp);
+        history.retain_response(&resp).await;
         assert_eq!(resp.id, history.id);
         assert_eq!(resp.extra_body["store"], true);
         assert!(history.cache.lock().await.entries.is_empty());

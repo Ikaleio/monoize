@@ -421,6 +421,12 @@ impl UserStore {
             ),
             api_key_cache: crate::db_cache::ApiKeyCache::new(Duration::from_secs(60)),
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
+            sub_account_balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(
+                30,
+            )),
+            group_ratio_cache: crate::db_cache::SnapshotCache::new(
+                crate::db_cache::REQUEST_PATH_CACHE_TTL,
+            ),
             registration_lock: Arc::new(tokio::sync::Mutex::new(())),
             api_key_creation_lock: Arc::new(tokio::sync::Mutex::new(())),
             custom_transforms: crate::custom_transforms::CustomTransformSnapshotHandle::default(),
@@ -584,6 +590,9 @@ impl UserStore {
             .clone()
             .spawn_eviction_task(std::time::Duration::from_secs(30));
         self.balance_cache
+            .clone()
+            .spawn_eviction_task(std::time::Duration::from_secs(30));
+        self.sub_account_balance_cache
             .clone()
             .spawn_eviction_task(std::time::Duration::from_secs(30));
         if is_replica {
@@ -1094,6 +1103,8 @@ impl UserStore {
         tx.commit().await.map_err(|e| e.to_string())?;
         self.api_key_cache.invalidate_by_user_id(id);
         self.balance_cache.invalidate(id);
+        // DPT-AK15 forbids materializing the deleted user's key ids.
+        self.sub_account_balance_cache.invalidate_all();
         Ok(())
     }
 
@@ -2059,6 +2070,9 @@ impl UserStore {
 
         tx.commit().await.map_err(|e| e.to_string())?;
         self.api_key_cache.invalidate_by_key_ids(&key_ids);
+        for key_id in &deleted_key_ids {
+            self.sub_account_balance_cache.invalidate(key_id);
+        }
         for user_id in affected_user_ids {
             self.balance_cache.invalidate(&user_id);
         }
@@ -2647,6 +2661,7 @@ impl UserStore {
                 .map_err(|e| e.to_string())?;
         }
 
+        self.sub_account_balance_cache.invalidate(key_id);
         self.api_key_cache.invalidate_by_key_id(key_id);
 
         self.get_api_key_by_id(key_id)
@@ -2734,37 +2749,44 @@ impl UserStore {
         self.load_user_balance(user_id).await
     }
 
-    pub async fn ensure_user_can_spend(&self, user_id: &str) -> Result<(), BillingError> {
-        let row = self
-            .db
-            .read()
-            .query_one(self.db.stmt(
-                "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
-                vec![user_id.into()],
-            ))
+    /// DPT-BP1: one read through `cache`. The decision uses the value read even
+    /// when a concurrent invalidation prevents publishing it, so a miss costs
+    /// exactly one query.
+    async fn spend_preflight_balance<F, Fut>(
+        cache: &crate::db_cache::BalanceCache,
+        key: &str,
+        load: F,
+    ) -> Result<Option<UserBalance>, BillingError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<UserBalance>, String>>,
+    {
+        if let Some(cached) = cache.get(key) {
+            return Ok(Some(cached));
+        }
+        let generation = cache.current_generation();
+        let loaded = load()
             .await
-            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?
-            .ok_or_else(|| BillingError::new(BillingErrorKind::NotFound, "user not found"))?;
-        let raw: String = row
-            .try_get("", "balance_nano_usd")
-            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
-        let balance = parse_nano_usd(&raw)
-            .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
-        let unlimited = row
-            .try_get::<i32>("", "balance_unlimited")
-            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?
-            == 1;
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e))?;
+        if let Some(balance) = &loaded {
+            cache.insert_if_current(key.to_string(), generation, balance.clone());
+        }
+        Ok(loaded)
+    }
 
-        if unlimited {
+    pub async fn ensure_user_can_spend(&self, user_id: &str) -> Result<(), BillingError> {
+        let balance = Self::spend_preflight_balance(&self.balance_cache, user_id, || {
+            self.load_user_balance(user_id)
+        })
+        .await?
+        .ok_or_else(|| BillingError::new(BillingErrorKind::NotFound, "user not found"))?;
+        if balance.balance_unlimited || balance.balance_nano_usd > 0 {
             return Ok(());
         }
-        if balance <= 0 {
-            return Err(BillingError::new(
-                BillingErrorKind::InsufficientBalance,
-                "insufficient balance",
-            ));
-        }
-        Ok(())
+        Err(BillingError::new(
+            BillingErrorKind::InsufficientBalance,
+            "insufficient balance",
+        ))
     }
 
     pub async fn charge_user_balance_nano(
@@ -3089,6 +3111,7 @@ impl UserStore {
         tx.commit()
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        self.sub_account_balance_cache.invalidate(api_key_id);
         self.api_key_cache.invalidate_by_key_id(api_key_id);
         Ok(allocation)
     }
@@ -3183,19 +3206,46 @@ impl UserStore {
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
         self.balance_cache.invalidate(user_id);
+        self.sub_account_balance_cache.invalidate(api_key_id);
         self.api_key_cache.invalidate_by_key_id(api_key_id);
         Ok((new_key_balance, new_user_balance))
     }
 
-    pub async fn ensure_sub_account_can_spend(&self, api_key_id: &str) -> Result<(), BillingError> {
-        let key = self
-            .get_api_key_by_id(api_key_id)
+    async fn load_sub_account_balance(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Option<UserBalance>, String> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT user_id, sub_account_balance_nano FROM api_keys WHERE id = $1",
+                vec![api_key_id.into()],
+            ))
             .await
-            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e))?
+            .map_err(|e| e.to_string())?;
+        row.map(|row| {
+            let raw: String = row
+                .try_get("", "sub_account_balance_nano")
+                .map_err(|e| e.to_string())?;
+            Ok(UserBalance {
+                user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+                balance_nano_usd: parse_nano_usd(&raw)?,
+                balance_unlimited: false,
+            })
+        })
+        .transpose()
+    }
+
+    /// DPT-BP2: sub-account balance through `sub_account_balance_cache`.
+    pub async fn ensure_sub_account_can_spend(&self, api_key_id: &str) -> Result<(), BillingError> {
+        let balance =
+            Self::spend_preflight_balance(&self.sub_account_balance_cache, api_key_id, || {
+                self.load_sub_account_balance(api_key_id)
+            })
+            .await?
             .ok_or_else(|| BillingError::new(BillingErrorKind::NotFound, "api key not found"))?;
-        let balance = parse_nano_usd(&key.sub_account_balance_nano)
-            .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
-        if balance <= 0 {
+        if balance.balance_nano_usd <= 0 {
             return Err(BillingError::new(
                 BillingErrorKind::InsufficientBalance,
                 "insufficient balance",

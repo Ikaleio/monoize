@@ -1193,12 +1193,12 @@ async fn push_image_stream_attempt(
     logical_model: &str,
     req_attempt: &urp::UrpRequest,
     path: &str,
-    upstream_body: &Value,
+    upstream_body: Option<&Value>,
     reconstructed_urp_response: Option<Value>,
     transform_chain: Value,
     error: Option<&AppError>,
 ) {
-    let Some(session) = capture.session.as_ref() else {
+    let (Some(session), Some(upstream_body)) = (capture.session.as_ref(), upstream_body) else {
         return;
     };
     session
@@ -1380,7 +1380,7 @@ async fn execute_stream_collected_image_typed(
             }
             let http = client_http_for_attempt(state, &attempt)?;
             let mut negotiate_nonstream = false;
-            let (stream_call, upstream_body) = loop {
+            let stream_call = loop {
                 if negotiate_nonstream || req_attempt.stream == Some(false) {
                     req_attempt.stream = Some(false);
                     req_attempt.extra_body.remove("partial_images");
@@ -1427,14 +1427,15 @@ async fn execute_stream_collected_image_typed(
                     body.remove("stream");
                     body.remove("partial_images");
                 }
+                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
                 // Inline image edits use multipart. Reference edits use JSON.
                 let stream_call = match call_streaming_image_capable_upstream(
                     &http,
                     &attempt,
                     &req_attempt,
-                    &upstream_body,
+                    upstream_body,
                     attempt.request_timeout_ms.saturating_mul(10).max(600_000),
-                    &attempt_extra_headers(&attempt, &upstream_body),
+                    &extra_headers,
                     capture.session.is_some(),
                 )
                 .await
@@ -1473,10 +1474,7 @@ async fn execute_stream_collected_image_typed(
                         &logical_model,
                         &req_attempt,
                         &stream_call.path,
-                        stream_call
-                            .capture_multipart_request
-                            .as_ref()
-                            .unwrap_or(&upstream_body),
+                        stream_call.capture_upstream_request.as_ref(),
                         None,
                         capture_transform_chain.clone(),
                         Some(&error),
@@ -1493,14 +1491,12 @@ async fn execute_stream_collected_image_typed(
                     negotiate_nonstream = true;
                     continue;
                 }
-                break (stream_call, upstream_body);
+                break stream_call;
             };
             let path = stream_call.path;
             // RCD-D6a/OIU-E5g: a multipart edit attempt records the sent form
             // as `upstream_request` instead of the unused JSON encoding.
-            let capture_upstream_request = stream_call
-                .capture_multipart_request
-                .unwrap_or_else(|| upstream_body.clone());
+            let capture_upstream_request = stream_call.capture_upstream_request;
             let call = stream_call.result;
 
             match call {
@@ -1752,7 +1748,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &capture_upstream_request,
+                            capture_upstream_request.as_ref(),
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1812,7 +1808,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &capture_upstream_request,
+                            capture_upstream_request.as_ref(),
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1841,7 +1837,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &capture_upstream_request,
+                            capture_upstream_request.as_ref(),
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -1909,7 +1905,7 @@ async fn execute_stream_collected_image_typed(
                                 &logical_model,
                                 &req_attempt,
                                 &path,
-                                &capture_upstream_request,
+                                capture_upstream_request.as_ref(),
                                 reconstructed_urp_response.clone(),
                                 capture_transform_chain.clone(),
                                 Some(&err),
@@ -1971,7 +1967,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &capture_upstream_request,
+                            capture_upstream_request.as_ref(),
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -2035,7 +2031,7 @@ async fn execute_stream_collected_image_typed(
                             &logical_model,
                             &req_attempt,
                             &path,
-                            &capture_upstream_request,
+                            capture_upstream_request.as_ref(),
                             reconstructed_urp_response.clone(),
                             capture_transform_chain.clone(),
                             Some(&err),
@@ -2064,7 +2060,7 @@ async fn execute_stream_collected_image_typed(
                         &logical_model,
                         &req_attempt,
                         &path,
-                        &capture_upstream_request,
+                        capture_upstream_request.as_ref(),
                         reconstructed_urp_response.clone(),
                         capture_transform_chain.clone(),
                         None,
@@ -2147,7 +2143,7 @@ async fn execute_stream_collected_image_typed(
                         &logical_model,
                         &req_attempt,
                         &path,
-                        &capture_upstream_request,
+                        capture_upstream_request.as_ref(),
                         None,
                         capture_transform_chain.clone(),
                         Some(&app_err),

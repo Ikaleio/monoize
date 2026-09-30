@@ -5,8 +5,12 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 async fn send_sse_event(tx: &mpsc::Sender<Event>, event: Event) {
+    // Downstream disconnects must not stop upstream decoding before terminal usage arrives.
+    // A closed receiver never reopens, so only the send that first observes the close logs.
+    if tx.is_closed() {
+        return;
+    }
     if let Err(err) = tx.send(event).await {
-        // Downstream disconnects must not stop upstream decoding before terminal usage arrives.
         tracing::debug!(
             error = %err,
             "downstream SSE receiver closed; continuing upstream drain"
@@ -14,9 +18,51 @@ async fn send_sse_event(tx: &mpsc::Sender<Event>, event: Event) {
     }
 }
 
-pub(crate) async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: String) -> AppResult<()> {
-    crate::request_capture::capture_sse_frame(format!("data: {data}\n\n")).await;
+pub(crate) async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: &str) -> AppResult<()> {
+    if let Some(capture) = crate::request_capture::current_sse_capture() {
+        capture.record(format!("data: {data}\n\n")).await;
+    }
     send_sse_event(tx, Event::default().data(data)).await;
+    Ok(())
+}
+
+pub(crate) async fn send_plain_sse_json(tx: &mpsc::Sender<Event>, data: &Value) -> AppResult<()> {
+    send_sse_json(tx, None, data).await
+}
+
+async fn send_sse_json(
+    tx: &mpsc::Sender<Event>,
+    name: Option<&str>,
+    data: &Value,
+) -> AppResult<()> {
+    let capture = crate::request_capture::current_sse_capture();
+    if capture.is_none() && tx.is_closed() {
+        return Ok(());
+    }
+    let event = match name {
+        Some(name) => Event::default().event(name),
+        None => Event::default(),
+    };
+    let event = match capture {
+        Some(capture) => {
+            let data = data.to_string();
+            let frame = match name {
+                Some(name) => format!("event: {name}\ndata: {data}\n\n"),
+                None => format!("data: {data}\n\n"),
+            };
+            capture.record(frame).await;
+            event.data(data)
+        }
+        // Serializes straight into the event buffer; byte-identical to `data(to_string())`.
+        None => event.json_data(data).map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "stream_encode_failed",
+                err.to_string(),
+            )
+        })?,
+    };
+    send_sse_event(tx, event).await;
     Ok(())
 }
 
@@ -25,10 +71,7 @@ pub(crate) async fn send_named_sse_json(
     name: &str,
     data: Value,
 ) -> AppResult<()> {
-    let data = data.to_string();
-    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {data}\n\n")).await;
-    send_sse_event(tx, Event::default().event(name).data(data)).await;
-    Ok(())
+    send_sse_json(tx, Some(name), &data).await
 }
 
 pub(crate) async fn send_responses_event(
@@ -37,11 +80,9 @@ pub(crate) async fn send_responses_event(
     name: &str,
     data: Value,
 ) -> AppResult<()> {
-    let payload = normalize_responses_payload(*seq, name, data).to_string();
+    let payload = normalize_responses_payload(*seq, name, data);
     *seq += 1;
-    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {payload}\n\n")).await;
-    send_sse_event(tx, Event::default().event(name).data(payload)).await;
-    Ok(())
+    send_sse_json(tx, Some(name), &payload).await
 }
 
 pub(crate) async fn send_responses_delta_string(
@@ -85,7 +126,7 @@ pub(crate) async fn send_chat_chunk_string(
         "choices": [{ "index": 0, "delta": delta_template, "finish_reason": Value::Null }]
     });
     for chunk in split_json_value_by_string_patch(base, content, patch, max_frame_length) {
-        send_plain_sse_data(tx, chunk.to_string()).await?;
+        send_plain_sse_json(tx, &chunk).await?;
     }
     Ok(())
 }
@@ -146,8 +187,6 @@ pub(crate) fn split_json_value_by_string_patch(
     patch: fn(&mut Value, &str),
     max_frame_length: Option<usize>,
 ) -> Vec<Value> {
-    let mut empty_template = template.clone();
-    patch(&mut empty_template, "");
     split_json_by_exact_limit(
         template,
         content,

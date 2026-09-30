@@ -271,6 +271,6 @@ pub(crate) async fn emit_synthetic_responses_stream(
         json!({ "response": completed_response }),
     )
     .await?;
-    send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
+    send_plain_sse_data(&tx, "[DONE]").await?;
     Ok(())
 }

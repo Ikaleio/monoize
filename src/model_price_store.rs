@@ -1,10 +1,16 @@
 //! `model_prices` and `price_sync_runs` persistence (`model-pricing.spec.md` §2, §10).
 
 use crate::db::DbPool;
+use crate::db_cache::REQUEST_PATH_CACHE_TTL;
 use crate::settings::validate_usd_decimal;
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 /// One `model_prices` row (MP-D1).
 #[derive(Debug, Clone, Serialize)]
@@ -335,14 +341,125 @@ fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
     })
 }
 
+/// DPT-RC5: the applicable row for one pricing key, or its absence.
+struct CachedModelPrice {
+    record: Option<Arc<ModelPriceRecord>>,
+    read_started_at: Instant,
+    generation: u64,
+}
+
+const MODEL_PRICE_CACHE_MAX_ENTRIES: usize = 4096;
+
+#[derive(Default)]
+struct ModelPriceCache {
+    entries: DashMap<String, CachedModelPrice>,
+    generation: AtomicU64,
+}
+
+impl ModelPriceCache {
+    fn servable(&self, entry: &CachedModelPrice) -> bool {
+        entry.generation == self.generation.load(Ordering::Acquire)
+            && entry.read_started_at.elapsed() <= REQUEST_PATH_CACHE_TTL
+    }
+
+    fn publish(
+        &self,
+        model_id: String,
+        record: Option<Arc<ModelPriceRecord>>,
+        read_started_at: Instant,
+        generation: u64,
+    ) {
+        if self.generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        if !self.entries.contains_key(&model_id)
+            && self.entries.len() >= MODEL_PRICE_CACHE_MAX_ENTRIES
+        {
+            self.entries.retain(|_, entry| self.servable(entry));
+            if self.entries.len() >= MODEL_PRICE_CACHE_MAX_ENTRIES {
+                return;
+            }
+        }
+        // Readers also compare generations, so an entry published just
+        // before a concurrent invalidation is never served.
+        self.entries.insert(
+            model_id,
+            CachedModelPrice {
+                record,
+                read_started_at,
+                generation,
+            },
+        );
+    }
+
+    fn invalidate(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.entries.clear();
+    }
+}
+
 #[derive(Clone)]
 pub struct ModelPriceStore {
     db: DbPool,
+    price_cache: Arc<ModelPriceCache>,
 }
 
 impl ModelPriceStore {
     pub fn new(db: DbPool) -> Self {
-        Self { db }
+        Self {
+            db,
+            price_cache: Arc::default(),
+        }
+    }
+
+    /// DPT-RC5: applicable rows (MP-R2/MP-R4) for the given pricing keys.
+    /// Keys without a servable cache entry are read with one set-based
+    /// `list_by_model_ids` call.
+    pub async fn list_applicable_by_model_ids(
+        &self,
+        model_ids: &[String],
+    ) -> Result<HashMap<String, Arc<ModelPriceRecord>>, String> {
+        let cache = &self.price_cache;
+        let mut applicable = HashMap::with_capacity(model_ids.len());
+        let mut missing = Vec::new();
+        for model_id in model_ids {
+            match cache
+                .entries
+                .get(model_id)
+                .filter(|entry| cache.servable(entry))
+            {
+                Some(entry) => {
+                    if let Some(record) = &entry.record {
+                        applicable.insert(model_id.clone(), Arc::clone(record));
+                    }
+                }
+                None => missing.push(model_id.clone()),
+            }
+        }
+        if missing.is_empty() {
+            return Ok(applicable);
+        }
+        missing.sort_unstable();
+        missing.dedup();
+        let generation = cache.generation.load(Ordering::Acquire);
+        let read_started_at = Instant::now();
+        let mut rows = self
+            .list_by_model_ids(&missing)
+            .await?
+            .into_iter()
+            .map(|row| (row.model_id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        for model_id in missing {
+            let record = rows
+                .remove(&model_id)
+                .filter(|row| row.enabled && row.is_complete())
+                .map(Arc::new);
+            if let Some(record) = &record {
+                applicable.insert(model_id.clone(), Arc::clone(record));
+            }
+            cache.publish(model_id, record, read_started_at, generation);
+        }
+        Ok(applicable)
     }
 
     /// MP-A1: all rows ordered by `model_id ASC`.
@@ -535,7 +652,8 @@ impl ModelPriceStore {
              source, locked_fields, raw_json, enabled, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"
         };
-        self.db
+        let result = self
+            .db
             .write()
             .await
             .execute(self.db.stmt(
@@ -558,8 +676,9 @@ impl ModelPriceStore {
                     record.updated_at.to_rfc3339().into(),
                 ],
             ))
-            .await
-            .map_err(|e| e.to_string())?;
+            .await;
+        self.price_cache.invalidate();
+        result.map_err(|e| e.to_string())?;
         Ok(record)
     }
 
@@ -573,15 +692,23 @@ impl ModelPriceStore {
                 "DELETE FROM model_prices WHERE model_id = $1",
                 vec![model_id.into()],
             ))
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(result.rows_affected() > 0)
+            .await;
+        self.price_cache.invalidate();
+        Ok(result.map_err(|e| e.to_string())?.rows_affected() > 0)
     }
 
     /// MP-Y13/MP-Y16: set-based upsert of fully merged sync rows in
     /// fixed-size chunks below the portable SQLite bound-parameter limit.
     /// Callers resolve ownership and locks before this write.
     pub async fn bulk_upsert_synced(&self, rows: &[ModelPriceRecord]) -> Result<(), String> {
+        let result = self.bulk_upsert_synced_chunks(rows).await;
+        // DPT-RC6: chunks commit independently, so a failed call may still
+        // have changed rows.
+        self.price_cache.invalidate();
+        result
+    }
+
+    async fn bulk_upsert_synced_chunks(&self, rows: &[ModelPriceRecord]) -> Result<(), String> {
         // 15 bound values per row; 60 rows keeps every statement below the
         // portable 999-parameter SQLite bound.
         const CHUNK_SIZE: usize = 60;
@@ -658,6 +785,19 @@ impl ModelPriceStore {
 
     /// MP-Y15: chunked delete of source-owned rows by model id.
     pub async fn delete_by_ids_with_source(
+        &self,
+        model_ids: &[String],
+        source: &str,
+    ) -> Result<u64, String> {
+        let result = self
+            .delete_by_ids_with_source_chunks(model_ids, source)
+            .await;
+        // DPT-RC6: chunks commit independently.
+        self.price_cache.invalidate();
+        result
+    }
+
+    async fn delete_by_ids_with_source_chunks(
         &self,
         model_ids: &[String],
         source: &str,

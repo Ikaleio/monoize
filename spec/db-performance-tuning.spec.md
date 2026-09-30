@@ -54,15 +54,17 @@ DPT-RL2. Each accepted entry MUST be serialized to a unique file in the request-
 
 DPT-RL3. `push(log)` MUST assign the stable database row UUID, durably publish one spool file by temporary-file write followed by same-directory atomic rename, and then MAY append an in-memory reference under the mutex. It MUST return `Result` so the caller can fail closed when persistence is unavailable.
 
-DPT-RL3a. The spool byte quota MUST be configurable. The default is `536870912`, selected by `MONOIZE_REQUEST_LOG_SPOOL_MAX_BYTES`. One serialized entry MUST be no larger than `8388608` bytes by default, selected by `MONOIZE_REQUEST_LOG_SPOOL_ENTRY_MAX_BYTES`. Terminal-log preflight MUST reject `MONOIZE_REQUEST_LOG_SPOOL_ENTRY_MAX_BYTES` values below `4096` with `RequestLogAdmissionError::EntryQuotaTooSmall`; no reservation or admission marker may be created for that configuration.
+DPT-RL3a. The spool byte quota MUST be configurable. The default is `536870912`, selected by `MONOIZE_REQUEST_LOG_SPOOL_MAX_BYTES`. One serialized entry MUST be no larger than `8388608` bytes by default, selected by `MONOIZE_REQUEST_LOG_SPOOL_ENTRY_MAX_BYTES`. The terminal-log admission unit is `min(65536, MONOIZE_REQUEST_LOG_SPOOL_ENTRY_MAX_BYTES)` bytes. With default settings, the quota admits `8192` concurrent terminal-log reservations when no durable spool bytes are outstanding. Terminal-log preflight MUST reject `MONOIZE_REQUEST_LOG_SPOOL_ENTRY_MAX_BYTES` values below `4096` with `RequestLogAdmissionError::EntryQuotaTooSmall`; no reservation or admission marker may be created for that configuration.
 
 DPT-RL3b. If accepting an entry would exceed either quota, or its one durable spool write attempt fails, unreserved `push` MUST return an error. It MUST NOT broadcast the log or remove its pending snapshot. `push` is for bounded internal producers, MUST NOT degrade an oversized entry, and MUST NOT retry indefinitely.
 
-DPT-RL3c. `reserve_terminal_log()` MUST atomically reserve one `MONOIZE_REQUEST_LOG_SPOOL_ENTRY_MAX_BYTES` unit against the sum of durable spool bytes and outstanding reservations. Concurrent reservations MUST NOT oversubscribe the spool quota. The reservation MUST preassign one stable spool-row UUID and one stable final `.json` path. Before returning success it MUST create, sync, and atomically publish a unique unarmed write-probe marker in the spool directory and sync that directory. On Windows, directory sync MUST open the directory with write access and `FILE_FLAG_BACKUP_SEMANTICS` before calling `FlushFileBuffers`. Dropping the final clone of an unarmed reservation MUST remove the probe and release the reservation.
+DPT-RL3c. `reserve_terminal_log()` MUST atomically reserve one admission unit (DPT-RL3a) against the sum of durable spool bytes and outstanding reservations. Concurrent reservations MUST NOT oversubscribe the spool quota. The reservation MUST preassign one stable spool-row UUID, one stable final `.json` path, and one stable hidden admission-marker path. `reserve_terminal_log()` MUST NOT perform filesystem I/O; `arm_reserved` is the first durable write and fails closed when the spool is not writable. Dropping the final clone of an unarmed reservation MUST remove any marker file at its marker path and release the reservation.
 
-DPT-RL3c-1. Before upstream dispatch, `arm_reserved(fallback_log, reservation)` MUST atomically replace the unarmed marker with a valid, durably synced `SpoolRequestLog` fallback that uses the reservation's stable UUID. The fallback MUST have terminal `status = "error"`, identify the admitted request, and state that terminal finalization was interrupted. Arming MUST fail unless the reservation belongs to that batcher, is unclaimed, and is unarmed. `push_reserved` MUST fail unless arming completed.
+DPT-RL3c-0. Every spool file publication MUST write a temporary file, sync it, and rename it on the blocking thread pool; it MUST NOT block a Tokio worker thread. The publication MUST then complete one spool-directory sync that started after its rename returned. Concurrent publications MUST share directory syncs: at most one directory sync per spool directory runs at a time, and one completed sync satisfies every publication whose rename returned before that sync started. A failed shared sync MUST fail every publication that waited on it. On Windows, directory sync MUST open the directory with write access and `FILE_FLAG_BACKUP_SEMANTICS` before calling `FlushFileBuffers`.
 
-DPT-RL3c-2. Exactly one `push_reserved(log, reservation)` call MAY claim an armed reservation. It MUST encode the terminal log with the reservation's stable UUID and durably rename it to the reservation's stable final path. After claim, a filesystem write, sync, or rename failure MUST leave the armed fallback and reservation active and MUST retry the same stable UUID and final path until durable rename succeeds. Retry delay MUST start at `10 ms`, double after each failed attempt, and stop increasing at `1000 ms`. `push_reserved` MUST release `flush_lock` before each retry sleep. After durable rename, the reservation MUST remove the armed marker, convert the full reservation to the serialized terminal entry's actual byte count, and release unused reserved bytes.
+DPT-RL3c-1. Before upstream dispatch, `arm_reserved(fallback_log, reservation)` MUST publish (DPT-RL3c-0) a valid `SpoolRequestLog` fallback at the reservation's marker path. The fallback MUST use the reservation's stable UUID, have terminal `status = "error"`, identify the admitted request, and state that terminal finalization was interrupted. Arming MUST fail unless the reservation belongs to that batcher, is unclaimed, and is unarmed. `push_reserved` MUST fail unless arming completed.
+
+DPT-RL3c-2. Exactly one `push_reserved(log, reservation)` call MAY claim an armed reservation. It MUST encode the terminal log with the reservation's stable UUID. If the encoded entry is larger than the reservation, `push_reserved` MUST grow the reservation to the encoded size against the combined quota before it writes the entry. If growth would oversubscribe the quota, `push_reserved` MUST keep the armed fallback and retry growth until quota becomes available. It MUST then publish (DPT-RL3c-0) the entry at the reservation's stable final path. After claim, a growth, filesystem write, sync, or rename failure MUST leave the armed fallback and reservation active and MUST retry the same stable UUID and final path until the directory sync succeeds. If the rename succeeded and only the directory sync failed, the retry MUST repeat only the directory sync. Retry delay MUST start at `10 ms`, double after each failed attempt, and stop increasing at `1000 ms`. `push_reserved` MUST NOT acquire `flush_lock`. After the directory sync, `push_reserved` MUST remove the armed marker without a further directory sync; DPT-RL10 removes a marker that survives a crash next to its final file. The reservation MUST then convert to the serialized terminal entry's actual byte count and release unused reserved bytes. Terminal publication of one request MUST NOT wait for another request's file write or for `flush`. It MAY wait for one in-progress shared directory sync before the sync that covers its rename starts.
 
 DPT-RL3c-3. Dropping the final clone of an armed or claimed reservation before terminal completion MUST preserve the fallback by atomically promoting its marker to the stable final `.json` path. If promotion succeeds, quota accounting MUST convert the reservation to the fallback file's actual byte count. If promotion fails, the marker MUST remain on disk and the process MUST retain the conservative full reservation.
 
@@ -70,9 +72,9 @@ DPT-RL3c-4. `cancel_reserved(reservation)` MAY cancel an armed but unclaimed res
 
 DPT-RL3d. `push(log)` without a preflight reservation is reserved for internal producers such as active probes and tests. It MUST atomically reserve the serialized entry's actual byte count before writing and MUST obey the same combined quota.
 
-DPT-RL3e. `arm_reserved` and `push_reserved` MUST serialize the complete entry. They MUST NOT replace the entry with a compact representation or generate `error_code = "request_log_payload_truncated"`. If the complete encoding exceeds the reservation, the operation MUST return `RequestLogAdmissionError::EntryTooLarge`. An `arm_reserved` size failure MUST occur before the reservation enters the armed state. A `push_reserved` size failure MUST leave the armed fallback available for durable promotion. The operation MUST NOT persist a partial terminal entry.
+DPT-RL3e. `arm_reserved` and `push_reserved` MUST serialize the complete entry. They MUST NOT replace the entry with a compact representation or generate `error_code = "request_log_payload_truncated"`. If the complete fallback encoding exceeds the reservation, `arm_reserved` MUST return `RequestLogAdmissionError::EntryTooLarge`. If the complete terminal encoding exceeds `MONOIZE_REQUEST_LOG_SPOOL_ENTRY_MAX_BYTES` or the spool quota, `push_reserved` MUST return `RequestLogAdmissionError::EntryTooLarge`. An `arm_reserved` size failure MUST occur before the reservation enters the armed state. A `push_reserved` size failure MUST leave the armed fallback available for durable promotion. The operation MUST NOT persist a partial terminal entry.
 
-DPT-RL3f. A successful local spool-file publication MUST remain serialized by `flush_lock` until `spool_bytes`, `admitted_bytes`, and the in-memory spool reference reflect that file. `flush` MUST NOT delete a locally published file between its final rename and its accounting transition.
+DPT-RL3f. Before a final rename makes a spool file visible to `flush`, the producer MUST add the file's byte count to `spool_bytes`. If that rename fails, the producer MUST subtract the same byte count. The file's bytes MUST remain covered by `admitted_bytes` through its reservation until the reservation converts to the actual byte count. `flush` MAY therefore select and delete a published file at any time after its rename. `flush_lock` MUST serialize only `flush` and `ship_via` with each other; `push` and `push_reserved` MUST NOT acquire it.
 
 ### 3.3 Flush
 
@@ -275,3 +277,80 @@ DPT-C1. `LastUsedBatcher` and `ApiKeyCache` use `DashMap` for lock-free concurre
 DPT-C2. `RequestLogBatcher` uses `tokio::sync::Mutex` for the buffer. The `push` operation holds the lock only for the duration of `Vec::push`. The `flush` operation holds the lock only for the duration of `std::mem::replace` (buffer swap), then releases it before executing DB writes.
 
 DPT-C3. `BalanceCache` uses `DashMap` with the same concurrency properties as DPT-C1.
+
+## 8. Request-Path Read Caches
+
+This section adds process-local caches for reads that every forwarded request performs before upstream dispatch. It does not change §3.
+
+### 8.1 SnapshotCache
+
+DPT-SC1. `db_cache` MUST expose `SnapshotCache<T>`. It holds at most one published snapshot `Arc<T>`, the `Instant` at which the load of that snapshot started, the invalidation generation captured before that load, a monotonically increasing invalidation generation, and at most one in-flight load.
+
+DPT-SC2. `get_or_load(load)` MUST return the published snapshot without database I/O if and only if its generation equals the current generation and no more than the TTL has elapsed since its load started. A hit MUST clone only the `Arc`.
+
+DPT-SC3. On a miss, all callers that observe the same generation MUST share one in-flight load. Only one `load` closure runs. Every waiter receives the same `Ok(Arc<T>)` or the same `Err(String)`. A failed load MUST NOT be published or retained; the next miss MUST start a new load. No lock MUST be held across an `.await`.
+
+DPT-SC4. A load MUST capture the generation before its first read. It MUST publish its result only if the generation is unchanged at publication. Callers that waited on that load MAY use an unpublished result.
+
+DPT-SC5. `invalidate()` MUST increment the generation and then drop the published snapshot. After `invalidate()` returns, a later `get_or_load` call in the same process MUST NOT return a snapshot, or join a load, whose captured generation precedes that increment.
+
+### 8.2 TTL
+
+DPT-RC1. The constant `REQUEST_PATH_CACHE_TTL` MUST equal `1000 ms`. It is the TTL of the routing catalog (DPT-RC2), the model-price cache (DPT-RC5), and the group billing-ratio cache (DPT-RC8). A change committed by another process MUST become visible to this process no later than `1000 ms` after the start of the first read that follows the commit.
+
+### 8.3 Routing catalog
+
+DPT-RC2. `MonoizeRoutingStore` MUST own one `SnapshotCache` of the routing catalog. One catalog load MUST execute the `list_providers` reads (providers, channels, channel models: three statements). The catalog MUST retain only providers with `enabled = 1`, and in each provider only channels with `enabled = 1 AND weight > 0`. Providers MUST be ordered by `priority ASC, created_at ASC`, and channels by `created_at ASC`. The catalog MUST also hold the sorted, distinct set of model names of the retained channels.
+
+DPT-RC3. These reads MUST be served from the catalog:
+- `available_model_names(candidates)` MUST return the candidates that are in the catalog model set.
+- `list_available_model_names()` MUST return the catalog model set in ascending order.
+- `list_providers_for_model(model)` MUST return `Arc<[MonoizeProvider]>`. It contains each catalog provider that has at least one retained channel whose `models` contains `model`, in catalog order. Each returned provider MUST contain only those channels. The `models` map of each returned channel MUST contain only the `model` entry. The projection for one model MUST be built at most once per catalog snapshot and shared by `Arc`. Only models in the catalog model set are memoized; other models MUST return an empty slice.
+
+`list_providers`, `get_provider`, `provider_count`, and `list_active_probe_candidates` MUST continue to read the database directly.
+
+DPT-RC4. The routing catalog MUST be invalidated after the write commits and before the method returns success, for each of these writes to `monoize_providers`, `monoize_channels`, or `monoize_channel_models`:
+
+| Write | Invalidation point |
+|---|---|
+| `MonoizeRoutingStore::create_provider` | after commit, before reading back the provider |
+| `MonoizeRoutingStore::update_provider` | after commit, before reading back the provider |
+| `MonoizeRoutingStore::delete_provider` | after the delete affects one row |
+| `MonoizeRoutingStore::reorder_providers` | after commit |
+| `MonoizeRoutingStore::remember_channel_websocket_supported` | after commit, when a row changed |
+| `UserStore::delete_group` (GR-X3 rewrites `monoize_providers.group_ids`) | the admin group-delete handler MUST call `MonoizeRoutingStore::invalidate_routing_catalog()` after `delete_group` succeeds and before it responds |
+
+Startup canonicalization in `MonoizeRoutingStore::new` completes before the store is shared. The cache is empty at that point.
+
+### 8.4 Model-price cache
+
+DPT-RC5. `ModelPriceStore` MUST cache, per `model_id`, the applicable row or its absence. A row is applicable when `enabled` is true and the row is complete (MP-R2, MP-R4). `list_applicable_by_model_ids(ids)` MUST return a map from `model_id` to `Arc<ModelPriceRecord>` that contains only applicable rows. It MUST serve each id whose entry has the current generation and whose read started no more than `1000 ms` before. It MUST fetch all other distinct ids with one `list_by_model_ids` call (MP-R8 chunking). It MUST capture the generation before that read and cache the results only under that generation. A served entry MUST have the current generation. The cache MUST hold at most `4096` entries. Before an insert at capacity, the cache MUST remove every entry that it cannot serve. If the cache is still full, the new entry MUST NOT be cached.
+
+DPT-RC6. The model-price cache MUST be invalidated (generation increment, then clear) by `upsert`, `delete`, `bulk_upsert_synced`, and `delete_by_ids_with_source` before they return. This includes an error return after any statement ran, because chunked sync writes can commit partially. Price sync (MP-Y13 to MP-Y16) writes only through these methods.
+
+DPT-RC7. The forwarding price snapshot (MP-R8) MUST use `list_applicable_by_model_ids`. `list`, `get`, and `list_by_model_ids` remain uncached for dashboard and active-probe callers.
+
+### 8.5 Group billing-ratio cache
+
+DPT-RC8. `UserStore` MUST own one `SnapshotCache` of `group_id -> billing_ratio` for every `monoize_groups` row. One load executes `SELECT id, billing_ratio FROM monoize_groups`. `group_billing_ratios()` MUST return the shared map. The forwarding path MUST read it only when at least one attempt has a billing group. `create_group`, `update_group`, `reorder_groups`, and `delete_group` MUST invalidate this cache after their write succeeds and before they return.
+
+DPT-RC9. With warm caches, building attempts for a forwarded request MUST NOT execute SQL for model availability, providers, channels, channel models, model prices, or group billing ratios. A write through an owning store in this process MUST be visible to every request that starts after the write returns.
+
+### 8.6 Spend preflight
+
+DPT-BP1. `UserStore::ensure_user_can_spend(user_id)` MUST read the balance through `BalanceCache`. On a hit, it decides from the cached `UserBalance`. On a miss, it captures the generation, reads the `users` row once, calls `insert_if_current`, and decides from the value it read, even if publication failed. It MUST NOT repeat the read because the generation changed. The decision is unchanged (BP-C8): `balance_unlimited` admits; `balance_nano_usd > 0` admits; otherwise the result is `InsufficientBalance`. A missing row is `NotFound`.
+
+DPT-BP2. `UserStore` MUST own a second `BalanceCache`, `sub_account_balance_cache`. Its key is `api_key_id`. Its TTL is 30 seconds, and its capacity follows DPT-BC3a. In an entry, `user_id` is the owning user, `balance_nano_usd` is `api_keys.sub_account_balance_nano`, and `balance_unlimited` is false. `ensure_sub_account_can_spend(api_key_id)` MUST follow DPT-BP1 with `SELECT user_id, sub_account_balance_nano FROM api_keys WHERE id = $1`. A balance `> 0` admits; otherwise the result is `InsufficientBalance`. A missing row is `NotFound`. `spawn_background_tasks` MUST start its eviction task with a 30-second interval on both roles.
+
+DPT-BP3. These mutations MUST invalidate the listed caches after commit and before they return:
+
+| Mutation | Invalidation |
+|---|---|
+| `charge_sub_account_balance_nano` (sub-account branch) | `sub_account_balance_cache.invalidate(api_key_id)` |
+| `transfer_to_sub_account` | `sub_account_balance_cache.invalidate(api_key_id)` |
+| `update_api_key` | `sub_account_balance_cache.invalidate(key_id)` |
+| `batch_delete_api_keys` | `sub_account_balance_cache.invalidate(id)` for each deleted id |
+| `delete_user` | `sub_account_balance_cache.invalidate_all()` |
+| `apply_metering_batch` (primary apply of replica deltas) | `balance_cache.invalidate(user_id)`, and `sub_account_balance_cache.invalidate(api_key_id)` when the delta names a key, for every delta in the committed batch |
+
+DPT-BP4. Replica preflight (`primary-replica-deployment.spec.md` M7) MUST keep reading persisted balances without these caches.

@@ -168,12 +168,12 @@ pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
 }
 
 /// MP-R1/MP-R8 preflight snapshot: the applicable `model_prices` rows for
-/// every distinct pricing key of one forwarding request, loaded by one
-/// set-based query.
+/// every distinct pricing key of one forwarding request, served by the
+/// request-path price cache (DPT-RC5).
 #[derive(Debug, Clone, Default)]
 pub(super) struct ModelPriceSnapshot {
     reasoning_suffix_map: HashMap<String, String>,
-    rows: HashMap<String, ModelPriceRecord>,
+    rows: HashMap<String, Arc<ModelPriceRecord>>,
 }
 
 impl ModelPriceSnapshot {
@@ -187,13 +187,13 @@ impl ModelPriceSnapshot {
     ) -> (String, Option<ModelPriceRecord>) {
         let upstream_key = normalize_pricing_model_key(upstream_model, &self.reasoning_suffix_map);
         if let Some(row) = self.rows.get(&upstream_key) {
-            return (upstream_key, Some(row.clone()));
+            return (upstream_key, Some(ModelPriceRecord::clone(row)));
         }
         let logical_key = normalize_pricing_model_key(logical_model, &self.reasoning_suffix_map);
         if logical_key != upstream_key
             && let Some(row) = self.rows.get(&logical_key)
         {
-            return (logical_key, Some(row.clone()));
+            return (logical_key, Some(ModelPriceRecord::clone(row)));
         }
         (upstream_key, None)
     }
@@ -220,17 +220,12 @@ pub(super) async fn build_model_price_snapshot(
     ));
     keys.sort();
     keys.dedup();
+    // MP-R2/MP-R4: only enabled, complete rows are returned.
     let rows = state
         .model_price_store
-        .list_by_model_ids(&keys)
+        .list_applicable_by_model_ids(&keys)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let rows = rows
-        .into_iter()
-        // MP-R2/MP-R4: a disabled or incomplete row is exactly a missing row.
-        .filter(|row| row.enabled && row.is_complete())
-        .map(|row| (row.model_id.clone(), row))
-        .collect();
     Ok(ModelPriceSnapshot {
         reasoning_suffix_map,
         rows,

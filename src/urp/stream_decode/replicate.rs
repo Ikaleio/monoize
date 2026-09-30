@@ -16,7 +16,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
     urp: &HandlerUrpRequest,
     upstream_resp: reqwest::Response,
     tx: mpsc::Sender<UrpStreamEvent>,
-    started_at: Option<std::time::Instant>,
+    mut started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
@@ -48,7 +48,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
             )
         })?;
 
-        mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
+        mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
 
         match ev.event.as_str() {
             "output" => {

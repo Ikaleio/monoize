@@ -2,8 +2,22 @@ use monoize::error::AppError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+fn main() {
+    // `args_os`: `args()` panics on non-UTF-8 argv, which would make an ignored
+    // argument (or a non-UTF-8 install path) abort startup.
+    let first = std::env::args_os().nth(1);
+    if matches!(first.as_deref().and_then(|arg| arg.to_str()), Some("--version" | "-V")) {
+        println!("monoize {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    serve();
+}
+
 #[tokio::main]
-async fn main() {
+async fn serve() {
     monoize::upstream_websocket::ensure_rustls_crypto_provider();
     tracing_subscriber::fmt()
         .with_env_filter(

@@ -189,6 +189,10 @@ pub(crate) fn last_used_bulk_update(
 const REQUEST_LOG_INSERT_COLUMNS: usize = 39;
 pub(crate) const REQUEST_LOG_INSERT_CHUNK_ENTRIES: usize = 20;
 pub(crate) const REQUEST_LOG_MIN_ENTRY_BYTES: u64 = 4_096;
+/// Upfront terminal-log reservation. A larger terminal entry grows its
+/// reservation when it is published, so admission capacity is not bounded by the
+/// worst-case entry size (DPT-RL3a, DPT-RL3c-2).
+const REQUEST_LOG_ADMISSION_UNIT_BYTES: u64 = 65_536;
 const REQUEST_LOG_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(10);
 const REQUEST_LOG_RETRY_MAX_DELAY: Duration = Duration::from_millis(1_000);
 const REQUEST_LOG_RESERVATION_UNARMED: u8 = 0;
@@ -529,7 +533,7 @@ pub struct RequestLogReservation {
 struct RequestLogReservationInner {
     admitted_total: Arc<AtomicU64>,
     spool_bytes: Arc<AtomicU64>,
-    bytes: u64,
+    bytes: AtomicU64,
     state: std::sync::atomic::AtomicU8,
     armed_bytes: AtomicU64,
     marker_path: std::sync::Mutex<Option<std::path::PathBuf>>,
@@ -629,21 +633,57 @@ impl RequestLogReservation {
             .store(REQUEST_LOG_RESERVATION_CONSUMED, Ordering::Release);
         self.inner
             .admitted_total
-            .fetch_sub(self.inner.bytes, Ordering::AcqRel);
+            .fetch_sub(self.inner.bytes.load(Ordering::Acquire), Ordering::AcqRel);
     }
 
+    /// Grows the reservation to `target` bytes against `quota`. Returns `false`
+    /// while outstanding reservations and durable bytes leave too little room.
+    /// Only the claiming publisher calls this, so `bytes` has a single writer.
+    fn try_grow(&self, target: u64, quota: u64) -> bool {
+        let current = self.inner.bytes.load(Ordering::Acquire);
+        if target <= current {
+            return true;
+        }
+        let delta = target - current;
+        let mut admitted = self.inner.admitted_total.load(Ordering::Acquire);
+        loop {
+            if admitted.saturating_add(delta) > quota {
+                return false;
+            }
+            match self.inner.admitted_total.compare_exchange_weak(
+                admitted,
+                admitted + delta,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.inner.bytes.store(target, Ordering::Release);
+                    return true;
+                }
+                Err(observed) => admitted = observed,
+            }
+        }
+    }
+
+    /// Converts the reservation to the published entry's size. The publishing
+    /// task has already removed the marker file.
     fn consume(&self, actual_bytes: u64) {
-        self.inner.remove_marker();
+        self.inner
+            .marker_path
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let reserved = self.inner.bytes.load(Ordering::Acquire);
         if self
             .inner
             .state
             .swap(REQUEST_LOG_RESERVATION_CONSUMED, Ordering::AcqRel)
             != REQUEST_LOG_RESERVATION_CONSUMED
-            && self.inner.bytes > actual_bytes
+            && reserved > actual_bytes
         {
             self.inner
                 .admitted_total
-                .fetch_sub(self.inner.bytes - actual_bytes, Ordering::AcqRel);
+                .fetch_sub(reserved - actual_bytes, Ordering::AcqRel);
         }
     }
 }
@@ -666,7 +706,8 @@ impl Drop for RequestLogReservationInner {
             }
             _ => {
                 self.remove_marker();
-                self.admitted_total.fetch_sub(self.bytes, Ordering::AcqRel);
+                self.admitted_total
+                    .fetch_sub(self.bytes.load(Ordering::Acquire), Ordering::AcqRel);
             }
         }
     }
@@ -705,7 +746,9 @@ impl RequestLogReservationInner {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take();
-        let visible = if final_path.exists() {
+        // An existing final file was counted in `spool_bytes` by the terminal
+        // publisher before its rename (DPT-RL3f); only a promoted marker is new.
+        let actual_bytes = if final_path.exists() {
             if let Some(marker) = marker.as_ref() {
                 match std::fs::remove_file(marker) {
                     Ok(()) => {}
@@ -716,40 +759,46 @@ impl RequestLogReservationInner {
                     }
                 }
             }
-            true
-        } else if let Some(marker) = marker.as_ref() {
-            match std::fs::rename(marker, final_path) {
-                Ok(()) => true,
+            match std::fs::metadata(final_path) {
+                Ok(metadata) if metadata.is_file() => metadata.len(),
+                Ok(_) => return false,
                 Err(error) => {
-                    tracing::warn!(
-                        marker = %marker.display(),
-                        final_path = %final_path.display(),
-                        "promote armed request-log fallback failed: {error}"
-                    );
-                    false
+                    tracing::warn!(path = %final_path.display(), "stat published request-log entry failed: {error}");
+                    return false;
                 }
             }
-        } else {
-            false
-        };
-        if !visible {
-            return false;
-        }
-
-        let actual_bytes = match std::fs::metadata(final_path) {
-            Ok(metadata) if metadata.is_file() => metadata.len(),
-            Ok(_) => return false,
-            Err(error) => {
-                tracing::warn!(path = %final_path.display(), "stat promoted request-log fallback failed: {error}");
+        } else if let Some(marker) = marker.as_ref() {
+            let bytes = match std::fs::metadata(marker) {
+                Ok(metadata) if metadata.is_file() => metadata.len(),
+                Ok(_) => return false,
+                Err(error) => {
+                    tracing::warn!(path = %marker.display(), "stat armed request-log fallback failed: {error}");
+                    return false;
+                }
+            };
+            self.spool_bytes.fetch_add(bytes, Ordering::AcqRel);
+            if let Err(error) = std::fs::rename(marker, final_path) {
+                atomic_saturating_sub(&self.spool_bytes, bytes);
+                tracing::warn!(
+                    marker = %marker.display(),
+                    final_path = %final_path.display(),
+                    "promote armed request-log fallback failed: {error}"
+                );
                 return false;
             }
+            bytes
+        } else {
+            return false;
         };
-        self.spool_bytes.fetch_add(actual_bytes, Ordering::AcqRel);
+
         if let Err(error) = sync_directory(&self.spool_dir) {
             tracing::warn!(path = %self.spool_dir.display(), "sync promoted request-log fallback failed: {error}");
-        } else if self.bytes > actual_bytes {
-            self.admitted_total
-                .fetch_sub(self.bytes - actual_bytes, Ordering::AcqRel);
+        } else {
+            let reserved = self.bytes.load(Ordering::Acquire);
+            if reserved > actual_bytes {
+                self.admitted_total
+                    .fetch_sub(reserved - actual_bytes, Ordering::AcqRel);
+            }
         }
         self.state
             .store(REQUEST_LOG_RESERVATION_CONSUMED, Ordering::Release);
@@ -794,6 +843,7 @@ pub struct RequestLogBatcher {
     broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
     pending_snapshots: Arc<DashMap<String, InsertRequestLog>>,
     ship_notify: Arc<Notify>,
+    directory_sync: Arc<SpoolDirectorySync>,
 }
 
 impl RequestLogBatcher {
@@ -850,6 +900,7 @@ impl RequestLogBatcher {
             buffer: Arc::new(Mutex::new(Vec::with_capacity(memory_capacity.max(1)))),
             flush_lock: Arc::new(Mutex::new(())),
             memory_capacity: memory_capacity.max(1),
+            directory_sync: Arc::new(SpoolDirectorySync::new(spool_dir.clone())),
             spool_dir: Arc::new(spool_dir),
             spool_max_bytes: spool_max_bytes.max(1),
             spool_entry_max_bytes,
@@ -867,20 +918,14 @@ impl RequestLogBatcher {
         self.ship_notify.clone()
     }
 
-    pub fn can_accept_terminal_log(&self) -> bool {
-        self.reserve_terminal_log().is_ok()
-    }
-
+    /// Reserves one admission unit and preassigns the request's spool paths.
+    /// Performs no I/O: `arm_reserved` is the first durable write (DPT-RL3c).
     pub fn reserve_terminal_log(&self) -> Result<RequestLogReservation, RequestLogAdmissionError> {
         if self.spool_entry_max_bytes < REQUEST_LOG_MIN_ENTRY_BYTES {
             return Err(RequestLogAdmissionError::EntryQuotaTooSmall {
                 configured: self.spool_entry_max_bytes,
                 minimum: REQUEST_LOG_MIN_ENTRY_BYTES,
             });
-        }
-        if let Err(error) = std::fs::create_dir_all(&*self.spool_dir) {
-            self.mark_spool_error(error.to_string());
-            return Err(RequestLogAdmissionError::Unavailable(error.to_string()));
         }
         let stable_id = uuid::Uuid::new_v4().to_string();
         let stable_name = format!(
@@ -892,27 +937,14 @@ impl RequestLogBatcher {
         );
         let final_path = self.spool_dir.join(format!("{stable_name}.json"));
         let marker = self.spool_dir.join(format!(".admission-{stable_name}"));
-        let reservation = self.reserve_bytes_with_target(
-            self.spool_entry_max_bytes,
+        self.reserve_bytes_with_target(
+            self.spool_entry_max_bytes
+                .min(REQUEST_LOG_ADMISSION_UNIT_BYTES),
             REQUEST_LOG_RESERVATION_UNARMED,
             Some(stable_id),
             Some(final_path),
-            Some(marker.clone()),
-        )?;
-        match write_admission_marker(&self.spool_dir, &marker) {
-            Ok(()) => {}
-            Err(error) => {
-                self.mark_spool_error(error.clone());
-                return Err(RequestLogAdmissionError::Unavailable(error));
-            }
-        }
-        self.spool_healthy
-            .store(true, std::sync::atomic::Ordering::Release);
-        *self
-            .spool_error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
-        Ok(reservation)
+            Some(marker),
+        )
     }
 
     pub async fn arm_reserved(
@@ -937,12 +969,14 @@ impl RequestLogBatcher {
             .clone()
             .ok_or(RequestLogAdmissionError::InvalidReservation)?;
         let entry = SpoolRequestLog::from_log(stable_id, &fallback_log);
-        let encoded = encode_reserved_spool_entry(&entry, reservation.inner.bytes)?;
+        let encoded = encode_reserved_spool_entry(
+            &entry,
+            reservation.inner.bytes.load(Ordering::Acquire),
+        )?;
         let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
         reservation.begin_arm(&self.admitted_bytes)?;
         let tmp = self.new_spool_admission_temp_path();
-        let result = write_spool_file(&self.spool_dir, &tmp, &marker, encoded).await;
-        match result {
+        match self.persist_spool_file(tmp, &marker, encoded, false).await {
             Ok(()) => {
                 reservation.finish_arm(encoded_len);
                 self.spool_healthy
@@ -953,10 +987,10 @@ impl RequestLogBatcher {
                     .unwrap_or_else(|error| error.into_inner()) = None;
                 Ok(())
             }
-            Err(error) => {
+            Err(failure) => {
                 reservation.abort_arm();
-                self.mark_spool_error(error.clone());
-                Err(RequestLogAdmissionError::Unavailable(error))
+                self.mark_spool_error(failure.error.clone());
+                Err(RequestLogAdmissionError::Unavailable(failure.error))
             }
         }
     }
@@ -1016,11 +1050,6 @@ impl RequestLogBatcher {
         Ok(())
     }
 
-    pub fn ensure_log_capacity(&self) -> Result<(), RequestLogAdmissionError> {
-        drop(self.reserve_terminal_log()?);
-        Ok(())
-    }
-
     pub async fn push(&self, log: InsertRequestLog) -> Result<(), RequestLogAdmissionError> {
         let entry = SpoolRequestLog::from_log(uuid::Uuid::new_v4().to_string(), &log);
         let encoded = serde_json::to_vec(&entry)
@@ -1045,7 +1074,10 @@ impl RequestLogBatcher {
             .clone()
             .ok_or(RequestLogAdmissionError::InvalidReservation)?;
         let entry = SpoolRequestLog::from_log(stable_id, &log);
-        let encoded = encode_reserved_spool_entry(&entry, reservation.inner.bytes)?;
+        let encoded = encode_reserved_spool_entry(
+            &entry,
+            self.spool_entry_max_bytes.min(self.spool_max_bytes),
+        )?;
         let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
         self.push_encoded_until_durable(log, encoded, encoded_len, reservation)
             .await
@@ -1060,12 +1092,17 @@ impl RequestLogBatcher {
     ) -> Result<(), RequestLogAdmissionError> {
         reservation.claim(&self.admitted_bytes)?;
         let path = self.new_spool_path();
-        let _spool_guard = self.flush_lock.lock().await;
+        self.spool_bytes.fetch_add(encoded_len, Ordering::AcqRel);
         let tmp = self.new_spool_temp_path();
-        let result = write_spool_file(&*self.spool_dir, &tmp, &path, encoded).await;
-        if let Err(error) = result {
-            self.mark_spool_error(error.clone());
-            return Err(RequestLogAdmissionError::Unavailable(error));
+        if let Err(failure) = self.persist_spool_file(tmp, &path, encoded, false).await {
+            if failure.published {
+                // The file is already visible to `flush`; keep its bytes admitted.
+                reservation.consume(encoded_len);
+            } else {
+                atomic_saturating_sub(&self.spool_bytes, encoded_len);
+            }
+            self.mark_spool_error(failure.error.clone());
+            return Err(RequestLogAdmissionError::Unavailable(failure.error));
         }
         self.complete_durable_push(log, path, encoded_len, reservation)
             .await;
@@ -1085,32 +1122,95 @@ impl RequestLogBatcher {
             .final_path
             .clone()
             .ok_or(RequestLogAdmissionError::InvalidReservation)?;
+        let marker = reservation
+            .inner
+            .marker_path
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
         let mut retry_delay = REQUEST_LOG_RETRY_INITIAL_DELAY;
-        loop {
-            let spool_guard = self.flush_lock.lock().await;
-            let tmp = self.new_spool_temp_path();
-            let result = write_spool_file(&*self.spool_dir, &tmp, &path, encoded.clone()).await;
-            match result {
-                Ok(()) => {
-                    self.complete_durable_push(log, path, encoded_len, reservation)
-                        .await;
-                    drop(spool_guard);
-                    return Ok(());
-                }
-                Err(error) => {
-                    drop(spool_guard);
-                    self.mark_spool_error(error.clone());
-                    tracing::warn!(
-                        request_id = log.request_id.as_deref().unwrap_or("<missing>"),
-                        retry_delay_ms = retry_delay.as_millis(),
-                        "request log durable spool write failed; retrying: {error}"
-                    );
-                    tokio::time::sleep(retry_delay).await;
-                    retry_delay =
-                        std::cmp::min(retry_delay.saturating_mul(2), REQUEST_LOG_RETRY_MAX_DELAY);
-                }
-            }
+        while !reservation.try_grow(encoded_len, self.spool_max_bytes) {
+            tracing::warn!(
+                request_id = log.request_id.as_deref().unwrap_or("<missing>"),
+                entry_bytes = encoded_len,
+                retry_delay_ms = retry_delay.as_millis(),
+                "request log spool quota cannot cover the terminal entry yet; retrying"
+            );
+            tokio::time::sleep(retry_delay).await;
+            retry_delay = std::cmp::min(retry_delay.saturating_mul(2), REQUEST_LOG_RETRY_MAX_DELAY);
         }
+        let mut published = false;
+        loop {
+            if !published {
+                self.spool_bytes.fetch_add(encoded_len, Ordering::AcqRel);
+            }
+            let tmp = self.new_spool_temp_path();
+            let result = self
+                .persist_spool_file(tmp, &path, encoded.clone(), published)
+                .await;
+            let Err(failure) = result else {
+                break;
+            };
+            if !failure.published {
+                atomic_saturating_sub(&self.spool_bytes, encoded_len);
+            }
+            published = failure.published;
+            self.mark_spool_error(failure.error.clone());
+            tracing::warn!(
+                request_id = log.request_id.as_deref().unwrap_or("<missing>"),
+                retry_delay_ms = retry_delay.as_millis(),
+                published,
+                "request log durable spool write failed; retrying: {}",
+                failure.error
+            );
+            tokio::time::sleep(retry_delay).await;
+            retry_delay = std::cmp::min(retry_delay.saturating_mul(2), REQUEST_LOG_RETRY_MAX_DELAY);
+        }
+        if let Some(marker) = marker
+            && let Err(error) = tokio::fs::remove_file(&marker).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            // No directory sync: startup recovery drops a marker that survives
+            // next to its final file (DPT-RL10).
+            tracing::warn!(path = %marker.display(), "remove request-log admission marker failed: {error}");
+        }
+        self.complete_durable_push(log, path, encoded_len, reservation)
+            .await;
+        Ok(())
+    }
+
+    /// Publishes `encoded` at `path` (DPT-RL3c-0): synced temporary file and
+    /// rename on the blocking pool, then a shared directory sync. With
+    /// `published`, an earlier attempt already renamed the file and only the
+    /// directory sync is retried.
+    async fn persist_spool_file(
+        &self,
+        tmp: std::path::PathBuf,
+        path: &std::path::Path,
+        encoded: Arc<[u8]>,
+        published: bool,
+    ) -> Result<(), SpoolWriteFailure> {
+        if !published {
+            let spool_dir = (*self.spool_dir).clone();
+            let path = path.to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                write_synced_then_rename(&spool_dir, &tmp, &path, &encoded)
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result)
+            .map_err(|error| SpoolWriteFailure {
+                published: false,
+                error,
+            })?;
+        }
+        self.directory_sync
+            .sync()
+            .await
+            .map_err(|error| SpoolWriteFailure {
+                published: true,
+                error,
+            })
     }
 
     fn new_spool_path(&self) -> std::path::PathBuf {
@@ -1138,7 +1238,6 @@ impl RequestLogBatcher {
         encoded_len: u64,
         reservation: RequestLogReservation,
     ) {
-        self.spool_bytes.fetch_add(encoded_len, Ordering::AcqRel);
         reservation.consume(encoded_len);
         self.spool_healthy
             .store(true, std::sync::atomic::Ordering::Release);
@@ -1196,7 +1295,7 @@ impl RequestLogBatcher {
                     inner: Arc::new(RequestLogReservationInner {
                         admitted_total: self.admitted_bytes.clone(),
                         spool_bytes: self.spool_bytes.clone(),
-                        bytes,
+                        bytes: AtomicU64::new(bytes),
                         state: std::sync::atomic::AtomicU8::new(initial_state),
                         armed_bytes: AtomicU64::new(0),
                         marker_path: std::sync::Mutex::new(marker_path),
@@ -1316,7 +1415,7 @@ impl RequestLogBatcher {
     /// Replica shipment path (PRP12 / M4–M5): select the oldest durable entries, hand
     /// them to `sink`, and only release spool files and quota accounting after the sink
     /// reports success. On failure every entry is requeued in its original order.
-    /// Serialized by `flush_lock`, so it cannot interleave with a DB flush on this node.
+    /// Serialized with `flush` by `flush_lock`; publishers never take that lock.
     pub(crate) async fn ship_via(&self, max_entries: usize, sink: &dyn MeteringSink) -> usize {
         let _flush_guard = self.flush_lock.lock().await;
         let selected: Vec<SpoolFileRef> = {
@@ -1801,6 +1900,164 @@ impl BalanceCache {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SnapshotCache: whole-table snapshots for request-path reads (DPT-SC*)
+// ---------------------------------------------------------------------------
+
+/// DPT-RC1: TTL shared by the routing catalog, model-price, and group-ratio caches.
+pub const REQUEST_PATH_CACHE_TTL: Duration = Duration::from_millis(1000);
+
+type SnapshotLoad<T> =
+    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<Arc<T>, String>>>;
+
+struct PublishedSnapshot<T> {
+    value: Arc<T>,
+    load_started_at: Instant,
+    generation: u64,
+}
+
+struct SnapshotInFlight<T> {
+    generation: u64,
+    load_id: u64,
+    load: SnapshotLoad<T>,
+}
+
+struct SnapshotCacheInner<T> {
+    ttl: Duration,
+    generation: AtomicU64,
+    next_load_id: AtomicU64,
+    published: std::sync::RwLock<Option<PublishedSnapshot<T>>>,
+    in_flight: std::sync::Mutex<Option<SnapshotInFlight<T>>>,
+}
+
+impl<T> SnapshotCacheInner<T> {
+    fn fresh(&self) -> Option<Arc<T>> {
+        let published = self
+            .published
+            .read()
+            .unwrap_or_else(|err| err.into_inner());
+        let snapshot = published.as_ref()?;
+        (snapshot.generation == self.generation.load(Ordering::Acquire)
+            && snapshot.load_started_at.elapsed() <= self.ttl)
+            .then(|| Arc::clone(&snapshot.value))
+    }
+
+    fn finish_load(
+        &self,
+        generation: u64,
+        load_id: u64,
+        load_started_at: Instant,
+        result: &Result<Arc<T>, String>,
+    ) {
+        if let Ok(value) = result {
+            let mut published = self
+                .published
+                .write()
+                .unwrap_or_else(|err| err.into_inner());
+            // `invalidate` increments before taking this lock, so a stale load
+            // either fails this check or is dropped by the invalidation.
+            if self.generation.load(Ordering::Acquire) == generation {
+                *published = Some(PublishedSnapshot {
+                    value: Arc::clone(value),
+                    load_started_at,
+                    generation,
+                });
+            }
+        }
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|err| err.into_inner());
+        if in_flight
+            .as_ref()
+            .is_some_and(|current| current.load_id == load_id)
+        {
+            *in_flight = None;
+        }
+    }
+}
+
+/// Single-flight, generation-checked snapshot of database state with a short
+/// TTL. Owners MUST call `invalidate` after every committed write to the
+/// underlying tables.
+pub struct SnapshotCache<T> {
+    inner: Arc<SnapshotCacheInner<T>>,
+}
+
+impl<T> Clone for SnapshotCache<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T: Send + Sync + 'static> SnapshotCache<T> {
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            inner: Arc::new(SnapshotCacheInner {
+                ttl,
+                generation: AtomicU64::new(0),
+                next_load_id: AtomicU64::new(0),
+                published: std::sync::RwLock::new(None),
+                in_flight: std::sync::Mutex::new(None),
+            }),
+        }
+    }
+
+    pub async fn get_or_load<F, Fut>(&self, load: F) -> Result<Arc<T>, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, String>> + Send + 'static,
+    {
+        use futures_util::FutureExt;
+
+        if let Some(value) = self.inner.fresh() {
+            return Ok(value);
+        }
+        let shared = {
+            let mut in_flight = self
+                .inner
+                .in_flight
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            if let Some(value) = self.inner.fresh() {
+                return Ok(value);
+            }
+            let generation = self.inner.generation.load(Ordering::Acquire);
+            match in_flight.as_ref() {
+                Some(current) if current.generation == generation => current.load.clone(),
+                _ => {
+                    let load_id = self.inner.next_load_id.fetch_add(1, Ordering::Relaxed);
+                    let load_started_at = Instant::now();
+                    let inner = Arc::clone(&self.inner);
+                    let future = load();
+                    let shared = async move {
+                        let result = future.await.map(Arc::new);
+                        inner.finish_load(generation, load_id, load_started_at, &result);
+                        result
+                    }
+                    .boxed()
+                    .shared();
+                    *in_flight = Some(SnapshotInFlight {
+                        generation,
+                        load_id,
+                        load: shared.clone(),
+                    });
+                    shared
+                }
+            }
+        };
+        shared.await
+    }
+
+    pub fn invalidate(&self) {
+        self.inner.generation.fetch_add(1, Ordering::AcqRel);
+        *self
+            .inner
+            .published
+            .write()
+            .unwrap_or_else(|err| err.into_inner()) = None;
+    }
+}
+
 fn remove_index_member(
     index: &DashMap<String, std::collections::HashSet<String>>,
     index_key: &str,
@@ -1889,33 +2146,89 @@ fn initialize_spool(spool_dir: &std::path::Path, max_entry_bytes: u64) -> Result
     Ok(bytes)
 }
 
-fn write_admission_marker(
-    spool_dir: &std::path::Path,
-    marker: &std::path::Path,
-) -> Result<(), String> {
-    use std::io::Write;
-    std::fs::create_dir_all(spool_dir).map_err(|error| error.to_string())?;
-    let nonce = uuid::Uuid::new_v4().simple();
-    let tmp = spool_dir.join(format!(".admission-tmp-{nonce}"));
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .map_err(|error| error.to_string())?;
-        file.write_all(REQUEST_LOG_UNARMED_MARKER)
-            .map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
-        std::fs::rename(&tmp, &marker).map_err(|error| error.to_string())?;
-        sync_directory(spool_dir)?;
-        Ok::<(), String>(())
-    })();
-    if let Err(error) = result {
-        let _ = std::fs::remove_file(&tmp);
-        let _ = std::fs::remove_file(&marker);
-        return Err(error);
+/// Group commit for spool-directory syncs (DPT-RL3c-0). A publisher takes a
+/// ticket after its rename returns; the first sync that starts after the ticket
+/// covers it. Concurrent publishers therefore share one directory fsync instead
+/// of queueing one each.
+struct SpoolDirectorySync {
+    directory: std::path::PathBuf,
+    state: std::sync::Mutex<SpoolDirectorySyncState>,
+    finished: Notify,
+}
+
+#[derive(Default)]
+struct SpoolDirectorySyncState {
+    issued: u64,
+    synced: u64,
+    running: bool,
+    /// Highest ticket covered by the latest failed sync, with its error.
+    failure: Option<(u64, String)>,
+}
+
+impl SpoolDirectorySync {
+    fn new(directory: std::path::PathBuf) -> Self {
+        Self {
+            directory,
+            state: std::sync::Mutex::default(),
+            finished: Notify::new(),
+        }
     }
-    Ok(())
+
+    fn state(&self) -> std::sync::MutexGuard<'_, SpoolDirectorySyncState> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    async fn sync(self: &Arc<Self>) -> Result<(), String> {
+        let ticket = {
+            let mut state = self.state();
+            state.issued += 1;
+            state.issued
+        };
+        loop {
+            // Registered before the state check so a completion in between is not missed.
+            let finished = self.finished.notified();
+            let covered_through = {
+                let mut state = self.state();
+                if state.synced >= ticket {
+                    return Ok(());
+                }
+                if let Some((failed_through, error)) = &state.failure
+                    && *failed_through >= ticket
+                {
+                    return Err(error.clone());
+                }
+                if state.running {
+                    None
+                } else {
+                    state.running = true;
+                    Some(state.issued)
+                }
+            };
+            let Some(covered_through) = covered_through else {
+                finished.await;
+                continue;
+            };
+            // The blocking task publishes the outcome itself, so a cancelled
+            // leader future cannot leave `running` set.
+            let this = Arc::clone(self);
+            return tokio::task::spawn_blocking(move || {
+                let result = sync_directory(&this.directory);
+                {
+                    let mut state = this.state();
+                    state.running = false;
+                    match &result {
+                        Ok(()) => state.synced = state.synced.max(covered_through),
+                        Err(error) => state.failure = Some((covered_through, error.clone())),
+                    }
+                }
+                this.finished.notify_waiters();
+                result
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result);
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -1938,38 +2251,35 @@ fn sync_directory(directory: &std::path::Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-async fn write_spool_file(
+struct SpoolWriteFailure {
+    /// Whether the final rename has happened, making the file visible to `flush`.
+    published: bool,
+    error: String,
+}
+
+fn write_synced_then_rename(
     spool_dir: &std::path::Path,
     tmp: &std::path::Path,
     path: &std::path::Path,
-    encoded: Arc<[u8]>,
+    encoded: &[u8],
 ) -> Result<(), String> {
-    let spool_dir = spool_dir.to_path_buf();
-    let tmp = tmp.to_path_buf();
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        use std::io::Write;
-        std::fs::create_dir_all(&spool_dir).map_err(|error| error.to_string())?;
-        let result = (|| {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&tmp)
-                .map_err(|error| error.to_string())?;
-            file.write_all(&encoded)
-                .map_err(|error| error.to_string())?;
-            file.sync_all().map_err(|error| error.to_string())?;
-            std::fs::rename(&tmp, &path).map_err(|error| error.to_string())?;
-            sync_directory(&spool_dir)?;
-            Ok::<(), String>(())
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-        result
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    use std::io::Write;
+    std::fs::create_dir_all(spool_dir).map_err(|error| error.to_string())?;
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(tmp)
+            .map_err(|error| error.to_string())?;
+        file.write_all(encoded)
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        std::fs::rename(tmp, path).map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
+    result
 }
 
 async fn load_spool_batch(

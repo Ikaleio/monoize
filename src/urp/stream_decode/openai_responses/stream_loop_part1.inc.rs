@@ -118,7 +118,7 @@ async fn consume_responses_json_frames(
     mut pending_request_envelope_extra: Option<HashMap<String, Value>>,
     mut frames: mpsc::Receiver<AppResult<(String, String)>>,
     tx: mpsc::Sender<UrpStreamEvent>,
-    started_at: Option<std::time::Instant>,
+    mut started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
@@ -151,7 +151,7 @@ async fn consume_responses_json_frames(
         })?
     {
         let (mut event_name, data) = frame?;
-        mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
+        mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
         if data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;
             break;

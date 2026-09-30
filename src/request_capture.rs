@@ -132,10 +132,8 @@ tokio::task_local! {
     static CURRENT_SSE_CAPTURE: SseFrameCapture;
 }
 
-pub(crate) async fn capture_sse_frame(frame: String) {
-    if let Ok(capture) = CURRENT_SSE_CAPTURE.try_with(Clone::clone) {
-        capture.record(frame).await;
-    }
+pub(crate) fn current_sse_capture() -> Option<SseFrameCapture> {
+    CURRENT_SSE_CAPTURE.try_with(Clone::clone).ok()
 }
 
 pub(crate) async fn with_sse_capture<F, T>(capture: SseFrameCapture, future: F) -> T
@@ -150,7 +148,7 @@ where
     F: std::future::Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let capture = CURRENT_SSE_CAPTURE.try_with(Clone::clone).ok();
+    let capture = current_sse_capture();
     tokio::spawn(async move {
         if let Some(capture) = capture {
             CURRENT_SSE_CAPTURE.scope(capture, future).await

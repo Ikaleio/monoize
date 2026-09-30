@@ -84,7 +84,7 @@ E3. A replica MUST poll the epoch with exactly one single-row, single-column `SE
 
 E4. A failed epoch poll (database error or unparseable stored value) MUST log at `warn` level, keep the previous snapshot, and retry on the next tick. It MUST NOT terminate the process. Idle replicas keep polling on the fixed interval; no traffic-adaptive backoff is permitted because it would make configuration propagation latency traffic-dependent.
 
-E5. Provider/channel routing rows are not part of the epoch contract: replicas read them fresh from the shared database on demand, subject only to the existing cache TTLs.
+E5. Provider/channel routing rows, model prices, and group billing ratios are not part of the epoch contract. Every node reads them from the shared database through the request-path caches of `db-performance-tuning.spec.md` §8. A write committed on another node MUST become visible to this node within `REQUEST_PATH_CACHE_TTL` (`1000 ms`), counted from the start of the first read that follows the commit.
 
 ## 5. Replica request surface
 

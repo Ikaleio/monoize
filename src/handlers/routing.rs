@@ -204,23 +204,24 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
     required_provider_type: Option<ProviderType>,
 ) -> AppResult<Vec<MonoizeAttempt>> {
     let routing_config_revision = state.routing_config_revision.load(Ordering::Acquire);
-    let mut providers = state
+    let providers = state
         .monoize_store
         .list_providers_for_model(&urp.model)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e))?;
     // R-GRP-2: rank providers by the position of the first effective group they
     // serve; the stable sort keeps priority order within the same rank.
-    providers.sort_by_key(|provider| {
+    let mut ranked_providers = providers.iter().collect::<Vec<_>>();
+    ranked_providers.sort_by_key(|provider| {
         crate::users::provider_group_rank(&provider.group_ids, &auth.effective_groups)
     });
     let mut attempts = Vec::new();
-    for provider in providers {
+    for provider in ranked_providers {
         collect_provider_attempts(
             state,
             urp,
             &auth.effective_groups,
-            &provider,
+            provider,
             routing_config_revision,
             &mut attempts,
         )
@@ -240,18 +241,17 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
         .collect::<Vec<_>>();
     let pricing_snapshot = build_model_price_snapshot(state, &upstream_models, &urp.model).await?;
 
-    // MP-G2: batch-load billing ratios for the distinct billing groups.
-    let mut billing_group_ids = attempts
+    // MP-G2: billing ratios come from the cached group registry (DPT-RC8).
+    let group_billing_ratios = if attempts
         .iter()
-        .filter_map(|attempt| attempt.billing_group_id.clone())
-        .collect::<Vec<_>>();
-    billing_group_ids.sort();
-    billing_group_ids.dedup();
-    let group_billing_ratios = state
-        .user_store
-        .list_group_billing_ratios(&billing_group_ids)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        .any(|attempt| attempt.billing_group_id.is_some())
+    {
+        Some(state.user_store.group_billing_ratios().await.map_err(|e| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
+        })?)
+    } else {
+        None
+    };
 
     let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut allowed_attempts = Vec::with_capacity(attempts.len());
@@ -265,7 +265,9 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
             continue;
         }
         if let Some(group_id) = attempt.billing_group_id.as_deref()
-            && let Some(ratio) = group_billing_ratios.get(group_id)
+            && let Some(ratio) = group_billing_ratios
+                .as_deref()
+                .and_then(|ratios| ratios.get(group_id))
         {
             attempt.group_billing_ratio = Multiplier::parse(ratio).map_err(|err| {
                 AppError::new(

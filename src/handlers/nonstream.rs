@@ -135,66 +135,46 @@ async fn finish_nonstream_error(
     error
 }
 
-#[allow(dead_code)]
-pub(super) async fn execute_nonstream_typed(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    req: urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
-    client_session_id: Option<String>,
-    capture: RequestCaptureContext,
-) -> AppResult<(urp::UrpResponse, String)> {
-    execute_nonstream_typed_owned(
-        state,
-        auth,
-        req,
-        max_multiplier,
-        downstream,
-        request_id,
-        request_ip,
-        client_session_id,
-        capture,
-        None,
-    )
-    .await
+/// Returns the request for one upstream attempt slot (FP6j-2). The pristine
+/// request is cloned while another slot may follow and moved into the final
+/// slot, so no pristine copy outlives the last possible attempt.
+pub(super) fn attempt_request_from_original(
+    original: &mut Option<urp::UrpRequest>,
+    final_slot: bool,
+) -> urp::UrpRequest {
+    if final_slot {
+        original.take()
+    } else {
+        original.clone()
+    }
+    .expect("only the final attempt slot takes the pristine request")
 }
 
-pub(super) async fn execute_nonstream_typed_owned(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    req: urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
-    client_session_id: Option<String>,
-    capture: RequestCaptureContext,
-    task_state: Option<&AdmittedRequestTaskState>,
-) -> AppResult<(urp::UrpResponse, String)> {
-    execute_nonstream_typed_with_validator(
-        state,
-        auth,
-        req,
-        max_multiplier,
-        downstream,
-        request_id,
-        request_ip,
-        client_session_id,
-        capture,
-        None,
-        task_state,
-    )
-    .await
+/// FP6j-2: once the attempt's input nodes are encoded into the upstream body,
+/// only a capture dump still reads them; upstream response decoding reads
+/// tools, context, extra body, and model only.
+pub(super) fn release_encoded_input(req: &mut urp::UrpRequest, capture: &RequestCaptureContext) {
+    if capture.session.is_none() {
+        req.input = Vec::new();
+    }
+}
+
+pub(super) fn find_pending_request_envelope_extra(
+    input: &[urp::Node],
+) -> Option<HashMap<String, Value>> {
+    input.iter().find_map(|node| match node {
+        urp::Node::NextDownstreamEnvelopeExtra { extra_body } if !extra_body.is_empty() => {
+            Some(extra_body.clone())
+        }
+        _ => None,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_nonstream_typed_with_validator(
     state: &AppState,
     auth: &crate::auth::AuthResult,
-    mut req: urp::UrpRequest,
+    req: urp::UrpRequest,
     max_multiplier: Option<Multiplier>,
     downstream: DownstreamProtocol,
     request_id: Option<String>,
@@ -204,28 +184,63 @@ pub(super) async fn execute_nonstream_typed_with_validator(
     response_validator: Option<fn(&urp::UrpResponse) -> AppResult<()>>,
     task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<(urp::UrpResponse, String)> {
+    let (resp, logical_model, ()) = execute_nonstream(
+        state,
+        auth,
+        req,
+        max_multiplier,
+        downstream,
+        request_id,
+        request_ip,
+        client_session_id,
+        capture,
+        |resp, logical_model| match response_validator {
+            Some(validate) => validate(resp),
+            None => encode_response_for_downstream(downstream, resp, logical_model).map(|_| ()),
+        },
+        task_state,
+    )
+    .await?;
+    Ok((resp, logical_model))
+}
+
+/// Runs routing, upstream attempts, response transforms, and billing for one
+/// non-stream request. `accept` runs on the final (history-decorated)
+/// response before billing; its error fails the request and its value is
+/// returned with the response (FP6k.1a).
+#[allow(clippy::too_many_arguments)]
+async fn execute_nonstream<T>(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    mut req: urp::UrpRequest,
+    max_multiplier: Option<Multiplier>,
+    downstream: DownstreamProtocol,
+    request_id: Option<String>,
+    request_ip: Option<String>,
+    client_session_id: Option<String>,
+    capture: RequestCaptureContext,
+    accept: impl Fn(&urp::UrpResponse, &str) -> AppResult<T>,
+    task_state: Option<&AdmittedRequestTaskState>,
+) -> AppResult<(urp::UrpResponse, String, T)> {
     let started_at = task_state
         .map(AdmittedRequestTaskState::started_at)
         .unwrap_or_else(std::time::Instant::now);
     let transform_match_model = resolve_model_suffix(state, &mut req).await?;
-    // Preserve the suffix-normalized request so each per-attempt iteration can
-    // re-derive the transformed request from a pristine base. This matters
-    // because cross-family strip runs BEFORE all transforms per-attempt
-    // (auto_cache_* etc. must observe the stripped request so their cache
-    // breakpoints actually survive into the upstream encoding).
-    let mut original_req = req.clone();
     let logical_model = req.model.clone();
+    let reasoning_effort = req.reasoning.as_ref().and_then(|r| r.effort.clone());
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let mut attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
-    bind_media_request_routes(&mut original_req, &mut attempts)?;
-    let history_context =
-        responses_history::HistoryContext::from_request(state, &original_req, downstream);
+    // Session affinity derives from the request as decoded, before media
+    // routes are bound into its input nodes.
     attach_client_session_id(&mut attempts, client_session_id, Some(&req));
+    bind_media_request_routes(&mut req, &mut attempts)?;
+    let mut history_context =
+        responses_history::HistoryContext::from_request(state, &req, downstream);
     ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
     let pending_request_log_guard = insert_pending_request_log(
         state,
         auth,
-        &req.model,
+        &logical_model,
         false,
         request_id.as_deref(),
         request_ip.as_deref(),
@@ -238,10 +253,17 @@ pub(super) async fn execute_nonstream_typed_with_validator(
     } else {
         pending_request_log_guard
     };
+    // The suffix-normalized request is the pristine base every attempt
+    // re-derives its transformed request from. This matters because the
+    // cross-family strip runs BEFORE all transforms per attempt (auto_cache_*
+    // etc. must observe the stripped request so their cache breakpoints
+    // actually survive into the upstream encoding).
+    let mut original_req = Some(req);
+    let attempt_count = attempts.len();
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
     let mut execution_state = AttemptExecutionState::default();
-    for mut attempt in attempts {
+    for (attempt_index, mut attempt) in attempts.into_iter().enumerate() {
         if execution_state.should_skip(&attempt) {
             continue;
         }
@@ -256,14 +278,17 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             if let Some(task_state) = task_state {
                 task_state.set_attempt(&attempt);
             }
-            // Clone from the pristine original request (pre-transforms) so
-            // that the cross-family strip can run BEFORE provider, global,
-            // and API-key transforms. This guarantees that transforms which
-            // inject upstream-specific part-level metadata (e.g.
-            // `cache_anthropic_system`, `cache_anthropic_tool_use`) survive into the
-            // encoded upstream request even when the downstream and upstream
-            // protocol families differ.
-            let mut req_attempt = original_req.clone();
+            // Derive from the pristine request (pre-transforms) so that the
+            // cross-family strip can run BEFORE provider, global, and API-key
+            // transforms. This guarantees that transforms which inject
+            // upstream-specific part-level metadata (e.g.
+            // `cache_anthropic_system`, `cache_anthropic_tool_use`) survive into
+            // the encoded upstream request even when the downstream and
+            // upstream protocol families differ.
+            let mut req_attempt = attempt_request_from_original(
+                &mut original_req,
+                attempt_index + 1 == attempt_count && channel_attempt + 1 == max_channel_attempts,
+            );
             if matches!(downstream, DownstreamProtocol::Responses) {
                 promote_responses_additional_tools(&mut req_attempt, attempt.provider_type);
             }
@@ -310,7 +335,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     started_at,
                     &request_id,
                     &request_ip,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    reasoning_effort.clone(),
                     tried_providers,
                     &capture,
                     false,
@@ -336,7 +361,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     started_at,
                     &request_id,
                     &request_ip,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    reasoning_effort.clone(),
                     tried_providers,
                     &capture,
                     false,
@@ -361,7 +386,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     started_at,
                     &request_id,
                     &request_ip,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    reasoning_effort.clone(),
                     tried_providers,
                     &capture,
                     false,
@@ -389,7 +414,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             started_at,
                             &request_id,
                             &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers,
                             &capture,
                             false,
@@ -401,9 +426,10 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             let provider = build_channel_provider_config(&attempt);
             let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
                 && urp::encode::openai_image::has_user_image_input(&req_attempt);
-            // RCD-D6/RCD-D6a: `upstream_request` defaults to the JSON body;
-            // the multipart edits branch replaces it with the RCD-D16 capture
-            // object because `upstream_body` is not what goes on the wire.
+            // RCD-D6/RCD-D6a capture `upstream_request`: the JSON body, or the
+            // RCD-D16 multipart object when multipart goes on the wire. Each
+            // branch below consumes `upstream_body` before awaiting upstream,
+            // keeping it here only for a capture session (FP6j-2).
             let mut capture_upstream_request: Option<Value> = None;
             let path = if openai_image_edit {
                 "/v1/images/edits".to_string()
@@ -433,7 +459,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     &http,
                     &attempt,
                     &req_attempt,
-                    &upstream_body,
+                    upstream_body,
                     attempt.request_timeout_ms.saturating_mul(10).max(600_000),
                     &extra_headers,
                     capture.session.is_some(),
@@ -441,9 +467,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                 .await
                 {
                     Ok(stream_call) => {
-                        if stream_call.capture_multipart_request.is_some() {
-                            capture_upstream_request = stream_call.capture_multipart_request;
-                        }
+                        capture_upstream_request = stream_call.capture_upstream_request;
                         stream_call.result
                     }
                     Err(err) => {
@@ -455,7 +479,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             started_at,
                             &request_id,
                             &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers,
                             &capture,
                             false,
@@ -465,67 +489,93 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     }
                 };
                 match call {
-                    Ok(upstream_resp) => match collect_streamed_upstream_response(
-                        &req_attempt,
-                        max_multiplier,
-                        attempt.provider_type,
-                        upstream_resp,
-                        started_at,
-                        &logical_model,
-                        stream_idle_timeout_ms,
-                    )
-                    .await
-                    {
-                        Ok((resp, observed_response_model)) => {
-                            Ok((None, Some((resp, observed_response_model))))
-                        }
-                        Err(CollectedUpstreamError::Internal(err)) => {
-                            return Err(finish_nonstream_error(
-                                state,
-                                auth,
-                                &attempt,
-                                &logical_model,
-                                started_at,
-                                &request_id,
-                                &request_ip,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                                tried_providers,
-                                &capture,
-                                false,
-                                err,
-                            )
-                            .await);
-                        }
-                        Err(CollectedUpstreamError::Upstream(err)) => {
-                            let same_channel_retryable = is_same_channel_retryable_app_error(&err);
-                            let passive_failure_class = same_channel_retryable
-                                .then(|| classify_retryable_app_failure(&err));
-                            record_upstream_attempt_failure(
-                                state,
-                                &attempt,
-                                attempt_number,
-                                &err,
-                                passive_failure_class,
-                                &mut tried_providers,
-                                &mut execution_state,
-                            )
-                            .await;
-                            last_failed_attempt = Some(attempt.clone());
-                            if allow_same_channel_retry(
-                                state,
-                                &attempt,
-                                &execution_state,
-                                channel_attempt + 1,
-                                passive_failure_class,
-                            )
-                            .await
-                            {
-                                maybe_sleep_before_channel_retry(&attempt).await;
-                                continue 'channel_attempts;
+                    Ok(upstream_resp) => {
+                        let legacy = match typed_request_to_legacy(&req_attempt, max_multiplier) {
+                            Ok(legacy) => legacy,
+                            Err(err) => {
+                                return Err(finish_nonstream_error(
+                                    state,
+                                    auth,
+                                    &attempt,
+                                    &logical_model,
+                                    started_at,
+                                    &request_id,
+                                    &request_ip,
+                                    reasoning_effort.clone(),
+                                    tried_providers,
+                                    &capture,
+                                    false,
+                                    err,
+                                )
+                                .await);
                             }
-                            break 'channel_attempts;
+                        };
+                        let pending_request_envelope_extra =
+                            find_pending_request_envelope_extra(&req_attempt.input);
+                        release_encoded_input(&mut req_attempt, &capture);
+                        match collect_streamed_upstream_response(
+                            legacy,
+                            pending_request_envelope_extra,
+                            attempt.provider_type,
+                            upstream_resp,
+                            started_at,
+                            &logical_model,
+                            stream_idle_timeout_ms,
+                        )
+                        .await
+                        {
+                            Ok((resp, observed_response_model)) => {
+                                Ok((None, Some((resp, observed_response_model))))
+                            }
+                            Err(CollectedUpstreamError::Internal(err)) => {
+                                return Err(finish_nonstream_error(
+                                    state,
+                                    auth,
+                                    &attempt,
+                                    &logical_model,
+                                    started_at,
+                                    &request_id,
+                                    &request_ip,
+                                    reasoning_effort.clone(),
+                                    tried_providers,
+                                    &capture,
+                                    false,
+                                    err,
+                                )
+                                .await);
+                            }
+                            Err(CollectedUpstreamError::Upstream(err)) => {
+                                let same_channel_retryable =
+                                    is_same_channel_retryable_app_error(&err);
+                                let passive_failure_class = same_channel_retryable
+                                    .then(|| classify_retryable_app_failure(&err));
+                                record_upstream_attempt_failure(
+                                    state,
+                                    &attempt,
+                                    attempt_number,
+                                    &err,
+                                    passive_failure_class,
+                                    &mut tried_providers,
+                                    &mut execution_state,
+                                )
+                                .await;
+                                last_failed_attempt = Some(attempt.clone());
+                                if allow_same_channel_retry(
+                                    state,
+                                    &attempt,
+                                    &execution_state,
+                                    channel_attempt + 1,
+                                    passive_failure_class,
+                                )
+                                .await
+                                {
+                                    maybe_sleep_before_channel_retry(&attempt).await;
+                                    continue 'channel_attempts;
+                                }
+                                break 'channel_attempts;
+                            }
                         }
-                    },
+                    }
                     Err(err) => Err(err),
                 }
             } else if openai_image_edit
@@ -559,7 +609,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             started_at,
                             &request_id,
                             &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers,
                             &capture,
                             false,
@@ -572,6 +622,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                 let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
+                drop(upstream_body);
                 match upstream::call_upstream_multipart_with_timeout_and_headers(
                     &http,
                     &provider,
@@ -605,16 +656,19 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     Err(err) => Err(err),
                 }
             } else {
+                release_encoded_input(&mut req_attempt, &capture);
                 let http = client_http_for_attempt(state, &attempt)?;
                 let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
+                let body = upstream::JsonBody::new(&upstream_body);
+                capture_upstream_request = capture.session.is_some().then_some(upstream_body);
                 upstream::call_upstream_with_timeout_and_headers(
                     &http,
                     &provider,
                     &attempt.api_key,
                     &path,
-                    &upstream_body,
+                    body,
                     attempt.request_timeout_ms,
                     &extra_headers,
                 )
@@ -623,7 +677,9 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             };
             match call_value {
                 Ok((value, collected_resp)) => {
-                    if let Some(session) = capture.session.as_ref() {
+                    if let (Some(session), Some(capture_upstream_request)) =
+                        (capture.session.as_ref(), capture_upstream_request)
+                    {
                         // RCD-D10c: a stream-collected attempt has no provider
                         // JSON body, so the pre-response-transform collected
                         // terminal event substitutes for it.
@@ -642,9 +698,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 &path,
                                 capture.raw_input.as_ref().clone(),
                                 &req_attempt,
-                                capture_upstream_request
-                                    .clone()
-                                    .unwrap_or_else(|| upstream_body.clone()),
+                                capture_upstream_request,
                                 value.clone(),
                                 reconstructed_urp_response,
                                 None,
@@ -725,7 +779,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                     started_at,
                                     &request_id,
                                     &request_ip,
-                                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                    reasoning_effort.clone(),
                                     tried_providers,
                                     &capture,
                                     false,
@@ -735,6 +789,8 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             }
                         },
                     };
+                    // A decoded response ends retry processing (FP6j-2).
+                    drop(original_req.take());
                     let observed_response_model = match stream_observed_model {
                         Some(observed) => observed.unwrap_or_default(),
                         None => value
@@ -760,7 +816,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             started_at,
                             &request_id,
                             &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers,
                             &capture,
                             false,
@@ -788,7 +844,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         state,
                         &mut resp,
                         &attempt.provider_transforms,
-                        &req.model,
+                        &logical_model,
                         Some(attempt.provider_type),
                     )
                     .await
@@ -801,7 +857,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             started_at,
                             &request_id,
                             &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers,
                             &capture,
                             false,
@@ -813,7 +869,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         state,
                         &mut resp,
                         &global_transforms,
-                        &req.model,
+                        &logical_model,
                         Some(attempt.provider_type),
                     )
                     .await
@@ -826,7 +882,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             started_at,
                             &request_id,
                             &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers,
                             &capture,
                             false,
@@ -838,7 +894,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         state,
                         &mut resp,
                         &auth.transforms,
-                        &req.model,
+                        &logical_model,
                         Some(attempt.provider_type),
                     )
                     .await
@@ -851,7 +907,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             started_at,
                             &request_id,
                             &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            reasoning_effort.clone(),
                             tried_providers,
                             &capture,
                             false,
@@ -866,27 +922,32 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     {
                         convert_assistant_images_to_markdown(&mut resp);
                     }
-                    if let Err(err) = match response_validator {
-                        Some(validate) => validate(&resp),
-                        None => encode_response_for_downstream(downstream, &resp, &logical_model)
-                            .map(|_| ()),
-                    } {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
+                    let history = history_context
+                        .take()
+                        .map(|history| history.with_resource_scope(media_resource_scope(&attempt)));
+                    if let Some(history) = &history {
+                        history.decorate_response(&mut resp);
                     }
+                    let accepted = match accept(&resp, &logical_model) {
+                        Ok(accepted) => accepted,
+                        Err(err) => {
+                            return Err(finish_nonstream_error(
+                                state,
+                                auth,
+                                &attempt,
+                                &logical_model,
+                                started_at,
+                                &request_id,
+                                &request_ip,
+                                reasoning_effort.clone(),
+                                tried_providers,
+                                &capture,
+                                false,
+                                err,
+                            )
+                            .await);
+                        }
+                    };
                     let charge = match maybe_charge_response(
                         state,
                         auth,
@@ -907,7 +968,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 started_at,
                                 &request_id,
                                 &request_ip,
-                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                reasoning_effort.clone(),
                                 tried_providers,
                                 &capture,
                                 false,
@@ -931,7 +992,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         attempt.channel_id.clone(),
                         None,
                         None,
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        reasoning_effort.clone(),
                         tried_providers,
                         client_gone_flag(task_state),
                         upstream_response_model,
@@ -941,16 +1002,15 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             .persist_with_result(resp.usage.as_ref(), false)
                             .await;
                     }
-                    if let Some(history) = history_context.clone() {
-                        history
-                            .with_resource_scope(media_resource_scope(&attempt))
-                            .finish_response(&mut resp)
-                            .await;
+                    if let Some(history) = history {
+                        history.retain_response(&resp).await;
                     }
-                    return Ok((resp, logical_model.clone()));
+                    return Ok((resp, logical_model, accepted));
                 }
                 Err(err) => {
-                    if let Some(session) = capture.session.as_ref() {
+                    if let (Some(session), Some(capture_upstream_request)) =
+                        (capture.session.as_ref(), capture_upstream_request)
+                    {
                         session
                             .push_attempt(crate::request_capture::build_attempt_dump(
                                 attempt_number,
@@ -962,9 +1022,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 &path,
                                 capture.raw_input.as_ref().clone(),
                                 &req_attempt,
-                                capture_upstream_request
-                                    .clone()
-                                    .unwrap_or_else(|| upstream_body.clone()),
+                                capture_upstream_request,
                                 None,
                                 None,
                                 None,
@@ -1023,7 +1081,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             request_id,
             request_ip,
             &final_err,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            reasoning_effort.clone(),
             tried_providers,
         );
     } else {
@@ -1036,7 +1094,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             request_id,
             request_ip,
             &final_err,
-            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            reasoning_effort.clone(),
             tried_providers,
         );
     }
@@ -1059,29 +1117,14 @@ enum CollectedUpstreamError {
 }
 
 async fn collect_streamed_upstream_response(
-    req_attempt: &urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
+    legacy: UrpRequest,
+    pending_request_envelope_extra: Option<HashMap<String, Value>>,
     provider_type: ProviderType,
     upstream_resp: reqwest::Response,
     started_at: std::time::Instant,
     logical_model: &str,
     stream_idle_timeout_ms: u64,
 ) -> Result<(urp::UrpResponse, Option<String>), CollectedUpstreamError> {
-    let legacy = typed_request_to_legacy(req_attempt, max_multiplier)
-        .map_err(CollectedUpstreamError::Internal)?;
-    let pending_request_envelope_extra =
-        req_attempt
-            .input
-            .clone()
-            .into_iter()
-            .find_map(|node| match node {
-                crate::urp::Node::NextDownstreamEnvelopeExtra { extra_body }
-                    if !extra_body.is_empty() =>
-                {
-                    Some(extra_body)
-                }
-                _ => None,
-            });
     let (decoded_tx, mut decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
     let decode_handle = {
@@ -1168,33 +1211,6 @@ async fn collect_streamed_upstream_response(
         })
 }
 
-#[allow(dead_code)]
-pub(super) async fn forward_nonstream_typed(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    req: urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
-    client_session_id: Option<String>,
-    capture: RequestCaptureContext,
-) -> AppResult<Value> {
-    forward_nonstream_typed_with_task_state(
-        state,
-        auth,
-        req,
-        max_multiplier,
-        downstream,
-        request_id,
-        request_ip,
-        client_session_id,
-        capture,
-        None,
-    )
-    .await
-}
-
 pub(super) async fn forward_nonstream_typed_with_task_state(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -1207,7 +1223,7 @@ pub(super) async fn forward_nonstream_typed_with_task_state(
     capture: RequestCaptureContext,
     task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<Value> {
-    let (resp, logical_model) = execute_nonstream_typed_owned(
+    let (_, _, body) = execute_nonstream(
         state,
         auth,
         req,
@@ -1217,10 +1233,11 @@ pub(super) async fn forward_nonstream_typed_with_task_state(
         request_ip,
         client_session_id,
         capture,
+        |resp, logical_model| encode_response_for_downstream(downstream, resp, logical_model),
         task_state,
     )
     .await?;
-    encode_response_for_downstream(downstream, &resp, &logical_model)
+    Ok(body)
 }
 
 #[allow(clippy::result_large_err)]

@@ -1,16 +1,18 @@
 use crate::db::DbPool;
+use crate::db_cache::{REQUEST_PATH_CACHE_TTL, SnapshotCache};
 use crate::exact_decimal::Multiplier;
 use crate::settings::default_reasoning_suffix_map;
 use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -638,6 +640,101 @@ impl ChannelHealthState {
 #[derive(Clone)]
 pub struct MonoizeRoutingStore {
     db: DbPool,
+    catalog: SnapshotCache<RoutingCatalog>,
+}
+
+/// DPT-RC2: enabled providers in routing order, each reduced to its enabled
+/// channels with positive weight.
+struct RoutingCatalog {
+    providers: Vec<CatalogProvider>,
+    /// Sorted, distinct model names served by `providers`.
+    model_names: Vec<String>,
+    providers_by_model: DashMap<String, Arc<[MonoizeProvider]>>,
+}
+
+/// Templates hold empty `channels`/`models` so per-model projections clone
+/// only the rows they return.
+struct CatalogProvider {
+    template: MonoizeProvider,
+    channels: Vec<CatalogChannel>,
+}
+
+struct CatalogChannel {
+    template: MonoizeChannel,
+    models: HashMap<String, MonoizeModelEntry>,
+}
+
+impl RoutingCatalog {
+    fn build(providers: Vec<MonoizeProvider>) -> Self {
+        let providers = providers
+            .into_iter()
+            .filter(|provider| provider.enabled)
+            .map(|mut template| {
+                let channels = std::mem::take(&mut template.channels)
+                    .into_iter()
+                    .filter(|channel| channel.enabled && channel.weight > 0)
+                    .map(|mut template| CatalogChannel {
+                        models: std::mem::take(&mut template.models),
+                        template,
+                    })
+                    .collect();
+                CatalogProvider { template, channels }
+            })
+            .collect::<Vec<_>>();
+        let mut model_names = providers
+            .iter()
+            .flat_map(|provider| &provider.channels)
+            .flat_map(|channel| channel.models.keys().cloned())
+            .collect::<Vec<_>>();
+        model_names.sort_unstable();
+        model_names.dedup();
+        Self {
+            providers,
+            model_names,
+            providers_by_model: DashMap::new(),
+        }
+    }
+
+    fn contains_model(&self, model: &str) -> bool {
+        self.model_names
+            .binary_search_by(|name| name.as_str().cmp(model))
+            .is_ok()
+    }
+
+    fn providers_for_model(&self, model: &str) -> Arc<[MonoizeProvider]> {
+        if !self.contains_model(model) {
+            return Arc::from([]);
+        }
+        if let Some(cached) = self.providers_by_model.get(model) {
+            return Arc::clone(&cached);
+        }
+        let projected = self
+            .providers
+            .iter()
+            .filter_map(|provider| {
+                let channels = provider
+                    .channels
+                    .iter()
+                    .filter_map(|channel| {
+                        let entry = channel.models.get(model)?;
+                        let mut projected = channel.template.clone();
+                        projected.models = HashMap::from([(model.to_string(), entry.clone())]);
+                        Some(projected)
+                    })
+                    .collect::<Vec<_>>();
+                (!channels.is_empty()).then(|| MonoizeProvider {
+                    channels,
+                    ..provider.template.clone()
+                })
+            })
+            .collect::<Arc<[_]>>();
+        Arc::clone(
+            &self
+                .providers_by_model
+                .entry(model.to_string())
+                .or_insert(projected),
+        )
+    }
 }
 
 fn default_enabled() -> bool {
@@ -1123,7 +1220,7 @@ fn decode_provider_row(
 
 impl MonoizeRoutingStore {
     pub async fn new(db: DbPool) -> Result<Self, String> {
-        let store = Self { db };
+        let store = Self::with_empty_catalog(db);
         store.migrate_transform_rule_ids().await?;
         Ok(store)
     }
@@ -1131,7 +1228,29 @@ impl MonoizeRoutingStore {
     /// Replica-side constructor per PRP11: skips canonicalization writes that the
     /// primary already performed on the shared database.
     pub async fn new_read_only(db: DbPool) -> Result<Self, String> {
-        Ok(Self { db })
+        Ok(Self::with_empty_catalog(db))
+    }
+
+    fn with_empty_catalog(db: DbPool) -> Self {
+        Self {
+            db,
+            catalog: SnapshotCache::new(REQUEST_PATH_CACHE_TTL),
+        }
+    }
+
+    /// DPT-RC4: callers that write routing rows outside this store (the
+    /// group-delete cascade) invalidate through this method.
+    pub fn invalidate_routing_catalog(&self) {
+        self.catalog.invalidate();
+    }
+
+    async fn routing_catalog(&self) -> Result<Arc<RoutingCatalog>, String> {
+        let store = self.clone();
+        self.catalog
+            .get_or_load(move || async move {
+                Ok(RoutingCatalog::build(store.list_providers().await?))
+            })
+            .await
     }
 
     async fn migrate_transform_rule_ids(&self) -> Result<(), String> {
@@ -1390,6 +1509,7 @@ impl MonoizeRoutingStore {
             .collect()
     }
 
+    /// DPT-RC3: the candidates served by an enabled provider/channel.
     pub async fn available_model_names(
         &self,
         candidates: &[String],
@@ -1397,142 +1517,25 @@ impl MonoizeRoutingStore {
         if candidates.is_empty() {
             return Ok(HashSet::new());
         }
-        let candidates = candidates
+        let catalog = self.routing_catalog().await?;
+        Ok(candidates
             .iter()
+            .filter(|candidate| catalog.contains_model(candidate))
             .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let mut available = HashSet::new();
-        const LOOKUP_CHUNK_SIZE: usize = 400;
-        for chunk in candidates.chunks(LOOKUP_CHUNK_SIZE) {
-            let placeholders = (0..chunk.len())
-                .map(|index| format!("${}", index + 1))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let rows = self
-                .db
-                .read()
-                .query_all(self.db.stmt(
-                    &format!(
-                        "SELECT DISTINCT cm.model_name
-                         FROM monoize_channel_models cm
-                         JOIN monoize_channels c ON c.id = cm.channel_id
-                         JOIN monoize_providers p ON p.id = c.provider_id
-                         WHERE p.enabled = 1
-                           AND c.enabled = 1
-                           AND c.weight > 0
-                           AND cm.model_name IN ({placeholders})"
-                    ),
-                    chunk.iter().cloned().map(Into::into).collect(),
-                ))
-                .await
-                .map_err(|e| e.to_string())?;
-            for row in rows {
-                available.insert(row.try_get("", "model_name").map_err(|e| e.to_string())?);
-            }
-        }
-        Ok(available)
+            .collect())
     }
 
     pub async fn list_available_model_names(&self) -> Result<Vec<String>, String> {
-        let rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                "SELECT DISTINCT cm.model_name
-                 FROM monoize_channel_models cm
-                 JOIN monoize_channels c ON c.id = cm.channel_id
-                 JOIN monoize_providers p ON p.id = c.provider_id
-                 WHERE p.enabled = 1 AND c.enabled = 1 AND c.weight > 0
-                 ORDER BY cm.model_name ASC",
-                vec![],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        rows.into_iter()
-            .map(|row| row.try_get("", "model_name").map_err(|e| e.to_string()))
-            .collect()
+        Ok(self.routing_catalog().await?.model_names.clone())
     }
 
+    /// DPT-RC3: providers serving `model`, each reduced to the qualifying
+    /// channels with `models` holding only the `model` entry.
     pub async fn list_providers_for_model(
         &self,
         model: &str,
-    ) -> Result<Vec<MonoizeProvider>, String> {
-        let provider_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                r#"SELECT DISTINCT p.id, p.name, p.max_retries, p.channel_max_retries,
-                          p.channel_retry_interval_ms, p.circuit_breaker_enabled,
-                          p.per_model_circuit_break, p.transforms, p.api_type_overrides,
-                          p.active_probe_enabled_override, p.active_probe_interval_seconds_override,
-                          p.active_probe_success_threshold_override, p.active_probe_model_override,
-                          p.request_timeout_ms_override, p.extra_fields_whitelist,
-                          p.strip_cross_protocol_nested_extra, p.group_ids,
-                          p.allow_free_when_unpriced_override,
-                          p.allow_free_when_missing_usage_override,
-                          p.enabled, p.priority, p.created_at, p.updated_at
-                   FROM monoize_providers p
-                   JOIN monoize_channels c ON c.provider_id = p.id
-                   JOIN monoize_channel_models cm ON cm.channel_id = c.id
-                   WHERE cm.model_name = $1
-                     AND p.enabled = 1
-                     AND c.enabled = 1
-                     AND c.weight > 0
-                   ORDER BY p.priority ASC, p.created_at ASC"#,
-                vec![model.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        if provider_rows.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let channel_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                r#"SELECT c.id, c.provider_id, c.name, c.base_url, c.api_key, c.weight, c.enabled,
-                          c.provider_type, c.passive_failure_count_threshold_override,
-                          c.passive_cooldown_seconds_override, c.passive_window_seconds_override,
-                          c.passive_rate_limit_cooldown_seconds_override,
-                          c.active_probe_enabled_override, c.active_probe_interval_seconds_override,
-                          c.active_probe_success_threshold_override, c.active_probe_model_override,
-                          c.affinity_enabled_override, c.affinity_idle_ttl_seconds_override,
-                          c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
-                          c.proxy_url,
-                          c.extra_headers,
-                          c.session_affinity_auto, c.websocket_supported,
-                          cm.redirect, cm.multiplier
-                   FROM monoize_channels c
-                   JOIN monoize_providers p ON p.id = c.provider_id
-                   JOIN monoize_channel_models cm ON cm.channel_id = c.id
-                   WHERE cm.model_name = $1
-                     AND p.enabled = 1
-                     AND c.enabled = 1
-                     AND c.weight > 0
-                   ORDER BY c.created_at ASC"#,
-                vec![model.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let mut channels_by_provider: HashMap<String, Vec<MonoizeChannel>> = HashMap::new();
-        for row in channel_rows {
-            let provider_id: String = row.try_get("", "provider_id").map_err(|e| e.to_string())?;
-            channels_by_provider
-                .entry(provider_id)
-                .or_default()
-                .push(decode_channel_model_row(&row, model)?);
-        }
-        provider_rows
-            .iter()
-            .map(|row| {
-                let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-                decode_provider_row(row, channels_by_provider.remove(&id).unwrap_or_default())
-            })
-            .collect()
+    ) -> Result<Arc<[MonoizeProvider]>, String> {
+        Ok(self.routing_catalog().await?.providers_for_model(model))
     }
 
     pub async fn list_active_probe_candidates(&self) -> Result<Vec<MonoizeProvider>, String> {
@@ -1687,7 +1690,11 @@ impl MonoizeRoutingStore {
             .await
             .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())?;
-        Ok(result.rows_affected() > 0)
+        let changed = result.rows_affected() > 0;
+        if changed {
+            self.catalog.invalidate();
+        }
+        Ok(changed)
     }
 
     pub async fn get_provider(&self, id: &str) -> Result<Option<MonoizeProvider>, String> {
@@ -1857,6 +1864,7 @@ impl MonoizeRoutingStore {
         self.replace_channels_on(&*txn, &id, &input.channels)
             .await?;
         txn.commit().await.map_err(|e| e.to_string())?;
+        self.catalog.invalidate();
 
         self.get_provider(&id)
             .await?
@@ -2037,6 +2045,7 @@ impl MonoizeRoutingStore {
         }
 
         txn.commit().await.map_err(|e| e.to_string())?;
+        self.catalog.invalidate();
 
         self.get_provider(id)
             .await?
@@ -2059,6 +2068,7 @@ impl MonoizeRoutingStore {
             return Err("provider not found".to_string());
         }
 
+        self.catalog.invalidate();
         Ok(())
     }
 
@@ -2126,7 +2136,9 @@ impl MonoizeRoutingStore {
         ))
         .await
         .map_err(|e| e.to_string())?;
-        txn.commit().await.map_err(|e| e.to_string())
+        txn.commit().await.map_err(|e| e.to_string())?;
+        self.catalog.invalidate();
+        Ok(())
     }
 
     async fn replace_channels_on(

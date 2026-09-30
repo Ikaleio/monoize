@@ -123,6 +123,8 @@ bun add --global monoize
 monoize
 ```
 
+运行 `monoize --version` 可输出已安装的版本号。
+
 包管理器只安装当前系统与 CPU 对应的原生二进制。支持 Linux x86-64/ARM64（glibc 与 musl）及 Windows x86-64。
 
 ### Docker

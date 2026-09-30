@@ -24,7 +24,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
     urp: &HandlerUrpRequest,
     upstream_resp: reqwest::Response,
     tx: mpsc::Sender<UrpStreamEvent>,
-    started_at: Option<std::time::Instant>,
+    mut started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
@@ -53,7 +53,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
     {
         let event =
             event.map_err(|err| stream_error("upstream_stream_decode_failed", err.to_string()))?;
-        mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
+        mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
         if event.data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;
             break;

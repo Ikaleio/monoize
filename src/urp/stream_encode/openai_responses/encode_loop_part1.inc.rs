@@ -72,7 +72,7 @@ async fn emit_responses_media_error(
     let response = response_failed_payload(response_id, created, logical_model,
         Some("unsupported_media"), message, &HashMap::new());
     send_responses_event(tx, seq, "response.failed", json!({ "response": response })).await?;
-    send_plain_sse_data(tx, "[DONE]".into()).await?;
+    send_plain_sse_data(tx, "[DONE]").await?;
     Err(crate::error::AppError::new(
         axum::http::StatusCode::BAD_GATEWAY,
         "unsupported_media",
@@ -1658,7 +1658,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     json!({ "response": completed_response }),
                 )
                 .await?;
-                send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
+                send_plain_sse_data(&tx, "[DONE]").await?;
             }
             UrpStreamEvent::ProviderControl {
                 protocol,
@@ -1707,7 +1707,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     json!({ "response": failed_response }),
                 )
                 .await?;
-                send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
+                send_plain_sse_data(&tx, "[DONE]").await?;
                 error_terminal_sent = true;
             }
         }

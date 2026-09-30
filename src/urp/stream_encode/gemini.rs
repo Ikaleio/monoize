@@ -552,7 +552,7 @@ pub async fn encode_urp_stream_as_gemini(
             Ok(frames) => frames,
             Err(message) => {
                 let body = crate::urp::media::error_body(&message);
-                crate::urp::stream_helpers::send_plain_sse_data(&tx, body.to_string()).await?;
+                crate::urp::stream_helpers::send_plain_sse_json(&tx, &body).await?;
                 return Err(AppError::new(
                     StatusCode::BAD_GATEWAY,
                     "stream_encode_failed",
@@ -562,14 +562,14 @@ pub async fn encode_urp_stream_as_gemini(
             }
         };
         for frame in frames {
-            crate::urp::stream_helpers::send_plain_sse_data(&tx, frame.to_string()).await?;
+            crate::urp::stream_helpers::send_plain_sse_json(&tx, &frame).await?;
         }
     }
     if !encoder.terminal {
         let message = "Gemini stream has no canonical terminal event";
-        crate::urp::stream_helpers::send_plain_sse_data(
+        crate::urp::stream_helpers::send_plain_sse_json(
             &tx,
-            crate::urp::media::error_body(message).to_string(),
+            &crate::urp::media::error_body(message),
         )
         .await?;
         return Err(

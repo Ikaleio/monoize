@@ -1,9 +1,8 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
-    latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_chat_object,
-    record_observed_upstream_response_model, record_stream_done_sentinel,
-    record_stream_response_service_tier, record_stream_terminal_error,
-    record_stream_terminal_event, record_stream_usage_if_present, record_visible_output_delta,
+    StreamChunkMetrics, latest_stream_usage_snapshot, parse_usage_from_chat_object,
+    record_stream_chunk_metrics, record_stream_terminal_error, record_stream_terminal_event,
+    response_service_tier,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::{parse_compatible_media_part, parse_tool_call_arguments_value};
@@ -18,9 +17,12 @@ use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+
+static NULL_DELTA: Value = Value::Null;
 
 const CHAT_CHOICE_EXTRA_BODY_KEY: &str = "_monoize_chat_choice_extra";
 const CHAT_DELTA_EXTRA_BODY_KEY: &str = "_monoize_chat_delta_extra";
@@ -44,6 +46,39 @@ pub(crate) async fn stream_chat_to_urp_events(
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
+) -> AppResult<()> {
+    // Visible output bytes ride along with the next event's single metrics lock; whatever is
+    // still pending when decoding stops (on any exit path) is flushed here.
+    let mut pending_visible_output_bytes = 0u64;
+    let result = decode_chat_stream(
+        urp,
+        upstream_resp,
+        tx,
+        started_at,
+        runtime_metrics.clone(),
+        idle_timeout_ms,
+        &mut pending_visible_output_bytes,
+    )
+    .await;
+    record_stream_chunk_metrics(
+        &runtime_metrics,
+        StreamChunkMetrics {
+            visible_output_bytes: pending_visible_output_bytes,
+            ..StreamChunkMetrics::default()
+        },
+    )
+    .await;
+    result
+}
+
+async fn decode_chat_stream(
+    urp: &HandlerUrpRequest,
+    upstream_resp: reqwest::Response,
+    tx: mpsc::Sender<UrpStreamEvent>,
+    mut started_at: Option<std::time::Instant>,
+    runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
+    pending_visible_output_bytes: &mut u64,
 ) -> AppResult<()> {
     let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut output_text = String::new();
@@ -103,9 +138,20 @@ pub(crate) async fn stream_chat_to_urp_events(
                 return Ok(());
             }
         };
-        mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
+        let ttfb_ms = started_at
+            .take()
+            .map(|started_at| started_at.elapsed().as_millis() as u64);
         if ev.data.trim() == "[DONE]" {
-            record_stream_done_sentinel(&runtime_metrics).await;
+            record_stream_chunk_metrics(
+                &runtime_metrics,
+                StreamChunkMetrics {
+                    ttfb_ms,
+                    done_sentinel: true,
+                    visible_output_bytes: std::mem::take(pending_visible_output_bytes),
+                    ..StreamChunkMetrics::default()
+                },
+            )
+            .await;
             if !protocol_terminal_seen {
                 emit_chat_terminal_error(
                     &tx,
@@ -124,6 +170,14 @@ pub(crate) async fn stream_chat_to_urp_events(
         let data_val: Value = match serde_json::from_str(&ev.data) {
             Ok(value) => value,
             Err(err) => {
+                record_stream_chunk_metrics(
+                    &runtime_metrics,
+                    StreamChunkMetrics {
+                        ttfb_ms,
+                        ..StreamChunkMetrics::default()
+                    },
+                )
+                .await;
                 emit_chat_terminal_error(
                     &tx,
                     &runtime_metrics,
@@ -139,15 +193,22 @@ pub(crate) async fn stream_chat_to_urp_events(
         if !response_started && let Some(id) = data_val.get("id").and_then(Value::as_str) {
             response_id = id.into();
         }
-        if let Some(usage) = parse_usage_from_chat_object(&data_val) {
-            latest_usage = Some(usage);
+        let usage = parse_usage_from_chat_object(&data_val);
+        if usage.is_some() {
+            latest_usage.clone_from(&usage);
         }
-        record_stream_response_service_tier(&runtime_metrics, &data_val).await;
-        if let Some(model) = data_val.get("model").and_then(Value::as_str) {
-            record_observed_upstream_response_model(&runtime_metrics, model, false).await;
-        }
-        record_stream_usage_if_present(&runtime_metrics, parse_usage_from_chat_object(&data_val))
-            .await;
+        record_stream_chunk_metrics(
+            &runtime_metrics,
+            StreamChunkMetrics {
+                ttfb_ms,
+                done_sentinel: false,
+                response_service_tier: response_service_tier(&data_val),
+                response_model: data_val.get("model").and_then(Value::as_str),
+                usage,
+                visible_output_bytes: std::mem::take(pending_visible_output_bytes),
+            },
+        )
+        .await;
 
         let choice = data_val
             .get("choices")
@@ -214,13 +275,9 @@ pub(crate) async fn stream_chat_to_urp_events(
                 .await;
         }
 
-        let delta = data_val
-            .get("choices")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|c| c.get("delta"))
-            .cloned()
-            .unwrap_or(Value::Null);
+        let delta = choice
+            .and_then(|choice| choice.get("delta"))
+            .unwrap_or(&NULL_DELTA);
         for content in [
             delta.get("content"),
             choice
@@ -244,7 +301,7 @@ pub(crate) async fn stream_chat_to_urp_events(
             }
         }
         let mut delta_extra = std::mem::take(&mut pending_delta_extra);
-        for (key, value) in chat_delta_extra(&delta) {
+        for (key, value) in chat_delta_extra(delta) {
             delta_extra.insert(key, value);
         }
         if !protocol_terminal_seen && let Some(choice) = choice {
@@ -261,21 +318,11 @@ pub(crate) async fn stream_chat_to_urp_events(
             assistant_message_phase = delta
                 .get("phase")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    data_val
-                        .get("choices")
-                        .and_then(|v| v.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|choice| choice.get("delta"))
-                        .and_then(|delta| delta.get("phase"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                });
+                .map(|s| s.to_string());
         }
 
         if delta.get("role").and_then(|v| v.as_str()) == Some("assistant") {
-            if !response_started && !chat_delta_has_payload(&delta) && !delta_extra.is_empty() {
+            if !response_started && !chat_delta_has_payload(delta) && !delta_extra.is_empty() {
                 ensure_response_started_with_extra(
                     &tx,
                     &response_id,
@@ -315,7 +362,7 @@ pub(crate) async fn stream_chat_to_urp_events(
             )
             .await?;
             output_text.push_str(t);
-            record_visible_output_delta(&runtime_metrics, t).await;
+            *pending_visible_output_bytes += t.len() as u64;
             send_node_delta(
                 &tx,
                 node_index,
@@ -400,16 +447,12 @@ pub(crate) async fn stream_chat_to_urp_events(
         }
         if let Some(audio) = delta.get("audio").and_then(Value::as_object) {
             for (key, value) in audio {
-                if matches!(key.as_str(), "data" | "transcript") && value.is_string() {
-                    let joined = format!(
-                        "{}{}",
-                        audio_fields
-                            .get(key)
-                            .and_then(Value::as_str)
-                            .unwrap_or_default(),
-                        value.as_str().unwrap()
-                    );
-                    audio_fields.insert(key.clone(), json!(joined));
+                if let ("data" | "transcript", Value::String(chunk)) = (key.as_str(), value) {
+                    if let Some(Value::String(accumulated)) = audio_fields.get_mut(key) {
+                        accumulated.push_str(chunk);
+                    } else {
+                        audio_fields.insert(key.clone(), Value::String(chunk.clone()));
+                    }
                 } else if !key.starts_with("_monoize_") {
                     audio_fields.insert(key.clone(), value.clone());
                 }
@@ -452,7 +495,7 @@ pub(crate) async fn stream_chat_to_urp_events(
                         &mut next_node_index,
                         &mut output_text,
                         &mut delta_extra,
-                        &runtime_metrics,
+                        pending_visible_output_bytes,
                     )
                     .await?;
                     continue;
@@ -523,7 +566,7 @@ pub(crate) async fn stream_chat_to_urp_events(
                             &mut next_node_index,
                             &mut output_text,
                             &mut delta_extra,
-                            &runtime_metrics,
+                            pending_visible_output_bytes,
                         )
                         .await?;
                         recognized = true;
@@ -573,7 +616,7 @@ pub(crate) async fn stream_chat_to_urp_events(
             .get("reasoning_details")
             .and_then(Value::as_array)
             .filter(|details| !details.is_empty());
-        let mut scalar_delta = delta.clone();
+        let mut scalar_delta = Cow::Borrowed(delta);
         if let Some(reasoning_details) = reasoning_details {
             for detail in reasoning_details {
                 process_reasoning_detail_delta(
@@ -588,7 +631,10 @@ pub(crate) async fn stream_chat_to_urp_events(
                 )
                 .await?;
             }
-            let scalar_obj = scalar_delta.as_object_mut().expect("chat delta object");
+            let scalar_obj = scalar_delta
+                .to_mut()
+                .as_object_mut()
+                .expect("chat delta object");
             scalar_obj.remove("reasoning_details");
             for key in ["reasoning", "reasoning_content", "reasoning_opaque"] {
                 let duplicate = delta.get(key).and_then(Value::as_str).is_some_and(|value| {
@@ -737,7 +783,7 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &mut tool_node_index_by_call_id,
                 &mut provider_items,
                 &mut delta_extra,
-                &runtime_metrics,
+                pending_visible_output_bytes,
             )
             .await?;
         }
@@ -1248,7 +1294,7 @@ async fn process_text_delta(
     next_node_index: &mut u32,
     output_text: &mut String,
     delta_extra: &mut Map<String, Value>,
-    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    pending_visible_output_bytes: &mut u64,
 ) -> AppResult<()> {
     if text.is_empty() {
         return Ok(());
@@ -1272,7 +1318,7 @@ async fn process_text_delta(
     )
     .await?;
     output_text.push_str(text);
-    record_visible_output_delta(runtime_metrics, text).await;
+    *pending_visible_output_bytes += text.len() as u64;
     send_node_delta(
         tx,
         node_index,
@@ -1985,7 +2031,7 @@ async fn process_terminal_message_snapshot(
     tool_node_index_by_call_id: &mut HashMap<String, u32>,
     provider_items: &mut Vec<(u32, Node)>,
     delta_extra: &mut Map<String, Value>,
-    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    pending_visible_output_bytes: &mut u64,
 ) -> AppResult<()> {
     if assistant_message_phase.is_none() {
         *assistant_message_phase = message
@@ -2102,7 +2148,7 @@ async fn process_terminal_message_snapshot(
                     next_node_index,
                     output_text,
                     delta_extra,
-                    runtime_metrics,
+                    pending_visible_output_bytes,
                 )
                 .await?;
             }
@@ -2122,7 +2168,7 @@ async fn process_terminal_message_snapshot(
                             next_node_index,
                             output_text,
                             delta_extra,
-                            runtime_metrics,
+                            pending_visible_output_bytes,
                         )
                         .await?;
                     }
@@ -2150,7 +2196,7 @@ async fn process_terminal_message_snapshot(
                             next_node_index,
                             output_text,
                             delta_extra,
-                            runtime_metrics,
+                            pending_visible_output_bytes,
                         )
                         .await?;
                     }
