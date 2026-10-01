@@ -709,7 +709,7 @@ ENC8a. A Chat Completions stream encoder MUST encode non-empty `Reasoning.conten
 
 ENC9. The Anthropic Messages encoder MUST reconstruct Anthropic `message` and `content[]` envelopes from flat URP v2 nodes. Block order MUST preserve flat node order after protocol-required grouping.
 
-ENC9a. When decoding a downstream Anthropic Messages request, Monoize MUST store request field `max_tokens` as the URP request field `max_output_tokens`. When encoding an upstream Anthropic Messages request, Monoize MUST always send `max_tokens`. If the downstream request omits an explicit output-token cap, Monoize MUST encode `max_tokens: 64000`. If the downstream request provides an explicit output-token cap, Monoize MUST forward that explicit value unchanged.
+ENC9a. When decoding a downstream Anthropic Messages request, Monoize MUST store request field `max_tokens` as the URP request field `max_output_tokens`. When encoding an upstream Anthropic Messages request, Monoize MUST always send `max_tokens`. If the downstream request omits an explicit output-token cap, Monoize MUST encode `max_tokens: 128000`. If the downstream request provides an explicit output-token cap, Monoize MUST forward that explicit value unchanged.
 
 ENC10. `ToolResult` remains a distinct top-level semantic unit. The Anthropic Messages encoder MUST render a `ToolResult` node as a distinct `tool_result` protocol object or block container. It MUST NOT rewrite that node as ordinary role-bearing content.
 

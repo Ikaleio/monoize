@@ -1,4 +1,4 @@
-const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 64_000;
+const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 128_000;
 
 fn apply_messages_response_format(obj: &mut Map<String, Value>, format: &ResponseFormat) {
     match format {
