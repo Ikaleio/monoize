@@ -71,12 +71,25 @@ impl AuthState {
             if let Some(store) = user_store {
                 match store.validate_api_key(token).await {
                     Ok(Some((api_key, user))) => {
+                        // Read the ceiling outside the key cache so subscription
+                        // changes and expiry apply to every authenticated request.
+                        let plan_group_ids = match store
+                            .get_active_billing_plan_group_ids(&user.id)
+                            .await
+                        {
+                            Ok(groups) => groups,
+                            Err(error) => {
+                                tracing::error!(user_id = %user.id, error = %error, "API key subscription lookup failed");
+                                return None;
+                            }
+                        };
                         // GR-I4: API-key auth always yields a concrete ordered list;
                         // `None` is reserved for internal system traffic.
                         let effective_groups = Some(resolve_effective_groups(
                             &user.group_id,
                             api_key.use_user_group,
                             &api_key.group_ids,
+                            plan_group_ids.as_deref(),
                         ));
                         return Some(AuthResult {
                             tenant_id: user.id.clone(),

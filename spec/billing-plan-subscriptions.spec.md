@@ -308,8 +308,17 @@ BP-G1. A request can use plan capacity only when all conditions are true:
 3. The selected attempt has a non-null `billing_group_id`.
 4. The selected `billing_group_id` is in the subscription snapshot `group_ids`.
 
-BP-G2. The plan MUST NOT filter or change API-key routing groups. A request that uses a
-group outside the subscription remains routable and uses prepaid or sub-account balance.
+BP-G2. An active subscription MUST restrict API-key routing to its snapshot `group_ids`.
+Authentication MUST intersect the key's resolved groups with these ids and preserve key
+group order. The subscription MUST NOT add groups to the key's resolved groups.
+
+BP-G2a. Subscription replacement, revocation, and expiry MUST affect the next request
+authenticated after the change. API-key cache hits MUST NOT retain an earlier subscription
+ceiling. Each authentication MUST read the active snapshot without loading plan usage.
+
+BP-G2b. When no active subscription exists under BP-D6, routing MUST use the key's resolved
+groups without a subscription ceiling. Subscription lookup or decoding errors MUST prevent
+forwarding. An active snapshot with an empty group list MUST fail authentication.
 
 BP-G3. Dashboard Playground traffic has no API key and MUST NOT use plan capacity.
 

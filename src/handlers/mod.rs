@@ -1258,16 +1258,11 @@ async fn playground_plan_ceiling(
     state: &AppState,
     user_id: &str,
 ) -> AppResult<Option<Vec<String>>> {
-    let subscription = state
+    state
         .user_store
-        .get_active_billing_plan_subscription(user_id)
+        .get_active_billing_plan_group_ids(user_id)
         .await
-        .map_err(|error| {
-            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-        })?;
-    Ok(subscription
-        .map(|subscription| subscription.group_ids)
-        .filter(|ids| !ids.is_empty()))
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))
 }
 
 fn playground_group_forbidden(message: &'static str) -> AppError {

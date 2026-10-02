@@ -402,18 +402,24 @@ pub fn canonicalize_group_ids(group_ids: &[String]) -> Vec<String> {
 ///
 /// `base = [user_group_id]` when the key inherits the owner's group
 /// (`use_user_group` true) or stores no explicit groups (GR-I3); otherwise the
-/// key's ordered `group_ids`. Billing plans never change routing groups.
+/// key's ordered `group_ids`. An active subscription restricts this list by
+/// membership without changing its order or adding groups.
 pub fn resolve_effective_groups(
     user_group_id: &str,
     use_user_group: bool,
     key_group_ids: &[String],
+    plan_group_ids: Option<&[String]>,
 ) -> Vec<String> {
     let base: Vec<String> = if use_user_group || key_group_ids.is_empty() {
         vec![user_group_id.to_string()]
     } else {
         key_group_ids.to_vec()
     };
-    canonicalize_group_ids(&base)
+    let mut groups = canonicalize_group_ids(&base);
+    if let Some(plan_groups) = plan_group_ids {
+        groups.retain(|id| plan_groups.contains(id));
+    }
+    groups
 }
 
 /// R-GRP-1 eligibility: `None` means internal system traffic (all providers

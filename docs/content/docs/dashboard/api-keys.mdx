@@ -60,6 +60,9 @@ The first matching rule rewrites the model before routing, billing, and model-li
 - **Inherit user group** (default): the key follows the owning user's group.
 - **Explicit groups**: select one or more groups. Order matters; Monoize prefers Providers from earlier groups. See [Routing and Reliability](/en/docs/routing).
 
+An active subscription limits both modes to the subscription's groups. Selecting another group cannot expand this limit.
+Subscription changes apply to the next request. Without an active subscription, the key's groups apply.
+
 ## Per-key transforms
 
 A key can hold an ordered transform chain. Key transforms run inside a safety boundary: only transform types allowed at API-key scope are accepted. See [Transforms](/en/docs/transforms).

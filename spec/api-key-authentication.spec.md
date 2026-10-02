@@ -75,9 +75,14 @@ strings; malformed JSON, a non-array JSON value, a non-string element, or an inc
 database type MUST fail authentication with an internal storage error. It MUST NOT be
 converted to `[]`.
 
-AKG3. The billing-plan layer is read as `plan_group_ids: string[] | absent` from the
-enabled plan referenced by the user (`billing-plan-subscriptions.spec.md` BP-R2: a
-disabled or missing plan contributes no restriction). Storage decoding follows AKG2a.
+AKG3. Authentication MUST read `plan_group_ids: string[] | absent` from the user's active
+subscription snapshot under `billing-plan-subscriptions.spec.md` BP-D6. A future, expired,
+revoked, or missing subscription contributes no restriction. Storage decoding follows
+AKG2a; an active snapshot with no groups MUST fail authentication.
+
+AKG3a. Every API-key authentication MUST read the active subscription, including API-key
+cache hits. The read MUST NOT load plan usage or depend on the current plan row.
+Lookup or decoding errors MUST prevent forwarding rather than remove the ceiling.
 
 AKG4. The authenticated context MUST represent request-scoped group access as
 `effective_groups: string[] | null` where the array is an **ordered** list of group ids.
@@ -88,7 +93,7 @@ AKG5. Authentication MUST resolve `effective_groups` as follows:
 
 1. `base = [user.group_id]` if `api_key.use_user_group` is true OR `api_key.group_ids == []`;
    otherwise `base = api_key.group_ids` with order preserved.
-2. If `plan_group_ids` is present and non-empty, `effective_groups` = the elements of
+2. If `plan_group_ids` is present, `effective_groups` = the elements of
    `base` that are members of `plan_group_ids`, in `base` order. Otherwise
    `effective_groups = base`.
 

@@ -879,6 +879,26 @@ impl UserStore {
         })
     }
 
+    /// Return the user's active subscription groups without loading usage.
+    /// Missing, future, expired, and revoked subscriptions return `None`.
+    /// Storage errors and active subscriptions without groups return an error.
+    pub(crate) async fn get_active_billing_plan_group_ids(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<Vec<String>>, String> {
+        let read = self.db.read();
+        let Some(subscription) = self
+            .active_subscription_on(&*read, user_id, Utc::now(), false)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if subscription.group_ids.is_empty() {
+            return Err(sql_err("active subscription has no routing groups"));
+        }
+        Ok(Some(subscription.group_ids))
+    }
+
     pub async fn get_active_billing_plan_subscription(
         &self,
         user_id: &str,

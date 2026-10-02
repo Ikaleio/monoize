@@ -62,6 +62,10 @@ TM-GRP-5. Group selection permission on create/update, applied after canonicaliz
 TM-GRP-6. API key create/update requests that violate TM-GRP-3 through TM-GRP-5 MUST be
 rejected with HTTP `400` and code `invalid_request`.
 
+TM-GRP-6a. Stored key groups and selectable groups MUST NOT bypass an active subscription.
+Forwarding authentication MUST apply the subscription ceiling defined by
+`api-key-authentication.spec.md` AKG3 through AKG7 to inherited and explicit key groups.
+
 TM-GRP-7. Stored `group_ids` decoding follows `groups-registry.spec.md` GR-C4; stored
 `use_user_group` MUST be integer `0` or `1`, and any other persisted value MUST fail the
 read.

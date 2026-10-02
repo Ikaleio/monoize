@@ -5,6 +5,9 @@ description: How Monoize selects a route, retries failures, falls forward, and b
 
 ## Route selection
 
+When a subscription is active, Monoize intersects the key's groups with the subscription's groups before selecting Providers.
+It preserves key group order. Requests cannot use Providers outside this intersection.
+
 For each request, Monoize resolves the route in this order:
 
 1. **Model redirects.** API-key rules run first, then global rules. The first match rewrites the model name.

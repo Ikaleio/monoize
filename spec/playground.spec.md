@@ -102,8 +102,8 @@ If the auto-group list is empty, Monoize MUST return HTTP `403` before upstream 
 PG-AUTH9. For a built-in request, an explicit group is permitted iff the group exists and
 at least one condition is true: the session user is an administrator, the group has
 `user_selectable = true`, or the group id equals the session user's current group id. A
-non-permitted group MUST return HTTP `403` before upstream dispatch. A group removed by a
-non-empty enabled billing-plan group ceiling MUST return HTTP `403` before upstream
+non-permitted group MUST return HTTP `403` before upstream dispatch. A group removed by an
+active subscription group ceiling MUST return HTTP `403` before upstream
 dispatch.
 
 PG-AUTH10. Playground internal authentication MUST bill the session user's main balance.
@@ -136,7 +136,7 @@ Selectors MUST NOT be free-text-only inputs.
 PG-SEL2. Group selector:
 
 - Options are "auto" plus every `Group` from `GET /api/dashboard/groups` that satisfies
-  PG-AUTH9 and the enabled billing-plan group ceiling, in response order.
+  PG-AUTH9 and the active subscription group ceiling, in response order.
 - Each option MUST use `Group.id` as its value and render `Group.name` as its label.
 - Selection persists the group id to `playground_group` (empty string for "auto").
 - If a non-empty persisted id does not match a returned `Group.id`, the page MUST clear
