@@ -97,13 +97,16 @@ fn flush_pending_anthropic_message(
     let Some(message) = pending.take() else {
         return;
     };
-    if message.content.is_empty() {
+    if message.content.is_empty()
+        && (message.role != OrdinaryRole::System || message.extra_body.is_empty())
+    {
         return;
     }
 
     let role = match message.role {
         OrdinaryRole::Assistant => "assistant",
-        OrdinaryRole::User | OrdinaryRole::System | OrdinaryRole::Developer => "user",
+        OrdinaryRole::System | OrdinaryRole::Developer => "system",
+        OrdinaryRole::User => "user",
     };
     let mut msg = json!({ "role": role, "content": message.content });
     if let Some(obj) = msg.as_object_mut() {

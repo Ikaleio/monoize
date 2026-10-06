@@ -4,10 +4,11 @@ use crate::urp::encode::{
 };
 use crate::urp::{
     CHAT_REASONING_DETAIL_EXTRA_KEY, FileSource, FinishReason, ImageSource,
-    MESSAGES_OUTPUT_CONFIG_EXTRA_KEY, MESSAGES_THINKING_CONFIG_EXTRA_KEY, MediaMetadata, Node,
-    OrdinaryRole, ProviderProtocol, REASONING_ENVELOPE_PREFIX, ResponseFormat, StopControl,
-    ToolCallType, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse, Usage,
-    strip_reasoning_signature_sigil, wrap_reasoning_signature_with_item_id,
+    MESSAGES_OUTPUT_CONFIG_EXTRA_KEY, MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY,
+    MESSAGES_THINKING_CONFIG_EXTRA_KEY, MediaMetadata, Node, OrdinaryRole, ProviderProtocol,
+    REASONING_ENVELOPE_PREFIX, ResponseFormat, StopControl, ToolCallType, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse, Usage, strip_reasoning_signature_sigil,
+    wrap_reasoning_signature_with_item_id,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;

@@ -6,9 +6,9 @@ use crate::urp::decode::{
 };
 use crate::urp::{
     FinishReason, InputDetails, JsonSchemaDefinition, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
-    MESSAGES_THINKING_CONFIG_EXTRA_KEY, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
-    ReasoningConfig, ResponseFormat, StopControl, ToolChoice, ToolResultContent, UrpRequest,
-    UrpResponse, Usage, unwrap_reasoning_signature_sigil,
+    MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY, MESSAGES_THINKING_CONFIG_EXTRA_KEY, Node, OrdinaryRole,
+    OutputDetails, ProviderProtocol, ReasoningConfig, ResponseFormat, StopControl, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage, unwrap_reasoning_signature_sigil,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -380,13 +380,18 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .unwrap_or("user"),
         );
 
-        let msg_extra_body = split_extra(msg_obj, &["role", "content"]);
+        let mut msg_extra_body = split_extra(msg_obj, &["role", "content"]);
         let message_nodes = match msg_obj.get("content") {
             Some(content) => decode_content_nodes(content, base_role)?,
             None => Vec::new(),
         };
 
-        if !msg_extra_body.is_empty() && !message_nodes.is_empty() {
+        if base_role == OrdinaryRole::System {
+            msg_extra_body.insert(MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY.into(), Value::Bool(true));
+        }
+        if base_role == OrdinaryRole::System
+            || (!msg_extra_body.is_empty() && !message_nodes.is_empty())
+        {
             input_nodes.push(Node::NextDownstreamEnvelopeExtra {
                 extra_body: msg_extra_body,
             });

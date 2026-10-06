@@ -633,6 +633,19 @@ RESP-10. Downstream `/v1/responses` streaming MUST NOT introduce a custom `respo
 
 MSG-1. The Messages encoder MUST reconstruct one Anthropic `message` envelope whose `content[]` block order matches flat-node order after applying protocol-required role and block mapping.
 
+MSG-1a. The Messages decoder MUST preserve the distinction between top-level `system` blocks and `messages[]` system envelopes.
+It MUST insert a `NextDownstreamEnvelopeExtra` boundary before each native system envelope, including an empty envelope with message controls.
+The boundary MUST contain `_monoize_messages_system_envelope = true` as native shape metadata, without a content snapshot.
+The encoder MUST consume this marker and reconstruct that envelope at its original position with role `system`.
+It MUST preserve separate native system envelopes, block order, block extras, and message extras, including `clear_at` and `output_config`.
+An empty system envelope with message controls MUST remain in `messages[]`.
+Current typed node roles and content MUST remain authoritative after mutation or deletion.
+Without a native boundary, leading system or developer nodes MUST encode as top-level `system[]`.
+System or developer nodes after a user or assistant envelope MUST encode as system messages at their current positions.
+The encoder MUST NOT move these nodes into top-level `system[]`, concatenate their text, or insert synthetic conversation turns.
+Upstream model support and placement validation remain the upstream API's responsibility.
+Cross-family stripping MUST remove the native envelope boundary under XTRA-5 while retaining typed system nodes in their current order.
+
 MSG-2. Each emitted Messages `content` block index MUST equal that block's final zero-based position in the reconstructed `content[]` array.
 
 MSG-3. Messages streaming output MUST preserve this exact lifecycle order:

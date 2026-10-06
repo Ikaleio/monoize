@@ -313,7 +313,16 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
             Node::NextDownstreamEnvelopeExtra { extra_body } => {
                 flush_pending_anthropic_message(&mut pending_message, &mut messages);
                 for (key, value) in extra_body {
-                    pending_envelope_extra.insert(key.clone(), value.clone());
+                    if key != MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY {
+                        pending_envelope_extra.insert(key.clone(), value.clone());
+                    }
+                }
+                if extra_body.get(MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY) == Some(&Value::Bool(true)) {
+                    pending_message = Some(AnthropicMessageEnvelope {
+                        role: OrdinaryRole::System,
+                        content: Vec::new(),
+                        extra_body: std::mem::take(&mut pending_envelope_extra),
+                    });
                 }
             }
             Node::ToolResult {
@@ -351,8 +360,24 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 origin_protocol: ProviderProtocol::Messages,
                 ..
             } => {
-                flush_pending_anthropic_message(&mut pending_message, &mut messages);
-                if let Some(block) = encode_system_block(node) {
+                let inline = !messages.is_empty() || pending_message.is_some();
+                if inline {
+                    if pending_message
+                        .as_ref()
+                        .is_some_and(|message| message.role != OrdinaryRole::System)
+                    {
+                        flush_pending_anthropic_message(&mut pending_message, &mut messages);
+                    }
+                    if let Some(block) = encode_system_block(node) {
+                        let message =
+                            pending_message.get_or_insert_with(|| AnthropicMessageEnvelope {
+                                role: OrdinaryRole::System,
+                                content: Vec::new(),
+                                extra_body: std::mem::take(&mut pending_envelope_extra),
+                            });
+                        message.content.push(block);
+                    }
+                } else if let Some(block) = encode_system_block(node) {
                     system_blocks.push(block);
                 }
             }

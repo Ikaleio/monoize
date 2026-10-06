@@ -79,6 +79,8 @@ pub const CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY: &str = "_monoize_chat_legacy_func
 pub const CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY: &str = "_monoize_chat_legacy_function_result";
 pub const MESSAGES_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_messages_thinking_config";
 pub const MESSAGES_OUTPUT_CONFIG_EXTRA_KEY: &str = "_monoize_messages_output_config";
+/// Native system-message boundary; typed nodes own the instruction content.
+pub const MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY: &str = "_monoize_messages_system_envelope";
 /// Shape marker for a Responses image-generation item; typed source owns the image payload.
 pub const RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY: &str =
     "_monoize_responses_image_generation_call";
