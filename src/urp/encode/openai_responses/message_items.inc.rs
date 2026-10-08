@@ -174,6 +174,8 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
                 });
             }
             merge_extra(&mut obj, extra_body);
+            // Phase is lifted onto the message item; OpenAI rejects it on content parts.
+            obj.remove("phase");
             Some(Value::Object(obj))
         }
         Part::Image {
