@@ -295,14 +295,17 @@ export function DashboardLayout() {
         <Menu aria-hidden="true" />
       </SidebarTrigger>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 py-6 pt-16 lg:px-8 lg:pt-6">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden py-6 pt-16 lg:pt-6">
+        {/* The pane spans the full width so its scrollbar sits at the viewport edge (DL7c). */}
         <main
           ref={setMainPane}
-          className="mx-auto flex min-h-0 min-w-0 w-full max-w-6xl flex-1 flex-col overflow-y-auto"
+          className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-y-auto px-6 lg:px-8"
         >
-          <DashboardScrollParentContext.Provider value={mainPane}>
-            <Outlet />
-          </DashboardScrollParentContext.Provider>
+          <div className="mx-auto flex w-full min-w-0 max-w-6xl flex-1 flex-col">
+            <DashboardScrollParentContext.Provider value={mainPane}>
+              <Outlet />
+            </DashboardScrollParentContext.Provider>
+          </div>
         </main>
       </div>
     </SidebarProvider>

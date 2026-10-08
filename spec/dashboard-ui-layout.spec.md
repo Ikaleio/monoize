@@ -155,6 +155,8 @@ DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pa
 
 DL7a. The right main pane MUST receive a definite remaining viewport height (`flex-1` and `min-height: 0` inside the `h-dvh` shell). Fill-height pages such as request logs MAY consume that height with an internal scroll region. Other pages MAY grow and scroll inside the same main pane.
 
+DL7c. The right main pane MUST span the full width between the sidebar and the right viewport edge, so its vertical scrollbar renders at the right viewport edge. The horizontal page padding (`1.5rem`, `2rem` at `lg` and above) MUST be inside the main pane. Page content MUST render inside a child of the main pane that is centered and limited to `max-w-6xl` (72rem). That child MUST pass the definite height of DL7a to fill-height pages.
+
 DL7b. The shell MUST expose the right main pane element to pages through
 `DashboardScrollParentContext` from `frontend/src/lib/dashboard-scroll.ts`, provided by `frontend/src/pages/layout.tsx`. The context value
 MUST be `null` until the element mounts. A virtualized page list MUST use this element
