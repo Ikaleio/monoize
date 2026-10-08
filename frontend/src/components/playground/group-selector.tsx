@@ -57,7 +57,7 @@ export function GroupSelector({
           aria-label={t("playground.group")}
           className="h-8 max-w-[9rem] gap-1.5 border border-transparent px-2 text-xs font-medium text-muted-foreground hover:border-border hover:text-foreground"
         >
-          <Layers className="h-3.5 w-3.5 shrink-0" />
+          <Layers aria-hidden="true" />
           <span className="min-w-0 truncate">
             {selectedGroup?.name || t("playground.groupAuto")}
           </span>

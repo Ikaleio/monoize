@@ -374,7 +374,8 @@ CJS-UI-3. Layout: one card per custom transform in a responsive grid (1 column b
 `md`, 2 columns from `md`, 3 columns from `xl`). Each card displays: the plain `name`,
 the id as secondary monospace text, the `description`, the `author`, badge chips for
 each declared phase and scope, a visibility badge, an `enabled` switch, an edit action,
-and a delete action behind a confirmation dialog. There is no table view.
+and a delete action behind a confirmation dialog. There is no table view. Card actions
+follow `frontend-design-system.spec.md` DS59–DS62, and the card applies no hover transform.
 
 CJS-UI-4. Motion: card entrance animates opacity `0 → 1` and y-offset `12px → 0` with
 the project `easeOutExpo` token and a per-card stagger of `0.05s`
@@ -395,7 +396,8 @@ the server detail message. The create action pre-fills the buffer with a comment
 template containing a valid frontmatter block and a `transform` function skeleton.
 
 CJS-UI-6. The page header contains a copy-skill action that copies the canonical
-authoring skill document (§12) to the clipboard and confirms with a toast.
+authoring skill document (§12) to the clipboard. Its feedback follows
+`frontend-design-system.spec.md` DS58.
 
 CJS-UI-7. The empty state (zero custom transforms, load complete) renders an explicit
 localized empty message plus the create action; it MUST NOT render a bare blank grid.

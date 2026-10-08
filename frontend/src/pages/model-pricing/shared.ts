@@ -19,18 +19,6 @@ export function formatUsdPerM(value: string | null | undefined): string {
   return `$${grouped}${cleanFraction ? `.${cleanFraction}` : ""}`;
 }
 
-export function formatRelativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
 export const BILLING_MODES: BillingMode[] = [
   "per_token",
   "per_request",
@@ -55,7 +43,7 @@ export function priceFieldValue(
   return record?.[field] ?? "";
 }
 
-export interface PricingSheetTarget {
+export interface PricingEditorTarget {
   mode: "create" | "edit";
   modelId: string;
   record: ModelPriceRecord | null;

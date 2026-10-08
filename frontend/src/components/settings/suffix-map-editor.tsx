@@ -109,7 +109,7 @@ export function SuffixMapEditor({ value, onChange }: SuffixMapEditorProps) {
             aria-label={t("common.delete")}
             onClick={() => commit(rows.filter((_, i) => i !== idx))}
           >
-            <X className="h-4 w-4" />
+            <X aria-hidden="true" />
           </Button>
         </div>
       ))}
@@ -121,7 +121,7 @@ export function SuffixMapEditor({ value, onChange }: SuffixMapEditorProps) {
             setRows([...rows, { id: ++suffixRowId, suffix: "", effort: "high" }]);
           }}
         >
-          <Plus className="mr-2 h-4 w-4" />
+          <Plus data-icon="inline-start" aria-hidden="true" />
           {t("settings.addSuffix")}
         </Button>
         <p className="text-sm text-muted-foreground">{t("settings.effortValues")}</p>

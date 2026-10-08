@@ -326,3 +326,62 @@ Input association MUST remain correct after a tier is removed.
 DS57. The application MUST apply the user's reduced-motion preference to direct
 Framer Motion elements as well as shared helpers. CSS button styles MUST NOT add
 scale transforms outside the reduced-motion-aware AnimatedButton wrapper.
+
+## 17. Shared Interaction Primitives
+
+This section fixes one implementation for each interaction that appears on more than one dashboard surface. A surface MUST NOT reimplement an interaction that this section assigns to a shared primitive.
+
+DS58. Copy to clipboard. Every dashboard control that copies text to the clipboard MUST use `CopyButton` from `components/ui/copy-button.tsx` or `useCopyToClipboard` from `hooks/use-copy-to-clipboard.ts`.
+
+- `CopyButton` MUST render `Button variant="ghost" size="icon"` with class `size-11 sm:size-7` and a localized accessible name.
+- After a successful write, the control MUST show the `Check` icon for 2000 ms and then return to the `Copy` icon. A labelled control MUST also show `common.copied` as its label for the same 2000 ms.
+- A successful write MUST NOT show a toast.
+- A failed write MUST keep the `Copy` icon and MUST show one error toast with `common.copyFailed`.
+
+DS59. Delete confirmation. Every action that deletes a persisted entity MUST open `ConfirmDeleteDialog` from `components/ui/confirm-delete-dialog.tsx` before the delete request starts.
+
+- The title MUST name the entity type. The description MUST name the target entity or the number of target entities. The title and the description MUST be different strings.
+- The confirm action MUST render with `buttonVariants({ variant: "destructive" })` and the label `common.delete`.
+- While the delete request is pending, the confirm action and the cancel action MUST be disabled. The dialog MUST close after the request settles.
+- A successful deletion MUST NOT show a toast; the removed row is the feedback. A failed deletion MUST restore the row and show one error toast.
+
+DS60. Row actions. Icon-only actions inside a list row MUST use `Button variant="ghost" size="icon"` with class `size-11 sm:size-9` and an accessible name that contains the entity name when one exists.
+
+- The edit action MUST use the `Pencil` icon.
+- The delete action MUST use the `Trash2` icon with `text-error-foreground`. Activating it MUST open DS59 confirmation. It MUST NOT open an editor.
+- Row action icons MUST use the button's default icon size. Call sites MUST NOT set icon `h-*`/`w-*` classes.
+
+DS61. Data-load failure. Every dashboard surface that reads data through SWR MUST render `QueryError` when its request fails.
+
+- Without cached data, `QueryError` MUST replace the content region. The surface MUST NOT render its empty state or a fabricated empty list.
+- With cached data, `QueryError stale` MUST render above the cached content.
+- The surface MUST NOT display the raw error message.
+
+DS62. Enabled state. A row whose enabled state the reader can change MUST show only a `Switch`, with `aria-label = common.enableItem(name)`. It MUST NOT show an adjacent "enabled" or "disabled" text label. A read-only enabled state MUST render `StatusBadge variant="success"` with `common.enabled`. A read-only disabled state MUST render `Badge variant="secondary"` with `common.disabled`. The `info` status variant MUST NOT represent a disabled state.
+
+DS63. Model set selection. Every control that edits a set of exact model IDs MUST use `ModelMultiSelect` from `components/models/model-multi-select.tsx`.
+
+- Inputs: `value: string[]`, `options: string[]`, `loading`, `error`, `onRetry`, `onChange`, and optional `allowCustom`.
+- The control MUST show the selected count, and a clear action when the count is greater than 0.
+- A search field MUST filter rows by case-insensitive substring match.
+- Selected IDs MUST list first in their stored order. Unselected options MUST follow in ascending lexical order.
+- A selected ID that is not in `options` MUST show a `common.unavailable` outline badge.
+- If `allowCustom = true` and the trimmed query is non-empty and not an existing row, the list MUST start with one action row that adds the trimmed query to the selection.
+- Loading MUST render skeleton rows. A load failure MUST render `QueryError`. An empty result MUST render `EmptyState variant="inline"`.
+- The row list MUST have a maximum height of 16rem and scroll inside its own border.
+
+DS64. Model redirect rules MUST be edited with `ModelRedirectsEditor` from `components/settings/model-redirects-editor.tsx`. Pages MUST NOT define a second redirect editor.
+
+DS65. Segmented choice. A control that selects one value from 2 to 6 fixed short options (for example a time window, or a view switch inside a dialog) MUST use `SegmentedControl` from `components/ui/segmented-control.tsx`. Each option MUST be `Button variant="outline"` with `h-9 px-3 text-sm tabular-nums` and `aria-pressed`. The selected option MUST use `bg-accent text-accent-foreground`. The option label is the option value unless the caller passes `label`. Text links separated by `/` MUST NOT be used as a segmented choice.
+
+DS66. Time display. Absolute timestamps in tables, lists, dialogs, and key-value rows MUST use `formatDateTime` (local `YYYY-MM-DD HH:mm:ss`). Calendar dates without a time of day MUST use `formatDate` (local `YYYY-MM-DD`). Both MUST come from `lib/format-time.ts`. These surfaces MUST NOT use relative time strings or `toLocaleString`, `toLocaleDateString`, or `toLocaleTimeString`. Chart axis ticks and compact menu metadata are exempt.
+
+DS67. Entity editors. A create or edit form for a persisted entity MUST render in `Dialog` and follow DS25–DS26c. `Sheet` MUST NOT host entity editors. The create form and the edit form of one entity type MUST render the same form component. Fields that exist in both modes MUST share label, help text, control type, and order.
+
+DS68. Entity lists. A list of persisted entities with row actions MUST use `DataList` inside `DataTableShell`. Lists that can exceed 100 rows MUST virtualize with `Virtuoso`, `virtualDataListComponents`, and the dashboard main pane as `customScrollParent`. The request-log stream, editable price grids, and the custom-transform card grid (`custom-js-transforms.spec.md` CJS-UI-3) are exempt. Exempt surfaces MUST still follow DS59–DS62 for their row or card actions.
+
+DS69. Page-header primary action. The primary action in `PageHeader` MUST render `Button` with the default variant inside `AnimatedButton`. Its leading icon MUST use `data-icon="inline-start"` and MUST NOT set size or margin classes.
+
+DS70. Mutation feedback. A successful create or update submitted from an editor dialog MUST close the dialog and show one success toast that names the entity type. If the page renders a persistent result panel for the created entity (for example the one-time API key value), that panel replaces the toast. A successful inline toggle, reorder, or deletion MUST NOT show a toast; the changed row is the feedback. Every failed mutation MUST restore the previous visible state and show one error toast.
+
+DS71. Button icons. `Button` and `DropdownMenuItem` size their icons to 16 px and separate icon and label with an 8 px gap. An icon inside either element MUST NOT set `h-*`, `w-*`, `size-*`, `mr-*`, or `ml-*` classes. An icon that precedes a label MUST use `data-icon="inline-start"`. A decorative icon MUST set `aria-hidden="true"`. Color classes (for example `text-error-foreground` on a delete icon) remain allowed. Elements without a built-in gap, such as `TabsTrigger` and badges, are out of scope.

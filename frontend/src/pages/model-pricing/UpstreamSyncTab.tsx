@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status";
 import { Switch } from "@/components/ui/switch";
@@ -34,6 +35,7 @@ import {
   VirtualTableHeaderCell,
 } from "@/components/ui/data-table-shell";
 import { api } from "@/lib/api";
+import { formatDateTime } from "@/lib/format-time";
 import type {
   PriceSyncPreview,
   PriceSyncRun,
@@ -94,8 +96,20 @@ function runStatusBadge(run: PriceSyncRun | undefined, t: (key: string, fallback
 
 export function UpstreamSyncTab() {
   const { t } = useTranslation();
-  const { data: runs = [], isLoading: runsLoading, mutate: refreshRuns } = usePriceSyncRuns();
-  const { data: settings, isLoading: settingsLoading } = useSettings();
+  const {
+    data: runsData,
+    error: runsError,
+    isLoading: runsLoading,
+    isValidating: runsValidating,
+    mutate: refreshRuns,
+  } = usePriceSyncRuns();
+  const runs = useMemo(() => runsData ?? [], [runsData]);
+  const {
+    data: settings,
+    error: settingsError,
+    isValidating: settingsValidating,
+    mutate: refreshSettings,
+  } = useSettings();
   const [preview, setPreview] = useState<PriceSyncPreview | null>(null);
   const [busySource, setBusySource] = useState<string | null>(null);
   const [metadataSyncing, setMetadataSyncing] = useState(false);
@@ -224,8 +238,15 @@ export function UpstreamSyncTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      {settingsLoading || !settings ? (
-        <Skeleton className="h-32 w-full" />
+      {settingsError ? (
+        <QueryError
+          onRetry={() => refreshSettings()}
+          retrying={settingsValidating}
+          stale={settings !== undefined}
+        />
+      ) : null}
+      {settings === undefined ? (
+        settingsError ? null : <Skeleton className="h-32 w-full" />
       ) : (
         <Card>
           <CardHeader>
@@ -280,7 +301,7 @@ export function UpstreamSyncTab() {
               </p>
               {lastRun ? (
                 <p className="font-mono text-xs text-muted-foreground">
-                  {new Date(lastRun.started_at).toLocaleString()} · +{lastRun.inserted} ~
+                  {formatDateTime(lastRun.started_at)} · +{lastRun.inserted} ~
                   {lastRun.updated} −{lastRun.deleted}
                 </p>
               ) : null}
@@ -329,7 +350,7 @@ export function UpstreamSyncTab() {
                     disabled={!connectionDirty || savingConnection}
                     onClick={() => void saveConnection()}
                   >
-                    <Save className="mr-1.5 h-3.5 w-3.5" />
+                    <Save data-icon="inline-start" aria-hidden="true" />
                     {savingConnection
                       ? t("common.saving", "Saving...")
                       : t("modelPricing.sync.saveConnection", "Save connection")}
@@ -345,7 +366,7 @@ export function UpstreamSyncTab() {
                   disabled={busySource === `preview:${source.id}`}
                   onClick={() => void handlePreview(source.id)}
                 >
-                  <Eye className="mr-1.5 h-3.5 w-3.5" />
+                  <Eye data-icon="inline-start" aria-hidden="true" />
                   {t("modelPricing.sync.preview", "Preview")}
                 </Button>
                 <Button
@@ -354,7 +375,7 @@ export function UpstreamSyncTab() {
                   disabled={busySource === `apply:${source.id}`}
                   onClick={() => void handleApply(source.id)}
                 >
-                  <Play className="mr-1.5 h-3.5 w-3.5" />
+                  <Play data-icon="inline-start" aria-hidden="true" />
                   {t("modelPricing.sync.apply", "Apply")}
                 </Button>
               </div>
@@ -384,13 +405,20 @@ export function UpstreamSyncTab() {
             {t("modelPricing.sync.recentRuns", "Recent sync runs")}
           </h3>
           <Button variant="ghost" size="sm" onClick={() => void refreshRuns()}>
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            <RefreshCw data-icon="inline-start" aria-hidden="true" />
             {t("common.refresh", "Refresh")}
           </Button>
         </div>
+        {runsError ? (
+          <QueryError
+            onRetry={() => refreshRuns()}
+            retrying={runsValidating}
+            stale={runsData !== undefined}
+          />
+        ) : null}
         {runsLoading ? (
           <Skeleton className="h-40 w-full" />
-        ) : runs.length === 0 ? (
+        ) : runsData === undefined ? null : runs.length === 0 ? (
           <Card className="px-6 py-8 text-center text-sm text-muted-foreground">
             {t("modelPricing.sync.noRuns", "No sync runs recorded yet.")}
           </Card>
@@ -424,12 +452,12 @@ export function UpstreamSyncTab() {
                       {runStatusBadge(run, (key, fallback) => t(key, fallback))}
                     </VirtualTableCell>
                     <VirtualTableCell className="font-mono text-xs">
-                      {new Date(run.started_at).toLocaleString()}
+                      {formatDateTime(run.started_at)}
                     </VirtualTableCell>
                     <VirtualTableCell className="font-mono text-xs">
                       {run.inserted} / {run.updated} / {run.skipped} / {run.deleted}
                     </VirtualTableCell>
-                    <VirtualTableCell className="max-w-[240px] truncate text-xs text-destructive">
+                    <VirtualTableCell className="max-w-[240px] truncate text-xs text-error-foreground">
                       {run.error ?? "—"}
                     </VirtualTableCell>
                   </tr>

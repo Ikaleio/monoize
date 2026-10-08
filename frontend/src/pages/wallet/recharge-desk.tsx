@@ -37,7 +37,7 @@ import { DashboardApiError } from "@/lib/api";
 import { formatNanoUsd } from "@/lib/exact-decimal";
 import { parseUsdToNano, previewPayAmount } from "@/lib/recharge";
 import { createRechargeOrderOptimistic, useRechargeChannels } from "@/lib/swr";
-import { WalletFeedback } from "./wallet-feedback";
+import { QueryError } from "@/components/ui/query-error";
 
 const PRESET_AMOUNTS = ["5", "10", "25", "50", "100"];
 
@@ -76,7 +76,7 @@ export function RechargeDesk({
   const reduced = useReducedMotion();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
-  const { data: channels, error, isLoading, mutate } = useRechargeChannels();
+  const { data: channels, error, isLoading, isValidating, mutate } = useRechargeChannels();
   const [channelId, setChannelId] = useState<string | null>(null);
   const [amount, setAmount] = useState("10");
   const [submitting, setSubmitting] = useState(false);
@@ -153,7 +153,7 @@ export function RechargeDesk({
             {isLoading ? (
               <RechargeDeskSkeleton />
             ) : error && channels === undefined ? (
-              <WalletFeedback onRetry={mutate} />
+              <QueryError onRetry={mutate} retrying={isValidating} />
             ) : (
               <EmptyState
                 variant="inline"

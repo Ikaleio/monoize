@@ -136,7 +136,7 @@ export function ModelCombobox({
           className="h-8 max-w-[11rem] gap-1.5 border border-transparent px-2 text-xs font-medium text-muted-foreground hover:border-border hover:text-foreground sm:max-w-[14rem]"
         >
           {kind === "image" && !value ? (
-            <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+            <ImageIcon aria-hidden="true" />
           ) : (
             <ModelIcon model={value || "model"} className="h-3.5 w-3.5 shrink-0" />
           )}

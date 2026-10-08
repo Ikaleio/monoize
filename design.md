@@ -1,7 +1,7 @@
 ---
 name: monoize-dashboard-design
-description: 用于 Monoize 控制台的管理列表页、目录页、概览页、设置页与钱包页：Provider 列表的 RPM/TPM 区域、令牌管理、支付管理、分组、订阅套餐、模型广场、系统仪表盘、系统设置和钱包。读者是管理员与普通用户；目标是在明暗主题及 390–1440px 视口中查找、比较、判断并操作条目。
-version: 2026-09-28
+description: 用于 Monoize 控制台的管理列表页、目录页、概览页、设置页与钱包页：Provider 列表的 RPM/TPM 区域、令牌管理、用户管理、模型定价列表、支付管理、分组、订阅套餐、模型广场、系统仪表盘、系统设置和钱包。读者是管理员与普通用户；目标是在明暗主题及 390–1440px 视口中查找、比较、判断并操作条目。
+version: 2026-10-09
 ---
 
 # 1. 范围与优先级
@@ -12,6 +12,8 @@ version: 2026-09-28
 |---|---|---|
 |Provider 列表（仅 RPM、TPM 区域）|`/dashboard/providers`|管理员|
 |令牌管理|`/dashboard/tokens`|全部用户|
+|用户管理|`/dashboard/users`|管理员|
+|模型定价（仅“模型定价”“未定价模型”Tab 的列表）|`/dashboard/models`|管理员|
 |支付管理|`/dashboard/payments`|管理员|
 |分组|`/dashboard/groups`|管理员|
 |钱包|`/dashboard/wallet`|全部用户|
@@ -39,7 +41,7 @@ version: 2026-09-28
 
 # 3. 页面结构与构图
 
-## 3.1 管理列表页（令牌管理、支付管理、分组、订阅套餐）
+## 3.1 管理列表页（令牌管理、用户管理、模型定价列表、支付管理、分组、订阅套餐）
 
 [必须] 按以下顺序组成页面：
 
@@ -61,6 +63,9 @@ version: 2026-09-28
 |令牌管理|创建密钥；有选中时加“删除所选”|全选、按名称或密钥前缀搜索|计数|名称与密钥（行首为行选择框）、余额、限制、过期时间、状态、操作|
 |支付管理·渠道|无|Tab|添加渠道|名称、类型、币种、汇率、充值范围、启用、操作|
 |支付管理·订单|无|Tab|状态筛选、用户名筛选|创建时间、用户、支付方式、到账、支付、状态、订单号、退款|
+|用户管理|添加用户|无|计数与今日消耗、调用次数|用户（头像、用户名、分组徽标）、角色、余额、今日消耗、今日调用、创建时间、最后登录、状态、操作|
+|模型定价·模型定价|无|搜索|添加定价|模型、计费模式、输入价格、输出价格、来源、状态、更新时间、操作|
+|模型定价·未定价模型|无|搜索|计数|模型、操作|
 |分组|新建分组|无|计数|位置、名称与描述、允许用户自选、操作|
 |订阅套餐|新建套餐|无|计数|名称与描述、滑动窗口限额、可用分组、价格、倍率、上架状态、操作|
 
@@ -211,7 +216,7 @@ version: 2026-09-28
 [必须] 空列表使用 `EmptyState`，并在有权限时提供创建操作。
 [必须] 不可执行的操作使用 `disabled`，并用 `title` 或提示说明原因。
 [必须] 令牌过期时，过期时间单元格显示 `StatusBadge variant="warning"`“已过期”。
-[必须] 紧跟标识符的复制按钮使用 `variant="ghost" size="icon"`、`size-11 sm:size-7`；复制后图标切换为 `Check` 2 秒。
+[必须] 紧跟标识符的复制按钮使用 `CopyButton`；复制成功后图标切换为 `Check` 2 秒，失败时显示 `common.copyFailed` 错误提示，成功时不弹提示。
 [必须] 分段控件的每个按钮设 `aria-pressed`，选中项使用 `bg-accent text-accent-foreground`。
 [必须] 首次加载失败使用 `QueryError`；有缓存时在缓存数据上方显示 `QueryError stale`，不显示原始错误信息。
 
@@ -231,9 +236,9 @@ version: 2026-09-28
 |页面标题区|`PageHeader`（`title`、`description`、`actions`）|`frontend/src/components/ui/page-header.tsx`|每页唯一标题|已实现|
 |列表外壳|`DataTableShell`（`toolbar`、`isEmpty`、`emptyState`）|`frontend/src/components/ui/data-table-shell.tsx`|管理列表表面|已实现|
 |工具栏搜索|`TableToolbarSearch`|同上|令牌搜索|已实现|
-|响应式列表|`DataList`（`columns`）、`DataListHeader`、`DataListHead`（`align`）、`DataListBody`、`DataListRow`（`asChild`）、`DataListCell`（`label`、`align`、`primary`）、`DataListActions`|`frontend/src/components/ui/data-list.tsx`|四个页面的全部列表|已实现|
+|响应式列表|`DataList`（`columns`）、`DataListHeader`、`DataListHead`（`align`）、`DataListBody`、`DataListRow`（`asChild`）、`DataListCell`（`label`、`align`、`primary`）、`DataListActions`|`frontend/src/components/ui/data-list.tsx`|管理列表页与目录页的全部列表|已实现|
 |滚动容器|`DashboardScrollParentContext`|`frontend/src/lib/dashboard-scroll.ts`（由 `pages/layout.tsx` 提供）|`Virtuoso` 的 `customScrollParent`|已实现|
-|虚拟列表|`Virtuoso`|`react-virtuoso`|令牌列表|已实现|
+|虚拟列表|`Virtuoso`|`react-virtuoso`|可能超过 100 行的列表：令牌、用户、模型定价、未定价模型|已实现|
 |空状态|`EmptyState`（`card`、`inline`）|`frontend/src/components/ui/empty-state.tsx`|空列表|已实现|
 |页面骨架|`TablePageSkeleton`、`PageHeaderSkeleton`、`Skeleton`|`frontend/src/components/ui/page-skeleton.tsx`、`skeleton.tsx`|首次加载|已实现|
 |按钮|`Button`（`default`、`outline`、`ghost`、`destructive`）、`AnimatedButton`|`frontend/src/components/ui/button.tsx`、`motion.tsx`|操作|已实现|
@@ -244,7 +249,12 @@ version: 2026-09-28
 |虚拟列表适配|`virtualDataListComponents`|`frontend/src/components/ui/data-list-virtual.tsx`|`Virtuoso` 的 `components`；列表 `aria-label` 通过 `context.label` 传入|已实现|
 |加载失败|`QueryError`（`onRetry`、`retrying`、`stale`）|`frontend/src/components/ui/query-error.tsx`|数据加载或刷新失败|已实现|
 |模型标识|`ModelIcon`|`frontend/src/components/ModelIcon.tsx`|模型广场模型 ID 前|已实现|
-|消费窗口|`SpendWindowControl`|`frontend/src/pages/admin-dashboard/spend-window-control.tsx`|渠道健康区块头|已实现|
+|分段选择|`SegmentedControl`（`value`、`options`、`onChange`、`ariaLabel`、`label`）|`frontend/src/components/ui/segmented-control.tsx`|时间窗口、对话框内视图切换（2–6 个固定短选项）|已实现|
+|复制|`CopyButton`（`value`、`label`）、`useCopyToClipboard`|`frontend/src/components/ui/copy-button.tsx`、`frontend/src/hooks/use-copy-to-clipboard.ts`|紧跟标识符的复制按钮；带文字的复制按钮|已实现|
+|删除确认|`ConfirmDeleteDialog`（`open`、`title`、`description`、`onConfirm`、`onOpenChange`）|`frontend/src/components/ui/confirm-delete-dialog.tsx`|所有删除持久化条目的操作|已实现|
+|模型多选|`ModelMultiSelect`（`value`、`options`、`loading`、`error`、`onRetry`、`onChange`、`allowCustom`）|`frontend/src/components/models/model-multi-select.tsx`|编辑精确模型 ID 集合|已实现|
+|模型重定向|`ModelRedirectsEditor`|`frontend/src/components/settings/model-redirects-editor.tsx`|全局与令牌模型重定向|已实现|
+|时间格式|`formatDateTime`、`formatDate`|`frontend/src/lib/format-time.ts`|全部时间戳与日期|已实现|
 |提示|`TooltipProvider`、`Tooltip`、`TooltipTrigger`、`TooltipContent`|`frontend/src/components/ui/tooltip.tsx`|完整订单号、禁用原因、指标说明|已实现|
 |切换|`Tabs`、`TabsList`、`TabsTrigger`、`TabsContent`|`frontend/src/components/ui/tabs.tsx`|支付管理、钱包|已实现|
 |对话框|`Dialog`、`AlertDialog`|`frontend/src/components/ui/`|编辑与破坏性确认|已实现|
@@ -292,7 +302,7 @@ version: 2026-09-28
 [必须] 金额以 `$` 加后端规范字符串显示；余额使用 `formatUsdDecimal(value, 2)`；账本金额使用 `formatNanoUsd(value, 4)`。
 [必须] 汇率写成“1 USD = {rate} {currency}”。
 [必须] 充值范围写成“$min – $max”。
-[必须] 订单与账本时间使用 `formatTime`；令牌过期日期使用 `formatDate`。
+[必须] 订单、账本、用户与定价记录的时间使用 `formatDateTime`；令牌过期日期与用户创建、登录日期使用 `formatDate`。
 [必须] 订单号显示前 8 个字符，完整订单号与 `error_code` 放在提示中。
 [必须] 令牌余额列在子账户关闭时显示普通次要文字“使用账户余额”，不使用徽标。
 [必须] 钱包错误状态不显示原始错误信息。

@@ -300,7 +300,7 @@ export function Composer({
               onClick={() => fileInputRef.current?.click()}
               className="size-11 shrink-0 touch-manipulation text-muted-foreground hover:text-foreground sm:size-8"
             >
-              <Paperclip className="h-4 w-4" />
+              <Paperclip aria-hidden="true" />
             </Button>
             <ModeToggle mode={mode} onModeChange={onModeChange} disabled={isBusy} />
             <SettingsPopover mode={mode} prefs={prefs} setPref={setPref} />

@@ -184,7 +184,7 @@ export function DateRangePicker({ from, to, onChange, t }: DateRangePickerProps)
 						isAllTime && 'text-muted-foreground'
 					)}
 				>
-					<CalendarIcon className='h-4 w-4 shrink-0' />
+					<CalendarIcon aria-hidden='true' />
 					<span className='truncate text-xs'>{label}</span>
 				</Button>
 			</PopoverTrigger>

@@ -16,8 +16,8 @@ import {
 	DialogTitle
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import type { FetchChannelModelsInput, ModelMetadataRecord, ModelPriceRecord } from '@/lib/api'
 import {
 	buildPricedModelIdSet,
@@ -44,6 +44,9 @@ type FetchModelsKey = readonly [
 	string,
 	string
 ]
+
+const PICKER_TABS = ['new', 'existing'] as const
+type PickerTab = (typeof PICKER_TABS)[number]
 
 export function ModelPickerDialog({
 	open,
@@ -72,7 +75,7 @@ function ModelPickerDialogContent({
 		() => new Set(existingModels)
 	)
 	const [search, setSearch] = useState('')
-	const [tab, setTab] = useState<'new' | 'existing'>('new')
+	const [tab, setTab] = useState<PickerTab>('new')
 
 	const fetchKey =
 		channelInfo ?
@@ -165,35 +168,19 @@ function ModelPickerDialogContent({
 	return (
 		<DialogContent className='max-h-[85vh] flex flex-col overflow-hidden max-w-4xl'>
 			<DialogHeader>
-				<div className='flex items-center justify-between pr-8'>
+				<div className='flex flex-wrap items-center justify-between gap-3 pr-8'>
 					<DialogTitle>{t('providers.selectModels')}</DialogTitle>
-					<div className='flex items-center gap-1 text-sm text-muted-foreground'>
-						<button
-							type='button'
-							className={cn(
-								'px-2 py-1 rounded transition-colors',
-								tab === 'new' ?
-									'font-bold text-foreground'
-								:	'hover:text-foreground cursor-pointer'
-							)}
-							onClick={() => setTab('new')}
-						>
-							{t('providers.newModels')} ({newModels.length})
-						</button>
-						<span>/</span>
-						<button
-							type='button'
-							className={cn(
-								'px-2 py-1 rounded transition-colors',
-								tab === 'existing' ?
-									'font-bold text-foreground'
-								:	'hover:text-foreground cursor-pointer'
-							)}
-							onClick={() => setTab('existing')}
-						>
-							{t('providers.existingModels')} ({existingModels.length})
-						</button>
-					</div>
+					<SegmentedControl
+						value={tab}
+						options={PICKER_TABS}
+						onChange={setTab}
+						ariaLabel={t('providers.selectModels')}
+						label={option =>
+							option === 'new' ?
+								`${t('providers.newModels')} (${newModels.length})`
+							:	`${t('providers.existingModels')} (${existingModels.length})`
+						}
+					/>
 				</div>
 				<DialogDescription>
 					{providerName}

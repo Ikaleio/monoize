@@ -139,7 +139,7 @@ function SelectedRowContent({ group, groupId, position, disabled, onRemove }: Se
         disabled={disabled}
         onClick={onRemove}
       >
-        <X className="h-3.5 w-3.5" />
+        <X aria-hidden="true" />
       </Button>
     </>
   );
@@ -233,7 +233,7 @@ export function GroupMultiSelect({
               className="h-7 max-w-full rounded-md px-2.5 text-xs"
               onClick={() => onChange([...value, group.id])}
             >
-              <Plus className="mr-1 h-3 w-3 shrink-0" />
+              <Plus data-icon="inline-start" aria-hidden="true" />
               <span className="truncate">{group.name}</span>
               {group.description && (
                 <span className="ml-1.5 hidden max-w-[12rem] truncate font-normal text-muted-foreground sm:inline">

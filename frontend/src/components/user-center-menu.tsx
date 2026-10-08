@@ -132,7 +132,7 @@ function PlanUsageSection() {
       <>
         <DropdownMenuSeparator />
         <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-          <span className="text-sm text-destructive">
+          <span className="text-sm text-error-foreground">
             {t("userMenu.planUsageError")}
           </span>
           <Button
@@ -276,7 +276,7 @@ function LiveUsageSection() {
       </div>
       {error ? (
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-destructive">
+          <span className="text-xs text-error-foreground">
             {t("userMenu.liveUsageError", "Failed to load live usage")}
           </span>
           <button
@@ -435,7 +435,7 @@ export function UserCenterMenu({
               navigate("/settings");
             }}
           >
-            <Cog className="mr-2 h-4 w-4" />
+            <Cog data-icon="inline-start" aria-hidden="true" />
             {t("userSettings.title")}
           </DropdownMenuItem>
         </DropdownMenuGroup>
@@ -450,9 +450,9 @@ export function UserCenterMenu({
               onNavigate?.();
               logout();
             }}
-            className="text-destructive"
+            className="text-error-foreground"
           >
-            <LogOut className="mr-2 h-4 w-4" />
+            <LogOut data-icon="inline-start" aria-hidden="true" />
             {t("auth.signOut")}
           </DropdownMenuItem>
         </DropdownMenuGroup>

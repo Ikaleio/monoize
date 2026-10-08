@@ -9,15 +9,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -25,13 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import type {
   BillingExprTier,
   BillingMode,
@@ -40,7 +31,6 @@ import type {
   UpsertModelPriceInput,
 } from "@/lib/api";
 import {
-  deleteModelPriceOptimistic,
   upsertModelMetadataOptimistic,
   upsertModelPriceOptimistic,
   useModelMetadata,
@@ -50,7 +40,7 @@ import {
   PER_TOKEN_PRICE_FIELDS,
   isValidUsdDecimal,
   type PerTokenPriceField,
-  type PricingSheetTarget,
+  type PricingEditorTarget,
 } from "./shared";
 
 interface TierRow {
@@ -266,7 +256,7 @@ function TiersEditor({
                   onChange(tiers.filter((_, itemIndex) => itemIndex !== index))
                 }
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="text-error-foreground" />
               </Button>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -367,12 +357,13 @@ function TiersEditor({
   );
 }
 
-export function PricingSheet({
+/** Create or edit one model price (model-pricing.spec.md MP-UI3, frontend-design-system.spec.md DS67). */
+export function PricingEditorDialog({
   target,
   onOpenChange,
   records,
 }: {
-  target: PricingSheetTarget | null;
+  target: PricingEditorTarget | null;
   onOpenChange: (open: boolean) => void;
   records: ModelPriceRecord[];
 }) {
@@ -387,7 +378,6 @@ export function PricingSheet({
   const [metaDirty, setMetaDirty] = useState(false);
   const [locksDirty, setLocksDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const metadataRecord = useMemo(
     () => metadataRecords.find((record) => record.model_id === modelId.trim()),
@@ -582,47 +572,22 @@ export function PricingSheet({
     }
   };
 
-  const confirmDelete = async () => {
-    if (!target?.record) return;
-    try {
-      await deleteModelPriceOptimistic(
-        target.record.model_id,
-        records,
-        (error) =>
-          toast.error(
-            t("modelPricing.deleteFailed", "Failed to delete model price"),
-            {
-              description: error.message,
-            },
-          ),
-      );
-      toast.success(t("modelPricing.deleteSuccess", "Model price deleted"));
-      onOpenChange(false);
-    } catch {
-      return;
-    } finally {
-      setDeleteOpen(false);
-    }
-  };
-
   return (
-    <>
-      <Sheet open={!!target} onOpenChange={onOpenChange}>
-        <SheetContent side="right" className="w-full p-0 sm:max-w-xl">
-          <div className="flex h-full flex-col">
-            <SheetHeader className="shrink-0 border-b px-6 py-4">
-              <SheetTitle className="font-mono text-base">
-                {isCreate
-                  ? t("modelPricing.sheetCreateTitle", "New model price")
-                  : modelId}
-              </SheetTitle>
-              <SheetDescription>
-                {t(
-                  "modelPricing.sheetDescription",
-                  "Prices are USD per 1M tokens. Values are exact decimal strings.",
-                )}
-              </SheetDescription>
-            </SheetHeader>
+    <Dialog open={!!target} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-2xl">
+        <DialogHeader className="shrink-0 border-b px-6 py-4">
+          <DialogTitle className="font-mono text-base">
+            {isCreate
+              ? t("modelPricing.sheetCreateTitle", "New model price")
+              : modelId}
+          </DialogTitle>
+          <DialogDescription>
+            {t(
+              "modelPricing.sheetDescription",
+              "Prices are USD per 1M tokens. Values are exact decimal strings.",
+            )}
+          </DialogDescription>
+        </DialogHeader>
 
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
               {isCreate ? (
@@ -996,60 +961,17 @@ export function PricingSheet({
               </details>
             </div>
 
-            <div className="flex shrink-0 items-center justify-between gap-2 border-t px-6 py-4">
-              {!isCreate && target?.record ? (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  <Trash2 className="mr-1 h-3.5 w-3.5" />
-                  {t("common.delete", "Delete")}
-                </Button>
-              ) : (
-                <span />
-              )}
-              <div className="flex items-center gap-2">
-                <Button variant="outline" onClick={() => onOpenChange(false)}>
-                  {t("common.cancel", "Cancel")}
-                </Button>
-                <Button onClick={() => void save()} disabled={saving}>
-                  {saving
-                    ? t("common.saving", "Saving...")
-                    : t("common.save", "Save")}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t("modelPricing.deleteTitle", "Delete model price")}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(
-                "modelPricing.deleteConfirm",
-                "Requests for this model will fail closed unless free settlement is allowed.",
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>
-              {t("common.cancel", "Cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => void confirmDelete()}
-            >
-              {t("common.delete", "Delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+        <DialogFooter className="shrink-0 border-t px-6 pb-6 pt-4">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t("common.cancel", "Cancel")}
+          </Button>
+          <Button onClick={() => void save()} disabled={saving}>
+            {saving
+              ? t("common.saving", "Saving...")
+              : t("common.save", "Save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

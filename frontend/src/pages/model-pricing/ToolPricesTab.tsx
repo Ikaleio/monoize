@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
+import { QueryError } from "@/components/ui/query-error";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import {
   DataTableShell,
@@ -70,7 +71,7 @@ function rowsToToolPrices(rows: ToolPriceRow[]): Record<string, ToolPriceEntry> 
 
 export function ToolPricesTab() {
   const { t } = useTranslation();
-  const { data: settings, isLoading } = useSettings();
+  const { data: settings, error, isLoading, isValidating, mutate } = useSettings();
   const [rows, setRows] = useState<ToolPriceRow[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -141,155 +142,162 @@ export function ToolPricesTab() {
     }
   };
 
-  if (isLoading && rows.length === 0) {
-    return <TablePageSkeleton showToolbar />;
+  if (settings === undefined) {
+    return isLoading ? (
+      <TablePageSkeleton showToolbar />
+    ) : (
+      <QueryError onRetry={() => mutate()} retrying={isValidating} />
+    );
   }
 
   return (
-    <DataTableShell
-      toolbar={
-        <>
-          <div className="flex items-center gap-2 text-base font-semibold">
-            <Hammer className="h-5 w-5" />
-            {t("modelPricing.tabs.toolPrices", "Tool Prices")}
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() =>
-                updateRows([...rows, { usageClass: "", usd: "", per: "1k_calls", minimumUnits: "" }])
-              }
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              {t("modelPricing.toolPrices.addRow", "Add class")}
-            </Button>
-            <Button onClick={() => void save()} disabled={saving || !dirty}>
-              <Save className="mr-2 h-4 w-4" />
-              {saving ? t("common.saving", "Saving...") : t("common.save", "Save")}
-            </Button>
-          </div>
-        </>
-      }
-      isEmpty={rows.length === 0}
-      emptyState={
-        <EmptyState
-          icon={<Hammer className="h-12 w-12" />}
-          title={t("modelPricing.toolPrices.empty", "No tool prices")}
-          description={t(
-            "modelPricing.toolPrices.emptyDesc",
-            "Server-native tool usage classes without a price settle at zero cost."
-          )}
-          action={
-            <Button
-              onClick={() =>
-                updateRows([{ usageClass: "", usd: "", per: "1k_calls", minimumUnits: "" }])
-              }
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              {t("modelPricing.toolPrices.addRow", "Add class")}
-            </Button>
+    <div className="space-y-6">
+      {error ? <QueryError onRetry={() => mutate()} retrying={isValidating} stale={true} /> : null}
+        <DataTableShell
+          toolbar={
+            <>
+              <div className="flex items-center gap-2 text-base font-semibold">
+                <Hammer className="h-5 w-5" />
+                {t("modelPricing.tabs.toolPrices", "Tool Prices")}
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    updateRows([...rows, { usageClass: "", usd: "", per: "1k_calls", minimumUnits: "" }])
+                  }
+                >
+                  <Plus data-icon="inline-start" aria-hidden="true" />
+                  {t("modelPricing.toolPrices.addRow", "Add class")}
+                </Button>
+                <Button onClick={() => void save()} disabled={saving || !dirty}>
+                  <Save data-icon="inline-start" aria-hidden="true" />
+                  {saving ? t("common.saving", "Saving...") : t("common.save", "Save")}
+                </Button>
+              </div>
+            </>
           }
-        />
-      }
-    >
-      <div className="overflow-x-auto">
-        <table className="w-full caption-bottom text-sm">
-          <thead className="[&_tr]:border-b">
-            <tr className="border-b">
-              <VirtualTableHeaderCell className="min-w-[240px]">
-                {t("modelPricing.toolPrices.usageClass", "Usage class")}
-              </VirtualTableHeaderCell>
-              <VirtualTableHeaderCell className="w-[160px]">
-                {t("modelPricing.toolPrices.price", "USD price")}
-              </VirtualTableHeaderCell>
-              <VirtualTableHeaderCell className="w-[160px]">
-                {t("modelPricing.toolPrices.unit", "Per")}
-              </VirtualTableHeaderCell>
-              <VirtualTableHeaderCell className="w-[150px]">
-                {t("modelPricing.toolPrices.minimumUnits", "Minimum units")}
-              </VirtualTableHeaderCell>
-              <VirtualTableHeaderCell className="w-[70px]">
-                {t("common.actions", "Actions")}
-              </VirtualTableHeaderCell>
-            </tr>
-          </thead>
-          <tbody className="[&_tr:last-child]:border-0">
-            {rows.map((row, index) => {
-              const updateRow = (patch: Partial<ToolPriceRow>) =>
-                updateRows(rows.map((item, i) => (i === index ? { ...item, ...patch } : item)));
-              const minimumEnabled = row.per !== "1k_calls";
-              return (
-                <tr key={index} className="border-b">
-                  <VirtualTableCell>
-                    <Input
-                      value={row.usageClass}
-                      onChange={(event) => updateRow({ usageClass: event.target.value })}
-                      placeholder="web_search"
-                      className="font-mono"
-                    />
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    <Input
-                      inputMode="decimal"
-                      value={row.usd}
-                      onChange={(event) => updateRow({ usd: event.target.value })}
-                      placeholder="0.01"
-                      className="font-mono"
-                    />
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    <Select
-                      value={row.per}
-                      onValueChange={(per) =>
-                        updateRow({
-                          per: per as ToolPriceUnit,
-                          ...(per === "1k_calls" ? { minimumUnits: "" } : {}),
-                        })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {UNITS.map((unit) => (
-                          <SelectItem key={unit} value={unit}>
-                            {unit === "1k_calls"
-                              ? t("modelPricing.toolPrices.unitCalls", "1K calls")
-                              : unit === "minute"
-                                ? t("modelPricing.toolPrices.unitMinute", "Minute")
-                                : t("modelPricing.toolPrices.unitSession", "Session")}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    <Input
-                      inputMode="numeric"
-                      value={row.minimumUnits}
-                      disabled={!minimumEnabled}
-                      onChange={(event) => updateRow({ minimumUnits: event.target.value })}
-                      placeholder={minimumEnabled ? "1" : "—"}
-                      className="font-mono"
-                    />
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-11 touch-manipulation text-destructive hover:text-destructive sm:size-9"
-                      aria-label={t("common.delete", "Delete")}
-                      onClick={() => updateRows(rows.filter((_, i) => i !== index))}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </VirtualTableCell>
+          isEmpty={rows.length === 0}
+          emptyState={
+            <EmptyState
+              icon={<Hammer className="h-12 w-12" />}
+              title={t("modelPricing.toolPrices.empty", "No tool prices")}
+              description={t(
+                "modelPricing.toolPrices.emptyDesc",
+                "Server-native tool usage classes without a price settle at zero cost."
+              )}
+              action={
+                <Button
+                  onClick={() =>
+                    updateRows([{ usageClass: "", usd: "", per: "1k_calls", minimumUnits: "" }])
+                  }
+                >
+                  <Plus data-icon="inline-start" aria-hidden="true" />
+                  {t("modelPricing.toolPrices.addRow", "Add class")}
+                </Button>
+              }
+            />
+          }
+        >
+          <div className="overflow-x-auto">
+            <table className="w-full caption-bottom text-sm">
+              <thead className="[&_tr]:border-b">
+                <tr className="border-b">
+                  <VirtualTableHeaderCell className="min-w-[240px]">
+                    {t("modelPricing.toolPrices.usageClass", "Usage class")}
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell className="w-[160px]">
+                    {t("modelPricing.toolPrices.price", "USD price")}
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell className="w-[160px]">
+                    {t("modelPricing.toolPrices.unit", "Per")}
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell className="w-[150px]">
+                    {t("modelPricing.toolPrices.minimumUnits", "Minimum units")}
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell className="w-[70px]">
+                    {t("common.actions", "Actions")}
+                  </VirtualTableHeaderCell>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </DataTableShell>
+              </thead>
+              <tbody className="[&_tr:last-child]:border-0">
+                {rows.map((row, index) => {
+                  const updateRow = (patch: Partial<ToolPriceRow>) =>
+                    updateRows(rows.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+                  const minimumEnabled = row.per !== "1k_calls";
+                  return (
+                    <tr key={index} className="border-b">
+                      <VirtualTableCell>
+                        <Input
+                          value={row.usageClass}
+                          onChange={(event) => updateRow({ usageClass: event.target.value })}
+                          placeholder="web_search"
+                          className="font-mono"
+                        />
+                      </VirtualTableCell>
+                      <VirtualTableCell>
+                        <Input
+                          inputMode="decimal"
+                          value={row.usd}
+                          onChange={(event) => updateRow({ usd: event.target.value })}
+                          placeholder="0.01"
+                          className="font-mono"
+                        />
+                      </VirtualTableCell>
+                      <VirtualTableCell>
+                        <Select
+                          value={row.per}
+                          onValueChange={(per) =>
+                            updateRow({
+                              per: per as ToolPriceUnit,
+                              ...(per === "1k_calls" ? { minimumUnits: "" } : {}),
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {UNITS.map((unit) => (
+                              <SelectItem key={unit} value={unit}>
+                                {unit === "1k_calls"
+                                  ? t("modelPricing.toolPrices.unitCalls", "1K calls")
+                                  : unit === "minute"
+                                    ? t("modelPricing.toolPrices.unitMinute", "Minute")
+                                    : t("modelPricing.toolPrices.unitSession", "Session")}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </VirtualTableCell>
+                      <VirtualTableCell>
+                        <Input
+                          inputMode="numeric"
+                          value={row.minimumUnits}
+                          disabled={!minimumEnabled}
+                          onChange={(event) => updateRow({ minimumUnits: event.target.value })}
+                          placeholder={minimumEnabled ? "1" : "—"}
+                          className="font-mono"
+                        />
+                      </VirtualTableCell>
+                      <VirtualTableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
+                          aria-label={t("common.delete", "Delete")}
+                          onClick={() => updateRows(rows.filter((_, i) => i !== index))}
+                        >
+                          <Trash2 className="text-error-foreground" />
+                        </Button>
+                      </VirtualTableCell>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </DataTableShell>
+    </div>
   );
 }

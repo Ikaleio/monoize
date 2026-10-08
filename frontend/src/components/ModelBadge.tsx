@@ -44,7 +44,7 @@ export function ModelBadge({
 			className={cn(
 				'h-7 max-w-full shrink-0 flex-nowrap gap-1.5 overflow-hidden border px-2 py-1 font-mono text-xs whitespace-nowrap transition-all',
 				resolvedStatus === 'destructive' ?
-					'border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/15'
+					'border-error-border bg-error-soft text-error-foreground hover:bg-error-soft/80'
 				: resolvedStatus === 'warning' ?
 					'border-warning-border bg-warning-soft text-warning-foreground hover:bg-warning-soft/80'
 				:	'bg-sidebar-accent/40 hover:bg-sidebar-accent text-foreground border-transparent hover:border-sidebar-border',

@@ -22,12 +22,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { OrderStatusBadge } from "@/components/recharge/order-status-badge";
-import { formatTime } from "@/pages/request-logs/utils";
+import { formatDateTime } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
 import { revalidateRechargeCaches, useRechargeOrders } from "@/lib/swr";
 import type { RechargeOrdersResponse } from "@/lib/api";
 import { PaginationFooter } from "./pagination-footer";
-import { WalletFeedback } from "./wallet-feedback";
+import { QueryError } from "@/components/ui/query-error";
 
 interface ActivityOrdersProps {
   active: boolean;
@@ -49,7 +49,7 @@ export function ActivityOrders({
   const { refreshUser } = useAuth();
   const [searchParams] = useSearchParams();
   const highlightedOrderId = searchParams.get("order_id");
-  const { data, error, isLoading, mutate } = useRechargeOrders(
+  const { data, error, isLoading, isValidating, mutate } = useRechargeOrders(
     pageSize,
     offset,
     { username },
@@ -96,7 +96,7 @@ export function ActivityOrders({
         </div>
       ) : error && !data ? (
         <div className="p-4">
-          <WalletFeedback onRetry={mutate} />
+          <QueryError onRetry={mutate} retrying={isValidating} />
         </div>
       ) : !data?.orders.length ? (
         <EmptyState
@@ -149,7 +149,7 @@ export function ActivityOrders({
                       </DataListCell>
                       <DataListCell label={t("wallet.createdAt")}>
                         <span className="tabular-nums text-muted-foreground">
-                          {formatTime(order.created_at)}
+                          {formatDateTime(order.created_at)}
                         </span>
                       </DataListCell>
                       <DataListCell label={t("wallet.orderId")}>

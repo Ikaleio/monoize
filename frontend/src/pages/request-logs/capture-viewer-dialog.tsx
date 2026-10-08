@@ -22,8 +22,10 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { easings, motion } from '@/components/ui/motion'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useRequestCapture } from '@/lib/swr'
 import { cn } from '@/lib/utils'
+import { formatDateTime } from '@/lib/format-time'
 import type { CaptureAttempt, CaptureFrameTruncation } from '@/lib/api'
 
 // RCV-F15: non-linear motion tokens, durations inside the 0.16s-0.30s band.
@@ -90,7 +92,7 @@ export function CaptureViewerDialog({
 					</div>
 				) : error ? (
 					<div className='mt-4 flex flex-col items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-4'>
-						<p className='text-sm text-destructive'>
+						<p className='text-sm text-error-foreground'>
 							{t('requestLogs.capture.loadFailed')}
 						</p>
 						<Button
@@ -99,7 +101,7 @@ export function CaptureViewerDialog({
 							size='sm'
 							onClick={() => void mutate()}
 						>
-							<RefreshCw className='mr-1.5 h-3.5 w-3.5' />
+							<RefreshCw data-icon='inline-start' aria-hidden='true' />
 							{t('requestLogs.capture.retry')}
 						</Button>
 					</div>
@@ -127,7 +129,7 @@ export function CaptureViewerDialog({
 								</Badge>
 							}
 							<span className='text-muted-foreground'>
-								{new Date(data.created_at).toLocaleString()}
+								{formatDateTime(data.created_at)}
 							</span>
 							{data.owner.username ?
 								<span className='text-muted-foreground'>
@@ -315,7 +317,7 @@ function AttemptTabs({ attempt, t }: { attempt: CaptureAttempt; t: Translate }) 
 	)
 }
 
-function CopyButton({
+function CopyTextButton({
 	getText,
 	disabled,
 	t
@@ -324,17 +326,7 @@ function CopyButton({
 	disabled?: boolean
 	t: Translate
 }) {
-	const [copied, setCopied] = useState(false)
-
-	const handleCopy = async () => {
-		try {
-			await navigator.clipboard.writeText(getText())
-			setCopied(true)
-			window.setTimeout(() => setCopied(false), 1600)
-		} catch {
-			// Clipboard API unavailable (insecure context); leave state unchanged.
-		}
-	}
+	const { copied, copy } = useCopyToClipboard()
 
 	return (
 		<Button
@@ -342,34 +334,13 @@ function CopyButton({
 			variant='outline'
 			size='sm'
 			disabled={disabled}
-			onClick={() => void handleCopy()}
-			aria-label={t('requestLogs.capture.copy')}
-			className='h-7 gap-1 bg-background/90 px-2 text-xs backdrop-blur'
+			onClick={() => void copy(getText())}
+			className='bg-background/90 backdrop-blur'
 		>
-			<AnimatePresence mode='wait' initial={false}>
-				{copied ?
-					<motion.span
-						key='copied'
-						initial={{ opacity: 0, scale: 0.7 }}
-						animate={{ opacity: 1, scale: 1, transition: expandTransition }}
-						exit={{ opacity: 0, scale: 0.7, transition: collapseTransition }}
-						className='inline-flex items-center gap-1 text-success'
-					>
-						<Check className='h-3.5 w-3.5' />
-						{t('requestLogs.capture.copied')}
-					</motion.span>
-				:	<motion.span
-						key='copy'
-						initial={{ opacity: 0, scale: 0.7 }}
-						animate={{ opacity: 1, scale: 1, transition: expandTransition }}
-						exit={{ opacity: 0, scale: 0.7, transition: collapseTransition }}
-						className='inline-flex items-center gap-1'
-					>
-						<Copy className='h-3.5 w-3.5' />
-						{t('requestLogs.capture.copy')}
-					</motion.span>
-				}
-			</AnimatePresence>
+			{copied ?
+				<Check data-icon='inline-start' aria-hidden='true' />
+			:	<Copy data-icon='inline-start' aria-hidden='true' />}
+			{t(copied ? 'requestLogs.capture.copied' : 'requestLogs.capture.copy')}
 		</Button>
 	)
 }
@@ -387,7 +358,7 @@ function JsonPane({
 	return (
 		<div className='relative'>
 			<div className='absolute right-2 top-2 z-10'>
-				<CopyButton
+				<CopyTextButton
 					disabled={isEmpty}
 					getText={() => JSON.stringify(value, null, 2)}
 					t={t}
@@ -466,7 +437,7 @@ function JsonLeaf({ value, t }: { value: unknown; t: Translate }) {
 		return <span className='text-warning'>{String(value)}</span>
 	}
 	if (typeof value === 'boolean') {
-		return <span className='text-destructive'>{String(value)}</span>
+		return <span className='text-error-foreground'>{String(value)}</span>
 	}
 	return <span className='italic text-muted-foreground'>null</span>
 }
@@ -647,7 +618,7 @@ function SseFramesPane({
 	return (
 		<div className='relative'>
 			<div className='absolute right-2 top-2 z-10'>
-				<CopyButton
+				<CopyTextButton
 					disabled={frames.length === 0}
 					getText={() => frames.join('\n')}
 					t={t}
@@ -694,7 +665,7 @@ const TOKEN_FIELD = 'text-info'
 const TOKEN_KEY = 'text-info'
 const TOKEN_STRING = 'text-success'
 const TOKEN_NUMBER = 'text-warning'
-const TOKEN_BOOLEAN = 'text-destructive'
+const TOKEN_BOOLEAN = 'text-error-foreground'
 const TOKEN_NULL = 'italic text-muted-foreground'
 
 function isJsonNumberChar(ch: string): boolean {

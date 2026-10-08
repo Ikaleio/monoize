@@ -199,17 +199,6 @@ export function formatDuration(ms: number | null | undefined): string | null {
 	return `${(ms / 1000).toFixed(2)}s`
 }
 
-export function formatTime(dateString: string): string {
-	const date = new Date(dateString)
-	const y = date.getFullYear()
-	const mo = String(date.getMonth() + 1).padStart(2, '0')
-	const d = String(date.getDate()).padStart(2, '0')
-	const h = String(date.getHours()).padStart(2, '0')
-	const mi = String(date.getMinutes()).padStart(2, '0')
-	const s = String(date.getSeconds()).padStart(2, '0')
-	return `${y}-${mo}-${d} ${h}:${mi}:${s}`
-}
-
 const RETRY_CHAIN_SEPARATOR = ' → '
 
 function nonempty(value: string | null | undefined): string | null {

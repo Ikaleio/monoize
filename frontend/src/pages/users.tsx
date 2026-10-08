@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -16,7 +16,17 @@ import {
 } from "lucide-react";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { GroupSingleSelect } from "@/components/groups/GroupPicker";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
+import {
+  DataList,
+  DataListActions,
+  DataListCell,
+  DataListHead,
+  DataListHeader,
+} from "@/components/ui/data-list";
+import { virtualDataListComponents } from "@/components/ui/data-list-virtual";
+import { QueryError } from "@/components/ui/query-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -47,7 +57,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -59,13 +68,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { TableVirtuoso } from "react-virtuoso";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Virtuoso } from "react-virtuoso";
 import { useAuth } from "@/hooks/use-auth";
 import {
   useUsers,
@@ -85,20 +88,13 @@ import {
   isSignedIntegerString,
 } from "@/lib/exact-decimal";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { getGravatarUrl } from "@/lib/utils";
-import {
-  AnimatedButton,
-  PageWrapper,
-  motion,
-  transitions,
-} from "@/components/ui/motion";
+import { cn, getGravatarUrl } from "@/lib/utils";
+import { DashboardScrollParentContext } from "@/lib/dashboard-scroll";
+import { formatDate, formatDateTime } from "@/lib/format-time";
+import { AnimatedButton, PageWrapper } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
-import {
-  DataTableShell,
-  VirtualTableCell,
-  VirtualTableHeaderCell,
-} from "@/components/ui/data-table-shell";
+import { DataTableShell } from "@/components/ui/data-table-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 
@@ -172,7 +168,9 @@ export function UsersPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
-  const { data: users = [], isLoading } = useUsers();
+  const { data, error, isLoading, isValidating, mutate } = useUsers();
+  const users = useMemo(() => data ?? [], [data]);
+  const scrollParent = useContext(DashboardScrollParentContext);
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const {
     data: billingPlans = [],
@@ -210,7 +208,7 @@ export function UsersPage() {
   const [balanceMode, setBalanceMode] = useState<"set" | "add">("set");
   const [balanceAddAmount, setBalanceAddAmount] = useState("");
   const [saving, setSaving] = useState(false);
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [durationValue, setDurationValue] = useState("30");
   const [durationUnit, setDurationUnit] = useState<DurationUnit>("days");
@@ -245,6 +243,7 @@ export function UsersPage() {
         users,
       );
       setCreateOpen(false);
+      toast.success(t("users.createSuccess"));
       setFormData({
         username: "",
         password: "",
@@ -307,6 +306,7 @@ export function UsersPage() {
         updates.group_id = formData.groupId;
       }
       await updateUserOptimistic(editUser.id, updates, users);
+      toast.success(t("users.updateSuccess"));
       setEditUser(null);
       setBalanceMode("set");
       setBalanceAddAmount("");
@@ -338,21 +338,39 @@ export function UsersPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    setDeleteTargetId(id);
-  };
-
   const confirmDelete = async () => {
-    if (!deleteTargetId) return;
+    if (!deleteTarget) return;
     try {
-      await deleteUserOptimistic(deleteTargetId, users);
+      await deleteUserOptimistic(deleteTarget.id, users);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : t("users.failedDelete"),
       );
-    } finally {
-      setDeleteTargetId(null);
     }
+  };
+
+  const dialogMode = editUser ? "edit" : createOpen ? "create" : null;
+  const isEdit = dialogMode === "edit";
+  const canChooseRole =
+    !isEdit || (currentUser?.role === "super_admin" && editUser?.role !== "super_admin");
+
+  const openCreate = () => {
+    setEditUser(null);
+    setFormData({
+      username: "",
+      password: "",
+      role: "user",
+      balanceUsd: "0",
+      balanceUnlimited: false,
+      email: "",
+      groupId: "",
+    });
+    setCreateOpen(true);
+  };
+
+  const closeDialog = () => {
+    setCreateOpen(false);
+    setEditUser(null);
   };
 
   const openEdit = (user: User) => {
@@ -427,14 +445,6 @@ export function UsersPage() {
     }
   };
 
-  const formatDate = (date: string) => {
-    return new Date(date).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  };
-
   const canEdit = (user: User) => {
     if (currentUser?.role === "super_admin") return true;
     if (user.role === "super_admin") return false;
@@ -458,176 +468,42 @@ export function UsersPage() {
 
   return (
     <PageWrapper className="space-y-6">
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={transitions.normal}
-      >
-        <PageHeader
-          title={t("users.title")}
-          description={t("users.description")}
-          actions={
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <DialogTrigger asChild>
-                <AnimatedButton>
-                  <Button>
-                    <Plus className="mr-2 h-4 w-4" />
-                    {t("users.addUser")}
-                  </Button>
-                </AnimatedButton>
-              </DialogTrigger>
-              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
-                <div className="flex min-h-0 flex-col p-6">
-                  <DialogHeader className="shrink-0">
-                    <DialogTitle>{t("users.createUser")}</DialogTitle>
-                    <DialogDescription>
-                      {t("users.addNewUser")}
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div
-                    className="min-h-0 flex-1 overflow-y-auto pr-1"
-                    style={{ WebkitOverflowScrolling: "touch" }}
-                  >
-                    <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="username">{t("auth.username")}</Label>
-                        <Input
-                          id="username"
-                          value={formData.username}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              username: e.target.value,
-                            })
-                          }
-                          placeholder="johndoe"
-                          minLength={3}
-                          maxLength={22}
-                          pattern="[a-zA-Z0-9_]+"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="password">{t("auth.password")}</Label>
-                        <Input
-                          id="password"
-                          type="password"
-                          value={formData.password}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              password: e.target.value,
-                            })
-                          }
-                          placeholder="••••••••"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>{t("users.role")}</Label>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="outline"
-                              className="w-full justify-start"
-                            >
-                              {t(`roles.${formData.role}`)}
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent className="w-full">
-                            {currentUser?.role === "super_admin" && (
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  setFormData({ ...formData, role: "admin" })
-                                }
-                              >
-                                {t("roles.admin")}
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem
-                              onClick={() =>
-                                setFormData({ ...formData, role: "user" })
-                              }
-                            >
-                              {t("roles.user")}
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="user-group">{t("users.group")}</Label>
-                        <GroupSingleSelect
-                          id="user-group"
-                          value={formData.groupId || defaultGroupId}
-                          groups={groups}
-                          loading={groupsLoading}
-                          onChange={(groupId) =>
-                            setFormData({ ...formData, groupId })
-                          }
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          {t("users.groupHelp")}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  <DialogFooter className="shrink-0 pt-4">
-                    <Button
-                      variant="outline"
-                      onClick={() => setCreateOpen(false)}
-                    >
-                      {t("common.cancel")}
-                    </Button>
-                    <Button
-                      onClick={handleCreate}
-                      disabled={
-                        saving ||
-                        !formData.username.trim() ||
-                        !formData.password
-                      }
-                    >
-                      {saving ? t("common.creating") : t("common.create")}
-                    </Button>
-                  </DialogFooter>
-                </div>
-              </DialogContent>
-            </Dialog>
-          }
-        />
-      </motion.div>
+      <PageHeader
+        title={t("users.title")}
+        description={t("users.description")}
+        actions={
+          <AnimatedButton>
+            <Button onClick={openCreate}>
+              <Plus data-icon="inline-start" aria-hidden="true" />
+              {t("users.addUser")}
+            </Button>
+          </AnimatedButton>
+        }
+      />
 
-      <AlertDialog
-        open={!!deleteTargetId}
+      {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
+
+      <ConfirmDeleteDialog
+        open={deleteTarget !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleteTargetId(null);
+          if (!open) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("users.confirmDelete")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("users.confirmDelete")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={confirmDelete}
-            >
-              {t("common.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title={t("users.deleteTitle")}
+        description={t("users.confirmDelete", { name: deleteTarget?.username })}
+        onConfirm={confirmDelete}
+      />
 
       <Dialog
-        open={!!editUser}
-        onOpenChange={(open) => !open && setEditUser(null)}
+        open={dialogMode !== null}
+        onOpenChange={(open) => {
+          if (!open) closeDialog();
+        }}
       >
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
           <div className="flex min-h-0 flex-col p-6">
             <DialogHeader className="shrink-0">
-              <DialogTitle>{t("users.editUser")}</DialogTitle>
-              <DialogDescription>{t("users.updateDetails")}</DialogDescription>
+              <DialogTitle>{t(isEdit ? "users.editUser" : "users.createUser")}</DialogTitle>
+              <DialogDescription>{t(isEdit ? "users.updateDetails" : "users.addNewUser")}</DialogDescription>
             </DialogHeader>
             <div
               className="mt-2 min-h-0 flex-1 overflow-y-auto pr-1"
@@ -642,6 +518,7 @@ export function UsersPage() {
                     onChange={(e) =>
                       setFormData({ ...formData, username: e.target.value })
                     }
+                    placeholder="johndoe"
                     minLength={3}
                     maxLength={22}
                     pattern="[a-zA-Z0-9_]+"
@@ -649,7 +526,7 @@ export function UsersPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-password">
-                    {t("users.newPassword")}
+                    {t(isEdit ? "users.newPassword" : "auth.password")}
                   </Label>
                   <Input
                     id="edit-password"
@@ -661,6 +538,7 @@ export function UsersPage() {
                     placeholder="••••••••"
                   />
                 </div>
+                {isEdit && (
                 <div className="space-y-2">
                   <Label htmlFor="edit-email">{t("userSettings.email")}</Label>
                   <div className="relative">
@@ -680,43 +558,31 @@ export function UsersPage() {
                     {t("userSettings.emailDescription")}
                   </p>
                 </div>
-                {currentUser?.role === "super_admin" &&
-                  editUser?.role !== "super_admin" && (
-                    <div className="space-y-2">
-                      <Label>{t("users.role")}</Label>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="outline"
-                            className="w-full justify-start"
-                          >
-                            {t(`roles.${formData.role}`)}
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="w-full">
-                          <DropdownMenuItem
-                            onClick={() =>
-                              setFormData({ ...formData, role: "admin" })
-                            }
-                          >
-                            {t("roles.admin")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() =>
-                              setFormData({ ...formData, role: "user" })
-                            }
-                          >
-                            {t("roles.user")}
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  )}
+                )}
+                {canChooseRole && (
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-user-role">{t("users.role")}</Label>
+                    <Select
+                      value={formData.role}
+                      onValueChange={(role) => setFormData({ ...formData, role })}
+                    >
+                      <SelectTrigger id="edit-user-role">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {currentUser?.role === "super_admin" && (
+                          <SelectItem value="admin">{t("roles.admin")}</SelectItem>
+                        )}
+                        <SelectItem value="user">{t("roles.user")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="edit-user-group">{t("users.group")}</Label>
                   <GroupSingleSelect
                     id="edit-user-group"
-                    value={formData.groupId}
+                    value={formData.groupId || defaultGroupId}
                     groups={groups}
                     loading={groupsLoading}
                     onChange={(groupId) =>
@@ -727,7 +593,7 @@ export function UsersPage() {
                     {t("users.groupHelp")}
                   </p>
                 </div>
-                {currentUser?.role && (
+                {isEdit && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <Label>{t("users.balance")}</Label>
@@ -811,6 +677,7 @@ export function UsersPage() {
                     </div>
                   </div>
                 )}
+                {isEdit && (
                 <FieldSet className="gap-4 rounded-lg border p-4">
                   <FieldLegend className="mb-0">
                     {t("users.subscriptionPlan")}
@@ -876,9 +743,7 @@ export function UsersPage() {
                           <p className="mt-1 text-sm text-muted-foreground">
                             {editSubscription
                               ? t("users.planExpires", {
-                                  date: new Date(
-                                    editSubscription.expires_at,
-                                  ).toLocaleString(),
+                                  date: formatDateTime(editSubscription.expires_at),
                                 })
                               : t("users.noActivePlanHelp")}
                           </p>
@@ -978,7 +843,7 @@ export function UsersPage() {
                           <Button
                             type="button"
                             variant="outline"
-                            className="text-destructive hover:text-destructive"
+                            className="text-error-foreground hover:text-error-foreground"
                             disabled={subscriptionSaving}
                             onClick={() =>
                               setSubscriptionConfirmation("revoke")
@@ -1013,15 +878,25 @@ export function UsersPage() {
                     </>
                   )}
                 </FieldSet>
+                )}
               </div>
             </div>
             <DialogFooter className="shrink-0 pt-4">
-              <Button variant="outline" onClick={() => setEditUser(null)}>
+              <Button variant="outline" onClick={closeDialog}>
                 {t("common.cancel")}
               </Button>
-              <Button onClick={handleUpdate} disabled={saving}>
-                {saving ? t("common.saving") : t("common.save")}
-              </Button>
+              {isEdit ? (
+                <Button onClick={handleUpdate} disabled={saving}>
+                  {saving ? t("common.saving") : t("common.save")}
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleCreate}
+                  disabled={saving || !formData.username.trim() || !formData.password}
+                >
+                  {saving ? t("common.creating") : t("common.create")}
+                </Button>
+              )}
             </DialogFooter>
           </div>
         </DialogContent>
@@ -1060,7 +935,7 @@ export function UsersPage() {
               disabled={subscriptionSaving}
               className={
                 subscriptionConfirmation === "revoke"
-                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  ? buttonVariants({ variant: "destructive" })
                   : undefined
               }
               onClick={(event) => {
@@ -1082,16 +957,11 @@ export function UsersPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1, ...transitions.normal }}
-      >
+      {data !== undefined ? (
         <DataTableShell
           toolbar={
-            <div>
-              <h2 className="text-base font-semibold">{t("users.allUsers")}</h2>
-              <p className="text-sm text-muted-foreground">
+            users.length > 0 ? (
+              <p className="ml-auto text-sm tabular-nums text-muted-foreground">
                 {t("users.usersTotal", { count: users.length })}
                 {" · "}
                 {t("users.todaySummary", {
@@ -1099,196 +969,150 @@ export function UsersPage() {
                   calls: todayTotals.calls.toLocaleString(),
                 })}
               </p>
-            </div>
+            ) : undefined
           }
           isEmpty={users.length === 0}
           emptyState={
             <EmptyState
-              icon={<UserIcon className="h-12 w-12" />}
+              icon={<UserIcon className="size-10" aria-hidden="true" />}
               title={t("users.allUsers")}
               description={t("users.noUsers")}
             />
           }
         >
-          <TableVirtuoso
-            style={{
-              height: "calc(100dvh - 280px)",
-              minHeight: 400,
-              overflowX: "auto",
-            }}
-            data={users}
-            components={{
-              Table: (props) => (
-                <table
-                  {...props}
-                  className="w-full caption-bottom text-sm"
-                  style={{ minWidth: "80rem" }}
-                />
-              ),
-              TableHead: (props) => (
-                <thead {...props} className="[&_tr]:border-b" />
-              ),
-              TableRow: (props) => (
-                <tr
-                  {...props}
-                  className="border-b transition-colors hover:bg-muted/50"
-                />
-              ),
-              TableBody: (props) => (
-                <tbody {...props} className="[&_tr:last-child]:border-0" />
-              ),
-            }}
-            fixedHeaderContent={() => (
-              <tr className="border-b bg-background">
-                <VirtualTableHeaderCell className="min-w-[14rem]">
-                  {t("users.user")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell className="w-[8.5rem] whitespace-nowrap">
-                  {t("users.role")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("users.balance")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("users.todaySpend")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("users.todayCalls")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("common.created")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("users.lastLogin")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell>
-                  {t("common.status")}
-                </VirtualTableHeaderCell>
-                <VirtualTableHeaderCell className="w-[100px]">
-                  {t("common.actions")}
-                </VirtualTableHeaderCell>
-              </tr>
-            )}
-            itemContent={(_index, user) => {
-              const RoleIcon = roleIcons[user.role];
-              return (
-                <>
-                  <VirtualTableCell className="whitespace-nowrap">
-                    <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
-                      <Avatar className="size-8 shrink-0">
-                        {user.email && (
-                          <AvatarImage
-                            src={getGravatarUrl(user.email, 64) ?? undefined}
-                            alt={user.username}
-                          />
-                        )}
-                        <AvatarFallback>
-                          {user.username[0].toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
-                        <span className="min-w-0 truncate font-medium">
-                          {user.username}
+          <DataList columns="minmax(0,1.6fr) 7.5rem 7rem 6.5rem 5.5rem 7rem 7rem 4rem 7.5rem">
+            <DataListHeader>
+              <DataListHead>{t("users.user")}</DataListHead>
+              <DataListHead>{t("users.role")}</DataListHead>
+              <DataListHead align="end">{t("users.balance")}</DataListHead>
+              <DataListHead align="end">{t("users.todaySpend")}</DataListHead>
+              <DataListHead align="end">{t("users.todayCalls")}</DataListHead>
+              <DataListHead>{t("common.created")}</DataListHead>
+              <DataListHead>{t("users.lastLogin")}</DataListHead>
+              <DataListHead>{t("common.status")}</DataListHead>
+              <DataListHead align="end">{t("common.actions")}</DataListHead>
+            </DataListHeader>
+            {scrollParent && (
+              <Virtuoso
+                customScrollParent={scrollParent}
+                data={users}
+                context={{ label: t("users.title") }}
+                computeItemKey={(_index, user) => user.id}
+                components={virtualDataListComponents}
+                itemContent={(_index, user) => {
+                  const RoleIcon = roleIcons[user.role];
+                  return (
+                    <>
+                      <DataListCell primary>
+                        <div className="flex min-w-0 items-center gap-2 whitespace-nowrap">
+                          <Avatar className="size-8 shrink-0">
+                            {user.email && (
+                              <AvatarImage
+                                src={getGravatarUrl(user.email, 64) ?? undefined}
+                                alt={user.username}
+                              />
+                            )}
+                            <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
+                          </Avatar>
+                          <span
+                            className={cn(
+                              "min-w-0 truncate font-medium",
+                              !user.enabled && "text-muted-foreground",
+                            )}
+                          >
+                            {user.username}
+                          </span>
+                          {user.group_id && (
+                            <GroupsBadge groupIds={[user.group_id]} className="shrink-0" />
+                          )}
+                        </div>
+                      </DataListCell>
+                      <DataListCell label={t("users.role")}>
+                        <Badge variant={roleVariants[user.role]} className="gap-1">
+                          <RoleIcon className="size-3 shrink-0" aria-hidden="true" />
+                          {t(`roles.${user.role}`)}
+                        </Badge>
+                      </DataListCell>
+                      <DataListCell label={t("users.balance")} align="end">
+                        <span className="tabular-nums">
+                          {user.balance_unlimited
+                            ? t("users.unlimited")
+                            : formatUsdDecimal(user.balance_usd, 2)}
                         </span>
-                        {user.group_id && (
-                          <GroupsBadge
-                            groupIds={[user.group_id]}
-                            className="shrink-0 whitespace-nowrap"
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </VirtualTableCell>
-                  <VirtualTableCell className="w-[8.5rem] whitespace-nowrap">
-                    <div className="flex h-8 max-w-full items-center overflow-x-auto overflow-y-hidden whitespace-nowrap">
-                      <Badge
-                        variant={roleVariants[user.role]}
-                        className="h-7 min-w-max shrink-0 flex-nowrap gap-1 whitespace-nowrap"
-                      >
-                        <RoleIcon className="h-3 w-3 shrink-0" />
-                        {t(`roles.${user.role}`)}
-                      </Badge>
-                    </div>
-                  </VirtualTableCell>
-                  <VirtualTableCell className="tabular-nums">
-                    {user.balance_unlimited
-                      ? t("users.unlimited")
-                      : formatUsdDecimal(user.balance_usd, 2)}
-                  </VirtualTableCell>
-                  <VirtualTableCell className="tabular-nums">
-                    {formatNanoUsd(user.today_cost_nano_usd, 2)}
-                  </VirtualTableCell>
-                  <VirtualTableCell className="tabular-nums">
-                    {(user.today_calls ?? 0).toLocaleString()}
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    {formatDate(user.created_at)}
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    {user.last_login_at
-                      ? formatDate(user.last_login_at)
-                      : t("common.never")}
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={user.enabled}
-                        onCheckedChange={() => handleToggleEnabled(user)}
-                        disabled={!canEdit(user)}
-                      />
-                      <span className="text-sm text-muted-foreground">
-                        {user.enabled
-                          ? t("common.enabled")
-                          : t("common.disabled")}
-                      </span>
-                    </div>
-                  </VirtualTableCell>
-                  <VirtualTableCell>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-11 touch-manipulation sm:size-9"
-                        title={t("users.viewLogs")}
-                        aria-label={t("users.viewLogs")}
-                        onClick={() =>
-                          navigate(
-                            `/dashboard/logs?username=${encodeURIComponent(user.username)}`,
-                          )
-                        }
-                      >
-                        <ScrollText className="h-4 w-4" />
-                      </Button>
-                      {canEdit(user) && (
+                      </DataListCell>
+                      <DataListCell label={t("users.todaySpend")} align="end">
+                        <span className="tabular-nums">
+                          {formatNanoUsd(user.today_cost_nano_usd, 2)}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("users.todayCalls")} align="end">
+                        <span className="tabular-nums">
+                          {(user.today_calls ?? 0).toLocaleString()}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("common.created")}>
+                        <span className="tabular-nums text-muted-foreground">
+                          {formatDate(user.created_at)}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("users.lastLogin")}>
+                        <span className="tabular-nums text-muted-foreground">
+                          {user.last_login_at ? formatDate(user.last_login_at) : t("common.never")}
+                        </span>
+                      </DataListCell>
+                      <DataListCell label={t("common.status")}>
+                        <Switch
+                          className="align-middle"
+                          checked={user.enabled}
+                          aria-label={t("common.enableItem", { name: user.username })}
+                          onCheckedChange={() => handleToggleEnabled(user)}
+                          disabled={!canEdit(user)}
+                        />
+                      </DataListCell>
+                      <DataListActions>
                         <Button
                           variant="ghost"
                           size="icon"
                           className="size-11 touch-manipulation sm:size-9"
-                          aria-label={t("common.edit")}
-                          onClick={() => openEdit(user)}
+                          title={t("users.viewLogs")}
+                          aria-label={t("users.viewLogs")}
+                          onClick={() =>
+                            navigate(`/dashboard/logs?username=${encodeURIComponent(user.username)}`)
+                          }
                         >
-                          <Pencil className="h-4 w-4" />
+                          <ScrollText />
                         </Button>
-                      )}
-                      {canDelete(user) && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={t("common.delete")}
-                          onClick={() => handleDelete(user.id)}
-                          className="size-11 touch-manipulation sm:size-9 text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                  </VirtualTableCell>
-                </>
-              );
-            }}
-          />
+                        {canEdit(user) && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-11 touch-manipulation sm:size-9"
+                            aria-label={t("common.editItem", { name: user.username })}
+                            onClick={() => openEdit(user)}
+                          >
+                            <Pencil />
+                          </Button>
+                        )}
+                        {canDelete(user) && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-11 touch-manipulation sm:size-9"
+                            aria-label={t("common.deleteItem", { name: user.username })}
+                            onClick={() => setDeleteTarget(user)}
+                          >
+                            <Trash2 className="text-error-foreground" />
+                          </Button>
+                        )}
+                      </DataListActions>
+                    </>
+                  );
+                }}
+              />
+            )}
+          </DataList>
         </DataTableShell>
-      </motion.div>
+      ) : null}
     </PageWrapper>
   );
 }

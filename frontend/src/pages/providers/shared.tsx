@@ -261,12 +261,12 @@ export function hasBillablePricingModelId(
 	return pricedModelIdSet.has(pricing) || (pricing !== logical && pricedModelIdSet.has(logical))
 }
 
-export function statusBadge(status?: string, t?: (key: string) => string) {
+export function statusBadge(status: string | undefined, t: (key: string) => string) {
 	if (status === 'healthy') {
-		return <StatusBadge variant='success'><StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t ? t('providers.statusHealthy') : 'Healthy'}</StatusBadge>
+		return <StatusBadge variant='success'><StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusHealthy')}</StatusBadge>
 	}
 	if (status === 'probing') {
-		return <StatusBadge variant='warning'><StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t ? t('providers.statusProbing') : 'Probing'}</StatusBadge>
+		return <StatusBadge variant='warning'><StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusProbing')}</StatusBadge>
 	}
-	return <StatusBadge variant='destructive'><StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t ? t('providers.statusUnhealthy') : 'Unhealthy'}</StatusBadge>
+	return <StatusBadge variant='destructive'><StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusUnhealthy')}</StatusBadge>
 }

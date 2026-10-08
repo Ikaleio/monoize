@@ -285,17 +285,17 @@ function PhaseChainSection({
                   aria-label={t("transforms.configure", { defaultValue: "Configure" })}
                   onClick={() => onConfigure(index)}
                 >
-                  <Settings2 className="h-3.5 w-3.5" />
+                  <Settings2 aria-hidden="true" />
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-11 touch-manipulation sm:size-7 text-destructive hover:text-destructive"
+                  className="size-11 touch-manipulation sm:size-7"
                   aria-label={t("common.delete")}
                   onClick={() => onChange(rules.filter((_, idx) => idx !== index))}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <Trash2 className="text-error-foreground" />
                 </Button>
               </div>
             </div>

@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { Braces, ChevronDown, ChevronUp, Copy, Plus, Trash2, X } from "lucide-react";
+import { Braces, ChevronDown, ChevronUp, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -162,12 +163,12 @@ function FieldRow({
               disabled={disabled}
               onClick={() => onChange({ kind: "unset" })}
             >
-              <X className="h-4 w-4" />
+              <X aria-hidden="true" />
             </Button>
           )}
         </div>
       )}
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && <p className="text-xs text-error-foreground">{error}</p>}
     </div>
   );
 }
@@ -365,7 +366,7 @@ function ArrayItemsEditor({
               }
             />
             {errors[`${path}.${index}`] && (
-              <p className="mt-1 text-xs text-destructive">{errors[`${path}.${index}`]}</p>
+              <p className="mt-1 text-xs text-error-foreground">{errors[`${path}.${index}`]}</p>
             )}
           </div>
           <div className="flex shrink-0 flex-col gap-1 sm:flex-row">
@@ -378,7 +379,7 @@ function ArrayItemsEditor({
               disabled={disabled || index === 0}
               onClick={() => move(index, index - 1)}
             >
-              <ChevronUp className="h-3.5 w-3.5" />
+              <ChevronUp aria-hidden="true" />
             </Button>
             <Button
               type="button"
@@ -389,18 +390,18 @@ function ArrayItemsEditor({
               disabled={disabled || index === items.length - 1}
               onClick={() => move(index, index + 1)}
             >
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDown aria-hidden="true" />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 touch-manipulation text-destructive hover:text-destructive sm:size-9"
+              className="size-11 touch-manipulation sm:size-9"
               aria-label={t("transforms.arrayRemoveItem")}
               disabled={disabled}
               onClick={() => setItems(items.filter((_, idx) => idx !== index))}
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="text-error-foreground" />
             </Button>
           </div>
         </div>
@@ -413,7 +414,7 @@ function ArrayItemsEditor({
         disabled={disabled}
         onClick={() => setItems([...items, defaultDraftForProperty(property?.items)])}
       >
-        <Plus className="mr-1 h-3.5 w-3.5" />
+        <Plus data-icon="inline-start" aria-hidden="true" />
         {t("transforms.arrayAddItem")}
       </Button>
     </div>
@@ -516,12 +517,12 @@ function KeyValueMapEditor({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 shrink-0 touch-manipulation text-destructive hover:text-destructive sm:size-8"
+              className="size-11 shrink-0 touch-manipulation sm:size-8"
               aria-label={t("transforms.mapRemoveEntry")}
               disabled={disabled}
               onClick={() => setEntries(entries.filter((_, idx) => idx !== index))}
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="text-error-foreground" />
             </Button>
           </div>
           <TypedJsonValueEditor
@@ -536,7 +537,7 @@ function KeyValueMapEditor({
             }
           />
           {errors[`${path}.${index}`] && (
-            <p className="text-xs text-destructive">{errors[`${path}.${index}`]}</p>
+            <p className="text-xs text-error-foreground">{errors[`${path}.${index}`]}</p>
           )}
         </div>
       ))}
@@ -550,7 +551,7 @@ function KeyValueMapEditor({
           setEntries([...entries, { key: "", value: { kind: "string", text: "" } }])
         }
       >
-        <Plus className="mr-1 h-3.5 w-3.5" />
+        <Plus data-icon="inline-start" aria-hidden="true" />
         {t("transforms.mapAddEntry")}
       </Button>
     </div>
@@ -594,18 +595,6 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
     }
   };
 
-  const copyJson = async () => {
-    if (draft.kind !== "json") {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(draft.text);
-      toast.success(t("transforms.jsonCopied"));
-    } catch {
-      toast.error(t("transforms.jsonCopyFailed"));
-    }
-  };
-
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
@@ -638,18 +627,9 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
               disabled={disabled}
               onClick={formatJson}
             >
-              <Braces className="h-3.5 w-3.5" />
+              <Braces aria-hidden="true" />
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-11 touch-manipulation sm:size-8"
-              aria-label={t("transforms.jsonCopy")}
-              onClick={copyJson}
-            >
-              <Copy className="h-3.5 w-3.5" />
-            </Button>
+            <CopyButton className="sm:size-8" label={t("transforms.jsonCopy")} value={draft.text} />
           </div>
         )}
       </div>

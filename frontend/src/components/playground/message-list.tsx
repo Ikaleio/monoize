@@ -56,12 +56,12 @@ function ImageJobRow({
 
   return (
     <div className="flex w-fit max-w-full flex-wrap items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3">
-      <span className="min-w-0 break-all text-sm text-destructive">
+      <span className="min-w-0 break-all text-sm text-error-foreground">
         {t("playground.imageError")}: {job.error}
       </span>
       <div className="flex items-center gap-1">
         <Button variant="outline" size="sm" onClick={onRetry} className="h-7 gap-1.5">
-          <RefreshCcw className="h-3 w-3" />
+          <RefreshCcw aria-hidden="true" />
           {t("playground.retry")}
         </Button>
         <Button
@@ -71,7 +71,7 @@ function ImageJobRow({
           aria-label={t("playground.dismiss")}
           className="size-7 text-muted-foreground hover:text-foreground"
         >
-          <X className="h-3.5 w-3.5" />
+          <X aria-hidden="true" />
         </Button>
       </div>
     </div>

@@ -17,6 +17,7 @@ import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { motion, transitions } from "@/components/ui/motion";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import {
   reasoningPartKind,
   type ReasoningPartKind,
@@ -53,7 +54,7 @@ function ActionButton({
       disabled={disabled}
       className={cn(
         "size-11 touch-manipulation text-muted-foreground sm:size-7",
-        destructive ? "hover:text-destructive" : "hover:text-foreground",
+        destructive ? "hover:text-error-foreground" : "hover:text-foreground",
       )}
     >
       {children}
@@ -217,7 +218,7 @@ export function ChatMessage({
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useCopyToClipboard();
 
   const isUser = message.role === "user";
   const text = useMemo(() => messageText(message), [message]);
@@ -234,15 +235,7 @@ export function ChatMessage({
     [message],
   );
 
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  };
+  const copy = () => void copyToClipboard(text);
 
   const startEdit = () => {
     setDraft(text);

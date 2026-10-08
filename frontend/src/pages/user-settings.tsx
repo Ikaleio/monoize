@@ -159,7 +159,7 @@ export function UserSettingsPage() {
                   disabled={savingEmail}
                   size="sm"
                 >
-                  <Save className="mr-2 h-4 w-4" />
+                  <Save data-icon="inline-start" aria-hidden="true" />
                   {savingEmail ? t("common.saving") : savedEmail ? t("common.saved") : t("common.save")}
                 </Button>
               </div>

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   BookMarked,
   Braces,
+  Check,
   Code2,
   Copy,
   Pencil,
@@ -29,17 +30,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { PageWrapper, motion, springs, transitions } from "@/components/ui/motion";
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
+import { AnimatedButton, PageWrapper, motion, springs, transitions } from "@/components/ui/motion";
+import { QueryError } from "@/components/ui/query-error";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { formatDate } from "@/lib/format-time";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useTheme } from "@/hooks/use-theme";
@@ -81,18 +76,10 @@ function transform(ctx) {
 }
 `;
 
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function CustomTransformsPage() {
-  const { t, i18n } = useTranslation();
-  const { data, isLoading } = useCustomTransforms();
+  const { t } = useTranslation();
+  const { data, error, isLoading, isValidating, mutate } = useCustomTransforms();
+  const skillCopy = useCopyToClipboard();
   const transforms = useMemo(() => data ?? [], [data]);
 
   const [editorOpen, setEditorOpen] = useState(false);
@@ -109,14 +96,6 @@ export function CustomTransformsPage() {
     setEditorOpen(true);
   };
 
-  const copySkill = async () => {
-    if (await copyToClipboard(skillMarkdown)) {
-      toast.success(t("customTransforms.copySkillSuccess"));
-    } else {
-      toast.error(t("customTransforms.copyFailed"));
-    }
-  };
-
   const toggleEnabled = async (item: CustomTransform, enabled: boolean) => {
     await updateCustomTransformOptimistic(item.id, { enabled }, transforms, (error) =>
       toast.error(error.message)
@@ -125,16 +104,9 @@ export function CustomTransformsPage() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    try {
-      await deleteCustomTransformOptimistic(deleteTarget.id, transforms, (error) =>
-        toast.error(error.message)
-      );
-      toast.success(t("common.success"));
-    } catch {
-      // optimistic helper already rolled back and toasted
-    } finally {
-      setDeleteTarget(null);
-    }
+    await deleteCustomTransformOptimistic(deleteTarget.id, transforms, (deleteError) =>
+      toast.error(deleteError.message)
+    ).catch(() => undefined);
   };
 
   return (
@@ -145,29 +117,37 @@ export function CustomTransformsPage() {
           description={t("customTransforms.description")}
           actions={
             <>
-              <Button variant="outline" onClick={copySkill}>
-                <BookMarked className="mr-2 h-4 w-4" />
-                {t("customTransforms.copySkill")}
+              <Button variant="outline" onClick={() => void skillCopy.copy(skillMarkdown)}>
+                {skillCopy.copied ? (
+                  <Check data-icon="inline-start" aria-hidden="true" />
+                ) : (
+                  <BookMarked data-icon="inline-start" aria-hidden="true" />
+                )}
+                {skillCopy.copied ? t("common.copied") : t("customTransforms.copySkill")}
               </Button>
-              <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" />
-                {t("customTransforms.create")}
-              </Button>
+              <AnimatedButton>
+                <Button onClick={openCreate}>
+                  <Plus data-icon="inline-start" aria-hidden="true" />
+                  {t("customTransforms.create")}
+                </Button>
+              </AnimatedButton>
             </>
           }
         />
 
+        {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
+
         {isLoading ? (
           <CardGridSkeleton />
-        ) : transforms.length === 0 ? (
+        ) : data === undefined ? null : transforms.length === 0 ? (
           <EmptyState
             variant="card"
-            icon={<Code2 className="h-10 w-10 text-muted-foreground" />}
+            icon={<Code2 className="size-10" aria-hidden="true" />}
             title={t("customTransforms.emptyTitle")}
             description={t("customTransforms.emptyDescription")}
             action={
               <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus data-icon="inline-start" aria-hidden="true" />
                 {t("customTransforms.create")}
               </Button>
             }
@@ -180,11 +160,9 @@ export function CustomTransformsPage() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ ...transitions.normal, delay: index * 0.05 }}
-                whileHover={{ y: -3 }}
               >
                 <TransformCard
                   item={item}
-                  language={i18n.language}
                   onToggle={(enabled) => toggleEnabled(item, enabled)}
                   onEdit={() => openEdit(item)}
                   onDelete={() => setDeleteTarget(item)}
@@ -204,31 +182,18 @@ export function CustomTransformsPage() {
           }}
         />
 
-        <AlertDialog
+        <ConfirmDeleteDialog
           open={deleteTarget !== null}
-          onOpenChange={(open) => !open && setDeleteTarget(null)}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("customTransforms.deleteTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("customTransforms.deleteDescription", {
-                  name: deleteTarget?.name,
-                  id: deleteTarget?.id,
-                })}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                onClick={handleDelete}
-              >
-                {t("common.delete")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+          onOpenChange={(open) => {
+            if (!open) setDeleteTarget(null);
+          }}
+          title={t("customTransforms.deleteTitle")}
+          description={t("customTransforms.deleteDescription", {
+            name: deleteTarget?.name,
+            id: deleteTarget?.id,
+          })}
+          onConfirm={handleDelete}
+        />
       </div>
     </PageWrapper>
   );
@@ -263,22 +228,19 @@ function CardGridSkeleton() {
 
 function TransformCard({
   item,
-  language,
   onToggle,
   onEdit,
   onDelete,
 }: {
   item: CustomTransform;
-  language: string;
   onToggle: (enabled: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
-  const updatedAt = new Date(item.updated_at).toLocaleDateString(language);
 
   return (
-    <Card className="flex h-full flex-col gap-3 p-5 transition-colors hover:border-foreground/15">
+    <Card className="flex h-full flex-col gap-3 p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-base font-semibold leading-tight">{item.name}</h3>
@@ -287,7 +249,7 @@ function TransformCard({
         <Switch
           checked={item.enabled}
           onCheckedChange={onToggle}
-          aria-label={t("common.enabled")}
+          aria-label={t("common.enableItem", { name: item.name })}
         />
       </div>
 
@@ -300,42 +262,44 @@ function TransformCard({
             : t("customTransforms.visibilityAdmin")}
         </Badge>
         {item.phases.map((phase) => (
-          <Badge key={phase} variant="outline" className="font-mono text-[11px]">
+          <Badge key={phase} variant="outline" className="font-mono">
             {phase}
           </Badge>
         ))}
         {item.scopes.map((scope) => (
-          <Badge key={scope} variant="outline" className="font-mono text-[11px] text-muted-foreground">
+          <Badge key={scope} variant="outline" className="font-mono text-muted-foreground">
             {scope}
           </Badge>
         ))}
       </div>
 
       <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <UserRound className="h-3.5 w-3.5 shrink-0" />
+        <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+          <UserRound className="size-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{item.author}</span>
           <span className="shrink-0">·</span>
-          <span className="truncate">{t("customTransforms.updatedAt", { date: updatedAt })}</span>
+          <span className="truncate tabular-nums">
+            {t("customTransforms.updatedAt", { date: formatDate(item.updated_at) })}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
             size="icon"
-            className="size-9 sm:size-8"
-            aria-label={t("common.edit")}
+            className="size-11 touch-manipulation sm:size-9"
+            aria-label={t("common.editItem", { name: item.name })}
             onClick={onEdit}
           >
-            <Pencil className="h-4 w-4" />
+            <Pencil />
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="size-9 sm:size-8"
-            aria-label={t("common.delete")}
+            className="size-11 touch-manipulation sm:size-9"
+            aria-label={t("common.deleteItem", { name: item.name })}
             onClick={onDelete}
           >
-            <Trash2 className="h-4 w-4 text-destructive" />
+            <Trash2 className="text-error-foreground" />
           </Button>
         </div>
       </div>
@@ -368,13 +332,7 @@ function EditorDialog({
     }
   }
 
-  const copyCode = async () => {
-    if (await copyToClipboard(source)) {
-      toast.success(t("customTransforms.copyCodeSuccess"));
-    } else {
-      toast.error(t("customTransforms.copyFailed"));
-    }
-  };
+  const codeCopy = useCopyToClipboard();
 
   const formatCode = async () => {
     try {
@@ -398,7 +356,7 @@ function EditorDialog({
       } else {
         await createCustomTransformOptimistic(source);
       }
-      toast.success(t("common.success"));
+      toast.success(t("customTransforms.saveSuccess"));
       onOpenChange(false);
     } catch (error) {
       // Keep the dialog open with the buffer intact (CJS-UI-5) and surface
@@ -422,12 +380,16 @@ function EditorDialog({
         </DialogHeader>
 
         <div className="flex items-center justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={copyCode}>
-            <Copy className="mr-1.5 h-3.5 w-3.5" />
-            {t("customTransforms.copyCode")}
+          <Button type="button" variant="outline" size="sm" onClick={() => void codeCopy.copy(source)}>
+            {codeCopy.copied ? (
+              <Check data-icon="inline-start" aria-hidden="true" />
+            ) : (
+              <Copy data-icon="inline-start" aria-hidden="true" />
+            )}
+            {codeCopy.copied ? t("common.copied") : t("customTransforms.copyCode")}
           </Button>
           <Button type="button" variant="outline" size="sm" onClick={formatCode}>
-            <Braces className="mr-1.5 h-3.5 w-3.5" />
+            <Braces data-icon="inline-start" aria-hidden="true" />
             {t("customTransforms.format")}
           </Button>
         </div>

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { CloudDownload, Layers3, Plus, Trash2 } from 'lucide-react'
 import { ModelBadge } from '@/components/ModelBadge'
 import { StackedModelList } from '@/components/StackedModelList'
@@ -27,8 +28,6 @@ import {
 	type ModelRow
 } from './shared'
 
-type Copy = (zh: string, en: string) => string
-
 type ModelEditorState = {
 	index: number | null
 	draft: ModelRow
@@ -45,7 +44,6 @@ type ChannelModelEditorProps = {
 	pricedModels: Set<string>
 	metadataProvider: Map<string, string | undefined>
 	reasoningSuffixMap: Record<string, string>
-	c: Copy
 }
 
 const emptyModel = (): ModelRow => ({
@@ -60,9 +58,9 @@ export function ChannelModelEditor({
 	onOpenPicker,
 	pricedModels,
 	metadataProvider,
-	reasoningSuffixMap,
-	c
+	reasoningSuffixMap
 }: ChannelModelEditorProps) {
+	const { t } = useTranslation()
 	const [editor, setEditor] = useState<ModelEditorState | null>(null)
 
 	const openAdd = () => {
@@ -97,14 +95,14 @@ export function ChannelModelEditor({
 		const errors: ModelEditorState['errors'] = {}
 
 		if (!model) {
-			errors.model = c('请输入逻辑模型名称。', 'Enter a logical model name.')
+			errors.model = t('providers.editor.modelNameRequired')
 		} else if (models.some((row, index) => index !== editor.index && row.model.trim() === model)) {
-			errors.model = c('当前 Channel 已存在同名模型。', 'This channel already contains that model.')
+			errors.model = t('providers.editor.modelDuplicate')
 		}
 
 		const normalizedMultiplier = normalizeMultiplier(multiplier)
 		if (normalizedMultiplier == null) {
-			errors.multiplier = c('倍率必须是不小于 0 的十进制数。0 表示免费。', 'Multiplier must be a decimal greater than or equal to zero. Zero means free.')
+			errors.multiplier = t('providers.editor.multiplierInvalid')
 		}
 
 		if (errors.model || errors.multiplier) {
@@ -137,21 +135,21 @@ export function ChannelModelEditor({
 				<div>
 					<div className='flex items-center gap-2'>
 						<Layers3 className='size-4 text-primary' />
-						<h4 className='font-medium'>{c('支持的模型', 'Supported models')}</h4>
+						<h4 className='font-medium'>{t('providers.editor.supportedModels')}</h4>
 						<Badge variant='secondary'>{models.length}</Badge>
 					</div>
 					<p className='mt-1 text-xs text-muted-foreground'>
-						{c('点击模型 badge 编辑重定向与倍率。', 'Click a model badge to edit its redirect and multiplier.')}
+						{t('providers.editor.supportedModelsHint')}
 					</p>
 				</div>
 				<div className='flex items-center gap-2'>
 					<Button variant='outline' size='sm' onClick={onOpenPicker}>
 						<CloudDownload data-icon />
-						{c('从上游获取', 'Fetch upstream')}
+						{t('providers.editor.fetchUpstream')}
 					</Button>
 					<Button size='sm' onClick={openAdd}>
 						<Plus data-icon />
-						{c('手动添加', 'Add manually')}
+						{t('providers.editor.addManually')}
 					</Button>
 				</div>
 			</div>
@@ -159,8 +157,8 @@ export function ChannelModelEditor({
 			{models.length === 0 ?
 				<Alert>
 					<Layers3 className='size-4' />
-					<AlertTitle>{c('当前 Channel 不会接收请求', 'This channel will not receive traffic')}</AlertTitle>
-					<AlertDescription>{c('从上游获取模型，或手动添加一个逻辑模型。', 'Fetch models from the upstream or add a logical model manually.')}</AlertDescription>
+					<AlertTitle>{t('providers.editor.noTraffic')}</AlertTitle>
+					<AlertDescription>{t('providers.editor.noModelsHint')}</AlertDescription>
 				</Alert>
 			: 	<StackedModelList>
 					{models.map((model, index) => {
@@ -178,7 +176,7 @@ export function ChannelModelEditor({
 								variant='ghost'
 								className='h-auto max-w-full rounded-md p-0 text-left'
 								onClick={() => openEdit(index)}
-								aria-label={c(`编辑模型 ${modelName}`, `Edit model ${modelName}`)}
+								aria-label={t('common.editItem', { name: modelName })}
 							>
 								<ModelBadge
 									model={modelName}
@@ -198,10 +196,10 @@ export function ChannelModelEditor({
 				<DialogContent className='max-w-lg'>
 					<DialogHeader>
 						<DialogTitle>
-							{editor?.index === null ? c('添加模型', 'Add model') : c('编辑模型', 'Edit model')}
+							{editor?.index === null ? t('providers.editor.addModel') : t('providers.editor.editModel')}
 						</DialogTitle>
 						<DialogDescription>
-							{c('设置当前 Channel 的逻辑模型、上游目标和计费倍率。', 'Configure the logical model, upstream target, and billing multiplier for this channel.')}
+							{t('providers.editor.modelDialogDescription')}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -209,7 +207,7 @@ export function ChannelModelEditor({
 						<form className='flex flex-col gap-5' onSubmit={event => { event.preventDefault(); saveModel() }}>
 							<FieldGroup className='gap-4'>
 								<Field data-invalid={Boolean(editor.errors.model)}>
-									<FieldLabel htmlFor='channel-model-name'>{c('逻辑模型', 'Logical model')}</FieldLabel>
+									<FieldLabel htmlFor='channel-model-name'>{t('providers.editor.logicalModel')}</FieldLabel>
 									<Input
 										id='channel-model-name'
 										value={editor.draft.model}
@@ -222,19 +220,19 @@ export function ChannelModelEditor({
 								</Field>
 
 								<Field>
-									<FieldLabel htmlFor='channel-model-redirect'>{c('上游模型', 'Upstream model')}</FieldLabel>
+									<FieldLabel htmlFor='channel-model-redirect'>{t('providers.editor.upstreamModel')}</FieldLabel>
 									<Input
 										id='channel-model-redirect'
 										value={editor.draft.redirect}
 										onChange={event => updateDraft({ redirect: event.target.value })}
-										placeholder={c('同逻辑模型', 'Same as logical model')}
+										placeholder={t('providers.editor.sameAsLogical')}
 										className='font-mono'
 									/>
-									<FieldDescription>{c('留空时使用逻辑模型名称。', 'Leave empty to use the logical model name.')}</FieldDescription>
+									<FieldDescription>{t('providers.editor.upstreamModelHint')}</FieldDescription>
 								</Field>
 
 								<Field data-invalid={Boolean(editor.errors.multiplier)}>
-									<FieldLabel htmlFor='channel-model-multiplier'>{c('倍率', 'Multiplier')}</FieldLabel>
+									<FieldLabel htmlFor='channel-model-multiplier'>{t('providers.editor.multiplier')}</FieldLabel>
 									<Input
 										id='channel-model-multiplier'
 										type='text'
@@ -251,15 +249,15 @@ export function ChannelModelEditor({
 								{editor.index !== null ?
 									<Button type='button' variant='destructive' onClick={deleteModel}>
 										<Trash2 data-icon />
-										{c('删除模型', 'Delete model')}
+										{t('providers.editor.deleteModel')}
 									</Button>
 								: 	<div className='hidden sm:block' />
 								}
 								<div className='flex flex-col-reverse gap-2 sm:flex-row'>
 									<Button type='button' variant='outline' onClick={() => setEditor(null)}>
-										{c('取消', 'Cancel')}
+										{t('common.cancel')}
 									</Button>
-									<Button type='submit'>{c('保存模型', 'Save model')}</Button>
+									<Button type='submit'>{t('providers.editor.saveModel')}</Button>
 								</div>
 							</DialogFooter>
 						</form>

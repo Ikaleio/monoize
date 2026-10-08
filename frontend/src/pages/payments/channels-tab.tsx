@@ -16,16 +16,8 @@ import {
   DataListHeader,
   DataListRow,
 } from "@/components/ui/data-list";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
+import { QueryError } from "@/components/ui/query-error";
 import type { PaymentChannel } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
@@ -45,7 +37,7 @@ interface ChannelsTabProps {
  */
 export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
   const { t } = useTranslation();
-  const { data, isLoading } = usePaymentChannels();
+  const { data, error, isLoading, isValidating, mutate } = usePaymentChannels();
   const channels = useMemo(() => data ?? [], [data]);
   const [deleteTarget, setDeleteTarget] = useState<PaymentChannel | null>(null);
 
@@ -60,16 +52,9 @@ export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    try {
-      await deletePaymentChannelOptimistic(deleteTarget.id, channels, (error) =>
-        toast.error(error.message),
-      );
-      toast.success(t("common.success"));
-    } catch {
-      // optimistic helper already rolled back and toasted
-    } finally {
-      setDeleteTarget(null);
-    }
+    await deletePaymentChannelOptimistic(deleteTarget.id, channels, (deleteError) =>
+      toast.error(deleteError.message),
+    ).catch(() => undefined);
   };
 
   if (isLoading) {
@@ -88,6 +73,9 @@ export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
 
   return (
     <>
+      {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
+
+      {data !== undefined ? (
       <DataTableShell
         isEmpty={channels.length === 0}
         emptyState={
@@ -97,7 +85,7 @@ export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
             description={t("payments.noChannelsDescription")}
             action={
               <Button onClick={onCreate}>
-                <Plus aria-hidden="true" />
+                <Plus data-icon="inline-start" aria-hidden="true" />
                 {t("payments.create")}
               </Button>
             }
@@ -172,26 +160,17 @@ export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
           </DataListBody>
         </DataList>
       </DataTableShell>
+      ) : null}
 
-      <AlertDialog
+      <ConfirmDeleteDialog
         open={deleteTarget !== null}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("payments.deleteTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("payments.deleteDescription", { name: deleteTarget?.name })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>
-              {t("common.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={t("payments.deleteTitle")}
+        description={t("payments.deleteDescription", { name: deleteTarget?.name })}
+        onConfirm={handleDelete}
+      />
     </>
   );
 }

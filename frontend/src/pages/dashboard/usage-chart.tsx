@@ -28,8 +28,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { motion, transitions } from "@/components/ui/motion";
 import { cn } from "@/lib/utils";
 import type { DashboardAnalytics } from "@/lib/api";
-import { usesTodayMarker, type UsageWindow } from "@/lib/usage-window";
-import { TimeWindowControl } from "./time-window-control";
+import { USAGE_WINDOWS, usesTodayMarker, type UsageWindow } from "@/lib/usage-window";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import {
   buildCumulativeTokenSeries,
   formatCompactTokens,
@@ -136,7 +136,12 @@ export function UsageChartPanel({
               )}
             </CardDescription>
           </div>
-          <TimeWindowControl value={window} onChange={onWindowChange} />
+          <SegmentedControl
+            value={window}
+            options={USAGE_WINDOWS}
+            onChange={onWindowChange}
+            ariaLabel={t("dashboard.usage.timeRange", "Time range")}
+          />
         </CardHeader>
 
         <CardContent

@@ -15,18 +15,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { toast } from "sonner";
-import { PageWrapper } from "@/components/ui/motion";
+import { AnimatedButton, PageWrapper } from "@/components/ui/motion";
+import { QueryError } from "@/components/ui/query-error";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -91,7 +83,7 @@ function useFinePointer() {
 
 export function GroupsPage() {
   const { t } = useTranslation();
-  const { data, isLoading } = useDashboardGroups();
+  const { data, error, isLoading, isValidating, mutate } = useDashboardGroups();
   const groups = useMemo(() => data ?? [], [data]);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -138,7 +130,7 @@ export function GroupsPage() {
         (error) => toast.error(error.message)
       );
       setCreateOpen(false);
-      toast.success(t("common.success"));
+      toast.success(t("groups.createSuccess"));
     } catch {
       // optimistic helper already rolled back and toasted
     } finally {
@@ -159,7 +151,7 @@ export function GroupsPage() {
         (error) => toast.error(error.message)
       );
       setEditTarget(null);
-      toast.success(t("common.success"));
+      toast.success(t("groups.updateSuccess"));
     } catch {
       // optimistic helper already rolled back and toasted
     } finally {
@@ -169,16 +161,9 @@ export function GroupsPage() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    try {
-      await deleteGroupOptimistic(deleteTarget.id, groups, (error) =>
-        toast.error(error.message)
-      );
-      toast.success(t("common.success"));
-    } catch {
-      // optimistic helper already rolled back and toasted
-    } finally {
-      setDeleteTarget(null);
-    }
+    await deleteGroupOptimistic(deleteTarget.id, groups, (deleteError) =>
+      toast.error(deleteError.message)
+    ).catch(() => undefined);
   };
 
   const toggleUserSelectable = async (group: Group, userSelectable: boolean) => {
@@ -199,7 +184,6 @@ export function GroupsPage() {
         groups,
         (error) => toast.error(error.message)
       );
-      toast.success(t("groups.reorderSuccess"));
     } catch {
       // optimistic helper already rolled back and toasted
     } finally {
@@ -293,7 +277,7 @@ export function GroupsPage() {
 
   const createButton = (
     <Button onClick={openCreate}>
-      <Plus aria-hidden="true" />
+      <Plus data-icon="inline-start" aria-hidden="true" />
       {t("groups.create")}
     </Button>
   );
@@ -311,9 +295,12 @@ export function GroupsPage() {
       <PageHeader
         title={t("groups.title")}
         description={t("groups.description")}
-        actions={createButton}
+        actions={<AnimatedButton>{createButton}</AnimatedButton>}
       />
 
+      {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
+
+      {data !== undefined ? (
       <DataTableShell
         toolbar={
           <p className="ml-auto text-sm tabular-nums text-muted-foreground">
@@ -458,6 +445,7 @@ export function GroupsPage() {
           </DataListBody>
         </DataList>
       </DataTableShell>
+      ) : null}
 
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -485,29 +473,15 @@ export function GroupsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirm */}
-      <AlertDialog
+      <ConfirmDeleteDialog
         open={deleteTarget !== null}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("groups.deleteTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("groups.deleteDescription", { name: deleteTarget?.name })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={handleDelete}
-            >
-              {t("common.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={t("groups.deleteTitle")}
+        description={t("groups.deleteDescription", { name: deleteTarget?.name })}
+        onConfirm={handleDelete}
+      />
     </PageWrapper>
   );
 }

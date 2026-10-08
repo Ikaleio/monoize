@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import {
 	ArrowLeft,
 	Braces,
@@ -122,7 +123,7 @@ function optionalPositiveInteger(value: string): number | null {
 	return value.trim() ? Number(value) : null
 }
 
-function channelInput(channel: ChannelRow, c: (zhText: string, enText: string) => string) {
+function channelInput(channel: ChannelRow, t: TFunction) {
 	return {
 		id: channel.id || undefined,
 		name: channel.name.trim(),
@@ -145,23 +146,23 @@ function channelInput(channel: ChannelRow, c: (zhText: string, enText: string) =
 		affinity_failback_mode_override: channel.affinity_failback_mode_override,
 		affinity_failback_delay_seconds_override: optionalPositiveInteger(channel.affinity_failback_delay_seconds_override),
 		proxy_url: channel.proxy_url.trim() || null,
-		extra_headers: parseExtraHeaders(channel.extra_headers, c),
+		extra_headers: parseExtraHeaders(channel.extra_headers, t),
 		session_affinity_auto: channel.session_affinity_auto,
 		websocket_supported: channel.websocket_supported
 	}
 }
 
-function parseExtraHeaders(raw: string, c: (zhText: string, enText: string) => string): Record<string, string> | null {
+function parseExtraHeaders(raw: string, t: TFunction): Record<string, string> | null {
 	const text = raw.trim()
 	if (!text) return null
 	let parsed: unknown
 	try {
 		parsed = JSON.parse(text)
 	} catch {
-		throw new Error(c('自定义请求头必须是合法的 JSON 对象', 'Extra headers must be valid JSON'))
+		throw new Error(t('providers.editor.extraHeadersInvalidJson'))
 	}
 	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-		throw new Error(c('自定义请求头必须是 JSON 对象，如 {"x-session-affinity":"ses_001"}', 'Extra headers must be a JSON object, e.g. {"x-session-affinity":"ses_001"}'))
+		throw new Error(t('providers.editor.extraHeadersNotObject'))
 	}
 	const out: Record<string, string> = {}
 	for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
@@ -170,7 +171,7 @@ function parseExtraHeaders(raw: string, c: (zhText: string, enText: string) => s
 	return Object.keys(out).length > 0 ? out : null
 }
 
-function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => string): CreateProviderInput {
+function buildInput(form: ProviderForm, t: TFunction): CreateProviderInput {
 	return {
 		name: form.name.trim(),
 		enabled: form.enabled,
@@ -180,7 +181,7 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 		channel_retry_interval_ms: form.channel_retry_interval_ms,
 		circuit_breaker_enabled: form.circuit_breaker_enabled,
 		per_model_circuit_break: form.per_model_circuit_break,
-		channels: form.channels.map(channel => channelInput(channel, c)),
+		channels: form.channels.map(channel => channelInput(channel, t)),
 		transforms: form.transforms,
 		api_type_overrides: form.api_type_overrides,
 		active_probe_enabled_override: form.active_probe_enabled_override,
@@ -224,9 +225,7 @@ export function ProviderDialog({
 	reasoningSuffixMap: Record<string, string>
 	settings?: SystemSettings
 }) {
-	const { i18n } = useTranslation()
-	const zh = i18n.language.startsWith('zh')
-	const c = (zhText: string, enText: string) => zh ? zhText : enText
+	const { t } = useTranslation()
 	const isEdit = mode === 'edit'
 	const [form, setFormState] = useState<ProviderForm>(() => current ? fromProvider(current) : emptyForm())
 	const [dirty, setDirty] = useState(false)
@@ -276,28 +275,28 @@ export function ProviderDialog({
 	}
 
 	const validate = () => {
-		if (!form.name.trim()) return c('请输入 Provider 名称', 'Enter a provider name')
-		if (!form.channels.length) return c('至少需要一个 Channel', 'At least one channel is required')
+		if (!form.name.trim()) return t('providers.editor.nameRequired')
+		if (!form.channels.length) return t('providers.editor.channelRequired')
 		if (!form.channels.some(channel => channel.models.length > 0)) {
-			return c('至少为一个 Channel 添加模型', 'Add models to at least one channel')
+			return t('providers.editor.modelsRequired')
 		}
 		for (const [index, channel] of form.channels.entries()) {
 			if (!channel.name.trim() || !channel.base_url.trim()) {
-				return c(`Channel ${index + 1} 的名称和 Base URL 不能为空`, `Channel ${index + 1} requires a name and base URL`)
+				return t('providers.editor.channelNameUrlRequired', { index: index + 1 })
 			}
 			if (!isEdit && !channel.api_key.trim()) {
-				return c(`Channel ${index + 1} 需要 API Key`, `Channel ${index + 1} requires an API key`)
+				return t('providers.editor.channelKeyRequired', { index: index + 1 })
 			}
 			const names = channel.models.map(model => model.model.trim())
 			if (names.some(name => !name) || new Set(names).size !== names.length) {
-				return c(`Channel ${index + 1} 存在空白或重复模型`, `Channel ${index + 1} has blank or duplicate models`)
+				return t('providers.editor.channelModelsInvalid', { index: index + 1 })
 			}
 			if (channel.models.some(model => normalizeMultiplier(model.multiplier) == null)) {
-				return c(`Channel ${index + 1} 的倍率必须是不小于 0 的十进制数`, `Channel ${index + 1} multipliers must be decimals greater than or equal to zero`)
+				return t('providers.editor.channelMultiplierInvalid', { index: index + 1 })
 			}
 		}
 		const invalidTransform = findFirstInvalidTransformRule(form.transforms, transformRegistry)
-		if (invalidTransform) return invalidTransform.errors[0]?.message ?? c('转换规则无效', 'Invalid transform rule')
+		if (invalidTransform) return invalidTransform.errors[0]?.message ?? t('providers.editor.transformInvalid')
 		return null
 	}
 
@@ -309,17 +308,17 @@ export function ProviderDialog({
 		}
 		setSaving(true)
 		try {
-			const input = buildInput(form, c)
+			const input = buildInput(form, t)
 			if (isEdit && current) {
 				await updateProviderOptimistic(current.id, input, providers)
 			} else {
 				await createProviderOptimistic(input, providers)
 			}
-			toast.success(c('Provider 已保存', 'Provider saved'))
+			toast.success(t('providers.editor.saveSuccess'))
 			setDirty(false)
 			onOpenChange(false)
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : c('保存失败', 'Save failed'))
+			toast.error(error instanceof Error ? error.message : t('providers.editor.saveFailed'))
 		} finally {
 			setSaving(false)
 		}
@@ -342,7 +341,7 @@ export function ProviderDialog({
 		const duplicate = {
 			...activeChannel,
 			id: '',
-			name: `${activeChannel.name} ${c('副本', 'copy')}`,
+			name: t('providers.editor.duplicateName', { name: activeChannel.name }),
 			api_key: '',
 			models: activeChannel.models.map(model => ({ ...model }))
 		}
@@ -368,11 +367,11 @@ export function ProviderDialog({
 	} : undefined
 
 	const sections: Array<{ id: Section; icon: typeof Server; label: string; summary: string }> = [
-		{ id: 'provider', icon: Server, label: 'Provider', summary: form.name || c('未命名', 'Untitled') },
+		{ id: 'provider', icon: Server, label: 'Provider', summary: form.name || t('providers.editor.untitled') },
 		{ id: 'channels', icon: Layers3, label: 'Channels', summary: `${form.channels.length}` },
-		{ id: 'routing', icon: GitBranch, label: c('路由', 'Routing'), summary: `${form.max_retries === -1 ? '∞' : form.max_retries + 1} attempts` },
-		{ id: 'transforms', icon: Braces, label: c('转换', 'Transforms'), summary: `${form.transforms.length}` },
-		{ id: 'protocol', icon: Settings2, label: c('协议', 'Protocol'), summary: `${form.api_type_overrides.length}` }
+		{ id: 'routing', icon: GitBranch, label: t('providers.editor.sectionRouting'), summary: form.max_retries === -1 ? t('providers.editor.attemptsUnlimited') : t('providers.editor.attempts', { count: form.max_retries + 1 }) },
+		{ id: 'transforms', icon: Braces, label: t('providers.editor.sectionTransforms'), summary: `${form.transforms.length}` },
+		{ id: 'protocol', icon: Settings2, label: t('providers.editor.sectionProtocol'), summary: `${form.api_type_overrides.length}` }
 	]
 
 	return (
@@ -386,15 +385,15 @@ export function ProviderDialog({
 						<div className='flex min-w-0 items-center justify-between gap-3'>
 							<div className='min-w-0'>
 								<DialogTitle className='truncate text-base sm:text-lg'>
-									{isEdit ? c('编辑 Provider', 'Edit provider') : c('新建 Provider', 'New provider')}
+									{isEdit ? t('providers.editor.editTitle') : t('providers.editor.createTitle')}
 									{form.name ? <span className='font-normal text-muted-foreground'> · {form.name}</span> : null}
 								</DialogTitle>
 								<DialogDescription className='mt-0.5 hidden sm:block'>
-									{c('模型归属于 Channel；在同一个 Provider 内可为不同上游配置独立重定向与倍率。', 'Models belong to channels. Each upstream can use its own redirect and multiplier.')}
+									{t('providers.editor.description')}
 								</DialogDescription>
 							</div>
 							<div className='flex shrink-0 items-center gap-2'>
-								<Label htmlFor='provider-enabled' className='hidden text-xs text-muted-foreground sm:block'>{form.enabled ? c('启用', 'Enabled') : c('停用', 'Disabled')}</Label>
+								<Label htmlFor='provider-enabled' className='hidden text-xs text-muted-foreground sm:block'>{form.enabled ? t('common.enabled') : t('common.disabled')}</Label>
 								<Switch id='provider-enabled' checked={form.enabled} onCheckedChange={enabled => setForm(previous => ({ ...previous, enabled }))} />
 							</div>
 						</div>
@@ -407,7 +406,7 @@ export function ProviderDialog({
 						</div>
 					) : (
 						<div className='flex min-h-0 flex-1'>
-							<nav className='hidden w-56 shrink-0 flex-col gap-1 border-r bg-muted/20 p-3 lg:flex' aria-label={c('Provider 编辑分区', 'Provider editor sections')}>
+							<nav className='hidden w-56 shrink-0 flex-col gap-1 border-r bg-muted/20 p-3 lg:flex' aria-label={t('providers.editor.sectionsLabel')}>
 								{sections.map(item => {
 									const Icon = item.icon
 									return <button key={item.id} type='button' onClick={() => setSection(item.id)} className={cn('flex min-h-14 items-center gap-3 rounded-lg px-3 text-left transition-colors', section === item.id ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
@@ -438,14 +437,13 @@ export function ProviderDialog({
 											duplicateChannel={duplicateChannel}
 											removeChannel={removeChannel}
 											openPicker={() => {
-												if (!pickerInfo) toast.error(c('请先填写 Base URL 和 API Key', 'Enter a base URL and API key first'))
+												if (!pickerInfo) toast.error(t('providers.editor.pickerNeedsConnection'))
 												else setPickerOpen(true)
 											}}
 											pricedModels={pricedModels}
 											metadataProvider={metadataProvider}
 											reasoningSuffixMap={reasoningSuffixMap}
 											settings={settings}
-											c={c}
 											onBaseUrlBlur={() => {
 												if (activeChannel && hasTrailingV1(activeChannel.base_url)) {
 													setV1ChannelIndex(selectedChannel)
@@ -454,13 +452,13 @@ export function ProviderDialog({
 											}}
 										/>
 									) : section === 'provider' ? (
-										<ProviderBasics form={form} setForm={setForm} c={c} />
+										<ProviderBasics form={form} setForm={setForm} />
 									) : section === 'routing' ? (
-										<RoutingSettings form={form} setForm={setForm} settings={settings} c={c} />
+										<RoutingSettings form={form} setForm={setForm} settings={settings} />
 									) : section === 'transforms' ? (
-										<div className='mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6'><SectionHeading title={c('请求与响应转换', 'Request and response transforms')} description={c('转换仍属于 Provider，按顺序应用到每个 Channel。', 'Transforms remain provider-scoped and run in order for every channel.')} /><TransformChainEditor value={form.transforms} registry={transformRegistry} loading={transformRegistryLoading} onChange={transforms => setForm(previous => ({ ...previous, transforms }))} /></div>
+										<div className='mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6'><SectionHeading title={t('providers.editor.transformsTitle')} description={t('providers.editor.transformsDescription')} /><TransformChainEditor value={form.transforms} registry={transformRegistry} loading={transformRegistryLoading} onChange={transforms => setForm(previous => ({ ...previous, transforms }))} /></div>
 									) : (
-										<ProtocolSettings form={form} setForm={setForm} c={c} />
+										<ProtocolSettings form={form} setForm={setForm} />
 									)}
 								</div>
 							</div>
@@ -468,10 +466,10 @@ export function ProviderDialog({
 					)}
 
 					<DialogFooter className='shrink-0 flex-row items-center justify-between gap-2 border-t bg-background px-4 py-3 sm:px-6'>
-						<p className='hidden text-xs text-muted-foreground sm:block'>{dirty ? c('有未保存的更改', 'Unsaved changes') : c('所有更改已保存', 'No unsaved changes')}</p>
+						<p className='hidden text-xs text-muted-foreground sm:block'>{dirty ? t('providers.editor.unsavedChanges') : t('providers.editor.noUnsavedChanges')}</p>
 						<div className='ml-auto flex items-center gap-2'>
-							<Button variant='outline' onClick={requestClose}>{c('取消', 'Cancel')}</Button>
-							<Button onClick={() => void save()} disabled={saving}><Save data-icon />{saving ? c('保存中…', 'Saving…') : c('保存 Provider', 'Save provider')}</Button>
+							<Button variant='outline' onClick={requestClose}>{t('common.cancel')}</Button>
+							<Button onClick={() => void save()} disabled={saving}><Save data-icon />{saving ? t('common.saving') : t('providers.editor.save')}</Button>
 						</div>
 					</DialogFooter>
 				</DialogContent>
@@ -481,7 +479,7 @@ export function ProviderDialog({
 				open={pickerOpen}
 				onOpenChange={setPickerOpen}
 				channelInfo={pickerInfo}
-				providerName={`${form.name || c('未命名 Provider', 'Untitled provider')} / ${activeChannel?.name || c('未命名 Channel', 'Untitled channel')}`}
+				providerName={`${form.name || t('providers.editor.untitledProvider')} / ${activeChannel?.name || t('providers.editor.untitledChannel')}`}
 				existingModels={activeChannel?.models.map(model => model.model) ?? []}
 				modelMetadata={modelMetadata}
 				modelPrices={modelPrices}
@@ -494,11 +492,11 @@ export function ProviderDialog({
 			/>
 
 			<AlertDialog open={closeConfirmOpen} onOpenChange={setCloseConfirmOpen}>
-				<AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{c('放弃未保存的更改？', 'Discard unsaved changes?')}</AlertDialogTitle><AlertDialogDescription>{c('本次编辑的内容将不会保存。', 'Your changes in this editor will be lost.')}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{c('继续编辑', 'Keep editing')}</AlertDialogCancel><AlertDialogAction className='bg-destructive text-destructive-foreground hover:bg-destructive/90' onClick={() => onOpenChange(false)}>{c('放弃', 'Discard')}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+				<AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('providers.editor.discardTitle')}</AlertDialogTitle><AlertDialogDescription>{t('providers.editor.discardDescription')}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t('providers.editor.keepEditing')}</AlertDialogCancel><AlertDialogAction className='bg-destructive text-destructive-foreground hover:bg-destructive/90' onClick={() => onOpenChange(false)}>{t('providers.editor.discard')}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
 			</AlertDialog>
 
 			<AlertDialog open={removeV1Open} onOpenChange={setRemoveV1Open}>
-				<AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{c('Base URL 包含 /v1', 'Base URL includes /v1')}</AlertDialogTitle><AlertDialogDescription>{c('多数适配器会自动追加 API 路径。建议移除末尾的 /v1。', 'Most adapters append the API path automatically. Removing the trailing /v1 is recommended.')}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{c('保留 /v1', 'Keep /v1')}</AlertDialogCancel><AlertDialogAction onClick={() => { if (v1ChannelIndex != null) updateChannel(v1ChannelIndex, { base_url: removeTrailingV1(form.channels[v1ChannelIndex]?.base_url ?? '') }) }}>{c('移除 /v1', 'Remove /v1')}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+				<AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('providers.editor.baseUrlV1Title')}</AlertDialogTitle><AlertDialogDescription>{t('providers.editor.baseUrlV1Description')}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t('providers.editor.keepV1')}</AlertDialogCancel><AlertDialogAction onClick={() => { if (v1ChannelIndex != null) updateChannel(v1ChannelIndex, { base_url: removeTrailingV1(form.channels[v1ChannelIndex]?.base_url ?? '') }) }}>{t('providers.editor.removeV1')}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
 			</AlertDialog>
 		</>
 	)
@@ -512,13 +510,14 @@ function Field({ label, hint, children, className }: { label: string; hint?: str
 	return <div className={cn('flex flex-col gap-2', className)}><Label>{label}</Label>{children}{hint ? <p className='text-xs text-muted-foreground'>{hint}</p> : null}</div>
 }
 
-function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; c: (zh: string, en: string) => string }) {
+function ProviderBasics({ form, setForm }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>> }) {
+	const { t } = useTranslation()
 	const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups()
 	return <div className='mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-6'>
-		<SectionHeading title={c('Provider 基础信息', 'Provider basics')} description={c('Provider 负责公共路由策略；模型和上游地址在 Channel 中配置。', 'Providers own shared routing policy. Models and upstream endpoints are configured per channel.')} />
+		<SectionHeading title={t('providers.editor.basicsTitle')} description={t('providers.editor.basicsDescription')} />
 		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
-			<Field label={c('名称', 'Name')} className='sm:col-span-2'><Input value={form.name} onChange={event => setForm(previous => ({ ...previous, name: event.target.value }))} placeholder='OpenAI production' /></Field>
-			<Field label={c('服务分组', 'Serving groups')} hint={c('留空保存时自动绑定系统默认分组。', 'Empty selections are bound to the system default group on save.')} className='sm:col-span-2'>
+			<Field label={t('common.name')} className='sm:col-span-2'><Input value={form.name} onChange={event => setForm(previous => ({ ...previous, name: event.target.value }))} placeholder='OpenAI production' /></Field>
+			<Field label={t('providers.editor.groups')} hint={t('providers.editor.groupsHint')} className='sm:col-span-2'>
 				<GroupMultiSelect
 					value={form.group_ids}
 					groups={groups}
@@ -526,24 +525,22 @@ function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: Rea
 					onChange={group_ids => setForm(previous => ({ ...previous, group_ids }))}
 				/>
 			</Field>
-			<Field label={c('额外字段白名单', 'Extra fields allowlist')} hint={c('逗号分隔，应用到全部 Channel。', 'Comma-separated and shared by all channels.')}><Input value={form.extra_fields_whitelist} onChange={event => setForm(previous => ({ ...previous, extra_fields_whitelist: event.target.value }))} placeholder='service_tier, metadata' /></Field>
+			<Field label={t('providers.editor.extraFields')} hint={t('providers.editor.extraFieldsHint')}><Input value={form.extra_fields_whitelist} onChange={event => setForm(previous => ({ ...previous, extra_fields_whitelist: event.target.value }))} placeholder='service_tier, metadata' /></Field>
 		</div>
 		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
 			<div className='sm:col-span-2'>
-				<h4 className='font-medium'>{c('免费结算覆盖', 'Free-settlement overrides')}</h4>
-				<p className='mt-1 text-xs text-muted-foreground'>{c('三态覆盖全局免费结算开关；“继承全局”跟随系统设置。', 'Three-state overrides for the global free-settlement flags. “Inherit global” follows the system setting.')}</p>
+				<h4 className='font-medium'>{t('providers.editor.freeSettlement')}</h4>
+				<p className='mt-1 text-xs text-muted-foreground'>{t('providers.editor.freeSettlementHint')}</p>
 			</div>
 			<NullableBoolean
-				label={c('未定价模型免费结算', 'Free settlement when unpriced')}
+				label={t('providers.editor.freeWhenUnpriced')}
 				value={form.allow_free_when_unpriced_override}
 				onChange={value => setForm(previous => ({ ...previous, allow_free_when_unpriced_override: value }))}
-				c={c}
 			/>
 			<NullableBoolean
-				label={c('缺失 Usage 免费结算', 'Free settlement when usage missing')}
+				label={t('providers.editor.freeWhenUsageMissing')}
 				value={form.allow_free_when_missing_usage_override}
 				onChange={value => setForm(previous => ({ ...previous, allow_free_when_missing_usage_override: value }))}
-				c={c}
 			/>
 		</div>
 	</div>
@@ -566,15 +563,15 @@ type WorkbenchProps = {
 	metadataProvider: Map<string, string | undefined>
 	reasoningSuffixMap: Record<string, string>
 	settings?: SystemSettings
-	c: (zh: string, en: string) => string
 	onBaseUrlBlur: () => void
 }
 
 function ChannelsWorkbench(props: WorkbenchProps) {
-	const { form, activeChannel, selectedChannel, mobileChannelOpen, setMobileChannelOpen, setSelectedChannel, addChannel, c } = props
+	const { form, activeChannel, selectedChannel, mobileChannelOpen, setMobileChannelOpen, setSelectedChannel, addChannel } = props
+	const { t } = useTranslation()
 	return <div className='grid h-full min-h-0 flex-1 lg:grid-cols-[300px_minmax(0,1fr)]'>
 		<div className={cn('flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r bg-muted/10', mobileChannelOpen ? 'hidden lg:flex' : 'flex')}>
-			<div className='flex shrink-0 items-center justify-between border-b px-4 py-3'><div><h3 className='font-semibold'>Channels</h3><p className='text-xs text-muted-foreground'>{c('每个上游独立配置模型能力', 'Models are configured per upstream')}</p></div><Button size='icon' variant='outline' className='size-11 touch-manipulation sm:size-9' onClick={addChannel} aria-label={c('添加 Channel', 'Add channel')}><Plus data-icon /></Button></div>
+			<div className='flex shrink-0 items-center justify-between border-b px-4 py-3'><div><h3 className='font-semibold'>Channels</h3><p className='text-xs text-muted-foreground'>{t('providers.editor.channelsSubtitle')}</p></div><Button size='icon' variant='outline' className='size-11 touch-manipulation sm:size-9' onClick={addChannel} aria-label={t('providers.editor.addChannel')}><Plus data-icon /></Button></div>
 			<div className='relative min-h-0 flex-1'>
 				<Virtuoso
 					className='absolute inset-0 pt-2'
@@ -583,7 +580,7 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 					itemContent={(index, channel) => (
 						<div className='px-2 pb-1'>
 							<button type='button' onClick={() => { setSelectedChannel(index); setMobileChannelOpen(true) }} className={cn('flex min-h-16 w-full items-center gap-3 rounded-lg border-l-2 px-3 py-2 text-left transition-colors', selectedChannel === index ? 'border-l-primary bg-primary/10' : 'border-l-transparent hover:bg-muted')}>
-								<div className='min-w-0 flex-1'><div className='flex items-center gap-2'><span className='truncate text-sm font-medium'>{channel.name || c('未命名 Channel', 'Untitled channel')}</span>{!channel.enabled ? <Badge variant='secondary'>{c('停用', 'Off')}</Badge> : null}</div><p className='mt-1 truncate font-mono text-xs text-muted-foreground'>{channel.base_url || c('尚未填写 Base URL', 'No base URL')}</p><p className='mt-1 text-xs text-muted-foreground'>{PROVIDER_TYPE_CONFIG[channel.provider_type]?.label ?? channel.provider_type} · {channel.models.length} {c('个模型', 'models')}</p></div>
+								<div className='min-w-0 flex-1'><div className='flex items-center gap-2'><span className='truncate text-sm font-medium'>{channel.name || t('providers.editor.untitledChannel')}</span>{!channel.enabled ? <Badge variant='secondary'>{t('common.disabled')}</Badge> : null}</div><p className='mt-1 truncate font-mono text-xs text-muted-foreground'>{channel.base_url || t('providers.editor.noBaseUrl')}</p><p className='mt-1 text-xs text-muted-foreground'>{PROVIDER_TYPE_CONFIG[channel.provider_type]?.label ?? channel.provider_type} · {t('providers.editor.modelCount', { count: channel.models.length })}</p></div>
 								<ChevronRight className='size-4 shrink-0 text-muted-foreground' />
 							</button>
 						</div>
@@ -593,26 +590,26 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 		</div>
 
 		<div className={cn('min-h-0 min-w-0 overflow-y-auto', mobileChannelOpen ? 'block' : 'hidden lg:block')}>
-			{activeChannel ? <ChannelDetail {...props} /> : <div className='grid h-full place-items-center p-6 text-center text-sm text-muted-foreground'>{c('选择一个 Channel 开始配置', 'Select a channel to start configuring')}</div>}
+			{activeChannel ? <ChannelDetail {...props} /> : <div className='grid h-full place-items-center p-6 text-center text-sm text-muted-foreground'>{t('providers.editor.selectChannel')}</div>}
 		</div>
 	</div>
 }
 
-function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, duplicateChannel, removeChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
+function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, duplicateChannel, removeChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, onBaseUrlBlur }: WorkbenchProps) {
 	const { t } = useTranslation()
 	const [probingWebsocket, setProbingWebsocket] = useState(false)
 	if (!activeChannel) return null
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
 		<div className='flex items-start justify-between gap-3'>
-			<div className='flex min-w-0 items-start gap-2'><Button size='icon' variant='ghost' className='-ml-2 size-11 touch-manipulation sm:size-9 lg:hidden' onClick={() => setMobileChannelOpen(false)} aria-label={c('返回 Channel 列表', 'Back to channels')}><ArrowLeft data-icon /></Button><div className='min-w-0'><h3 className='truncate text-lg font-semibold'>{activeChannel.name || c('未命名 Channel', 'Untitled channel')}</h3><div className='mt-1'>{activeChannel._health_status ? statusBadge(activeChannel._health_status) : <Badge variant='secondary'>{c('未保存', 'Unsaved')}</Badge>}</div></div></div>
-			<div className='flex items-center gap-1'><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={duplicateChannel} aria-label={c('复制 Channel', 'Duplicate channel')}><Copy data-icon /></Button><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' disabled={form.channels.length === 1} onClick={removeChannel} aria-label={c('删除 Channel', 'Delete channel')}><Trash2 data-icon /></Button><Switch checked={activeChannel.enabled} onCheckedChange={enabled => updateChannel(selectedChannel, { enabled })} /></div>
+			<div className='flex min-w-0 items-start gap-2'><Button size='icon' variant='ghost' className='-ml-2 size-11 touch-manipulation sm:size-9 lg:hidden' onClick={() => setMobileChannelOpen(false)} aria-label={t('providers.editor.backToChannels')}><ArrowLeft data-icon /></Button><div className='min-w-0'><h3 className='truncate text-lg font-semibold'>{activeChannel.name || t('providers.editor.untitledChannel')}</h3><div className='mt-1'>{activeChannel._health_status ? statusBadge(activeChannel._health_status, t) : <Badge variant='secondary'>{t('providers.editor.unsaved')}</Badge>}</div></div></div>
+			<div className='flex items-center gap-1'><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={duplicateChannel} aria-label={t('providers.editor.duplicateChannel')}><Copy data-icon /></Button><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' disabled={form.channels.length === 1} onClick={removeChannel} aria-label={t('providers.editor.deleteChannel')}><Trash2 data-icon /></Button><Switch checked={activeChannel.enabled} onCheckedChange={enabled => updateChannel(selectedChannel, { enabled })} /></div>
 		</div>
 
 		<section className='flex flex-col gap-4 rounded-xl border bg-card p-4 sm:p-5'>
-			<div className='flex items-center gap-2'><Server className='size-4 text-primary' /><h4 className='font-medium'>{c('连接', 'Connection')}</h4></div>
+			<div className='flex items-center gap-2'><Server className='size-4 text-primary' /><h4 className='font-medium'>{t('providers.editor.connection')}</h4></div>
 			<div className='grid gap-4 sm:grid-cols-2'>
-				<Field label={c('Channel 名称', 'Channel name')}><Input value={activeChannel.name} onChange={event => updateChannel(selectedChannel, { name: event.target.value })} /></Field>
-				<Field label={c('接口类型', 'API type')}><Select value={activeChannel.provider_type} onValueChange={(provider_type: ProviderType) => updateChannel(selectedChannel, { provider_type })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+				<Field label={t('providers.editor.channelName')}><Input value={activeChannel.name} onChange={event => updateChannel(selectedChannel, { name: event.target.value })} /></Field>
+				<Field label={t('providers.editor.apiType')}><Select value={activeChannel.provider_type} onValueChange={(provider_type: ProviderType) => updateChannel(selectedChannel, { provider_type })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
 				{activeChannel.provider_type === 'responses' ? (
 					<div className='grid gap-2 sm:col-span-2 sm:grid-cols-[1fr_auto] sm:items-end'>
 						<NullableBoolean
@@ -623,7 +620,6 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 							onChange={value => updateChannel(selectedChannel, { websocket_supported: value })}
 							enabledLabel={t('providers.websocketSupportedYes')}
 							disabledLabel={t('providers.websocketSupportedNo')}
-							c={c}
 						/>
 						<Button
 							type='button'
@@ -664,8 +660,8 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 					</div>
 				) : null}
 				<Field label='Base URL' className='sm:col-span-2'><Input value={activeChannel.base_url} onChange={event => updateChannel(selectedChannel, { base_url: event.target.value })} onBlur={onBaseUrlBlur} placeholder='https://api.openai.com' className='font-mono' /></Field>
-				<Field label='API Key' hint={form.id && activeChannel.id ? c('留空保留现有密钥。', 'Leave blank to preserve the stored key.') : undefined}><Input type='password' autoComplete='new-password' value={activeChannel.api_key} onChange={event => updateChannel(selectedChannel, { api_key: event.target.value })} placeholder={form.id && activeChannel.id ? '••••••••••••' : 'sk-…'} className='font-mono' /></Field>
-				<Field label={c('流量权重', 'Traffic weight')}><Input type='number' min='0' value={activeChannel.weight} onChange={event => updateChannel(selectedChannel, { weight: event.target.value })} /></Field>
+				<Field label='API Key' hint={form.id && activeChannel.id ? t('providers.editor.apiKeyKeepHint') : undefined}><Input type='password' autoComplete='new-password' value={activeChannel.api_key} onChange={event => updateChannel(selectedChannel, { api_key: event.target.value })} placeholder={form.id && activeChannel.id ? '••••••••••••' : 'sk-…'} className='font-mono' /></Field>
+				<Field label={t('providers.editor.weight')}><Input type='number' min='0' value={activeChannel.weight} onChange={event => updateChannel(selectedChannel, { weight: event.target.value })} /></Field>
 			</div>
 		</section>
 
@@ -677,38 +673,37 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 			pricedModels={pricedModels}
 			metadataProvider={metadataProvider}
 			reasoningSuffixMap={reasoningSuffixMap}
-			c={c}
 		/>
 
 		<details className='group rounded-xl border bg-card'>
-			<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'><div className='flex items-center gap-3'><GitBranch className='size-4 text-muted-foreground' /><div><h4 className='font-medium'>{c('路由亲和', 'Routing affinity')}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{c('默认继承全局设置', 'Inherits global settings by default')}</p></div></div><ChevronRight className='size-4 transition-transform group-open:rotate-90' /></summary>
+			<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'><div className='flex items-center gap-3'><GitBranch className='size-4 text-muted-foreground' /><div><h4 className='font-medium'>{t('providers.editor.affinityTitle')}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{t('providers.editor.affinityDescription')}</p></div></div><ChevronRight className='size-4 transition-transform group-open:rotate-90' /></summary>
 			<div className='grid gap-4 border-t p-4 sm:grid-cols-2 sm:p-5'>
-				<NullableBoolean label={c('启用亲和', 'Affinity enabled')} value={activeChannel.affinity_enabled_override} onChange={value => updateChannel(selectedChannel, { affinity_enabled_override: value })} c={c} />
-				<AffinityModeOverride label={c('恢复策略', 'Recovery policy')} value={activeChannel.affinity_failback_mode_override} onChange={value => updateChannel(selectedChannel, { affinity_failback_mode_override: value })} c={c} />
-				<NumberOverride label={c('空闲过期（秒）', 'Idle expiry (seconds)')} value={activeChannel.affinity_idle_ttl_seconds_override} placeholder={settings?.monoize_affinity_idle_ttl_seconds} onChange={value => updateChannel(selectedChannel, { affinity_idle_ttl_seconds_override: value })} />
-				<NumberOverride min={0} label={c('回切延迟（秒）', 'Failback delay (seconds)')} value={activeChannel.affinity_failback_delay_seconds_override} placeholder={settings?.monoize_affinity_failback_delay_seconds} onChange={value => updateChannel(selectedChannel, { affinity_failback_delay_seconds_override: value })} />
-				<Field label={c('出口代理', 'Egress proxy')} hint={c('留空跟随节点全局代理；填写 http(s) 代理地址仅对本 Channel 生效', 'Empty follows the node-global proxy; an http(s) URL applies to this channel only')}>
+				<NullableBoolean label={t('providers.editor.affinityEnabled')} value={activeChannel.affinity_enabled_override} onChange={value => updateChannel(selectedChannel, { affinity_enabled_override: value })} />
+				<AffinityModeOverride label={t('providers.editor.recoveryPolicy')} value={activeChannel.affinity_failback_mode_override} onChange={value => updateChannel(selectedChannel, { affinity_failback_mode_override: value })} />
+				<NumberOverride label={t('providers.editor.idleExpiry')} value={activeChannel.affinity_idle_ttl_seconds_override} placeholder={settings?.monoize_affinity_idle_ttl_seconds} onChange={value => updateChannel(selectedChannel, { affinity_idle_ttl_seconds_override: value })} />
+				<NumberOverride min={0} label={t('providers.editor.failbackDelay')} value={activeChannel.affinity_failback_delay_seconds_override} placeholder={settings?.monoize_affinity_failback_delay_seconds} onChange={value => updateChannel(selectedChannel, { affinity_failback_delay_seconds_override: value })} />
+				<Field label={t('providers.editor.egressProxy')} hint={t('providers.editor.egressProxyHint')}>
 					<Input value={activeChannel.proxy_url} placeholder='http://proxy:port' onChange={event => updateChannel(selectedChannel, { proxy_url: event.target.value })} />
 				</Field>
-				<NullableBoolean label={c('自动会话亲和', 'Auto session affinity')} hint={c('null 时对 Cloudflare Workers AI 与 OpenCode Zen/Go 自动开启，并发送 x-session-affinity 与 x-opencode-session', 'When null, enables for Cloudflare Workers AI and OpenCode Zen/Go, and sends x-session-affinity and x-opencode-session')} nullLabel={c('按 Base URL 自动判断', 'Auto-detect by Base URL')} value={activeChannel.session_affinity_auto} onChange={value => updateChannel(selectedChannel, { session_affinity_auto: value })} c={c} />
-				<Field label={c('自定义请求头', 'Extra headers')} hint={c('注入到该 Channel 的所有上游请求，例如 {"x-session-affinity":"ses_001"} 或 {"x-opencode-session":"ses_001"}', 'Injected into every upstream request of this channel, e.g. {"x-session-affinity":"ses_001"} or {"x-opencode-session":"ses_001"}')} className='sm:col-span-2'>
+				<NullableBoolean label={t('providers.editor.autoSessionAffinity')} hint={t('providers.editor.autoSessionAffinityHint')} nullLabel={t('providers.editor.autoDetectByBaseUrl')} value={activeChannel.session_affinity_auto} onChange={value => updateChannel(selectedChannel, { session_affinity_auto: value })} />
+				<Field label={t('providers.editor.extraHeaders')} hint={t('providers.editor.extraHeadersHint')} className='sm:col-span-2'>
 					<Textarea value={activeChannel.extra_headers} rows={3} placeholder={'{"x-session-affinity": "ses_001"}'} className='font-mono text-xs' onChange={event => updateChannel(selectedChannel, { extra_headers: event.target.value })} />
 				</Field>
 				<p className='text-xs leading-relaxed text-muted-foreground sm:col-span-2'>
-					{c('“保持当前 Channel”会让同一 Agent Thread 持续使用回落后的 Channel；“优先级恢复”在延迟结束后，遇到更高优先级 Provider 恢复时按正常顺序重新选择。', '“Keep current channel” keeps an Agent thread on its fallback channel. “Prefer higher priority” returns to normal ordering after the delay when an earlier provider becomes eligible.')}
+					{t('providers.editor.recoveryPolicyHint')}
 				</p>
 			</div>
 		</details>
 
 		<details className='group rounded-xl border bg-card'>
-			<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'><div className='flex items-center gap-3'><CircleGauge className='size-4 text-muted-foreground' /><div><h4 className='font-medium'>{c('健康检查与熔断', 'Health and circuit breaker')}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{c('默认继承全局设置', 'Inherits global settings by default')}</p></div></div><ChevronRight className='size-4 transition-transform group-open:rotate-90' /></summary>
+			<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'><div className='flex items-center gap-3'><CircleGauge className='size-4 text-muted-foreground' /><div><h4 className='font-medium'>{t('providers.editor.healthTitle')}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{t('providers.editor.affinityDescription')}</p></div></div><ChevronRight className='size-4 transition-transform group-open:rotate-90' /></summary>
 			<div className='grid gap-4 border-t p-4 sm:grid-cols-2 sm:p-5'>
-				<NullableBoolean label={c('主动探测', 'Active probing')} value={activeChannel.active_probe_enabled_override} onChange={value => updateChannel(selectedChannel, { active_probe_enabled_override: value })} c={c} />
-				<Field label={c('探测模型', 'Probe model')} hint={c(`留空继承：${settings?.monoize_active_probe_model || '首个 Channel 模型'}`, `Empty inherits: ${settings?.monoize_active_probe_model || 'first channel model'}`)}><Input value={activeChannel.active_probe_model_override} onChange={event => updateChannel(selectedChannel, { active_probe_model_override: event.target.value })} /></Field>
-				<NumberOverride label={c('失败次数阈值', 'Failure count threshold')} value={activeChannel.passive_failure_count_threshold_override} placeholder={settings?.monoize_passive_failure_threshold} onChange={value => updateChannel(selectedChannel, { passive_failure_count_threshold_override: value })} />
-				<NumberOverride label={c('统计窗口（秒）', 'Window (seconds)')} value={activeChannel.passive_window_seconds_override} placeholder={settings?.monoize_passive_window_seconds} onChange={value => updateChannel(selectedChannel, { passive_window_seconds_override: value })} />
-				<NumberOverride label={c('冷却时间（秒）', 'Cooldown (seconds)')} value={activeChannel.passive_cooldown_seconds_override} placeholder={settings?.monoize_passive_cooldown_seconds} onChange={value => updateChannel(selectedChannel, { passive_cooldown_seconds_override: value })} />
-				<NumberOverride label={c('限流冷却（秒）', 'Rate-limit cooldown (seconds)')} value={activeChannel.passive_rate_limit_cooldown_seconds_override} placeholder={settings?.monoize_passive_rate_limit_cooldown_seconds} onChange={value => updateChannel(selectedChannel, { passive_rate_limit_cooldown_seconds_override: value })} />
+				<NullableBoolean label={t('providers.editor.activeProbing')} value={activeChannel.active_probe_enabled_override} onChange={value => updateChannel(selectedChannel, { active_probe_enabled_override: value })} />
+				<Field label={t('providers.editor.probeModel')} hint={t('providers.editor.probeModelHint', { model: settings?.monoize_active_probe_model || t('providers.editor.firstChannelModel') })}><Input value={activeChannel.active_probe_model_override} onChange={event => updateChannel(selectedChannel, { active_probe_model_override: event.target.value })} /></Field>
+				<NumberOverride label={t('providers.editor.failureThreshold')} value={activeChannel.passive_failure_count_threshold_override} placeholder={settings?.monoize_passive_failure_threshold} onChange={value => updateChannel(selectedChannel, { passive_failure_count_threshold_override: value })} />
+				<NumberOverride label={t('providers.editor.windowSeconds')} value={activeChannel.passive_window_seconds_override} placeholder={settings?.monoize_passive_window_seconds} onChange={value => updateChannel(selectedChannel, { passive_window_seconds_override: value })} />
+				<NumberOverride label={t('providers.editor.cooldownSeconds')} value={activeChannel.passive_cooldown_seconds_override} placeholder={settings?.monoize_passive_cooldown_seconds} onChange={value => updateChannel(selectedChannel, { passive_cooldown_seconds_override: value })} />
+				<NumberOverride label={t('providers.editor.rateLimitCooldownSeconds')} value={activeChannel.passive_rate_limit_cooldown_seconds_override} placeholder={settings?.monoize_passive_rate_limit_cooldown_seconds} onChange={value => updateChannel(selectedChannel, { passive_rate_limit_cooldown_seconds_override: value })} />
 			</div>
 		</details>
 	</div>
@@ -718,34 +713,38 @@ function NumberOverride({ label, value, placeholder, min = 1, onChange }: { labe
 	return <Field label={label}><Input type='number' min={min} value={value} placeholder={placeholder == null ? undefined : String(placeholder)} onChange={event => onChange(event.target.value)} /></Field>
 }
 
-function NullableBoolean({ label, hint, nullLabel, enabledLabel, disabledLabel, value, onChange, c }: { label: string; hint?: string; nullLabel?: string; enabledLabel?: string; disabledLabel?: string; value: boolean | null; onChange: (value: boolean | null) => void; c: (zh: string, en: string) => string }) {
-	return <Field label={label} hint={hint}><Select value={value == null ? 'inherit' : value ? 'enabled' : 'disabled'} onValueChange={next => onChange(next === 'inherit' ? null : next === 'enabled')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{nullLabel ?? c('继承全局', 'Inherit global')}</SelectItem><SelectItem value='enabled'>{enabledLabel ?? c('启用', 'Enabled')}</SelectItem><SelectItem value='disabled'>{disabledLabel ?? c('停用', 'Disabled')}</SelectItem></SelectGroup></SelectContent></Select></Field>
+function NullableBoolean({ label, hint, nullLabel, enabledLabel, disabledLabel, value, onChange }: { label: string; hint?: string; nullLabel?: string; enabledLabel?: string; disabledLabel?: string; value: boolean | null; onChange: (value: boolean | null) => void }) {
+	const { t } = useTranslation()
+	return <Field label={label} hint={hint}><Select value={value == null ? 'inherit' : value ? 'enabled' : 'disabled'} onValueChange={next => onChange(next === 'inherit' ? null : next === 'enabled')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{nullLabel ?? t('providers.editor.inheritGlobal')}</SelectItem><SelectItem value='enabled'>{enabledLabel ?? t('common.enabled')}</SelectItem><SelectItem value='disabled'>{disabledLabel ?? t('common.disabled')}</SelectItem></SelectGroup></SelectContent></Select></Field>
 }
 
-function AffinityModeOverride({ label, value, onChange, c }: { label: string; value: AffinityFailbackMode | null; onChange: (value: AffinityFailbackMode | null) => void; c: (zh: string, en: string) => string }) {
-	return <Field label={label}><Select value={value ?? 'inherit'} onValueChange={next => onChange(next === 'inherit' ? null : next as AffinityFailbackMode)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{c('继承全局', 'Inherit global')}</SelectItem><SelectItem value='sticky'>{c('保持当前 Channel', 'Keep current channel')}</SelectItem><SelectItem value='prefer_higher_priority'>{c('优先级恢复', 'Prefer higher priority')}</SelectItem></SelectGroup></SelectContent></Select></Field>
+function AffinityModeOverride({ label, value, onChange }: { label: string; value: AffinityFailbackMode | null; onChange: (value: AffinityFailbackMode | null) => void }) {
+	const { t } = useTranslation()
+	return <Field label={label}><Select value={value ?? 'inherit'} onValueChange={next => onChange(next === 'inherit' ? null : next as AffinityFailbackMode)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{t('providers.editor.inheritGlobal')}</SelectItem><SelectItem value='sticky'>{t('providers.editor.failbackSticky')}</SelectItem><SelectItem value='prefer_higher_priority'>{t('providers.editor.failbackPriority')}</SelectItem></SelectGroup></SelectContent></Select></Field>
 }
 
-function RoutingSettings({ form, setForm, settings, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; settings?: SystemSettings; c: (zh: string, en: string) => string }) {
-	return <div className='mx-auto flex w-full max-w-4xl flex-col gap-6 p-4 sm:p-6'><SectionHeading title={c('路由与重试', 'Routing and retries')} description={c('这些策略应用到 Provider 下的全部 Channel。', 'These policies apply to every channel in the provider.')} />
+function RoutingSettings({ form, setForm, settings }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; settings?: SystemSettings }) {
+	const { t } = useTranslation()
+	return <div className='mx-auto flex w-full max-w-4xl flex-col gap-6 p-4 sm:p-6'><SectionHeading title={t('providers.editor.routingTitle')} description={t('providers.editor.routingDescription')} />
 		<div className='grid gap-4 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
-			<Field label={c('Provider 最大重试', 'Provider max retries')} hint={c('-1 表示尝试全部可用 Channel。', '-1 tries every eligible channel.')}><Input type='number' min='-1' value={form.max_retries} onChange={event => setForm(previous => ({ ...previous, max_retries: Number(event.target.value) }))} /></Field>
-			<Field label={c('单 Channel 重试', 'Retries per channel')}><Input type='number' min='0' value={form.channel_max_retries} onChange={event => setForm(previous => ({ ...previous, channel_max_retries: Number(event.target.value) }))} /></Field>
-			<Field label={c('重试间隔（毫秒）', 'Retry interval (ms)')}><Input type='number' min='0' value={form.channel_retry_interval_ms} onChange={event => setForm(previous => ({ ...previous, channel_retry_interval_ms: Number(event.target.value) }))} /></Field>
-			<Field label={c('请求超时覆盖（毫秒）', 'Request timeout override (ms)')} hint={c(`留空继承全局 ${settings?.monoize_request_timeout_ms ?? '—'}`, `Empty inherits global ${settings?.monoize_request_timeout_ms ?? '—'}`)}><Input type='number' min='1' value={form.request_timeout_ms_override} onChange={event => setForm(previous => ({ ...previous, request_timeout_ms_override: event.target.value }))} /></Field>
-			<div className='flex items-center justify-between gap-4 rounded-lg border p-4'><div><Label>{c('启用熔断器', 'Circuit breaker')}</Label><p className='mt-1 text-xs text-muted-foreground'>{c('根据失败状态暂时移除 Channel。', 'Temporarily removes failing channels.')}</p></div><Switch checked={form.circuit_breaker_enabled} onCheckedChange={value => setForm(previous => ({ ...previous, circuit_breaker_enabled: value }))} /></div>
-			<div className='flex items-center justify-between gap-4 rounded-lg border p-4'><div><Label>{c('按模型隔离熔断', 'Per-model circuit breaker')}</Label><p className='mt-1 text-xs text-muted-foreground'>{c('同一 Channel 的模型分别维护健康状态。', 'Tracks health separately per model.')}</p></div><Switch checked={form.per_model_circuit_break} onCheckedChange={value => setForm(previous => ({ ...previous, per_model_circuit_break: value }))} /></div>
+			<Field label={t('providers.editor.maxRetries')} hint={t('providers.editor.maxRetriesHint')}><Input type='number' min='-1' value={form.max_retries} onChange={event => setForm(previous => ({ ...previous, max_retries: Number(event.target.value) }))} /></Field>
+			<Field label={t('providers.editor.channelRetries')}><Input type='number' min='0' value={form.channel_max_retries} onChange={event => setForm(previous => ({ ...previous, channel_max_retries: Number(event.target.value) }))} /></Field>
+			<Field label={t('providers.editor.retryInterval')}><Input type='number' min='0' value={form.channel_retry_interval_ms} onChange={event => setForm(previous => ({ ...previous, channel_retry_interval_ms: Number(event.target.value) }))} /></Field>
+			<Field label={t('providers.editor.requestTimeout')} hint={t('providers.editor.requestTimeoutHint', { value: settings?.monoize_request_timeout_ms ?? '—' })}><Input type='number' min='1' value={form.request_timeout_ms_override} onChange={event => setForm(previous => ({ ...previous, request_timeout_ms_override: event.target.value }))} /></Field>
+			<div className='flex items-center justify-between gap-4 rounded-lg border p-4'><div><Label>{t('providers.editor.circuitBreaker')}</Label><p className='mt-1 text-xs text-muted-foreground'>{t('providers.editor.circuitBreakerHint')}</p></div><Switch checked={form.circuit_breaker_enabled} onCheckedChange={value => setForm(previous => ({ ...previous, circuit_breaker_enabled: value }))} /></div>
+			<div className='flex items-center justify-between gap-4 rounded-lg border p-4'><div><Label>{t('providers.editor.perModelBreaker')}</Label><p className='mt-1 text-xs text-muted-foreground'>{t('providers.editor.perModelBreakerHint')}</p></div><Switch checked={form.per_model_circuit_break} onCheckedChange={value => setForm(previous => ({ ...previous, per_model_circuit_break: value }))} /></div>
 		</div>
 	</div>
 }
 
-function ProtocolSettings({ form, setForm, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; c: (zh: string, en: string) => string }) {
-	return <div className='mx-auto flex w-full max-w-4xl flex-col gap-6 p-4 sm:p-6'><SectionHeading title={c('协议覆盖', 'Protocol overrides')} description={c('按逻辑模型 glob 覆盖 Channel 默认接口类型。第一条匹配规则生效。', 'Override a channel default API type by logical-model glob. First match wins.')} />
+function ProtocolSettings({ form, setForm }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>> }) {
+	const { t } = useTranslation()
+	return <div className='mx-auto flex w-full max-w-4xl flex-col gap-6 p-4 sm:p-6'><SectionHeading title={t('providers.editor.protocolTitle')} description={t('providers.editor.protocolDescription')} />
 		<div className='flex flex-col gap-3'>
-			{form.api_type_overrides.map((rule, index) => <div key={index} className='grid gap-2 rounded-xl border bg-card p-3 sm:grid-cols-[1fr_220px_40px] sm:items-center'><Input value={rule.pattern} onChange={event => setForm(previous => ({ ...previous, api_type_overrides: previous.api_type_overrides.map((item, itemIndex) => itemIndex === index ? { ...item, pattern: event.target.value } : item) }))} placeholder='gpt-*' className='font-mono' /><Select value={rule.api_type} onValueChange={(api_type: ProviderType) => setForm(previous => ({ ...previous, api_type_overrides: previous.api_type_overrides.map((item, itemIndex) => itemIndex === index ? { ...item, api_type } : item) }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' aria-label={c('删除覆盖规则', 'Delete override')} onClick={() => setForm(previous => ({ ...previous, api_type_overrides: previous.api_type_overrides.filter((_, itemIndex) => itemIndex !== index) }))}><Trash2 data-icon /></Button></div>)}
-			<Button variant='outline' className='self-start' onClick={() => setForm(previous => ({ ...previous, api_type_overrides: [...previous.api_type_overrides, { pattern: '', api_type: 'chat_completion' }] }))}><Plus data-icon />{c('添加覆盖规则', 'Add override')}</Button>
+			{form.api_type_overrides.map((rule, index) => <div key={index} className='grid gap-2 rounded-xl border bg-card p-3 sm:grid-cols-[1fr_220px_40px] sm:items-center'><Input value={rule.pattern} onChange={event => setForm(previous => ({ ...previous, api_type_overrides: previous.api_type_overrides.map((item, itemIndex) => itemIndex === index ? { ...item, pattern: event.target.value } : item) }))} placeholder='gpt-*' className='font-mono' /><Select value={rule.api_type} onValueChange={(api_type: ProviderType) => setForm(previous => ({ ...previous, api_type_overrides: previous.api_type_overrides.map((item, itemIndex) => itemIndex === index ? { ...item, api_type } : item) }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select><Button size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' aria-label={t('providers.editor.deleteOverride')} onClick={() => setForm(previous => ({ ...previous, api_type_overrides: previous.api_type_overrides.filter((_, itemIndex) => itemIndex !== index) }))}><Trash2 data-icon /></Button></div>)}
+			<Button variant='outline' className='self-start' onClick={() => setForm(previous => ({ ...previous, api_type_overrides: [...previous.api_type_overrides, { pattern: '', api_type: 'chat_completion' }] }))}><Plus data-icon />{t('providers.editor.addOverride')}</Button>
 		</div>
 		<Separator />
-		<div className='rounded-xl border bg-card p-4 sm:p-5'><NullableBoolean label={c('剥离跨协议嵌套额外字段', 'Strip cross-protocol nested extras')} value={form.strip_cross_protocol_nested_extra} onChange={value => setForm(previous => ({ ...previous, strip_cross_protocol_nested_extra: value }))} c={c} /></div>
+		<div className='rounded-xl border bg-card p-4 sm:p-5'><NullableBoolean label={t('providers.editor.stripNestedExtras')} value={form.strip_cross_protocol_nested_extra} onChange={value => setForm(previous => ({ ...previous, strip_cross_protocol_nested_extra: value }))} /></div>
 	</div>
 }

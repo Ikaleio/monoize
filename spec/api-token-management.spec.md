@@ -270,3 +270,5 @@ TM-UI1. The create and edit dialogs MUST render `sub_account_balance_nano_usd` o
 TM-UI2. A non-admin create or update mutation MUST omit `sub_account_balance_nano_usd` from its JSON request body.
 
 TM-UI3. The create and edit dialogs MUST render a `request_capture_retention` select with exactly the options `5m`, `1h`, `24h`, and `7d` (localized labels, stored values verbatim). The select MUST be rendered iff the dialog's `request_capture_mode` value is not `"off"`. When hidden, the mutation still submits the current draft value, so toggling the mode does not reset retention. The create dialog's initial value MUST be `"24h"`.
+
+TM-UI4. The create and edit dialogs MUST render one shared form component (`frontend-design-system.spec.md` DS67). Only the expiry field (`expires_in_days`) is create-only. Every other field MUST render with the same label, help text, and control in both modes. When `model_limits_enabled` is true, `model_limits` MUST be edited with `ModelMultiSelect` (DS63) with `allowCustom = true`; its options MUST be the `model_id` values from `GET /api/dashboard/marketplace/models`. The mutation MUST submit the selected IDs in display order.

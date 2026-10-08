@@ -253,8 +253,10 @@ the API base URL; do not instruct the user to open system settings. If non-empty
 - derived endpoint paths in this order: `/v1/chat/completions`, `/v1/responses`,
   `/v1/messages`, `/v1/models`.
 
-DH-8c. Clicking a base URL or endpoint row MUST copy the full absolute URL to the
-clipboard and toast a localized copied confirmation.
+DH-8c. Each base URL or endpoint row MUST be one button that copies the full absolute URL
+to the clipboard. The row MUST show a trailing `Copy` icon. Copy feedback MUST follow
+`frontend-design-system.spec.md` DS58: the icon changes to `Check` for 2000 ms, and only a
+failure shows a toast.
 
 DH-8d. `GET /api/dashboard/settings/public` MUST continue to read only the setting keys
 defined for that endpoint in one set-based database query. It MUST NOT load transforms,

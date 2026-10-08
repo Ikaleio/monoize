@@ -8,16 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import {
   DataList,
   DataListActions,
@@ -31,7 +22,8 @@ import { DataTableShell } from "@/components/ui/data-table-shell";
 import { StatusBadge } from "@/components/ui/status";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { GroupMultiSelect } from "@/components/groups/GroupPicker";
-import { PageWrapper } from "@/components/ui/motion";
+import { AnimatedButton, PageWrapper } from "@/components/ui/motion";
+import { QueryError } from "@/components/ui/query-error";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -102,7 +94,7 @@ function formFromPlan(plan: BillingPlan): FormState {
 
 export function BillingPlansPage() {
   const { t } = useTranslation();
-  const { data, isLoading } = useBillingPlans();
+  const { data, error, isLoading, isValidating, mutate } = useBillingPlans();
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const plans = useMemo(() => data ?? [], [data]);
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -181,18 +173,14 @@ export function BillingPlansPage() {
 
   const confirmDelete = async () => {
     if (!deleting) return;
-    try {
-      await deleteBillingPlanOptimistic(deleting.id, plans, (error) => toast.error(error.message));
-    } catch {
-      // optimistic helper already rolled back and toasted
-    } finally {
-      setDeleting(null);
-    }
+    await deleteBillingPlanOptimistic(deleting.id, plans, (deleteError) =>
+      toast.error(deleteError.message)
+    ).catch(() => undefined);
   };
 
   const createButton = (
     <Button onClick={startCreate}>
-      <Plus aria-hidden="true" />
+      <Plus data-icon="inline-start" aria-hidden="true" />
       {t("billingPlans.create")}
     </Button>
   );
@@ -207,8 +195,11 @@ export function BillingPlansPage() {
 
   return (
     <PageWrapper className="space-y-6">
-      <PageHeader title={t("billingPlans.title")} description={t("billingPlans.description")} actions={createButton} />
+      <PageHeader title={t("billingPlans.title")} description={t("billingPlans.description")} actions={<AnimatedButton>{createButton}</AnimatedButton>} />
 
+      {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
+
+      {data !== undefined ? (
       <DataTableShell
         toolbar={
           <p className="ml-auto text-sm tabular-nums text-muted-foreground">
@@ -312,6 +303,7 @@ export function BillingPlansPage() {
           </DataListBody>
         </DataList>
       </DataTableShell>
+      ) : null}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
@@ -432,23 +424,15 @@ export function BillingPlansPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={Boolean(deleting)} onOpenChange={(value) => !value && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("billingPlans.deleteTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("billingPlans.deleteDescription", { name: deleting?.name })}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => void confirmDelete()}
-            >
-              {t("common.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDeleteDialog
+        open={deleting !== null}
+        onOpenChange={(value) => {
+          if (!value) setDeleting(null);
+        }}
+        title={t("billingPlans.deleteTitle")}
+        description={t("billingPlans.deleteDescription", { name: deleting?.name })}
+        onConfirm={confirmDelete}
+      />
     </PageWrapper>
   );
 }

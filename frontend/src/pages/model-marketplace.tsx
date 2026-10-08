@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, SearchX, Store } from "lucide-react";
+import { SearchX, Store } from "lucide-react";
 import { ModelIcon } from "@/components/ModelIcon";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import {
   DataList,
   DataListBody,
@@ -33,19 +34,12 @@ export function ModelMarketplacePage() {
   const { data, error, isLoading, isValidating, mutate } = useMarketplaceModels();
   const records = useMemo(() => data ?? [], [data]);
   const [search, setSearch] = useState("");
-  const [copiedModel, setCopiedModel] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     if (!query) return records;
     return records.filter((record) => record.model_id.toLocaleLowerCase().includes(query));
   }, [records, search]);
-
-  const copyModelId = async (modelId: string) => {
-    await navigator.clipboard.writeText(modelId);
-    setCopiedModel(modelId);
-    setTimeout(() => setCopiedModel((current) => (current === modelId ? null : current)), 2000);
-  };
 
   if (isLoading && !error && data === undefined) {
     return (
@@ -123,15 +117,10 @@ export function ModelMarketplacePage() {
                         <span className="truncate font-mono font-medium" title={record.model_id}>
                           {record.model_id}
                         </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-11 shrink-0 touch-manipulation sm:size-7"
-                          aria-label={t("modelMarketplace.copyModelId", { model: record.model_id })}
-                          onClick={() => void copyModelId(record.model_id)}
-                        >
-                          {copiedModel === record.model_id ? <Check /> : <Copy />}
-                        </Button>
+                        <CopyButton
+                          value={record.model_id}
+                          label={t("modelMarketplace.copyModelId", { model: record.model_id })}
+                        />
                       </div>
                       <p className="truncate pl-6 text-muted-foreground">{record.models_dev_provider || "—"}</p>
                     </DataListCell>

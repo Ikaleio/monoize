@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { QueryError } from "@/components/ui/query-error";
 import { Label } from "@/components/ui/label";
 import { DataTableShell } from "@/components/ui/data-table-shell";
 import {
@@ -42,7 +43,7 @@ import {
 } from "@/components/ui/tooltip";
 import { OrderStatusBadge } from "@/components/recharge/order-status-badge";
 import { PaginationFooter } from "@/pages/wallet/pagination-footer";
-import { formatTime } from "@/pages/request-logs/utils";
+import { formatDateTime } from "@/lib/format-time";
 import { DashboardApiError } from "@/lib/api";
 import type { RechargeOrder, RechargeOrderStatus } from "@/lib/api";
 import { ORDER_STATUSES, SUPPORTS_REFUND } from "@/lib/recharge";
@@ -137,7 +138,11 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
     [filters],
   );
   const pageKey = rechargeOrdersSWRKey(PAGE_SIZE, offset, queryFilters);
-  const { data, isLoading } = useRechargeOrders(PAGE_SIZE, offset, queryFilters);
+  const { data, error, isLoading, isValidating, mutate } = useRechargeOrders(
+    PAGE_SIZE,
+    offset,
+    queryFilters,
+  );
 
   const needsManual = refundTarget
     ? !SUPPORTS_REFUND[refundTarget.channel_type_id]
@@ -186,8 +191,11 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
 
   return (
     <>
+      {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
+
+      {data !== undefined ? (
       <DataTableShell
-        isEmpty={!data || data.orders.length === 0}
+        isEmpty={data.orders.length === 0}
         emptyState={
           <EmptyState
             icon={<ReceiptText className="size-10" aria-hidden="true" />}
@@ -212,7 +220,7 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
                 <DataListRow key={order.id}>
                   <DataListCell label={t("common.created")}>
                     <span className="tabular-nums text-muted-foreground">
-                      {formatTime(order.created_at)}
+                      {formatDateTime(order.created_at)}
                     </span>
                   </DataListCell>
                   <DataListCell primary>
@@ -288,6 +296,7 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
           ) : null}
         </div>
       </DataTableShell>
+      ) : null}
 
       <AlertDialog
         open={refundTarget !== null}

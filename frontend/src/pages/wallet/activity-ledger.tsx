@@ -21,13 +21,13 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { springs } from "@/components/ui/motion";
-import { formatTime } from "@/pages/request-logs/utils";
+import { formatDateTime } from "@/lib/format-time";
 import { formatNanoUsd } from "@/lib/exact-decimal";
 import { WALLET_LEDGER_KINDS } from "@/lib/recharge";
 import { useLedger } from "@/lib/swr";
 import { cn } from "@/lib/utils";
 import { PaginationFooter } from "./pagination-footer";
-import { WalletFeedback } from "./wallet-feedback";
+import { QueryError } from "@/components/ui/query-error";
 
 const PAGE_SIZE = 10;
 const ALL_KINDS = [...WALLET_LEDGER_KINDS];
@@ -44,7 +44,7 @@ export function ActivityLedger({
   const [kind, setKind] = useState("all");
   const [offset, setOffset] = useState(0);
   const kinds = kind === "all" ? ALL_KINDS : [kind];
-  const { data, error, isLoading, mutate } = useLedger(
+  const { data, error, isLoading, isValidating, mutate } = useLedger(
     PAGE_SIZE,
     offset,
     kinds,
@@ -96,7 +96,7 @@ export function ActivityLedger({
         </div>
       ) : error && !data ? (
         <div className="px-4 pb-4">
-          <WalletFeedback onRetry={mutate} />
+          <QueryError onRetry={mutate} retrying={isValidating} />
         </div>
       ) : !data?.entries.length ? (
         <EmptyState
@@ -152,7 +152,7 @@ export function ActivityLedger({
                       </DataListCell>
                       <DataListCell label={t("wallet.createdAt")}>
                         <span className="tabular-nums text-muted-foreground">
-                          {formatTime(entry.created_at)}
+                          {formatDateTime(entry.created_at)}
                         </span>
                       </DataListCell>
                     </motion.li>

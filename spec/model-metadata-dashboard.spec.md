@@ -133,12 +133,12 @@ UI1. The `/dashboard/models` page is defined by `model-pricing.spec.md` §11. Th
 no standalone metadata table page.
 
 UI2. Metadata fields (`mode`, `max_tokens`, `max_input_tokens`, `max_output_tokens`,
-`models_dev_provider`) are shown and edited inside the model pricing sheet
+`models_dev_provider`) are shown and edited inside the model pricing editor dialog
 (`model-pricing.spec.md` MP-UI3) in a section separated from the price fields.
 Metadata edits persist through §3.3; price edits persist through
 `model-pricing.spec.md` MP-A2.
 
-UI3. When `raw_json.providers` contains multiple variants, the pricing sheet MUST show
+UI3. When `raw_json.providers` contains multiple variants, the pricing editor MUST show
 a provider-variant selector. Selecting a variant auto-fills price fields (exact
 decimal strings from `raw_json`) and limit fields from that variant. The user MAY edit
 the auto-filled values before saving.

@@ -186,15 +186,6 @@ export function ProviderCard({
 			})
 		}
 
-		items.push({
-			key: 'enabled-state',
-			collapsed: (
-				<StatusBadge variant={provider.enabled ? 'success' : 'info'}>
-					{provider.enabled ? t('common.enabled') : t('common.disabled')}
-				</StatusBadge>
-			)
-		})
-
 		if (attentionModelCount > 0) {
 			items.push({
 				key: 'model-attention',
@@ -233,7 +224,7 @@ export function ProviderCard({
 		}
 
 		return items
-	}, [attentionModelCount, channelTypeLabelEntries, groupNameById, provider.enabled, provider.group_ids, t, unavailableModelCount])
+	}, [attentionModelCount, channelTypeLabelEntries, groupNameById, provider.group_ids, t, unavailableModelCount])
 
 	const handleQuickTest = async (channelId: string) => {
 		setQuickTestingChannelId(channelId)
@@ -416,11 +407,11 @@ export function ProviderCard({
 											<Button
 												variant='ghost'
 												size='icon'
-												className={cn(providerActionButtonClass, 'text-destructive hover:text-destructive')}
+												className={providerActionButtonClass}
 												aria-label={t('common.delete')}
 												onClick={() => onDelete(provider)}
 											>
-												<Trash2 />
+												<Trash2 className='text-error-foreground' />
 											</Button>
 										</TooltipTrigger>
 										<TooltipContent>{t('common.delete')}</TooltipContent>
@@ -552,11 +543,9 @@ export function ProviderCard({
 															{Object.keys(channel.models ?? {}).length}M ·{' '}
 															W:{channel.weight}
 														</span>
-														<StatusBadge variant={channel.enabled ? 'success' : 'info'}>
-															{channel.enabled ?
-																t('common.enabled')
-															: 	t('common.disabled')}
-														</StatusBadge>
+														{channel.enabled ?
+															<StatusBadge variant='success'>{t('common.enabled')}</StatusBadge>
+														:	<Badge variant='secondary'>{t('common.disabled')}</Badge>}
 													</span>
 												</div>
 											)}

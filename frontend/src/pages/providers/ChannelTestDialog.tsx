@@ -3,20 +3,19 @@ import { useTranslation } from 'react-i18next'
 import {
 	Activity,
 	Check,
-	Clipboard,
 	Layers3,
 	ListRestart,
 	Loader2,
 	X,
 	Zap
 } from 'lucide-react'
-import { toast } from 'sonner'
 import { mutate } from 'swr'
 import { Virtuoso } from 'react-virtuoso'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Checkbox } from '@/components/ui/checkbox'
+import { CopyButton } from '@/components/ui/copy-button'
 import {
 	Dialog,
 	DialogContent,
@@ -157,11 +156,6 @@ export function ChannelTestDialog({
 		state => state.status === 'passed'
 	).length
 
-	const copyError = async (error: string) => {
-		await navigator.clipboard.writeText(error)
-		toast.success(t('providers.testErrorCopied'))
-	}
-
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className='flex max-h-[85vh] max-w-2xl flex-col overflow-hidden'>
@@ -295,7 +289,7 @@ export function ChannelTestDialog({
 											</Button>
 										</div>
 										{status === 'failed' && state?.error && (
-											<div className='flex items-start gap-2 border-t bg-destructive/5 px-3 py-2'>
+											<div className='flex items-start gap-2 border-t bg-error-soft px-3 py-2'>
 												<div className='flex min-w-0 flex-1 flex-col gap-1'>
 													<div className='flex flex-wrap items-center gap-1.5'>
 														{state.http_status != null && (
@@ -312,19 +306,11 @@ export function ChannelTestDialog({
 															</Badge>
 														)}
 													</div>
-													<code className='break-words whitespace-pre-wrap font-mono text-sm leading-relaxed text-destructive'>
+													<code className='break-words whitespace-pre-wrap font-mono text-sm leading-relaxed text-error-foreground'>
 														{state.error}
 													</code>
 												</div>
-												<Button
-													variant='ghost'
-													size='icon'
-													className='size-8 shrink-0'
-													aria-label={t('providers.copyTestError')}
-													onClick={() => copyError(state.error!)}
-												>
-													<Clipboard />
-												</Button>
+												<CopyButton value={state.error} label={t('providers.copyTestError')} />
 											</div>
 										)}
 									</div>

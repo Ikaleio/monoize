@@ -8,14 +8,8 @@ import type {
 	MonoizeChannel,
 	ProviderModelRuntimeStatus
 } from '@/lib/api'
+import { formatDateTime } from '@/lib/format-time'
 import { statusBadge } from './shared'
-
-function formatTimestamp(value: string | undefined, locale: string) {
-	if (!value) return null
-	const timestamp = new Date(value)
-	if (Number.isNaN(timestamp.getTime())) return value
-	return timestamp.toLocaleString(locale)
-}
 
 export function ProviderModelRuntimeBadge({
 	model,
@@ -80,13 +74,13 @@ export function ProviderModelRuntimeBadge({
 										})}
 									</span>
 									{status.breaker_channels.length > 0 && (
-										<div className='flex flex-col gap-1 text-destructive'>
+										<div className='flex flex-col gap-1 text-error-foreground'>
 											<span>{t('providers.trippedChannels')}</span>
 											{status.breaker_channels.map(channel => (
 												<span key={channel.channel_id} className='break-words font-mono text-sm'>
 													{channel.channel_name}
 													{channel.cooldown_until ?
-														` · ${t('providers.until', { time: formatTimestamp(channel.cooldown_until, navigator.language) })}`
+														` · ${t('providers.until', { time: formatDateTime(channel.cooldown_until) })}`
 													: 	null}
 												</span>
 											))}
@@ -145,7 +139,7 @@ export function ChannelRuntimeStatus({
 						<div className='flex min-w-56 max-w-sm flex-col gap-2 p-2 text-sm'>
 							<div className='flex items-center gap-2 font-medium'>
 								{status === 'unhealthy' ?
-									<TriangleAlert className='size-4 text-destructive' />
+									<TriangleAlert className='size-4 text-error-foreground' />
 								: 	<RadioTower className='size-4 text-warning' />}
 								{perModelCircuitBreak ?
 									t(
@@ -168,7 +162,7 @@ export function ChannelRuntimeStatus({
 								<span className='flex items-center gap-2 text-muted-foreground'>
 									<Clock3 className='size-4' />
 									{t('providers.cooldownUntil', {
-										time: formatTimestamp(channel._cooldown_until, navigator.language)
+										time: formatDateTime(channel._cooldown_until)
 									})}
 								</span>
 							)}

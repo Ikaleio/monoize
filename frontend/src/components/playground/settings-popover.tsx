@@ -35,7 +35,7 @@ export function SettingsPopover({
           aria-label={t("playground.settings")}
           className="size-11 shrink-0 touch-manipulation text-muted-foreground hover:text-foreground sm:size-8"
         >
-          <Settings2 className="h-4 w-4" />
+          <Settings2 aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent

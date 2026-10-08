@@ -613,7 +613,7 @@ export function PlaygroundPage() {
                 onClick={handleNewChat}
                 className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
               >
-                <SquarePen className="h-3.5 w-3.5" />
+                <SquarePen aria-hidden="true" />
                 {t("playground.newChat")}
               </Button>
             </div>
@@ -645,7 +645,7 @@ export function PlaygroundPage() {
               transition={layoutTransition}
               className="mx-auto mb-2 flex w-full max-w-3xl shrink-0 items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-2"
             >
-              <span className="min-w-0 flex-1 break-words text-sm text-destructive">
+              <span className="min-w-0 flex-1 break-words text-sm text-error-foreground">
                 {error.message}
               </span>
               <Button
@@ -655,7 +655,7 @@ export function PlaygroundPage() {
                 disabled={busy}
                 className="h-7 shrink-0 gap-1.5"
               >
-                <RefreshCcw className="h-3 w-3" />
+                <RefreshCcw aria-hidden="true" />
                 {t("playground.retry")}
               </Button>
               <Button
@@ -665,7 +665,7 @@ export function PlaygroundPage() {
                 aria-label={t("playground.dismiss")}
                 className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
               >
-                <X className="h-3.5 w-3.5" />
+                <X aria-hidden="true" />
               </Button>
             </motion.div>
           )}

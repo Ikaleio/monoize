@@ -19,7 +19,7 @@ import {
 import type { SystemSettings } from "@/lib/api";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
 import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
-import { CodexModelSelector } from "@/components/settings/codex-model-selector";
+import { ModelMultiSelect } from "@/components/models/model-multi-select";
 import { ModelRedirectsEditor } from "@/components/settings/model-redirects-editor";
 import { SuffixMapEditor } from "@/components/settings/suffix-map-editor";
 import {
@@ -184,14 +184,20 @@ export function SettingsPage() {
         return (
           <SettingsGroup id="codex">
             <SettingBlock id="codex_model_ids">
-              <CodexModelSelector
-                availableModelIds={availableCodexModelIds}
-                selectedModelIds={currentSettings.codex_model_ids ?? []}
-                isLoading={providersLoading}
-                loadError={providersError}
-                onRetry={() => void mutateProviders()}
-                onChange={(codex_model_ids) => handleChange({ codex_model_ids })}
-              />
+              <div className="flex flex-col gap-4">
+                <ModelMultiSelect
+                  value={currentSettings.codex_model_ids ?? []}
+                  options={availableCodexModelIds}
+                  loading={providersLoading}
+                  error={providersError}
+                  onRetry={() => mutateProviders()}
+                  onChange={(codex_model_ids) => handleChange({ codex_model_ids })}
+                  label={t("settings.codexModelsLegend")}
+                />
+                <p className="text-pretty text-sm leading-6 text-muted-foreground">
+                  {t("settings.codexModelsCompatibilityHelp")}
+                </p>
+              </div>
             </SettingBlock>
           </SettingsGroup>
         );
@@ -213,6 +219,7 @@ export function SettingsPage() {
               <ModelRedirectsEditor
                 value={currentSettings.global_model_redirects ?? []}
                 disabled={saving}
+                emptyText={t("settings.globalModelRedirectsEmpty")}
                 onChange={(global_model_redirects) => handleChange({ global_model_redirects })}
               />
             </SettingBlock>

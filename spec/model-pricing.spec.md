@@ -832,18 +832,21 @@ MP-UI1. The page at `/dashboard/models` contains exactly five tabs in this order
 MP-UI2. Every tab uses SWR for data loading, renders a skeleton while loading, and
 applies optimistic updates for user-triggered mutations.
 
-MP-UI3. Model Pricing tab: a virtualized table (`TableVirtuoso`) with columns Model,
-Mode, Input $/1M, Output $/1M, Source, Status (enabled + lock count), Updated. The Mode
-cell MUST show a `fast` badge when `billing_expr.service_tiers.fast` exists. A row
-click opens a pricing sheet (drawer) with one section per `billing_mode` selected by a
-mode switcher: per-token price fields, per-request price field, and a tiered editor
-for `billing_expr`. The tiered editor MUST include the standard context tiers and an
-optional Fast / Priority table (`service_tiers.fast`). All price inputs are decimal
-strings; conversion and validation MUST NOT pass values through JavaScript `Number` or
-`parseFloat`.
+MP-UI3. Model Pricing tab: a virtualized `DataList` (DS68) with columns Model, Mode,
+Input $/1M, Output $/1M, Source, Status (enabled + lock count), Updated, and Actions.
+The Updated cell MUST use `formatDateTime` (DS66). The Mode cell MUST show a `fast`
+badge when `billing_expr.service_tiers.fast` exists. The row edit action opens the
+pricing editor dialog (DS67). The row delete action opens DS59 confirmation and, after
+confirmation, deletes the price row. The pricing editor has one section per
+`billing_mode` selected by a mode switcher: per-token price fields, per-request price
+field, and a tiered editor for `billing_expr`. The tiered editor MUST include the
+standard context tiers and an optional Fast / Priority table (`service_tiers.fast`).
+All price inputs are decimal strings; conversion and validation MUST NOT pass values
+through JavaScript `Number` or `parseFloat`. When the search query matches no row, the
+tab MUST render a no-match inline empty state, not the no-prices empty state.
 
-MP-UI4. Unpriced Models tab: renders MP-A4 results with a per-row action that opens
-the pricing sheet pre-filled with the model id.
+MP-UI4. Unpriced Models tab: renders MP-A4 results in a virtualized `DataList` with a
+per-row action that opens the pricing editor dialog pre-filled with the model id.
 
 MP-UI5. Tool Prices tab: an editor for the `tool_prices` object. Each row has usage
 class, USD price, a unit selector (`1k_calls`, `minute`, `session`), and a

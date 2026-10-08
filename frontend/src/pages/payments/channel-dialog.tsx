@@ -204,7 +204,7 @@ export function ChannelDialog({
         );
       }
       onOpenChange(false);
-      toast.success(t("common.success"));
+      toast.success(t("payments.saveSuccess"));
     } catch {
       // optimistic helper already rolled back and toasted
     } finally {

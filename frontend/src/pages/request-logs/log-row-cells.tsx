@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ScanSearch } from "lucide-react";
+import { Info, ScanSearch, TriangleAlert, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ModelBadge } from "@/components/ModelBadge";
 import { cn } from "@/lib/utils";
+import { formatDateTime } from "@/lib/format-time";
 import type { RequestLog } from "@/lib/api";
 import {
   formatNanoPerTokenPerMillion,
@@ -23,7 +24,6 @@ import {
   formatCachePercentage,
   formatCost,
   formatDuration,
-  formatTime,
   getDurationMs,
   getTtfbMs,
   readNanoString,
@@ -593,7 +593,7 @@ export function LogRowCells({
       <td className="whitespace-nowrap py-1 pl-2 pr-2 align-middle font-mono text-muted-foreground">
         <span className="inline-flex w-full flex-col leading-4">
           <span className="h-4 whitespace-nowrap">
-            {formatTime(log.created_at)}
+            {formatDateTime(log.created_at)}
           </span>
           <span className="flex h-6 w-full items-center gap-1">
             {log.request_id ? (
@@ -1115,28 +1115,33 @@ export function LogRowCells({
                   )}
                   {freeReason === "unpriced" && (
                     <div className="text-warning text-xs flex items-center gap-1">
-                      ℹ {t("requestLogs.freeReasonUnpriced")}
+                      <Info className="size-3.5 shrink-0" aria-hidden="true" />
+                      {t("requestLogs.freeReasonUnpriced")}
                     </div>
                   )}
                   {freeReason === "missing_usage" && (
                     <div className="text-warning text-xs flex items-center gap-1">
-                      ℹ {t("requestLogs.freeReasonMissingUsage")}
+                      <Info className="size-3.5 shrink-0" aria-hidden="true" />
+                      {t("requestLogs.freeReasonMissingUsage")}
                     </div>
                   )}
                   {unpricedToolClasses.length > 0 && (
                     <div className="text-warning text-xs flex items-center gap-1">
-                      ⚠ {t("requestLogs.unpricedToolClasses")}:{" "}
+                      <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+                      {t("requestLogs.unpricedToolClasses")}:{" "}
                       {unpricedToolClasses.join(", ")}
                     </div>
                   )}
                   {isEstimatedBilling && (
                     <div className="text-warning text-xs flex items-center gap-1">
-                      ⚡ {t("requestLogs.estimatedBilling")}
+                      <Zap className="size-3.5 shrink-0" aria-hidden="true" />
+                      {t("requestLogs.estimatedBilling")}
                     </div>
                   )}
                   {isAdminUnpricedExemption && (
                     <div className="text-warning text-xs flex items-center gap-1">
-                      ℹ {t("requestLogs.adminUnpricedExemption")}
+                      <Info className="size-3.5 shrink-0" aria-hidden="true" />
+                      {t("requestLogs.adminUnpricedExemption")}
                     </div>
                   )}
                   <div className="border-t border-muted pt-2 mt-2">

@@ -50,7 +50,7 @@ export function ApiKeyDropdown({
           aria-label={`${t("playground.apiKey")}: ${selectedLabel}`}
           className="h-8 max-w-[10rem] gap-1.5 border border-transparent px-2 text-xs font-medium text-muted-foreground hover:border-border hover:text-foreground"
         >
-          <KeyRound className="h-3.5 w-3.5 shrink-0" />
+          <KeyRound aria-hidden="true" />
           <span className="min-w-0 truncate">{selectedLabel}</span>
           <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
         </Button>

@@ -1,17 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Plus, Server } from 'lucide-react'
+import { Plus, Server } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle
-} from '@/components/ui/alert-dialog'
+import { ConfirmDeleteDialog } from '@/components/ui/confirm-delete-dialog'
+import { QueryError } from '@/components/ui/query-error'
 import { toast } from 'sonner'
 import type { Provider } from '@/lib/api'
 import {
@@ -34,7 +26,13 @@ import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
 
 export function ProvidersPage() {
 	const { t } = useTranslation()
-	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders({ refreshInterval: 10000 })
+	const {
+		data: providersData,
+		error: providersError,
+		isLoading,
+		isValidating,
+		mutate: reloadProviders
+	} = useProviders({ refreshInterval: 10000 })
 	const providers = providersData ?? []
 	const { data: settings } = useSettings()
 	const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
@@ -51,7 +49,6 @@ export function ProvidersPage() {
 	const applyReorder = async (orderedIds: string[]) => {
 		try {
 			await reorderProviders(orderedIds)
-			toast.success(t('providers.reorderSuccess'))
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : t('common.error'))
 		}
@@ -83,26 +80,18 @@ export function ProvidersPage() {
 		await applyReorder(next.map(provider => provider.id))
 	}
 
-	const handleDelete = async (provider: Provider) => {
-		setDeleteTarget(provider)
-	}
-
 	const confirmDelete = async () => {
 		if (!deleteTarget) return
 		try {
 			await deleteProviderOptimistic(deleteTarget.id, providers)
-			toast.success(t('providers.deleteSuccess'))
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : t('common.error'))
-		} finally {
-			setDeleteTarget(null)
 		}
 	}
 
 	const handleToggle = async (provider: Provider, enabled: boolean) => {
 		try {
 			await updateProviderOptimistic(provider.id, { enabled }, providers)
-			toast.success(t('providers.updateSuccess'))
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : t('common.error'))
 		}
@@ -117,13 +106,7 @@ export function ProvidersPage() {
 	}
 
 	const errorState = providersError ? (
-		<EmptyState
-			variant='card'
-			icon={<AlertTriangle className='h-12 w-12 text-destructive' />}
-			title={t('providers.loadFailed', { defaultValue: 'Failed to load providers' })}
-			description={<span className='font-mono text-xs break-all'>{providersError instanceof Error ? providersError.message : t('common.error')}</span>}
-			action={<Button variant='outline' onClick={() => void reloadProviders()}>{t('common.retry', { defaultValue: 'Retry' })}</Button>}
-		/>
+		<QueryError onRetry={reloadProviders} retrying={isValidating} stale={providersData !== undefined} />
 	) : null
 
 	if (providersError && !providersData) {
@@ -151,7 +134,7 @@ export function ProvidersPage() {
 				<PageHeader title={t('providers.title')} description={t('providers.description')} actions={(
 					<AnimatedButton>
 						<Button onClick={() => setCreateOpen(true)}>
-							<Plus className='h-4 w-4 mr-2' />
+							<Plus data-icon='inline-start' aria-hidden='true' />
 							{t('providers.addProvider')}
 						</Button>
 					</AnimatedButton>
@@ -161,7 +144,7 @@ export function ProvidersPage() {
 			{errorState}
 
 			<div className='space-y-4'>
-				{providers.length === 0 && (
+				{providersData !== undefined && providers.length === 0 && (
 					<motion.div
 						initial={{ opacity: 0, scale: 0.95 }}
 						animate={{ opacity: 1, scale: 1 }}
@@ -169,10 +152,10 @@ export function ProvidersPage() {
 					>
 						<EmptyState
 							variant='card'
-							icon={<Server className='h-12 w-12' />}
+							icon={<Server className='size-10' aria-hidden='true' />}
 							title={t('providers.noProviders')}
 							description={t('providers.emptyStateDesc')}
-							action={<Button variant='outline' onClick={() => setCreateOpen(true)}><Plus className='h-4 w-4 mr-2' />{t('providers.addProvider')}</Button>}
+							action={<Button onClick={() => setCreateOpen(true)}><Plus data-icon='inline-start' aria-hidden='true' />{t('providers.addProvider')}</Button>}
 						/>
 					</motion.div>
 				)}
@@ -184,7 +167,7 @@ export function ProvidersPage() {
 						index={index}
 						total={providers.length}
 						onEdit={setEditProvider}
-						onDelete={handleDelete}
+						onDelete={setDeleteTarget}
 						onMove={moveProvider}
 						onToggle={handleToggle}
 						onDragStart={setDraggingProviderId}
@@ -226,25 +209,15 @@ export function ProvidersPage() {
 				settings={settings}
 			/>
 
-			<AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open) setDeleteTarget(null) }}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>{t('providers.deleteConfirm')}</AlertDialogTitle>
-						<AlertDialogDescription>
-							{t('providers.deleteConfirmDesc', { id: deleteTarget?.name })}
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-						<AlertDialogAction
-							className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
-							onClick={confirmDelete}
-						>
-							{t('common.delete')}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
+			<ConfirmDeleteDialog
+				open={deleteTarget !== null}
+				onOpenChange={open => {
+					if (!open) setDeleteTarget(null)
+				}}
+				title={t('providers.deleteConfirm')}
+				description={t('providers.deleteConfirmDesc', { name: deleteTarget?.name })}
+				onConfirm={confirmDelete}
+			/>
 		</PageWrapper>
 	)
 }

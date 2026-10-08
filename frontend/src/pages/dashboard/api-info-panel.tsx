@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { Check, Copy } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { Button } from "@/components/ui/button";
 import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -29,6 +31,27 @@ const ENDPOINTS = [
   { labelKey: "dashboard.api.models", fallback: "Models", path: "/v1/models" },
 ] as const;
 
+/** DH-8c: one row-sized copy button with the shared copy feedback. */
+function CopyRow({ value, children }: { value: string; children: ReactNode }) {
+  const { t } = useTranslation();
+  const { copied, copy } = useCopyToClipboard();
+  return (
+    <button
+      type="button"
+      aria-label={`${t("common.copy")}: ${value}`}
+      className="flex w-full items-center gap-3 rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      onClick={() => void copy(value)}
+    >
+      <span className="min-w-0 flex-1">{children}</span>
+      {copied ? (
+        <Check className="size-4 shrink-0 text-success" aria-hidden="true" />
+      ) : (
+        <Copy className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 interface ApiInfoPanelProps extends QueryErrorProps {
   failed?: boolean;
   settings: PublicSystemSettings | undefined;
@@ -46,15 +69,6 @@ export function ApiInfoPanel({
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const baseUrl = settings?.api_base_url?.trim() ?? "";
-
-  const copy = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success(t("common.copied", "Copied"));
-    } catch {
-      toast.error(t("common.error", "Error"));
-    }
-  };
 
   return (
     <motion.div
@@ -106,40 +120,35 @@ export function ApiInfoPanel({
             />
           ) : (
             <div className="flex min-h-0 flex-col gap-2 overflow-auto">
-              <button
-                type="button"
-                className="w-full rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 active:bg-muted/70"
-                onClick={() => void copy(baseUrl)}
-              >
-                <p className="text-sm text-muted-foreground">
+              <CopyRow value={baseUrl}>
+                <span className="block text-sm text-muted-foreground">
                   {t("dashboard.apiBaseUrl", "API Base URL")}
-                </p>
-                <p className="mt-0.5 truncate font-mono text-sm font-semibold">
+                </span>
+                <span className="mt-0.5 block truncate font-mono text-sm font-semibold">
                   {baseUrl}
-                </p>
-              </button>
+                </span>
+              </CopyRow>
               {ENDPOINTS.map((endpoint, index) => {
                 const fullUrl = `${baseUrl.replace(/\/+$/, "")}${endpoint.path}`;
                 return (
-                  <motion.button
+                  <motion.div
                     key={endpoint.path}
-                    type="button"
                     initial={{ opacity: 0, x: 10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{
                       delay: 0.04 * (index + 1),
                       ...transitions.normal,
                     }}
-                    className="w-full rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 active:bg-muted/70"
-                    onClick={() => void copy(fullUrl)}
                   >
-                    <p className="text-sm text-muted-foreground">
-                      {t(endpoint.labelKey, endpoint.fallback)}
-                    </p>
-                    <p className="mt-0.5 font-mono text-sm text-muted-foreground">
-                      {endpoint.path}
-                    </p>
-                  </motion.button>
+                    <CopyRow value={fullUrl}>
+                      <span className="block text-sm text-muted-foreground">
+                        {t(endpoint.labelKey, endpoint.fallback)}
+                      </span>
+                      <span className="mt-0.5 block font-mono text-sm text-muted-foreground">
+                        {endpoint.path}
+                      </span>
+                    </CopyRow>
+                  </motion.div>
                 );
               })}
             </div>

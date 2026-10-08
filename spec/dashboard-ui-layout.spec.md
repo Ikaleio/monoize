@@ -547,17 +547,13 @@ from settings or analytics payloads.
 
 ## 6. Users Page
 
-UP1. In `/dashboard/users` list table, the role badge (`user.role`) MUST be rendered as a single-line badge. Badge text and icon MUST NOT wrap into multiple lines.
+UP1. In the `/dashboard/users` list, the role badge (`user.role`) MUST be rendered as a single-line badge. Badge text and icon MUST NOT wrap into multiple lines.
 
-UP2. The role badge container in `/dashboard/users` table MUST enforce a fixed maximum height equal to one badge row and MUST use horizontal overflow (`overflow-x: auto`, `overflow-y: hidden`) when space is insufficient on narrow viewports.
+UP2. The users list MUST use `DataList` inside `DataTableShell` (`frontend-design-system.spec.md` DS68). In wide mode, every column, including the actions column, MUST be visible without horizontal scrolling at a list width of 56rem or more. Below wide mode, rows MUST stack as defined by DS22d.
 
-UP3. The users table in `/dashboard/users` MUST allow horizontal scrolling on narrow viewports so role badges remain single-line instead of wrapping.
+UP3. The users list MUST NOT establish its own horizontal or vertical scroll container and MUST NOT set a viewport-derived height.
 
-UP4. The users table body in `/dashboard/users` MUST use virtualized rendering via `react-virtuoso` (`TableVirtuoso`) instead of rendering all rows as plain DOM rows.
-
-- Table header MUST be rendered via `fixedHeaderContent` (sticky header).
-- Table body rows MUST be rendered via `itemContent` callback.
-- Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
+UP4. The users list body MUST be virtualized with `Virtuoso`, `virtualDataListComponents`, and the dashboard main pane as `customScrollParent`. The list header MUST stay sticky relative to the main pane in wide mode.
 
 UP5. In the `/dashboard/users` list table, the username text and the user's group badge MUST render in a single non-wrapping inline row inside the user cell.
 

@@ -66,7 +66,7 @@ export function ModelsGlobInput({ value, onChange, disabled }: ModelsGlobInputPr
                   className="h-4 w-4 shrink-0"
                   onClick={() => removePattern(pattern)}
                 >
-                  <X className="h-3 w-3" />
+                  <X aria-hidden="true" />
                 </Button>
               )}
             </Badge>

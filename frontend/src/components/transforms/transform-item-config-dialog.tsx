@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Braces, Copy } from "lucide-react";
+import { AlertTriangle, Braces } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import {
   Dialog,
   DialogContent,
@@ -165,15 +166,6 @@ function TransformItemConfigDialogInner({
     onOpenChange(false);
   };
 
-  const copyConfigJson = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success(t("transforms.jsonCopied"));
-    } catch {
-      toast.error(t("transforms.jsonCopyFailed"));
-    }
-  };
-
   const formatRawConfig = () => {
     try {
       setRawConfigText(JSON.stringify(JSON.parse(rawConfigText.trim()), null, 2));
@@ -234,25 +226,18 @@ function TransformItemConfigDialogInner({
                       aria-label={t("transforms.jsonFormat")}
                       onClick={formatRawConfig}
                     >
-                      <Braces className="h-3.5 w-3.5" />
+                      <Braces aria-hidden="true" />
                     </Button>
                   )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-11 touch-manipulation sm:size-8"
-                    aria-label={t("transforms.jsonCopy")}
-                    onClick={() =>
-                      copyConfigJson(
-                        isUnknownTransform
-                          ? JSON.stringify(draftRule.config, null, 2)
-                          : rawConfigText
-                      )
+                  <CopyButton
+                    className="sm:size-8"
+                    label={t("transforms.jsonCopy")}
+                    value={
+                      isUnknownTransform
+                        ? JSON.stringify(draftRule.config, null, 2)
+                        : rawConfigText
                     }
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </Button>
+                  />
                 </div>
                 <Textarea
                   rows={8}
@@ -262,7 +247,7 @@ function TransformItemConfigDialogInner({
                   onChange={(e) => setRawConfigText(e.target.value)}
                 />
                 {fieldErrors.config && (
-                  <p className="text-xs text-destructive">{fieldErrors.config}</p>
+                  <p className="text-xs text-error-foreground">{fieldErrors.config}</p>
                 )}
               </div>
             )}

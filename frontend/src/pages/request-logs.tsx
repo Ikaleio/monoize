@@ -667,7 +667,7 @@ export function RequestLogsPage() {
 							<div className='flex flex-wrap items-center gap-2 pt-0.5'>
 								{isAdmin && (
 									<Input
-										className='w-[140px] h-9 focus-visible:border-ring focus-visible:ring-0'
+										className='w-[140px]'
 										placeholder={t('requestLogs.filterUsernamePlaceholder')}
 										value={usernameInput}
 										onChange={e => setUsernameInput(e.target.value)}
@@ -678,7 +678,7 @@ export function RequestLogsPage() {
 									/>
 								)}
 								<Input
-									className='w-[200px] h-9 focus-visible:border-ring focus-visible:ring-0'
+									className='w-[200px]'
 									placeholder={t('requestLogs.filterModelPlaceholder')}
 									value={modelInput}
 									onChange={e => setModelInput(e.target.value)}
@@ -691,7 +691,7 @@ export function RequestLogsPage() {
 									value={filters.api_key_id || 'all'}
 									onValueChange={handleTokenChange}
 								>
-									<SelectTrigger className='w-[140px] h-9 focus:border-border focus:ring-0 focus-visible:border-ring data-[state=open]:border-ring'>
+									<SelectTrigger className='w-[140px]'>
 										<SelectValue placeholder={t('requestLogs.filterToken')} />
 									</SelectTrigger>
 									<SelectContent>
@@ -707,7 +707,7 @@ export function RequestLogsPage() {
 									value={filters.status || 'all'}
 									onValueChange={handleStatusChange}
 								>
-									<SelectTrigger className='w-[120px] h-9 focus:border-border focus:ring-0 focus-visible:border-ring data-[state=open]:border-ring'>
+									<SelectTrigger className='w-[120px]'>
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>

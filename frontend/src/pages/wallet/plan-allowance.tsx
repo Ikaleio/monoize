@@ -12,13 +12,14 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { springs } from "@/components/ui/motion";
 import { formatNanoUsd } from "@/lib/exact-decimal";
+import { formatDateTime } from "@/lib/format-time";
 import {
   purchaseBillingPlanOptimistic,
   useBillingPlanMarketplace,
   useBillingPlanSubscription,
 } from "@/lib/swr";
 import type { BillingPlanWindowUsage } from "@/lib/api";
-import { WalletFeedback } from "./wallet-feedback";
+import { QueryError } from "@/components/ui/query-error";
 
 function PlanAllowanceSkeleton({ className }: { className?: string }) {
   return (
@@ -88,19 +89,21 @@ function AllowanceMeter({
 }
 
 export function PlanAllowance({ className }: { className?: string }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const {
     data: subscription,
     error: subscriptionError,
     isLoading,
+    isValidating: subscriptionValidating,
     mutate: mutateSubscription,
   } = useBillingPlanSubscription();
   const {
     data: plans,
     error: plansError,
     isLoading: plansLoading,
+    isValidating: plansValidating,
     mutate: mutatePlans,
   } = useBillingPlanMarketplace();
   const [purchasing, setPurchasing] = useState<string | null>(null);
@@ -140,8 +143,9 @@ export function PlanAllowance({ className }: { className?: string }) {
 
       <CardContent className="px-5 pb-5">
         {hasBlockingError ? (
-          <WalletFeedback
+          <QueryError
             onRetry={() => Promise.all([mutateSubscription(), mutatePlans()])}
+            retrying={subscriptionValidating || plansValidating}
           />
         ) : subscription ? (
           <div className="flex flex-col gap-5">
@@ -164,9 +168,7 @@ export function PlanAllowance({ className }: { className?: string }) {
                     aria-hidden="true"
                   />
                   {t("wallet.planExpires", {
-                    time: new Date(subscription.expires_at).toLocaleString(
-                      i18n.language,
-                    ),
+                    time: formatDateTime(subscription.expires_at),
                   })}
                 </span>
               </div>

@@ -16,12 +16,16 @@ interface ModelRedirectsEditorProps {
   value: ModelRedirectRule[];
   onChange: (value: ModelRedirectRule[]) => void;
   disabled?: boolean;
+  /** Shown when no rule exists; states what happens without rules in this scope. */
+  emptyText: string;
 }
 
+/** Ordered regex redirect rules (frontend-design-system.spec.md DS64). */
 export function ModelRedirectsEditor({
   value,
   onChange,
   disabled = false,
+  emptyText,
 }: ModelRedirectsEditorProps) {
   const { t } = useTranslation();
   const idPrefix = useId();
@@ -42,7 +46,7 @@ export function ModelRedirectsEditor({
     <FieldGroup className="gap-4">
       {value.length === 0 ? (
         <FieldDescription className="rounded-md border border-dashed p-4">
-          {t("settings.globalModelRedirectsEmpty")}
+          {emptyText}
         </FieldDescription>
       ) : (
         value.map((rule, index) => {

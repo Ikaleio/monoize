@@ -162,7 +162,7 @@ export function LoginPage() {
               onClick={toggleLanguage}
               title={t("language.switchLanguage")}
             >
-              <Languages className="h-5 w-5" />
+              <Languages aria-hidden="true" />
             </Button>
           </AnimatedButton>
         </motion.div>

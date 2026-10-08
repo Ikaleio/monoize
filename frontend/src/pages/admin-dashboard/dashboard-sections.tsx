@@ -5,11 +5,12 @@ import type {
   AdminOverview,
   AdminOverviewChannelHealth,
 } from "@/lib/api";
-import type { SpendWindow } from "@/lib/spend-window";
+import { SPEND_WINDOWS, type SpendWindow } from "@/lib/spend-window";
 import { DashboardScrollParentContext } from "@/lib/dashboard-scroll";
 import { formatNanoUsd } from "@/lib/exact-decimal";
+import { formatDateTime } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
-import { SpendWindowControl } from "@/pages/admin-dashboard/spend-window-control";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -71,16 +72,6 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
-function formatTimestamp(unixMs: number | null | undefined): string {
-  if (unixMs == null) return "—";
-  const date = new Date(unixMs);
-  if (Number.isNaN(date.getTime())) return "—";
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
 /** ADF-5b: cooldown wins over the enabled flag, which wins over the health flag. */
 function channelStatus(channel: AdminOverviewChannelHealth): ChannelStatus {
   if (channel.cooldown_active) return "cooling";
@@ -123,7 +114,7 @@ export function SystemStatusCard({ data }: { data: AdminOverview }) {
             { label: t("adminDashboard.nodeRole"), value: data.node.role, mono: true },
             { label: t("adminDashboard.version"), value: data.node.version, mono: true },
             { label: t("adminDashboard.uptime"), value: humanizeUptime(data.node.uptime_seconds) },
-            { label: t("adminDashboard.startedAt"), value: formatTimestamp(Date.parse(data.node.started_at)) },
+            { label: t("adminDashboard.startedAt"), value: formatDateTime(data.node.started_at) },
             { label: t("adminDashboard.listen"), value: data.node.listen, mono: true },
             { label: t("adminDashboard.metricsPath"), value: data.node.metrics_path, mono: true },
             {
@@ -197,7 +188,7 @@ export function ReplicaStatusCard({ data }: { data: AdminOverview }) {
               rows={[
                 { label: t("adminDashboard.version"), value: replica.version, mono: true },
                 { label: t("adminDashboard.uptime"), value: humanizeUptime(replica.uptime_seconds) },
-                { label: t("adminDashboard.lastSeen"), value: formatTimestamp(Date.parse(replica.last_seen_at)) },
+                { label: t("adminDashboard.lastSeen"), value: formatDateTime(replica.last_seen_at) },
                 { label: t("adminDashboard.spoolPendingCount"), value: formatNumber(replica.spool_pending_count) },
                 { label: t("adminDashboard.spoolPendingBytes"), value: formatBytes(replica.spool_pending_bytes) },
               ]}
@@ -303,7 +294,12 @@ export function ChannelHealthCard({
               {t("adminDashboard.channelSummary", { count: rows.length, unhealthy })}
             </CardDescription>
           </div>
-          <SpendWindowControl value={spendWindow} onChange={onSpendWindowChange} />
+          <SegmentedControl
+            value={spendWindow}
+            options={SPEND_WINDOWS}
+            onChange={onSpendWindowChange}
+            ariaLabel={t("adminDashboard.spendWindowAria")}
+          />
         </div>
         <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm text-muted-foreground">
           <span>
@@ -368,7 +364,7 @@ export function ChannelHealthCard({
                     </DataListCell>
                     <DataListCell label={t("adminDashboard.lastProbe")} align="end">
                       <span className="tabular-nums text-muted-foreground">
-                        {formatTimestamp(channel.last_probe_at)}
+                        {channel.last_probe_at == null ? "—" : formatDateTime(channel.last_probe_at)}
                       </span>
                     </DataListCell>
                   </>
