@@ -68,7 +68,10 @@ pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
         ProviderType::OpenaiImage => "/v1/images/generations",
         ProviderType::OpenrouterImage => "/v1/images",
         ProviderType::Replicate => "/v1/predictions",
-        ProviderType::Systemone => "/v1/systemone",
+        ProviderType::SystemOne => crate::decision::DecisionFormat::SystemOne.upstream_path(),
+        ProviderType::OpenaiDecisions => {
+            crate::decision::DecisionFormat::OpenaiDecisions.upstream_path()
+        }
         ProviderType::Group => "/v1/responses",
     }
 }
@@ -190,18 +193,59 @@ async fn normalized_logical_model_for_matching_with_map(
         .unwrap_or_else(|| requested_model.to_string()))
 }
 
+/// AT-4: the set of effective API types that an endpoint may route to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RouteSurface {
+    /// Every forwarding endpoint other than the decision endpoints.
+    Generation,
+    /// `/v1/systemone` and `/v1/decisions`.
+    Decision,
+}
+
+impl RouteSurface {
+    fn admits(self, api_type: crate::monoize_routing::MonoizeProviderType) -> bool {
+        let is_decision = api_type.to_config_type().decision_format().is_some();
+        is_decision == (self == Self::Decision)
+    }
+}
+
 pub(super) async fn build_monoize_attempts(
     state: &AppState,
     urp: &UrpRequest,
     auth: &crate::auth::AuthResult,
 ) -> AppResult<Vec<MonoizeAttempt>> {
-    build_monoize_attempts_for_provider_type(state, urp, auth, None).await
+    build_attempts(state, urp, auth, RouteSurface::Generation, None).await
+}
+
+pub(super) async fn build_decision_attempts(
+    state: &AppState,
+    urp: &UrpRequest,
+    auth: &crate::auth::AuthResult,
+) -> AppResult<Vec<MonoizeAttempt>> {
+    build_attempts(state, urp, auth, RouteSurface::Decision, None).await
 }
 
 pub(super) async fn build_monoize_attempts_for_provider_type(
     state: &AppState,
     urp: &UrpRequest,
     auth: &crate::auth::AuthResult,
+    required_provider_type: Option<ProviderType>,
+) -> AppResult<Vec<MonoizeAttempt>> {
+    build_attempts(
+        state,
+        urp,
+        auth,
+        RouteSurface::Generation,
+        required_provider_type,
+    )
+    .await
+}
+
+async fn build_attempts(
+    state: &AppState,
+    urp: &UrpRequest,
+    auth: &crate::auth::AuthResult,
+    surface: RouteSurface,
     required_provider_type: Option<ProviderType>,
 ) -> AppResult<Vec<MonoizeAttempt>> {
     let routing_config_revision = state.routing_config_revision.load(Ordering::Acquire);
@@ -223,16 +267,14 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
             urp,
             &auth.effective_groups,
             provider,
+            surface,
             routing_config_revision,
             &mut attempts,
         )
         .await;
     }
-    // SO-EXCL: a systemone attempt is eligible only for POST /v1/systemone.
     if let Some(required_provider_type) = required_provider_type {
         attempts.retain(|attempt| attempt.provider_type == required_provider_type);
-    } else {
-        attempts.retain(|attempt| attempt.provider_type != ProviderType::Systemone);
     }
     if attempts.is_empty() {
         return Ok(attempts);
@@ -479,6 +521,7 @@ pub(super) async fn collect_provider_attempts(
     urp: &UrpRequest,
     effective_groups: &Option<Vec<String>>,
     provider: &crate::monoize_routing::MonoizeProvider,
+    surface: RouteSurface,
     routing_config_revision: u64,
     out: &mut Vec<MonoizeAttempt>,
 ) {
@@ -496,6 +539,15 @@ pub(super) async fn collect_provider_attempts(
                 urp.max_multiplier
                     .is_none_or(|maximum| entry.multiplier <= maximum)
             })
+        })
+        // AT-4: filter before the Provider attempt limit so Channels of the
+        // other surface never consume attempt slots.
+        .filter(|channel| {
+            surface.admits(crate::monoize_routing::resolve_effective_api_type(
+                &provider.api_type_overrides,
+                channel.provider_type,
+                &urp.model,
+            ))
         })
         .cloned()
         .collect();

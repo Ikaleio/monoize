@@ -33,12 +33,24 @@ RPM は、全ユーザーの保存済みリクエストをすべての終了ス�
 ## Channel を追加
 
 1. Provider を開き、**Channel を追加**をクリックします。
-2. 上流タイプを選択します：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image`、`replicate`、`systemone`。
+2. 上流タイプを選択します：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image`、`replicate`、`system_one`、`openai_decisions`。
 3. 上流のベース URL と API キーを入力します。
 4. 重みを設定します。トラフィックは対象 Channel 間で重みに比例して分配されます。既定 `1`。
 5. 任意：Channel ごとの `proxy_url` を設定して、プロセスレベルの上流プロキシを上書きします。
 
 後で Channel を編集するとき、API キー欄を空にすると保存済みのキーが維持されます。
+
+## 意思決定モデル
+
+意思決定モデルには `system_one` または `openai_decisions` の Channel を使います。これらの Channel は `/v1/systemone` と `/v1/decisions` だけを提供します。[API エンドポイント](/ja/docs/endpoints)を参照してください。
+
+| 上流 | タイプ | ベース URL |
+| --- | --- | --- |
+| TypeSafe Jev | `system_one` | `https://api.typesafe.ai` |
+| OpenRouter | `system_one` | `https://openrouter.ai/api` |
+| OpenAI | `openai_decisions` | `https://api.openai.com` |
+
+Channel テストは、はい・いいえの質問を 1 つだけ含む非ストリーミングの意思決定リクエストを 1 回送信します。上流で料金が発生する場合があります。
 
 ## OpenRouter の画像
 

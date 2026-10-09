@@ -48,6 +48,18 @@ type ChannelTestState = Record<
 
 type TestMode = 'sequential' | 'concurrent' | null
 
+const STREAM_TEST_SUPPORTED: Record<ProviderType, boolean> = {
+	responses: true,
+	chat_completion: true,
+	messages: true,
+	gemini: true,
+	openai_image: false,
+	openrouter_image: false,
+	replicate: false,
+	system_one: false,
+	openai_decisions: false
+}
+
 type ChannelTestDialogProps = {
 	open: boolean
 	onOpenChange: (open: boolean) => void
@@ -70,7 +82,7 @@ export function ChannelTestDialog({
 	models
 }: ChannelTestDialogProps) {
 	const { t } = useTranslation()
-	const streamCapable = providerType !== 'openai_image' && providerType !== 'openrouter_image' && providerType !== 'replicate' && providerType !== 'systemone'
+	const streamCapable = STREAM_TEST_SUPPORTED[providerType]
 	const [stream, setStream] = useState(streamCapable)
 	const [testState, setTestState] = useState<ChannelTestState>({})
 	const [testMode, setTestMode] = useState<TestMode>(null)

@@ -25,7 +25,8 @@ pub enum MonoizeProviderType {
     OpenaiImage,
     OpenrouterImage,
     Replicate,
-    Systemone,
+    SystemOne,
+    OpenaiDecisions,
 }
 
 impl MonoizeProviderType {
@@ -39,7 +40,8 @@ impl MonoizeProviderType {
             "openai_image" => Some(Self::OpenaiImage),
             "openrouter_image" => Some(Self::OpenrouterImage),
             "replicate" => Some(Self::Replicate),
-            "systemone" => Some(Self::Systemone),
+            "system_one" => Some(Self::SystemOne),
+            "openai_decisions" => Some(Self::OpenaiDecisions),
             _ => None,
         }
     }
@@ -53,7 +55,8 @@ impl MonoizeProviderType {
             Self::OpenaiImage => "openai_image",
             Self::OpenrouterImage => "openrouter_image",
             Self::Replicate => "replicate",
-            Self::Systemone => "systemone",
+            Self::SystemOne => "system_one",
+            Self::OpenaiDecisions => "openai_decisions",
         }
     }
 
@@ -66,7 +69,8 @@ impl MonoizeProviderType {
             Self::OpenaiImage => crate::config::ProviderType::OpenaiImage,
             Self::OpenrouterImage => crate::config::ProviderType::OpenrouterImage,
             Self::Replicate => crate::config::ProviderType::Replicate,
-            Self::Systemone => crate::config::ProviderType::Systemone,
+            Self::SystemOne => crate::config::ProviderType::SystemOne,
+            Self::OpenaiDecisions => crate::config::ProviderType::OpenaiDecisions,
         }
     }
 }
@@ -2867,7 +2871,8 @@ async fn read_probe_stream(
             MonoizeProviderType::OpenaiImage
             | MonoizeProviderType::OpenrouterImage
             | MonoizeProviderType::Replicate
-            | MonoizeProviderType::Systemone => {}
+            | MonoizeProviderType::SystemOne
+            | MonoizeProviderType::OpenaiDecisions => {}
         }
     }
 
@@ -3034,17 +3039,27 @@ fn build_probe_request(
             });
             (url, body, &[][..])
         }
-        MonoizeProviderType::Systemone => {
-            let url = crate::upstream::join_url(base, "/v1/systemone");
+        MonoizeProviderType::SystemOne => {
+            let url = crate::upstream::join_url(
+                base,
+                crate::decision::DecisionFormat::SystemOne.upstream_path(),
+            );
             let body = serde_json::json!({
                 "model": model,
-                "state": "Monoize liveness probe.",
-                "questions": {
-                    "probe": {
-                        "type": "noul",
-                        "instructions": "Is this text a liveness probe?"
-                    }
-                }
+                "state": "ping",
+                "questions": {"ping": {"type": "noul", "instructions": "Is this a ping?"}}
+            });
+            (url, body, &[][..])
+        }
+        MonoizeProviderType::OpenaiDecisions => {
+            let url = crate::upstream::join_url(
+                base,
+                crate::decision::DecisionFormat::OpenaiDecisions.upstream_path(),
+            );
+            let body = serde_json::json!({
+                "model": model,
+                "input": "ping",
+                "questions": [{"type": "predicate", "name": "ping", "instructions": "Is this a ping?"}]
             });
             (url, body, &[][..])
         }

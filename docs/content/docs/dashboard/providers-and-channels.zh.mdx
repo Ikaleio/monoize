@@ -32,12 +32,24 @@ RPM 统计所有用户、所有终态的已落库请求。TPM 累加输入和输
 ## 添加 Channel
 
 1. 打开 Provider 并点击**添加通道**。
-2. 选择上游类型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image`、`replicate` 或 `systemone`。
+2. 选择上游类型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image`、`replicate`、`system_one` 或 `openai_decisions`。
 3. 填写上游 Base URL 和 API 密钥。
 4. 设置权重。流量按权重比例在符合条件的 Channel 之间分配。默认 `1`。
 5. 可选：为单个 Channel 设置 `proxy_url`，覆盖进程级上游代理。
 
 之后编辑 Channel 时，API 密钥留空则保持原有密钥不变。
+
+## 决策模型
+
+决策模型请使用 `system_one` 或 `openai_decisions` 类型的 Channel。这两种 Channel 只服务 `/v1/systemone` 和 `/v1/decisions`。参见 [API 端点](/zh/docs/endpoints)。
+
+| 上游 | 类型 | Base URL |
+| --- | --- | --- |
+| TypeSafe Jev | `system_one` | `https://api.typesafe.ai` |
+| OpenRouter | `system_one` | `https://openrouter.ai/api` |
+| OpenAI | `openai_decisions` | `https://api.openai.com` |
+
+Channel 测试会发送一次只含一个是非题的非流式决策请求，可能产生上游费用。
 
 ## OpenRouter 图片
 

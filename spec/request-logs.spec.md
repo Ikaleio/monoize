@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Purpose:** Record and expose per-request metadata for API-key-authenticated and classified internal proxy requests.
-- **Scope:** Applies to all forwarding endpoints (responses, chat completions, messages, embeddings, system one) and the dashboard request-logs API.
+- **Scope:** Applies to all forwarding endpoints (responses, chat completions, messages, embeddings, decisions) and the dashboard request-logs API.
 
 ## 1. Data model
 

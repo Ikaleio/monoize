@@ -201,7 +201,8 @@ curl http://localhost:8080/v1/chat/completions \
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/embeddings` | Embeddings |
-| `POST` | `/v1/systemone` | TypeSafe System One |
+| `POST` | `/v1/systemone` | System One decisions |
+| `POST` | `/v1/decisions` | OpenAI Decisions |
 | `POST` | `/v1/images/generations` | Image generation |
 | `POST` | `/v1/images/edits` | Image edits with multipart uploads or JSON references |
 
@@ -217,7 +218,8 @@ Every forwarding endpoint also has an `/api/v1/...` alias.
 | `gemini` | Google Gemini native |
 | `openai_image` | OpenAI-compatible image API |
 | `replicate` | Replicate predictions |
-| `systemone` | TypeSafe System One |
+| `system_one` | System One decision API |
+| `openai_decisions` | OpenAI Decisions API |
 
 ## Configuration
 

@@ -78,10 +78,10 @@ A provider record MUST include:
 
 Implementation-specific extension:
 - A provider MUST NOT contain `provider_type`.
-- Each channel MUST contain `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","systemone")`; this value determines the channel default upstream request shape.
+- Each channel MUST contain `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions")`; this value determines the channel default upstream request shape.
 - Each Channel MUST contain `models: Record<string, ModelEntry>`.
 - Provider MUST NOT contain a `models` field.
-- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","systemone") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
+- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
 
 ### 2.4 API Type Resolution
 
@@ -95,6 +95,8 @@ AT-1. For a given request model and selected channel, the effective API type MUS
 AT-2. Glob matching MUST use the same semantics as transform model filtering: `*` matches zero or more characters, `?` matches exactly one character, matching is anchored (full string).
 
 AT-3. The effective API type determines the upstream endpoint path and request encoding for that specific request.
+
+AT-4. `system_one` and `openai_decisions` are decision API types. A decision endpoint MUST consider only Channels whose effective API type is a decision API type. Every other forwarding endpoint MUST consider only Channels whose effective API type is not a decision API type. Both filters MUST run before the Provider attempt limit (`decision-api.spec.md` DR-R2, DR-R3).
 
 ### 2.5 Router Configuration
 

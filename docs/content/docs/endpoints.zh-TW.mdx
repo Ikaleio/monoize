@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 下列每個端點都有 `/api` 前綴別名，例如 `/api/v1/chat/completions`。當用戶端硬編碼了 `/api` 路徑時使用別名。
 
-除 `systemone` 外，端點可以到達任意上游類型。例如，用戶端呼叫 `/v1/messages`，而路由透過 `chat_completion` 類型的 Channel 服務該模型。Monoize 在兩個方向上轉換協議。`POST /v1/systemone` 只選擇 `systemone` Channel，並且不轉換請求內容。
+任何端點都可以到達任何上游類型。例如，用戶端呼叫 `/v1/messages`，而路由透過 `chat_completion` 類型的 Channel 服務該模型。Monoize 在兩個方向上轉換協議。決策 Channel 例外，參見下文「決策」一節。
 
 Chat 路由會保留 OpenRouter 的 `configuration_update` 訊息，包括空內容更新。檔案 data URI 轉成 Messages 文件時會保留 MIME 類型。Messages 串流會保留 `citations_delta` 引用。Responses 內容過濾終止會保留為未完成狀態，不會誤報為長度限制。
 
@@ -137,35 +137,44 @@ curl http://localhost:8080/v1/embeddings \
   }'
 ```
 
-## System One
+## 決策
 
-`POST /v1/systemone` 轉發 TypeSafe System One 請求。Channel 的上游類型必須是 `systemone`。其他端點不會選擇這種 Channel。
+決策模型用機率回答型別化問題，不產生文字。Monoize 接受兩種請求格式：
+
+| 端點 | 請求格式 |
+| --- | --- |
+| `POST /v1/systemone` | System One：`state` 加 `questions` 物件，題型為 `noul`、`choice`、`score` |
+| `POST /v1/decisions` | OpenAI Decisions：`input` 加 `questions` 陣列，題型為 `predicate`、`choice`、`score` |
 
 ```bash
 curl http://localhost:8080/v1/systemone \
   -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "jev-latest",
-    "state": "The gate is closed.",
+    "model": "my-decision-model",
+    "state": "My payouts have failed for 3 days.",
     "questions": {
-      "open": {
-        "type": "noul",
-        "instructions": "Is the gate open?"
+      "urgent": { "type": "noul", "instructions": "Is this request urgent?" },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team owns this request?",
+        "criteria": { "billing": "Payments and refunds", "technical": "Bugs and outages" }
       }
     }
   }'
 ```
 
-Monoize 原樣返回上游 JSON。回應裡的 `model` 保持上游的值。例如 `jev-1.13.0` 不會被改成邏輯模型名稱。
+這兩個端點只路由到 `system_one` 與 `openai_decisions` 類型的 Channel。其他端點不會路由到這兩種 Channel。每個決策端點都可以使用這兩種 Channel。決策端點不支援串流。
 
-不要傳送 `"stream": true`。這個值會返回 HTTP 400。
+請求格式與 Channel 格式相同時，Monoize 轉發全部欄位，只替換 `model`。格式不同時，Monoize 轉換請求與答案：
 
-計費讀取 `usage.input_tokens` 和 `usage.output_tokens`。上游不收取輸出 token 費用時，把輸出單價設為 `0`。
+- 文字輸入可雙向轉換。物件或陣列形式的 `state` 轉為 `input` 中的 JSON 文字。
+- 圖片輸入需要 `openai_decisions` Channel。如果沒有這種 Channel 服務該模型，Monoize 回傳 `400 unsupported_decision_input`。
+- `noul` 的 criteria 附加到 `predicate` 的 instructions 結尾。布林型 choice 值轉為 System One 鍵 `"true"` 與 `"false"`。
+- OpenAI 的 `refusal` 答案在 System One 回應中變為 `{ "type": "refusal" }`。
+- 目標格式未定義的欄位會被捨棄，例如 `safety_identifier`。
 
-接入 OpenRouter 時，把 Channel 的 base URL 設為 `https://openrouter.ai/api/v1`。把模型 redirect 到 `typesafe/jev-1.13`。
-
-TypeSafe SDK 的 `models.list()` 需要 `{models:[{name}]}`。Monoize 的 `GET /v1/models` 格式不同，所以這次呼叫會失敗。`systemOne()` 仍然可用。SDK 會在 base URL 後面拼接 `/v1/systemone`。
+計費使用上游回傳的 `usage.input_tokens` 與 `usage.output_tokens`。決策上游不對輸出 token 收費，但部分上游會回報輸出 token。請把每個決策模型的輸出價格設為 `0`。
 
 ## 圖像
 

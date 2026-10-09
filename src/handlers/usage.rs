@@ -919,20 +919,6 @@ pub(crate) fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> 
     })
 }
 
-pub(super) fn parse_usage_from_systemone_object(obj: &Value) -> Option<urp::Usage> {
-    let usage = obj.get("usage")?.as_object()?;
-    let input_tokens = usage.get("input_tokens")?.as_u64()?;
-    let output_tokens = usage.get("output_tokens")?.as_u64()?;
-    Some(urp::Usage {
-        iterations: None,
-        input_tokens,
-        output_tokens,
-        input_details: None,
-        output_details: None,
-        extra_body: HashMap::new(),
-    })
-}
-
 pub(super) fn parse_usage_from_embeddings_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
     let input_tokens = usage.get("prompt_tokens")?.as_u64()?;

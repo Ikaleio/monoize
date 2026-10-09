@@ -198,14 +198,6 @@ C7. For embeddings responses, billing MUST treat usage as:
 - `input_tokens = usage.input_tokens`
 - `output_tokens = 0`
 
-C7a. For System One responses, billing MUST treat usage as
-`spec/systemone-api.spec.md` SO-BILL and `model-pricing.spec.md` MP-C4a:
-
-- `input_tokens = usage.input_tokens`
-- `output_tokens = usage.output_tokens`
-
-There is no cache split and no reasoning split. Output tokens use the model output price.
-
 ## 6. Billing execution and ledger
 
 L1. Billing deduction MUST run after successful non-stream proxy response decode.
@@ -296,11 +288,11 @@ Q2. `GET /api/dashboard/model-metadata/{model_id}` MUST return single row or `40
 
 UF1. Admin endpoint `POST /api/dashboard/fetch-channel-models` MUST accept:
 
-- `provider_type: responses | chat_completion | messages | gemini | openai_image | openrouter_image | replicate | systemone`
+- `provider_type: responses | chat_completion | messages | gemini | openai_image | openrouter_image | replicate | system_one | openai_decisions`
 - `base_url: string`
 - `api_key: string`
 
-UF2. For `responses`, `chat_completion`, `messages`, `openai_image`, and `replicate`, the endpoint MUST:
+UF2. For `responses`, `chat_completion`, `messages`, `openai_image`, `replicate`, `system_one`, and `openai_decisions`, the endpoint MUST:
 
 1. Let `base = trim_trailing_slash(base_url)`.
 2. Build the upstream models URL as:
@@ -310,8 +302,6 @@ UF2. For `responses`, `chat_completion`, `messages`, `openai_image`, and `replic
 4. Parse OpenAI-compatible `{ data: [{ id: string, ... }] }`.
 
 UF2a. For `openrouter_image`, apply UF2 with path `/v1/images/models`.
-
-UF2b. For `systemone`, apply the URL and bearer authentication of UF2. Parse ids per `spec/systemone-api.spec.md` SO-MODELS-2.
 
 UF3. For `gemini`, the endpoint MUST call the Gemini model-list API using `api_key` and parse model names as model IDs after removing a leading `models/` prefix.
 

@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 Every endpoint below also exists under the `/api` prefix, for example `/api/v1/chat/completions`. Use the alias when a client hardcodes `/api` paths.
 
-Most endpoints can reach any upstream type except `systemone`. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions. `POST /v1/systemone` selects only a `systemone` Channel and does not convert the request.
+Any endpoint can reach any upstream type. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions. Decision Channels are the exception: see [Decisions](#decisions).
 
 Monoize preserves OpenRouter `configuration_update` messages on Chat routes, including updates with empty content. File data URIs retain their MIME type during conversion to Messages documents. Messages streams retain `citations_delta` citations. Responses content-filter termination remains an incomplete response rather than a length limit.
 
@@ -137,35 +137,44 @@ curl http://localhost:8080/v1/embeddings \
   }'
 ```
 
-## System One
+## Decisions
 
-`POST /v1/systemone` forwards a TypeSafe System One request. Select a Channel whose upstream type is `systemone`. No other endpoint selects that Channel type.
+Decision models answer typed questions with probabilities instead of text. Monoize accepts two request formats:
+
+| Endpoint | Request format |
+| --- | --- |
+| `POST /v1/systemone` | System One: `state` and a `questions` object with `noul`, `choice`, and `score` questions |
+| `POST /v1/decisions` | OpenAI Decisions: `input` and a `questions` array with `predicate`, `choice`, and `score` questions |
 
 ```bash
 curl http://localhost:8080/v1/systemone \
   -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "jev-latest",
-    "state": "The gate is closed.",
+    "model": "my-decision-model",
+    "state": "My payouts have failed for 3 days.",
     "questions": {
-      "open": {
-        "type": "noul",
-        "instructions": "Is the gate open?"
+      "urgent": { "type": "noul", "instructions": "Is this request urgent?" },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team owns this request?",
+        "criteria": { "billing": "Payments and refunds", "technical": "Bugs and outages" }
       }
     }
   }'
 ```
 
-Monoize returns the upstream JSON without changes. It keeps the upstream `model` value. For example, `jev-1.13.0` stays `jev-1.13.0`.
+These endpoints route only to `system_one` and `openai_decisions` Channels. Other endpoints never route to these Channel types. Each decision endpoint can use both Channel types. Decision endpoints do not stream.
 
-Do not send `"stream": true`. Monoize returns HTTP 400 for that value.
+When the request format and the Channel format are the same, Monoize forwards every field and replaces only `model`. When they differ, Monoize converts the request and the answers:
 
-Billing uses `usage.input_tokens` and `usage.output_tokens`. Set the output price to `0` when upstream output tokens are free.
+- Text input converts in both directions. An object or array `state` becomes JSON text in `input`.
+- Image parts require an `openai_decisions` Channel. If no such Channel serves the model, Monoize returns `400 unsupported_decision_input`.
+- `noul` criteria are appended to the `predicate` instructions. Boolean choice values become the System One keys `"true"` and `"false"`.
+- An OpenAI `refusal` answer becomes `{ "type": "refusal" }` in a System One response.
+- Fields that the target format does not define are dropped, for example `safety_identifier`.
 
-For OpenRouter, set the Channel base URL to `https://openrouter.ai/api/v1`. Redirect the model to `typesafe/jev-1.13`.
-
-The TypeSafe SDK `models.list()` expects `{models:[{name}]}`. `GET /v1/models` uses a different shape, so that call fails. `systemOne()` still works. The SDK appends `/v1/systemone` to the base URL.
+Billing uses `usage.input_tokens` and `usage.output_tokens` from the upstream. Decision upstreams do not charge for output tokens, but some report them. Set the output price of each decision model to `0`.
 
 ## Images
 

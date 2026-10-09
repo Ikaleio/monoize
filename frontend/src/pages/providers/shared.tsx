@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import { Anthropic, Google, OpenAI, OpenRouter } from '@lobehub/icons'
-import { Box, Scale } from 'lucide-react'
+import { Box, ListChecks } from 'lucide-react'
 import { StatusBadge, StatusDot } from '@/components/ui/status'
 import type {
 	AffinityFailbackMode,
@@ -81,7 +81,8 @@ export const PROVIDER_TYPE_CONFIG: Record<
 	openai_image: { label: 'OpenAI Image', path: '/v1/images/generations', icon: OpenAI },
 	openrouter_image: { label: 'OpenRouter Image', path: '/v1/images', icon: OpenRouter },
 	replicate: { label: 'Replicate', path: '/v1/replicate/predictions', icon: Box },
-	systemone: { label: 'System One', path: '/v1/systemone', icon: Scale }
+	system_one: { label: 'System One', path: '/v1/systemone', icon: ListChecks },
+	openai_decisions: { label: 'OpenAI Decisions', path: '/v1/decisions', icon: OpenAI }
 }
 
 export const PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT = 40

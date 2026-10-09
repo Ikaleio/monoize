@@ -673,8 +673,8 @@ pub async fn fetch_provider_models(
     let body = parse_discovery_json_response(resp).await?;
 
     let list_type =
-        if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Systemone {
-            crate::monoize_routing::MonoizeProviderType::Systemone
+        if channel.provider_type == crate::monoize_routing::MonoizeProviderType::SystemOne {
+            crate::monoize_routing::MonoizeProviderType::SystemOne
         } else {
             crate::monoize_routing::MonoizeProviderType::ChatCompletion
         };
@@ -1111,7 +1111,8 @@ pub async fn test_channel(
             crate::monoize_routing::MonoizeProviderType::OpenaiImage
                 | crate::monoize_routing::MonoizeProviderType::OpenrouterImage
                 | crate::monoize_routing::MonoizeProviderType::Replicate
-                | crate::monoize_routing::MonoizeProviderType::Systemone
+                | crate::monoize_routing::MonoizeProviderType::SystemOne
+                | crate::monoize_routing::MonoizeProviderType::OpenaiDecisions
         )
     {
         return Err(AppError::new(
@@ -1265,20 +1266,6 @@ pub(super) fn build_gemini_models_list_url(base_url: &str) -> String {
     }
 }
 
-fn string_field_ids(
-    items: Option<&Value>,
-    field: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> Vec<String> {
-    items
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get(field).and_then(Value::as_str).map(String::from))
-        .filter(|id| seen.insert(id.clone()))
-        .collect()
-}
-
 fn extract_model_ids(
     provider_type: crate::monoize_routing::MonoizeProviderType,
     body: &Value,
@@ -1297,17 +1284,32 @@ fn extract_model_ids(
             })
             .filter(|id| seen.insert(id.clone()))
             .collect(),
-        crate::monoize_routing::MonoizeProviderType::Systemone => {
+        // DR-C3: TypeSafe lists models as `models[].name`; other System One
+        // hosts use the OpenAI `data[].id` list.
+        crate::monoize_routing::MonoizeProviderType::SystemOne => {
             let from_data = string_field_ids(body.get("data"), "id", &mut seen);
-            if !from_data.is_empty() {
-                from_data
-            } else {
-                seen.clear();
+            if from_data.is_empty() {
                 string_field_ids(body.get("models"), "name", &mut seen)
+            } else {
+                from_data
             }
         }
         _ => string_field_ids(body.get("data"), "id", &mut seen),
     };
     models.sort();
     models
+}
+
+fn string_field_ids(
+    items: Option<&Value>,
+    field: &str,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<String> {
+    items
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(field).and_then(Value::as_str).map(String::from))
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
 }

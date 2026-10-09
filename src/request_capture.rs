@@ -1222,7 +1222,8 @@ fn provider_type_name(provider_type: ProviderType) -> &'static str {
         ProviderType::OpenaiImage => "openai_image",
         ProviderType::OpenrouterImage => "openrouter_image",
         ProviderType::Replicate => "replicate",
-        ProviderType::Systemone => "systemone",
+        ProviderType::SystemOne => "system_one",
+        ProviderType::OpenaiDecisions => "openai_decisions",
         ProviderType::Group => "group",
     }
 }

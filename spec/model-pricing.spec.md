@@ -251,10 +251,10 @@ from the breakdown.
 
 MP-C4. For embeddings responses, `output_tokens = 0` and only input line items apply.
 
-MP-C4a. For System One responses, billing MUST use the normalized usage from
-`spec/systemone-api.spec.md` SO-BILL. `input_tokens = usage.input_tokens` and
-`output_tokens = usage.output_tokens`. There is no cache split and no reasoning
-split. Output tokens MUST use the model output price.
+MP-C4a. For decision responses (`POST /v1/systemone`, `POST /v1/decisions`), billing
+MUST use the usage defined by `spec/decision-api.spec.md` DR-S1 and DR-S3.
+`input_tokens = usage.input_tokens` and `output_tokens = usage.output_tokens`.
+Output tokens MUST use the model output price.
 
 ### 4.3 `per_request` mode
 

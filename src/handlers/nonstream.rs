@@ -1300,18 +1300,18 @@ pub(super) fn encode_request_for_provider(
                 AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message)
             })?,
         ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model),
-        ProviderType::Systemone => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "provider_type_not_supported",
-                "systemone is not a URP provider",
-            ));
-        }
         ProviderType::Group => {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
                 "provider_type_not_supported",
                 "group is virtual",
+            ));
+        }
+        ProviderType::SystemOne | ProviderType::OpenaiDecisions => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "provider_type_not_supported",
+                "decision channels serve only decision endpoints",
             ));
         }
     };
@@ -1353,8 +1353,10 @@ pub(super) fn decode_response_from_provider(
             urp::decode::openai_image::decode_response(value, model)
         }
         ProviderType::Replicate => urp::decode::replicate::decode_response(value),
-        ProviderType::Systemone => Err("provider_type systemone is not supported".to_string()),
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
+        ProviderType::SystemOne | ProviderType::OpenaiDecisions => {
+            Err("decision channels serve only decision endpoints".to_string())
+        }
     }
     .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))?;
     if provider_type == ProviderType::Messages {

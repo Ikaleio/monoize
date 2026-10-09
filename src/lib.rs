@@ -8,6 +8,7 @@ pub mod custom_transforms;
 pub mod dashboard_handlers;
 pub mod db;
 pub mod db_cache;
+pub mod decision;
 pub mod entity;
 pub mod error;
 pub mod error_sanitize;

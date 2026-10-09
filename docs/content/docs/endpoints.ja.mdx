@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 以下の各エンドポイントには `/api` プレフィックスの別名があります。例: `/api/v1/chat/completions`。クライアントが `/api` パスを固定している場合に別名を使います。
 
-`systemone` を除き、エンドポイントは任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。`POST /v1/systemone` は `systemone` Channel だけを選び、リクエストを変換しません。
+どのエンドポイントも任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。意思決定 Channel は例外です。後述の「意思決定」を参照してください。
 
 Chat ルートは、空の内容を持つ OpenRouter の `configuration_update` メッセージも保持します。ファイルの data URI を Messages 文書に変換するときは MIME タイプを保持します。Messages ストリームは `citations_delta` の引用を保持します。Responses のコンテンツフィルターによる終了は未完了として扱い、長さの制限として報告しません。
 
@@ -137,35 +137,44 @@ curl http://localhost:8080/v1/embeddings \
   }'
 ```
 
-## System One
+## 意思決定
 
-`POST /v1/systemone` は TypeSafe System One リクエストを転送します。上流タイプが `systemone` の Channel を選びます。他のエンドポイントはこの Channel タイプを選びません。
+意思決定モデルは、型付きの質問にテキストではなく確率で答えます。Monoize は 2 つのリクエスト形式を受け付けます。
+
+| エンドポイント | リクエスト形式 |
+| --- | --- |
+| `POST /v1/systemone` | System One：`state` と `questions` オブジェクト。質問タイプは `noul`、`choice`、`score` |
+| `POST /v1/decisions` | OpenAI Decisions：`input` と `questions` 配列。質問タイプは `predicate`、`choice`、`score` |
 
 ```bash
 curl http://localhost:8080/v1/systemone \
   -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "jev-latest",
-    "state": "The gate is closed.",
+    "model": "my-decision-model",
+    "state": "My payouts have failed for 3 days.",
     "questions": {
-      "open": {
-        "type": "noul",
-        "instructions": "Is the gate open?"
+      "urgent": { "type": "noul", "instructions": "Is this request urgent?" },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team owns this request?",
+        "criteria": { "billing": "Payments and refunds", "technical": "Bugs and outages" }
       }
     }
   }'
 ```
 
-Monoize は上流 JSON を変更せずに返します。応答の `model` は上流の値のままです。たとえば `jev-1.13.0` は `jev-1.13.0` のままです。
+これらのエンドポイントは `system_one` と `openai_decisions` の Channel にだけルーティングします。ほかのエンドポイントはこの 2 つの Channel タイプにルーティングしません。各意思決定エンドポイントは両方の Channel タイプを使えます。意思決定エンドポイントはストリーミングに対応しません。
 
-`"stream": true` を送らないでください。この値は HTTP 400 を返します。
+リクエスト形式と Channel の形式が同じ場合、Monoize はすべてのフィールドを転送し、`model` だけを置き換えます。形式が異なる場合、Monoize はリクエストと回答を変換します。
 
-課金は `usage.input_tokens` と `usage.output_tokens` を使います。上流が出力トークンを課金しないときは、出力単価を `0` にします。
+- テキスト入力は双方向に変換されます。オブジェクトまたは配列の `state` は `input` の JSON テキストになります。
+- 画像入力には `openai_decisions` Channel が必要です。そのモデルを提供する Channel がない場合、Monoize は `400 unsupported_decision_input` を返します。
+- `noul` の criteria は `predicate` の instructions の末尾に追加されます。真偽値の choice 値は System One のキー `"true"` と `"false"` になります。
+- OpenAI の `refusal` 回答は、System One のレスポンスでは `{ "type": "refusal" }` になります。
+- 変換先の形式が定義しないフィールドは破棄されます。例: `safety_identifier`。
 
-OpenRouter を使うときは、Channel の base URL を `https://openrouter.ai/api/v1` にします。モデルを `typesafe/jev-1.13` へ redirect します。
-
-TypeSafe SDK の `models.list()` は `{models:[{name}]}` を要求します。Monoize の `GET /v1/models` は別の形なので、その呼び出しは失敗します。`systemOne()` は動作します。SDK は base URL の後に `/v1/systemone` を付けます。
+課金には上流の `usage.input_tokens` と `usage.output_tokens` を使います。意思決定の上流は出力トークンに課金しませんが、出力トークンを報告する上流もあります。各意思決定モデルの出力価格を `0` に設定してください。
 
 ## 画像
 

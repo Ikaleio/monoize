@@ -29,7 +29,7 @@ A provider object MUST include:
 - `per_model_circuit_break: boolean` (default `false`)
 - `channels: Channel[]`
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
-- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty). Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","systemone") }`.
+- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty). Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions") }`.
 - `active_probe_enabled_override?: boolean | null`
 - `active_probe_interval_seconds_override?: integer | null`
 - `active_probe_success_threshold_override?: integer | null`
@@ -67,7 +67,7 @@ A channel object MUST include:
 
 - `id: string`
 - `name: string`
-- `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","systemone")`
+- `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions")`
 - `base_url: string`
 - `api_key: string` (write-only: MUST NOT be returned by list/get APIs)
 - `weight: integer >= 0`
@@ -170,7 +170,7 @@ CP-INV-3b. `multiplier = 0` is a valid explicit free configuration for that Chan
 
 CP-INV-4. Every channel weight MUST satisfy `weight >= 0`.
 
-CP-INV-5. Every channel `provider_type` and every `api_type_overrides[].api_type` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, `systemone`.
+CP-INV-5. Every channel `provider_type` and every `api_type_overrides[].api_type` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, `system_one`, `openai_decisions`.
 
 CP-INV-6. Every `api_type_overrides[].pattern` MUST be a non-empty string.
 
@@ -357,10 +357,9 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
   - If `api_key` is omitted or empty and no stored Channel key can be resolved, return `400 invalid_input`.
   - The request body `provider_type` and `base_url` are the source of truth for the upstream request. They MAY differ from the stored Channel values when the editor has unsaved changes.
   - For `openrouter_image`, call `GET {base}/v1/images/models` with bearer authentication.
-  - For `responses`, `chat_completion`, `openai_image`, and `replicate`, call `GET {base}/v1/models` with bearer authentication.
+  - For `responses`, `chat_completion`, `openai_image`, `replicate`, `system_one`, and `openai_decisions`, call `GET {base}/v1/models` with bearer authentication.
   - For `messages`, call `GET {base}/v1/models` with header `x-api-key`, header `Authorization: Bearer <api_key>`, and header `anthropic-version: 2023-06-01`.
   - For `gemini`, call Gemini list models with `x-goog-api-key`.
-  - For `systemone`, call `GET {base}/v1/models` with bearer authentication. The URL MUST NOT repeat a trailing `/v1`. Read `data[].id` when that list is non-empty. Otherwise read `models[].name` without stripping a `models/` prefix. Return the unique ids sorted ascending.
   - Read both successful and non-successful upstream response bodies through the bounded discovery reader defined by RRB-UD1 through RRB-UD6 in `spec/runtime-resource-bounds.spec.md`.
   - Parse a successful upstream response as JSON only after the bounded reader returns the complete body.
   - Return unique model ids sorted ascending.
@@ -411,8 +410,8 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
   4. `response.cancelled` is failure.
   5. An `error` event is failure.
   A JSON `null` `error` field is absent. Purpose: a reasoning model can consume the 16-token probe cap and terminate as `incomplete` with `incomplete_details.reason = "max_output_tokens"`. That outcome still proves the Channel is reachable.
-- If `stream = true` for an OpenAI Image, OpenRouter Image, Replicate, or System One Channel, return `400 invalid_request` because the liveness test does not define a streaming form for those Channel types.
-- A non-streaming System One probe MUST `POST join_url(base, "/v1/systemone")` with the body in `spec/systemone-api.spec.md` SO-PROBE-1. HTTP 2xx is success. The active-probe scheduler MUST send that non-streaming form.
+- If `stream = true` for an OpenAI Image, OpenRouter Image, Replicate, System One, or OpenAI Decisions Channel, return `400 invalid_request` because the liveness test does not define a streaming form for those Channel types.
+- A `system_one` probe MUST send `POST {base}/v1/systemone` with `state = "ping"` and one `noul` question. An `openai_decisions` probe MUST send `POST {base}/v1/decisions` with `input = "ping"` and one `predicate` question.
 - If `per_model_circuit_break = true`, a successful test MUST reset only the `{channel_id}::{resolved logical model}` health key. It MUST NOT reset the base Channel key or any sibling model key. If this model key does not exist and capacity remains, insert and reset this model key.
 - If `per_model_circuit_break = false`, a successful test MUST reset only the base Channel health key. If this key does not exist and capacity remains, insert and reset it.
 - A successful test MUST NOT inspect or mutate any other health-map key. Its health-map work MUST be `O(1)` and independent of Channel model count and global health entry count.

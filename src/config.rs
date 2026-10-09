@@ -28,8 +28,20 @@ pub enum ProviderType {
     OpenaiImage,
     OpenrouterImage,
     Replicate,
-    Systemone,
+    SystemOne,
+    OpenaiDecisions,
     Group,
+}
+
+impl ProviderType {
+    /// Returns the decision wire format when this type targets a decision endpoint.
+    pub fn decision_format(self) -> Option<crate::decision::DecisionFormat> {
+        match self {
+            Self::SystemOne => Some(crate::decision::DecisionFormat::SystemOne),
+            Self::OpenaiDecisions => Some(crate::decision::DecisionFormat::OpenaiDecisions),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

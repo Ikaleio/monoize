@@ -32,12 +32,24 @@ The screenshot uses local example traffic.
 ## Add a Channel
 
 1. Open the Provider and click **Add Channel**.
-2. Select the upstream type: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, or `systemone`.
+2. Select the upstream type: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, `system_one`, or `openai_decisions`.
 3. Enter the upstream base URL and API key.
 4. Set a weight. Traffic splits between eligible Channels in proportion to weight. Default `1`.
 5. Optional: set a per-Channel `proxy_url` to override the process-level upstream proxy.
 
 When you edit a Channel later, leave the API key field empty to keep the stored key.
+
+## Decision models
+
+Use `system_one` or `openai_decisions` Channels for decision models. These Channels serve only `/v1/systemone` and `/v1/decisions`. See [API Endpoints](/en/docs/endpoints).
+
+| Upstream | Type | Base URL |
+| --- | --- | --- |
+| TypeSafe Jev | `system_one` | `https://api.typesafe.ai` |
+| OpenRouter | `system_one` | `https://openrouter.ai/api` |
+| OpenAI | `openai_decisions` | `https://api.openai.com` |
+
+Channel tests send one non-streaming decision request with one yes/no question. The test can incur upstream charges.
 
 ## OpenRouter images
 

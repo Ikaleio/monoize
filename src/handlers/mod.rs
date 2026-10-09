@@ -1,15 +1,16 @@
 mod account_balance;
 mod billing;
 mod compact;
+mod decisions;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
+mod json_forward;
 mod nonstream;
 mod request_logging;
 pub(crate) mod responses_history;
 mod responses_websocket;
 pub(crate) mod routing;
 mod streaming;
-mod systemone;
 pub(crate) mod usage;
 
 use crate::app::AppState;
@@ -39,6 +40,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use billing::*;
 use helpers::*;
+use json_forward::*;
 use nonstream::*;
 use request_logging::*;
 use routing::*;
@@ -48,8 +50,8 @@ use usage::*;
 pub use account_balance::{codex_usage, deepseek_user_balance};
 pub(crate) use compact::classify_openai_compact_scheme;
 pub use compact::compact_response;
+pub use decisions::{create_decisions, create_system_one};
 pub use responses_websocket::responses_websocket;
-pub use systemone::create_systemone;
 
 #[allow(clippy::result_large_err)]
 fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {
@@ -624,229 +626,58 @@ pub async fn create_embeddings(
     }
 
     let max_multiplier = resolve_max_multiplier_for_embeddings(&body, &headers, &auth);
-    let request_id = extract_request_id(&headers);
-    let request_ip = extract_client_ip(&headers);
     let started_at = std::time::Instant::now();
     let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
     let mut attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
     attach_client_session_id(&mut attempts, extract_client_session_id(&headers), None);
-    ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
-    let _pending_request_log_guard = insert_pending_request_log(
-        &state,
-        &auth,
-        &logical_model,
-        false,
-        request_id.as_deref(),
-        request_ip.as_deref(),
-        started_at,
+    forward_json_attempts(
+        JsonForward {
+            state: &state,
+            auth: &auth,
+            headers: &headers,
+            logical_model: &logical_model,
+            started_at,
+        },
+        attempts,
+        &EmbeddingsForward {
+            body: &body,
+            logical_model: &logical_model,
+        },
     )
-    .await?;
-    let mut last_failed_attempt: Option<MonoizeAttempt> = None;
-    let mut tried_providers: Vec<TriedProvider> = Vec::new();
-    let mut execution_state = AttemptExecutionState::default();
+    .await
+}
 
-    for attempt in attempts {
-        if execution_state.should_skip(&attempt) {
-            continue;
+/// DE3, DE4, DE8: pass-through with `model` rewritten in both directions.
+struct EmbeddingsForward<'a> {
+    body: &'a Value,
+    logical_model: &'a str,
+}
+
+impl JsonForwardEndpoint for EmbeddingsForward<'_> {
+    fn upstream_request(&self, attempt: &MonoizeAttempt) -> AppResult<(&'static str, Value)> {
+        let mut body = self.body.clone();
+        if let Some(object) = body.as_object_mut() {
+            object.insert(
+                "model".to_string(),
+                Value::String(attempt.upstream_model.clone()),
+            );
         }
+        Ok(("/v1/embeddings", body))
+    }
 
-        let max_channel_attempts = same_channel_attempt_slots(&attempt);
-        for channel_attempt in 0..max_channel_attempts {
-            if execution_state.should_skip(&attempt) {
-                break;
-            }
+    fn parse_usage(&self, upstream: &Value) -> Option<urp::Usage> {
+        parse_usage_from_embeddings_object(upstream)
+    }
 
-            let attempt_number = execution_state.record_upstream_attempt(&attempt);
-            let mut upstream_body = body.clone();
-            if let Some(upstream_obj) = upstream_body.as_object_mut() {
-                upstream_obj.insert(
-                    "model".to_string(),
-                    Value::String(attempt.upstream_model.clone()),
-                );
-            }
-            let request_body = upstream::JsonBody::new(&upstream_body);
-            drop(upstream_body);
-
-            let provider = build_channel_provider_config(&attempt);
-            let http = client_http_for_attempt(&state, &attempt)?;
-            let result = upstream::call_upstream_with_timeout_and_headers(
-                &http,
-                &provider,
-                &attempt.api_key,
-                "/v1/embeddings",
-                request_body,
-                attempt.request_timeout_ms,
-                &[],
-            )
-            .await;
-
-            match result {
-                Ok(mut value) => {
-                    update_pending_channel_info(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        false,
-                        request_id.as_deref(),
-                        request_ip.as_deref(),
-                        started_at,
-                    )
-                    .await;
-                    let usage = parse_usage_from_embeddings_object(&value);
-                    // MP-F3: a fail-closed missing-usage billable success
-                    // rejects with 403 before response delivery.
-                    if usage.is_none() && missing_usage_rejects(&auth, &attempt) {
-                        let err = missing_usage_error();
-                        spawn_request_log_error(
-                            &state,
-                            &auth,
-                            &attempt,
-                            &logical_model,
-                            false,
-                            started_at,
-                            request_id.clone(),
-                            request_ip.clone(),
-                            &err,
-                            None,
-                            tried_providers,
-                        );
-                        return Err(err);
-                    }
-                    let upstream_response_model = mismatched_upstream_response_model(
-                        &attempt.upstream_model,
-                        value.get("model").and_then(Value::as_str).unwrap_or(""),
-                    );
-                    let response_service_tier =
-                        usage::response_service_tier(&value).map(str::to_string);
-                    mark_channel_success(&state, &attempt).await;
-                    let settled_usage = match usage.as_ref() {
-                        Some(usage_row) => crate::settlement::SettledUsage::Reported(usage_row),
-                        None => crate::settlement::SettledUsage::MissingFree,
-                    };
-                    let charge = match maybe_charge_settled(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        settled_usage,
-                        None,
-                        response_service_tier.as_deref(),
-                        request_id.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(charge) => charge,
-                        Err(err) => {
-                            spawn_request_log_error(
-                                &state,
-                                &auth,
-                                &attempt,
-                                &logical_model,
-                                false,
-                                started_at,
-                                request_id.clone(),
-                                request_ip.clone(),
-                                &err,
-                                None,
-                                tried_providers,
-                            );
-                            return Err(err);
-                        }
-                    };
-
-                    if let Some(obj) = value.as_object_mut() {
-                        obj.insert("model".to_string(), Value::String(logical_model.clone()));
-                    }
-
-                    spawn_request_log(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        usage,
-                        charge.charge_nano_usd,
-                        charge.billing_breakdown,
-                        false,
-                        started_at,
-                        request_id.clone(),
-                        request_ip.clone(),
-                        attempt.channel_id.clone(),
-                        None,
-                        None,
-                        None,
-                        tried_providers,
-                        false,
-                        upstream_response_model,
-                    );
-
-                    return Ok(Json(value).into_response());
-                }
-                Err(err) => {
-                    let same_channel_retryable = is_same_channel_retryable_error(&err);
-                    let passive_failure_class =
-                        same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let mask_sensitive_info =
-                        state.monoize_runtime.read().await.mask_sensitive_info;
-                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
-                    record_upstream_attempt_failure(
-                        &state,
-                        &attempt,
-                        attempt_number,
-                        &app_err,
-                        passive_failure_class,
-                        &mut tried_providers,
-                        &mut execution_state,
-                    )
-                    .await;
-                    last_failed_attempt = Some(attempt.clone());
-                    if allow_same_channel_retry(
-                        &state,
-                        &attempt,
-                        &execution_state,
-                        channel_attempt + 1,
-                        passive_failure_class,
-                    )
-                    .await
-                    {
-                        maybe_sleep_before_channel_retry(&attempt).await;
-                        continue;
-                    }
-                    break;
-                }
-            }
+    fn downstream_body(&self, _attempt: &MonoizeAttempt, mut upstream: Value) -> AppResult<Value> {
+        if let Some(object) = upstream.as_object_mut() {
+            object.insert(
+                "model".to_string(),
+                Value::String(self.logical_model.to_string()),
+            );
         }
+        Ok(upstream)
     }
-    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
-    if let Some(attempt) = last_failed_attempt {
-        spawn_request_log_error(
-            &state,
-            &auth,
-            &attempt,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            None,
-            tried_providers,
-        );
-    } else {
-        spawn_request_log_error_no_attempt(
-            &state,
-            &auth,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            None,
-            tried_providers,
-        );
-    }
-    Err(final_err)
 }
 
 const URP_KNOWN_RESPONSE_FIELDS: [&str; 13] = [
@@ -980,7 +811,8 @@ fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str
         ProviderType::OpenaiImage => "openai_image",
         ProviderType::OpenrouterImage => "openrouter_image",
         ProviderType::Replicate => "replicate",
-        ProviderType::Systemone => "systemone",
+        ProviderType::SystemOne => "system_one",
+        ProviderType::OpenaiDecisions => "openai_decisions",
         ProviderType::Group => "group",
     }
 }
@@ -1159,7 +991,7 @@ pub(crate) fn provider_type_protocol(provider_type: ProviderType) -> Option<urp:
         ProviderType::OpenaiImage => Some(urp::ProviderProtocol::OpenaiImage),
         ProviderType::OpenrouterImage => Some(urp::ProviderProtocol::OpenrouterImage),
         ProviderType::Replicate => Some(urp::ProviderProtocol::Replicate),
-        ProviderType::Systemone | ProviderType::Group => None,
+        ProviderType::SystemOne | ProviderType::OpenaiDecisions | ProviderType::Group => None,
     }
 }
 

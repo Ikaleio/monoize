@@ -628,7 +628,8 @@ export type ProviderType =
   | "openai_image"
   | "openrouter_image"
   | "replicate"
-  | "systemone";
+  | "system_one"
+  | "openai_decisions";
 export type AffinityFailbackMode = "sticky" | "prefer_higher_priority";
 
 export interface ApiTypeOverride {
