@@ -672,10 +672,13 @@ pub async fn fetch_provider_models(
 
     let body = parse_discovery_json_response(resp).await?;
 
-    let models: Vec<String> = extract_model_ids(
-        crate::monoize_routing::MonoizeProviderType::ChatCompletion,
-        &body,
-    );
+    let list_type =
+        if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Systemone {
+            crate::monoize_routing::MonoizeProviderType::Systemone
+        } else {
+            crate::monoize_routing::MonoizeProviderType::ChatCompletion
+        };
+    let models: Vec<String> = extract_model_ids(list_type, &body);
     let (compact_scheme, compact_models) = crate::handlers::classify_openai_compact_scheme(&models);
 
     Ok(Json(json!({
@@ -1108,6 +1111,7 @@ pub async fn test_channel(
             crate::monoize_routing::MonoizeProviderType::OpenaiImage
                 | crate::monoize_routing::MonoizeProviderType::OpenrouterImage
                 | crate::monoize_routing::MonoizeProviderType::Replicate
+                | crate::monoize_routing::MonoizeProviderType::Systemone
         )
     {
         return Err(AppError::new(
@@ -1261,6 +1265,20 @@ pub(super) fn build_gemini_models_list_url(base_url: &str) -> String {
     }
 }
 
+fn string_field_ids(
+    items: Option<&Value>,
+    field: &str,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<String> {
+    items
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(field).and_then(Value::as_str).map(String::from))
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
+}
+
 fn extract_model_ids(
     provider_type: crate::monoize_routing::MonoizeProviderType,
     body: &Value,
@@ -1279,14 +1297,16 @@ fn extract_model_ids(
             })
             .filter(|id| seen.insert(id.clone()))
             .collect(),
-        _ => body
-            .get("data")
-            .and_then(|d| d.as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(String::from))
-            .filter(|id| seen.insert(id.clone()))
-            .collect(),
+        crate::monoize_routing::MonoizeProviderType::Systemone => {
+            let from_data = string_field_ids(body.get("data"), "id", &mut seen);
+            if !from_data.is_empty() {
+                from_data
+            } else {
+                seen.clear();
+                string_field_ids(body.get("models"), "name", &mut seen)
+            }
+        }
+        _ => string_field_ids(body.get("data"), "id", &mut seen),
     };
     models.sort();
     models

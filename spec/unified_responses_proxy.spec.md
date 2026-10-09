@@ -21,7 +21,7 @@
 - **Downstream:** The client calling Monoize.
 - **Upstream:** A provider endpoint Monoize calls.
 - **Provider:** A configured upstream channel.
-- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, or `group`.
+- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, `systemone`, or `group`.
 - **URP v2 request:** The canonical internal request object `UrpRequestV2` defined by `spec/urp-v2-flat-structure.spec.md`.
 - **URP v2 response:** The canonical internal response object `UrpResponseV2` defined by `spec/urp-v2-flat-structure.spec.md`.
 - **Node sequence:** An ordered flat `Vec<Node>` sequence used by URP v2 `input` and `output`.
@@ -58,6 +58,7 @@ Monoize MUST implement:
 - `POST /v1/chat/completions` (adapter)
 - `POST /v1/messages` (adapter)
 - `POST /v1/embeddings` (pass-through)
+- `POST /v1/systemone` (pass-through; `spec/systemone-api.spec.md`)
 - `GET /v1/models` (model listing)
 
 Alias:
@@ -180,7 +181,7 @@ C3. Monoize MUST resolve listen address from `MONOIZE_LISTEN`, default `0.0.0.0:
 
 C4. Monoize MUST resolve metrics endpoint path from `MONOIZE_METRICS_PATH`, default `/metrics`.
 
-C5. Monoize MUST accept downstream request bodies up to the configured HTTP body limit on forwarding endpoints (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`). `MONOIZE_HTTP_BODY_MAX_BYTES` MUST select this limit when its trimmed value is a positive base-10 integer that fits `usize`; an unset, empty, zero, negative, malformed, or overflowing value MUST select the default `52428800` bytes. Any framework-default extractor limit smaller than the selected value MUST be disabled so that the selected value is the effective limit.
+C5. Monoize MUST accept downstream request bodies up to the configured HTTP body limit on forwarding endpoints (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/systemone`). `MONOIZE_HTTP_BODY_MAX_BYTES` MUST select this limit when its trimmed value is a positive base-10 integer that fits `usize`; an unset, empty, zero, negative, malformed, or overflowing value MUST select the default `52428800` bytes. Any framework-default extractor limit smaller than the selected value MUST be disabled so that the selected value is the effective limit.
 
 C6. Monoize runs as one application process with concurrent worker tasks. Exactly one process with node role `primary` is the only supported writer for Monoize business tables (`primary-replica-deployment.spec.md`). Processes running as role `replica` share the same database read-only and ship telemetry through the primary's ingest API; direct SQL writes from any source and concurrent Monoize primary writer processes are outside the cache-coherence contract.
 
@@ -1664,7 +1665,7 @@ DE1. Monoize MUST authenticate and apply pre-forward balance guard exactly as ot
 
 DE2. Monoize MUST route Provider and Channel candidates using the same Channel model-map matching rules as chat completions.
 
-DE3. Monoize MUST call upstream path `POST /v1/embeddings` for every selected provider attempt, regardless of provider type.
+DE3. Monoize MUST call upstream path `POST /v1/embeddings` for every selected provider attempt, regardless of provider type. Monoize MUST drop attempts whose effective provider type is `systemone`, per `spec/systemone-api.spec.md` SO-EXCL.
 
 DE4. Monoize MUST forward request JSON as pass-through payload except for replacing outbound `model` with the selected `upstream_model`.
 

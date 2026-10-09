@@ -25,6 +25,7 @@ pub enum MonoizeProviderType {
     OpenaiImage,
     OpenrouterImage,
     Replicate,
+    Systemone,
 }
 
 impl MonoizeProviderType {
@@ -38,6 +39,7 @@ impl MonoizeProviderType {
             "openai_image" => Some(Self::OpenaiImage),
             "openrouter_image" => Some(Self::OpenrouterImage),
             "replicate" => Some(Self::Replicate),
+            "systemone" => Some(Self::Systemone),
             _ => None,
         }
     }
@@ -51,6 +53,7 @@ impl MonoizeProviderType {
             Self::OpenaiImage => "openai_image",
             Self::OpenrouterImage => "openrouter_image",
             Self::Replicate => "replicate",
+            Self::Systemone => "systemone",
         }
     }
 
@@ -63,6 +66,7 @@ impl MonoizeProviderType {
             Self::OpenaiImage => crate::config::ProviderType::OpenaiImage,
             Self::OpenrouterImage => crate::config::ProviderType::OpenrouterImage,
             Self::Replicate => crate::config::ProviderType::Replicate,
+            Self::Systemone => crate::config::ProviderType::Systemone,
         }
     }
 }
@@ -2862,7 +2866,8 @@ async fn read_probe_stream(
             }
             MonoizeProviderType::OpenaiImage
             | MonoizeProviderType::OpenrouterImage
-            | MonoizeProviderType::Replicate => {}
+            | MonoizeProviderType::Replicate
+            | MonoizeProviderType::Systemone => {}
         }
     }
 
@@ -3026,6 +3031,20 @@ fn build_probe_request(
             let body = serde_json::json!({
                 "version": model,
                 "input": {}
+            });
+            (url, body, &[][..])
+        }
+        MonoizeProviderType::Systemone => {
+            let url = crate::upstream::join_url(base, "/v1/systemone");
+            let body = serde_json::json!({
+                "model": model,
+                "state": "Monoize liveness probe.",
+                "questions": {
+                    "probe": {
+                        "type": "noul",
+                        "instructions": "Is this text a liveness probe?"
+                    }
+                }
             });
             (url, body, &[][..])
         }

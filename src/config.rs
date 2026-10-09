@@ -28,6 +28,7 @@ pub enum ProviderType {
     OpenaiImage,
     OpenrouterImage,
     Replicate,
+    Systemone,
     Group,
 }
 

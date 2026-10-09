@@ -93,6 +93,11 @@ pub(crate) async fn stream_upstream_to_urp_events(
             )
             .await
         }
+        ProviderType::Systemone => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "provider_type_not_supported",
+            "systemone is not a URP provider",
+        )),
         ProviderType::Group => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "provider_type_not_supported",

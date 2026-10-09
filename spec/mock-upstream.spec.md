@@ -119,3 +119,33 @@ MU15a. `/v1/images/edits` with text field `stream` equal to `true` MUST return S
 the MU14a shape with event names `image_edit.partial_image` /
 `image_edit.completed`, the teal PNG, and `partial_images` read from the same-named
 text field.
+
+## 6. `POST /v1/systemone`
+
+MU16. The body MUST be a JSON object. `questions` MUST be an object. A violation
+MUST return HTTP 400. Otherwise the endpoint MUST return HTTP 200 with a JSON
+object that contains `model`, `answers`, and `usage`.
+
+MU17. `answers` MUST contain one property for each key of `questions`, in source
+key order. The value depends on that question's `type`:
+
+- `noul`: `{ "type": "noul", "noul": 0.5 }`.
+- `choice`: `choice` is the first key of object `criteria`. `n` is the key count,
+  or `1` when `criteria` is missing or empty. `probabilities` maps each criteria
+  key to `1/n`. An empty criteria object yields `choice = null` and
+  `probabilities = {}`. `confidence` is `1/n`.
+- `score`: `n` is the number of keys in object `legend`, or the length of array
+  `legend`. A missing legend uses `n = 1` and `legend = {}`. `score` is
+  `(n - 1) / 2`. `probabilities` maps each legend key to `1/n`. Array legend keys
+  are the decimal indexes `"0"`, `"1"`, and so on. `confidence` is `1/n`. The
+  answer includes `legend`.
+- Any other `type`: `{ "type": <type> }`.
+
+MU18. `usage.input_tokens` MUST equal `ceil(utf8_byte_length / 4)`. The measured
+text is the JSON encoding of an object whose keys are `state` then `questions`,
+with no extra whitespace. A missing `state` is JSON `null`.
+`usage.output_tokens` MUST equal the number of keys in `questions`.
+
+MU19. When the request `model` string is exactly `jev-latest`, the response
+`model` MUST be `jev-1.13.0`. Otherwise the response `model` MUST equal the
+request `model` string. A missing `model` MUST become an empty string.

@@ -68,6 +68,7 @@ pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
         ProviderType::OpenaiImage => "/v1/images/generations",
         ProviderType::OpenrouterImage => "/v1/images",
         ProviderType::Replicate => "/v1/predictions",
+        ProviderType::Systemone => "/v1/systemone",
         ProviderType::Group => "/v1/responses",
     }
 }
@@ -227,8 +228,11 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
         )
         .await;
     }
+    // SO-EXCL: a systemone attempt is eligible only for POST /v1/systemone.
     if let Some(required_provider_type) = required_provider_type {
         attempts.retain(|attempt| attempt.provider_type == required_provider_type);
+    } else {
+        attempts.retain(|attempt| attempt.provider_type != ProviderType::Systemone);
     }
     if attempts.is_empty() {
         return Ok(attempts);

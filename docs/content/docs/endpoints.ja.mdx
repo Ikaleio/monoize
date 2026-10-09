@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 以下の各エンドポイントには `/api` プレフィックスの別名があります。例: `/api/v1/chat/completions`。クライアントが `/api` パスを固定している場合に別名を使います。
 
-どのエンドポイントも任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。
+`systemone` を除き、エンドポイントは任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。`POST /v1/systemone` は `systemone` Channel だけを選び、リクエストを変換しません。
 
 Chat ルートは、空の内容を持つ OpenRouter の `configuration_update` メッセージも保持します。ファイルの data URI を Messages 文書に変換するときは MIME タイプを保持します。Messages ストリームは `citations_delta` の引用を保持します。Responses のコンテンツフィルターによる終了は未完了として扱い、長さの制限として報告しません。
 
@@ -136,6 +136,36 @@ curl http://localhost:8080/v1/embeddings \
     "input": "The quick brown fox"
   }'
 ```
+
+## System One
+
+`POST /v1/systemone` は TypeSafe System One リクエストを転送します。上流タイプが `systemone` の Channel を選びます。他のエンドポイントはこの Channel タイプを選びません。
+
+```bash
+curl http://localhost:8080/v1/systemone \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": "The gate is closed.",
+    "questions": {
+      "open": {
+        "type": "noul",
+        "instructions": "Is the gate open?"
+      }
+    }
+  }'
+```
+
+Monoize は上流 JSON を変更せずに返します。応答の `model` は上流の値のままです。たとえば `jev-1.13.0` は `jev-1.13.0` のままです。
+
+`"stream": true` を送らないでください。この値は HTTP 400 を返します。
+
+課金は `usage.input_tokens` と `usage.output_tokens` を使います。上流が出力トークンを課金しないときは、出力単価を `0` にします。
+
+OpenRouter を使うときは、Channel の base URL を `https://openrouter.ai/api/v1` にします。モデルを `typesafe/jev-1.13` へ redirect します。
+
+TypeSafe SDK の `models.list()` は `{models:[{name}]}` を要求します。Monoize の `GET /v1/models` は別の形なので、その呼び出しは失敗します。`systemOne()` は動作します。SDK は base URL の後に `/v1/systemone` を付けます。
 
 ## 画像
 

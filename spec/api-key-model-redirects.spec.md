@@ -70,7 +70,7 @@ ensure_model_allowed()         ← sees rewritten model
 ```
 
 The execution order applies to `POST /v1/responses`, `POST /v1/chat/completions`,
-`POST /v1/messages`, `POST /v1/embeddings`, `POST /v1/responses/compact`,
+`POST /v1/messages`, `POST /v1/embeddings`, `POST /v1/systemone`, `POST /v1/responses/compact`,
 `POST /v1/images/generations`, `POST /v1/images/edits`, and every `/api` alias
 of those endpoints.
 

@@ -1598,6 +1598,7 @@ fn build_v1_router() -> Router<AppState> {
             post(crate::handlers::create_chat_completions),
         )
         .route("/v1/embeddings", post(crate::handlers::create_embeddings))
+        .route("/v1/systemone", post(crate::handlers::create_systemone))
         .route("/v1/messages", post(crate::handlers::create_messages))
         .route(
             "/v1/images/generations",

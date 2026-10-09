@@ -5,13 +5,13 @@ description: 用 Rust 编写的 AI API 网关：转换协议语义，将一个�
 
 ## 概述
 
-Monoize 是用 Rust 编写的 AI API 网关。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Embeddings 和图像格式的请求。它将请求转发到配置的上游 Channel，并按客户端使用的协议返回响应。
+Monoize 是用 Rust 编写的 AI API 网关。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Embeddings、图像和 System One 格式的请求。它将请求转发到配置的上游 Channel，并按客户端使用的协议返回响应。
 
 Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求解码为统一的类型化内部表示，再编码为选定的上游协议。响应沿同一路径反向转换。文本、推理、加密推理、工具调用、工具结果、图像、用量和流边界在转换中保持原有角色。
 
 ## 核心功能
 
-- **协议转换：** 支持使用任意受支持的下游端点调用任意配置的上游 Channel 类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。
+- **协议转换：** 除 `systemone` 外，受支持的下游端点可以调用已配置的上游 Channel 类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。只有 `POST /v1/systemone` 会选择 `systemone` Channel。
 - **路由与可靠性：** 一个逻辑模型可以匹配多个有序 Provider。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在发出第一个响应字节后停止回落。参见[路由与可靠性](/zh/docs/routing)。
 - **Transform 变换：** 36 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
 - **请求捕获：** 捕获功能默认关闭。开启后，Monoize 会记录每次上游尝试的报文。结构化查看器展示每一跳。参见[请求日志](/zh/docs/request-logs)。
@@ -27,6 +27,7 @@ Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/embeddings` | Embeddings |
+| `POST` | `/v1/systemone` | TypeSafe System One |
 | `POST` | `/v1/images/generations` | 图像生成 |
 | `POST` | `/v1/images/edits` | Multipart 图像编辑 |
 
@@ -43,6 +44,7 @@ Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求
 | `openai_image` | OpenAI 兼容图像 API |
 | `openrouter_image` | OpenRouter 专用图像 API |
 | `replicate` | Replicate predictions |
+| `systemone` | TypeSafe System One |
 
 ## 限制
 

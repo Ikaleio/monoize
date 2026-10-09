@@ -445,6 +445,82 @@ function reasoningResponsesStream(model: string, text: string): string[] {
   ];
 }
 
+function systemOneAnswer(question: any): Record<string, unknown> {
+  const type = typeof question?.type === "string" ? question.type : "";
+  if (type === "noul") return { type, noul: 0.5 };
+  if (type === "choice") {
+    const criteria =
+      question?.criteria &&
+      typeof question.criteria === "object" &&
+      !Array.isArray(question.criteria)
+        ? question.criteria
+        : {};
+    const keys = Object.keys(criteria);
+    const n = Math.max(keys.length, 1);
+    const share = 1 / n;
+    const probabilities: Record<string, number> = {};
+    for (const key of keys) probabilities[key] = share;
+    return {
+      type,
+      choice: keys.length > 0 ? keys[0] : null,
+      probabilities,
+      confidence: share,
+    };
+  }
+  if (type === "score") {
+    const legend = question?.legend;
+    let keys: string[] = [];
+    let legendOut: unknown = {};
+    if (legend && typeof legend === "object" && !Array.isArray(legend)) {
+      keys = Object.keys(legend);
+      legendOut = legend;
+    } else if (Array.isArray(legend)) {
+      keys = legend.map((_, index) => String(index));
+      legendOut = legend;
+    }
+    const n = Math.max(keys.length, 1);
+    const share = 1 / n;
+    const probabilities: Record<string, number> = {};
+    for (const key of keys) probabilities[key] = share;
+    return {
+      type,
+      score: (n - 1) / 2,
+      legend: legendOut,
+      probabilities,
+      confidence: share,
+    };
+  }
+  return { type };
+}
+
+function systemOneResponse(body: any): Response {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ error: "body must be object" }, 400);
+  }
+  const questions = body.questions;
+  if (!questions || typeof questions !== "object" || Array.isArray(questions)) {
+    return jsonResponse({ error: "questions must be an object" }, 400);
+  }
+  const answers: Record<string, unknown> = {};
+  for (const key of Object.keys(questions)) {
+    answers[key] = systemOneAnswer(questions[key]);
+  }
+  const text = JSON.stringify({
+    state: body.state === undefined ? null : body.state,
+    questions,
+  });
+  const inputTokens = Math.ceil(new TextEncoder().encode(text).length / 4);
+  const requested = typeof body.model === "string" ? body.model : "";
+  return jsonResponse({
+    model: requested === "jev-latest" ? "jev-1.13.0" : requested,
+    answers,
+    usage: {
+      input_tokens: inputTokens,
+      output_tokens: Object.keys(questions).length,
+    },
+  });
+}
+
 function responsesObject(model: string, text: string) {
   return {
     id: `resp_mock_${Date.now()}`,
@@ -650,6 +726,11 @@ Bun.serve({
         model,
         content: [{ type: "text", text }],
       });
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/systemone") {
+      const body = await req.json();
+      return systemOneResponse(body);
     }
 
     return jsonResponse({ error: "not found" }, 404);

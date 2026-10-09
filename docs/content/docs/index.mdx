@@ -5,13 +5,13 @@ description: A Rust gateway that converts AI API protocols and routes one logica
 
 ## Overview
 
-Monoize is an AI API gateway written in Rust. It accepts requests in OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, embeddings, and image formats. It forwards each request to a configured upstream Channel. It returns the response in the protocol that the client used.
+Monoize is an AI API gateway written in Rust. It accepts requests in OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, embeddings, image, and System One formats. It forwards each request to a configured upstream Channel. It returns the response in the protocol that the client used.
 
 Monoize converts protocol semantics instead of renaming JSON fields. It decodes each request into a typed canonical representation. It then encodes that representation for the selected upstream protocol. The response follows the reverse path. Text, reasoning, encrypted reasoning, tool calls, tool results, images, usage counters, and stream boundaries keep their roles across conversion.
 
 ## Core capabilities
 
-- **Protocol conversion:** Call any supported endpoint with any configured upstream Channel type. Monoize converts between Responses, Chat Completions, Messages, Gemini, and image protocols in streaming and non-streaming modes.
+- **Protocol conversion:** Call any supported endpoint with any configured upstream Channel type, except `systemone`. Monoize converts between Responses, Chat Completions, Messages, Gemini, and image protocols in streaming and non-streaming modes. Only `POST /v1/systemone` selects a `systemone` Channel.
 - **Routing and reliability:** A logical model can route to multiple ordered Providers. Each Provider contains weighted Channels. Monoize retries retryable failures, advances to the next route, and stops fallback after sending the first response byte. See [Routing and Reliability](/en/docs/routing).
 - **Transforms:** 36 built-in transforms adjust requests and responses per Provider, per API key, or globally. See [Transforms](/en/docs/transforms).
 - **Request capture:** Capture is disabled by default. When enabled, Monoize records the payload of each upstream attempt. A structured viewer displays each attempt. See [Request Logs](/en/docs/request-logs).
@@ -27,6 +27,7 @@ Monoize converts protocol semantics instead of renaming JSON fields. It decodes 
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/embeddings` | Embeddings |
+| `POST` | `/v1/systemone` | TypeSafe System One |
 | `POST` | `/v1/images/generations` | Image generation |
 | `POST` | `/v1/images/edits` | Multipart image edits |
 
@@ -43,6 +44,7 @@ Every forwarding endpoint also has an `/api/v1/...` alias.
 | `openai_image` | OpenAI-compatible image API |
 | `openrouter_image` | OpenRouter dedicated image API |
 | `replicate` | Replicate predictions |
+| `systemone` | TypeSafe System One |
 
 ## Limits
 

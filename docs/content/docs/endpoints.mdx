@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 Every endpoint below also exists under the `/api` prefix, for example `/api/v1/chat/completions`. Use the alias when a client hardcodes `/api` paths.
 
-Any endpoint can reach any upstream type. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions.
+Most endpoints can reach any upstream type except `systemone`. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions. `POST /v1/systemone` selects only a `systemone` Channel and does not convert the request.
 
 Monoize preserves OpenRouter `configuration_update` messages on Chat routes, including updates with empty content. File data URIs retain their MIME type during conversion to Messages documents. Messages streams retain `citations_delta` citations. Responses content-filter termination remains an incomplete response rather than a length limit.
 
@@ -136,6 +136,36 @@ curl http://localhost:8080/v1/embeddings \
     "input": "The quick brown fox"
   }'
 ```
+
+## System One
+
+`POST /v1/systemone` forwards a TypeSafe System One request. Select a Channel whose upstream type is `systemone`. No other endpoint selects that Channel type.
+
+```bash
+curl http://localhost:8080/v1/systemone \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": "The gate is closed.",
+    "questions": {
+      "open": {
+        "type": "noul",
+        "instructions": "Is the gate open?"
+      }
+    }
+  }'
+```
+
+Monoize returns the upstream JSON without changes. It keeps the upstream `model` value. For example, `jev-1.13.0` stays `jev-1.13.0`.
+
+Do not send `"stream": true`. Monoize returns HTTP 400 for that value.
+
+Billing uses `usage.input_tokens` and `usage.output_tokens`. Set the output price to `0` when upstream output tokens are free.
+
+For OpenRouter, set the Channel base URL to `https://openrouter.ai/api/v1`. Redirect the model to `typesafe/jev-1.13`.
+
+The TypeSafe SDK `models.list()` expects `{models:[{name}]}`. `GET /v1/models` uses a different shape, so that call fails. `systemOne()` still works. The SDK appends `/v1/systemone` to the base URL.
 
 ## Images
 

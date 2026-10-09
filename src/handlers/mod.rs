@@ -9,6 +9,7 @@ pub(crate) mod responses_history;
 mod responses_websocket;
 pub(crate) mod routing;
 mod streaming;
+mod systemone;
 pub(crate) mod usage;
 
 use crate::app::AppState;
@@ -48,6 +49,7 @@ pub use account_balance::{codex_usage, deepseek_user_balance};
 pub(crate) use compact::classify_openai_compact_scheme;
 pub use compact::compact_response;
 pub use responses_websocket::responses_websocket;
+pub use systemone::create_systemone;
 
 #[allow(clippy::result_large_err)]
 fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {
@@ -978,6 +980,7 @@ fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str
         ProviderType::OpenaiImage => "openai_image",
         ProviderType::OpenrouterImage => "openrouter_image",
         ProviderType::Replicate => "replicate",
+        ProviderType::Systemone => "systemone",
         ProviderType::Group => "group",
     }
 }
@@ -1156,7 +1159,7 @@ pub(crate) fn provider_type_protocol(provider_type: ProviderType) -> Option<urp:
         ProviderType::OpenaiImage => Some(urp::ProviderProtocol::OpenaiImage),
         ProviderType::OpenrouterImage => Some(urp::ProviderProtocol::OpenrouterImage),
         ProviderType::Replicate => Some(urp::ProviderProtocol::Replicate),
-        ProviderType::Group => None,
+        ProviderType::Systemone | ProviderType::Group => None,
     }
 }
 

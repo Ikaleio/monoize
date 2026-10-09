@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 下列每個端點都有 `/api` 前綴別名，例如 `/api/v1/chat/completions`。當用戶端硬編碼了 `/api` 路徑時使用別名。
 
-任何端點都可以到達任何上游類型。例如，用戶端呼叫 `/v1/messages`，而路由透過 `chat_completion` 類型的 Channel 服務該模型。Monoize 在兩個方向上轉換協議。
+除 `systemone` 外，端點可以到達任意上游類型。例如，用戶端呼叫 `/v1/messages`，而路由透過 `chat_completion` 類型的 Channel 服務該模型。Monoize 在兩個方向上轉換協議。`POST /v1/systemone` 只選擇 `systemone` Channel，並且不轉換請求內容。
 
 Chat 路由會保留 OpenRouter 的 `configuration_update` 訊息，包括空內容更新。檔案 data URI 轉成 Messages 文件時會保留 MIME 類型。Messages 串流會保留 `citations_delta` 引用。Responses 內容過濾終止會保留為未完成狀態，不會誤報為長度限制。
 
@@ -136,6 +136,36 @@ curl http://localhost:8080/v1/embeddings \
     "input": "The quick brown fox"
   }'
 ```
+
+## System One
+
+`POST /v1/systemone` 轉發 TypeSafe System One 請求。Channel 的上游類型必須是 `systemone`。其他端點不會選擇這種 Channel。
+
+```bash
+curl http://localhost:8080/v1/systemone \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": "The gate is closed.",
+    "questions": {
+      "open": {
+        "type": "noul",
+        "instructions": "Is the gate open?"
+      }
+    }
+  }'
+```
+
+Monoize 原樣返回上游 JSON。回應裡的 `model` 保持上游的值。例如 `jev-1.13.0` 不會被改成邏輯模型名稱。
+
+不要傳送 `"stream": true`。這個值會返回 HTTP 400。
+
+計費讀取 `usage.input_tokens` 和 `usage.output_tokens`。上游不收取輸出 token 費用時，把輸出單價設為 `0`。
+
+接入 OpenRouter 時，把 Channel 的 base URL 設為 `https://openrouter.ai/api/v1`。把模型 redirect 到 `typesafe/jev-1.13`。
+
+TypeSafe SDK 的 `models.list()` 需要 `{models:[{name}]}`。Monoize 的 `GET /v1/models` 格式不同，所以這次呼叫會失敗。`systemOne()` 仍然可用。SDK 會在 base URL 後面拼接 `/v1/systemone`。
 
 ## 圖像
 

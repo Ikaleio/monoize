@@ -627,7 +627,8 @@ export type ProviderType =
   | "gemini"
   | "openai_image"
   | "openrouter_image"
-  | "replicate";
+  | "replicate"
+  | "systemone";
 export type AffinityFailbackMode = "sticky" | "prefer_higher_priority";
 
 export interface ApiTypeOverride {

@@ -201,6 +201,7 @@ curl http://localhost:8080/v1/chat/completions \
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/embeddings` | Embeddings |
+| `POST` | `/v1/systemone` | TypeSafe System One |
 | `POST` | `/v1/images/generations` | 图像生成 |
 | `POST` | `/v1/images/edits` | 使用 multipart 上传或 JSON 引用编辑图像 |
 
@@ -216,6 +217,7 @@ curl http://localhost:8080/v1/chat/completions \
 | `gemini` | Google Gemini 原生 |
 | `openai_image` | OpenAI 兼容图像 API |
 | `replicate` | Replicate Predictions |
+| `systemone` | TypeSafe System One |
 
 ## 配置
 

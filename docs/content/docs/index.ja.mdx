@@ -5,13 +5,13 @@ description: Rust 製の AI API ゲートウェイ。プロトコルの意味論
 
 ## 概要
 
-Monoize は Rust 製の AI API ゲートウェイです。OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、埋め込み、画像形式のリクエストを受け付けます。リクエストを設定済みの上流 Channel へ転送し、クライアントが使用したプロトコルでレスポンスを返します。
+Monoize は Rust 製の AI API ゲートウェイです。OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、埋め込み、画像、System One 形式のリクエストを受け付けます。リクエストを設定済みの上流 Channel へ転送し、クライアントが使用したプロトコルでレスポンスを返します。
 
 Monoize はフィールド名ではなく、プロトコルの意味論を変換します。各リクエストを型付きの内部表現へデコードし、選択された上流プロトコルへエンコードします。レスポンスは同じ経路を逆向きにたどります。テキスト、推論、暗号化された推論、ツール呼び出し、ツール結果、画像、使用量、ストリーム境界は、変換を通してそれぞれの役割を保持します。
 
 ## 主な機能
 
-- **プロトコル変換：** 対応する任意の下流エンドポイントから、設定済みの任意の上流 Channel タイプを呼び出せます。Monoize は Responses、Chat Completions、Messages、Gemini、画像プロトコルをストリーミング・非ストリーミングの両モードで変換します。
+- **プロトコル変換：** `systemone` を除き、対応する下流エンドポイントから設定済みの上流 Channel タイプを呼び出せます。Monoize は Responses、Chat Completions、Messages、Gemini、画像プロトコルをストリーミング・非ストリーミングの両モードで変換します。`systemone` Channel を選ぶのは `POST /v1/systemone` だけです。
 - **ルーティングと信頼性：** 1 つの論理モデルは複数の順序付き Provider にマッチできます。各 Provider は重み付きの Channel を持ちます。Monoize は再試行可能な失敗をリトライし、次のルートへ進み、最初のレスポンスバイト送出後はフォールバックを停止します。[ルーティングと信頼性](/ja/docs/routing)を参照してください。
 - **Transform 変換：** 36 個の組み込み Transform が、Provider 単位・API キー単位・グローバルにリクエストとレスポンスを調整します。[変換](/ja/docs/transforms)を参照してください。
 - **リクエストキャプチャ：** キャプチャは既定で無効です。有効にすると、各上流試行のペイロードを保存します。構造化ビューアで各ホップを確認できます。[リクエストログ](/ja/docs/request-logs)を参照してください。
@@ -27,6 +27,7 @@ Monoize はフィールド名ではなく、プロトコルの意味論を変換
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/embeddings` | 埋め込み |
+| `POST` | `/v1/systemone` | TypeSafe System One |
 | `POST` | `/v1/images/generations` | 画像生成 |
 | `POST` | `/v1/images/edits` | マルチパート画像編集 |
 
@@ -43,6 +44,7 @@ Monoize はフィールド名ではなく、プロトコルの意味論を変換
 | `openai_image` | OpenAI 互換画像 API |
 | `openrouter_image` | OpenRouter 専用画像 API |
 | `replicate` | Replicate predictions |
+| `systemone` | TypeSafe System One |
 
 ## 制限
 
