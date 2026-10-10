@@ -112,10 +112,12 @@ pub struct SyncPlan {
     pub delete_ids: Vec<String>,
 }
 
-/// Fetches `https://models.dev/api.json` and returns the parsed root.
-/// Errors carry a `fetch_failed:`/`parse_failed:` prefix for HTTP mapping.
+/// Fetches `https://models.dev/api.json?type=all` and returns the parsed root.
+/// `type=all` is required: the default document omits `type=decision` models,
+/// including Jev (MP-Y1a). Errors carry a `fetch_failed:`/`parse_failed:` prefix
+/// for HTTP mapping.
 pub async fn fetch_models_dev_root(http: &reqwest::Client) -> Result<Value, String> {
-    fetch_json(http, "https://models.dev/api.json", None).await
+    fetch_json(http, "https://models.dev/api.json?type=all", None).await
 }
 
 async fn fetch_json(

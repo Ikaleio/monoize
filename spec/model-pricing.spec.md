@@ -558,7 +558,7 @@ MP-Y1. Three sync sources exist:
 
 | `source` | Endpoint | Auth |
 |---|---|---|
-| `models_dev` | `GET https://models.dev/api.json` | none |
+| `models_dev` | `GET https://models.dev/api.json?type=all` | none |
 | `openrouter` | `GET https://openrouter.ai/api/v1/models` | none |
 | `new_api` | `GET {configured_base_url}/api/pricing` | optional bearer token |
 
@@ -571,6 +571,11 @@ otherwise.
 MP-Y2a. Settings writes handle the token field as: value `"__set__"` keeps the stored
 token unchanged; value `""` clears the stored token; any other string replaces the
 stored token. This makes a read-modify-write settings round trip lossless.
+
+MP-Y1a. The `models_dev` request MUST send query parameter `type=all`. The default
+document omits every model whose `type` is `decision`. Jev (`jev`, `jev-latest`,
+`jev-1.13`) is a decision model. A fetch without `type=all` MUST NOT be treated as a
+complete catalog.
 
 MP-Y3. Fetch timeout is 30 seconds. A fetch or parse failure finalizes the
 `price_sync_runs` row with `status = "failed"` and returns HTTP `502` with code
