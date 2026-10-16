@@ -176,10 +176,10 @@ fn validate_thinking_display(thinking: &Map<String, Value>) -> Result<(), String
     let Some(display) = thinking.get("display") else {
         return Ok(());
     };
-    if matches!(display.as_str(), Some("summarized" | "omitted")) {
+    if matches!(display.as_str(), Some("summarized" | "omitted" | "updates")) {
         return Ok(());
     }
-    Err("Messages thinking.display must be summarized or omitted".to_string())
+    Err("Messages thinking.display must be summarized, omitted, or updates".to_string())
 }
 
 fn validate_default_temperature(request: &Map<String, Value>) -> Result<(), String> {

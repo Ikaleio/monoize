@@ -927,15 +927,20 @@ pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> Provide
 pub(super) fn provider_extra_headers(
     provider_type: ProviderType,
     body: &serde_json::Value,
-) -> &'static [(&'static str, &'static str)] {
+) -> Vec<(&'static str, &'static str)> {
     match provider_type {
-        ProviderType::Messages if messages_body_uses_files_api(body) => &[
-            ("anthropic-version", "2023-06-01"),
-            ("anthropic-beta", "files-api-2025-04-14"),
-        ],
-        ProviderType::Messages => &[("anthropic-version", "2023-06-01")],
-        ProviderType::Replicate => &[("prefer", "wait=60")],
-        _ => &[],
+        ProviderType::Messages => {
+            let mut headers = vec![("anthropic-version", "2023-06-01")];
+            if messages_body_uses_files_api(body) {
+                headers.push(("anthropic-beta", "files-api-2025-04-14"));
+            }
+            if body.pointer("/thinking/display").and_then(Value::as_str) == Some("updates") {
+                headers.push(("anthropic-beta", "thinking-display-updates-2026-08-18"));
+            }
+            headers
+        }
+        ProviderType::Replicate => vec![("prefer", "wait=60")],
+        _ => Vec::new(),
     }
 }
 
@@ -978,6 +983,27 @@ pub(super) fn attempt_extra_headers(
         for (name, value) in extras {
             out.push((name.clone(), value.clone()));
         }
+    }
+    let mut beta_tokens = Vec::new();
+    out.retain(|(name, value)| {
+        if attempt.provider_type != ProviderType::Messages
+            || !name.eq_ignore_ascii_case("anthropic-beta")
+        {
+            return true;
+        }
+        for token in value
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
+            if !beta_tokens.iter().any(|existing| existing == token) {
+                beta_tokens.push(token.to_string());
+            }
+        }
+        false
+    });
+    if !beta_tokens.is_empty() {
+        out.push(("anthropic-beta".to_string(), beta_tokens.join(",")));
     }
     if let Some(value) = resolve_session_affinity_value(attempt, body) {
         for name in SESSION_CACHE_HEADER_NAMES {
