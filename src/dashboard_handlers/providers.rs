@@ -26,7 +26,11 @@ fn discovery_body_error(error: crate::bounded_response::BoundedResponseError) ->
     } else {
         "upstream_fetch_failed"
     };
-    AppError::new(StatusCode::BAD_GATEWAY, code, error.to_string())
+    AppError::new(
+        StatusCode::BAD_GATEWAY,
+        code,
+        crate::error::error_chain(&error),
+    )
 }
 
 async fn parse_discovery_json_response(response: reqwest::Response) -> AppResult<Value> {
@@ -666,7 +670,7 @@ pub async fn fetch_provider_models(
         AppError::new(
             StatusCode::BAD_GATEWAY,
             "upstream_fetch_failed",
-            format!("failed to fetch models: {e}"),
+            format!("failed to fetch models: {}", crate::error::error_chain(&e)),
         )
     })?;
 
@@ -816,7 +820,7 @@ pub async fn fetch_channel_models(
         AppError::new(
             StatusCode::BAD_GATEWAY,
             "upstream_fetch_failed",
-            format!("failed to fetch models: {e}"),
+            format!("failed to fetch models: {}", crate::error::error_chain(&e)),
         )
     })?;
 

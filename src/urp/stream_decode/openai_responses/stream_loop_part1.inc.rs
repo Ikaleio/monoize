@@ -65,7 +65,7 @@ async fn feed_responses_sse_frames(
                     .send(Err(AppError::new(
                         StatusCode::BAD_GATEWAY,
                         "upstream_stream_decode_failed",
-                        err.to_string(),
+                        crate::error::sse_error_chain(&err),
                     )))
                     .await;
                 break;

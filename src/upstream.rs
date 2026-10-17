@@ -1,5 +1,5 @@
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig};
-use crate::error::AppError;
+use crate::error::{AppError, error_chain};
 use axum::http::StatusCode;
 use serde_json::Value;
 
@@ -118,6 +118,8 @@ impl JsonBody {
     }
 }
 
+/// Sends a JSON request and reads the whole 2xx body as JSON. CFG-6a item 1:
+/// `timeout_ms` bounds sending, the response headers, and the full body.
 pub async fn call_upstream_with_timeout_and_headers(
     client: &reqwest::Client,
     provider: &ProviderConfig,
@@ -127,26 +129,16 @@ pub async fn call_upstream_with_timeout_and_headers(
     timeout_ms: u64,
     extra_headers: &[(String, String)],
 ) -> Result<Value, UpstreamCallError> {
-    let resp = call_upstream_raw_with_timeout_and_headers(
-        client,
-        provider,
-        auth_value,
-        path,
-        body,
-        timeout_ms,
-        extra_headers,
-    )
-    .await?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(|err| {
-        UpstreamCallError::new(UpstreamErrorKind::Network, Some(status), err.to_string())
-    })?;
-    let value: Value = serde_json::from_str(&text).map_err(|err| {
-        UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), err.to_string())
-    })?;
-    Ok(value)
+    let req = json_request(client, provider, auth_value, path, body, extra_headers)?;
+    with_deadline(timeout_ms, "upstream response not completed", async {
+        read_json_body(exchange(req).await?).await
+    })
+    .await
 }
 
+/// Sends a JSON request and returns the 2xx response with its body unread.
+/// CFG-6a item 2: `timeout_ms` bounds only the response headers (and a
+/// non-2xx error body); the caller bounds the 2xx body by idle time.
 pub async fn call_upstream_raw_with_timeout_and_headers(
     client: &reqwest::Client,
     provider: &ProviderConfig,
@@ -156,6 +148,80 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
     timeout_ms: u64,
     extra_headers: &[(String, String)],
 ) -> Result<reqwest::Response, UpstreamCallError> {
+    let req = json_request(client, provider, auth_value, path, body, extra_headers)?;
+    with_deadline(
+        timeout_ms,
+        "upstream response headers not received",
+        exchange(req),
+    )
+    .await
+}
+
+/// Multipart counterpart of `call_upstream_with_timeout_and_headers`.
+pub async fn call_upstream_multipart_json_with_timeout_and_headers(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    form: reqwest::multipart::Form,
+    timeout_ms: u64,
+    extra_headers: &[(String, String)],
+) -> Result<Value, UpstreamCallError> {
+    let req = multipart_request(client, provider, auth_value, path, form, extra_headers)?;
+    with_deadline(timeout_ms, "upstream response not completed", async {
+        read_json_body(exchange(req).await?).await
+    })
+    .await
+}
+
+/// Multipart counterpart of `call_upstream_raw_with_timeout_and_headers`.
+pub async fn call_upstream_multipart_with_timeout_and_headers(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    form: reqwest::multipart::Form,
+    timeout_ms: u64,
+    extra_headers: &[(String, String)],
+) -> Result<reqwest::Response, UpstreamCallError> {
+    let req = multipart_request(client, provider, auth_value, path, form, extra_headers)?;
+    with_deadline(
+        timeout_ms,
+        "upstream response headers not received",
+        exchange(req),
+    )
+    .await
+}
+
+fn json_request(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    body: JsonBody,
+    extra_headers: &[(String, String)],
+) -> Result<reqwest::RequestBuilder, UpstreamCallError> {
+    // Same header and bytes that `RequestBuilder::json` sets on a fresh request.
+    let req = client
+        .post(upstream_url(provider, path)?)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.0);
+    authorize(req, provider, auth_value, extra_headers)
+}
+
+fn multipart_request(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    form: reqwest::multipart::Form,
+    extra_headers: &[(String, String)],
+) -> Result<reqwest::RequestBuilder, UpstreamCallError> {
+    let req = client.post(upstream_url(provider, path)?).multipart(form);
+    authorize(req, provider, auth_value, extra_headers)
+}
+
+fn upstream_url(provider: &ProviderConfig, path: &str) -> Result<String, UpstreamCallError> {
     let base = provider.base_url.as_ref().ok_or_else(|| {
         UpstreamCallError::new(
             UpstreamErrorKind::Http,
@@ -163,30 +229,69 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
             "missing base_url".to_string(),
         )
     })?;
-    let url = join_url(base, path);
-    // Same header and bytes that `RequestBuilder::json` sets on a fresh request.
-    let mut req = client
-        .post(url)
-        .timeout(std::time::Duration::from_millis(timeout_ms))
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body.0);
+    Ok(join_url(base, path))
+}
+
+fn authorize(
+    req: reqwest::RequestBuilder,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    extra_headers: &[(String, String)],
+) -> Result<reqwest::RequestBuilder, UpstreamCallError> {
     let auth = provider.auth.as_ref().ok_or_else(|| {
         UpstreamCallError::new(UpstreamErrorKind::Http, None, "missing auth".to_string())
     })?;
-    req = apply_auth(req, auth, auth_value)
+    let mut req = apply_auth(req, auth, auth_value)
         .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Http, None, err.message))?;
     for (k, v) in extra_headers {
         req = req.header(k, v);
     }
+    Ok(req)
+}
+
+/// Sends `req` and returns the response when its status is 2xx.
+async fn exchange(req: reqwest::RequestBuilder) -> Result<reqwest::Response, UpstreamCallError> {
     let resp = req
         .send()
         .await
-        .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Network, None, err.to_string()))?;
+        .map_err(|err| transport_error(None, &err))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(non_success_upstream_error(resp, status).await);
     }
     Ok(resp)
+}
+
+async fn read_json_body(resp: reqwest::Response) -> Result<Value, UpstreamCallError> {
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|err| transport_error(Some(status), &err))?;
+    serde_json::from_str(&text).map_err(|err| {
+        UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), err.to_string())
+    })
+}
+
+fn transport_error(status: Option<StatusCode>, err: &reqwest::Error) -> UpstreamCallError {
+    UpstreamCallError::new(UpstreamErrorKind::Network, status, error_chain(err))
+}
+
+/// CFG-6a item 4: an expired deadline is a transport failure.
+async fn with_deadline<T>(
+    timeout_ms: u64,
+    what: &str,
+    call: impl Future<Output = Result<T, UpstreamCallError>>,
+) -> Result<T, UpstreamCallError> {
+    tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), call)
+        .await
+        .unwrap_or_else(|_| {
+            Err(UpstreamCallError::new(
+                UpstreamErrorKind::Network,
+                None,
+                format!("{what} within {timeout_ms}ms"),
+            ))
+        })
 }
 
 /// SAN-D3: classify a non-2xx upstream response. `message` keeps the raw body
@@ -209,46 +314,6 @@ async fn non_success_upstream_error(
     UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
         .with_error_info(info)
         .with_source(source)
-}
-
-pub async fn call_upstream_multipart_with_timeout_and_headers(
-    client: &reqwest::Client,
-    provider: &ProviderConfig,
-    auth_value: &str,
-    path: &str,
-    form: reqwest::multipart::Form,
-    timeout_ms: u64,
-    extra_headers: &[(String, String)],
-) -> Result<reqwest::Response, UpstreamCallError> {
-    let base = provider.base_url.as_ref().ok_or_else(|| {
-        UpstreamCallError::new(
-            UpstreamErrorKind::Http,
-            None,
-            "missing base_url".to_string(),
-        )
-    })?;
-    let url = join_url(base, path);
-    let mut req = client
-        .post(url)
-        .timeout(std::time::Duration::from_millis(timeout_ms))
-        .multipart(form);
-    let auth = provider.auth.as_ref().ok_or_else(|| {
-        UpstreamCallError::new(UpstreamErrorKind::Http, None, "missing auth".to_string())
-    })?;
-    req = apply_auth(req, auth, auth_value)
-        .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Http, None, err.message))?;
-    for (k, v) in extra_headers {
-        req = req.header(k, v);
-    }
-    let resp = req
-        .send()
-        .await
-        .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Network, None, err.to_string()))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(non_success_upstream_error(resp, status).await);
-    }
-    Ok(resp)
 }
 
 #[allow(clippy::result_large_err)]

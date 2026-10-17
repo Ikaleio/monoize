@@ -49,7 +49,7 @@ pub(crate) async fn stream_image_to_urp_events(
             AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "upstream_stream_decode_failed",
-                err.to_string(),
+                crate::error::sse_error_chain(&err),
             )
         })?;
         mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;

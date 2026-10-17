@@ -112,3 +112,31 @@ impl IntoResponse for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+/// SAN-D4 `CHAIN`: `error` followed by each distinct `source()` message,
+/// joined by `": "`. reqwest and hyper omit the cause from `Display`, so the
+/// actionable detail (reset, timeout, TLS failure) lives only in the chain.
+pub fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_text = cause.to_string();
+        if !text.contains(&cause_text) {
+            text.push_str(": ");
+            text.push_str(&cause_text);
+        }
+        source = cause.source();
+    }
+    text
+}
+
+/// SAN-D4 text for an SSE stream error. `EventStreamError` exposes no
+/// `source()`, so the transport variant is unwrapped explicitly.
+pub fn sse_error_chain(error: &eventsource_stream::EventStreamError<reqwest::Error>) -> String {
+    match error {
+        eventsource_stream::EventStreamError::Transport(error) => {
+            format!("Transport error: {}", error_chain(error))
+        }
+        other => other.to_string(),
+    }
+}

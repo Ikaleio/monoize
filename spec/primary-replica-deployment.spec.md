@@ -52,6 +52,8 @@ PX7. The application MUST cache one HTTP client per distinct effective proxy URL
 
 PX8. The metering shipment of section 6 always resolves to the no-proxy internal client regardless of any Channel `proxy_url`.
 
+PX9. Every outbound HTTP client MUST support `gzip`, `br`, and `zstd` response content codings. If a request has no `Accept-Encoding` header, the client MUST send `Accept-Encoding` listing these three codings. The client MUST decode a response body with one of these codings before any Monoize consumer reads it, and it MUST remove the `Content-Encoding` and `Content-Length` headers from that response.
+
 ## 3. Startup behavior
 
 ### 3.1 Primary

@@ -130,7 +130,7 @@ async fn decode_chat_stream(
                     &tx,
                     &runtime_metrics,
                     "upstream_stream_decode_failed",
-                    &err.to_string(),
+                    &crate::error::sse_error_chain(&err),
                     None,
                     None,
                 )

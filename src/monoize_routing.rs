@@ -2740,7 +2740,10 @@ async fn read_probe_stream(
                     http_status: Some(status),
                     error_code: Some("upstream_stream_decode_failed".to_string()),
                     error_type: Some("stream_error".to_string()),
-                    error: Some(format!("upstream stream decode failed: {error}")),
+                    error: Some(format!(
+                        "upstream stream decode failed: {}",
+                        crate::error::sse_error_chain(&error)
+                    )),
                 };
             }
         };
@@ -2959,7 +2962,10 @@ pub async fn probe_channel_completion(
             http_status: None,
             error_code: Some("upstream_connection_failed".to_string()),
             error_type: Some("transport_error".to_string()),
-            error: Some(format!("connection failed: {error}")),
+            error: Some(format!(
+                "connection failed: {}",
+                crate::error::error_chain(&error)
+            )),
         },
     }
 }

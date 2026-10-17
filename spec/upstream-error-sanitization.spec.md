@@ -37,6 +37,8 @@ SAN-D3. Every `UpstreamCallError` carries a `source` classification with exactly
 
 Constructors default `source` to `transport` for network-kind errors and `internal` for HTTP-kind errors; the non-2xx response path sets `structured_body`, `unparsed_body`, or `empty_body` explicitly.
 
+SAN-D4. `CHAIN(e)` is the raw detail text of an HTTP-client error `e`. It equals the `Display` text of `e`, followed by `": "` and the `Display` text of each error in the `source()` chain of `e`, in chain order. A chain entry whose text is empty or already occurs in the accumulated text MUST be omitted. Every raw detail text that Monoize builds from an upstream HTTP-client error MUST use `CHAIN`. This rule covers send failures, response-body read failures, SSE transport failures, active-probe transport failures, and model-list fetch failures. For an SSE transport failure, the text MUST be `Transport error: ` followed by `CHAIN` of the HTTP-client error. Example: `Transport error: error decoding response body: error reading a body from connection: connection reset by peer`.
+
 ## 2. Per-attempt error conversion
 
 SAN-1. When a failed upstream attempt is converted to an `AppError` (`upstream_error_to_app`), with `STATUS` being the upstream HTTP status or `502 Bad Gateway` when absent, the client-facing `message` MUST be exactly:

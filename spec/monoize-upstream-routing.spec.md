@@ -141,6 +141,15 @@ CFG-6. Each provider MAY define a timeout override field:
 
 - `request_timeout_ms_override: integer? (>= 1)` — When set, overrides the global `request_timeout_ms` for all upstream calls made through this provider. Resolution order: provider override → global `request_timeout_ms` setting → 30000ms default.
 
+CFG-6a. Let `T` be the resolved `request_timeout_ms` of an attempt. Upstream HTTP forwarding calls MUST apply these deadlines:
+
+1. A call whose complete 2xx body Monoize reads as one JSON value (non-stream forwarding, including multipart image edits) MUST complete sending, response headers, and the full body within `T` ms.
+2. A call whose 2xx body Monoize consumes incrementally (SSE stream decoding, non-stream collection of an upstream stream, and every image-capable dispatch) MUST receive the response headers within `H = max(10 × T, 600000)` ms. For a non-2xx response, `H` also bounds the read of the error body.
+3. For a call of item 2, Monoize MUST NOT apply a total deadline to the 2xx body. The only body bound is `monoize_stream_idle_timeout_ms`: each wait for the next SSE event, WebSocket frame, or JSON body chunk MUST end with `upstream_idle_timeout` when it exceeds that value. A stream that keeps delivering data within the idle bound MAY last indefinitely.
+4. A deadline failure of item 1 or item 2 is a transport failure (`upstream-error-sanitization.spec.md` SAN-D3 `transport`).
+
+Active probes keep one total deadline of `T` ms and are outside CFG-6a.
+
 ## 3. Request Routing Parameters
 
 The router MUST read:

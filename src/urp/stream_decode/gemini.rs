@@ -51,8 +51,12 @@ pub(crate) async fn stream_gemini_to_urp_events(
             )
         })?
     {
-        let event =
-            event.map_err(|err| stream_error("upstream_stream_decode_failed", err.to_string()))?;
+        let event = event.map_err(|err| {
+            stream_error(
+                "upstream_stream_decode_failed",
+                crate::error::sse_error_chain(&err),
+            )
+        })?;
         mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
         if event.data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;

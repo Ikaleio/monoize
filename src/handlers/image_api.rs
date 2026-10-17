@@ -704,14 +704,35 @@ async fn decode_image_json_as_stream(
     request: &urp::UrpRequest,
     mask_sensitive_info: bool,
     tx: mpsc::Sender<urp::UrpStreamEvent>,
+    idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let value = upstream_response.json::<Value>().await.map_err(|error| {
+    let invalid_json = |detail: String| {
         AppError::new(
             StatusCode::BAD_GATEWAY,
             "invalid_upstream_response",
-            format!("invalid upstream image JSON: {error}"),
+            format!("invalid upstream image JSON: {detail}"),
         )
-    })?;
+    };
+    // CFG-6a item 3: the dispatch sets no total body deadline, so each chunk
+    // wait is bounded by the stream idle timeout instead.
+    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
+    let mut body = Vec::new();
+    let mut chunks = upstream_response.bytes_stream();
+    while let Some(chunk) = tokio::time::timeout(idle_timeout, chunks.next())
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "upstream_idle_timeout",
+                format!("upstream image body idle for {idle_timeout_ms}ms without data"),
+            )
+        })?
+    {
+        let chunk = chunk.map_err(|error| invalid_json(crate::error::error_chain(&error)))?;
+        body.extend_from_slice(&chunk);
+    }
+    let value: Value =
+        serde_json::from_slice(&body).map_err(|error| invalid_json(error.to_string()))?;
     let response = decode_response_from_provider(
         provider_type,
         &value,
@@ -1577,6 +1598,7 @@ async fn execute_stream_collected_image_typed(
                                     &request,
                                     mask_sensitive_info,
                                     decoded_tx,
+                                    stream_idle_timeout_ms,
                                 )
                                 .await;
                             }

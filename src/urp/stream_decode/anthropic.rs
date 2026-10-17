@@ -671,7 +671,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                     &tx,
                     &runtime_metrics,
                     "upstream_stream_decode_failed",
-                    error.to_string(),
+                    crate::error::sse_error_chain(&error),
                     HashMap::new(),
                 )
                 .await;

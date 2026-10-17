@@ -44,7 +44,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
             AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "upstream_stream_decode_failed",
-                err.to_string(),
+                crate::error::sse_error_chain(&err),
             )
         })?;
 

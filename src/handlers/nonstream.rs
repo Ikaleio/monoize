@@ -623,7 +623,7 @@ async fn execute_nonstream<T>(
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
                 drop(upstream_body);
-                match upstream::call_upstream_multipart_with_timeout_and_headers(
+                upstream::call_upstream_multipart_json_with_timeout_and_headers(
                     &http,
                     &provider,
                     &attempt.api_key,
@@ -633,28 +633,7 @@ async fn execute_nonstream<T>(
                     &extra_headers,
                 )
                 .await
-                {
-                    Ok(resp) => {
-                        let status = resp.status();
-                        match resp.text().await {
-                            Ok(text) => serde_json::from_str::<Value>(&text)
-                                .map(|value| (Some(value), None))
-                                .map_err(|err| {
-                                    upstream::UpstreamCallError::new(
-                                        upstream::UpstreamErrorKind::Http,
-                                        Some(status),
-                                        err.to_string(),
-                                    )
-                                }),
-                            Err(err) => Err(upstream::UpstreamCallError::new(
-                                upstream::UpstreamErrorKind::Network,
-                                Some(status),
-                                err.to_string(),
-                            )),
-                        }
-                    }
-                    Err(err) => Err(err),
-                }
+                .map(|value| (Some(value), None))
             } else {
                 release_encoded_input(&mut req_attempt, &capture);
                 let http = client_http_for_attempt(state, &attempt)?;
