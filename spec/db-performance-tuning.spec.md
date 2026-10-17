@@ -98,6 +98,8 @@ DPT-RL9. The default flush interval (as configured in `UserStore::spawn_backgrou
 
 DPT-RL10. Spool files left by an abrupt process exit MUST be discovered and retried by a later process using the same spool directory. Memory-buffer capacity MUST NOT limit recovery of on-disk entries. Startup MUST delete legacy constant-content and unarmed write-probe admission markers. Startup MUST parse every armed admission marker as a bounded `SpoolRequestLog`; if its stable final path is absent, startup MUST atomically promote the marker to that path and sync the directory. If the final path already exists, startup MUST retain the final file and remove the duplicate marker. Startup MUST fail without deleting a non-legacy admission marker that is neither a valid fallback nor an already-published final row.
 
+DPT-RL10a. Before each request-log spool scan, `RequestLogBatcher` MUST create the configured spool directory if it is absent. A directory removed after startup MUST therefore be recreated before discovery, and the scan MUST treat it as an empty spool when no files remain.
+
 ## 4. ApiKeyCache
 
 ### 4.1 State

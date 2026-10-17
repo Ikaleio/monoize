@@ -2288,6 +2288,11 @@ async fn load_spool_batch(
     max_entries: usize,
     max_entry_bytes: u64,
 ) -> Result<Vec<(SpoolFileRef, SpoolRequestLog)>, String> {
+    // The configured directory can disappear after initialization, for example
+    // when a Docker bind mount is recreated while the container is running.
+    tokio::fs::create_dir_all(spool_dir)
+        .await
+        .map_err(|error| format!("create spool directory {}: {error}", spool_dir.display()))?;
     let mut paths = buffered
         .into_iter()
         .map(|entry| entry.path)
@@ -2322,9 +2327,13 @@ async fn load_spool_batch(
                 path.display()
             ));
         }
-        let raw = tokio::fs::read(&path)
-            .await
-            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let raw = match tokio::fs::read(&path).await {
+            Ok(raw) => raw,
+            // Another batcher/process may have committed and removed this file
+            // after discovery. Treat that race as a skipped candidate.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("read {}: {error}", path.display())),
+        };
         let log = serde_json::from_slice::<SpoolRequestLog>(&raw)
             .map_err(|error| format!("decode {}: {error}", path.display()))?;
         entries.push((
