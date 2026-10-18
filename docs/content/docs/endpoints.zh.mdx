@@ -225,7 +225,7 @@ curl http://localhost:8080/v1/images/edits \
 
 对于 Responses 路由，配置 [image_enable_openai_generation_tool](/zh/docs/transforms/image_enable_openai_generation_tool)。请求中的图像参数优先于变换默认值，蒙版会映射到工具的 `input_image_mask`。图像 `background` 用于配置工具，与 Responses 的布尔值 `background` 不同。Responses 路由会明确拒绝图像 `style` 和 `response_format="url"`。
 
-图像响应保留上游返回的 `quality`、`size`、`background`、`output_format` 和图像 `model`。上游未返回的值保持缺省；请求参数不能证明上游的实际执行结果。返回多张图像时，只有所有图像都报告相同值，响应才会包含对应的顶层字段。图像流的完成事件携带各自图像的元数据。
+图像响应保留上游返回的 `quality`、`size`、`background`、`output_format` 和图像 `model`。上游未返回的值保持缺省；请求参数不能证明上游的实际执行结果。上游明确返回的 `mime_type` 或 `media_type` 会在 `output_format` 缺省时写入 `output_format`。每张返回的图像都包含 `mime_type`。返回多张图像时，只有所有图像都报告相同值，响应才会包含对应的顶层字段。图像流的完成事件携带各自图像的元数据。
 
 ## 使用官方 SDK
 

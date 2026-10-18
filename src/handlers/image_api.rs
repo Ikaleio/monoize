@@ -624,6 +624,9 @@ impl ImageStreamSink {
             } else if let Some(url) = image.url {
                 payload.insert("url".to_string(), Value::String(url));
             }
+            if let Some(mime_type) = image.mime_type {
+                payload.insert("mime_type".to_string(), Value::String(mime_type));
+            }
             payload.insert(
                 "created_at".to_string(),
                 Value::from(chrono::Utc::now().timestamp()),
@@ -2275,8 +2278,23 @@ fn collect_response_text(resp: &urp::UrpResponse) -> String {
 struct ExtractedImage {
     b64_json: Option<String>,
     url: Option<String>,
+    mime_type: Option<String>,
     revised_prompt: Option<String>,
     generation: urp::ImageGenerationMetadata,
+}
+
+fn image_item_mime(source: &urp::ImageSource, metadata: &urp::MediaMetadata) -> Option<String> {
+    match source {
+        urp::ImageSource::Base64 { media_type, .. } if !media_type.trim().is_empty() => {
+            Some(media_type.clone())
+        }
+        urp::ImageSource::Url { .. } => metadata
+            .media_type
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .cloned(),
+        _ => None,
+    }
 }
 
 fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> {
@@ -2298,6 +2316,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                     images.push(ExtractedImage {
                         b64_json: Some(data.clone()),
                         url: None,
+                        mime_type: image_item_mime(source, metadata),
                         revised_prompt: metadata.image_generation.revised_prompt.clone(),
                         generation: metadata.image_generation.for_source(source),
                     });
@@ -2309,6 +2328,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                     images.push(ExtractedImage {
                         b64_json: None,
                         url: Some(url.clone()),
+                        mime_type: image_item_mime(source, metadata),
                         revised_prompt: metadata.image_generation.revised_prompt.clone(),
                         generation: metadata.image_generation.for_source(source),
                     });
@@ -2385,6 +2405,9 @@ fn assemble_image_response(
                     }
                     if let Some(url) = img.url {
                         item.insert("url".to_string(), Value::String(url));
+                    }
+                    if let Some(mime_type) = img.mime_type {
+                        item.insert("mime_type".to_string(), Value::String(mime_type));
                     }
                     if let Some(revised) = img.revised_prompt {
                         item.insert("revised_prompt".to_string(), Value::String(revised));

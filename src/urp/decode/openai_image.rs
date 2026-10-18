@@ -1,6 +1,6 @@
 use crate::urp::{
     FinishReason, ImageSource, InputDetails, ModalityBreakdown, Node, OrdinaryRole, OutputDetails,
-    UrpResponse, Usage,
+    RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, UrpResponse, Usage,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -27,7 +27,10 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
             .get("revised_prompt")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let metadata = crate::urp::MediaMetadata {
+        let reported_mime = reported_image_mime(item);
+        let media_type = image_media_type(item, generation.output_format.as_deref());
+        apply_reported_output_format(&mut image_generation, reported_mime.as_deref());
+        let mut metadata = crate::urp::MediaMetadata {
             image_generation,
             ..Default::default()
         };
@@ -37,22 +40,28 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
             .and_then(|v| v.as_str())
             .filter(|value| !value.trim().is_empty())
         {
+            let mut extra_body = HashMap::new();
+            extra_body.insert(
+                RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
+                Value::Object(Default::default()),
+            );
             output.push(Node::Image {
                 metadata: metadata.clone(),
 
                 id: None,
                 role: OrdinaryRole::Assistant,
                 source: ImageSource::Base64 {
-                    media_type: image_media_type(item, generation.output_format.as_deref()),
+                    media_type,
                     data: b64.to_string(),
                 },
-                extra_body: HashMap::new(),
+                extra_body,
             });
         } else if let Some(url) = item_obj
             .get("url")
             .and_then(|v| v.as_str())
             .filter(|value| !value.trim().is_empty())
         {
+            metadata.media_type = reported_mime;
             output.push(Node::Image {
                 metadata: metadata.clone(),
 
@@ -86,17 +95,58 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
 }
 
 pub(crate) fn image_media_type(payload: &Value, output_format: Option<&str>) -> String {
-    payload
-        .get("media_type")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(match output_format {
+    reported_image_mime(payload).unwrap_or_else(|| {
+        match output_format {
             Some("jpeg" | "jpg") => "image/jpeg",
             Some("webp") => "image/webp",
             Some("svg") => "image/svg+xml",
             _ => "image/png",
-        })
+        }
         .to_string()
+    })
+}
+
+/// Explicit per-image type. `media_type` wins over xAI's `mime_type`.
+/// `image/jpg` normalizes to `image/jpeg`. The PNG fallback is not explicit.
+pub(crate) fn reported_image_mime(payload: &Value) -> Option<String> {
+    let raw = ["media_type", "mime_type"].into_iter().find_map(|key| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })?;
+    let essence = crate::urp::media::mime_essence(&raw);
+    let normalized = if essence.eq_ignore_ascii_case("image/jpg") {
+        "image/jpeg".to_string()
+    } else if essence.is_empty() {
+        raw
+    } else {
+        essence
+    };
+    Some(normalized)
+}
+
+pub(crate) fn apply_reported_output_format(
+    generation: &mut crate::urp::ImageGenerationMetadata,
+    reported_mime: Option<&str>,
+) {
+    if generation.output_format.is_some() {
+        return;
+    }
+    let Some(mime) = reported_mime else {
+        return;
+    };
+    let format = match crate::urp::media::mime_essence(mime).as_str() {
+        "image/png" => Some("png"),
+        "image/jpeg" => Some("jpeg"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    };
+    if let Some(format) = format {
+        generation.output_format = Some(format.to_string());
+    }
 }
 
 /// Parse an OpenAI Image API `usage` object (non-streaming response body or

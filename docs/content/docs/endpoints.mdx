@@ -225,7 +225,7 @@ With `stream=true`, Monoize sends an immediate SSE heartbeat and another after 1
 
 For Responses routes, configure [image_enable_openai_generation_tool](/en/docs/transforms/image_enable_openai_generation_tool). Image settings override transform defaults, and masks become the tool's `input_image_mask`. Image `background` configures the tool; it is separate from the Responses boolean `background`. Responses routes reject image `style` and `response_format="url"` with an explicit error.
 
-Image responses preserve upstream-reported `quality`, `size`, `background`, `output_format`, and image `model`. Missing values remain absent; request values are not proof of upstream execution. For multiple images, a top-level field appears only when every image reports the same value. Completed image stream events report metadata for their own image.
+Image responses preserve upstream-reported `quality`, `size`, `background`, `output_format`, and image `model`. Missing values remain absent; request values are not proof of upstream execution. An explicit upstream `mime_type` or `media_type` sets `output_format` when `output_format` is absent. Each returned image includes `mime_type`. For multiple images, a top-level field appears only when every image reports the same value. Completed image stream events report metadata for their own image.
 
 ## Use official SDKs
 

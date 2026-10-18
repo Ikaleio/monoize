@@ -156,6 +156,7 @@ IR2. For each `Node::Image` found:
 
 - `ImageSource::Base64 { data, .. }` → use `data` as `b64_json`.
 - `ImageSource::Url { url, .. }` → use `url` as `url` field in the response data item. If the downstream request did not specify `response_format: "url"`, Monoize MUST still include the URL as-is (no download/re-encoding).
+- Each data item MUST include `mime_type` from the Base64 source media type, or from `MediaMetadata.media_type` for a URL. Omit `mime_type` when both are absent.
 
 IR3. If a sub-request succeeds but produces zero assistant `Node::Image` nodes, Monoize MUST scan for assistant `Node::Text` nodes and attempt to extract text content. If the URP response contains no extractable image, that sub-request MUST be treated as failed for the purpose of IM16.
 

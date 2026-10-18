@@ -32,6 +32,8 @@ interface ImageApiDataItem {
   b64_json?: string;
   url?: string;
   revised_prompt?: string;
+  mime_type?: string;
+  output_format?: string;
 }
 
 let seq = 0;
@@ -105,6 +107,8 @@ async function readImageStream(response: Response): Promise<ImageApiDataItem[]> 
         b64_json: event.b64_json,
         url: event.url,
         revised_prompt: event.revised_prompt,
+        mime_type: event.mime_type,
+        output_format: event.output_format,
       });
     }
   };
@@ -195,6 +199,22 @@ export async function requestImages(
   return readImageStream(response);
 }
 
+function imageDataMime(item: ImageApiDataItem): string {
+  const declared = item.mime_type?.trim().toLowerCase();
+  if (declared?.startsWith("image/")) return declared.split(";")[0];
+  switch (item.output_format) {
+    case "jpeg":
+    case "jpg":
+      return "image/jpeg";
+    case "webp":
+      return "image/webp";
+    case "png":
+      return "image/png";
+    default:
+      return "image/png";
+  }
+}
+
 function buildAssistantImageMessage(items: ImageApiDataItem[]): UIMessage {
   const revised = items
     .map((item) => item.revised_prompt)
@@ -207,11 +227,14 @@ function buildAssistantImageMessage(items: ImageApiDataItem[]): UIMessage {
       ...(revised.length > 0
         ? [{ type: "text" as const, text: revised.join("\n\n") }]
         : []),
-      ...items.map((item) => ({
-        type: "file" as const,
-        mediaType: "image/png",
-        url: item.url ?? `data:image/png;base64,${item.b64_json ?? ""}`,
-      })),
+      ...items.map((item) => {
+        const mediaType = imageDataMime(item);
+        return {
+          type: "file" as const,
+          mediaType,
+          url: item.url ?? `data:${mediaType};base64,${item.b64_json ?? ""}`,
+        };
+      }),
     ],
   };
 }

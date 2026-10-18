@@ -225,7 +225,7 @@ curl http://localhost:8080/v1/images/edits \
 
 Responses ルートでは [image_enable_openai_generation_tool](/ja/docs/transforms/image_enable_openai_generation_tool) を設定します。リクエストの画像設定が変換のデフォルト値より優先され、マスクはツールの `input_image_mask` に変換されます。画像の `background` はツールの設定です。Responses の真偽値 `background` とは別に扱います。Responses ルートは画像の `style` と `response_format="url"` を明示的なエラーで拒否します。
 
-画像レスポンスは、上流が返した `quality`、`size`、`background`、`output_format`、画像の `model` を保持します。上流が返さない値は省略します。リクエストの値を実行結果として補完しません。複数の画像では、すべての画像が同じ値を報告したフィールドだけをトップレベルに返します。画像ストリームの完了イベントは、その画像のメタデータを返します。
+画像レスポンスは、上流が返した `quality`、`size`、`background`、`output_format`、画像の `model` を保持します。上流が返さない値は省略します。リクエストの値を実行結果として補完しません。上流が明示した `mime_type` または `media_type` は、`output_format` がないとき `output_format` を設定します。返却する各画像は `mime_type` を含みます。複数の画像では、すべての画像が同じ値を報告したフィールドだけをトップレベルに返します。画像ストリームの完了イベントは、その画像のメタデータを返します。
 
 ## 公式 SDK の利用
 

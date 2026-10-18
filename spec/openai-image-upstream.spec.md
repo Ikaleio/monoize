@@ -100,7 +100,7 @@ OIU-D6. If the upstream response contains a top-level `usage` object, Monoize MU
 
 OIU-D7. For `gpt-image-2`, decoded usage MUST preserve text input tokens, image input tokens, cached input tokens, and image output tokens as structured URP usage fields when upstream provides them.
 
-OIU-D8. Decoders MUST copy upstream-reported `quality`, `size`, `background`, `output_format`, and `model` strings into each generated image's typed `MediaMetadata.image_generation`. Non-streaming Images responses use top-level fields. Completed Images SSE events and Responses `image_generation_call` items use their own fields. These recognized fields MUST NOT remain duplicate semantic values in adapter extras. Base64 image MIME MUST follow an explicit `output_format` (`png`, `jpeg`, or `webp`), subject to the Images `media_type` precedence in OIU-D10. Absent format retains the existing PNG fallback without inventing response metadata.
+OIU-D8. Decoders MUST copy upstream-reported `quality`, `size`, `background`, `output_format`, and `model` strings into each generated image's typed `MediaMetadata.image_generation`. Non-streaming Images responses use top-level fields. Completed Images SSE events and Responses `image_generation_call` items use their own fields. These recognized fields MUST NOT remain duplicate semantic values in adapter extras. Base64 image MIME MUST follow OIU-D10. When `output_format` is absent and OIU-D10 finds an explicit `media_type` or `mime_type` of `image/png`, `image/jpeg`, `image/jpg`, or `image/webp`, the decoder MUST set `output_format` to `png`, `jpeg`, `jpeg`, or `webp`. That value is upstream-reported. The PNG fallback MUST NOT set `output_format`.
 
 OIU-D9. Non-streaming and streaming Responses encoders MUST project generated-image metadata from the current typed fields. Native replay extras MUST NOT restore deleted metadata. The response envelope's text-model identifier MUST NOT be used as the generated image's model.
 
@@ -108,7 +108,7 @@ OIU-D9. Non-streaming and streaming Responses encoders MUST project generated-im
 
 ### 5.1 Responses API downstream (`/v1/responses`)
 
-OIU-R1. When the downstream protocol is Responses, the URP response MUST be encoded using the standard Responses encoder. Assistant image nodes appear as native `output_image` items in the response.
+OIU-R1. When the downstream protocol is Responses, the URP response MUST be encoded using the standard Responses encoder. A Base64 assistant image from this adapter MUST be a native `image_generation_call` whose `result` is the Base64 data. Its typed `output_format` MUST be included when present. A URL image has no `image_generation_call` representation and MUST return `unsupported_media`.
 
 ### 5.2 Chat Completions / Messages downstream
 
@@ -197,9 +197,12 @@ OIU-C3. The encoder MUST forward `image_generation.n` when present. If typed ima
 
 ## 10. Shared Images decoding
 
-OIU-D10. The shared Images decoder MUST honor nonblank per-image `media_type` before the existing `output_format` inference.
+OIU-D10. The shared Images decoder MUST honor a nonblank per-image `media_type`, then a nonblank per-image `mime_type`, before the existing `output_format` inference.
 This rule applies to non-streaming responses and partial or completed SSE image events.
-The decoder MUST map `media_type` to the typed image source and MUST NOT retain a second copy in image extras.
+The decoder MUST map that type to the typed image source.
+A URL image MUST store the same explicit type on `MediaMetadata.media_type`.
+The decoder MUST NOT retain `media_type` or `mime_type` as a second copy in image extras.
+`image/jpg` MUST normalize to `image/jpeg`.
 
 OIU-S8. The shared stream decoder MUST decode nested `error.message` and `error.code`, with the existing top-level error shape as fallback.
 An error MUST terminate decoding without a successful response terminal event.

@@ -425,7 +425,9 @@ placeholder with an animated loading treatment until the request settles.
 PG-IMG5. On success, the placeholder MUST be replaced by an assistant message whose
 parts are, in order: one text part with `revised_prompt` when present, then one `file`
 part per `data[]` entry — `url` used verbatim when present, otherwise
-`data:image/png;base64,<b64_json>`. The frontend MUST retain the request input in memory,
+`data:{mime};base64,<b64_json>`. Use the event `mime_type` when it is a nonblank image type.
+Otherwise map `output_format` `jpeg` or `jpg` to `image/jpeg`, `webp` to `image/webp`, and `png` to `image/png`.
+Absent format uses `image/png`. The frontend MUST retain the request input in memory,
 keyed by the generated assistant message id, until the conversation is cleared.
 
 PG-IMG5a. Image requests MUST consume the SSE response defined by `image-api-proxy.spec.md` section 5.5.

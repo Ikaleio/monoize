@@ -243,11 +243,22 @@ fn image_source_from_payload(payload: &Value) -> Option<ImageSource> {
 
 fn image_node_from_payload(payload: &Value) -> Option<Node> {
     let source = image_source_from_payload(payload)?;
+    let reported_mime = crate::urp::decode::openai_image::reported_image_mime(payload);
+    let mut image_generation =
+        crate::urp::ImageGenerationMetadata::from_object(payload.as_object()?);
+    crate::urp::decode::openai_image::apply_reported_output_format(
+        &mut image_generation,
+        reported_mime.as_deref(),
+    );
+    let mut extra_body = image_extra_body(payload);
+    extra_body.insert(
+        crate::urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
+        Value::Object(Default::default()),
+    );
     Some(Node::Image {
         metadata: crate::urp::MediaMetadata {
-            image_generation: crate::urp::ImageGenerationMetadata::from_object(
-                payload.as_object()?,
-            ),
+            media_type: reported_mime,
+            image_generation,
             ..Default::default()
         },
 
@@ -258,7 +269,7 @@ fn image_node_from_payload(payload: &Value) -> Option<Node> {
             .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
         role: OrdinaryRole::Assistant,
         source,
-        extra_body: image_extra_body(payload),
+        extra_body,
     })
 }
 
@@ -269,6 +280,7 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
         "b64_json",
         "result",
         "media_type",
+        "mime_type",
         "output_format",
         "partial_image_index",
         "usage",
@@ -292,7 +304,7 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
 /// and `output_format` (unlike terminal image nodes, where they are header
 /// data) so downstream encoders can rebuild the wire event.
 fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String, Value> {
-    let excluded = ["type", "b64_json", "result", "media_type"];
+    let excluded = ["type", "b64_json", "result", "media_type", "mime_type"];
     let mut extra_body: HashMap<String, Value> = payload
         .as_object()
         .map(|obj| {
@@ -309,6 +321,16 @@ fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String
         "provider_event_type".to_string(),
         Value::String(event_name.to_string()),
     );
+    if !extra_body.contains_key("output_format") {
+        let mut generation = crate::urp::ImageGenerationMetadata::default();
+        crate::urp::decode::openai_image::apply_reported_output_format(
+            &mut generation,
+            crate::urp::decode::openai_image::reported_image_mime(payload).as_deref(),
+        );
+        if let Some(format) = generation.output_format {
+            extra_body.insert("output_format".to_string(), Value::String(format));
+        }
+    }
     extra_body
 }
 

@@ -17,7 +17,7 @@ MT9. Resource metadata MUST NOT appear as native wire fields. Protocol-family co
 
 MT9a. `MediaMetadata.image_generation` MUST retain upstream-reported quality, dimensions, background, output format, image model, and per-image `revised_prompt` as optional typed strings. Empty generation metadata MUST be omitted from serialized URP. Nodes, headers, bridge parts, and terminal stream reconstruction MUST preserve it. Encoders MUST use the typed values rather than native extras or request values. `revised_prompt` belongs to its image and MUST NOT enter the common response envelope or a duplicate text node.
 
-MT9b. When `output_format` is present and the current Base64 source has a supported MIME, output encoders MUST reconcile the format with that source. A source changed to WebP MUST NOT retain an obsolete PNG format. An absent `output_format` MUST remain absent.
+MT9b. When `output_format` is present and the current Base64 source has a supported MIME, output encoders MUST reconcile the format with that source. A source changed to WebP MUST NOT retain an obsolete PNG format. An absent `output_format` MUST remain absent. An `output_format` set by `openai-image-upstream.spec.md` OIU-D8 from an explicit upstream media type is present.
 
 MT9c. `MediaMetadata.image_mask` MUST identify an input mask with a boolean. Its default is false. An adapter MUST NOT infer mask identity from node position or a synthetic ID. Input compression MUST preserve all user image sources when any user image is a mask. This rule preserves mask alignment, dimensions, format, and alpha without requiring a paired resampling policy.
 
