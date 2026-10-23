@@ -2426,3 +2426,32 @@ async fn messages_message_lifecycle_requires_one_start_before_blocks_or_terminal
         );
     }
 }
+
+#[test]
+fn tool_removal_and_effort_system_messages_round_trip() {
+    let native = json!({
+        "model":"claude-opus-5-5",
+        "max_tokens":128,
+        "system":[{"type":"text","text":"base"}],
+        "messages":[
+            {"role":"user","content":"hi"},
+            {"role":"system","content":[{"type":"tool_removal","tool":{"type":"tool_reference","name":"ops_discover_tools"}}]},
+            {"role":"system","content":[],"output_config":{"effort":"medium"}}
+        ]
+    });
+    let urp = decode::decode_request(&native).unwrap();
+    let encoded = encode::encode_request(&urp, "claude-opus-5-5");
+    let messages = encoded.get("messages").cloned().unwrap_or(Value::Null);
+    assert_eq!(
+        messages,
+        json!([
+            {"role":"user","content":[{"type":"text","text":"hi"}]},
+            {"role":"system","content":[
+                {"type":"text","text":"Tool ops_discover_tools is no longer available."},
+                {"type":"tool_removal","tool":{"type":"tool_reference","name":"ops_discover_tools"}}
+            ]},
+            {"role":"system","content":[],"output_config":{"effort":"medium"}}
+        ]),
+        "{messages}"
+    );
+}

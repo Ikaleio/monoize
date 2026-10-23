@@ -103,16 +103,64 @@ fn flush_pending_anthropic_message(
         return;
     }
 
+    let mut content = message.content;
+    if matches!(message.role, OrdinaryRole::System | OrdinaryRole::Developer)
+        && let Some(note) = system_tool_change_text(&content)
+        && !has_nonempty_text_block(&content)
+    {
+        // Relays that do not implement inline tool blocks drop tool_addition
+        // and tool_removal, then reject the message because no block remains.
+        content.insert(0, json!({ "type": "text", "text": note }));
+    }
+
     let role = match message.role {
         OrdinaryRole::Assistant => "assistant",
         OrdinaryRole::System | OrdinaryRole::Developer => "system",
         OrdinaryRole::User => "user",
     };
-    let mut msg = json!({ "role": role, "content": message.content });
+    let mut msg = json!({ "role": role, "content": content });
     if let Some(obj) = msg.as_object_mut() {
         merge_extra(obj, &message.extra_body);
     }
     out.push(msg);
+}
+
+fn has_nonempty_text_block(blocks: &[Value]) -> bool {
+    blocks.iter().any(|block| {
+        block.get("type").and_then(Value::as_str) == Some("text")
+            && block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty())
+    })
+}
+
+fn system_tool_change_text(blocks: &[Value]) -> Option<String> {
+    let mut notes = Vec::new();
+    for block in blocks {
+        let kind = block.get("type").and_then(Value::as_str);
+        let name = block
+            .pointer("/tool/name")
+            .or_else(|| block.pointer("/tool/definition/name"))
+            .and_then(Value::as_str);
+        match (kind, name) {
+            (Some("tool_removal"), Some(name)) => {
+                notes.push(format!("Tool {name} is no longer available."));
+            }
+            (Some("tool_addition"), Some(name)) => {
+                notes.push(format!("Tool {name} is now available."));
+            }
+            (Some("tool_removal" | "tool_addition"), None) => {
+                notes.push("The available tools changed.".to_string());
+            }
+            _ => {}
+        }
+    }
+    if notes.is_empty() {
+        None
+    } else {
+        Some(notes.join(" "))
+    }
 }
 
 fn append_node_to_pending_anthropic_message(
