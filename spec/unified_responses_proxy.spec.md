@@ -1264,6 +1264,8 @@ PM8e. When calling a `type=messages` upstream, Monoize MUST send the Channel `ap
 
 PM8d. When an encoded `type=messages` upstream request contains an `image` or `document` block whose `source.type = "file"` and whose source has a non-empty `file_id`, or a `container_upload` block with a non-empty `file_id`, Monoize MUST also send HTTP header `anthropic-beta` with value `files-api-2025-04-14`. Monoize MUST NOT add this beta header solely because an unrelated string field happens to equal a file identifier.
 
+PM8f. When an encoded `type=messages` upstream request contains a `messages[].content[]` block whose `type` is `tool_addition` or `tool_removal`, Monoize MUST also send HTTP header `anthropic-beta` with value `inline-tools-2026-09-15`. Determine this from the encoded body after transforms. Monoize MUST NOT infer the beta from a nested tool-argument object or from a string that merely mentions those type names. When an encoded `messages[]` entry has `role = "system"` and an `output_config` field, Monoize MUST also send `mid-conversation-output-config-2026-07-01`. A top-level request `output_config` MUST NOT by itself add that token. Merge these tokens with every other generated or Channel-configured `anthropic-beta` token without duplicates.
+
 PM8a. When decoding Anthropic Messages usage, Monoize MUST map cache usage as follows:
 
 - wire `cache_read_input_tokens` -> `Usage.input_details.cache_read_tokens`;

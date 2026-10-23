@@ -288,16 +288,17 @@ async fn build_attempts(
     let pricing_snapshot = build_model_price_snapshot(state, &upstream_models, &urp.model).await?;
 
     // MP-G2: billing ratios come from the cached group registry (DPT-RC8).
-    let group_billing_ratios = if attempts
-        .iter()
-        .any(|attempt| attempt.billing_group_id.is_some())
-    {
-        Some(state.user_store.group_billing_ratios().await.map_err(|e| {
-            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
-        })?)
-    } else {
-        None
-    };
+    let group_billing_ratios =
+        if attempts
+            .iter()
+            .any(|attempt| attempt.billing_group_id.is_some())
+        {
+            Some(state.user_store.group_billing_ratios().await.map_err(|e| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
+            })?)
+        } else {
+            None
+        };
 
     let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut allowed_attempts = Vec::with_capacity(attempts.len());
@@ -937,6 +938,15 @@ pub(super) fn provider_extra_headers(
             if body.pointer("/thinking/display").and_then(Value::as_str) == Some("updates") {
                 headers.push(("anthropic-beta", "thinking-display-updates-2026-08-18"));
             }
+            if messages_body_uses_inline_tools(body) {
+                headers.push(("anthropic-beta", "inline-tools-2026-09-15"));
+            }
+            if messages_body_uses_mid_conversation_output_config(body) {
+                headers.push((
+                    "anthropic-beta",
+                    "mid-conversation-output-config-2026-07-01",
+                ));
+            }
             headers
         }
         ProviderType::Replicate => vec![("prefer", "wait=60")],
@@ -1202,6 +1212,43 @@ fn messages_body_uses_files_api(value: &serde_json::Value) -> bool {
         serde_json::Value::Array(values) => values.iter().any(messages_body_uses_files_api),
         _ => false,
     }
+}
+
+/// `tool_addition` / `tool_removal` are only legal system content when the
+/// inline-tools beta is present. Without it Anthropic drops the block and
+/// rejects the message as empty system content.
+fn messages_body_uses_inline_tools(body: &serde_json::Value) -> bool {
+    body.get("messages")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|blocks| {
+                        blocks.iter().any(|block| {
+                            matches!(
+                                block.get("type").and_then(serde_json::Value::as_str),
+                                Some("tool_addition" | "tool_removal")
+                            )
+                        })
+                    })
+            })
+        })
+}
+
+/// A mid-conversation system message that only sets `output_config` has an
+/// empty `content` array. Anthropic accepts that only with this beta; otherwise
+/// it returns "system content must contain at least one block".
+fn messages_body_uses_mid_conversation_output_config(body: &serde_json::Value) -> bool {
+    body.get("messages")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("system")
+                    && message.get("output_config").is_some()
+            })
+        })
 }
 
 /// SAN-6: the downstream exhausted-routing message carries only the model and
@@ -1750,5 +1797,59 @@ fn merge_extra_fields_whitelist(
             }
             Some(merged)
         }
+    }
+}
+
+#[cfg(test)]
+mod messages_beta_header_tests {
+    use super::provider_extra_headers;
+    use crate::config::ProviderType;
+
+    fn beta_tokens(body: serde_json::Value) -> Vec<&'static str> {
+        provider_extra_headers(ProviderType::Messages, &body)
+            .into_iter()
+            .filter(|(name, _)| *name == "anthropic-beta")
+            .map(|(_, value)| value)
+            .collect()
+    }
+
+    #[test]
+    fn inline_tool_change_adds_beta_header() {
+        let tokens = beta_tokens(serde_json::json!({
+            "model": "claude-opus-5-5",
+            "messages": [{
+                "role": "system",
+                "content": [{
+                    "type": "tool_removal",
+                    "tool": {"type": "tool_reference", "name": "ops_discover_tools"}
+                }]
+            }]
+        }));
+        assert!(tokens.contains(&"inline-tools-2026-09-15"));
+        assert!(!tokens.contains(&"mid-conversation-output-config-2026-07-01"));
+    }
+
+    #[test]
+    fn effort_only_system_message_adds_output_config_beta() {
+        let tokens = beta_tokens(serde_json::json!({
+            "messages": [{
+                "role": "system",
+                "content": [],
+                "output_config": {"effort": "medium"}
+            }],
+            "output_config": {"effort": "high"}
+        }));
+        assert!(tokens.contains(&"mid-conversation-output-config-2026-07-01"));
+        assert!(!tokens.contains(&"inline-tools-2026-09-15"));
+    }
+
+    #[test]
+    fn top_level_output_config_does_not_add_mid_conversation_beta() {
+        let tokens = beta_tokens(serde_json::json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "output_config": {"effort": "high"}
+        }));
+        assert!(!tokens.contains(&"mid-conversation-output-config-2026-07-01"));
+        assert!(!tokens.contains(&"inline-tools-2026-09-15"));
     }
 }
