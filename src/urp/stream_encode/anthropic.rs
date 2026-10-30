@@ -660,6 +660,7 @@ fn messages_stop_reason<'a>(
     extra_body: &'a HashMap<String, Value>,
     finish_reason: Option<FinishReason>,
     saw_tool_use: bool,
+    saw_refusal: bool,
 ) -> &'a str {
     if let Some(stop_reason) = extra_body
         .get("stop_reason")
@@ -672,6 +673,14 @@ fn messages_stop_reason<'a>(
     }
     if finish_reason.is_none() && saw_tool_use {
         return "tool_use";
+    }
+    if saw_refusal
+        && matches!(
+            finish_reason,
+            None | Some(FinishReason::Stop | FinishReason::Other)
+        )
+    {
+        return "refusal";
     }
     match finish_reason {
         Some(FinishReason::Length) => "max_tokens",
@@ -689,6 +698,32 @@ fn messages_stop_sequence(extra_body: &HashMap<String, Value>) -> Value {
         .get("stop_sequence")
         .cloned()
         .unwrap_or(Value::Null)
+}
+
+/// Builds the terminal `message_delta`, carrying preserved `stop_details` and `container` (PM6d).
+fn messages_terminal_delta(
+    extra_body: &HashMap<String, Value>,
+    stop_reason: &str,
+    usage: &Usage,
+) -> Value {
+    let stop_sequence = if stop_reason == "stop_sequence" {
+        messages_stop_sequence(extra_body)
+    } else {
+        Value::Null
+    };
+    let mut delta = Map::new();
+    delta.insert("stop_reason".to_string(), json!(stop_reason));
+    delta.insert("stop_sequence".to_string(), stop_sequence);
+    for key in ["stop_details", "container"] {
+        if let Some(value) = extra_body.get(key) {
+            delta.insert(key.to_string(), value.clone());
+        }
+    }
+    json!({
+        "type": "message_delta",
+        "delta": delta,
+        "usage": anthropic_native_usage_json(usage)
+    })
 }
 
 fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
@@ -800,7 +835,10 @@ fn apply_emitted_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta:
             metadata.merge(delta_metadata);
             if let Some(delta) = content.as_deref().filter(|content| !content.is_empty()) {
                 thinking.push_str(delta);
-            } else if let Some(delta) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+            } else if delta_metadata.summary_as_thinking
+                && let Some(delta) = summary.as_deref().filter(|summary| !summary.is_empty())
+            {
+                // Unmarked summaries are not emitted live (DM5a); NodeDone flushes them.
                 thinking.push_str(delta);
             }
             if let Some(signature_delta) = encrypted
@@ -906,7 +944,7 @@ async fn emit_live_delta_for_node_delta(
     block_index: u32,
     payload: &AnthropicBlockPayload,
     delta: &NodeDelta,
-    _extra_body: &HashMap<String, Value>,
+    extra_body: &HashMap<String, Value>,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     if let (AnthropicBlockPayload::Text { .. }, NodeDelta::Text { citations, .. }) =
@@ -975,17 +1013,33 @@ async fn emit_live_delta_for_node_delta(
                         .then(|| summary.as_deref().filter(|summary| !summary.is_empty()))
                         .flatten()
                 });
+            let mut thinking_delta = json!({ "type": "thinking_delta", "thinking": "" });
+            let estimated_tokens = extra_body.get("estimated_tokens");
+            if let Some(estimated_tokens) = estimated_tokens {
+                thinking_delta["estimated_tokens"] = estimated_tokens.clone();
+            }
             if let Some(text) = text {
                 send_messages_delta_string(
                     tx,
                     json!({
                         "type": "content_block_delta",
                         "index": block_index,
-                        "delta": { "type": "thinking_delta", "thinking": "" }
+                        "delta": thinking_delta
                     }),
                     messages_delta_path_thinking,
                     text,
                     sse_max_frame_length,
+                )
+                .await?;
+            } else if estimated_tokens.is_some_and(|value| !value.is_null()) {
+                // PM6e: an empty thinking_delta still reports the token estimate.
+                send_named_messages_event(
+                    tx,
+                    json!({
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": thinking_delta
+                    }),
                 )
                 .await?;
             }
@@ -1398,6 +1452,13 @@ async fn try_start_next_live_block(
     {
         return Ok(());
     }
+    if matches!(
+        &block_state.payload,
+        AnthropicBlockPayload::Thinking { thinking, signature, .. }
+            if thinking.is_empty() && signature.as_deref().is_none_or(str::is_empty)
+    ) {
+        return Ok(());
+    }
     emit_live_block_start(tx, block_state, next_content_block_index, saw_tool_use).await?;
     emitted_node_owned_surfaces.insert(surface_kind_for_payload(&block_state.payload));
     *open_node_index = Some(*next_flush_node_index);
@@ -1429,7 +1490,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
     }
     let projected = crate::urp::tool_signature::project_response(resp);
     let resp = &projected;
-    let message_id = resp.id.clone();
+    let message_id = crate::urp::encode::anthropic::messages_response_id(&resp.id);
     let mut saw_tool_use = false;
     let usage = resp.usage.clone().unwrap_or(urp::Usage {
         iterations: None,
@@ -1490,20 +1551,15 @@ pub(crate) async fn emit_synthetic_messages_stream(
         }
     }
 
-    let stop_reason = messages_stop_reason(&resp.extra_body, resp.finish_reason, saw_tool_use);
-    let stop_sequence = if stop_reason == "stop_sequence" {
-        messages_stop_sequence(&resp.extra_body)
-    } else {
-        Value::Null
-    };
-    let message_delta = json!({
-        "type": "message_delta",
-        "delta": {
-            "stop_reason": stop_reason,
-            "stop_sequence": stop_sequence
-        },
-        "usage": anthropic_native_usage_json(&usage)
-    });
+    let stop_reason = messages_stop_reason(
+        &resp.extra_body,
+        resp.finish_reason,
+        saw_tool_use,
+        message_nodes
+            .iter()
+            .any(|node| matches!(node, Node::Refusal { .. })),
+    );
+    let message_delta = messages_terminal_delta(&resp.extra_body, stop_reason, &usage);
     send_named_messages_event(&tx, message_delta).await?;
     send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
     Ok(())
@@ -1533,6 +1589,8 @@ pub(crate) async fn encode_urp_stream_as_messages(
     let mut open_node_index: Option<u32> = None;
     let mut absorbed_signature_node_indices: HashSet<u32> = HashSet::new();
     let mut emitted_node_indices: HashSet<u32> = HashSet::new();
+    let mut node_identities: HashMap<u32, String> = HashMap::new();
+    let mut saw_refusal = false;
 
     async fn ensure_message_start(
         tx: &mpsc::Sender<Event>,
@@ -1573,7 +1631,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 extra_body,
                 ..
             } => {
-                response_id = Some(id);
+                response_id = Some(crate::urp::encode::anthropic::messages_response_id(&id));
                 if let Some(usage) = usage {
                     response_usage = Some(usage);
                 }
@@ -1588,13 +1646,20 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
                     continue;
                 }
+                if let Some(identity) = messages_header_identity(&header) {
+                    node_identities.insert(node_index, identity);
+                }
+                saw_refusal |= matches!(header, NodeHeader::Refusal { .. });
                 let Some(payload) = anthropic_block_from_node_header(&header, &extra_body) else {
                     continue;
                 };
                 should_emit_terminal_message = true;
+                let message_id = response_id
+                    .get_or_insert_with(|| crate::urp::encode::anthropic::messages_response_id(""))
+                    .clone();
                 ensure_message_start(
                     &tx,
-                    response_id.as_deref().unwrap_or("msg_mock"),
+                    &message_id,
                     logical_model,
                     response_usage.as_ref(),
                     &pending_envelope_extra,
@@ -1672,6 +1737,23 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         citations.extend(delta_citations.iter().cloned());
                     }
                 }
+                // A reasoning block waits for its first text or signature (DM5.3 item 5).
+                if block_state.block_index.is_none()
+                    && node_index == next_flush_node_index
+                    && open_node_index.is_none()
+                {
+                    try_start_next_live_block(
+                        &tx,
+                        &mut live_node_blocks,
+                        &next_flush_node_index,
+                        &mut next_content_block_index,
+                        &mut saw_tool_use,
+                        &mut open_node_index,
+                        &mut emitted_node_owned_surfaces,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
             }
             UrpStreamEvent::NodeDone {
                 node_index,
@@ -1687,6 +1769,10 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     live_node_blocks.remove(&node_index);
                     continue;
                 }
+                if let Some(identity) = messages_node_identity(&node) {
+                    node_identities.insert(node_index, identity);
+                }
+                saw_refusal |= matches!(node, Node::Refusal { .. });
                 if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
                     mark_node_without_messages_block(
                         &tx,
@@ -1870,9 +1956,12 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     pending_envelope_extra.clear();
                     continue;
                 }
+                let message_id = response_id
+                    .get_or_insert_with(|| crate::urp::encode::anthropic::messages_response_id(""))
+                    .clone();
                 ensure_message_start(
                     &tx,
-                    response_id.as_deref().unwrap_or("msg_mock"),
+                    &message_id,
                     logical_model,
                     response_usage.as_ref(),
                     &pending_envelope_extra,
@@ -1884,9 +1973,14 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     live_node_blocks.drain().collect();
                 remaining_live_node_blocks.sort_by_key(|(node_index, _)| *node_index);
                 for (node_index, mut block_state) in remaining_live_node_blocks {
+                    let terminal_node = terminal_node_for_stream_node(
+                        &output,
+                        node_index,
+                        node_identities.get(&node_index),
+                    );
                     if block_state.block_index.is_some() {
                         emitted_node_indices.insert(node_index);
-                        if let Some(node) = output.get(node_index as usize) {
+                        if let Some(node) = terminal_node {
                             emit_terminal_suffix_before_stop(
                                 &tx,
                                 &block_state,
@@ -1900,11 +1994,19 @@ pub(crate) async fn encode_urp_stream_as_messages(
                             .insert(surface_kind_for_payload(&block_state.payload));
                         continue;
                     }
-                    if let Some(node) = output.get(node_index as usize) {
+                    if let Some(node) = terminal_node {
                         let Some(payload) = anthropic_block_from_node(node) else {
                             continue;
                         };
                         block_state.payload = payload;
+                    } else if matches!(
+                        &block_state.payload,
+                        AnthropicBlockPayload::Thinking { metadata, thinking, signature, .. }
+                            if !metadata.redacted
+                                && thinking.is_empty()
+                                && signature.as_deref().is_none_or(str::is_empty)
+                    ) {
+                        continue;
                     }
                     emitted_node_indices.insert(node_index);
                     if matches!(
@@ -1940,6 +2042,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     &mut saw_tool_use,
                     &output,
                     &emitted_node_indices,
+                    &node_identities,
                     sse_max_frame_length,
                 )
                 .await?;
@@ -1952,20 +2055,12 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     output_details: None,
                     extra_body: HashMap::new(),
                 });
-                let stop_reason = messages_stop_reason(&extra_body, finish_reason, saw_tool_use);
-                let stop_sequence = if stop_reason == "stop_sequence" {
-                    messages_stop_sequence(&extra_body)
-                } else {
-                    Value::Null
-                };
-                let message_delta = json!({
-                    "type": "message_delta",
-                    "delta": {
-                        "stop_reason": stop_reason,
-                        "stop_sequence": stop_sequence
-                    },
-                    "usage": anthropic_native_usage_json(&usage)
-                });
+                saw_refusal |= output
+                    .iter()
+                    .any(|node| matches!(node, Node::Refusal { .. }));
+                let stop_reason =
+                    messages_stop_reason(&extra_body, finish_reason, saw_tool_use, saw_refusal);
+                let message_delta = messages_terminal_delta(&extra_body, stop_reason, &usage);
                 send_named_messages_event(&tx, message_delta).await?;
                 send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
                 return Ok(());
@@ -2044,19 +2139,101 @@ fn messages_error_payload(
     payload
 }
 
+fn messages_header_identity(header: &NodeHeader) -> Option<String> {
+    let (kind, value) = match header {
+        NodeHeader::ToolCall { call_id, .. } => ("tool_call", Some(call_id)),
+        NodeHeader::ToolResult { call_id, .. } => ("tool_result", Some(call_id)),
+        NodeHeader::Text { id, .. } => ("text", id.as_ref()),
+        NodeHeader::Image { id, .. } => ("image", id.as_ref()),
+        NodeHeader::Audio { id, .. } => ("audio", id.as_ref()),
+        NodeHeader::File { id, .. } => ("file", id.as_ref()),
+        NodeHeader::Refusal { id, .. } => ("refusal", id.as_ref()),
+        NodeHeader::Reasoning { id, .. } => ("reasoning", id.as_ref()),
+        NodeHeader::ProviderItem { id, .. } => ("provider_item", id.as_ref()),
+        NodeHeader::NextDownstreamEnvelopeExtra => return None,
+    };
+    value
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{kind}:{value}"))
+}
+
+/// DM9b: stream indices and terminal positions diverge when decoders emit controls the
+/// terminal snapshot lacks, so reconciliation keys on node identity first.
+fn messages_node_identity(node: &Node) -> Option<String> {
+    let (kind, value) = match node {
+        Node::ToolCall { call_id, .. } => ("tool_call", Some(call_id)),
+        Node::ToolResult { call_id, .. } => ("tool_result", Some(call_id)),
+        Node::Text { id, .. } => ("text", id.as_ref()),
+        Node::Image { id, .. } => ("image", id.as_ref()),
+        Node::Audio { id, .. } => ("audio", id.as_ref()),
+        Node::File { id, .. } => ("file", id.as_ref()),
+        Node::Refusal { id, .. } => ("refusal", id.as_ref()),
+        Node::Reasoning { id, .. } => ("reasoning", id.as_ref()),
+        Node::ProviderItem { id, .. } => ("provider_item", id.as_ref()),
+        Node::NextDownstreamEnvelopeExtra { .. } => return None,
+    };
+    value
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{kind}:{value}"))
+}
+
+/// Returns the terminal node that corresponds to one stream node: identity first, then position.
+fn terminal_node_for_stream_node<'a>(
+    output: &'a [Node],
+    node_index: u32,
+    identity: Option<&String>,
+) -> Option<&'a Node> {
+    identity
+        .and_then(|identity| {
+            output
+                .iter()
+                .find(|node| messages_node_identity(node).as_ref() == Some(identity))
+        })
+        .or_else(|| output.get(node_index as usize))
+}
+
 async fn emit_messages_response_done_fallback(
     tx: &mpsc::Sender<Event>,
     next_content_block_index: &mut u32,
     saw_tool_use: &mut bool,
     output: &[Node],
     emitted_node_indices: &HashSet<u32>,
+    node_identities: &HashMap<u32, String>,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    for (node_index, node) in output.iter().enumerate() {
+    let mut emitted_by_identity: HashMap<&str, Vec<u32>> = HashMap::new();
+    let mut sorted_emitted: Vec<u32> = emitted_node_indices.iter().copied().collect();
+    sorted_emitted.sort_unstable();
+    for node_index in &sorted_emitted {
+        if let Some(identity) = node_identities.get(node_index) {
+            emitted_by_identity
+                .entry(identity.as_str())
+                .or_default()
+                .push(*node_index);
+        }
+    }
+    let mut consumed: HashSet<u32> = HashSet::new();
+    let mut matched_positions: HashSet<usize> = HashSet::new();
+    for (position, node) in output.iter().enumerate() {
+        let Some(identity) = messages_node_identity(node) else {
+            continue;
+        };
+        if let Some(indices) = emitted_by_identity.get_mut(identity.as_str())
+            && !indices.is_empty()
+        {
+            consumed.insert(indices.remove(0));
+            matched_positions.insert(position);
+        }
+    }
+    for (position, node) in output.iter().enumerate() {
         let Some(payload) = anthropic_block_from_node(node) else {
             continue;
         };
-        if emitted_node_indices.contains(&(node_index as u32)) {
+        if matched_positions.contains(&position) {
+            continue;
+        }
+        let position_index = position as u32;
+        if emitted_node_indices.contains(&position_index) && consumed.insert(position_index) {
             continue;
         }
         PendingAnthropicBlock {

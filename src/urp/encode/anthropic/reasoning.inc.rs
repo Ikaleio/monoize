@@ -1,5 +1,3 @@
-const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 128_000;
-
 fn apply_messages_response_format(obj: &mut Map<String, Value>, format: &ResponseFormat) {
     match format {
         ResponseFormat::JsonSchema { json_schema } => {
@@ -222,47 +220,57 @@ pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
         "cache_creation_input_tokens".to_string(),
         Value::from(input_details.cache_creation_tokens),
     );
-    usage_object.insert(
-        "tool_prompt_input_tokens".to_string(),
-        Value::from(input_details.tool_prompt_tokens),
-    );
+    usage_object.remove("tool_prompt_input_tokens");
+    if input_details.tool_prompt_tokens > 0 {
+        usage_object.insert(
+            "tool_prompt_input_tokens".to_string(),
+            Value::from(input_details.tool_prompt_tokens),
+        );
+    }
     usage_object.remove("reasoning_output_tokens");
     let mut native_output_details = usage_object
         .remove("output_tokens_details")
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
     native_output_details.retain(|key, _| !key.starts_with("_monoize_"));
-    if usage.output_details.is_some() {
-        native_output_details.insert(
-            "thinking_tokens".to_string(),
-            Value::from(output_details.reasoning_tokens),
-        );
-    }
-    if !native_output_details.is_empty() {
-        usage_object.insert(
-            "output_tokens_details".to_string(),
-            Value::Object(native_output_details),
-        );
-    }
-    usage_object.insert(
-        "accepted_prediction_output_tokens".to_string(),
-        Value::from(output_details.accepted_prediction_tokens),
+    native_output_details.insert(
+        "thinking_tokens".to_string(),
+        Value::from(output_details.reasoning_tokens),
     );
     usage_object.insert(
-        "rejected_prediction_output_tokens".to_string(),
-        Value::from(output_details.rejected_prediction_tokens),
+        "output_tokens_details".to_string(),
+        Value::Object(native_output_details),
     );
+    for (key, value) in [
+        (
+            "accepted_prediction_output_tokens",
+            output_details.accepted_prediction_tokens,
+        ),
+        (
+            "rejected_prediction_output_tokens",
+            output_details.rejected_prediction_tokens,
+        ),
+    ] {
+        usage_object.remove(key);
+        if value > 0 {
+            usage_object.insert(key.to_string(), Value::from(value));
+        }
+    }
 
-    usage_object.remove("cache_creation");
-    if input_details.cache_creation_5m_tokens > 0 || input_details.cache_creation_1h_tokens > 0 {
-        usage_object.insert(
-            "cache_creation".to_string(),
-            json!({
-                "ephemeral_5m_input_tokens": input_details.cache_creation_5m_tokens,
-                "ephemeral_1h_input_tokens": input_details.cache_creation_1h_tokens
-            }),
-        );
-    }
+    let mut cache_creation = usage_object
+        .remove("cache_creation")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    cache_creation.retain(|key, _| !key.starts_with("_monoize_"));
+    cache_creation.insert(
+        "ephemeral_5m_input_tokens".to_string(),
+        Value::from(input_details.cache_creation_5m_tokens),
+    );
+    cache_creation.insert(
+        "ephemeral_1h_input_tokens".to_string(),
+        Value::from(input_details.cache_creation_1h_tokens),
+    );
+    usage_object.insert("cache_creation".to_string(), Value::Object(cache_creation));
 
     usage_object.remove("iterations");
     if let Some(iterations) = &usage.iterations {
@@ -299,6 +307,7 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let request_nodes = &req.input;
     let mut pending_message: Option<AnthropicMessageEnvelope> = None;
     let mut pending_envelope_extra = HashMap::new();
+    let mut deferred_system: Vec<DeferredSystemBlock> = Vec::new();
 
     let mut node_index = 0;
     while node_index < request_nodes.len() {
@@ -309,6 +318,24 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         let node = merged_reasoning
             .as_ref()
             .unwrap_or(&request_nodes[node_index]);
+        if !deferred_system.is_empty() {
+            let target_role = match node {
+                Node::NextDownstreamEnvelopeExtra { extra_body } => (extra_body
+                    .get(MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY)
+                    == Some(&Value::Bool(true)))
+                .then_some(OrdinaryRole::System),
+                Node::ToolResult { tool_type, .. } if *tool_type != ToolCallType::Custom => {
+                    Some(OrdinaryRole::User)
+                }
+                _ => anthropic_message_role_for_node(node),
+            };
+            let reminders_fit_user_message =
+                deferred_system.iter().all(|deferred| deferred.text.is_some());
+            if target_role.is_some_and(|role| role != OrdinaryRole::User || !reminders_fit_user_message)
+            {
+                flush_deferred_system_message(&mut deferred_system, &mut messages);
+            }
+        }
         match node {
             Node::NextDownstreamEnvelopeExtra { extra_body } => {
                 flush_pending_anthropic_message(&mut pending_message, &mut messages);
@@ -322,6 +349,7 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
                         role: OrdinaryRole::System,
                         content: Vec::new(),
                         extra_body: std::mem::take(&mut pending_envelope_extra),
+                        system_reminders: Vec::new(),
                     });
                 }
             }
@@ -360,22 +388,25 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 origin_protocol: ProviderProtocol::Messages,
                 ..
             } => {
-                let inline = !messages.is_empty() || pending_message.is_some();
-                if inline {
-                    if pending_message
-                        .as_ref()
-                        .is_some_and(|message| message.role != OrdinaryRole::System)
-                    {
-                        flush_pending_anthropic_message(&mut pending_message, &mut messages);
-                    }
+                let native_envelope_open = pending_message
+                    .as_ref()
+                    .is_some_and(|message| message.role == OrdinaryRole::System);
+                if native_envelope_open {
                     if let Some(block) = encode_system_block(node) {
-                        let message =
-                            pending_message.get_or_insert_with(|| AnthropicMessageEnvelope {
-                                role: OrdinaryRole::System,
-                                content: Vec::new(),
-                                extra_body: std::mem::take(&mut pending_envelope_extra),
-                            });
-                        message.content.push(block);
+                        pending_message
+                            .as_mut()
+                            .expect("open native system envelope")
+                            .content
+                            .push(block);
+                    }
+                } else if !messages.is_empty() || pending_message.is_some() {
+                    flush_pending_anthropic_message(&mut pending_message, &mut messages);
+                    if let Some(block) = encode_system_block(node) {
+                        let text = match node {
+                            Node::Text { content, .. } => Some(content.clone()),
+                            _ => None,
+                        };
+                        deferred_system.push(DeferredSystemBlock { block, text });
                     }
                 } else if let Some(block) = encode_system_block(node) {
                     system_blocks.push(block);
@@ -423,16 +454,18 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
             }
             Node::Audio { .. } | Node::Refusal { .. } => {}
         }
+        attach_deferred_system_reminders(&mut deferred_system, &mut pending_message);
         node_index += consumed_nodes;
     }
     flush_pending_anthropic_message(&mut pending_message, &mut messages);
+    flush_deferred_system_message(&mut deferred_system, &mut messages);
 
     let mut body = json!({
         "model": upstream_model,
         "messages": messages,
         "max_tokens": req
             .max_output_tokens
-            .unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS),
+            .unwrap_or_else(|| messages_default_max_tokens(upstream_model)),
     });
     let obj = body.as_object_mut().expect("anthropic request object");
 
@@ -485,48 +518,74 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         {
             output.remove("format");
         }
-        let mode = if reasoning.disabled() {
-            Some("disabled")
+        let explicit_thinking = native_thinking.is_some();
+        let budget = reasoning.budget_tokens;
+        let mode: Option<String> = if explicit_thinking {
+            if reasoning.disabled() {
+                Some("disabled".to_string())
+            } else {
+                reasoning.mode.clone()
+            }
+        } else if reasoning.disabled() {
+            generated_disabled_thinking_type(upstream_model).map(str::to_string)
         } else if let Some(mode) = reasoning.mode.as_deref() {
-            Some(mode)
-        } else if native_thinking.is_some()
-            || (reasoning.budget_tokens.is_none() && reasoning.effort.is_none())
-        {
-            None
-        } else if native_output.is_some()
-            && native_thinking.is_none()
-            && reasoning.budget_tokens.is_none()
+            Some(mode.to_string())
+        } else if (budget.is_none() && reasoning.effort.is_none())
+            || (native_output.is_some() && budget.is_none())
         {
             None
         } else if model_supports_adaptive(upstream_model) {
-            Some("adaptive")
+            Some("adaptive".to_string())
         } else {
-            Some("enabled")
+            Some("enabled".to_string())
         };
+        let mode = mode.as_deref();
         if let Some(mode) = mode {
             thinking.insert("type".into(), json!(mode));
         }
-        if let Some(budget) = reasoning.budget_tokens {
-            thinking.insert("budget_tokens".into(), json!(budget));
-        } else if mode == Some("enabled") && native_thinking.is_none() {
-            thinking.insert(
-                "budget_tokens".into(),
-                json!(effort_to_budget(
-                    reasoning.effort.as_deref().unwrap_or("medium")
-                )),
-            );
+        match budget {
+            Some(budget) if explicit_thinking || mode == Some("enabled") => {
+                thinking.insert("budget_tokens".into(), json!(budget));
+            }
+            None if !explicit_thinking && mode == Some("enabled") => {
+                thinking.insert(
+                    "budget_tokens".into(),
+                    json!(effort_to_budget(
+                        reasoning.effort.as_deref().unwrap_or("medium")
+                    )),
+                );
+            }
+            _ => {}
         }
         if let Some(display) = &reasoning.display {
             thinking.insert("display".into(), json!(display));
+        } else if !explicit_thinking
+            && matches!(mode, Some("adaptive" | "enabled"))
+            && model_supports_adaptive(upstream_model)
+            && reasoning
+                .summary
+                .as_deref()
+                .is_some_and(|summary| summary != "none")
+        {
+            // Claude 5+ defaults display to "omitted"; a summary request needs it (RC4c.2).
+            thinking.insert("display".into(), json!("summarized"));
         }
-        if let Some(effort) = reasoning
+        let effort = reasoning
             .effort
             .as_deref()
             .filter(|v| !matches!(*v, "none" | "minimal" | "minimum"))
+            .map(str::to_string)
+            .or_else(|| {
+                budget
+                    .filter(|_| {
+                        !explicit_thinking && native_output.is_none() && mode == Some("adaptive")
+                    })
+                    .map(|budget| effort_from_budget(budget, upstream_model).to_string())
+            });
+        if let Some(effort) = effort
+            && (mode == Some("adaptive") || native_output.is_some())
         {
-            if mode == Some("adaptive") || native_output.is_some() {
-                output.insert("effort".into(), json!(effort));
-            }
+            output.insert("effort".into(), json!(effort));
         }
         if !thinking.is_empty() || native_thinking.is_some() {
             obj.insert("thinking".into(), Value::Object(thinking));

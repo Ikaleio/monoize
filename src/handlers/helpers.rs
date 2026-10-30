@@ -1426,13 +1426,17 @@ const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
 const EXTRA_WHITELIST_ANTHROPIC: &[&str] = &[
     "cache_control",
     "container",
+    "context_management",
+    "diagnostics",
+    "inference_geo",
     "max_tokens",
+    "mcp_servers",
     "metadata",
     "output_config",
     "service_tier",
+    "speed",
     "stop_sequences",
     "top_k",
-    "inference_geo",
 ];
 
 const EXTRA_WHITELIST_GEMINI: &[&str] = &[
@@ -1576,6 +1580,12 @@ pub(super) async fn call_streaming_image_capable_upstream(
     })
 }
 
+/// Messages body members that another protocol family may carry under the same name with an
+/// incompatible shape (Responses `context_management`), so they pass the default Messages
+/// whitelist only for a Messages downstream (XF6g).
+const MESSAGES_SAME_FAMILY_EXTRA_FIELDS: &[&str] =
+    &["context_management", "diagnostics", "mcp_servers", "speed"];
+
 /// Filter `req.extra_body` to only contain fields allowed by the upstream
 /// provider type's whitelist, optionally extended by a provider-level override.
 ///
@@ -1583,6 +1593,7 @@ pub(super) async fn call_streaming_image_capable_upstream(
 pub(super) fn filter_extra_body_for_provider(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,
+    downstream: DownstreamProtocol,
     provider_override: &Option<Vec<String>>,
 ) {
     if let Some(overrides) = provider_override {
@@ -1600,11 +1611,15 @@ pub(super) fn filter_extra_body_for_provider(
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
+    let same_family = downstream.is_same_family(provider_type);
 
     req.extra_body.retain(|k, _| {
         k.starts_with("_monoize_")
-            || defaults.contains(&k.as_str())
             || override_set.contains(k.as_str())
+            || (defaults.contains(&k.as_str())
+                && (same_family
+                    || provider_type != ProviderType::Messages
+                    || !MESSAGES_SAME_FAMILY_EXTRA_FIELDS.contains(&k.as_str())))
     });
 }
 
@@ -2460,6 +2475,7 @@ mod media_resource_routing_tests {
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,
+            client_anthropic_headers: Default::default(),
             origin_key: None,
             origin_peer_channel_ids: vec![],
         }

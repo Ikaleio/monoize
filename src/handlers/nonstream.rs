@@ -1242,7 +1242,12 @@ pub(super) fn encode_request_for_provider(
             req.extra_body.remove("store");
         }
     }
-    filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
+    filter_extra_body_for_provider(
+        req,
+        attempt.provider_type,
+        downstream,
+        &attempt.extra_fields_whitelist,
+    );
     filter_tools_for_provider(req, attempt.provider_type, downstream);
     let stateful_same_responses = matches!(downstream, DownstreamProtocol::Responses)
         && attempt.provider_type == ProviderType::Responses

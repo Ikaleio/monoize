@@ -695,6 +695,7 @@ pub(super) async fn collect_provider_attempts(
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,
+            client_anthropic_headers: Default::default(),
             origin_key,
             origin_peer_channel_ids,
         });
@@ -770,7 +771,11 @@ pub(super) fn attach_client_session_id(
 ) {
     let body_id = req.and_then(super::helpers::stable_session_affinity_raw);
     let derived = req.map(derive_session_affinity_from_urp);
+    let anthropic_headers = req
+        .map(|req| req.context.anthropic_client_headers.clone())
+        .unwrap_or_default();
     for attempt in attempts {
+        attempt.client_anthropic_headers = anthropic_headers.clone();
         attempt.client_session_id = client_session_id.clone().or_else(|| {
             body_id
                 .as_deref()
@@ -954,6 +959,28 @@ pub(super) fn provider_extra_headers(
     }
 }
 
+/// PM8/PM8h: reads the downstream `anthropic-version` and every `anthropic-beta` token.
+pub(super) fn anthropic_client_headers(headers: &HeaderMap) -> urp::AnthropicClientHeaders {
+    let version = headers
+        .get("anthropic-version")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let mut beta: Vec<String> = Vec::new();
+    for value in headers.get_all("anthropic-beta") {
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        for token in value.split(',').map(str::trim).filter(|token| !token.is_empty()) {
+            if !beta.iter().any(|existing| existing == token) {
+                beta.push(token.to_string());
+            }
+        }
+    }
+    urp::AnthropicClientHeaders { version, beta }
+}
+
 const SESSION_CACHE_HEADER_NAMES: &[&str] = &["x-session-affinity", "x-opencode-session"];
 
 fn header_list_contains(headers: &[(String, String)], name: &str) -> bool {
@@ -989,6 +1016,21 @@ pub(super) fn attempt_extra_headers(
         .iter()
         .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
         .collect();
+    // PM8/PM8h: downstream anthropic headers reach only Messages upstreams; beta tokens sit
+    // between generated and Channel tokens in the merged header.
+    if attempt.provider_type == ProviderType::Messages {
+        let client = &attempt.client_anthropic_headers;
+        if let Some(version) = client.version.as_deref() {
+            for (name, value) in &mut out {
+                if name.eq_ignore_ascii_case("anthropic-version") {
+                    *value = version.to_string();
+                }
+            }
+        }
+        if !client.beta.is_empty() {
+            out.push(("anthropic-beta".to_string(), client.beta.join(",")));
+        }
+    }
     if let Some(extras) = &attempt.extra_headers {
         for (name, value) in extras {
             out.push((name.clone(), value.clone()));

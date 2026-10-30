@@ -227,9 +227,11 @@ fn opaque_reasoning_client_replay_preserves_payload_and_provider_binding() {
                         "wrong-model",
                         true,
                     );
-                    assert!(
+                    // PR4c.6: Messages replay matches on provider type only.
+                    assert_eq!(
                         reasoning_values(&wrong).2.is_empty(),
-                        "ciphertext survived a model mismatch: {origin:?} via {downstream:?}"
+                        origin != ProviderProtocol::Messages,
+                        "model mismatch handling: {origin:?} via {downstream:?}"
                     );
                     filter_and_unwrap_reasoning_envelopes_for_upstream(
                         &mut replay.input,

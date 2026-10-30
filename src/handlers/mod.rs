@@ -1,6 +1,7 @@
 mod account_balance;
 mod billing;
 mod compact;
+mod count_tokens;
 mod decisions;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
@@ -50,6 +51,7 @@ use usage::*;
 pub use account_balance::{codex_usage, deepseek_user_balance};
 pub(crate) use compact::classify_openai_compact_scheme;
 pub use compact::compact_response;
+pub use count_tokens::count_messages_tokens;
 pub use decisions::{create_decisions, create_system_one};
 pub use responses_websocket::responses_websocket;
 
@@ -448,10 +450,28 @@ pub async fn create_messages(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    let request_id = extract_request_id(&headers);
-    match create_messages_inner(state, headers, body).await {
+    let request_id = messages_request_id(&headers);
+    let mut response = match create_messages_inner(state, headers, body, request_id.clone()).await
+    {
         Ok(response) => response,
-        Err(err) => anthropic_error_response(err, request_id.as_deref()),
+        Err(err) => anthropic_error_response(err, Some(&request_id)),
+    };
+    insert_messages_request_id_header(&mut response, &request_id);
+    response
+}
+
+/// DM4b: the downstream `x-request-id`, or a generated `req_` id.
+pub(super) fn messages_request_id(headers: &HeaderMap) -> String {
+    extract_request_id(headers)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("req_{}", uuid::Uuid::new_v4().simple()))
+}
+
+pub(super) fn insert_messages_request_id_header(response: &mut Response, request_id: &str) {
+    if let Ok(value) = axum::http::HeaderValue::from_str(request_id) {
+        response
+            .headers_mut()
+            .insert(axum::http::HeaderName::from_static("request-id"), value);
     }
 }
 
@@ -459,9 +479,10 @@ async fn create_messages_inner(
     state: AppState,
     headers: HeaderMap,
     body: Value,
+    request_id: String,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    let request_id = extract_request_id(&headers);
+    let request_id = Some(request_id);
     let capture_session = state
         .request_capture
         .maybe_start_session(
@@ -479,6 +500,7 @@ async fn create_messages_inner(
     });
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
+    req.context.anthropic_client_headers = anthropic_client_headers(&headers);
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
@@ -799,6 +821,8 @@ struct MonoizeAttempt {
     /// `x-session-affinity` and `x-opencode-session`, for request-log
     /// persistence.
     session_affinity_value: Option<String>,
+    /// PM8/PM8h: downstream `/v1/messages` headers, sent only when the attempt targets `messages`.
+    client_anthropic_headers: urp::AnthropicClientHeaders,
     /// RTA-6c: `scheme://host:port` from Channel `base_url`, when parseable.
     origin_key: Option<String>,
     /// Enabled positive-weight Channels of this Provider that share `origin_key`.
