@@ -714,6 +714,8 @@ TXO-3. On streams, the transform MUST keep per-node state. It MUST withhold a re
 
 TXO-4. `ResponseDone.output` MUST list the nodes in output-index order, so position `K` holds the node whose events used index `K`: one closed `Text` node per segment of a converted source node, and each passed-through node unchanged. A node without stream events MUST be appended after the streamed nodes and converted with TXO-2 when it has plain text. Exactly one `O` and one `C` surround each segment.
 
+TXO-5. URP text citation ranges are node-local, so `Text` nodes this transform does not rewrite keep their ranges; Chat encoders add the preceding text, including inserted tags. The transform MUST remap the `node_index` of a Chat late-citation control event (PC7h) to the node's output index.
+
 TXI-1. `reasoning_from_think_xml` is response-phase only. Config MUST contain a non-empty string `tag`, with `O` and `C` as in TXO-1.
 
 TXI-2. On a non-stream response, each assistant `Text` node MUST be split, in order, into `Text` segments outside tags and `Reasoning{content}` segments between `O` and the next `C`. An `O` without a later `C` makes the rest of the text reasoning. Empty segments produce no node.
@@ -723,6 +725,8 @@ TXI-3. On streams, the transform MUST produce the same segments as TXI-2 for the
 TXI-4. Every segment is its own node with its own `NodeStart`, deltas, and `NodeDone`. A `Text` node's `NodeStart` MUST be withheld until its first non-empty segment, so a stream that starts with `O` creates no empty text node. Text segments keep the original header `role` and `phase`.
 
 TXI-5. Node indexes MUST stay dense and in emission order: the transform MUST assign output indexes `0, 1, 2, …` in `NodeStart` order and remap every later event of a source node to its assigned index. `ResponseDone.output` MUST list the emitted nodes in output-index order, so position `K` holds the node whose events used index `K`, as PC7g requires. A terminal-only node without stream events MUST be appended after the streamed nodes, split with TXI-2.
+
+TXI-6. A citation range of a source `Text` node MUST be rebased on the emitted segments, in characters, excluding tags and reasoning, in both modes, so it addresses the same characters. The owner is the first `Text` segment ending after the range start, and the range is clipped to it. A range inside removed text becomes an empty range at the owner's next kept character, or at the end of the last `Text` segment. If no `Text` segment exists, the citation is dropped because no text remains to cite. On streams, a citation waits until its start is segmented. A citation of an open segment MUST be a citation delta on it. A citation of a closed segment MUST join that segment's terminal node and MUST be emitted as a Chat late-citation control event (PC7h).
 
 SER-1. `reasoning_strip_encrypted` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
 
@@ -839,6 +843,8 @@ AMIO-10. On streams where the downstream protocol can faithfully represent extra
 AMIO-11. Under the incremental path in AMIO-10, the transform MUST update terminal `NodeDone.node` and `ResponseDone.output` so the authoritative final flat node state contains the cleaned text nodes and inserted image nodes.
 
 AMIO-12. If the selected downstream protocol cannot faithfully represent the incremental rewritten node lifecycle, the runtime MUST use the buffered synthetic stream path.
+
+AMIO-13. A citation range of a rewritten `Text` node MUST be rebased on the cleaned text, in characters, in both modes, so it addresses the same characters after image Markdown is removed. A range inside removed Markdown becomes an empty range at the next kept character. If no text remains, the citation is dropped. On streams, a citation waits until its start is parsed, and a late-citation control event (PC7h) of a completed node MUST be rebased the same way.
 
 AOIM-1. `image_output_to_markdown` is response-phase only.
 
