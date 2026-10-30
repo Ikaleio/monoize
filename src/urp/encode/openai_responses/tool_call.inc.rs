@@ -455,10 +455,9 @@ pub(crate) fn synthesized_response_controls(echo: Option<&Value>) -> Map<String,
 }
 
 /// STR3t: the effective downstream request controls echoed on a synthesized Responses object.
-pub(crate) fn response_request_echo(req: &UrpRequest) -> Value {
-    let mut stripped = req.clone();
-    stripped.input.retain(is_retained_responses_instruction_node);
-    let encoded = encode_request_prepared(&stripped, &req.model);
+pub(crate) fn response_request_echo(mut req: UrpRequest) -> Value {
+    req.input.retain(is_retained_responses_instruction_node);
+    let encoded = encode_request_prepared(&req, &req.model);
     let mut echo = Map::new();
     for key in [
         "instructions",

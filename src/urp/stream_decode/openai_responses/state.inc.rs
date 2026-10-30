@@ -275,7 +275,12 @@ fn map_output_item_done(
                     node_index,
                     node,
                     usage: None,
-                    extra_body: HashMap::new(),
+                    extra_body: text_done_extra_body(
+                        HashMap::new(),
+                        output_index,
+                        content_index,
+                        index_state,
+                    ),
                 });
                 output_state_for(index_state, output_index)
                     .content_done
@@ -345,7 +350,9 @@ fn map_output_item_done(
 fn merge_response_completed_outputs(
     terminal_outputs: Vec<AccumulatedOutputEntry>,
     accumulated_outputs: &[AccumulatedOutputEntry],
+    terminal_is_authoritative: bool,
 ) -> Result<Vec<Node>, String> {
+    let accumulated_len = accumulated_outputs.len();
     let mut merged_entries = accumulated_outputs.to_vec();
     let mut used_accumulated_indices: Vec<usize> = Vec::new();
 
@@ -381,6 +388,15 @@ fn merge_response_completed_outputs(
         }
     }
 
+    if terminal_is_authoritative {
+        // PR6c: an accumulated item absent from this terminal snapshot was discarded upstream.
+        let mut index = 0;
+        merged_entries.retain(|_| {
+            let keep = index >= accumulated_len || used_accumulated_indices.contains(&index);
+            index += 1;
+            keep
+        });
+    }
     merged_entries.sort_by_key(|entry| entry.output_index);
     Ok(merged_entries
         .into_iter()

@@ -13,6 +13,11 @@ fn accumulate_message_content_event(
         .and_then(Value::as_u64).unwrap_or(0);
     let item_id = stable_message_item_id_for_output(index_state, output_index);
     let state = output_state_for(index_state, output_index);
+    if event_name == "response.output_text.done"
+        && let Some(value) = data.get("phase").and_then(Value::as_str)
+    {
+        state.text_done_phases.insert(content_index, value.to_owned());
+    }
     let citations: Vec<_> = state.text_citations.iter()
         .filter(|((part, _), _)| *part == content_index)
         .map(|(_, annotation)| annotation.clone()).collect();
@@ -64,7 +69,9 @@ fn accumulate_message_content_event(
                     *logprobs = Some(scores);
                 }
             }
-            if let Some(value) = data.get("phase").and_then(Value::as_str) {
+            if let Some(value) = data.get("phase").and_then(Value::as_str)
+                && phase.is_none()
+            {
                 *phase = Some(value.to_owned());
             }
             *stored_citations = citations;

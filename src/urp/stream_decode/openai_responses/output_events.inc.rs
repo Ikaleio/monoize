@@ -70,7 +70,16 @@ fn map_response_completed_with_accumulated(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let outputs = match merge_response_completed_outputs(terminal_outputs, accumulated_outputs) {
+    let terminal_is_authoritative = response_obj.get("output").is_some_and(Value::is_array)
+        && matches!(
+            response_obj.get("status").and_then(Value::as_str),
+            Some("incomplete" | "cancelled" | "failed")
+        );
+    let outputs = match merge_response_completed_outputs(
+        terminal_outputs,
+        accumulated_outputs,
+        terminal_is_authoritative,
+    ) {
         Ok(outputs) => outputs,
         Err(reason) => {
             events.push(UrpStreamEvent::Error {
@@ -131,6 +140,25 @@ fn map_response_completed(
     index_state: &mut ResponsesStreamIndexState,
 ) -> Vec<UrpStreamEvent> {
     map_response_completed_with_accumulated(data_val, index_state, &[])
+}
+
+/// `NodeDone.extra_body` for one message part, carrying a native done-event `phase`.
+fn text_done_extra_body(
+    mut extra_body: HashMap<String, Value>,
+    output_index: u64,
+    content_index: u64,
+    index_state: &mut ResponsesStreamIndexState,
+) -> HashMap<String, Value> {
+    if let Some(phase) = output_state_for(index_state, output_index)
+        .text_done_phases
+        .remove(&content_index)
+    {
+        extra_body.insert(
+            crate::urp::RESPONSES_TEXT_DONE_PHASE_EXTRA_KEY.to_string(),
+            Value::String(phase),
+        );
+    }
+    extra_body
 }
 
 fn urp_node_index_from_delta(data_val: &Value, index_state: &mut ResponsesStreamIndexState) -> u32 {

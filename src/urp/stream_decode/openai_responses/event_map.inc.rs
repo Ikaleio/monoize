@@ -500,9 +500,10 @@ fn map_content_part_done(
     if is_reasoning_part {
         return Vec::new();
     }
+    let extra_body = node.extra_body_mut().clone();
     vec![UrpStreamEvent::NodeDone {
         node_index,
-        extra_body: node.extra_body_mut().clone(),
+        extra_body: text_done_extra_body(extra_body, output_index, content_index, index_state),
         node,
         usage: None,
     }]

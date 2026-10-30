@@ -66,13 +66,15 @@ pub(crate) async fn emit_synthetic_responses_stream(
                 let mut summary_lifecycle = ReasoningSummaryLifecycle::default();
                 summary_lifecycle
                     .finish(
-                        &tx,
+                        ReasoningSummaryTarget {
+                            tx: &tx,
+                            item_id: item.get("id").unwrap_or(&Value::Null),
+                            output_index,
+                            source: source.as_deref(),
+                            sse_max_frame_length,
+                        },
                         &mut seq,
-                        item.get("id").unwrap_or(&Value::Null),
-                        output_index,
-                        source.as_deref(),
                         &reasoning_summary_parts_from_item(item),
-                        sse_max_frame_length,
                     )
                     .await?;
                 if !text.is_empty() {

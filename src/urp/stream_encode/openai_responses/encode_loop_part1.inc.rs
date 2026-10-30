@@ -278,26 +278,25 @@ pub(crate) async fn encode_urp_stream_as_responses(
             continue;
         }
 
-        if let Some(mut payload) = pending_in_progress.take() {
-            let in_progress_source = match &event {
-                UrpStreamEvent::ProviderControl { event_name, data, .. }
-                    if event_name == urp::RESPONSES_IN_PROGRESS_CONTROL => Some(data),
-                _ => None,
+        // PR5e: unrelated provider controls pass ahead of the pending start event.
+        let in_progress_source = match &event {
+            UrpStreamEvent::ProviderControl { event_name, data, .. }
+                if event_name == urp::RESPONSES_IN_PROGRESS_CONTROL => Some(data),
+            _ => None,
+        };
+        if pending_in_progress.is_some()
+            && (in_progress_source.is_some()
+                || !matches!(event, UrpStreamEvent::ProviderControl { .. }))
+            && let Some(payload) = pending_in_progress.take()
+        {
+            let payload = match in_progress_source {
+                Some(source) => response_in_progress_payload(&payload, source),
+                None => payload,
             };
-            let consumed = in_progress_source.is_some();
-            if let (Some(Value::Object(source)), Some(response)) =
-                (in_progress_source, payload["response"].as_object_mut())
-            {
-                for (key, value) in source {
-                    if !key.starts_with("_monoize_") {
-                        response.entry(key.clone()).or_insert_with(|| value.clone());
-                    }
-                }
-            }
             send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
-            if consumed {
-                continue;
-            }
+        }
+        if in_progress_source.is_some() {
+            continue;
         }
 
         if let UrpStreamEvent::NodeDelta { node_index, delta: urp::NodeDelta::Image { .. }, extra_body, .. } = &event
@@ -415,7 +414,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             phase,
                             call_id: None,
                             name: None,
-                            wire_phase: None,
                             message_start_emitted: false,
                             output_item_start_emitted: false,
                             output_item_start: None,
@@ -520,7 +518,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             phase,
                             call_id: node_header_call_id(&header),
                             name: node_header_name(&header),
-                            wire_phase: None,
                             message_start_emitted: true,
                             output_item_start_emitted: !defer_reasoning_start,
                             output_item_start: defer_reasoning_start.then_some(item.clone()),
@@ -555,7 +552,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         phase,
                         call_id: node_header_call_id(&header),
                         name: node_header_name(&header),
-                        wire_phase: None,
                         message_start_emitted,
                         output_item_start_emitted: false,
                         output_item_start: None,
@@ -633,9 +629,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let Some(node_state) = node_states.get_mut(&node_index) else {
                     continue;
                 };
-                if let Some(phase) = extra_body.get("phase").and_then(Value::as_str) {
-                    node_state.wire_phase = Some(phase.to_string());
-                }
                 if deferred_media_decision == Some(Some(true)) {
                     materialize_deferred_message_state(
                         node_state,
@@ -718,7 +711,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 &mut seq,
                                 with_delta_wire_fields(
                                     responses_text_delta_payload(
-                                        node_state.wire_phase.as_deref(),
+                                        extra_body.get("phase").and_then(Value::as_str),
                                         &json!({"id":node_state.item_id}),
                                         node_state.output_index as u64,
                                         node_state.content_index.unwrap_or(0) as u64,
@@ -777,6 +770,24 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             },
                             None,
                         );
+                        if let Some(summary_event) = &metadata.summary_event {
+                            reasoning_summaries
+                                .entry(node_state.output_index)
+                                .or_default()
+                                .apply_event(
+                                    ReasoningSummaryTarget {
+                                        tx: &tx,
+                                        item_id: &json!(node_state.item_id),
+                                        output_index: node_state.output_index,
+                                        source: source.as_deref(),
+                                        sse_max_frame_length,
+                                    },
+                                    &mut seq,
+                                    metadata.summary_index,
+                                    summary_event,
+                                )
+                                .await?;
+                        }
                         if let Some(summary) =
                             summary.as_deref().filter(|summary| !summary.is_empty())
                         {
@@ -784,15 +795,17 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 .entry(node_state.output_index)
                                 .or_default()
                                 .delta(
-                                    &tx,
+                                    ReasoningSummaryTarget {
+                                        tx: &tx,
+                                        item_id: &json!(node_state.item_id),
+                                        output_index: node_state.output_index,
+                                        source: source.as_deref(),
+                                        sse_max_frame_length,
+                                    },
                                     &mut seq,
-                                    &json!(node_state.item_id),
-                                    node_state.output_index,
-                                    source.as_deref(),
                                     metadata.summary_index,
                                     summary,
                                     &extra_body,
-                                    sse_max_frame_length,
                                 )
                                 .await?;
                         }
@@ -876,7 +889,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
             }
             UrpStreamEvent::NodeDone {
-                node_index, node, ..
+                node_index,
+                node,
+                extra_body: done_event_extra,
+                ..
             } => {
                 if matches!(node, urp::Node::NextDownstreamEnvelopeExtra { .. }) {
                     continue;
@@ -935,7 +951,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     } => {
                         apply_node_done_to_stream_output_item_state(&mut node_state, &node);
                         let mut done_payload = responses_text_delta_payload(
-                            node_state.wire_phase.as_deref(),
+                            done_event_extra
+                                .get(urp::RESPONSES_TEXT_DONE_PHASE_EXTRA_KEY)
+                                .and_then(Value::as_str),
                             &json!({ "id": node_state.item_id }),
                             node_state.output_index as u64,
                             node_state.content_index.unwrap_or(0) as u64,
@@ -993,14 +1011,16 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             .entry(node_state.output_index)
                             .or_default()
                             .finish(
-                                &tx,
-                                &mut seq,
-                                &json!(node_state.item_id),
-                                node_state.output_index,
-                                source.as_deref(),
-                                &reasoning_summary_parts_from_node(&node),
-                                sse_max_frame_length,
-                            )
+                                    ReasoningSummaryTarget {
+                                        tx: &tx,
+                                        item_id: &json!(node_state.item_id),
+                                        output_index: node_state.output_index,
+                                        source: source.as_deref(),
+                                        sse_max_frame_length,
+                                    },
+                                    &mut seq,
+                                    &reasoning_summary_parts_from_node(&node),
+                                )
                             .await?;
                         if let Some(content) =
                             content.as_deref().filter(|content| !content.is_empty())
@@ -1163,6 +1183,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     extra_body.insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo.clone());
                 }
                 let terminal_extra = extra_body.clone();
+                // STR3p: an item still open when a non-completed response ends is incomplete.
+                let terminal_not_completed = outcome
+                    .as_ref()
+                    .map_or_else(
+                        || urp::ResponseOutcome::from_finish(finish_reason).status,
+                        |outcome| outcome.status,
+                    )
+                    != urp::ResponseStatus::Completed;
                 let mut remaining_node_indices: Vec<u32> = node_states.keys().copied().collect();
                 remaining_node_indices.sort_unstable();
                 let mut used_terminal_output_positions = HashSet::new();
@@ -1170,6 +1198,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     let Some(mut node_state) = node_states.remove(&node_index) else {
                         continue;
                     };
+                    let mut discarded_by_terminal = false;
                     let node = if let Some((matched_output_position, node)) =
                         find_terminal_output_node_for_state(
                             &output,
@@ -1180,6 +1209,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         used_terminal_output_positions.insert(matched_output_position);
                         node
                     } else if let Some(node) = synthesize_terminal_node_from_state(&node_state) {
+                        discarded_by_terminal = terminal_not_completed;
                         node
                     } else {
                         continue;
@@ -1227,7 +1257,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 None,
                             );
                             let mut done_payload = responses_text_delta_payload(
-                                node_state.wire_phase.as_deref(),
+                                None,
                                 &json!({ "id": node_state.item_id }),
                                 node_state.output_index as u64,
                                 node_state.content_index.unwrap_or(0) as u64,
@@ -1287,13 +1317,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 .entry(node_state.output_index)
                                 .or_default()
                                 .finish(
-                                    &tx,
+                                    ReasoningSummaryTarget {
+                                        tx: &tx,
+                                        item_id: &json!(node_state.item_id),
+                                        output_index: node_state.output_index,
+                                        source: source.as_deref(),
+                                        sse_max_frame_length,
+                                    },
                                     &mut seq,
-                                    &json!(node_state.item_id),
-                                    node_state.output_index,
-                                    source.as_deref(),
                                     &reasoning_summary_parts_from_node(&node),
-                                    sse_max_frame_length,
                                 )
                                 .await?;
                             if let Some(content) =
@@ -1450,9 +1482,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             sse_max_frame_length,
                         )
                     } else {
-                        let item = node_state.completed_item.take().unwrap_or_else(|| {
+                        let mut item = node_state.completed_item.take().unwrap_or_else(|| {
                             complete_stream_output_item(encode_stream_output_item_from_node(&node))
                         });
+                        if discarded_by_terminal
+                            && node_state.zone == ResponsesOutputZone::FunctionCall
+                        {
+                            item["status"] = json!("incomplete");
+                        }
                         sanitize_responses_output_item_for_frame_limit(
                             &reasoning_item_with_duration(
                                 item,
@@ -1496,11 +1533,16 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 if let Some(created) = created {
                     response["created_at"] = json!(created);
                 }
-                if let Some(active) = active_node_message_output.take()
+                if let Some(mut active) = active_node_message_output.take()
                     && active.item.is_object()
                     && streamed_output_indices.contains(&active.output_index)
                     && completed_output_indices.insert(active.output_index)
                 {
+                    if terminal_not_completed
+                        && active.item.get("status").and_then(Value::as_str) == Some("in_progress")
+                    {
+                        active.item["status"] = json!("incomplete");
+                    }
                     let done_item = sanitize_responses_output_item_for_frame_limit(
                         &complete_stream_output_item(active.item.clone()),
                         sse_max_frame_length,
@@ -1746,161 +1788,273 @@ fn with_delta_wire_fields(mut payload: Value, event_extra: &HashMap<String, Valu
     payload
 }
 
+#[derive(Debug, Default)]
+struct ReasoningSummaryPartState {
+    text: String,
+    text_done: bool,
+    part_done: bool,
+}
+
 /// STR3i: one reasoning item's summary parts, addressed by `summary_index`.
 #[derive(Debug, Default)]
 struct ReasoningSummaryLifecycle {
-    parts: BTreeMap<u64, String>,
+    parts: BTreeMap<u64, ReasoningSummaryPartState>,
     open: Option<u64>,
     finished: bool,
 }
 
-impl ReasoningSummaryLifecycle {
-    #[allow(clippy::too_many_arguments)]
-    async fn close_open(
-        &mut self,
-        tx: &mpsc::Sender<Event>,
-        seq: &mut u64,
-        item_id: &Value,
-        output_index: usize,
-        source: Option<&str>,
-        final_text: Option<&str>,
-    ) -> AppResult<()> {
-        let Some(index) = self.open.take() else {
-            return Ok(());
-        };
-        let text = final_text
-            .or_else(|| self.parts.get(&index).map(String::as_str))
-            .unwrap_or_default();
+/// Addresses the wire events of one reasoning item.
+#[derive(Clone, Copy)]
+struct ReasoningSummaryTarget<'a> {
+    tx: &'a mpsc::Sender<Event>,
+    item_id: &'a Value,
+    output_index: usize,
+    source: Option<&'a str>,
+    sse_max_frame_length: Option<usize>,
+}
+
+impl ReasoningSummaryTarget<'_> {
+    async fn send_text_done(&self, seq: &mut u64, index: u64, text: &str) -> AppResult<()> {
         send_responses_event(
-            tx,
+            self.tx,
             seq,
             "response.reasoning_summary_text.done",
             insert_reasoning_source(
                 json!({
-                    "item_id": item_id,
-                    "output_index": output_index,
+                    "item_id": self.item_id,
+                    "output_index": self.output_index,
                     "summary_index": index,
                     "text": text,
                 }),
-                source,
+                self.source,
             ),
-        )
-        .await?;
-        send_responses_event(
-            tx,
-            seq,
-            "response.reasoning_summary_part.done",
-            json!({
-                "item_id": item_id,
-                "output_index": output_index,
-                "summary_index": index,
-                "part": { "type": "summary_text", "text": text },
-            }),
         )
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
+    async fn send_part(&self, seq: &mut u64, name: &str, index: u64, part: Value) -> AppResult<()> {
+        send_responses_event(
+            self.tx,
+            seq,
+            name,
+            json!({
+                "item_id": self.item_id,
+                "output_index": self.output_index,
+                "summary_index": index,
+                "part": part,
+            }),
+        )
+        .await
+    }
+}
+
+impl ReasoningSummaryLifecycle {
+    /// Closes `index`. `final_text` replaces accumulated text in the done events.
+    async fn close_part(
+        &mut self,
+        target: ReasoningSummaryTarget<'_>,
+        seq: &mut u64,
+        index: u64,
+        final_text: Option<&str>,
+    ) -> AppResult<()> {
+        if self.open == Some(index) {
+            self.open = None;
+        }
+        let Some(state) = self.parts.get_mut(&index) else {
+            return Ok(());
+        };
+        let text = final_text.map_or_else(|| state.text.clone(), str::to_string);
+        if !std::mem::replace(&mut state.text_done, true) {
+            target.send_text_done(seq, index, &text).await?;
+        }
+        if !std::mem::replace(&mut state.part_done, true) {
+            target
+                .send_part(
+                    seq,
+                    "response.reasoning_summary_part.done",
+                    index,
+                    json!({ "type": "summary_text", "text": text }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_open(
+        &mut self,
+        target: ReasoningSummaryTarget<'_>,
+        seq: &mut u64,
+        index: u64,
+        added_part: Option<&Value>,
+    ) -> AppResult<()> {
+        if self.open == Some(index) {
+            return Ok(());
+        }
+        if let Some(open) = self.open {
+            self.close_part(target, seq, open, None).await?;
+        }
+        if !self.parts.contains_key(&index) {
+            self.parts.insert(index, ReasoningSummaryPartState::default());
+            let part = added_part
+                .cloned()
+                .unwrap_or_else(|| json!({ "type": "summary_text", "text": "" }));
+            target
+                .send_part(seq, "response.reasoning_summary_part.added", index, part)
+                .await?;
+        }
+        self.open = Some(index);
+        Ok(())
+    }
+
+    /// STR3i.1: applies one native part event.
+    async fn apply_event(
+        &mut self,
+        target: ReasoningSummaryTarget<'_>,
+        seq: &mut u64,
+        summary_index: Option<u64>,
+        event: &urp::ReasoningSummaryEvent,
+    ) -> AppResult<()> {
+        let index = summary_index.or(self.open).unwrap_or(0);
+        match event {
+            urp::ReasoningSummaryEvent::PartAdded { part } => {
+                self.ensure_open(target, seq, index, Some(part)).await
+            }
+            urp::ReasoningSummaryEvent::TextDone { text } => {
+                self.ensure_open(target, seq, index, None).await?;
+                let state = self.parts.entry(index).or_default();
+                state.text.clone_from(text);
+                if std::mem::replace(&mut state.text_done, true) {
+                    return Ok(());
+                }
+                target.send_text_done(seq, index, text).await
+            }
+            urp::ReasoningSummaryEvent::PartDone { part } => {
+                self.ensure_open(target, seq, index, None).await?;
+                let state = self.parts.entry(index).or_default();
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    state.text = text.to_string();
+                }
+                let needs_text_done = !std::mem::replace(&mut state.text_done, true);
+                state.part_done = true;
+                let text = state.text.clone();
+                self.open = None;
+                if needs_text_done {
+                    target.send_text_done(seq, index, &text).await?;
+                }
+                target
+                    .send_part(seq, "response.reasoning_summary_part.done", index, part.clone())
+                    .await
+            }
+        }
+    }
+
     async fn delta(
         &mut self,
-        tx: &mpsc::Sender<Event>,
+        target: ReasoningSummaryTarget<'_>,
         seq: &mut u64,
-        item_id: &Value,
-        output_index: usize,
-        source: Option<&str>,
         summary_index: Option<u64>,
         delta: &str,
         event_extra: &HashMap<String, Value>,
-        sse_max_frame_length: Option<usize>,
     ) -> AppResult<()> {
         let index = summary_index.or(self.open).unwrap_or(0);
-        if self.open != Some(index) {
-            self.close_open(tx, seq, item_id, output_index, source, None).await?;
-            self.open = Some(index);
-            self.parts.entry(index).or_default();
-            send_responses_event(
-                tx,
-                seq,
-                "response.reasoning_summary_part.added",
-                json!({
-                    "item_id": item_id,
-                    "output_index": output_index,
-                    "summary_index": index,
-                    "part": { "type": "summary_text", "text": "" },
-                }),
-            )
-            .await?;
-        }
-        self.parts.entry(index).or_default().push_str(delta);
+        self.ensure_open(target, seq, index, None).await?;
+        self.parts.entry(index).or_default().text.push_str(delta);
         send_responses_delta_string(
-            tx,
+            target.tx,
             seq,
             "response.reasoning_summary_text.delta",
             with_delta_wire_fields(
                 insert_reasoning_source(
                     json!({
-                        "item_id": item_id,
-                        "output_index": output_index,
+                        "item_id": target.item_id,
+                        "output_index": target.output_index,
                         "summary_index": index,
                     }),
-                    source,
+                    target.source,
                 ),
                 event_extra,
             ),
             "delta",
             delta,
-            sse_max_frame_length,
+            target.sse_max_frame_length,
         )
         .await
     }
 
-    /// Completes every part. `final_parts` are the terminal `summary[]` texts by position.
-    #[allow(clippy::too_many_arguments)]
+    /// Emits the delta a part never streamed, then closes the part.
+    async fn complete_part(
+        &mut self,
+        target: ReasoningSummaryTarget<'_>,
+        seq: &mut u64,
+        index: u64,
+        final_text: Option<&str>,
+    ) -> AppResult<()> {
+        let needs_delta = final_text.is_some_and(|text| !text.is_empty())
+            && self
+                .parts
+                .get(&index)
+                .is_none_or(|state| state.text.is_empty() && !state.text_done);
+        if needs_delta && let Some(text) = final_text {
+            self.delta(target, seq, Some(index), text, &HashMap::new()).await?;
+        }
+        self.close_part(target, seq, index, final_text).await
+    }
+
+    /// STR3i.2: completes every part. `final_parts` are the terminal `summary[]` texts by position.
     async fn finish(
         &mut self,
-        tx: &mpsc::Sender<Event>,
+        target: ReasoningSummaryTarget<'_>,
         seq: &mut u64,
-        item_id: &Value,
-        output_index: usize,
-        source: Option<&str>,
         final_parts: &[String],
-        sse_max_frame_length: Option<usize>,
     ) -> AppResult<()> {
         if std::mem::replace(&mut self.finished, true) {
             return Ok(());
         }
         // A transform may rewrite the summary into fewer parts than were already streamed.
         let parts_authoritative = final_parts.len() >= self.parts.len();
+        if let Some(open) = self.open {
+            let final_text = parts_authoritative
+                .then(|| final_parts.get(open as usize))
+                .flatten()
+                .map(String::as_str);
+            self.complete_part(target, seq, open, final_text).await?;
+        }
         if !parts_authoritative {
-            return self.close_open(tx, seq, item_id, output_index, source, None).await;
+            return Ok(());
         }
         for (position, text) in final_parts.iter().enumerate() {
             let index = position as u64;
-            if self.open != Some(index) {
-                if self.parts.contains_key(&index) {
-                    continue;
-                }
-                self.close_open(tx, seq, item_id, output_index, source, None).await?;
-                if text.is_empty() {
-                    continue;
-                }
-                self.delta(
-                    tx,
-                    seq,
-                    item_id,
-                    output_index,
-                    source,
-                    Some(index),
-                    text,
-                    &HashMap::new(),
-                    sse_max_frame_length,
-                )
-                .await?;
+            let known = self.parts.get(&index);
+            if known.is_some_and(|state| state.part_done) || (known.is_none() && text.is_empty()) {
+                continue;
             }
-            self.close_open(tx, seq, item_id, output_index, source, Some(text)).await?;
+            self.complete_part(target, seq, index, Some(text)).await?;
         }
-        self.close_open(tx, seq, item_id, output_index, source, None).await
+        Ok(())
     }
+}
+
+/// PR5e: the upstream `response.in_progress` object owns the downstream event.
+fn response_in_progress_payload(start: &Value, source: &Value) -> Value {
+    let mut response: Map<String, Value> = source
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| !key.starts_with("_monoize_") && key.as_str() != "created")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let started = &start["response"];
+    for key in ["id", "object", "created_at", "model", "store", "previous_response_id"] {
+        if let Some(value) = started.get(key) {
+            response.insert(key.to_string(), value.clone());
+        }
+    }
+    response.insert("status".to_string(), json!("in_progress"));
+    response.insert("output".to_string(), json!([]));
+    for key in ["error", "incomplete_details", "usage"] {
+        response.entry(key.to_string()).or_insert(Value::Null);
+    }
+    json!({ "response": response })
 }
 
 fn reasoning_summary_parts_from_item(item: &Value) -> Vec<String> {
@@ -2997,11 +3151,13 @@ fn stream_reasoning_delta_has_meaningful_payload(delta: &urp::NodeDelta) -> bool
     matches!(
         delta,
         urp::NodeDelta::Reasoning {
+            metadata,
             content,
             encrypted,
             summary,
             ..
-        } if content.as_ref().is_some_and(|value| !value.is_empty())
+        } if metadata.summary_event.is_some()
+            || content.as_ref().is_some_and(|value| !value.is_empty())
             || summary.as_ref().is_some_and(|value| !value.is_empty())
             || encrypted.as_ref().is_some_and(stream_reasoning_json_value_is_non_empty)
     )
@@ -3502,13 +3658,15 @@ async fn emit_missing_terminal_sub_lifecycles(
                     .entry(*output_index)
                     .or_default()
                     .finish(
-                        tx,
+                        ReasoningSummaryTarget {
+                            tx,
+                            item_id: &item_id,
+                            output_index: *output_index,
+                            source,
+                            sse_max_frame_length,
+                        },
                         seq,
-                        &item_id,
-                        *output_index,
-                        source,
                         &reasoning_summary_parts_from_item(item),
-                        sse_max_frame_length,
                     )
                     .await?;
                 if let Some(text) = reasoning_text_from_item(item) {
