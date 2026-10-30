@@ -253,22 +253,25 @@ pub async fn create_response(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
-    create_response_inner(state, headers, body, false).await
+    create_response_inner(state, headers, body, None).await
 }
 
 pub(crate) async fn create_response_prefer_websocket(
     state: AppState,
     headers: HeaderMap,
     body: Value,
+    interrupt: tokio::sync::watch::Receiver<crate::upstream_websocket::ResponsesWsControl>,
 ) -> AppResult<Response> {
-    create_response_inner(state, headers, body, true).await
+    create_response_inner(state, headers, body, Some(interrupt)).await
 }
 
 async fn create_response_inner(
     state: AppState,
     headers: HeaderMap,
     body: Value,
-    prefer_upstream_websocket: bool,
+    websocket_interrupt: Option<
+        tokio::sync::watch::Receiver<crate::upstream_websocket::ResponsesWsControl>,
+    >,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     let request_id = extract_request_id(&headers);
@@ -329,7 +332,7 @@ async fn create_response_inner(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
-                prefer_upstream_websocket,
+                websocket_interrupt,
             ),
         );
         return Ok(Sse::new(stream)
@@ -408,7 +411,7 @@ pub async fn create_chat_completions(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
-                false,
+                None,
             ),
         );
         return Ok(Sse::new(stream)
@@ -498,7 +501,7 @@ async fn create_messages_inner(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
-                false,
+                None,
             ),
         );
         return Ok(Sse::new(stream)

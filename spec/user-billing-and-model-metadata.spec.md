@@ -225,6 +225,8 @@ L2.1. A downstream client disconnect MUST NOT by itself stop upstream stream con
 
 L2.2. If upstream terminal usage is received after downstream disconnect, Monoize MUST bill from that upstream usage using the same charge calculation as a normally completed stream.
 
+L2.2a. For a WebSocket upstream, downstream interruption or disconnect MUST send `response.interrupt` under WS2g in `unified_responses_proxy.spec.md`. Monoize MUST keep reading terminal usage after the interrupt. A non-error `response.cancelled` or `response.incomplete` with usage MUST settle through the normal billing pipeline. The interrupt MUST NOT create a second charge. HTTP upstreams MUST retain L2.1 consumption behavior.
+
 L2.3. A billable successful response MUST NOT silently become free because authoritative usage is absent. Non-stream handling MUST reject such a response before delivering it when no deterministic estimate exists. Pass-through streaming MUST maintain an input/output estimate while forwarding; if terminal usage is absent, it MUST settle from that estimate and mark the billing breakdown as estimated.
 
 L2.4. A pass-through stream has already committed its HTTP status before post-response settlement. A settlement storage or pricing error therefore MUST be recorded as a billing failure and MUST NOT be replaced with a successful zero-charge computation. This rule does not permit an insufficient-balance error during settlement because L4 requires admitted requests to settle into negative balances.

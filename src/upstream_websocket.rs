@@ -23,6 +23,13 @@ use tokio_tungstenite::{
 
 const RESPONSES_WS_BETA: &str = "responses_websockets=2026-02-06";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResponsesWsControl {
+    Running,
+    Interrupt,
+    Disconnected,
+}
+
 pub fn ensure_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }

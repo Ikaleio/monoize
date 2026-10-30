@@ -1,9 +1,11 @@
 use super::*;
+use crate::upstream_websocket::ResponsesWsControl;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
+use std::collections::VecDeque;
 
 const DEFAULT_MESSAGE_MAX_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_CONNECTION_MAX_BYTES: usize = 100 * 1024 * 1024;
@@ -74,6 +76,37 @@ struct ResponsesWebsocketSession {
     last_request: Option<Map<String, Value>>,
     last_response_id: Option<String>,
     last_response_output: Vec<Value>,
+}
+
+#[derive(Default)]
+struct ResponsesWebsocketInput {
+    accepted_turns: usize,
+    inbound_bytes: usize,
+    pending: VecDeque<String>,
+}
+
+impl ResponsesWebsocketInput {
+    fn accept_text(
+        &mut self,
+        text: &str,
+        limits: ResponsesWebsocketLimits,
+    ) -> Result<bool, WebsocketEventError> {
+        self.inbound_bytes = self.inbound_bytes.saturating_add(text.len());
+        let interrupt = serde_json::from_str::<Value>(text)
+            .ok()
+            .is_some_and(|event| {
+                event.get("type").and_then(Value::as_str) == Some("response.interrupt")
+            });
+        if self.inbound_bytes > limits.connection_max_bytes
+            || (!interrupt && self.accepted_turns >= limits.max_turns)
+        {
+            return Err(WebsocketEventError::connection_limit());
+        }
+        if !interrupt {
+            self.accepted_turns = self.accepted_turns.saturating_add(1);
+        }
+        Ok(interrupt)
+    }
 }
 
 struct CompletedResponse {
@@ -165,10 +198,18 @@ async fn serve_responses_websocket(
     let mut legacy_terminal = beta.contains("responses_websockets=2026-02-04")
         && !beta.contains("responses_websockets=2026-02-06");
     let mut session = ResponsesWebsocketSession::default();
-    let mut accepted_turns = 0_usize;
-    let mut inbound_bytes = 0_usize;
+    let mut input = ResponsesWebsocketInput::default();
 
-    while let Some(message) = socket.next().await {
+    loop {
+        let queued = input.pending.pop_front();
+        let from_queue = queued.is_some();
+        let message = match queued {
+            Some(text) => Ok(Message::Text(text.into())),
+            None => match socket.next().await {
+                Some(message) => message,
+                None => break,
+            },
+        };
         let message = match message {
             Ok(message) => message,
             Err(err) => {
@@ -179,14 +220,16 @@ async fn serve_responses_websocket(
 
         match message {
             Message::Text(text) => {
-                inbound_bytes = inbound_bytes.saturating_add(text.len());
-                if accepted_turns >= limits.max_turns || inbound_bytes > limits.connection_max_bytes
-                {
-                    let _ = send_event_error(&mut socket, WebsocketEventError::connection_limit())
-                        .await;
-                    break;
+                if !from_queue {
+                    match input.accept_text(text.as_str(), limits) {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(err) => {
+                            let _ = send_event_error(&mut socket, err).await;
+                            break;
+                        }
+                    }
                 }
-                accepted_turns = accepted_turns.saturating_add(1);
                 if !handle_client_text(
                     &mut socket,
                     &mut session,
@@ -195,6 +238,7 @@ async fn serve_responses_websocket(
                     text.as_str(),
                     limits,
                     &mut legacy_terminal,
+                    &mut input,
                 )
                 .await
                 {
@@ -230,6 +274,7 @@ async fn handle_client_text(
     text: &str,
     limits: ResponsesWebsocketLimits,
     legacy_terminal: &mut bool,
+    input: &mut ResponsesWebsocketInput,
 ) -> bool {
     let value = match serde_json::from_str::<Value>(text) {
         Ok(value) => value,
@@ -296,10 +341,12 @@ async fn handle_client_text(
         return send_warmup(socket, session, request, limits).await;
     }
 
+    let (interrupt, interrupt_rx) = tokio::sync::watch::channel(ResponsesWsControl::Running);
     let response = match super::create_response_prefer_websocket(
         state.clone(),
         headers.clone(),
         Value::Object(request.clone()),
+        interrupt_rx,
     )
     .await
     {
@@ -307,11 +354,24 @@ async fn handle_client_text(
         Err(err) => return send_app_error(socket, err).await,
     };
 
-    let completed =
-        match forward_sse_body_as_websocket(socket, response, limits, *legacy_terminal).await {
-            Ok(completed) => completed,
-            Err(err) => return send_event_error(socket, err).await,
-        };
+    let completed = match forward_sse_body_as_websocket(
+        socket,
+        response,
+        limits,
+        *legacy_terminal,
+        input,
+        &interrupt,
+    )
+    .await
+    {
+        Ok(completed) => completed,
+        Err(err) => {
+            if *interrupt.borrow() == ResponsesWsControl::Disconnected {
+                return false;
+            }
+            return send_event_error(socket, err).await;
+        }
+    };
     if let Some(completed) = completed {
         if completed.retainable && request_with_output_fits(&request, &completed.output, limits) {
             session.last_request = Some(request);
@@ -555,12 +615,56 @@ async fn forward_sse_body_as_websocket(
     response: Response,
     limits: ResponsesWebsocketLimits,
     legacy_terminal: bool,
+    input: &mut ResponsesWebsocketInput,
+    interrupt: &tokio::sync::watch::Sender<ResponsesWsControl>,
 ) -> Result<Option<CompletedResponse>, WebsocketEventError> {
     let mut stream = response.into_body().into_data_stream();
     let mut buffer = Vec::new();
     let mut completed = None;
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = tokio::select! {
+            message = socket.next() => {
+                match message {
+                    Some(Ok(Message::Text(text))) => {
+                        match input.accept_text(text.as_str(), limits) {
+                            Ok(true) => { interrupt.send_replace(ResponsesWsControl::Interrupt); }
+                            Ok(false) => input.pending.push_back(text.to_string()),
+                            Err(err) => {
+                                interrupt.send_replace(ResponsesWsControl::Disconnected);
+                                let _ = send_event_error(socket, err).await;
+                                let _ = socket.send(Message::Close(None)).await;
+                                return Err(WebsocketEventError::connection_limit());
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        if socket.send(Message::Pong(payload)).await.is_err() {
+                            interrupt.send_replace(ResponsesWsControl::Disconnected);
+                            return Err(WebsocketEventError::invalid("WebSocket send failed"));
+                        }
+                    }
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Binary(_))) => {
+                        if !send_event_error(socket, WebsocketEventError::invalid(
+                            "binary WebSocket messages are not supported",
+                        )).await {
+                            interrupt.send_replace(ResponsesWsControl::Disconnected);
+                            return Err(WebsocketEventError::invalid("WebSocket send failed"));
+                        }
+                    }
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => {
+                        interrupt.send_replace(ResponsesWsControl::Disconnected);
+                        return Err(WebsocketEventError::invalid("WebSocket disconnected"));
+                    }
+                }
+                continue;
+            }
+            chunk = stream.next() => match chunk {
+                Some(chunk) => chunk,
+                None => break,
+            },
+        };
         let chunk = chunk.map_err(|err| {
             tracing::debug!(error = %err, "Responses WebSocket SSE bridge read failed");
             WebsocketEventError::invalid("upstream SSE body read failed")
@@ -583,6 +687,7 @@ async fn forward_sse_body_as_websocket(
                 .await
                 .is_err()
             {
+                interrupt.send_replace(ResponsesWsControl::Disconnected);
                 return Err(WebsocketEventError::invalid("WebSocket send failed"));
             }
         }
@@ -602,6 +707,7 @@ async fn forward_sse_body_as_websocket(
             .await
             .is_err()
         {
+            interrupt.send_replace(ResponsesWsControl::Disconnected);
             return Err(WebsocketEventError::invalid("WebSocket send failed"));
         }
     }

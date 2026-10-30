@@ -77,6 +77,8 @@ curl http://localhost:8080/v1/responses \
 - `GET /v1/responses` は Codex WebSocket v1 と v2 に対応します。v1 は `response.done`、v2 は `response.completed` を送信します。`store=false` でも接続内の継続は利用できます。
 - `GET /v1/codex/responses` は `GET /v1/responses` と同じ WebSocket ハンドラーを使います。`POST /v1/codex/responses` は `POST /v1/responses` と同じ HTTP ハンドラーを使います。両方の新しいパスには `/api` エイリアスもあります。
 - Responses WebSocket クライアントは Responses Channel に対して上流 WebSocket を開くことがあります。`POST /v1/responses` は HTTP のままです。ハンドシェイク失敗時は、同じ attempt で HTTP SSE に戻します。
+- `response.interrupt` を送信すると、生成中の上流 WebSocket 応答を中断します。生成中でない場合は何も行いません。重複した中断要求は、上流への試行ごとに1回にまとめます。
+- クライアントが切断すると、Monoize は上流 WebSocket 応答を中断し、課金のために終端イベントの使用量を読み取ります。HTTP 上流では従来どおり応答の読み取りを続けます。
 - `POST /v1/responses/compact` は会話をコンパクト化します。
 - Monoize はネイティブの compact ボディを上流の `POST /v1/responses/compact` に転送します。
 - Channel 選択後、その Channel が `{model}-openai-compact` をマップしていれば、Monoize はその兄弟モデルを回線モデルとして送ります。そうでなければ会話モデルを送ります。

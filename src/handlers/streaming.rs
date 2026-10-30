@@ -1,11 +1,15 @@
 use super::*;
+use crate::upstream_websocket::ResponsesWsControl;
 use crate::urp::stream_decode::stream_upstream_to_urp_events;
 use crate::urp::stream_encode::encode_urp_stream;
 use futures_util::StreamExt;
 
 enum StreamUpstreamSource {
     Http(reqwest::Response),
-    ResponsesWebSocket(Box<dyn crate::upstream_websocket::ResponsesWsSession>),
+    ResponsesWebSocket {
+        session: Box<dyn crate::upstream_websocket::ResponsesWsSession>,
+        interrupt: tokio::sync::watch::Receiver<ResponsesWsControl>,
+    },
 }
 
 type ForwardEventStream = futures_util::stream::Map<
@@ -400,7 +404,7 @@ pub(super) async fn forward_stream_typed(
     request_ip: Option<String>,
     client_session_id: Option<String>,
     capture: RequestCaptureContext,
-    prefer_upstream_websocket: bool,
+    websocket_interrupt: Option<tokio::sync::watch::Receiver<ResponsesWsControl>>,
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 > {
@@ -871,7 +875,10 @@ pub(super) async fn forward_stream_typed(
                             }
                             // FP6j-1: dropping the last sender ends the
                             // downstream SSE before settlement and logging.
-                            let downstream_closed = tx_err.is_closed();
+                            let downstream_closed = tx_err.is_closed()
+                                || websocket_interrupt.as_ref().is_some_and(|control| {
+                                    *control.borrow() == ResponsesWsControl::Disconnected
+                                });
                             drop(tx_err);
                             match stream_result {
                                 Ok(()) => {
@@ -1058,7 +1065,7 @@ pub(super) async fn forward_stream_typed(
             let mut upstream_body = Some(upstream_body);
             let mut websocket_source = None;
             let mut websocket_send_error = None;
-            if prefer_upstream_websocket
+            if let Some(interrupt) = websocket_interrupt.as_ref()
                 && attempt.provider_type == ProviderType::Responses
                 && attempt.websocket_supported != Some(false)
             {
@@ -1094,7 +1101,12 @@ pub(super) async fn forward_stream_typed(
                         let text = upstream::JsonBody::new(&payload).into_string();
                         drop(payload);
                         match ws.send_text(text).await {
-                            Ok(()) => websocket_source = Some(ws),
+                            Ok(()) => {
+                                websocket_source = Some(StreamUpstreamSource::ResponsesWebSocket {
+                                    session: ws,
+                                    interrupt: interrupt.clone(),
+                                });
+                            }
                             Err(err) => websocket_send_error = Some(err),
                         }
                     }
@@ -1150,12 +1162,8 @@ pub(super) async fn forward_stream_typed(
                 }
                 break;
             }
-            let (path, capture_upstream_request, call) = if let Some(ws) = websocket_source {
-                (
-                    "/v1/responses".to_string(),
-                    upstream_body,
-                    Ok(StreamUpstreamSource::ResponsesWebSocket(ws)),
-                )
+            let (path, capture_upstream_request, call) = if let Some(source) = websocket_source {
+                ("/v1/responses".to_string(), upstream_body, Ok(source))
             } else {
                 let http = client_http_for_attempt(&state, &attempt)?;
                 // Reference edits use JSON; inline Base64 edits use multipart.
@@ -1265,7 +1273,7 @@ pub(super) async fn forward_stream_typed(
                                     )
                                     .await
                                 }
-                                StreamUpstreamSource::ResponsesWebSocket(session) => {
+                                StreamUpstreamSource::ResponsesWebSocket { session, interrupt } => {
                                     crate::urp::stream_decode::openai_responses::stream_responses_websocket_to_urp_events(
                                         &legacy,
                                         pending_request_envelope_extra,
@@ -1274,6 +1282,7 @@ pub(super) async fn forward_stream_typed(
                                         Some(started_at),
                                         Some(metrics),
                                         stream_idle_timeout_ms,
+                                        interrupt,
                                     )
                                     .await
                                 }
@@ -1644,7 +1653,10 @@ pub(super) async fn forward_stream_typed(
                         }
                         // FP6j-1: dropping the last sender ends the downstream
                         // SSE before settlement, logging, and capture persistence.
-                        let downstream_closed = tx_err.is_closed();
+                        let downstream_closed = tx_err.is_closed()
+                            || websocket_interrupt.as_ref().is_some_and(|control| {
+                                *control.borrow() == ResponsesWsControl::Disconnected
+                            });
                         drop(tx_err);
 
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {

@@ -77,6 +77,8 @@ Notes:
 - `GET /v1/responses` supports Codex WebSocket v1 and v2. V1 emits `response.done`; v2 emits `response.completed`. Connection-local continuation also works with `store=false`.
 - `GET /v1/codex/responses` uses the same WebSocket handler. `POST /v1/codex/responses` uses the same HTTP handler. Both paths also have `/api` aliases.
 - A Responses WebSocket client may open an upstream WebSocket to a Responses Channel. `POST /v1/responses` still uses HTTP. Handshake failure falls back to HTTP SSE on the same attempt.
+- Send `response.interrupt` to interrupt the active upstream WebSocket response. Idle interrupts do nothing. Repeated interrupts produce one upstream interrupt per attempt.
+- When the client disconnects, Monoize interrupts the upstream WebSocket response and continues reading terminal usage for billing. HTTP upstream responses continue to drain normally.
 - `POST /v1/responses/compact` compacts a conversation.
 - Monoize forwards the native compact body to upstream `POST /v1/responses/compact`.
 - After Channel selection, if that Channel maps `{model}-openai-compact`, Monoize sends that sibling as the wire model. Otherwise it sends the conversation model.

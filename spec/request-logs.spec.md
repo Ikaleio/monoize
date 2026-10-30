@@ -125,6 +125,8 @@ RL1h. A downstream client disconnect MUST NOT cancel in-flight upstream work. Af
 
 RL1h-1. For a streaming request, the terminal request log is scheduled after the downstream SSE body has ended (`unified_responses_proxy.spec.md` FP6j-1). The RL1h `client_gone` decision MUST use the downstream receiver state read when Monoize closes the downstream channel. A client that disconnects after that point MUST NOT turn a delivered stream into `client_gone`.
 
+RL1h-2. A downstream disconnect MAY stop upstream WebSocket generation with `response.interrupt` under WS2g, but MUST NOT cancel terminal usage consumption or settlement. A billable interrupted response after disconnect MUST use `client_gone`. A client that sends `response.interrupt` and remains connected MUST NOT be classified as disconnected solely because it requested interruption.
+
 RL1i. When a provider attempt is selected (upstream call succeeds or streaming begins), the provider metadata (`provider_id`, `channel_id`, `upstream_model`, `provider_multiplier`) MUST be captured in memory and included in the terminal INSERT. No intermediate database write is performed.
 
 RL1l. A terminal `success` or `client_gone` row MUST record `upstream_response_model` only when the selected upstream response declares a model that differs from the model sent on that attempt.

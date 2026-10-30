@@ -33,10 +33,11 @@ pub(crate) async fn stream_responses_websocket_to_urp_events(
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
+    interrupt: tokio::sync::watch::Receiver<ResponsesWsControl>,
 ) -> AppResult<()> {
     let (frame_tx, frame_rx) = mpsc::channel(32);
     let feeder = tokio::spawn(async move {
-        feed_responses_ws_frames(session, frame_tx).await;
+        feed_responses_ws_frames(session, frame_tx, interrupt, idle_timeout_ms).await;
     });
     let result = consume_responses_json_frames(
         urp,
@@ -80,9 +81,34 @@ async fn feed_responses_sse_frames(
 async fn feed_responses_ws_frames(
     mut session: Box<dyn ResponsesWsSession>,
     frame_tx: mpsc::Sender<AppResult<(String, String)>>,
+    mut interrupt: tokio::sync::watch::Receiver<ResponsesWsControl>,
+    idle_timeout_ms: u64,
 ) {
+    let mut interrupt_sent = false;
     loop {
-        match session.next_text().await {
+        let next = tokio::select! {
+            biased;
+            _ = async {
+                if *interrupt.borrow_and_update() == ResponsesWsControl::Running {
+                    // Dropping the turn's sender also interrupts a disconnected bridge.
+                    let _ = interrupt.changed().await;
+                }
+            }, if !interrupt_sent => {
+                interrupt_sent = true;
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_millis(idle_timeout_ms.max(1)),
+                    session.send_text(json!({"type": "response.interrupt"}).to_string()),
+                ).await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(%error, "upstream WebSocket interrupt send failed; draining usage"),
+                    Err(_) => tracing::warn!("upstream WebSocket interrupt send timed out; draining usage"),
+                }
+                continue;
+            }
+            next = session.next_text() => next,
+        };
+        match next {
             Ok(None) => break,
             Ok(Some(text)) => {
                 let event_name = serde_json::from_str::<Value>(&text)
@@ -94,7 +120,15 @@ async fn feed_responses_ws_frames(
                             .map(str::to_string)
                     })
                     .unwrap_or_default();
-                if frame_tx.send(Ok((event_name, text))).await.is_err() {
+                let terminal = matches!(
+                    event_name.as_str(),
+                    "response.completed"
+                        | "response.failed"
+                        | "response.incomplete"
+                        | "response.cancelled"
+                        | "error"
+                );
+                if frame_tx.send(Ok((event_name, text))).await.is_err() || terminal {
                     break;
                 }
             }
