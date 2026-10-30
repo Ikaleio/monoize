@@ -838,7 +838,11 @@ pub(crate) async fn encode_urp_stream_as_chat(
         match event {
             UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
                 chat_id = urp::encode::openai_chat::chat_completion_id(&id);
-                created = now_ts();
+                created = extra_body
+                    .get(urp::CHAT_CHUNK_EXTRA_KEY)
+                    .and_then(|chunk| chunk.get("created"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or_else(now_ts);
                 tx.set_envelope_extra(
                     extra_body
                         .get(urp::CHAT_CHUNK_EXTRA_KEY)

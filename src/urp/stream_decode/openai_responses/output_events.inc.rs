@@ -71,10 +71,11 @@ fn map_response_completed_with_accumulated(
         })
         .unwrap_or_default();
     let terminal_is_authoritative = response_obj.get("output").is_some_and(Value::is_array)
-        && matches!(
-            response_obj.get("status").and_then(Value::as_str),
-            Some("incomplete" | "cancelled" | "failed")
-        );
+        && (index_state.discard_requested
+            || matches!(
+                response_obj.get("status").and_then(Value::as_str),
+                Some("incomplete" | "cancelled" | "failed")
+            ));
     let outputs = match merge_response_completed_outputs(
         terminal_outputs,
         accumulated_outputs,
@@ -123,6 +124,12 @@ fn map_response_completed_with_accumulated(
         crate::urp::RESPONSES_RESPONSE_SOURCE_EXTRA_KEY.to_string(),
         Value::Object(Default::default()),
     );
+    if terminal_is_authoritative && index_state.discard_requested {
+        terminal_extra.insert(
+            crate::urp::RESPONSES_ITEMS_DISCARDED_EXTRA_KEY.to_string(),
+            Value::Bool(true),
+        );
+    }
     events.push(UrpStreamEvent::ResponseDone {
         outcome: crate::urp::ResponseOutcome::from_responses(&response_obj),
         finish_reason,

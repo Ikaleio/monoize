@@ -1190,7 +1190,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         || urp::ResponseOutcome::from_finish(finish_reason).status,
                         |outcome| outcome.status,
                     )
-                    != urp::ResponseStatus::Completed;
+                    != urp::ResponseStatus::Completed
+                    || extra_body.contains_key(urp::RESPONSES_ITEMS_DISCARDED_EXTRA_KEY);
                 let mut remaining_node_indices: Vec<u32> = node_states.keys().copied().collect();
                 remaining_node_indices.sort_unstable();
                 let mut used_terminal_output_positions = HashSet::new();

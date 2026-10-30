@@ -73,6 +73,68 @@ async fn feed_responses_sse_frames(
     }
 }
 
+/// PR5b: serializes canonical events into upstream `output_index` order.
+#[derive(Default)]
+struct OutputOrderGate {
+    open: BTreeSet<u64>,
+    held: BTreeMap<u64, Vec<UrpStreamEvent>>,
+    node_indices: HashMap<u32, u32>,
+}
+
+impl OutputOrderGate {
+    fn announce(&mut self, output_index: u64) {
+        self.open.insert(output_index);
+    }
+
+    fn blocked(&self, output_index: u64) -> bool {
+        self.open.range(..output_index).next().is_some()
+    }
+
+    fn hold(&mut self, output_index: u64, events: Vec<UrpStreamEvent>) {
+        self.held.entry(output_index).or_default().extend(events);
+    }
+
+    /// Closes one item and returns the held events it no longer blocks.
+    fn complete(&mut self, output_index: u64) -> Vec<UrpStreamEvent> {
+        self.open.remove(&output_index);
+        let mut released = Vec::new();
+        while let Some(entry) = self.held.first_entry() {
+            if self.open.range(..*entry.key()).next().is_some() {
+                break;
+            }
+            released.extend(entry.remove());
+        }
+        released
+    }
+
+    fn take_all(&mut self) -> Vec<UrpStreamEvent> {
+        self.open.clear();
+        std::mem::take(&mut self.held).into_values().flatten().collect()
+    }
+
+    fn canonicalize(&mut self, event: &mut UrpStreamEvent) {
+        if let UrpStreamEvent::NodeStart { node_index, .. }
+        | UrpStreamEvent::NodeDelta { node_index, .. }
+        | UrpStreamEvent::NodeDone { node_index, .. } = event
+        {
+            let next = self.node_indices.len() as u32;
+            *node_index = *self.node_indices.entry(*node_index).or_insert(next);
+        }
+    }
+
+    async fn release_all(
+        &mut self,
+        tx: &mpsc::Sender<UrpStreamEvent>,
+        runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    ) {
+        for mut event in self.take_all() {
+            self.canonicalize(&mut event);
+            record_visible_stream_event_delta(runtime_metrics, &event).await;
+            let _ = tx.send(event).await;
+        }
+    }
+}
+
 async fn consume_responses_json_frames(
     urp: &HandlerUrpRequest,
     mut pending_request_envelope_extra: Option<HashMap<String, Value>>,
@@ -100,17 +162,31 @@ async fn consume_responses_json_frames(
     let mut index_state = ResponsesStreamIndexState::default();
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    while let Some(frame) = tokio::time::timeout(idle_timeout, frames.recv())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
-        let (mut event_name, data) = frame?;
+    let mut output_gate = OutputOrderGate::default();
+    loop {
+        let frame = match tokio::time::timeout(idle_timeout, frames.recv()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
+            Err(_) => {
+                output_gate.release_all(&tx, &runtime_metrics).await;
+                return Err(AppError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "upstream_idle_timeout",
+                    format!("upstream stream idle for {idle_timeout_ms}ms without data"),
+                ));
+            }
+        };
+        let (mut event_name, data) = match frame {
+            Ok(frame) => frame,
+            Err(error) => {
+                output_gate.release_all(&tx, &runtime_metrics).await;
+                return Err(error);
+            }
+        };
+        if event_name == crate::urp::RESPONSES_DISCARD_REQUESTED_FRAME {
+            index_state.discard_requested = data.trim() == "true";
+            continue;
+        }
         mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
         if data.trim() == "[DONE]" {
             record_stream_done_sentinel(&runtime_metrics).await;
@@ -119,6 +195,7 @@ async fn consume_responses_json_frames(
         let data_val: Value = match serde_json::from_str(&data) {
             Ok(value) => value,
             Err(error) => {
+                output_gate.release_all(&tx, &runtime_metrics).await;
                 let code = "responses_invalid_sse_json".to_string();
                 let message = format!("invalid JSON in upstream Responses event: {error}");
                 let _ = tx
@@ -156,6 +233,7 @@ async fn consume_responses_json_frames(
             event_name.push_str(payload_type);
         }
         if let Err(message) = validate_responses_event_shape(&event_name, &data_val) {
+            output_gate.release_all(&tx, &runtime_metrics).await;
             let (code, message, extra_body, terminal_error) = responses_stream_error_parts("error", json!({
                 "error": { "code":"responses_invalid_event", "type":"upstream_protocol_error", "message":message }
             }));
@@ -173,6 +251,7 @@ async fn consume_responses_json_frames(
             _ => None,
         };
         if let Some(Err(message)) = content_validation {
+            output_gate.release_all(&tx, &runtime_metrics).await;
             let (code, message, extra_body, terminal_error) = responses_stream_error_parts("error", json!({
                 "error": { "code":"malformed_media", "type":"upstream_protocol_error", "message":message }
             }));
@@ -297,6 +376,7 @@ async fn consume_responses_json_frames(
         let bare_error = data_val.get("error").is_some_and(|error| !error.is_null())
             && data_val.get("response").is_none();
         if matches!(event_name.as_str(), "error") || bare_error {
+            output_gate.release_all(&tx, &runtime_metrics).await;
             let (code, message, extra_body, terminal_error) =
                 responses_stream_error_parts(&event_name, data_val);
             let _ = tx
@@ -615,6 +695,12 @@ async fn consume_responses_json_frames(
                 }
             }
         }
+        let event_output_index = data_val.get("output_index").and_then(Value::as_u64);
+        if event_name == "response.output_item.added"
+            && let Some(output_index) = event_output_index
+        {
+            output_gate.announce(output_index);
+        }
         let is_terminal_response_event = matches!(
             event_name.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
@@ -655,7 +741,23 @@ async fn consume_responses_json_frames(
                 &mut index_state,
             )
         };
-        for stream_event in stream_events {
+        let mut ready_events = Vec::new();
+        if is_terminal_response_event {
+            ready_events.extend(output_gate.take_all());
+            ready_events.extend(stream_events);
+        } else if let Some(output_index) = event_output_index
+            && output_gate.blocked(output_index)
+        {
+            output_gate.hold(output_index, stream_events);
+        } else {
+            ready_events.extend(stream_events);
+        }
+        if event_name == "response.output_item.done"
+            && let Some(output_index) = event_output_index
+        {
+            ready_events.extend(output_gate.complete(output_index));
+        }
+        for mut stream_event in ready_events {
             if let UrpStreamEvent::Error {
                 code,
                 message,
@@ -682,6 +784,7 @@ async fn consume_responses_json_frames(
                 return Ok(());
             }
             response_done_sent |= matches!(stream_event, UrpStreamEvent::ResponseDone { .. });
+            output_gate.canonicalize(&mut stream_event);
             record_visible_stream_event_delta(&runtime_metrics, &stream_event).await;
             let _ = tx.send(stream_event).await;
         }
@@ -692,6 +795,7 @@ async fn consume_responses_json_frames(
     }
 
     if !response_done_sent {
+        output_gate.release_all(&tx, &runtime_metrics).await;
         let code = "responses_stream_missing_terminal".to_string();
         let message = "upstream Responses stream ended without a terminal response event";
         let _ = tx
