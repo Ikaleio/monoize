@@ -260,18 +260,16 @@ pub(crate) async fn create_response_prefer_websocket(
     state: AppState,
     headers: HeaderMap,
     body: Value,
-    interrupt: tokio::sync::watch::Receiver<crate::upstream_websocket::ResponsesWsControl>,
+    turn: crate::upstream_websocket::ResponsesWsTurn,
 ) -> AppResult<Response> {
-    create_response_inner(state, headers, body, Some(interrupt)).await
+    create_response_inner(state, headers, body, Some(turn)).await
 }
 
 async fn create_response_inner(
     state: AppState,
     headers: HeaderMap,
     body: Value,
-    websocket_interrupt: Option<
-        tokio::sync::watch::Receiver<crate::upstream_websocket::ResponsesWsControl>,
-    >,
+    ws_turn: Option<crate::upstream_websocket::ResponsesWsTurn>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     let request_id = extract_request_id(&headers);
@@ -316,7 +314,7 @@ async fn create_response_inner(
         ));
     }
 
-    responses_history::prepare(&state, &auth, &mut req).await?;
+    responses_history::prepare(&state, &auth, &mut req, ws_turn.as_ref()).await?;
 
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::Responses;
@@ -332,7 +330,7 @@ async fn create_response_inner(
                 request_ip.clone(),
                 extract_client_session_id(&headers),
                 capture.clone(),
-                websocket_interrupt,
+                ws_turn,
             ),
         );
         return Ok(Sse::new(stream)
