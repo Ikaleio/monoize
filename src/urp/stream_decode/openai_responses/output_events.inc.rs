@@ -81,7 +81,10 @@ fn map_response_completed_with_accumulated(
         accumulated_outputs,
         terminal_is_authoritative,
     ) {
-        Ok(outputs) => outputs,
+        Ok((outputs, retained)) => {
+            index_state.retained_output_indices = retained;
+            outputs
+        }
         Err(reason) => {
             events.push(UrpStreamEvent::Error {
                 code: Some("responses_terminal_conflict".to_string()),

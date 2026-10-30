@@ -352,7 +352,7 @@ fn merge_response_completed_outputs(
     terminal_outputs: Vec<AccumulatedOutputEntry>,
     accumulated_outputs: &[AccumulatedOutputEntry],
     terminal_is_authoritative: bool,
-) -> Result<Vec<Node>, String> {
+) -> Result<(Vec<Node>, Option<BTreeSet<u64>>), String> {
     let accumulated_len = accumulated_outputs.len();
     let mut merged_entries = accumulated_outputs.to_vec();
     let mut used_accumulated_indices: Vec<usize> = Vec::new();
@@ -389,7 +389,7 @@ fn merge_response_completed_outputs(
         }
     }
 
-    if terminal_is_authoritative {
+    let retained = terminal_is_authoritative.then(|| {
         // PR6c: an accumulated item absent from this terminal snapshot was discarded upstream.
         let mut index = 0;
         merged_entries.retain(|_| {
@@ -397,12 +397,19 @@ fn merge_response_completed_outputs(
             index += 1;
             keep
         });
-    }
+        merged_entries
+            .iter()
+            .map(|entry| entry.output_index)
+            .collect::<BTreeSet<u64>>()
+    });
     merged_entries.sort_by_key(|entry| entry.output_index);
-    Ok(merged_entries
-        .into_iter()
-        .flat_map(|entry| entry.nodes)
-        .collect())
+    Ok((
+        merged_entries
+            .into_iter()
+            .flat_map(|entry| entry.nodes)
+            .collect(),
+        retained,
+    ))
 }
 
 fn match_accumulated_entry_by_compatible_output_index(

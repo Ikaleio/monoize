@@ -251,6 +251,8 @@ fn map_responses_event_to_urp_events_with_state(
 #[derive(Debug, Default)]
 struct ResponsesStreamIndexState {
     discard_requested: bool,
+    /// Upstream output indices an authoritative terminal kept (PR6c); `None` otherwise.
+    retained_output_indices: Option<BTreeSet<u64>>,
     next_node_index: u32,
     node_index_by_content_key: HashMap<(u64, u64), u32>,
     synthetic_node_index_by_output_index: HashMap<u64, u32>,
