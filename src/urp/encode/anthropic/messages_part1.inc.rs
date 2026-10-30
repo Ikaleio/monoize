@@ -1,13 +1,24 @@
+/// Parses function-call arguments into a Messages `tool_use.input` value. Chat providers
+/// send `""` for zero-argument calls, which Messages represents as `{}` (DM4).
+fn messages_tool_input(arguments: &str) -> Option<Value> {
+    if arguments.trim().is_empty() {
+        return Some(json!({}));
+    }
+    let mut input = serde_json::from_str::<Value>(arguments).ok()?;
+    crate::urp::integerize_json_floats(&mut input);
+    Some(input)
+}
+
 fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> Option<Value> {
     match node {
         Node::Text {
             citations,
             content,
-            phase,
             extra_body,
             ..
         } => {
-            if content.is_empty() && phase.is_none() && extra_body.is_empty() {
+            // `phase` is a Responses concept; Anthropic rejects it as an extra input (PM2a).
+            if content.is_empty() && extra_body.is_empty() {
                 return None;
             }
             let mut block = json!({ "type": "text", "text": content });
@@ -19,9 +30,6 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
                 ));
             }
             if let Some(obj) = block.as_object_mut() {
-                if let Some(phase) = phase {
-                    obj.insert("phase".to_string(), Value::String(phase.clone()));
-                }
                 merge_extra(obj, extra_body);
             }
             Some(block)
@@ -58,11 +66,10 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
                 merge_extra(obj, &wire_extra);
                 Some(block)
             } else if let Some(text) = plaintext_from_reasoning(content, summary) {
-                let mut block = json!({ "type": "thinking", "thinking": text });
+                // Anthropic requires a signature on every replayed thinking block (PM5d).
+                let sig = signature?;
+                let mut block = json!({ "type": "thinking", "thinking": text, "signature": sig });
                 let obj = block.as_object_mut().expect("thinking block object");
-                if let Some(sig) = signature {
-                    obj.insert("signature".to_string(), sig);
-                }
                 merge_extra(obj, &wire_extra);
                 Some(block)
             } else {
@@ -87,8 +94,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             if *tool_type == ToolCallType::Custom {
                 return None;
             }
-            let mut input = serde_json::from_str::<Value>(arguments).ok()?;
-            crate::urp::integerize_json_floats(&mut input);
+            let input = messages_tool_input(arguments)?;
             let mut block = json!({
                 "type": "tool_use",
                 "id": call_id,
@@ -177,9 +183,10 @@ pub(crate) fn encode_assistant_response_block(node: &Node) -> Option<Value> {
                 let mut thinking = Map::new();
                 thinking.insert("type".to_string(), Value::String("thinking".to_string()));
                 thinking.insert("thinking".to_string(), Value::String(text.to_string()));
-                if let Some(sig) = signature {
-                    thinking.insert("signature".to_string(), sig);
-                }
+                thinking.insert(
+                    "signature".to_string(),
+                    signature.unwrap_or_else(|| Value::String(String::new())),
+                );
                 merge_extra(&mut thinking, &wire_extra);
                 Some(Value::Object(thinking))
             } else {
@@ -205,8 +212,7 @@ pub(crate) fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             if *tool_type == ToolCallType::Custom {
                 return None;
             }
-            let mut input = serde_json::from_str::<Value>(arguments).ok()?;
-            crate::urp::integerize_json_floats(&mut input);
+            let input = messages_tool_input(arguments)?;
             let mut block = json!({
                 "type": "tool_use",
                 "id": call_id,
@@ -234,6 +240,9 @@ pub(crate) fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             ..
         } => {
             encode_messages_provider_block(*origin_protocol, Some(id), item_type, body, extra_body)
+        }
+        Node::Refusal { content, .. } if !content.is_empty() => {
+            Some(json!({ "type": "text", "text": content }))
         }
         Node::Audio { .. }
         | Node::Refusal { .. }

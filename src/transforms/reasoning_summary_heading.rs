@@ -197,9 +197,11 @@ fn apply_live_summary_delta(
     cfg: &Config,
     state: &mut StreamState,
 ) {
-    let NodeDelta::Reasoning { summary, .. } = delta else {
+    let NodeDelta::Reasoning { summary, metadata, .. } = delta else {
         return;
     };
+    // STR3i.1: native done text predates the rewrite, so the encoder derives the lifecycle.
+    metadata.summary_event = None;
     let Some(text) = summary.as_mut() else {
         return;
     };

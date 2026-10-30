@@ -188,11 +188,18 @@ fn map_output_item_added(
         } else if item_type == "message" && output_state.item_id.is_none() {
             output_state.item_id = Some(crate::urp::synthetic_message_id());
         }
-        if output_state.item_extra_body.is_empty() {
-            output_state.item_extra_body = item_extra_body.clone();
-        } else {
-            for (key, value) in item_extra_body.clone() {
-                output_state.item_extra_body.entry(key).or_insert(value);
+        // Tool items keep their fields on the node; an envelope control would shift stream
+        // node positions relative to the terminal output.
+        if !matches!(
+            item_type,
+            "function_call" | "custom_tool_call" | "function_call_output" | "custom_tool_call_output"
+        ) {
+            if output_state.item_extra_body.is_empty() {
+                output_state.item_extra_body = item_extra_body.clone();
+            } else {
+                for (key, value) in item_extra_body.clone() {
+                    output_state.item_extra_body.entry(key).or_insert(value);
+                }
             }
         }
         if item_type == "reasoning" {
@@ -485,14 +492,18 @@ fn map_content_part_done(
     }
     if let Some(output_state) = index_state.output_state_by_index.get_mut(&output_index) {
         output_state.part_done_seen = true;
-        if !is_reasoning_part { output_state.content_nodes.insert(content_index, node.clone()); }
+        if !is_reasoning_part {
+            output_state.content_nodes.insert(content_index, node.clone());
+            output_state.content_done.insert(content_index);
+        }
     }
     if is_reasoning_part {
         return Vec::new();
     }
+    let extra_body = node.extra_body_mut().clone();
     vec![UrpStreamEvent::NodeDone {
         node_index,
-        extra_body: node.extra_body_mut().clone(),
+        extra_body: text_done_extra_body(extra_body, output_index, content_index, index_state),
         node,
         usage: None,
     }]

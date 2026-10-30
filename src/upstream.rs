@@ -1,5 +1,5 @@
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig};
-use crate::error::{AppError, error_chain};
+use crate::error::{AppError, ForwardedHeaders, error_chain};
 use axum::http::StatusCode;
 use serde_json::Value;
 
@@ -36,6 +36,7 @@ pub struct UpstreamCallError {
     pub param: Option<String>,
     pub message: String,
     pub source: UpstreamErrorSource,
+    pub forwarded_headers: ForwardedHeaders,
 }
 
 impl UpstreamCallError {
@@ -56,6 +57,7 @@ impl UpstreamCallError {
             param: None,
             message,
             source,
+            forwarded_headers: Vec::new(),
         }
     }
 
@@ -118,6 +120,20 @@ impl JsonBody {
     }
 }
 
+/// SE1d `FWD`: selects the retry and rate-limit headers of an upstream response.
+pub fn forwarded_response_headers(headers: &reqwest::header::HeaderMap) -> ForwardedHeaders {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.as_str();
+            matches!(name, "retry-after" | "retry-after-ms" | "x-should-retry")
+                || name.starts_with("anthropic-ratelimit-")
+                || name.starts_with("x-ratelimit-")
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
 /// Sends a JSON request and reads the whole 2xx body as JSON. CFG-6a item 1:
 /// `timeout_ms` bounds sending, the response headers, and the full body.
 pub async fn call_upstream_with_timeout_and_headers(
@@ -129,9 +145,40 @@ pub async fn call_upstream_with_timeout_and_headers(
     timeout_ms: u64,
     extra_headers: &[(String, String)],
 ) -> Result<Value, UpstreamCallError> {
+    call_upstream_json_with_response_headers(
+        client,
+        provider,
+        auth_value,
+        path,
+        body,
+        timeout_ms,
+        extra_headers,
+    )
+    .await
+    .map(|(value, _)| value)
+}
+
+/// `call_upstream_with_timeout_and_headers` that also returns SE1d `FWD`.
+pub async fn call_upstream_json_with_response_headers(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    body: JsonBody,
+    timeout_ms: u64,
+    extra_headers: &[(String, String)],
+) -> Result<(Value, ForwardedHeaders), UpstreamCallError> {
     let req = json_request(client, provider, auth_value, path, body, extra_headers)?;
     with_deadline(timeout_ms, "upstream response not completed", async {
-        read_json_body(exchange(req).await?).await
+        let resp = exchange(req).await?;
+        let forwarded = forwarded_response_headers(resp.headers());
+        match read_json_body(resp).await {
+            Ok(value) => Ok((value, forwarded)),
+            Err(mut err) => {
+                err.forwarded_headers = forwarded;
+                Err(err)
+            }
+        }
     })
     .await
 }
@@ -301,6 +348,7 @@ async fn non_success_upstream_error(
     resp: reqwest::Response,
     status: StatusCode,
 ) -> UpstreamCallError {
+    let forwarded_headers = forwarded_response_headers(resp.headers());
     let text = resp.text().await.unwrap_or_default();
     let info = extract_error_info(&text);
     let (message, source) = match info.message.clone() {
@@ -311,9 +359,11 @@ async fn non_success_upstream_error(
         ),
         None => (text, UpstreamErrorSource::UnparsedBody),
     };
-    UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
+    let mut err = UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
         .with_error_info(info)
-        .with_source(source)
+        .with_source(source);
+    err.forwarded_headers = forwarded_headers;
+    err
 }
 
 #[allow(clippy::result_large_err)]

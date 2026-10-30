@@ -26,7 +26,6 @@ struct StreamedNodeState {
     phase: Option<String>,
     call_id: Option<String>,
     name: Option<String>,
-    reasoning_summary_part_added_sent: bool,
     message_start_emitted: bool,
     output_item_start_emitted: bool,
     output_item_start: Option<Value>,
@@ -151,6 +150,33 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
     let completed_item = state.completed_item.as_ref();
 
     match header {
+        urp::NodeHeader::Text { signature, citations, id, role, phase } => {
+            // An item the terminal snapshot discarded still closes its open part (STR3j).
+            let content = completed_item
+                .and_then(|item| item.get("content"))
+                .and_then(Value::as_array)
+                .and_then(|parts| {
+                    parts.iter().find(|part| {
+                        part.get("type").and_then(Value::as_str) == Some("output_text")
+                    })
+                })
+                .and_then(|part| part.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            Some(urp::Node::Text {
+                logprobs: None,
+                signature: signature.clone(),
+                citations: citations.clone(),
+                id: id
+                    .clone()
+                    .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),
+                role: *role,
+                content,
+                phase: phase.clone(),
+                extra_body: HashMap::new(),
+            })
+        }
         urp::NodeHeader::Reasoning { metadata, id } => {
             let content = completed_item
                 .and_then(|item| item.get("text"))
@@ -169,12 +195,12 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
             let summary = completed_item
                 .and_then(|item| item.get("summary"))
                 .and_then(Value::as_array)
-                .and_then(|summary| {
+                .map(|summary| {
                     summary
                         .iter()
-                        .find_map(|entry| entry.get("text").and_then(Value::as_str))
+                        .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+                        .collect::<String>()
                 })
-                .map(|s| s.to_string())
                 .filter(|s| !s.is_empty());
             if content.is_none() && encrypted.is_none() && summary.is_none() {
                 return None;

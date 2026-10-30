@@ -29,6 +29,8 @@ struct AnthropicMessagesStreamState {
     finish_reason: Option<FinishReason>,
     exact_stop_reason: Option<String>,
     exact_stop_sequence: Option<Value>,
+    /// PM6d: latest non-stop `message_delta.delta` members such as `stop_details` and `container`.
+    message_delta_extra: HashMap<String, Value>,
     saw_terminal_delta: bool,
     response_done_sent: bool,
 }
@@ -1174,7 +1176,11 @@ fn handle_content_block_delta(
             let Some(text) = delta_value.get("thinking").and_then(|v| v.as_str()) else {
                 return Ok(Vec::new());
             };
-            if text.is_empty() {
+            if text.is_empty()
+                && delta_extra
+                    .get("estimated_tokens")
+                    .is_none_or(Value::is_null)
+            {
                 return Ok(Vec::new());
             }
             summary.push_str(text);
@@ -1185,7 +1191,7 @@ fn handle_content_block_delta(
                 },
                 content: None,
                 encrypted: None,
-                summary: Some(text.to_string()),
+                summary: (!text.is_empty()).then(|| text.to_string()),
                 source: None,
             }
         }
@@ -1343,8 +1349,16 @@ fn active_node_from_content_block(
                 .get("phase")
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
-            let extra_body =
+            let mut extra_body =
                 object_without_keys(content_block, &["type", "text", "phase", "citations"]);
+            // PM6e: native text starts carry `citations: []`; typed citations follow as deltas.
+            if content_block
+                .get("citations")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+            {
+                extra_body.insert("citations".to_string(), Value::Array(Vec::new()));
+            }
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Text {
                     citations: crate::urp::citations::decode(
@@ -1663,6 +1677,9 @@ fn take_response_done(
     }
     state.response_done_sent = true;
     let mut extra_body = response_extra.clone();
+    for (key, value) in &state.message_delta_extra {
+        extra_body.insert(key.clone(), value.clone());
+    }
     if let Some(stop_reason) = state.exact_stop_reason.as_ref() {
         extra_body.insert(
             "stop_reason".to_string(),
@@ -1802,6 +1819,12 @@ fn merge_message_delta_state(state: &mut AnthropicMessagesStreamState, event: &V
     };
     if let Some(stop_sequence) = delta.get("stop_sequence") {
         state.exact_stop_sequence = Some(stop_sequence.clone());
+    }
+    for (key, value) in delta {
+        if !matches!(key.as_str(), "stop_reason" | "stop_sequence") && !key.starts_with("_monoize_")
+        {
+            state.message_delta_extra.insert(key.clone(), value.clone());
+        }
     }
     let Some(stop_reason) = delta
         .get("stop_reason")

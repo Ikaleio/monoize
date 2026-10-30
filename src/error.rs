@@ -1,6 +1,16 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+
+/// SE1d `FWD`: upstream retry and rate-limit response headers.
+pub type ForwardedHeaders = Vec<(HeaderName, HeaderValue)>;
+
+/// Copies `FWD` headers onto a downstream response.
+pub fn append_forwarded_headers(response: &mut Response, headers: ForwardedHeaders) {
+    for (name, value) in headers {
+        response.headers_mut().append(name, value);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppError {
@@ -18,6 +28,32 @@ pub struct AppError {
     pub internal_message: Option<String>,
     /// The downstream encoder already sent its complete terminal error sequence.
     pub downstream_stream_terminal_sent: bool,
+    /// SE1d: headers copied onto the downstream error response.
+    pub forwarded_headers: ForwardedHeaders,
+    /// RTA-8b: original status and code of a masked Channel credential failure.
+    pub credential_failure: Option<CredentialFailure>,
+}
+
+/// RTA-8b body diagnostics. Kept apart from `upstream_status` and
+/// `upstream_code` because those drive the client-visible status and code on
+/// every rendering path, including WebSocket error frames.
+#[derive(Debug, Clone)]
+pub struct CredentialFailure {
+    pub upstream_status: u16,
+    pub upstream_code: Option<String>,
+}
+
+impl CredentialFailure {
+    /// Adds the diagnostics to a rendered error object.
+    pub fn insert_into(&self, error: &mut serde_json::Value) {
+        let Some(error) = error.as_object_mut() else {
+            return;
+        };
+        error.insert("upstream_status".to_string(), self.upstream_status.into());
+        if let Some(code) = &self.upstream_code {
+            error.insert("upstream_code".to_string(), code.as_str().into());
+        }
+    }
 }
 
 impl AppError {
@@ -34,6 +70,8 @@ impl AppError {
             upstream_param: None,
             internal_message: None,
             downstream_stream_terminal_sent: false,
+            forwarded_headers: Vec::new(),
+            credential_failure: None,
         }
     }
 
@@ -87,27 +125,27 @@ struct ErrorBody {
     upstream_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     upstream_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_param: Option<String>,
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        let (upstream_status, upstream_code) = match self.credential_failure {
+            Some(failure) => (Some(failure.upstream_status), failure.upstream_code),
+            None => (None, None),
+        };
         let body = ErrorEnvelope {
             error: ErrorBody {
                 message: self.message,
                 error_type: self.error_type,
                 param: self.param,
                 code: self.code,
-                upstream_status: self.upstream_status,
-                upstream_code: self.upstream_code,
-                upstream_type: self.upstream_type,
-                upstream_param: self.upstream_param,
+                upstream_status,
+                upstream_code,
             },
         };
-        (self.status, axum::Json(body)).into_response()
+        let mut response = (self.status, axum::Json(body)).into_response();
+        append_forwarded_headers(&mut response, self.forwarded_headers);
+        response
     }
 }
 

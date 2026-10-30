@@ -1,6 +1,6 @@
 use super::{StreamRuntimeMetrics, StreamTerminalError};
 use crate::urp;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -339,77 +339,6 @@ pub(crate) async fn record_stream_terminal_error(
     guard.terminal.terminal_error = Some(error);
 }
 
-pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
-    let usage = usage.accounting();
-    let mut obj = json!({
-        "prompt_tokens": usage.input_tokens,
-        "completion_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens(),
-        "completion_tokens_details": {
-            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0),
-            "accepted_prediction_tokens": usage.output_details.as_ref().map(|d| d.accepted_prediction_tokens).unwrap_or(0),
-            "rejected_prediction_tokens": usage.output_details.as_ref().map(|d| d.rejected_prediction_tokens).unwrap_or(0)
-        },
-        "prompt_tokens_details": {
-            "cached_tokens": usage.cached_tokens().unwrap_or(0),
-            "cache_write_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
-            "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
-            "tool_prompt_tokens": usage.input_details.as_ref().map(|d| d.tool_prompt_tokens).unwrap_or(0)
-        }
-    });
-    if let Some(map) = obj.as_object_mut() {
-        for detail_key in ["prompt_tokens_details", "completion_tokens_details"] {
-            let Some(extra_detail) = usage.extra_body.get(detail_key).and_then(Value::as_object)
-            else {
-                continue;
-            };
-            let Some(generated_detail) = map.get_mut(detail_key).and_then(Value::as_object_mut)
-            else {
-                continue;
-            };
-            for (key, value) in extra_detail {
-                if !key.starts_with("_monoize_") {
-                    generated_detail
-                        .entry(key.clone())
-                        .or_insert_with(|| value.clone());
-                }
-            }
-        }
-
-        for (k, v) in &usage.extra_body {
-            if !k.starts_with("_monoize_")
-                && !matches!(
-                    k.as_str(),
-                    "prompt_tokens_details"
-                        | "completion_tokens_details"
-                        | "total_tokens"
-                        | "prompt_tokens"
-                        | "completion_tokens"
-                        | "input_tokens"
-                        | "output_tokens"
-                )
-            {
-                map.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    urp::usage::write_modality(
-        &mut obj["prompt_tokens_details"],
-        &usage
-            .input_details
-            .as_ref()
-            .and_then(|d| d.modality_breakdown.clone()),
-    );
-    urp::usage::write_modality(
-        &mut obj["completion_tokens_details"],
-        &usage
-            .output_details
-            .as_ref()
-            .and_then(|d| d.modality_breakdown.clone()),
-    );
-    obj
-}
-
 fn split_usage_extra(usage: &Map<String, Value>, known_keys: &[&str]) -> HashMap<String, Value> {
     usage
         .iter()
@@ -427,7 +356,7 @@ fn split_usage_extra(usage: &Map<String, Value>, known_keys: &[&str]) -> HashMap
         .collect()
 }
 
-fn parse_modality_breakdown_from_detail_object(
+pub(crate) fn parse_modality_breakdown_from_detail_object(
     detail: Option<&Map<String, Value>>,
 ) -> Option<urp::ModalityBreakdown> {
     let detail = detail?;
@@ -454,7 +383,7 @@ fn parse_modality_breakdown_from_detail_object(
     }
 }
 
-fn parse_cache_read_modality_breakdown_from_detail_object(
+pub(crate) fn parse_cache_read_modality_breakdown_from_detail_object(
     detail: Option<&Map<String, Value>>,
 ) -> Option<urp::ModalityBreakdown> {
     let detail = detail?;
@@ -565,142 +494,13 @@ fn make_output_details(
     }
 }
 
+/// PC9a: stream chunks share the non-stream Chat usage parser.
 pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
-    let input_tokens = usage
-        .get("prompt_tokens")
-        .or_else(|| usage.get("input_tokens"))
-        .and_then(|v| v.as_u64())?;
-    let output_tokens = usage
-        .get("completion_tokens")
-        .or_else(|| usage.get("output_tokens"))
-        .and_then(|v| v.as_u64())?;
-    let prompt_details = usage
-        .get("prompt_tokens_details")
-        .or_else(|| usage.get("input_tokens_details"))
-        .and_then(|v| v.as_object());
-    let completion_details = usage
-        .get("completion_tokens_details")
-        .or_else(|| usage.get("output_tokens_details"))
-        .and_then(|v| v.as_object());
-    let cached_tokens = usage
-        .get("prompt_tokens_details")
-        .and_then(|v| v.get("cached_tokens"))
-        .or_else(|| {
-            usage
-                .get("input_tokens_details")
-                .and_then(|v| v.get("cached_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_creation_tokens = usage
-        .get("prompt_tokens_details")
-        .and_then(|v| v.get("cache_write_tokens"))
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(|v| v.get("cache_creation_tokens"))
-        })
-        .or_else(|| {
-            usage
-                .get("input_tokens_details")
-                .and_then(|v| v.get("cache_write_tokens"))
-        })
-        .or_else(|| {
-            usage
-                .get("input_tokens_details")
-                .and_then(|v| v.get("cache_creation_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let tool_prompt_tokens = usage
-        .get("prompt_tokens_details")
-        .and_then(|v| v.get("tool_prompt_tokens"))
-        .or_else(|| {
-            usage
-                .get("input_tokens_details")
-                .and_then(|v| v.get("tool_prompt_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let reasoning_tokens = usage
-        .get("completion_tokens_details")
-        .and_then(|v| v.get("reasoning_tokens"))
-        .or_else(|| {
-            usage
-                .get("output_tokens_details")
-                .and_then(|v| v.get("reasoning_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let accepted_prediction_tokens = usage
-        .get("completion_tokens_details")
-        .and_then(|v| v.get("accepted_prediction_tokens"))
-        .or_else(|| {
-            usage
-                .get("output_tokens_details")
-                .and_then(|v| v.get("accepted_prediction_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let rejected_prediction_tokens = usage
-        .get("completion_tokens_details")
-        .and_then(|v| v.get("rejected_prediction_tokens"))
-        .or_else(|| {
-            usage
-                .get("output_tokens_details")
-                .and_then(|v| v.get("rejected_prediction_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let mut extra_body = split_usage_extra(
-        usage,
-        &[
-            "prompt_tokens",
-            "completion_tokens",
-            "input_tokens",
-            "output_tokens",
-        ],
-    );
-    for key in [
-        "prompt_tokens_details",
-        "input_tokens_details",
-        "completion_tokens_details",
-        "output_tokens_details",
-    ] {
-        if let Some(Value::Object(details)) = extra_body.get_mut(key) {
-            for field in [
-                "text_tokens",
-                "image_tokens",
-                "audio_tokens",
-                "video_tokens",
-                "document_tokens",
-            ] {
-                details.remove(field);
-            }
-        }
-    }
-    Some(urp::Usage {
-        iterations: None,
-        input_tokens,
-        output_tokens,
-        input_details: make_input_details(
-            0,
-            cached_tokens,
-            parse_cache_read_modality_breakdown_from_detail_object(prompt_details),
-            cache_creation_tokens,
-            tool_prompt_tokens,
-            parse_modality_breakdown_from_detail_object(prompt_details),
-        ),
-        output_details: make_output_details(
-            0,
-            reasoning_tokens,
-            accepted_prediction_tokens,
-            rejected_prediction_tokens,
-            parse_modality_breakdown_from_detail_object(completion_details),
-        ),
-        extra_body,
-    })
+    ["prompt_tokens", "input_tokens", "completion_tokens", "output_tokens"]
+        .iter()
+        .any(|key| usage.contains_key(*key))
+        .then(|| urp::decode::openai_chat::parse_chat_usage(usage))
 }
 
 pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {

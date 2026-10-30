@@ -161,7 +161,8 @@ fn decode_anthropic_response_format(obj: &Map<String, Value>) -> Option<Response
             name: "response".to_string(),
             description: None,
             schema: format.get("schema")?.clone(),
-            strict: None,
+            // Messages structured outputs always enforce the schema.
+            strict: Some(true),
             extra_body: split_extra(format, &["type", "schema"]),
         },
     })
@@ -339,13 +340,31 @@ fn text_node_with_phase(
     }
 }
 
-fn ordinary_role_from_messages_role(role: &str) -> OrdinaryRole {
-    match role {
-        "assistant" => OrdinaryRole::Assistant,
-        "system" => OrdinaryRole::System,
-        "developer" => OrdinaryRole::Developer,
-        _ => OrdinaryRole::User,
+fn ordinary_role_from_messages_role(role: Option<&Value>) -> Result<OrdinaryRole, String> {
+    match role.and_then(Value::as_str) {
+        Some("user") => Ok(OrdinaryRole::User),
+        Some("assistant") => Ok(OrdinaryRole::Assistant),
+        Some("system") => Ok(OrdinaryRole::System),
+        Some("developer") => Ok(OrdinaryRole::Developer),
+        Some(other) => Err(format!(
+            "messages: Unexpected role \"{other}\". Allowed roles are \"user\", \"assistant\" or \"system\""
+        )),
+        None => Err("messages: each message requires a string role".to_string()),
     }
+}
+
+fn decode_stop_sequences(value: Option<&Value>) -> Result<Option<StopControl>, String> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let invalid = || "stop_sequences: Input should be a valid array of strings".to_string();
+    let stops = value
+        .as_array()
+        .ok_or_else(invalid)?
+        .iter()
+        .map(|stop| stop.as_str().map(str::to_string).ok_or_else(invalid))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(StopControl::Multiple(stops)))
 }
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
@@ -373,12 +392,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         let msg_obj = raw_msg
             .as_object()
             .ok_or_else(|| "Messages message must be an object".to_string())?;
-        let base_role = ordinary_role_from_messages_role(
-            msg_obj
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or("user"),
-        );
+        let base_role = ordinary_role_from_messages_role(msg_obj.get("role"))?;
 
         let mut msg_extra_body = split_extra(msg_obj, &["role", "content"]);
         let message_nodes = match msg_obj.get("content") {
@@ -482,17 +496,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         tools,
         tool_choice: raw_tool_choice.map(tool_choice_from_messages_value),
         parallel_tool_calls,
-        stop: obj
-            .get("stop_sequences")
-            .and_then(Value::as_array)
-            .and_then(|stops| {
-                stops
-                    .iter()
-                    .map(Value::as_str)
-                    .map(|stop| stop.map(str::to_string))
-                    .collect::<Option<Vec<_>>>()
-            })
-            .map(StopControl::Multiple),
+        stop: decode_stop_sequences(obj.get("stop_sequences"))?,
         verbosity: None,
         response_format: decode_anthropic_response_format(obj),
         user: obj

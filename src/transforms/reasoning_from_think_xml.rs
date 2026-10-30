@@ -20,14 +20,43 @@ impl TransformConfig for Config {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Text,
+    Reasoning,
+}
+
+struct OpenSegment {
+    out_index: u32,
+    mode: Mode,
+    content: String,
+}
+
+struct TextSplit {
+    phase: Option<String>,
+    id: Option<String>,
+    mode: Mode,
+    buffer: String,
+    open: Option<OpenSegment>,
+}
+
+/// TXI-3..TXI-5 state: per-text-node split state plus dense output index assignment.
 #[derive(Default)]
 struct StreamState {
-    in_reasoning: HashMap<u32, bool>,
+    next_index: u32,
+    index_map: HashMap<u32, u32>,
+    text_nodes: HashMap<u32, TextSplit>,
+    split_done: HashMap<u32, Vec<(u32, Node)>>,
+    replacement: Option<Vec<UrpStreamEvent>>,
 }
 
 impl TransformState for StreamState {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn finalize_stream_event(&mut self, event: UrpStreamEvent) -> Vec<UrpStreamEvent> {
+        self.replacement.take().unwrap_or_else(|| vec![event])
     }
 }
 
@@ -106,9 +135,10 @@ impl Transform for ReasoningFromThinkXmlTransform {
                         Node::Text {
                             role: OrdinaryRole::Assistant,
                             content,
+                            phase,
                             ..
                         } => {
-                            out.extend(extract_text_and_reasoning(&content, &cfg.tag));
+                            out.extend(extract_text_and_reasoning(&content, phase, &cfg.tag));
                         }
                         other => out.push(other),
                     }
@@ -127,7 +157,7 @@ impl Transform for ReasoningFromThinkXmlTransform {
     }
 }
 
-fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
+fn extract_text_and_reasoning(content: &str, phase: Option<String>, tag: &str) -> Vec<Node> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
     let mut nodes = Vec::new();
@@ -136,62 +166,205 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Node> {
     loop {
         let Some(start) = rest.find(&open) else {
             if !rest.is_empty() {
-                nodes.push(Node::Text {
-                    logprobs: None,
-                    signature: None,
-                    citations: Vec::new(),
-                    id: None,
-                    role: OrdinaryRole::Assistant,
-                    content: rest.to_string(),
-                    phase: None,
-                    extra_body: HashMap::new(),
-                });
+                nodes.push(text_node(rest.to_string(), phase.clone(), None));
             }
             break;
         };
         let before = &rest[..start];
         if !before.is_empty() {
-            nodes.push(Node::Text {
-                logprobs: None,
-                signature: None,
-                citations: Vec::new(),
-                id: None,
-                role: OrdinaryRole::Assistant,
-                content: before.to_string(),
-                phase: None,
-                extra_body: HashMap::new(),
-            });
+            nodes.push(text_node(before.to_string(), phase.clone(), None));
         }
         let after_open = &rest[start + open.len()..];
         let Some(end) = after_open.find(&close) else {
             if !after_open.is_empty() {
-                nodes.push(Node::Reasoning {
-                    metadata: Default::default(),
-                    id: None,
-                    content: Some(after_open.to_string()),
-                    encrypted: None,
-                    summary: None,
-                    source: None,
-                    extra_body: HashMap::new(),
-                });
+                nodes.push(reasoning_node(after_open.to_string()));
             }
             break;
         };
         let reasoning = &after_open[..end];
         if !reasoning.is_empty() {
-            nodes.push(Node::Reasoning {
-                metadata: Default::default(),
-                id: None,
-                content: Some(reasoning.to_string()),
-                encrypted: None,
-                summary: None,
-                source: None,
-                extra_body: HashMap::new(),
-            });
+            nodes.push(reasoning_node(reasoning.to_string()));
         }
         rest = &after_open[end + close.len()..];
     }
     nodes
+}
+
+fn text_node(content: String, phase: Option<String>, id: Option<String>) -> Node {
+    Node::Text {
+        logprobs: None,
+        signature: None,
+        citations: Vec::new(),
+        id,
+        role: OrdinaryRole::Assistant,
+        content,
+        phase,
+        extra_body: HashMap::new(),
+    }
+}
+
+fn reasoning_node(content: String) -> Node {
+    Node::Reasoning {
+        metadata: Default::default(),
+        id: None,
+        content: Some(content),
+        encrypted: None,
+        summary: None,
+        source: None,
+        extra_body: HashMap::new(),
+    }
+}
+
+/// Bytes at the end of `buffer` that may begin `tag` once more text arrives.
+fn held_tag_prefix_len(buffer: &str, tag: &str) -> usize {
+    (1..tag.len())
+        .rev()
+        .find(|&len| tag.is_char_boundary(len) && buffer.ends_with(&tag[..len]))
+        .unwrap_or(0)
+}
+
+impl StreamState {
+    fn allocate(&mut self) -> u32 {
+        let index = self.next_index;
+        self.next_index += 1;
+        index
+    }
+
+    fn close_segment(
+        &mut self,
+        source: u32,
+        out: &mut Vec<UrpStreamEvent>,
+    ) {
+        let Some(split) = self.text_nodes.get_mut(&source) else {
+            return;
+        };
+        let Some(segment) = split.open.take() else {
+            return;
+        };
+        let node = match segment.mode {
+            Mode::Text => {
+                let id = split.id.take();
+                text_node(segment.content, split.phase.clone(), id)
+            }
+            Mode::Reasoning => reasoning_node(segment.content),
+        };
+        self.split_done
+            .entry(source)
+            .or_default()
+            .push((segment.out_index, node.clone()));
+        out.push(UrpStreamEvent::NodeDone {
+            node_index: segment.out_index,
+            node,
+            usage: None,
+            extra_body: HashMap::new(),
+        });
+    }
+
+    fn emit_segment(&mut self, source: u32, text: &str, out: &mut Vec<UrpStreamEvent>) {
+        if text.is_empty() {
+            return;
+        }
+        let mode = self.text_nodes[&source].mode;
+        if self.text_nodes[&source].open.is_none() {
+            let out_index = self.allocate();
+            let split = self.text_nodes.get_mut(&source).expect("text split state");
+            let header = match mode {
+                Mode::Text => NodeHeader::Text {
+                    signature: None,
+                    citations: Vec::new(),
+                    id: split.id.clone(),
+                    role: OrdinaryRole::Assistant,
+                    phase: split.phase.clone(),
+                },
+                Mode::Reasoning => NodeHeader::Reasoning {
+                    metadata: Default::default(),
+                    id: None,
+                },
+            };
+            split.open = Some(OpenSegment {
+                out_index,
+                mode,
+                content: String::new(),
+            });
+            out.push(UrpStreamEvent::NodeStart {
+                node_index: out_index,
+                header,
+                extra_body: HashMap::new(),
+            });
+        }
+        let split = self.text_nodes.get_mut(&source).expect("text split state");
+        let segment = split.open.as_mut().expect("open segment");
+        segment.content.push_str(text);
+        let delta = match mode {
+            Mode::Text => NodeDelta::Text {
+                logprobs: None,
+                signature: None,
+                citations: Vec::new(),
+                content: text.to_string(),
+            },
+            Mode::Reasoning => NodeDelta::Reasoning {
+                metadata: Default::default(),
+                content: Some(text.to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
+            },
+        };
+        out.push(UrpStreamEvent::NodeDelta {
+            node_index: segment.out_index,
+            delta,
+            usage: None,
+            extra_body: HashMap::new(),
+        });
+    }
+
+    /// Emits every buffered byte that cannot start the awaited tag (TXI-3).
+    fn drain(&mut self, source: u32, open: &str, close: &str, terminal: bool) -> Vec<UrpStreamEvent> {
+        let mut out = Vec::new();
+        loop {
+            let split = &self.text_nodes[&source];
+            let tag = match split.mode {
+                Mode::Text => open,
+                Mode::Reasoning => close,
+            };
+            if let Some(position) = split.buffer.find(tag) {
+                let before = split.buffer[..position].to_string();
+                self.emit_segment(source, &before, &mut out);
+                self.close_segment(source, &mut out);
+                let split = self.text_nodes.get_mut(&source).expect("text split state");
+                split.buffer.drain(..position + tag.len());
+                split.mode = match split.mode {
+                    Mode::Text => Mode::Reasoning,
+                    Mode::Reasoning => Mode::Text,
+                };
+                continue;
+            }
+            let held = if terminal {
+                0
+            } else {
+                held_tag_prefix_len(&split.buffer, tag)
+            };
+            let ready = split.buffer.len() - held;
+            let text = split.buffer[..ready].to_string();
+            self.emit_segment(source, &text, &mut out);
+            self.text_nodes
+                .get_mut(&source)
+                .expect("text split state")
+                .buffer
+                .drain(..ready);
+            break;
+        }
+        if terminal {
+            self.close_segment(source, &mut out);
+        }
+        out
+    }
+
+    fn remap(&mut self, node_index: &mut u32) {
+        if let Some(out) = self.index_map.get(node_index) {
+            *node_index = *out;
+        }
+    }
 }
 
 fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) {
@@ -203,61 +376,100 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
             header:
                 NodeHeader::Text {
                     role: OrdinaryRole::Assistant,
+                    id,
+                    phase,
                     ..
                 },
             ..
         } => {
-            state.in_reasoning.insert(*node_index, false);
+            state.text_nodes.insert(
+                *node_index,
+                TextSplit {
+                    phase: phase.clone(),
+                    id: id.clone(),
+                    mode: Mode::Text,
+                    buffer: String::new(),
+                    open: None,
+                },
+            );
+            state.replacement = Some(Vec::new());
+        }
+        UrpStreamEvent::NodeStart { node_index, .. } => {
+            let out = state.allocate();
+            state.index_map.insert(*node_index, out);
+            *node_index = out;
         }
         UrpStreamEvent::NodeDelta {
             node_index, delta, ..
-        } => {
-            let Some(in_reasoning) = state.in_reasoning.get_mut(node_index) else {
-                return;
-            };
+        } if state.text_nodes.contains_key(node_index) => {
+            let source = *node_index;
+            let mut out = Vec::new();
             if let NodeDelta::Text {
-                logprobs: _,
-                signature: _,
-                citations: _,
-                content,
+                content, citations, ..
             } = delta
             {
-                if content.contains(&open) || *in_reasoning {
-                    let mut s = content.clone();
-                    if let Some(pos) = s.find(&open) {
-                        s = s[(pos + open.len())..].to_string();
-                        *in_reasoning = true;
-                    }
-                    if let Some(end) = s.find(&close) {
-                        s = s[..end].to_string();
-                        *in_reasoning = false;
-                    }
-                    *delta = NodeDelta::Reasoning {
-                        metadata: Default::default(),
-                        content: Some(s),
-                        encrypted: None,
-                        summary: None,
-                        source: None,
-                    };
+                state
+                    .text_nodes
+                    .get_mut(&source)
+                    .expect("text split state")
+                    .buffer
+                    .push_str(content);
+                out = state.drain(source, &open, &close, false);
+                // A citation-only delta stays on the current text segment.
+                if !citations.is_empty()
+                    && let Some(segment) = state.text_nodes[&source].open.as_ref()
+                    && segment.mode == Mode::Text
+                {
+                    out.push(UrpStreamEvent::NodeDelta {
+                        node_index: segment.out_index,
+                        delta: NodeDelta::Text {
+                            logprobs: None,
+                            signature: None,
+                            citations: std::mem::take(citations),
+                            content: String::new(),
+                        },
+                        usage: None,
+                        extra_body: HashMap::new(),
+                    });
                 }
             }
+            state.replacement = Some(out);
         }
-        UrpStreamEvent::NodeDone { node_index, .. } => {
-            state.in_reasoning.remove(node_index);
+        UrpStreamEvent::NodeDelta { node_index, .. } => state.remap(node_index),
+        UrpStreamEvent::NodeDone { node_index, .. } if state.text_nodes.contains_key(node_index) => {
+            let source = *node_index;
+            state.replacement = Some(state.drain(source, &open, &close, true));
         }
+        UrpStreamEvent::NodeDone { node_index, .. } => state.remap(node_index),
         UrpStreamEvent::ResponseDone { output, .. } => {
-            let mut rewritten = Vec::with_capacity(output.len());
-            for node in output.drain(..) {
+            let mut rewritten: Vec<(u32, Node)> = Vec::with_capacity(output.len());
+            let mut terminal_only = Vec::new();
+            for (position, node) in output.drain(..).enumerate() {
+                let position = position as u32;
+                if let Some(segments) = state.split_done.remove(&position) {
+                    rewritten.extend(segments);
+                } else if state.text_nodes.contains_key(&position) {
+                    // A streamed text node that produced only empty segments.
+                } else if let Some(out) = state.index_map.get(&position) {
+                    rewritten.push((*out, node));
+                } else {
+                    terminal_only.push(node);
+                }
+            }
+            rewritten.sort_by_key(|(index, _)| *index);
+            let mut final_output: Vec<Node> = rewritten.into_iter().map(|(_, node)| node).collect();
+            for node in terminal_only {
                 match node {
                     Node::Text {
                         role: OrdinaryRole::Assistant,
                         content,
+                        phase,
                         ..
-                    } => rewritten.extend(extract_text_and_reasoning(&content, tag)),
-                    other => rewritten.push(other),
+                    } => final_output.extend(extract_text_and_reasoning(&content, phase, tag)),
+                    other => final_output.push(other),
                 }
             }
-            *output = rewritten;
+            *output = final_output;
         }
         _ => {}
     }

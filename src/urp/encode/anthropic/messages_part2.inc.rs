@@ -296,6 +296,33 @@ fn effort_to_budget(effort: &str) -> u32 {
     }
 }
 
+/// Maps the canonical finish reason, reporting `refusal` when an otherwise ordinary stop
+/// carries a refusal node from another protocol family (DM4a).
+pub(crate) fn messages_stop_reason_for_output(
+    finish_reason: Option<FinishReason>,
+    output: &[Node],
+) -> &'static str {
+    if matches!(
+        finish_reason,
+        None | Some(FinishReason::Stop | FinishReason::Other)
+    ) && output
+        .iter()
+        .any(|node| matches!(node, Node::Refusal { .. }))
+    {
+        return "refusal";
+    }
+    finish_reason_to_stop_reason(finish_reason)
+}
+
+/// Keeps native `msg_` ids and replaces foreign or missing ids with a fresh `msg_` id (DM4b).
+pub(crate) fn messages_response_id(id: &str) -> String {
+    if id.starts_with("msg_") {
+        id.to_string()
+    } else {
+        format!("msg_{}", uuid::Uuid::new_v4().simple())
+    }
+}
+
 fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static str {
     match finish_reason {
         Some(FinishReason::Length) => "max_tokens",

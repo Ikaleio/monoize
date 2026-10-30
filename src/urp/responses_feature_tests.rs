@@ -153,6 +153,7 @@ async fn encode_events_limit(events: Vec<UrpStreamEvent>, limit: Option<usize>) 
         std::time::Instant::now(),
         limit,
         false,
+        None,
     )
     .await
     .unwrap();
@@ -1107,6 +1108,7 @@ async fn assert_responses_media_stream_errors(response: &UrpResponse, events: Ve
                 std::time::Instant::now(),
                 None,
                 false,
+                None,
             )
             .await
         };
@@ -1131,8 +1133,8 @@ async fn assert_responses_media_stream_errors(response: &UrpResponse, events: Ve
             .filter(|data| *data != "[DONE]")
             .map(|data| serde_json::from_str(data).unwrap())
             .collect();
-        assert!(values.iter().any(|frame| frame["type"] == "response.failed"
-            && frame["response"]["error"]["code"] == "unsupported_media"));
+        assert!(values.iter().any(|frame| frame["type"] == "error"
+            && frame["code"] == "unsupported_media"));
         assert!(
             values
                 .iter()
@@ -1333,8 +1335,10 @@ async fn failed_and_error_events_prevent_later_success() {
             );
         }
         let (_, frames) = encode_events(events).await;
-        assert!(frames.iter().any(|frame| frame["type"] == "response.failed"
-            && frame["response"]["error"]["code"] == "tool_error"));
+        assert!(frames.iter().any(|frame| {
+            (frame["type"] == "response.failed" && frame["response"]["error"]["code"] == "tool_error")
+                || (frame["type"] == "error" && frame["code"] == "tool_error")
+        }));
         assert!(
             !frames
                 .iter()
@@ -1377,8 +1381,8 @@ async fn bare_native_error_envelopes_fail_without_losing_failed_response_semanti
                 .any(|event| matches!(event, UrpStreamEvent::ResponseDone { .. }))
         );
         let (_, frames) = encode_events(events).await;
-        assert!(frames.iter().any(|frame| frame["type"] == "response.failed"
-            && frame["response"]["error"]["message"] == "invalid input"));
+        assert!(frames.iter().any(|frame| frame["type"] == "error"
+            && frame["message"] == "invalid input"));
         assert!(
             !frames
                 .iter()
@@ -1781,7 +1785,11 @@ fn responses_compatible_content_shapes_and_audio_are_typed() {
             );
             assert!(encode::encode_request_checked(&canonical, "feature-model").is_err());
             let chat =
-                super::encode::openai_chat::encode_request_checked(&canonical, "feature-model")
+                super::encode::openai_chat::encode_request_checked(
+                    &canonical,
+                    "feature-model",
+                    super::encode::openai_chat::ChatDialect::Generic,
+                )
                     .unwrap();
             assert!(
                 chat["messages"][0]["content"]
@@ -2510,7 +2518,7 @@ async fn malformed_and_truncated_streams_never_synthesize_success() {
         assert_eq!(
             frames
                 .iter()
-                .filter(|f| f["type"] == "response.failed")
+                .filter(|f| f["type"] == "error")
                 .count(),
             1
         );
@@ -2835,11 +2843,7 @@ async fn malformed_event_objects_do_not_become_successful_empty_output() {
             "{events:?}"
         );
         let (_, frames) = encode_events(events).await;
-        assert!(
-            frames
-                .iter()
-                .any(|frame| frame["type"] == "response.failed")
-        );
+        assert!(frames.iter().any(|frame| frame["type"] == "error"));
         assert!(
             !frames
                 .iter()
@@ -2879,7 +2883,7 @@ async fn byte_fragmented_crlf_sse_preserves_unicode_and_opaque_reasoning() {
 }
 
 #[tokio::test]
-async fn unscored_text_delta_uses_null_probability_field() {
+async fn unscored_text_delta_uses_empty_probability_array() {
     let item = json!({"type":"message","id":"msg_unscored","role":"assistant","content":[{"type":"output_text","text":"plain","annotations":[]}]});
     let decoded = decode::decode_response(&response(vec![item.clone()])).unwrap();
     let events = decode_stream(fixture_stream(&item, None)).await;
@@ -2895,7 +2899,7 @@ async fn unscored_text_delta_uses_null_probability_field() {
         assert!(
             deltas
                 .iter()
-                .all(|frame| frame.get("logprobs") == Some(&Value::Null))
+                .all(|frame| frame.get("logprobs") == Some(&json!([])))
         );
         let completed = frames
             .iter()
