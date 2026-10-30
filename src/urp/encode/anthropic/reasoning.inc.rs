@@ -530,6 +530,17 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
             generated_disabled_thinking_type(upstream_model).map(str::to_string)
         } else if let Some(mode) = reasoning.mode.as_deref() {
             Some(mode.to_string())
+        } else if budget.is_none()
+            && reasoning.effort.is_none()
+            && native_output.is_none()
+            && reasoning
+                .summary
+                .as_deref()
+                .is_some_and(|summary| summary != "none")
+            && model_supports_adaptive(upstream_model)
+        {
+            // RC4c.2: a summary request needs a thinking object to carry `display`.
+            Some("adaptive".to_string())
         } else if (budget.is_none() && reasoning.effort.is_none())
             || (native_output.is_some() && budget.is_none())
         {
