@@ -1,6 +1,5 @@
 use super::*;
 use crate::error::ForwardedHeaders;
-use crate::upstream_websocket::ResponsesWsControl;
 use crate::urp::stream_decode::stream_upstream_to_urp_events;
 use crate::urp::stream_encode::encode_urp_stream;
 use futures_util::StreamExt;
@@ -8,9 +7,11 @@ use futures_util::StreamExt;
 enum StreamUpstreamSource {
     Http(reqwest::Response),
     ResponsesWebSocket {
-        session: Box<dyn crate::upstream_websocket::ResponsesWsSession>,
-        interrupt: tokio::sync::watch::Receiver<ResponsesWsControl>,
+        source: crate::upstream_websocket::ResponsesWsTurnSource,
+        turn: crate::upstream_websocket::ResponsesWsTurn,
     },
+    /// WS2c/WS6: synthetic Responses frames for a warmup without an upstream.
+    LocalFrames(Vec<String>),
 }
 
 type ForwardEventStream = futures_util::stream::Map<
@@ -486,7 +487,7 @@ pub(super) async fn forward_stream_typed(
     request_ip: Option<String>,
     client_session_id: Option<String>,
     capture: RequestCaptureContext,
-    websocket_interrupt: Option<tokio::sync::watch::Receiver<ResponsesWsControl>>,
+    ws_turn: Option<crate::upstream_websocket::ResponsesWsTurn>,
     commit: StreamCommit,
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
@@ -503,6 +504,31 @@ pub(super) async fn forward_stream_typed(
     // Session affinity derives from the request as decoded, before media
     // routes are bound into its input nodes.
     attach_client_session_id(&mut attempts, client_session_id, Some(&req));
+    if let Some(turn) = ws_turn.as_ref() {
+        if let Some((channel_id, upstream_model)) = turn.successor.as_ref() {
+            // WS18: a steering successor can only read the pinned session.
+            attempts.retain(|attempt| {
+                attempt.channel_id == *channel_id && attempt.upstream_model == *upstream_model
+            });
+            if attempts.is_empty() {
+                return Err(AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "steer_successor_unavailable",
+                    "the steering successor's upstream session is not routable",
+                ));
+            }
+        } else if turn.warmup
+            && attempts.first().is_none_or(|attempt| {
+                attempt.provider_type != ProviderType::Responses
+                    || attempt.websocket_supported == Some(false)
+            })
+        {
+            // WS6: no upstream WebSocket can prepare this warmup; the handler
+            // answers it locally without a request log or charge.
+            turn.state.set_local_warmup();
+            return Ok(receiver_event_stream(mpsc::channel::<Event>(1).1));
+        }
+    }
     bind_media_request_routes(&mut req, &mut attempts)?;
     let mut history_context =
         responses_history::HistoryContext::from_request(&state, &req, downstream);
@@ -545,6 +571,15 @@ pub(super) async fn forward_stream_typed(
             &logical_model,
             downstream,
         ) || attempt.provider_type == ProviderType::Replicate;
+        // WS6/WS18: warmups and steering successors never make an HTTP call.
+        let requires_buffered_stream = requires_buffered_stream
+            && !ws_turn
+                .as_ref()
+                .is_some_and(|turn| turn.warmup || turn.successor.is_some());
+        if requires_buffered_stream && let Some(turn) = ws_turn.as_ref() {
+            turn.state
+                .set_upstream_kind(crate::upstream_websocket::UPSTREAM_KIND_HTTP);
+        }
         let max_channel_attempts = same_channel_attempt_slots(&attempt);
 
         'channel_attempts: for channel_attempt in 0..max_channel_attempts {
@@ -980,9 +1015,7 @@ pub(super) async fn forward_stream_typed(
                             // FP6j-1: dropping the last sender ends the
                             // downstream SSE before settlement and logging.
                             let downstream_closed = tx_err.is_closed()
-                                || websocket_interrupt.as_ref().is_some_and(|control| {
-                                    *control.borrow() == ResponsesWsControl::Disconnected
-                                });
+                                || ws_turn.as_ref().is_some_and(|turn| turn.is_disconnected());
                             drop(tx_err);
                             if let Some(foreign_extras) = foreign_extras {
                                 foreign_extras.restore(&mut resp);
@@ -1174,7 +1207,7 @@ pub(super) async fn forward_stream_typed(
             let mut upstream_body = Some(upstream_body);
             let mut websocket_source = None;
             let mut websocket_send_error = None;
-            if let Some(interrupt) = websocket_interrupt.as_ref()
+            if let Some(turn) = ws_turn.as_ref()
                 && attempt.provider_type == ProviderType::Responses
                 && attempt.websocket_supported != Some(false)
             {
@@ -1188,40 +1221,62 @@ pub(super) async fn forward_stream_typed(
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .or(state.node.upstream_proxy_url.as_deref());
-                match crate::upstream_websocket::connect_responses_websocket(
-                    &attempt.base_url,
-                    &ws_headers,
+                    .or(state.node.upstream_proxy_url.as_deref())
+                    .map(str::to_string);
+                let target = crate::upstream_websocket::UpstreamWsTarget {
+                    base_url: attempt.base_url.clone(),
+                    headers: ws_headers,
                     proxy,
-                    attempt.request_timeout_ms,
-                )
-                .await
+                    timeout_ms: attempt.request_timeout_ms,
+                    channel_id: attempt.channel_id.clone(),
+                    upstream_model: req_attempt.model.clone(),
+                };
+                let create_body = if capture.session.is_some() {
+                    upstream_body.clone()
+                } else {
+                    upstream_body.take()
+                }
+                .expect("the encoded body is present until dispatch");
+                match crate::upstream_websocket::open_turn_source(turn, target, create_body).await
                 {
-                    Ok(mut ws) => {
+                    Ok(source) => {
                         remember_websocket_supported(&state, &mut attempt, true).await;
-                        let create_body = if capture.session.is_some() {
-                            upstream_body.clone()
-                        } else {
-                            upstream_body.take()
-                        }
-                        .expect("the encoded body is present until dispatch");
-                        let payload =
-                            crate::upstream_websocket::responses_ws_create_payload(create_body);
-                        let text = upstream::JsonBody::new(&payload).into_string();
-                        drop(payload);
-                        match ws.send_text(text).await {
-                            Ok(()) => {
-                                websocket_source = Some(StreamUpstreamSource::ResponsesWebSocket {
-                                    session: ws,
-                                    interrupt: interrupt.clone(),
-                                });
-                            }
-                            Err(err) => websocket_send_error = Some(err),
-                        }
+                        turn.state
+                            .set_upstream_kind(crate::upstream_websocket::UPSTREAM_KIND_WEBSOCKET);
+                        websocket_source = Some(StreamUpstreamSource::ResponsesWebSocket {
+                            source,
+                            turn: turn.clone(),
+                        });
                     }
-                    Err(_) => {
+                    Err(crate::upstream_websocket::TurnOpenError::Handshake { error, body }) => {
+                        tracing::debug!(
+                            channel_id = %attempt.channel_id,
+                            http_status = ?error.http_status,
+                            "upstream WebSocket handshake failed; using HTTP SSE: {}",
+                            error.message
+                        );
                         remember_websocket_supported(&state, &mut attempt, false).await;
+                        if upstream_body.is_none() {
+                            upstream_body = Some(body);
+                        }
                     }
+                    Err(crate::upstream_websocket::TurnOpenError::Send(err)) => {
+                        websocket_send_error = Some(err);
+                    }
+                }
+            }
+            if websocket_source.is_none()
+                && websocket_send_error.is_none()
+                && let Some(turn) = ws_turn.as_ref()
+            {
+                if turn.warmup {
+                    // WS2c/WS6: a warmup never reaches an HTTP upstream.
+                    websocket_source = Some(StreamUpstreamSource::LocalFrames(
+                        crate::upstream_websocket::local_warmup_frames(&req_attempt.model),
+                    ));
+                } else {
+                    turn.state
+                        .set_upstream_kind(crate::upstream_websocket::UPSTREAM_KIND_HTTP);
                 }
             }
             if let Some(err) = websocket_send_error {
@@ -1394,16 +1449,39 @@ pub(super) async fn forward_stream_typed(
                                     )
                                     .await
                                 }
-                                StreamUpstreamSource::ResponsesWebSocket { session, interrupt } => {
-                                    crate::urp::stream_decode::openai_responses::stream_responses_websocket_to_urp_events(
+                                StreamUpstreamSource::ResponsesWebSocket { source, turn } => {
+                                    let (frame_tx, frame_rx) = mpsc::channel(32);
+                                    crate::upstream_websocket::spawn_turn_feeder(
+                                        source,
+                                        turn,
+                                        frame_tx,
+                                        stream_idle_timeout_ms,
+                                    );
+                                    crate::urp::stream_decode::openai_responses::stream_responses_frames_to_urp_events(
                                         &legacy,
                                         pending_request_envelope_extra,
-                                        session,
+                                        frame_rx,
                                         decoded_tx,
                                         Some(started_at),
                                         Some(metrics),
                                         stream_idle_timeout_ms,
-                                        interrupt,
+                                    )
+                                    .await
+                                }
+                                StreamUpstreamSource::LocalFrames(local_frames) => {
+                                    let (frame_tx, frame_rx) = mpsc::channel(local_frames.len().max(1));
+                                    for frame in local_frames {
+                                        let _ = frame_tx.try_send(Ok((String::new(), frame)));
+                                    }
+                                    drop(frame_tx);
+                                    crate::urp::stream_decode::openai_responses::stream_responses_frames_to_urp_events(
+                                        &legacy,
+                                        pending_request_envelope_extra,
+                                        frame_rx,
+                                        decoded_tx,
+                                        Some(started_at),
+                                        Some(metrics),
+                                        stream_idle_timeout_ms,
                                     )
                                     .await
                                 }
@@ -1780,9 +1858,7 @@ pub(super) async fn forward_stream_typed(
                         // FP6j-1: dropping the last sender ends the downstream
                         // SSE before settlement, logging, and capture persistence.
                         let downstream_closed = tx_err.is_closed()
-                            || websocket_interrupt.as_ref().is_some_and(|control| {
-                                *control.borrow() == ResponsesWsControl::Disconnected
-                            });
+                            || ws_turn.as_ref().is_some_and(|turn| turn.is_disconnected());
                         drop(tx_err);
 
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {

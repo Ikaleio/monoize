@@ -25,32 +25,27 @@ pub(crate) async fn stream_responses_to_urp_events(
     result
 }
 
-pub(crate) async fn stream_responses_websocket_to_urp_events(
+/// Decodes Responses JSON frames supplied by an upstream WebSocket feeder
+/// (`crate::upstream_websocket`, WS2d) with the same decoder as SSE events.
+pub(crate) async fn stream_responses_frames_to_urp_events(
     urp: &HandlerUrpRequest,
     pending_request_envelope_extra: Option<HashMap<String, Value>>,
-    session: Box<dyn ResponsesWsSession>,
+    frames: mpsc::Receiver<AppResult<(String, String)>>,
     tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
-    interrupt: tokio::sync::watch::Receiver<ResponsesWsControl>,
 ) -> AppResult<()> {
-    let (frame_tx, frame_rx) = mpsc::channel(32);
-    let feeder = tokio::spawn(async move {
-        feed_responses_ws_frames(session, frame_tx, interrupt, idle_timeout_ms).await;
-    });
-    let result = consume_responses_json_frames(
+    consume_responses_json_frames(
         urp,
         pending_request_envelope_extra,
-        frame_rx,
+        frames,
         tx,
         started_at,
         runtime_metrics,
         idle_timeout_ms,
     )
-    .await;
-    feeder.abort();
-    result
+    .await
 }
 
 async fn feed_responses_sse_frames(
@@ -76,75 +71,6 @@ async fn feed_responses_sse_frames(
             break;
         }
     }
-}
-
-async fn feed_responses_ws_frames(
-    mut session: Box<dyn ResponsesWsSession>,
-    frame_tx: mpsc::Sender<AppResult<(String, String)>>,
-    mut interrupt: tokio::sync::watch::Receiver<ResponsesWsControl>,
-    idle_timeout_ms: u64,
-) {
-    let mut interrupt_sent = false;
-    loop {
-        let next = tokio::select! {
-            biased;
-            _ = async {
-                if *interrupt.borrow_and_update() == ResponsesWsControl::Running {
-                    // Dropping the turn's sender also interrupts a disconnected bridge.
-                    let _ = interrupt.changed().await;
-                }
-            }, if !interrupt_sent => {
-                interrupt_sent = true;
-                let result = tokio::time::timeout(
-                    std::time::Duration::from_millis(idle_timeout_ms.max(1)),
-                    session.send_text(json!({"type": "response.interrupt"}).to_string()),
-                ).await;
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => tracing::warn!(%error, "upstream WebSocket interrupt send failed; draining usage"),
-                    Err(_) => tracing::warn!("upstream WebSocket interrupt send timed out; draining usage"),
-                }
-                continue;
-            }
-            next = session.next_text() => next,
-        };
-        match next {
-            Ok(None) => break,
-            Ok(Some(text)) => {
-                let event_name = serde_json::from_str::<Value>(&text)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("type")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_default();
-                let terminal = matches!(
-                    event_name.as_str(),
-                    "response.completed"
-                        | "response.failed"
-                        | "response.incomplete"
-                        | "response.cancelled"
-                        | "error"
-                );
-                if frame_tx.send(Ok((event_name, text))).await.is_err() || terminal {
-                    break;
-                }
-            }
-            Err(err) => {
-                let _ = frame_tx
-                    .send(Err(AppError::new(
-                        StatusCode::BAD_GATEWAY,
-                        "upstream_stream_decode_failed",
-                        err,
-                    )))
-                    .await;
-                break;
-            }
-        }
-    }
-    session.close().await;
 }
 
 async fn consume_responses_json_frames(
