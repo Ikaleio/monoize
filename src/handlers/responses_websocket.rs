@@ -1532,11 +1532,15 @@ async fn handle_steer(conn: &Connection, event: &Map<String, Value>) {
         active
             .iter()
             .find(|(_, turn)| turn.public_id == previous)
-            .map(|(lane, turn)| (lane.clone(), turn.state.upstream_kind(), turn.steer.clone()))
+            .map(|(lane, turn)| {
+                let forwardable = turn.state.upstream_kind() == UPSTREAM_KIND_WEBSOCKET
+                    && !turn.state.steer_rejected();
+                (lane.clone(), forwardable, turn.steer.clone())
+            })
     });
     let (lane, code) = match (valid, target) {
         (false, target) => (target.map(|(lane, ..)| lane).unwrap_or(None), "invalid_input"),
-        (true, Some((lane, kind, steer))) if kind == UPSTREAM_KIND_WEBSOCKET => {
+        (true, Some((lane, true, steer))) => {
             if steer.send(input.clone()).is_ok() {
                 return;
             }
