@@ -1,7 +1,7 @@
 //! Canonical prompt-cache breakpoints (`spec/urp-v2-flat-structure.spec.md` section 4a).
 
 use super::encode::openai_chat::ChatDialect;
-use super::internal_legacy_bridge::Part;
+use super::internal_legacy_bridge::{Part, continues_message};
 use super::{Node, OrdinaryRole, ProviderProtocol, ToolDefinition, ToolResultContent, UrpRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 const CACHE_CONTROL_KEY: &str = "cache_control";
 const PROMPT_CACHE_BREAKPOINT_KEY: &str = "prompt_cache_breakpoint";
 const MESSAGES_BREAKPOINT_LIMIT: usize = 4;
+const CACHE_CONTROL_TTLS: &[&str] = &["5m", "1h"];
 /// The source key and value of a Chat message-level marker, held on its node between the Chat
 /// decoder and the decode post-pass.
 const CHAT_MESSAGE_MARKER_EXTRA_KEY: &str = "_monoize_chat_message_cache_marker";
@@ -508,12 +509,9 @@ where
 }
 
 /// CB-10: Anthropic rejects a marker on an empty text block.
-fn drop_converted_empty_text_markers(req: &mut UrpRequest) {
+fn drop_converted_empty_text_markers(req: &mut UrpRequest, target: ProviderProtocol) {
     let drop_converted = |slot: &mut Option<CacheBreakpoint>| {
-        if slot
-            .as_ref()
-            .is_some_and(|marker| marker.origin != ProviderProtocol::Messages)
-        {
+        if slot.as_ref().is_some_and(|marker| marker.origin != target) {
             *slot = None;
         }
     };
@@ -642,10 +640,10 @@ fn wire_member(
             marker.to_wire(wire, accepted_ttl(marker, accepted), false),
         )
     };
-    const CACHE_CONTROL_TTLS: &[&str] = &["5m", "1h"];
     match target {
         CacheWireTarget::Messages => Some(convert(CacheControl, CACHE_CONTROL_TTLS)),
-        CacheWireTarget::Chat(ChatDialect::DeepSeek) => None,
+        // CB-12a already handled every Vercel carrier that can convert.
+        CacheWireTarget::Chat(ChatDialect::DeepSeek | ChatDialect::Vercel) => None,
         CacheWireTarget::Chat(ChatDialect::OpenAi) => (explicit_model
             && chat_part_carrier(carrier))
         .then(|| convert(PromptCacheBreakpoint, &["30m"])),
@@ -751,6 +749,91 @@ fn chat_part_carrier(carrier: Carrier) -> bool {
     )
 }
 
+/// CB-12a: places converted markers on Vercel's documented message level. A marker ends its wire
+/// message, because a marker lifted to a later message end would widen the cached prefix.
+fn materialize_vercel_message_markers(req: &mut UrpRequest) {
+    let target = CacheWireTarget::Chat(ChatDialect::Vercel);
+    drop_converted_empty_text_markers(req, ProviderProtocol::ChatCompletion);
+    let converted = |slot: &mut Option<CacheBreakpoint>| {
+        let marker = slot.take_if(|marker| !replays(marker, target))?;
+        let wire = CacheBreakpointWire::CacheControl;
+        Some((
+            wire.key(),
+            marker.to_wire(wire, accepted_ttl(&marker, CACHE_CONTROL_TTLS), false),
+        ))
+    };
+    let mut output: Vec<Node> = Vec::with_capacity(req.input.len());
+    let mut message_start = 0;
+    let mut split_next = false;
+    for mut node in std::mem::take(&mut req.input) {
+        let ordinary = !matches!(
+            node,
+            Node::NextDownstreamEnvelopeExtra { .. } | Node::ToolResult { .. }
+        );
+        let continues = ordinary
+            && output.last().is_some_and(|previous| {
+                !matches!(
+                    previous,
+                    Node::NextDownstreamEnvelopeExtra { .. } | Node::ToolResult { .. }
+                ) && continues_message(previous, &node)
+            });
+        if !continues {
+            message_start = output.len();
+        } else if split_next {
+            output.push(Node::NextDownstreamEnvelopeExtra {
+                extra_body: HashMap::from([(
+                    CHAT_MESSAGE_BOUNDARY_EXTRA_KEY.to_string(),
+                    Value::Bool(true),
+                )]),
+            });
+            message_start = output.len();
+        }
+        split_next = false;
+        if let Node::ToolResult {
+            content,
+            extra_body,
+            ..
+        } = &mut node
+        {
+            let last_text = content
+                .iter()
+                .rposition(|item| matches!(item, ToolResultContent::Text { .. }));
+            for (index, item) in content.iter_mut().enumerate() {
+                if let ToolResultContent::Text {
+                    cache_breakpoint, ..
+                } = item
+                    && let Some((key, value)) = converted(cache_breakpoint)
+                    && Some(index) == last_text
+                {
+                    extra_body.insert(key.to_string(), value);
+                }
+            }
+            output.push(node);
+            continue;
+        }
+        let member = match &mut node {
+            Node::Text {
+                cache_breakpoint, ..
+            } => converted(cache_breakpoint),
+            Node::Image { metadata, .. }
+            | Node::Audio { metadata, .. }
+            | Node::File { metadata, .. } => converted(&mut metadata.cache_breakpoint),
+            _ => None,
+        };
+        output.push(node);
+        if let Some((key, value)) = member {
+            output.insert(
+                message_start,
+                Node::NextDownstreamEnvelopeExtra {
+                    extra_body: HashMap::from([(key.to_string(), value)]),
+                },
+            );
+            split_next = true;
+        }
+    }
+    req.input = output;
+}
+
 /// Resolves every typed marker for one target and writes the result as a wire member of the
 /// owning extras. `req` MUST be the encoder's own clone (CB-17); the adapters then treat the
 /// member like any other block field, including their scalar-collapse and instruction checks.
@@ -760,7 +843,7 @@ pub(crate) fn materialize_wire_markers(
     upstream_model: &str,
 ) {
     if target == CacheWireTarget::Messages {
-        drop_converted_empty_text_markers(req);
+        drop_converted_empty_text_markers(req, ProviderProtocol::Messages);
         enforce_messages_limit(req);
     } else {
         move_converted_tool_result_markers(req, target);
@@ -769,6 +852,9 @@ pub(crate) fn materialize_wire_markers(
     replay_message_markers(req, target);
     if let Some(tools) = &mut req.tools {
         replay_tool_payload_markers(tools, target);
+    }
+    if target == CacheWireTarget::Chat(ChatDialect::Vercel) {
+        materialize_vercel_message_markers(req);
     }
     let explicit_model = supports_openai_explicit_breakpoints(upstream_model);
     for_each_slot(req, &mut |carrier, slot, extra_body| {
