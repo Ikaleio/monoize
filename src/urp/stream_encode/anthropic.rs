@@ -1589,7 +1589,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
     let mut open_node_index: Option<u32> = None;
     let mut absorbed_signature_node_indices: HashSet<u32> = HashSet::new();
     let mut emitted_node_indices: HashSet<u32> = HashSet::new();
-    let mut node_identities: HashMap<u32, String> = HashMap::new();
+    let mut node_keys: HashMap<u32, MessagesNodeKey> = HashMap::new();
     let mut saw_refusal = false;
 
     async fn ensure_message_start(
@@ -1646,8 +1646,8 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
                     continue;
                 }
-                if let Some(identity) = messages_header_identity(&header) {
-                    node_identities.insert(node_index, identity);
+                if let Some(key) = messages_header_key(&header) {
+                    node_keys.insert(node_index, key);
                 }
                 saw_refusal |= matches!(header, NodeHeader::Refusal { .. });
                 let Some(payload) = anthropic_block_from_node_header(&header, &extra_body) else {
@@ -1714,6 +1714,27 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     continue;
                 };
                 maybe_override_reasoning_item_id(&mut block_state.payload, &delta);
+                // PM6e: buffering would lose this delta's estimate, so open the block now.
+                if block_state.block_index.is_none()
+                    && node_index == next_flush_node_index
+                    && open_node_index.is_none()
+                    && extra_body.contains_key("estimated_tokens")
+                    && matches!(
+                        &block_state.payload,
+                        AnthropicBlockPayload::Thinking { metadata, .. } if !metadata.redacted
+                    )
+                {
+                    emit_live_block_start(
+                        &tx,
+                        block_state,
+                        &mut next_content_block_index,
+                        &mut saw_tool_use,
+                    )
+                    .await?;
+                    emitted_node_owned_surfaces
+                        .insert(surface_kind_for_payload(&block_state.payload));
+                    open_node_index = Some(node_index);
+                }
                 if let Some(block_index) = block_state.block_index {
                     emit_live_delta_for_node_delta(
                         &tx,
@@ -1769,8 +1790,8 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     live_node_blocks.remove(&node_index);
                     continue;
                 }
-                if let Some(identity) = messages_node_identity(&node) {
-                    node_identities.insert(node_index, identity);
+                if let Some(key) = messages_node_key(&node) {
+                    node_keys.insert(node_index, key);
                 }
                 saw_refusal |= matches!(node, Node::Refusal { .. });
                 if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
@@ -1972,12 +1993,27 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 let mut remaining_live_node_blocks: Vec<(u32, LiveNodeBlockState)> =
                     live_node_blocks.drain().collect();
                 remaining_live_node_blocks.sort_by_key(|(node_index, _)| *node_index);
+                // Pair every stream node that can own a terminal node, so a live block never
+                // takes the terminal node of an already completed sibling part.
+                let mut known_stream_nodes: Vec<(u32, MessagesNodeKey)> = node_keys
+                    .iter()
+                    .filter(|(node_index, _)| {
+                        emitted_node_indices.contains(*node_index)
+                            || remaining_live_node_blocks
+                                .iter()
+                                .any(|(live_index, _)| live_index == *node_index)
+                    })
+                    .map(|(node_index, key)| (*node_index, key.clone()))
+                    .collect();
+                known_stream_nodes.sort_unstable_by_key(|(node_index, _)| *node_index);
+                let terminal_positions: HashMap<u32, usize> =
+                    pair_stream_nodes_with_terminal(&known_stream_nodes, &output)
+                        .into_iter()
+                        .collect();
                 for (node_index, mut block_state) in remaining_live_node_blocks {
-                    let terminal_node = terminal_node_for_stream_node(
-                        &output,
-                        node_index,
-                        node_identities.get(&node_index),
-                    );
+                    let terminal_node = terminal_positions
+                        .get(&node_index)
+                        .and_then(|position| output.get(*position));
                     if block_state.block_index.is_some() {
                         emitted_node_indices.insert(node_index);
                         if let Some(node) = terminal_node {
@@ -2036,13 +2072,18 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 )
                 .await?;
 
+                let mut emitted_stream_nodes: Vec<(u32, MessagesNodeKey)> = node_keys
+                    .iter()
+                    .filter(|(node_index, _)| emitted_node_indices.contains(*node_index))
+                    .map(|(node_index, key)| (*node_index, key.clone()))
+                    .collect();
+                emitted_stream_nodes.sort_unstable_by_key(|(node_index, _)| *node_index);
                 emit_messages_response_done_fallback(
                     &tx,
                     &mut next_content_block_index,
                     &mut saw_tool_use,
                     &output,
-                    &emitted_node_indices,
-                    &node_identities,
+                    &emitted_stream_nodes,
                     sse_max_frame_length,
                 )
                 .await?;
@@ -2139,8 +2180,33 @@ fn messages_error_payload(
     payload
 }
 
-fn messages_header_identity(header: &NodeHeader) -> Option<String> {
-    let (kind, value) = match header {
+/// One stream node's kind and, when known, its identity (DM9b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessagesNodeKey {
+    kind: &'static str,
+    identity: Option<String>,
+}
+
+impl MessagesNodeKey {
+    fn new(kind: &'static str, identity: Option<&String>) -> Self {
+        Self {
+            kind,
+            identity: identity.filter(|value| !value.is_empty()).cloned(),
+        }
+    }
+
+    /// A call id names one call, so differing call ids are never the same node. Other ids can
+    /// differ between live events and the terminal snapshot of one node.
+    fn may_pair_without_identity(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && (!matches!(self.kind, "tool_call" | "tool_result")
+                || self.identity.is_none()
+                || other.identity.is_none())
+    }
+}
+
+fn messages_header_key(header: &NodeHeader) -> Option<MessagesNodeKey> {
+    let (kind, identity) = match header {
         NodeHeader::ToolCall { call_id, .. } => ("tool_call", Some(call_id)),
         NodeHeader::ToolResult { call_id, .. } => ("tool_result", Some(call_id)),
         NodeHeader::Text { id, .. } => ("text", id.as_ref()),
@@ -2152,15 +2218,13 @@ fn messages_header_identity(header: &NodeHeader) -> Option<String> {
         NodeHeader::ProviderItem { id, .. } => ("provider_item", id.as_ref()),
         NodeHeader::NextDownstreamEnvelopeExtra => return None,
     };
-    value
-        .filter(|value| !value.is_empty())
-        .map(|value| format!("{kind}:{value}"))
+    Some(MessagesNodeKey::new(kind, identity))
 }
 
 /// DM9b: stream indices and terminal positions diverge when decoders emit controls the
-/// terminal snapshot lacks, so reconciliation keys on node identity first.
-fn messages_node_identity(node: &Node) -> Option<String> {
-    let (kind, value) = match node {
+/// terminal snapshot lacks, so reconciliation never compares them directly.
+fn messages_node_key(node: &Node) -> Option<MessagesNodeKey> {
+    let (kind, identity) = match node {
         Node::ToolCall { call_id, .. } => ("tool_call", Some(call_id)),
         Node::ToolResult { call_id, .. } => ("tool_result", Some(call_id)),
         Node::Text { id, .. } => ("text", id.as_ref()),
@@ -2172,24 +2236,50 @@ fn messages_node_identity(node: &Node) -> Option<String> {
         Node::ProviderItem { id, .. } => ("provider_item", id.as_ref()),
         Node::NextDownstreamEnvelopeExtra { .. } => return None,
     };
-    value
-        .filter(|value| !value.is_empty())
-        .map(|value| format!("{kind}:{value}"))
+    Some(MessagesNodeKey::new(kind, identity))
 }
 
-/// Returns the terminal node that corresponds to one stream node: identity first, then position.
-fn terminal_node_for_stream_node<'a>(
-    output: &'a [Node],
-    node_index: u32,
-    identity: Option<&String>,
-) -> Option<&'a Node> {
-    identity
-        .and_then(|identity| {
-            output
-                .iter()
-                .find(|node| messages_node_identity(node).as_ref() == Some(identity))
-        })
-        .or_else(|| output.get(node_index as usize))
+/// DM9b pairing: identity first (ordered, because the parts of one message share an id), then
+/// the earliest unpaired stream node of the same kind. Returns `(stream index, terminal position)`.
+fn pair_stream_nodes_with_terminal(
+    stream_nodes: &[(u32, MessagesNodeKey)],
+    output: &[Node],
+) -> Vec<(u32, usize)> {
+    let terminal: Vec<(usize, MessagesNodeKey)> = output
+        .iter()
+        .enumerate()
+        .filter_map(|(position, node)| messages_node_key(node).map(|key| (position, key)))
+        .collect();
+    let mut stream_used = vec![false; stream_nodes.len()];
+    let mut terminal_used = vec![false; terminal.len()];
+    let mut pairs = Vec::new();
+    for (stream_slot, (node_index, key)) in stream_nodes.iter().enumerate() {
+        if key.identity.is_none() {
+            continue;
+        }
+        if let Some(slot) = terminal
+            .iter()
+            .enumerate()
+            .position(|(slot, (_, other))| !terminal_used[slot] && other == key)
+        {
+            stream_used[stream_slot] = true;
+            terminal_used[slot] = true;
+            pairs.push((*node_index, terminal[slot].0));
+        }
+    }
+    for (slot, (position, key)) in terminal.iter().enumerate() {
+        if terminal_used[slot] {
+            continue;
+        }
+        if let Some(stream_slot) = stream_nodes.iter().enumerate().position(|(stream_slot, (_, other))| {
+            !stream_used[stream_slot] && other.may_pair_without_identity(key)
+        }) {
+            stream_used[stream_slot] = true;
+            terminal_used[slot] = true;
+            pairs.push((stream_nodes[stream_slot].0, *position));
+        }
+    }
+    pairs
 }
 
 async fn emit_messages_response_done_fallback(
@@ -2197,45 +2287,20 @@ async fn emit_messages_response_done_fallback(
     next_content_block_index: &mut u32,
     saw_tool_use: &mut bool,
     output: &[Node],
-    emitted_node_indices: &HashSet<u32>,
-    node_identities: &HashMap<u32, String>,
+    emitted_stream_nodes: &[(u32, MessagesNodeKey)],
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    let mut emitted_by_identity: HashMap<&str, Vec<u32>> = HashMap::new();
-    let mut sorted_emitted: Vec<u32> = emitted_node_indices.iter().copied().collect();
-    sorted_emitted.sort_unstable();
-    for node_index in &sorted_emitted {
-        if let Some(identity) = node_identities.get(node_index) {
-            emitted_by_identity
-                .entry(identity.as_str())
-                .or_default()
-                .push(*node_index);
-        }
-    }
-    let mut consumed: HashSet<u32> = HashSet::new();
-    let mut matched_positions: HashSet<usize> = HashSet::new();
+    let paired: HashSet<usize> = pair_stream_nodes_with_terminal(emitted_stream_nodes, output)
+        .into_iter()
+        .map(|(_, position)| position)
+        .collect();
     for (position, node) in output.iter().enumerate() {
-        let Some(identity) = messages_node_identity(node) else {
+        if paired.contains(&position) {
             continue;
-        };
-        if let Some(indices) = emitted_by_identity.get_mut(identity.as_str())
-            && !indices.is_empty()
-        {
-            consumed.insert(indices.remove(0));
-            matched_positions.insert(position);
         }
-    }
-    for (position, node) in output.iter().enumerate() {
         let Some(payload) = anthropic_block_from_node(node) else {
             continue;
         };
-        if matched_positions.contains(&position) {
-            continue;
-        }
-        let position_index = position as u32;
-        if emitted_node_indices.contains(&position_index) && consumed.insert(position_index) {
-            continue;
-        }
         PendingAnthropicBlock {
             block_index: *next_content_block_index,
             payload,

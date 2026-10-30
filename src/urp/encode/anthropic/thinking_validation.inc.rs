@@ -92,10 +92,18 @@ fn validate_generated_thinking_controls(
     if obj.contains_key("top_k") {
         return Err("Messages top_k must be omitted when thinking is active".to_string());
     }
-    if let Some(top_p) = obj.get("top_p")
-        && !top_p.as_f64().is_some_and(|top_p| (0.95..=1.0).contains(&top_p))
-    {
-        return Err("Messages top_p must be between 0.95 and 1 when thinking is active".to_string());
+    if let Some(top_p) = obj.get("top_p") {
+        // Current models default top_p to 0.99 and answer every other value with HTTP 400.
+        let allowed = if model_rejects_nondefault_sampling(upstream_model) {
+            top_p.as_f64() == Some(0.99)
+        } else {
+            top_p.as_f64().is_some_and(|top_p| (0.95..=1.0).contains(&top_p))
+        };
+        if !allowed {
+            return Err(format!(
+                "Messages top_p value {top_p} is not accepted with thinking on model {upstream_model}"
+            ));
+        }
     }
     if obj
         .get("messages")
@@ -159,6 +167,17 @@ fn model_supports_xhigh_effort(model: &str) -> bool {
     denotes_claude_model(&model)
         && (model.contains("fable")
             || (model.contains("mythos") && !model.contains("preview"))
+            || family_at_least(&model, "opus", (4, 7))
+            || family_at_least(&model, "sonnet", (5, 0))
+            || family_at_least(&model, "haiku", (5, 5)))
+}
+
+/// RC4d.1: models that answer non-default sampling values with HTTP 400.
+fn model_rejects_nondefault_sampling(model: &str) -> bool {
+    let model = model.to_lowercase();
+    denotes_claude_model(&model)
+        && (model.contains("fable")
+            || model.contains("mythos")
             || family_at_least(&model, "opus", (4, 7))
             || family_at_least(&model, "sonnet", (5, 0))
             || family_at_least(&model, "haiku", (5, 5)))
