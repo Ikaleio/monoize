@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use futures_util::{SinkExt, StreamExt};
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -610,9 +610,25 @@ impl ResponsesWsLane {
 pub(crate) struct ResponsesWsTurnState {
     upstream_kind: AtomicU8,
     local_warmup: AtomicBool,
+    steer_rejected: AtomicBool,
+}
+
+/// WS2i: Channels whose upstream WebSocket rejected `response.steer`.
+static STEERING_REJECTING_CHANNELS: std::sync::LazyLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn channel_rejects_steering(channel_id: &str) -> bool {
+    STEERING_REJECTING_CHANNELS
+        .lock()
+        .is_ok_and(|channels| channels.contains(channel_id))
 }
 
 impl ResponsesWsTurnState {
+    /// WS12b: steering must fail locally for this turn's upstream.
+    pub(crate) fn steer_rejected(&self) -> bool {
+        self.steer_rejected.load(Ordering::Acquire)
+    }
+
     pub(crate) fn upstream_kind(&self) -> u8 {
         self.upstream_kind.load(Ordering::Acquire)
     }
@@ -704,6 +720,9 @@ pub(crate) async fn open_turn_source(
     body: Value,
 ) -> Result<ResponsesWsTurnSource, TurnOpenError> {
     let mut slot = turn.lane.slot.clone().lock_owned().await;
+    if channel_rejects_steering(&target.channel_id) {
+        turn.state.steer_rejected.store(true, Ordering::Release);
+    }
     let same_route = slot.session.is_some()
         && slot.channel_id == target.channel_id
         && slot.upstream_model == target.upstream_model;
@@ -896,6 +915,23 @@ pub(crate) fn local_warmup_frames(model: &str) -> Vec<String> {
 }
 
 type FrameSender = mpsc::Sender<Result<(String, String), AppError>>;
+
+/// WS12b shape of a steer that the routed upstream cannot apply.
+fn steering_not_supported(public_response_id: &str, input: Value) -> Value {
+    json!({
+        "type": "response.steer.failed",
+        "steer": {
+            "id": format!("steer_{}", uuid::Uuid::new_v4().simple()),
+            "previous_response_id": public_response_id,
+            "input": input,
+        },
+        "error": {
+            "type": "invalid_request_error",
+            "code": "steering_not_supported",
+            "message": "The routed upstream does not support steering; resend the input with response.create.",
+        },
+    })
+}
 
 enum FeedFlow {
     Continue,
@@ -1139,6 +1175,28 @@ impl TurnFeeder {
                 };
             }
             _ => {}
+        }
+        if kind == "error"
+            && value.get("response").is_none()
+            && !self.sent_steers.is_empty()
+            && matches!(
+                value.pointer("/error/code").and_then(Value::as_str),
+                Some("invalid_request_type" | "unsupported_request_type" | "unsupported_event_type")
+            )
+        {
+            // WS2i: an upstream without steering rejects the event type while its
+            // response keeps streaming; this error belongs to the steer.
+            let input = self.sent_steers.pop_front().unwrap_or(Value::Null);
+            self.turn.state.steer_rejected.store(true, Ordering::Release);
+            if let Ok(mut channels) = STEERING_REJECTING_CHANNELS.lock() {
+                channels.insert(self.source.target.channel_id.clone());
+            }
+            self.relay(steering_not_supported(&self.turn.public_response_id, input));
+            return if self.terminal && self.steers_resolved() {
+                FeedFlow::Finish
+            } else {
+                FeedFlow::Continue
+            };
         }
         if self.terminal {
             if kind == "response.created" && !self.accepted_steers.is_empty() {
