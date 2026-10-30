@@ -683,16 +683,19 @@ RC4d.1. Generated controls use this model classification, derived from the Anthr
 - Supports `output_config.effort = "xhigh"`: every Fable, every Mythos except Mythos Preview, Opus >= 4.7, Sonnet >= 5.0, Haiku >= 5.5.
 - Rejects forced `tool_choice` (`any` or `tool`) with adaptive thinking: Fable >= 5.1, Mythos >= 5.1, Opus >= 5.5, Sonnet >= 5.5.
 - Manual thinking (`enabled`) rejects forced `tool_choice` on every model.
+- Rejects non-default sampling (`temperature` other than `1`, `top_p` other than `0.99`, any `top_k`) on every request: every Fable, every Mythos, Opus >= 4.7, Sonnet >= 5.0, Haiku >= 5.5.
+
+The documentation establishes these classes only for the identifiers it lists. Applying an inequality to a later unreleased version is a Monoize forward-compatibility assumption: a later model is expected to keep the restrictions of its family. Applying it wrongly affects only generated controls; explicit client controls remain unvalidated under RC4d.
 
 RC4f. Immediately before sending an upstream Messages request, Monoize MUST validate generated controls (RC4d) in the fully encoded body, and only those. If the encoded body has no `thinking` object, or its `thinking` object is explicit, Monoize MUST NOT apply RC4f.1 through RC4f.4. If validation fails, Monoize MUST return HTTP 400 with code `invalid_request`, MUST NOT dispatch the upstream request, and MUST NOT alter `max_tokens`, `budget_tokens`, sampling controls, tool choice, or message history to make the request valid. A generated thinking object is active when its type is `enabled` or `adaptive`.
 
 RC4f.1. A generated active `enabled` object MUST carry integer `budget_tokens >= 1024` and strictly less than the encoded `max_tokens`.
 
-RC4f.2. For a generated active thinking object, `temperature` MUST be absent or equal to `1`, `top_k` MUST be absent, and `top_p` MUST be absent or a number in the inclusive range `[0.95, 1]`.
+RC4f.2. For a generated active thinking object, `temperature` MUST be absent or equal to `1`, and `top_k` MUST be absent. `top_p` MUST be absent or equal to `0.99` on a model that rejects non-default sampling under RC4d.1, and absent or a number in the inclusive range `[0.95, 1]` on every other model.
 
 RC4f.3. For a generated active `enabled` object, `tool_choice.type` MUST NOT equal `any` or `tool`. For a generated active `adaptive` object, `tool_choice.type` MUST NOT equal `any` or `tool` when the model rejects forced tool choice under RC4d.1.
 
-RC4f.4. For a generated active thinking object, the final encoded `messages[]` entry MUST NOT have `role = "assistant"`. When `output_config.effort` is generated and equals `xhigh`, the model MUST support `xhigh` under RC4d.1.
+RC4f.4. For a generated active thinking object, the final encoded `messages[]` entry MUST NOT have `role = "assistant"`. Generated controls exist only for requests without explicit Messages thinking, and a `pause_turn` continuation is a Messages-client flow with server-tool blocks, so this rule targets cross-protocol prefill. A Messages client that sends explicit thinking is outside RC4f under RC4d. When `output_config.effort` is generated and equals `xhigh`, the model MUST support `xhigh` under RC4d.1.
 
 RC4f.5. Monoize MUST NOT validate model-wide sampling restrictions, `display` values, or `thinking.type` values for a request whose controls are explicit. The upstream response, including its native error, is authoritative for those requests.
 
@@ -1739,7 +1742,7 @@ DM4. Tool-calling:
 
 DM4a. A URP `Refusal` node MUST render as a Messages `text` block with the refusal text, in non-stream responses and in streams. When the response contains a `Refusal` node, no preserved exact Messages stop reason applies under PM6.2, and the canonical finish reason is absent, `stop`, or `other`, the non-stream `stop_reason` and the stream `message_delta.delta.stop_reason` MUST be `refusal`.
 
-DM4b. Downstream Messages message ids: when the canonical response id starts with `msg_`, Monoize MUST emit it unchanged. Otherwise (for example `resp_…` or `chatcmpl-…` from another protocol family, or an absent id), Monoize MUST emit `msg_` followed by 32 lowercase hexadecimal characters of a fresh random UUID. One response uses one id; a stream uses it in `message_start`. Every `/v1/messages` and `/v1/messages/count_tokens` HTTP response, success or error, MUST carry header `request-id` equal to the Messages wire request id. The wire request id is the canonical request id (the `x-request-id` value after the request-id middleware normalizes or generates it) when that id already starts with `req_`, and `req_` followed by the canonical request id otherwise. A JSON error body for these endpoints MUST carry the same wire value in top-level `request_id`. Request logs and request captures MUST keep the unprefixed canonical request id.
+DM4b. Downstream Messages message ids: when the canonical response id starts with `msg_`, Monoize MUST emit it unchanged. A cross-family id arrives already rewritten under `urp-v2-flat-structure.spec.md` XTRA-5a item 5 (`resp_<tail>` and `chatcmpl-<tail>` become `msg_<tail>`). Otherwise (an id without the prefix that reached the encoder, or an absent or empty id), Monoize MUST emit `msg_` followed by 32 lowercase hexadecimal characters of a fresh random UUID. One response uses one id; a stream uses it in `message_start`. Every `/v1/messages` and `/v1/messages/count_tokens` HTTP response, success or error, MUST carry header `request-id` equal to the Messages wire request id. The wire request id is the canonical request id (the `x-request-id` value after the request-id middleware normalizes or generates it) when that id already starts with `req_`, and `req_` followed by the canonical request id otherwise. A JSON error body for these endpoints MUST carry the same wire value in top-level `request_id`. Request logs and request captures MUST keep the unprefixed canonical request id.
 
 DM4.1. For downstream `tool_result` blocks that carry block-array content, Monoize MUST preserve image and file payloads when routing through URP v2 and when encoding to eligible upstream formats.
 
