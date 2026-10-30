@@ -7,6 +7,8 @@ description: Enable top-level automatic caching for Anthropic Messages requests.
 
 This transform adds `cache_control` to the request JSON. The upstream moves the cache point to the last eligible content block as the conversation grows. Existing `cache_control` values remain unchanged.
 
+The transform does nothing when the upstream type is not `messages`.
+
 ## Reference
 
 | Property | Value |

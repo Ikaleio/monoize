@@ -5,7 +5,9 @@ description: 在智能体循环中，于每轮工具调用前插入 cache_contro
 
 ## 行为
 
-当请求提交工具结果时，此变换在最后一个工具结果上插入 Anthropic ephemeral `cache_control` 缓存断点。每次提交工具结果时，缓存断点随会话前进。
+当请求提交工具结果时，此变换在最后一个工具结果上设置缓存断点。Messages 上游将其作为 ephemeral `cache_control` 接收。每次提交工具结果时，缓存断点随会话前进。
+
+路由到其他上游类型时，断点同样保留。参见[跨协议的缓存断点](/zh/docs/endpoints)。其他上游类型可能收到 `prompt_cache_breakpoint`，也可能不收到标记。
 
 没有工具结果的请求原样通过。
 

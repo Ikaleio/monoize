@@ -60,6 +60,23 @@ MONOIZE_DATABASE_DSN=postgres://user:password@host:5432/monoize
 
 キャプチャはダッシュボードで有効化します。[リクエストログ](/ja/docs/request-logs) を参照してください。
 
+## Responses WebSocket の制限
+
+次の制限は下流の Responses WebSocket 接続ごとに適用されます。
+
+| 変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES` | `52428800` | WebSocket メッセージまたはフレーム 1 つの最大バイト数 |
+| `MONOIZE_RESPONSES_WS_MAX_TURNS` | `4096` | 接続ごとのターン数。中断、steer、拒否されたイベントは数えない |
+| `MONOIZE_RESPONSES_WS_CONNECTION_MAX_BYTES` | `1073741824` | 接続ごとの受信テキストバイト数 |
+| `MONOIZE_RESPONSES_WS_HISTORY_MAX_ITEMS` | `16384` | lane キャッシュエントリごとの保持項目数 |
+| `MONOIZE_RESPONSES_WS_HISTORY_MAX_BYTES` | `33554432` | lane キャッシュエントリごとの保持 JSON バイト数 |
+| `MONOIZE_RESPONSES_WS_SSE_FRAME_MAX_BYTES` | `52428800` | 内部 SSE フレームごとのバイト数 |
+| `MONOIZE_RESPONSES_WS_SSE_BUFFER_MAX_BYTES` | `52428800` | 内部 SSE バッファのバイト数 |
+| `MONOIZE_RESPONSES_WS_MAX_AGE_SECS` | `3600` | 接続の最大存続時間（秒） |
+
+接続ごとの名前付き lane 32 個と生成中ターン 16 個の制限は固定です。[API エンドポイント](/ja/docs/endpoints)を参照してください。
+
 ## プライマリ / レプリカ構成
 
 Monoize は、1 つの書き込み可能なプライマリと複数の読み取り専用レプリカで、同一の PostgreSQL データベースを共有して動作できます。レプリカは `/v1/**` トラフィックのみを処理します。リクエストログと課金差分は、認証付き内部 API でプライマリへ送られます。

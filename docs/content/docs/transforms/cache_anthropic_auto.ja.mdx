@@ -7,6 +7,8 @@ description: Anthropic Messages リクエストでトップレベルの自動キ
 
 この変換はリクエスト JSON のトップレベルに `cache_control` を追加します。会話が伸びると、上流はキャッシュ位置を最後の対象ブロックへ移します。既存の `cache_control` は変更しません。
 
+上流タイプが `messages` でない場合、この変換は何も変更しません。
+
 ## 参照情報
 
 | 項目 | 値 |

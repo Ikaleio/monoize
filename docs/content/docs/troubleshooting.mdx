@@ -28,12 +28,30 @@ The client IP is not in the key's IP whitelist. Add the address or CIDR range, o
 
 ### `502 upstream_error`
 
-All eligible routes failed, or no route serves the model. Check in this order:
+No route serves the model, the final attempt failed without an upstream code, or the upstream rejected the Channel credential. Check in this order:
 
-1. **No route exists.** Confirm at least one enabled Provider has an enabled Channel with weight above zero that maps the model.
-2. **Groups do not intersect.** The key's groups must share at least one group with the Provider. See [API Keys](/en/docs/dashboard/api-keys).
-3. **All Channels unhealthy.** The circuit breaker skips unhealthy Channels during cooldown. Read the failed attempts on the log row to find the root upstream error.
-4. **Multiplier cap.** A key with `max_multiplier` skips model entries priced above the cap.
+1. **Channel credential rejected.** The body has `upstream_status` set to `401`, `403`, or `407`. Fix the Channel key or its permissions. The client key is valid.
+2. **Transport failure.** The message is `failed to request upstream`. Check the Channel base URL and proxy.
+3. **No route exists.** Confirm at least one enabled Provider has an enabled Channel with weight above zero that maps the model.
+4. **Groups do not intersect.** The key's groups must share at least one group with the Provider. See [API Keys](/en/docs/dashboard/api-keys).
+5. **All Channels unhealthy.** The circuit breaker skips unhealthy Channels during cooldown. Read the failed attempts on the log row to find the root upstream error.
+6. **Multiplier cap.** A key with `max_multiplier` skips model entries priced above the cap.
+
+### Other upstream statuses and codes
+
+The client receives the final upstream status and code, for example `429 rate_limit_exceeded`. This also applies with `stream: true`. Read the failed attempts on the log row to see each hop. An attempt that received `2xx` before failing can make a later error arrive in the stream with HTTP `200`.
+
+### `400 unsupported_tool`
+
+The request sends an `openrouter:*` tool or another tool type without a Chat encoding to a Chat dialect that cannot represent it. Remove the tool, or route the model to a Channel with the `openrouter` or `generic` dialect. See [API Endpoints](/en/docs/endpoints).
+
+### A built-in tool has no effect
+
+Cross-family routes keep only mapped built-in tools. Monoize drops other built-in tools without an error, and a forced choice of a dropped tool becomes `auto`. See [API Endpoints](/en/docs/endpoints).
+
+### An error message shows `***`
+
+Monoize masks hostnames, URLs, IP addresses, and API keys in client error text. Admins read the full text in [Request Logs](/en/docs/request-logs).
 
 ### Requests always hit one Channel
 
@@ -53,7 +71,23 @@ Charge = base price × group `billing_ratio` × Channel model `multiplier`. Conf
 
 ### The stream stops mid-response
 
-Monoize never switches upstreams after the first response byte. A stream that dies mid-response reflects an upstream failure. Read the log row and enable capture to see the raw upstream frames.
+Monoize never switches upstreams after the first protocol event. A stream that dies mid-response reflects an upstream failure. The client receives an in-stream `error` event, because the HTTP status is already `200`. Read the log row and enable capture to see the raw upstream frames.
+
+### A client waits for `[DONE]`
+
+Only Chat Completions streams send `data: [DONE]`. Responses and Messages streams end after their terminal event. Update the client to stop at the terminal event.
+
+### A Chat stream has no usage chunk
+
+Set `stream_options.include_usage` to `true` in the request. Billing does not depend on this option.
+
+### A Responses WebSocket closes or rejects events
+
+- `websocket_connection_limit_reached` means that the connection reached a turn, byte, or age limit. Open a new connection. The default age limit is 60 minutes.
+- `previous_response_not_found` means that the connection has no such cached response. Resend the complete history.
+- `response.steer.failed` with `steering_not_supported` means that the turn or Channel cannot steer. Wait for the response to finish, then send the input in a new turn.
+
+See [Responses WebSocket](/en/docs/endpoints) for all codes.
 
 ### A client rejects long SSE frames
 
@@ -72,6 +106,10 @@ Some upstreams return reasoning in nonstandard fields. Use the reasoning transfo
 ### Provider-specific fields are missing upstream
 
 Cross-family conversion removes provider-specific nested fields with no safe target representation. Use the `field_set` transform to reinstate a field for one Provider.
+
+### Provider-specific fields are missing from a response
+
+Cross-family responses lose provider-specific fields, such as `metadata`, `container`, and `stop_details`. This rule has no setting. Route the model to a Channel of the same protocol family to keep these fields.
 
 ### A client rejects tool-call numbers such as `4338.0`
 

@@ -5,7 +5,9 @@ description: Insert a cache_control breakpoint on the final tool result.
 
 ## What it does
 
-When the request submits tool results, this transform inserts an Anthropic ephemeral `cache_control` breakpoint on the final tool result. The cache point moves forward with each tool-result submission.
+When the request submits tool results, this transform sets a cache breakpoint on the final tool result. A Messages upstream receives it as ephemeral `cache_control`. The cache point moves forward with each tool-result submission.
+
+The breakpoint also survives routing to other upstream types. See [cache breakpoints across protocols](/en/docs/endpoints). Other upstream types can receive `prompt_cache_breakpoint`, or no marker.
 
 Requests without tool results pass through unchanged.
 

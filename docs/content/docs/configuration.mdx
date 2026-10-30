@@ -60,6 +60,23 @@ Request capture obeys these process-level bounds:
 
 Enable capture in the dashboard. See [Request Logs](/en/docs/request-logs).
 
+## Responses WebSocket limits
+
+These limits apply to each downstream Responses WebSocket connection:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES` | `52428800` | Maximum size of one WebSocket message or frame, in bytes |
+| `MONOIZE_RESPONSES_WS_MAX_TURNS` | `4096` | Turns per connection. Interrupts, steers, and rejected events do not count |
+| `MONOIZE_RESPONSES_WS_CONNECTION_MAX_BYTES` | `1073741824` | Inbound text bytes per connection |
+| `MONOIZE_RESPONSES_WS_HISTORY_MAX_ITEMS` | `16384` | Retained items per lane cache entry |
+| `MONOIZE_RESPONSES_WS_HISTORY_MAX_BYTES` | `33554432` | Retained JSON bytes per lane cache entry |
+| `MONOIZE_RESPONSES_WS_SSE_FRAME_MAX_BYTES` | `52428800` | Bytes per internal SSE frame |
+| `MONOIZE_RESPONSES_WS_SSE_BUFFER_MAX_BYTES` | `52428800` | Bytes in the internal SSE buffer |
+| `MONOIZE_RESPONSES_WS_MAX_AGE_SECS` | `3600` | Maximum connection age, in seconds |
+
+The limits of 32 named lanes and 16 generating turns per connection are fixed. See [API Endpoints](/en/docs/endpoints).
+
 ## Primary/replica deployment
 
 Monoize can run as one writable primary plus read-only replicas that share one PostgreSQL database. Replicas serve `/v1/**` traffic only. They ship request logs and billing deltas to the primary over an authenticated internal API.

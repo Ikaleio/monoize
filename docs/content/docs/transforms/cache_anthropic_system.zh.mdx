@@ -5,9 +5,11 @@ description: 在系统提示词之后插入 Anthropic cache_control 缓存断点
 
 ## 行为
 
-此变换在请求的最后一个 system 或 developer 节点上插入 Anthropic ephemeral `cache_control` 缓存断点。上游随后缓存稳定的系统前缀，并在后续请求中直接读取缓存。
+此变换在请求的最后一个 system 或 developer 文本或媒体节点上设置缓存断点。Messages 上游将其作为 ephemeral `cache_control` 接收。上游随后缓存稳定的系统前缀，并在后续请求中直接读取缓存。
 
-请求中没有 system 或 developer 节点时，此变换不做任何修改。
+路由到其他上游类型时，断点同样保留。参见[跨协议的缓存断点](/zh/docs/endpoints)。其他上游类型可能收到 `prompt_cache_breakpoint`，也可能不收到标记。
+
+请求中没有这类节点时，此变换不做任何修改。system 角色的 Provider 条目不计入。
 
 ## 参考信息
 

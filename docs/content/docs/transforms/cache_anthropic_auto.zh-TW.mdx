@@ -7,6 +7,8 @@ description: 為 Anthropic Messages 請求啟用頂層自動快取。
 
 此變換會在請求 JSON 頂層加入 `cache_control`。上游會在對話增長時，將快取斷點移到最後一個可快取內容區塊。既有的 `cache_control` 值保持不變。
 
+上游類型不是 `messages` 時，此變換不做任何修改。
+
 ## 參考資訊
 
 | 屬性 | 值 |

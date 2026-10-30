@@ -28,7 +28,8 @@ Monoize tries routes in nested order: Channels inside a Provider first, then the
 - `channel_retry_interval_ms` inserts a wait between in-Channel retries. The default is `0`.
 - `max_retries` bounds the total attempt count across the Provider.
 - When a Provider is exhausted, Monoize continues with the next eligible Provider.
-- When all Providers are exhausted, the client receives HTTP `502` with code `upstream_error`.
+- When all Providers are exhausted, the client receives the status and error of the final failed attempt. See [Error responses](/en/docs/endpoints).
+- A final upstream `401`, `403`, or `407` returns `502` with code `upstream_error`. A request with no attempt also returns `502 upstream_error`.
 
 ### Which errors retry the same Channel
 
@@ -41,7 +42,11 @@ Monoize tries routes in nested order: Channels inside a Provider first, then the
 
 ## Streaming guarantee
 
-Fallback ends when the first response byte reaches the client. Before that byte, Monoize can switch Channels and Providers freely. After that byte, Monoize never switches. A visible stream therefore always comes from one generation.
+Monoize sends SSE response headers after the first upstream attempt is accepted. An HTTP attempt is accepted at a `2xx` status. An upstream WebSocket attempt is accepted at its first event other than a provider-control event. A failure before this point returns a native JSON error, not SSE.
+
+Fallback continues after the headers until the first protocol data or error event. Monoize buffers response-start and provider-control events, such as `codex.rate_limits`, until the first output event. The buffer holds at most 256 events. SSE heartbeats start after the headers and do not end fallback.
+
+If all routes fail after the headers, the error arrives in the stream, because the HTTP status is already `200`. After the first protocol event, Monoize never switches. A visible stream therefore always comes from one generation.
 
 ## Circuit breaker
 

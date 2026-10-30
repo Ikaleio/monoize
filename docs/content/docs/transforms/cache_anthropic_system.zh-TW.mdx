@@ -5,9 +5,11 @@ description: 在系統提示詞之後插入 Anthropic cache_control 快取斷點
 
 ## 行為
 
-此變換在請求的最後一個 system 或 developer 節點上插入 Anthropic ephemeral `cache_control` 快取斷點。上游隨後快取穩定的系統前綴，並在後續請求中直接讀取快取。
+此變換在請求的最後一個 system 或 developer 文字或媒體節點上設定快取斷點。Messages 上游將其作為 ephemeral `cache_control` 接收。上游隨後快取穩定的系統前綴，並在後續請求中直接讀取快取。
 
-請求中沒有 system 或 developer 節點時，此變換不做任何修改。
+路由到其他上游類型時，斷點同樣保留。參見[跨協定的快取斷點](/zh-TW/docs/endpoints)。其他上游類型可能收到 `prompt_cache_breakpoint`，也可能不收到標記。
+
+請求中沒有這類節點時，此變換不做任何修改。system 角色的 Provider 項目不計入。
 
 ## 參考資訊
 

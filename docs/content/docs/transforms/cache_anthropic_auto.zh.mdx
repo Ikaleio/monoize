@@ -7,6 +7,8 @@ description: 为 Anthropic Messages 请求启用顶层自动缓存。
 
 此变换向请求 JSON 顶层添加 `cache_control`。上游会在对话增长时，将缓存断点移到最后一个可缓存内容块。已有的 `cache_control` 值保持不变。
 
+上游类型不是 `messages` 时，此变换不做任何修改。
+
 ## 参考信息
 
 | 属性 | 值 |

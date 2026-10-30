@@ -9,6 +9,8 @@ This transform writes the Monoize username into the Anthropic `metadata.user_id`
 
 The transform never overwrites a value the client already set.
 
+The transform does nothing when the request has no cache breakpoint. Client and transform breakpoints count, including breakpoints on tool definitions.
+
 ## Reference
 
 | Property | Value |

@@ -31,6 +31,8 @@ Messages リクエストでは、オブジェクト型の `input_schema` を持�
 
 Responses オブジェクトに null 以外の error があり、有効な status がない場合はエラーになります。空のオブジェクトは拒否します。エラーがなく output 配列を持つ互換レスポンスでは、status を省略できます。
 
+プロトコルファミリーをまたぐレスポンスとは、上流タイプがエンドポイントのプロトコルと異なるレスポンスです。`gemini` 上流は常にこれに該当します。Monoize は、ストリーミングの有無にかかわらず、プロバイダー固有のフィールドを削除します。例は `metadata`、`status`、`phase`、`prompt_cache_key`、`container`、`diagnostics`、`stop_details` です。このルールを無効にする設定はありません。レスポンス id も変換先のプレフィックス（`resp_`、`chatcmpl-`、`msg_`）に書き換えます。課金、リクエストログ、リクエストキャプチャは元の値を読み取ります。
+
 ## モデル一覧
 
 ```bash
@@ -55,6 +57,31 @@ curl http://localhost:8080/v1/chat/completions \
 
 `"stream": true` を設定するとサーバー送信イベントを使います。省略または `false` にすると単一の JSON レスポンスを返します。
 
+Chat ストリームは `data: [DONE]` で終わります。Monoize が使用量チャンクを送るのは、リクエストで `stream_options.include_usage` を `true` にした場合だけです。このオプションは課金に影響しません。
+
+### Chat ダイアレクト
+
+`chat_completion` の試行ごとに、Monoize は Channel の base URL のホストと上流モデルからダイアレクトを 1 つ選びます。表の上から順に、最初に一致した行を使います。
+
+| ダイアレクト | 一致条件 | assistant 履歴の推論フィールド | 生成する出力トークンフィールド |
+| --- | --- | --- | --- |
+| `openai` | ホストが `api.openai.com` または `*.openai.azure.com` | なし | `max_completion_tokens` |
+| `openrouter` | ホストが `openrouter.ai` または `*.openrouter.ai` | `reasoning_details` と `reasoning` | `max_tokens` |
+| `vercel` | ホストが `ai-gateway.vercel.sh` | `reasoning_details` と `reasoning` | `max_tokens` |
+| `deepseek` | ホストが `api.deepseek.com`、またはモデル id が `deepseek` を含む | `reasoning_content` | `max_tokens` |
+| `generic` | その他すべての試行 | `reasoning_details` と `reasoning` | `max_completion_tokens` |
+
+- ホストの行が優先されます。OpenRouter 上の DeepSeek モデルは `openrouter` ダイアレクトを使います。
+- Channel ごとの上書きはできません。別の Channel へのリトライでは、ダイアレクトを選び直します。
+- `generic` は OpenRouter 互換の動作をします。一覧にないホストの厳格なリレーは、拡張フィールドを拒否する場合があります。
+- Chat クライアントは自身の出力トークンフィールド名を維持します（`deepseek` を除く）。表はその他のクライアントに適用されます。
+- 推論の強度は `reasoning_effort` で送ります（`none` を含む）。両方のフィールドがある場合、`reasoning.effort` が `reasoning_effort` より優先されます。
+- ネイティブの Chat `reasoning` オブジェクトは `openrouter`、`vercel`、`generic` の上流にのみ届きます。`openai` と `deepseek` の上流には送りません。
+- 強度がない場合、予算または有効モードは `openrouter` と `vercel` で `reasoning.max_tokens` または `reasoning.enabled` になります。他のダイアレクトでは省略します。
+- Monoize は強度と `reasoning.max_tokens` を同時に送りません。
+- `openai` ダイアレクトはネイティブの `thinking` オブジェクトを省略します。`providerOptions` を受け取るのは `vercel` ダイアレクトだけです。
+- Chat レスポンスは上流の推論フィールド形式を保持します。上流の `reasoning_content` は `reasoning_content` のままで、`reasoning_details` は追加しません。
+
 ## Responses
 
 ```bash
@@ -74,27 +101,147 @@ curl http://localhost:8080/v1/responses \
 - HTTP 履歴の既定値は `store=true` です。現在のプロセスで最大 30 分間保持します。再起動やキャッシュの退避で記録は削除されます。
 - `store=false` を指定すると HTTP 履歴を保持しません。不明または期限切れの id は `400 previous_response_not_found` を返します。その場合は履歴全体を再送してください。
 - 毎回、現在の instructions と制御パラメーターを指定してください。前回のトップレベル `instructions` は継承されません。
-- `GET /v1/responses` は Codex WebSocket v1 と v2 に対応します。v1 は `response.done`、v2 は `response.completed` を送信します。`store=false` でも接続内の継続は利用できます。
-- `GET /v1/codex/responses` は `GET /v1/responses` と同じ WebSocket ハンドラーを使います。`POST /v1/codex/responses` は `POST /v1/responses` と同じ HTTP ハンドラーを使います。両方の新しいパスには `/api` エイリアスもあります。
-- Responses WebSocket クライアントは Responses Channel に対して上流 WebSocket を開くことがあります。`POST /v1/responses` は HTTP のままです。ハンドシェイク失敗時は、同じ attempt で HTTP SSE に戻します。
-- `response.interrupt` を送信すると、生成中の上流 WebSocket 応答を中断します。生成中でない場合は何も行いません。重複した中断要求は、上流への試行ごとに1回にまとめます。
-- クライアントが切断すると、Monoize は上流 WebSocket 応答を中断し、課金のために終端イベントの使用量を読み取ります。HTTP 上流では従来どおり応答の読み取りを続けます。
+- `POST /v1/responses` のストリームは終端 JSON イベントの後に終わります。`data: [DONE]` フレームはありません。`sequence_number` は `0` から始まります。
+- 長時間のエージェントセッションには WebSocket を使用できます。[Responses WebSocket](#responses-websocket) を参照してください。
 - `POST /v1/responses/compact` は会話をコンパクト化します。
+- compact リクエストには `input` または `previous_response_id` が必要です。どちらもない場合は `400 invalid_request` を返します。
 - Monoize はネイティブの compact ボディを上流の `POST /v1/responses/compact` に転送します。
 - Channel 選択後、その Channel が `{model}-openai-compact` をマップしていれば、Monoize はその兄弟モデルを回線モデルとして送ります。そうでなければ会話モデルを送ります。
 - 課金は会話モデルの価格を使います。兄弟モデル ID に別の価格行は不要です。
 
-Responses 上流へのリクエストでは、Monoize は明示された `include` と `reasoning.summary` の値を保持します。`reasoning.encrypted_content` や既定の要約設定は自動で追加しません。
+Responses 上流への `POST /v1/responses` では、Monoize は明示された `include` と `reasoning.summary` の値を保持します。`reasoning.encrypted_content` や既定の要約設定は自動で追加しません。
+
+Chat Completions または Messages クライアントが Responses 上流にルーティングされる場合、リクエストに値がなければ、Monoize は `include` を `["reasoning.encrypted_content"]`、`store` を `false` に設定します。これによりステートレスなクライアントもツールターン間で推論を維持できます。Messages の `thinking` は `reasoning.effort` と `reasoning.summary` にマッピングします。
+
+## Responses WebSocket
+
+`GET /v1/responses` または `GET /v1/codex/responses` を WebSocket にアップグレードします。どちらのパスにも `/api` エイリアスがあり、認証は `POST /v1/responses` と同じです。`POST /v1/codex/responses` は `POST /v1/responses` と同じ HTTP ハンドラーを使います。
+
+クライアントメッセージは、1 つのテキストフレームに 1 つの JSON オブジェクトとして送ります。Monoize は各イベントを 1 つの JSON テキストフレームで送ります。SSE のフレーミングや `[DONE]` は使いません。ターンごとに、リクエスト ID、リクエストログ行、課金が分かれます。
+
+### プロトコルバージョン
+
+- `OpenAI-Beta: responses_websockets=2026-02-06` は v2 を選択します。クライアントが両方のバージョンを送ると v2 が優先されます。
+- `OpenAI-Beta: responses_websockets=2026-02-04` は v1 を選択します。
+- バージョンヘッダーがない場合、`response.append` は v1 を選択します。`response.create` は、接続がすでに v1 でなければ v2 を選択します。
+- v2 は上流の終端イベントタイプを保持します。
+- v1 は、後続の `response.append` で延長できる完了レスポンスに `response.done` を送ります。その他の終端イベントはタイプを保持します。
+- `response.append` はローカルエミュレーションです。Monoize は接続キャッシュから次のリクエストを構築します。上流が `response.append` を受け取ることはありません。
+
+### 上流トランスポート
+
+- Responses Channel にルーティングされたターンは、上流 WebSocket を開く場合があります。`POST /v1/responses` は常に HTTP を使います。
+- ハンドシェイクに失敗すると、同じ試行で HTTP SSE を使います。ステータス `101` の後の失敗は通常の上流失敗で、HTTP にはフォールバックしません。
+- 各 lane は、1 つの上流セッションを 1 つの Channel と上流モデルに固定します。そのセッションでの継続では新しい入力だけを送ります。
+- 上流が `previous_response_not_found` を返すか、再利用セッションが早期に失敗すると、Monoize は新しいセッションで履歴全体を再生します。クライアントにエラーは見えません。
+- ルーティングまたはモデルが変わると、固定セッションを閉じます。クライアント接続を閉じると、すべての固定セッションを閉じます。
+- Responses Channel へ送る生成ターンでは、クライアントが指定していない限り、Monoize は常に `reasoning.encrypted_content` を `include` に追加します。ウォームアップターンと他の Channel タイプには追加しません。
+- これらのターンでは、Monoize はクライアント向けイベントから `encrypted_content` を削除し、接続キャッシュに保持します。自身でこの値を指定したクライアントは `encrypted_content` を受け取ります。
+- Monoize は `client_metadata` を上流 WebSocket の create に転送します。同じ Channel では `x-codex-turn-state` も再送します。
+
+### Lane
+
+lane は 1 つの接続内のリクエストキューです。`response.create` または `response.append` に `stream_id` を設定すると名前付き lane を選択します。省略すると既定の lane を使います。
+
+- `stream_id` は `[A-Za-z0-9_.-]` からなる 1〜256 文字の文字列です。
+- 1 つの接続で受け付ける名前付き lane は最大 32 個です。既定の lane は数えません。
+- 同じ lane のターンは到着順に実行します。異なる lane は並行して実行します。
+- 1 つの接続で同時に生成するターンは最大 16 個です。他のターンは各 lane で待機します。
+- 名前付き lane のイベントには、エラーと確認応答を含めて `stream_id` が付きます。既定の lane のイベントには付きません。
+- Monoize は `stream_id` を上流へ送りません。
+
+### 継続
+
+返された `resp_monoize_` id を `previous_response_id` として送ります。Monoize はキャッシュされた入力、キャッシュされた出力、新しい入力からリクエストを構築します。`store=false` でも使えます。
+
+- 各 lane は最後の `completed`、`incomplete`、`cancelled` レスポンスをキャッシュします。中断されたレスポンスとステアリングされたレスポンスも含みます。
+- `previous_response_id` には他の lane のレスポンスも指定できます。これで会話をフォークできます。
+- v2 の `response.create` は自身の制御パラメーターだけを使います。キャッシュされたレスポンスの制御パラメーターを継承するのは v1 の `response.append` だけです。
+- `response.failed` またはエラーフレームで終わったターンはキャッシュエントリを作りません。同じ lane の継続が参照していたエントリも削除します。失敗したフォークでは親エントリを保持します。
+- 不明な id には `previous_response_not_found` を返します。接続は開いたままです。その場合は履歴全体を再送してください。
+- `previous_response_id` が文字列でない場合、または `conversation` と併用した場合は `400 invalid_request` を返します。
+- Monoize は `item_reference` 入力を、一致するキャッシュ項目のコピーに置き換えます。一致しない参照はそのまま転送します。
+- WebSocket を閉じると、キャッシュされたレスポンスはすべて削除されます。
+
+### ウォームアップ
+
+`response.create` の `generate` を `false` にすると、セッションをウォームアップします。
+
+- 最初の試行で上流 WebSocket を使える場合、Monoize はウォームアップを上流へ送ります。課金とログには上流の使用量を使います。
+- それ以外の場合、Monoize は `response.created` と `response.completed` をローカルで返します。上流呼び出し、ログ行の書き込み、課金は行いません。
+
+### 中断
+
+`{"type":"response.interrupt"}` を送ります。任意のメンバーは `response_id`、`stream_id`、`mode` です。`mode` に指定できるのは `discard_partial_items` だけです。
+
+- `response_id` は該当する生成中のターンを選択します。指定がなければ `stream_id` が lane を選択し、それもなければ既定の lane を選択します。
+- 選択した lane がアイドルの場合、中断は何も行いません。同じターンへの重複した中断は 1 回にまとめます。
+- 中断はターンを消費せず、ログ行も作りません。
+- `response_id` が生成中のターンを指さず、別のターンが生成中の場合、Monoize はコード `response_not_in_progress` の `response.interrupt.failed` を送ります。
+- 上流 WebSocket では、Monoize は上流へ中断を 1 回送ります。公開 id を付けて `response.interrupt.accepted` または `response.interrupt.failed` を中継し、その後に終端イベントを中継します。
+- HTTP SSE または Responses 以外の上流では、Monoize は `response.created` の後で転送を止めます。`response.interrupt.accepted` を送り、完了した項目だけを含む `response.completed` を `usage: null` で送ります。
+- この場合、Monoize は上流レスポンスの残りをバックグラウンドで読み取ります。課金とログ行は 1 回だけ完了します。
+- クライアントが切断すると、Monoize はキュー内のターンを破棄し、上流 WebSocket レスポンスを中断します。課金のために終端の使用量を読み続けます。HTTP 上流のレスポンスは読み取りを続けます。
+
+### ステアリング
+
+生成中のレスポンスに入力を追加するには、`{"type":"response.steer","previous_response_id":"<id>","input":"..."}` を送ります。`input` は文字列、または空でない `user` メッセージの配列です。steer はキューで待たず、ターンも消費しません。
+
+Monoize は steer を上流 WebSocket へ転送します。`response.steer.accepted`、`response.steer.pending`、`response.steer.failed` は公開 id を付けて中継します。
+
+steer が受理されると、上流は後続レスポンスを開始できます。Monoize はこれを、独自の id、ログ行、課金を持つ新しいターンとして実行します。その `previous_response_id` はステアリングされたレスポンスです。Channel または上流モデルが一致しなくなった場合、ターンは `502 steer_successor_unavailable` で失敗します。
+
+`response.steer.failed` は次のコードを使います。
+
+| コード | 意味 |
+| --- | --- |
+| `invalid_input` | イベントに余分なメンバーがある、または `input` が無効 |
+| `response_not_active` | キャッシュされたレスポンスはすでに生成中ではない |
+| `response_not_found` | id がこの接続のどのレスポンスにも一致しない |
+| `steering_not_supported` | ターンが HTTP SSE または Responses 以外の上流を使っている、または Channel が以前に steer を拒否した |
+
+Monoize は steer を拒否した Channel を、プロセスの再起動まで記憶します。以後、その Channel への steer はローカルで失敗します。現在のレスポンスは継続します。
+
+### エラーフレームと制限
+
+エラーフレームはすべて次の形式で、`sequence_number` はありません。名前付き lane のエラーには `stream_id` も付きます。ターンのエラーはそのターンだけを終了します。
+
+```json
+{ "type": "error", "status": 400, "error": { "type": "invalid_request_error", "code": "previous_response_not_found", "message": "...", "param": "previous_response_id" } }
+```
+
+| コード | ステータス | 意味 |
+| --- | --- | --- |
+| `invalid_websocket_event` | `400` | メッセージが無効。最初のメッセージが無効な場合は接続も閉じる |
+| `invalid_stream_id` | `400` | `stream_id` の形式が無効 |
+| `websocket_stream_limit_reached` | `400` | イベントが 33 個目の lane を指定した |
+| `invalid_interrupt` | `400` | `mode` の値に対応していない |
+| `background_not_supported` | `400` | イベントが `background=true` を設定した |
+| `websocket_history_limit_exceeded` | `400` | 組み立てたリクエストが保持履歴の制限を超えた |
+| `websocket_connection_limit_reached` | `400` | 接続がターン、バイト、または接続時間の制限に達した。Monoize はその後接続を閉じる |
+| `websocket_sse_limit_exceeded` | `502` | 内部の SSE フレームまたはバッファの制限によりターンが終了した |
+
+接続は接続時間の制限（既定で 60 分）に達すると閉じます。続けるには新しい接続を開いてください。すべての制限は[設定](/ja/docs/configuration)を参照してください。
 
 ## 推論を無効にする
 
 Chat Completions リクエストでは `"reasoning_effort": "none"` を設定してください。Responses リクエストでは `"reasoning": { "effort": "none" }` を設定してください。
 
-Monoize は明示的な `none` を OpenAI 互換の上流に送信します。Chat のネイティブ `reasoning` オブジェクトがある場合、その中に `effort: "none"` を設定し、最上位の短縮フィールドは送信しません。
+Monoize は明示的な `none` を、Responses 上流と `openai`、`openrouter`、`vercel`、`generic` の Chat ダイアレクトに送信します。`openrouter`、`vercel`、`generic` では、Chat のネイティブ `reasoning` オブジェクトがある場合、その中に `effort: "none"` を設定し、最上位の短縮フィールドは送信しません。
 
-Messages の制御パラメーターが明示されていない場合、Monoize は Messages 上流に `thinking: { "type": "disabled" }` を送信します。Gemini 上流には `generationConfig.thinkingConfig.thinkingBudget: 0` を送信します。
+Messages の制御パラメーターが明示されていない場合、Messages 上流に送る内容はモデルによって異なります。
 
-DeepSeek Chat リクエストでは推論努力の値をそのまま転送します。値の再マッピングや `thinking` 制御パラメーターの自動生成は行いません。
+- 多くのモデルには `thinking: { "type": "disabled" }` を送ります。
+- Sonnet 5.5 には `thinking: { "type": "between_tools" }` を送ります。
+- `disabled` を拒否するその他のモデル（Fable、Mythos、Opus 5.5 以降など）には `thinking` フィールドを送りません。
+
+Gemini 上流には、モデルファミリーごとのオフ値を送ります。
+
+- 予算ファミリーには `thinkingBudget: 0` を送ります。Gemini 2.x Pro は思考を無効にできないため `128` を送ります。
+- レベルファミリー（Gemini 3 や 4 など）には、対応する最低の `thinkingLevel` を送ります。
+- 思考に対応しないファミリーには思考設定を送りません。
+
+`deepseek` Chat ダイアレクトには、`none` の場合に `thinking: { "type": "disabled" }` を送り、`reasoning_effort` は送りません。その他の強度は `reasoning_effort` としてそのまま転送します。
 
 推論の強度を省略すると、上流のデフォルト値が使われます。推論の無効化に対応するモデルを選択してください。推論が必須のモデルでは無効化できません。
 
@@ -112,20 +259,105 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
+`messages` 上流では、Monoize はクライアントの `anthropic-version` を転送し、指定がなければ `2023-06-01` を送ります。クライアントの `anthropic-beta` トークンは、生成トークンおよび Channel トークンと統合し、各トークンを 1 回だけ送ります。他の上流タイプにはこれらのクライアントヘッダーを送りません。
+
+Monoize は明示された `thinking` と `output_config` をローカル検証なしで転送し、受理の判断は上流に任せます。Monoize が検証するのは自身が生成した制御パラメーターだけで、組み合わせが無効な場合は `400 invalid_request` を返します。
+
+`/v1/messages` と `/v1/messages/count_tokens` のレスポンスには常に `request-id` ヘッダーが付きます。形式はエラーレスポンスの節を参照してください。
+
+### トークン数の計測
+
+`POST /v1/messages/count_tokens` の認証、リダイレクト、モデル制限は `/v1/messages` と同じです。
+
+- Monoize はルート順に `messages` Channel だけを試します。ボディは `model` だけを置き換えて転送します。
+- 該当する Channel がない場合は `404 not_found_error` を返します。Claude Code はその後ローカル推定に切り替えます。
+- このエンドポイントは課金せず、リクエストログを書かず、Channel の健全性も変更しません。
+
 ## Gemini 上流
 
 Channel の上流タイプを `gemini` に設定すると、既存のエンドポイントから Gemini を利用できます。この対応には、公開 Gemini HTTP エンドポイントの追加や Live API は含まれません。
 
 Monoize は `generateContent` のリクエスト、レスポンス、会話履歴を双方向に変換します。ストリーミングには `streamGenerateContent` SSE を使います。
 
-- テキスト、推論、関数呼び出し、関数の結果、対応するメディアは、順序と識別情報を保持します。思考署名は元の Part との対応を保持します。
+- テキスト、推論、関数呼び出し、関数の結果、対応するメディアは、順序と識別情報を保持します。
+- 他のプロトコルでは、テキストとメディアの思考署名を不透明な推論値として運びます。この値をそのまま再送すると、各署名が元の Part に戻ります。
+- Gemini 3 以降では、現在のターンの各 model Content で最初の未署名の関数呼び出しに `skip_thought_signature_validator` を付けます。
+- Channel の base URL は `/v1`、`/v1beta`、`/v1alpha` で終わることができ、そのセグメントが API バージョンを決めます。それ以外の場合は `v1beta` を使います。
+- 推論の制御はモデルファミリーに従います。Gemini 2.x はモデルの範囲に収めた `thinkingBudget` を使います。Gemini 3 以降は `thinkingLevel` を使います。Monoize は両方を同時に送りません。
+- カスタムツールは `input` 文字列 1 つを持つ関数宣言になります。返された呼び出しはカスタムツール呼び出しに戻します。
 - 生成パラメーター、構造化レスポンス形式、ツール、ツール選択を、変換先が対応するフィールドに変換します。
+- 停止シーケンスが 5 個を超えると、その試行はリクエストエラーで失敗します。
 - Token logprobs は一致するテキストに関連付けられます。テキストが変わると、無効になったスコアを破棄します。Gemini で要求できる top logprobs は最大 20 個です。
 - 表現可能な引用と grounding の参照リンクを変換先の形式に変換します。引用範囲は、非 ASCII テキストを含めて元の位置を保持します。
 - テキストと推論は完了前から順次出力します。完全な内容が必要なメディアや署名付き Part は、完了まで待つ場合があります。失敗または途中終了したストリームはエラーを返します。
 - Monoize は index が 0 の候補を優先し、なければ最初の候補を返します。独立した候補は結合しません。
 
-Gemini 専用ツール、Provider が実行するコード、変換できないメタデータは Gemini 内でのみ保持します。変換先のプロトコルには、表現可能な機能だけを送信します。
+他のプロトコルは Gemini 固有の出力を次のように受け取ります。
+
+- コード実行 Part はフェンス付きの assistant テキストになります。
+- `toolCall` と `toolResponse` の Part は、不透明な推論値の中に丸ごと保持されます。クライアントがその値を再送すると、Monoize は元の位置に復元します。推論値を破棄するクライアントでは失われます。
+- その他の不明な Part と変換できないメタデータは Gemini 内でのみ保持します。
+
+### 継続トークン
+
+終了理由 `CONTINUATION` は、理由が `max_output_tokens` の不完全なレスポンスになります。すべてのプロトコルがトークンを不透明な推論値として受け取ります。Responses クライアントには `incomplete_details.continuation_token` も見えます。
+
+- 続けるには、その値とともに途中の assistant ターンを再送します。Monoize はそのターンを取り除き、最新のトークンを `continuationToken` として送ります。
+- クライアントは元の内容を繰り返し、トップレベルの `continuationToken` を明示することもできます。
+- `maxOutputTokens` は継続全体で累積します。継続のたびに増やすか、省略してください。
+
+### 画像サイズ
+
+画像出力では、Monoize は `WxH` サイズを `imageConfig.aspectRatio` と `imageConfig.imageSize` に変換します。ネイティブの値が優先されます。
+
+- アスペクト比は、モデルファミリーが対応する最も近い比率になります。
+- 最長辺で段階を決めます。792 以下は `512`、1584 以下は `1K`、3168 以下は `2K`、それより大きければ `4K` です。
+- Monoize は段階を、モデルのドキュメントにある最小の対応段階まで上げます。なければ最大の段階まで下げます。
+- 2.5 Flash Image と 3.1 Flash Lite Image には `imageSize` を送りません。
+- 3.1 Flash Image のドキュメントには `512`、`1K`、`2K`、`4K` があります。Nano Banana と 3 Pro Image には `1K`、`2K`、`4K` があります。
+
+## プロトコルをまたぐ組み込みツール
+
+組み込みツールを別の上流ファミリーへルーティングしても、リクエストエラーにはなりません。変換先があれば Monoize は定義をマッピングします。なければその試行で定義を削除します。
+
+| 元のツール | 変換先の上流 | 結果 |
+| --- | --- | --- |
+| Responses `web_search`、`web_search_preview` | `messages` | `web_search_20250305`。`allowed_domains` と `user_location` をコピー |
+| Messages `web_search_*` | `responses` | `web_search`。`allowed_domains` と `user_location` をコピーし、`blocked_domains` と `max_uses` を削除 |
+| どちらかのファミリーの Web 検索 | `chat_completion`、`openrouter` ダイアレクト | `openrouter:web_search` |
+| どちらかのファミリーの Web 検索 | `chat_completion`、その他のダイアレクト | 削除 |
+| `web_search*` | `gemini` | `googleSearch` |
+| `code_interpreter`、`code_execution*` | `gemini` | `codeExecution` |
+| `web_fetch*` | `gemini` | `urlContext` |
+| その他の組み込みツール | 別のファミリー | 削除 |
+
+- マッピングされたツールの強制選択は、強制のままです。
+- 削除されたツールを指す選択は `auto` になります。ツールが残らない場合は `tool_choice` を削除し、`tools: []` は送りません。
+- 検索結果の項目はファミリーをまたぎません。クライアントは検索ブロックなしで回答テキストを受け取ります。
+- Chat クライアントは `openrouter:*` ツールを送れます。Monoize は `openrouter` と `generic` ダイアレクトでそのまま再送します。
+- `openai`、`deepseek`、`vercel` ダイアレクトでは、これらのツールは送信前に `400 unsupported_tool` で失敗します。Chat エンコードのない他のツールタイプも同様に失敗します。
+
+## プロトコルをまたぐキャッシュブレークポイント
+
+Monoize は、3 つのクライアントプロトコルすべてのリクエストブロックで `cache_control` と `prompt_cache_breakpoint` を受け付けます。1 つのブロックに両方ある場合は `cache_control` が優先されます。変換時、マーカーはテキスト、メディア、ツール呼び出し、ツール結果、ツール定義のオブジェクトに保持されます。トップレベルの `cache_control` は Messages のリクエスト制御のままです。
+
+| 上流 | 送信するマーカー |
+| --- | --- |
+| `messages` | 対応するブロックまたはツールの `cache_control` |
+| `responses` | 入力テキスト、画像、ファイル、ツール出力パーツの `prompt_cache_breakpoint` |
+| `chat_completion`、`openai` ダイアレクト | コンテンツパーツの `prompt_cache_breakpoint` |
+| `chat_completion`、`openrouter`、`vercel`、`generic` ダイアレクト | コンテンツパーツとツール定義の `cache_control` |
+| `chat_completion`、`deepseek` ダイアレクト | なし。DeepSeek は自動でキャッシュします |
+| `gemini` | なし |
+
+同じプロトコルファミリーのマーカーはそのまま再送します。変換されたマーカーは次のルールに従います。
+
+- 不明なメンバーを削除します。`ttl` は変換先が受け付ける場合だけ保持し、Monoize が TTL を換算することはありません。
+- `cache_control` は `5m` と `1h` を受け付けます。Responses の `prompt_cache_breakpoint` は `30m` と `12h` を受け付けます。`openai` Chat は `30m` を受け付けます。
+- Responses または `openai` Chat への変換には、GPT-5.6 以降のモデル id が必要です。別名のデプロイエイリアスにはマーカーを送りません。
+- Responses と `openai` Chat は、assistant テキスト、ツール呼び出し、ツール定義の変換済みマーカーを受け取りません。マーカー付きの system メッセージは入力メッセージになります。
+- ツール結果の変換済みマーカーは、その最後の対象パーツへ移ります。
+- `messages` への変換では、空テキストのマーカーを削除します。残すのは末尾のマーカーで、上限は 4 からトップレベルの `cache_control` と provider item 内のネイティブマーカーを引いた数です。
 
 ## Embeddings
 
@@ -253,12 +485,67 @@ client = anthropic.Anthropic(
 
 ## エラーレスポンス
 
+レスポンス開始前のエラーは、呼び出したエンドポイントの HTTP ステータスと JSON ボディを使います。`stream` が `true` でも `false` でも同じです。Monoize はこれらのエラーを HTTP `200` や SSE で包みません。
+
+`POST /v1/responses` と `POST /v1/chat/completions` は次のボディを返します。
+
+```json
+{ "error": { "message": "...", "type": "invalid_request_error", "param": null, "code": "invalid_value" } }
+```
+
+`POST /v1/messages` は次のボディを返し、同じ id を `request-id` ヘッダーにも設定します。
+
+```json
+{ "type": "error", "error": { "type": "invalid_request_error", "message": "..." }, "request_id": "req_..." }
+```
+
+Embeddings、compact、意思決定、画像の各エンドポイントは同じステータスルールに従い、`{"error": ...}` ボディを維持します。
+
+### ローカルエラー
+
 | HTTP ステータス | コード | 意味 |
 | --- | --- | --- |
+| `400`、`413`、`415`、`422` | `invalid_json` | ボディが無効な JSON、大きすぎる、JSON コンテンツでない、または構造が不正 |
 | `401` | `unauthorized` | API キーが未指定、無効、無効化済み、または期限切れ |
 | `402` | `insufficient_balance` | ユーザーまたはサブアカウントの残高が不足 |
 | `403` | `model_not_allowed` | キーのモデル制限が要求モデルを拒否 |
 | `403` | `ip_not_allowed` | クライアント IP がキーの IP ホワイトリストにない |
-| `502` | `upstream_error` | モデルを提供するルートがない、または適格なルートがすべて失敗 |
+| `502` | `upstream_error` | モデルを提供するルートがない |
 
-上流のエラーテキストはクライアントに届く前にサニタイズされます。完全な詳細は[リクエストログ](/ja/docs/request-logs)で確認できます。
+### 上流の失敗
+
+すべてのルートが失敗すると、クライアントは最後に失敗した試行のステータス、`type`、`code`、`param`、サニタイズ済みの `message` を受け取ります。
+
+- `400`、`404`、`409`、`413`、`422`、`429`、`5xx` などのステータスはそのまま返します。
+- 最後の上流が `401`、`403`、`407` を返した場合は、コード `upstream_error` の `502` を返します。この失敗はクライアントではなく Channel の認証情報に属します。
+- そのボディには `upstream_status` と、報告があれば `upstream_code` も含まれます。`type` は `server_error`、Messages では `api_error` です。
+- 上流の HTTP ステータスがない失敗は `502` を返します。トランスポート障害のメッセージは `failed to request upstream` です。
+- 上流のコードがない失敗は `upstream_error` を使います。
+- クライアント自身の Monoize キーによる `401` は `401` のままです。
+
+`/v1/messages` の `error.type` は常に Messages ネイティブのエラータイプです。`request_id` の値は `req_` にリクエスト ID を付けたものです。すでに `req_` で始まる id は変更しません。
+
+### ストリーム開始後のエラー
+
+Monoize は上流の試行が受理された後に SSE ヘッダーを送ります。それ以降の失敗では HTTP ステータス `200` を変更できないため、ストリーム内で通知します。
+
+- `/v1/chat/completions` はエラーのデータフレームを 1 つ送り、続けて `data: [DONE]` を送ります。
+- `/v1/responses` は `code`、`message`、`param` を持つフラットな `error` イベントを送ります。`[DONE]` はありません。
+- 上流の `response.failed` は `response.failed` のままで、部分出力と使用量を保持します。
+- `/v1/messages` は `request_id` 付きの `error` イベントを送ります。`[DONE]` はありません。
+
+### レート制限ヘッダー
+
+同じファミリーのルートでは、Monoize は `retry-after`、`retry-after-ms`、`x-should-retry`、`anthropic-ratelimit-*`、`x-ratelimit-*` を転送します。エラーと成功の両方に適用します。ファミリーをまたぐルートと上流 WebSocket の試行では転送しません。
+
+### サニタイズされたエラーテキスト
+
+システム設定 `monoize_mask_sensitive_info` は既定で有効です。有効な場合、Monoize はクライアント向けエラーテキストの URL、ホスト名、IPv4 アドレス、`api_key:` の値をマスクします。
+
+- たとえば `api.openai.com` は `***.***.com` になります。
+- Monoize は Channel の `base_url`、Channel の `proxy_url`、ノードプロキシのホストを常にマスクします。
+- `response.create`、`reasoning.effort`、`messages.1.content.0.type` などのプロトコル識別子は読めるまま残します。
+- 未設定のプライベート名は、最後のラベルが不明な場合に見えたままになることがあります。
+- トランスポート障害は `failed to request upstream` だけを表示します。解析できない上流ボディはステータスだけを表示します。
+
+完全な詳細は[リクエストログ](/ja/docs/request-logs)で確認できます。

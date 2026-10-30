@@ -5,7 +5,9 @@ description: 在最後一個工具結果上插入 cache_control 快取斷點。
 
 ## 行為
 
-當請求提交工具結果時，此變換在最後一個工具結果上插入 Anthropic ephemeral `cache_control` 快取斷點。每次提交工具結果時，快取斷點會隨對話前進。
+當請求提交工具結果時，此變換在最後一個工具結果上設定快取斷點。Messages 上游將其作為 ephemeral `cache_control` 接收。每次提交工具結果時，快取斷點會隨對話前進。
+
+路由到其他上游類型時，斷點同樣保留。參見[跨協定的快取斷點](/zh-TW/docs/endpoints)。其他上游類型可能收到 `prompt_cache_breakpoint`，也可能不收到標記。
 
 沒有工具結果的請求原樣通過。
 

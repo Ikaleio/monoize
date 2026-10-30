@@ -9,6 +9,8 @@ This transform inserts explicit OpenAI prompt-cache breakpoints on eligible tool
 
 Requests without eligible tool-result blocks pass through unchanged.
 
+The transform does nothing when the upstream type is not `responses`. It requires a GPT-5.6 or later model. A block with an existing marker keeps that marker.
+
 ## Reference
 
 | Property | Value |

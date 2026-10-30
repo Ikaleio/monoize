@@ -31,6 +31,8 @@ Messages requests convert custom tools with an object `input_schema`, their JSON
 
 Responses objects with a non-null error and missing or invalid status produce an error. Empty objects are rejected. Error-free responses with an output array can omit status.
 
+A cross-family response has an upstream type that differs from the endpoint protocol. A `gemini` upstream is always cross-family. Monoize removes provider-specific fields from these responses, in stream and non-stream modes. Examples are `metadata`, `status`, `phase`, `prompt_cache_key`, `container`, `diagnostics`, and `stop_details`. No setting disables this rule. Monoize also rewrites the response id to the target prefix: `resp_`, `chatcmpl-`, or `msg_`. Billing, request logs, and request capture read the original values.
+
 ## List models
 
 ```bash
@@ -55,6 +57,31 @@ curl http://localhost:8080/v1/chat/completions \
 
 Set `"stream": true` for server-sent events. Omit it or set `false` for one JSON response.
 
+Chat streams end with `data: [DONE]`. Monoize sends the usage chunk only when the request sets `stream_options.include_usage` to `true`. This option does not change billing.
+
+### Chat dialects
+
+For each `chat_completion` attempt, Monoize selects one dialect from the Channel base URL host and the upstream model. The first matching row applies.
+
+| Dialect | Match | Reasoning in assistant history | Generated output-token field |
+| --- | --- | --- | --- |
+| `openai` | Host `api.openai.com` or `*.openai.azure.com` | None | `max_completion_tokens` |
+| `openrouter` | Host `openrouter.ai` or `*.openrouter.ai` | `reasoning_details` and `reasoning` | `max_tokens` |
+| `vercel` | Host `ai-gateway.vercel.sh` | `reasoning_details` and `reasoning` | `max_tokens` |
+| `deepseek` | Host `api.deepseek.com`, or a model id that contains `deepseek` | `reasoning_content` | `max_tokens` |
+| `generic` | Every other attempt | `reasoning_details` and `reasoning` | `max_completion_tokens` |
+
+- Host rows come first. A DeepSeek model on OpenRouter uses the `openrouter` dialect.
+- No per-Channel override exists. A retry on another Channel selects the dialect again.
+- `generic` follows OpenRouter-compatible behavior. A strict relay on an unlisted host can reject its extension fields.
+- A Chat client keeps its own output-token field name, except on `deepseek`. The table applies to other clients.
+- Effort uses `reasoning_effort`, including `none`. If a request has both fields, `reasoning.effort` takes precedence over `reasoning_effort`.
+- A native Chat `reasoning` object reaches `openrouter`, `vercel`, and `generic` upstreams only. `openai` and `deepseek` upstreams do not receive it.
+- A budget or enabled mode without effort becomes `reasoning.max_tokens` or `reasoning.enabled` on `openrouter` and `vercel`. Other dialects omit these values.
+- Monoize never sends effort together with `reasoning.max_tokens`.
+- The `openai` dialect omits a native `thinking` object. Only the `vercel` dialect receives `providerOptions`.
+- Chat responses keep the upstream reasoning surface. An upstream `reasoning_content` field stays `reasoning_content` and adds no `reasoning_details`.
+
 ## Responses
 
 ```bash
@@ -74,27 +101,147 @@ Notes:
 - HTTP history defaults to `store=true`. It lasts up to 30 minutes in this process. Restart or cache eviction removes it.
 - Set `store=false` to disable HTTP history retention. Unknown or expired ids return `400 previous_response_not_found`. Resend complete history after this error.
 - Supply current instructions and request controls on each call. Previous top-level `instructions` are not inherited.
-- `GET /v1/responses` supports Codex WebSocket v1 and v2. V1 emits `response.done`; v2 emits `response.completed`. Connection-local continuation also works with `store=false`.
-- `GET /v1/codex/responses` uses the same WebSocket handler. `POST /v1/codex/responses` uses the same HTTP handler. Both paths also have `/api` aliases.
-- A Responses WebSocket client may open an upstream WebSocket to a Responses Channel. `POST /v1/responses` still uses HTTP. Handshake failure falls back to HTTP SSE on the same attempt.
-- Send `response.interrupt` to interrupt the active upstream WebSocket response. Idle interrupts do nothing. Repeated interrupts produce one upstream interrupt per attempt.
-- When the client disconnects, Monoize interrupts the upstream WebSocket response and continues reading terminal usage for billing. HTTP upstream responses continue to drain normally.
+- `POST /v1/responses` streams end after the terminal JSON event. They have no `data: [DONE]` frame. `sequence_number` starts at `0`.
+- Use a WebSocket for long agent sessions. See [Responses WebSocket](#responses-websocket).
 - `POST /v1/responses/compact` compacts a conversation.
+- A compact request needs `input` or `previous_response_id`. A request with neither returns `400 invalid_request`.
 - Monoize forwards the native compact body to upstream `POST /v1/responses/compact`.
 - After Channel selection, if that Channel maps `{model}-openai-compact`, Monoize sends that sibling as the wire model. Otherwise it sends the conversation model.
 - Billing uses the conversation model price. The sibling ID does not need its own price row.
 
-For Responses upstreams, Monoize preserves explicit `include` and `reasoning.summary` values. It does not add `reasoning.encrypted_content` or a default summary setting.
+On `POST /v1/responses` to a Responses upstream, Monoize preserves explicit `include` and `reasoning.summary` values. It does not add `reasoning.encrypted_content` or a default summary setting.
+
+A Chat Completions or Messages client can route to a Responses upstream. If the request has no value, Monoize then sets `include` to `["reasoning.encrypted_content"]` and `store` to `false`. Stateless clients then keep reasoning across tool turns. Messages `thinking` maps to `reasoning.effort` and `reasoning.summary`.
+
+## Responses WebSocket
+
+Upgrade `GET /v1/responses` or `GET /v1/codex/responses` to a WebSocket. Both paths have `/api` aliases and use the same authentication as `POST /v1/responses`. `POST /v1/codex/responses` uses the same HTTP handler as `POST /v1/responses`.
+
+Send each client message as one JSON object in one text frame. Monoize sends each event as one JSON text frame, without SSE framing or `[DONE]`. Each turn has its own request id, request log row, and charge.
+
+### Protocol versions
+
+- `OpenAI-Beta: responses_websockets=2026-02-06` selects v2. It takes precedence when the client sends both versions.
+- `OpenAI-Beta: responses_websockets=2026-02-04` selects v1.
+- Without a version header, `response.append` selects v1. `response.create` selects v2 unless the connection already uses v1.
+- V2 keeps upstream terminal event types.
+- V1 sends `response.done` for a completed response that a later `response.append` can extend. Every other terminal event keeps its type.
+- `response.append` is a local emulation. Monoize builds the next request from its connection cache. The upstream never receives `response.append`.
+
+### Upstream transport
+
+- A turn routed to a Responses Channel can open an upstream WebSocket. `POST /v1/responses` always uses HTTP.
+- Handshake failure uses HTTP SSE on the same attempt. After status `101`, a failure is an ordinary upstream failure, without HTTP fallback.
+- Each lane pins one upstream session to one Channel and upstream model. A continuation on that session sends only the new input.
+- If the upstream answers `previous_response_not_found` or the reused session fails early, Monoize replays the full history on a new session. The client sees no error.
+- A routing or model change closes the pinned session. Closing the client connection closes every pinned session.
+- Monoize adds `reasoning.encrypted_content` to `include` on every generated turn sent to a Responses Channel, unless the client already lists it. Warmup turns and other Channel types do not get this value.
+- For those turns, Monoize removes `encrypted_content` from client events and keeps it in the connection cache. A client that lists the value itself receives `encrypted_content`.
+- Monoize forwards `client_metadata` to upstream WebSocket creates. It also replays `x-codex-turn-state` on the same Channel.
+
+### Lanes
+
+A lane is a request queue inside one connection. Set `stream_id` on `response.create` or `response.append` to select a named lane. Omit it to use the default lane.
+
+- `stream_id` is a string of 1 to 256 characters from `[A-Za-z0-9_.-]`.
+- A connection accepts at most 32 named lanes. The default lane does not count.
+- Turns in one lane run in arrival order. Different lanes run concurrently.
+- At most 16 turns generate at once on one connection. Other turns wait in their lanes.
+- Every event of a named lane carries its `stream_id`, including errors and acknowledgements. Default-lane events carry none.
+- Monoize does not send `stream_id` upstream.
+
+### Continuation
+
+Send a returned `resp_monoize_` id as `previous_response_id`. Monoize then builds the input from the cached input, the cached output, and the new input. This also works with `store=false`.
+
+- Each lane caches its last `completed`, `incomplete`, or `cancelled` response. This includes interrupted and steered responses.
+- A `previous_response_id` can name a response from another lane. Use this to fork a conversation.
+- A v2 `response.create` uses only its own controls. Only v1 `response.append` inherits controls from the cached response.
+- A turn that ends with `response.failed` or an error frame creates no cache entry. It also removes the entry that a same-lane continuation referenced. A failed fork keeps the parent entry.
+- An unknown id returns `previous_response_not_found`. The connection stays open. Resend the complete history after this error.
+- A non-string `previous_response_id`, or one combined with `conversation`, returns `400 invalid_request`.
+- Monoize replaces an `item_reference` input with a copy of the matching cached item. It forwards an unmatched reference unchanged.
+- Closing the WebSocket deletes all cached responses.
+
+### Warmup
+
+Set `generate` to `false` on `response.create` to warm up a session.
+
+- If the first attempt can use an upstream WebSocket, Monoize sends the warmup upstream. Billing and logs use the upstream usage.
+- Otherwise Monoize answers locally with `response.created` and `response.completed`. It makes no upstream call, writes no log row, and charges nothing.
+
+### Interruption
+
+Send `{"type":"response.interrupt"}`. Optional members are `response_id`, `stream_id`, and `mode`. The only accepted `mode` is `discard_partial_items`.
+
+- `response_id` selects that generating turn. Otherwise `stream_id` selects a lane, and no `stream_id` selects the default lane.
+- An interrupt does nothing when the selected lane is idle. Repeated interrupts of one turn produce one interrupt.
+- An interrupt does not consume a turn and does not create a log row.
+- If `response_id` names no generating turn while another turn generates, Monoize sends `response.interrupt.failed` with code `response_not_in_progress`.
+- On an upstream WebSocket, Monoize sends one upstream interrupt. It relays `response.interrupt.accepted` or `response.interrupt.failed` with the public id, then the terminal event.
+- On HTTP SSE or a non-Responses upstream, Monoize stops forwarding after `response.created`. It sends `response.interrupt.accepted`, then `response.completed` with finished items only and `usage: null`.
+- In that case, Monoize reads the rest of the upstream response in the background. Billing and the log row complete once.
+- When the client disconnects, Monoize discards queued turns and interrupts upstream WebSocket responses. It continues reading terminal usage for billing. HTTP upstream responses continue to drain.
+
+### Steering
+
+Send `{"type":"response.steer","previous_response_id":"<id>","input":"..."}` to add input to a generating response. `input` is a string or a non-empty array of `user` messages. A steer does not wait in the queue and does not consume a turn.
+
+Monoize forwards the steer on an upstream WebSocket. It relays `response.steer.accepted`, `response.steer.pending`, and `response.steer.failed` with the public id.
+
+After an accepted steer, the upstream can start a successor response. Monoize runs it as a new turn with its own id, log row, and charge. Its `previous_response_id` is the steered response. If the Channel or upstream model no longer matches, the turn fails with `502 steer_successor_unavailable`.
+
+`response.steer.failed` uses these codes:
+
+| Code | Meaning |
+| --- | --- |
+| `invalid_input` | The event has an extra member or invalid `input` |
+| `response_not_active` | The cached response is no longer generating |
+| `response_not_found` | The id matches no response on this connection |
+| `steering_not_supported` | The turn uses HTTP SSE or a non-Responses upstream, or the Channel rejected steering earlier |
+
+Monoize remembers a Channel that rejects steering until the process restarts. Later steers for that Channel fail locally. The current response continues.
+
+### Error frames and limits
+
+Every error frame has this shape. It has no `sequence_number`. A named-lane error also carries `stream_id`. A turn error ends only that turn.
+
+```json
+{ "type": "error", "status": 400, "error": { "type": "invalid_request_error", "code": "previous_response_not_found", "message": "...", "param": "previous_response_id" } }
+```
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `invalid_websocket_event` | `400` | The message is invalid. A bad first message also closes the connection |
+| `invalid_stream_id` | `400` | `stream_id` has an invalid format |
+| `websocket_stream_limit_reached` | `400` | The event names a 33rd lane |
+| `invalid_interrupt` | `400` | `mode` has an unsupported value |
+| `background_not_supported` | `400` | The event sets `background=true` |
+| `websocket_history_limit_exceeded` | `400` | The assembled request exceeds a retained history limit |
+| `websocket_connection_limit_reached` | `400` | The connection reached a turn, byte, or age limit. Monoize then closes it |
+| `websocket_sse_limit_exceeded` | `502` | An internal SSE frame or buffer limit ended the turn |
+
+A connection closes at the age limit, which is 60 minutes by default. Open a new connection to continue. See [Configuration](/en/docs/configuration) for all limits.
 
 ## Disable reasoning
 
 Set `"reasoning_effort": "none"` in Chat Completions requests. Set `"reasoning": { "effort": "none" }` in Responses requests.
 
-Monoize preserves explicit `none` for OpenAI-compatible upstreams. A preserved native Chat `reasoning` object receives `effort: "none"` instead of the top-level shorthand.
+Monoize preserves explicit `none` for Responses upstreams and for the `openai`, `openrouter`, `vercel`, and `generic` Chat dialects. On `openrouter`, `vercel`, and `generic`, a preserved native Chat `reasoning` object receives `effort: "none"` instead of the top-level shorthand.
 
-Without explicit Messages controls, Monoize converts `none` to `thinking: { "type": "disabled" }` for Messages upstreams. Gemini upstreams receive `generationConfig.thinkingConfig.thinkingBudget: 0`.
+Without explicit Messages controls, the Messages upstream result depends on the model:
 
-DeepSeek Chat requests pass reasoning effort values through without remapping or generated `thinking` controls.
+- Most models receive `thinking: { "type": "disabled" }`.
+- Sonnet 5.5 receives `thinking: { "type": "between_tools" }`.
+- Other models that reject `disabled`, such as Fable, Mythos, and Opus 5.5 or later, receive no `thinking` field.
+
+Gemini upstreams receive the off value of the model family:
+
+- Budget families receive `thinkingBudget: 0`. Gemini 2.x Pro receives `128`, because it cannot disable thinking.
+- Level families, such as Gemini 3 and 4, receive the lowest supported `thinkingLevel`.
+- Families without thinking support receive no thinking configuration.
+
+The `deepseek` Chat dialect receives `thinking: { "type": "disabled" }` for `none`, without `reasoning_effort`. Other effort values pass through as `reasoning_effort`.
 
 Omitting effort permits the upstream default. Use a model that supports disabled reasoning. Models with mandatory reasoning cannot honor this request.
 
@@ -112,20 +259,105 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
+On a `messages` upstream, Monoize forwards the client `anthropic-version` value. Without one, it sends `2023-06-01`. It merges client `anthropic-beta` tokens with generated and Channel tokens, each token once. Other upstream types do not receive these client headers.
+
+Monoize forwards explicit `thinking` and `output_config` controls without local validation. The upstream decides whether to accept them. Monoize validates only the controls that it generates, and returns `400 invalid_request` for an invalid combination.
+
+Every `/v1/messages` and `/v1/messages/count_tokens` response carries a `request-id` header. See the error section for its format.
+
+### Count tokens
+
+`POST /v1/messages/count_tokens` uses the same authentication, redirects, and model limits as `/v1/messages`.
+
+- Monoize tries only `messages` Channels in route order. It forwards the body with only `model` replaced.
+- If no such Channel exists, it returns `404 not_found_error`. Claude Code then falls back to a local estimate.
+- This endpoint charges nothing, writes no request log, and does not change Channel health.
+
 ## Gemini upstreams
 
 Set the Channel upstream type to `gemini` to use Gemini through the existing endpoints. This support adds no public Gemini HTTP endpoint or Live API.
 
 Monoize converts `generateContent` requests, responses, and conversation history in both directions. Streaming uses `streamGenerateContent` SSE.
 
-- Text, reasoning, function calls, function results, and supported media retain their order and identity. Thought signatures remain attached to their original Parts.
+- Text, reasoning, function calls, function results, and supported media retain their order and identity.
+- Other protocols carry thought signatures on text and media as opaque reasoning values. Replay these values unchanged to restore each signature to its Part.
+- On Gemini 3 and later, the first unsigned function call of each current-turn model Content receives `skip_thought_signature_validator`.
+- A Channel base URL can end in `/v1`, `/v1beta`, or `/v1alpha`. That segment sets the API version. Otherwise Monoize uses `v1beta`.
+- Reasoning controls follow the model family. Gemini 2.x uses a `thinkingBudget` clamped to the model range. Gemini 3 and later use `thinkingLevel`. Monoize never sends both.
+- Custom tools become function declarations with one `input` string. Monoize restores returned calls as custom tool calls.
 - Generation controls, structured response formats, tools, and tool choice convert to their supported equivalents.
+- More than 5 stop sequences fail the attempt with a request error.
 - Token logprobs remain attached to matching text. Changed text discards stale scores. Gemini permits at most 20 requested top logprobs.
 - Representable citations and grounding links convert to the target format. Citation ranges retain their text locations, including non-ASCII text.
 - Text and reasoning stream before completion. Atomic media and signed Parts can wait until complete. Failed or truncated streams produce errors.
 - Monoize returns candidate index zero when present, otherwise the first candidate. It does not combine independent candidates.
 
-Gemini-only tools, provider-executed code, and unsupported metadata stay within Gemini. A target protocol receives only the features it can represent.
+Other protocols receive Gemini-specific output as follows:
+
+- Code execution Parts appear as fenced assistant text.
+- `toolCall` and `toolResponse` Parts travel whole in an opaque reasoning value. Monoize restores them in place when the client replays that value. A client that discards reasoning values loses them.
+- Other unknown Parts and unsupported metadata stay within Gemini.
+
+### Continuation tokens
+
+A `CONTINUATION` finish reason produces an incomplete response with reason `max_output_tokens`. Every protocol receives the token as an opaque reasoning value. Responses clients also see `incomplete_details.continuation_token`.
+
+- To continue, replay the partial assistant turn with that value. Monoize removes the turn and sends the latest token as `continuationToken`.
+- A client can instead repeat the original contents with an explicit top-level `continuationToken`.
+- `maxOutputTokens` is cumulative across hops. Increase or omit it on each hop.
+
+### Image size
+
+For image output, Monoize converts a `WxH` size to `imageConfig.aspectRatio` and `imageConfig.imageSize`. Native values take precedence.
+
+- The aspect ratio is the nearest ratio that the model family supports.
+- The longest edge selects a tier: up to 792 is `512`, up to 1584 is `1K`, up to 3168 is `2K`, and larger is `4K`.
+- Monoize raises the tier to the smallest tier that the model documents, or lowers it to the largest.
+- 2.5 Flash Image and 3.1 Flash Lite Image receive no `imageSize`.
+- 3.1 Flash Image documents `512`, `1K`, `2K`, and `4K`. Nano Banana and 3 Pro Image document `1K`, `2K`, and `4K`.
+
+## Built-in tools across protocols
+
+Built-in tools can route to another upstream family without a request error. Monoize maps the definition when a target exists. Otherwise it drops the definition for that attempt.
+
+| Source tool | Target upstream | Result |
+| --- | --- | --- |
+| Responses `web_search`, `web_search_preview` | `messages` | `web_search_20250305`, with `allowed_domains` and `user_location` copied |
+| Messages `web_search_*` | `responses` | `web_search`, with `allowed_domains` and `user_location` copied. `blocked_domains` and `max_uses` are dropped |
+| Web search of either family | `chat_completion`, `openrouter` dialect | `openrouter:web_search` |
+| Web search of either family | `chat_completion`, other dialects | Dropped |
+| `web_search*` | `gemini` | `googleSearch` |
+| `code_interpreter`, `code_execution*` | `gemini` | `codeExecution` |
+| `web_fetch*` | `gemini` | `urlContext` |
+| Every other built-in tool | Another family | Dropped |
+
+- A forced choice of a mapped tool stays forced.
+- A choice that names a dropped tool becomes `auto`. If no tool remains, Monoize removes `tool_choice` and does not send `tools: []`.
+- Search result items do not cross families. The client receives the answer text without search blocks.
+- A Chat client can send `openrouter:*` tools. Monoize replays them on the `openrouter` and `generic` dialects.
+- On the `openai`, `deepseek`, and `vercel` dialects, these tools fail with `400 unsupported_tool` before dispatch. Any other tool type without a Chat encoding fails the same way.
+
+## Cache breakpoints across protocols
+
+Monoize accepts `cache_control` and `prompt_cache_breakpoint` on request blocks from all three client protocols. If one block has both, `cache_control` takes precedence. Markers stay on text, media, tool call, tool result, and tool definition objects during conversion. Top-level `cache_control` remains a Messages request control.
+
+| Upstream | Marker sent |
+| --- | --- |
+| `messages` | `cache_control` on the matching block or tool |
+| `responses` | `prompt_cache_breakpoint` on input text, image, file, and tool output parts |
+| `chat_completion`, `openai` dialect | `prompt_cache_breakpoint` on content parts |
+| `chat_completion`, `openrouter`, `vercel`, `generic` dialects | `cache_control` on content parts and tool definitions |
+| `chat_completion`, `deepseek` dialect | None. DeepSeek caches automatically |
+| `gemini` | None |
+
+A marker from the same protocol family replays unchanged. A converted marker follows these rules:
+
+- It drops unknown members. It keeps `ttl` only when the target accepts that value, and Monoize never translates a TTL.
+- `cache_control` accepts `5m` and `1h`. Responses `prompt_cache_breakpoint` accepts `30m` and `12h`. `openai` Chat accepts `30m`.
+- Conversion toward Responses or `openai` Chat requires a GPT-5.6 or later model id. A deployment alias with another name receives no marker.
+- Responses and `openai` Chat receive no converted marker on assistant text, tool calls, or tool definitions. A marked system message becomes an input message.
+- A converted marker on a tool result moves to its last eligible part.
+- Toward `messages`, Monoize drops a marker on empty text. It keeps the last markers that fit the limit of 4, minus top-level `cache_control` and native markers in provider items.
 
 ## Embeddings
 
@@ -253,12 +485,67 @@ client = anthropic.Anthropic(
 
 ## Error responses
 
+Errors before the response starts use the HTTP status and JSON body of the called endpoint. This rule applies with `stream` set to `true` or `false`. Monoize does not wrap these errors in HTTP `200` or SSE.
+
+`POST /v1/responses` and `POST /v1/chat/completions` return this body:
+
+```json
+{ "error": { "message": "...", "type": "invalid_request_error", "param": null, "code": "invalid_value" } }
+```
+
+`POST /v1/messages` returns this body and the same id in the `request-id` header:
+
+```json
+{ "type": "error", "error": { "type": "invalid_request_error", "message": "..." }, "request_id": "req_..." }
+```
+
+Embeddings, compact, decision, and image endpoints follow the same status rule and keep their `{"error": ...}` body.
+
+### Local errors
+
 | HTTP status | Code | Meaning |
 | --- | --- | --- |
+| `400`, `413`, `415`, `422` | `invalid_json` | The body is invalid JSON, too large, not JSON content, or has the wrong shape |
 | `401` | `unauthorized` | The API key is missing, invalid, disabled, or expired |
 | `402` | `insufficient_balance` | The user or sub-account balance is empty |
 | `403` | `model_not_allowed` | The key's model limits reject the requested model |
 | `403` | `ip_not_allowed` | The client IP is not in the key's IP whitelist |
-| `502` | `upstream_error` | No route serves the model, or all eligible routes failed |
+| `502` | `upstream_error` | No route serves the model |
 
-Upstream error text is sanitized before it reaches the client. Read the full detail in [Request Logs](/en/docs/request-logs).
+### Upstream failures
+
+When all routes fail, the client receives the status, `type`, `code`, `param`, and sanitized `message` of the final failed attempt.
+
+- Statuses such as `400`, `404`, `409`, `413`, `422`, `429`, and `5xx` pass through.
+- A final upstream `401`, `403`, or `407` returns `502` with code `upstream_error`. The failure belongs to the Channel credential, not the client.
+- That body also carries `upstream_status` and, when reported, `upstream_code`. Its `type` is `server_error`, or `api_error` on Messages.
+- A failure without an upstream HTTP status returns `502`. A transport failure has the message `failed to request upstream`.
+- A failure without an upstream code uses `upstream_error`.
+- A `401` for the client's own Monoize key stays `401`.
+
+On `/v1/messages`, `error.type` is always a native Messages error type. The `request_id` value is `req_` plus the request id. An id that already starts with `req_` stays unchanged.
+
+### Errors after the stream starts
+
+Monoize sends SSE headers after an upstream attempt is accepted. A later failure cannot change HTTP status `200`, so it arrives in the stream:
+
+- `/v1/chat/completions` sends one error data frame, then `data: [DONE]`.
+- `/v1/responses` sends a flat `error` event with `code`, `message`, and `param`, and no `[DONE]`.
+- An upstream `response.failed` stays `response.failed`, with partial output and usage.
+- `/v1/messages` sends an `error` event with `request_id`, and no `[DONE]`.
+
+### Rate-limit headers
+
+On same-family routes, Monoize forwards `retry-after`, `retry-after-ms`, `x-should-retry`, `anthropic-ratelimit-*`, and `x-ratelimit-*`. This applies to errors and successes. Cross-family routes and upstream WebSocket attempts forward none of them.
+
+### Sanitized error text
+
+The system setting `monoize_mask_sensitive_info` is on by default. When it is on, Monoize masks URLs, hostnames, IPv4 addresses, and `api_key:` values in client error text.
+
+- For example, `api.openai.com` becomes `***.***.com`.
+- Monoize always masks the hosts of Channel `base_url`, Channel `proxy_url`, and the node proxy.
+- Protocol identifiers stay readable, such as `response.create`, `reasoning.effort`, and `messages.1.content.0.type`.
+- An unconfigured private name with an unknown final label can stay visible.
+- A transport failure shows only `failed to request upstream`. An unparseable upstream body shows only the status.
+
+Read the full detail in [Request Logs](/en/docs/request-logs).

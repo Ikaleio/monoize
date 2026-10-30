@@ -5,9 +5,11 @@ description: Insert an Anthropic cache_control breakpoint after the system promp
 
 ## What it does
 
-This transform inserts an Anthropic ephemeral `cache_control` breakpoint on the last system or developer node of the request. The upstream then caches the stable system prefix and reads it from cache on later requests.
+This transform sets a cache breakpoint on the last system or developer text or media node of the request. A Messages upstream receives it as ephemeral `cache_control`. The upstream then caches the stable system prefix and reads it from cache on later requests.
 
-The transform changes nothing when the request has no system or developer node.
+The breakpoint also survives routing to other upstream types. See [cache breakpoints across protocols](/en/docs/endpoints). Other upstream types can receive `prompt_cache_breakpoint`, or no marker.
+
+The transform changes nothing when the request has no such node. System-role provider items do not count.
 
 ## Reference
 
