@@ -553,7 +553,8 @@ async fn execute_nonstream<T>(
                                 )
                                 .await);
                             }
-                            Err(CollectedUpstreamError::Upstream(err)) => {
+                            Err(CollectedUpstreamError::Upstream(mut err)) => {
+                                err.forwarded_headers = std::mem::take(&mut forwarded_headers);
                                 let same_channel_retryable =
                                     is_same_channel_retryable_app_error(&err);
                                 let passive_failure_class = same_channel_retryable
@@ -724,7 +725,8 @@ async fn execute_nonstream<T>(
                                 &req_attempt,
                             ) {
                                 Ok(resp) => resp,
-                                Err(err) => {
+                                Err(mut err) => {
+                                    err.forwarded_headers = std::mem::take(&mut forwarded_headers);
                                     let same_channel_retryable =
                                         is_same_channel_retryable_app_error(&err);
                                     let passive_failure_class = same_channel_retryable
@@ -925,6 +927,16 @@ async fn execute_nonstream<T>(
                     if let Some(echo) = responses_echo {
                         resp.extra_body
                             .insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo);
+                    }
+                    if strip_foreign_response {
+                        let mask_sensitive_info =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
+                        normalize_outcome_error(
+                            &mut resp.outcome,
+                            downstream,
+                            request_id.as_deref(),
+                            mask_sensitive_info,
+                        );
                     }
                     let accepted = match accept(&resp, &logical_model) {
                         Ok(accepted) => accepted,

@@ -100,12 +100,20 @@ impl ResponseOutcome {
                 "Upstream response failed"
             });
         }
+        let mut request_id = None;
         if messages {
-            error["type"] = json!("api_error");
+            // SE2a: the normalizer stores the native type and request id here.
+            let object = error.as_object_mut().expect("error is a JSON object");
+            let error_type = object.remove("error_type").unwrap_or(json!("api_error"));
+            object.insert("type".to_string(), error_type);
+            request_id = object.remove("request_id");
         }
         let mut body = json!({"error":error});
         if messages {
             body["type"] = json!("error");
+        }
+        if let Some(request_id) = request_id {
+            body["request_id"] = request_id;
         }
         Some(body)
     }

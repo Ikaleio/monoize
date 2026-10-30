@@ -49,11 +49,30 @@ const PRE_OUTPUT_BUFFER_MAX_EVENTS: usize = 256;
 /// FP4h: the single transition from "no downstream response yet" to committed
 /// SSE headers. Cloned into the forwarding task and every attempt.
 #[derive(Clone)]
-pub(super) struct StreamCommit(
-    Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<AppResult<ForwardedHeaders>>>>>,
-);
+pub(super) struct StreamCommit {
+    sender:
+        Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<AppResult<ForwardedHeaders>>>>>,
+    downstream_gone: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// RL1h-1: sets the flag when the waiting handler or the returned response body
+/// is dropped. The forwarding task feeds an internal channel, whose open state
+/// says nothing about the real client.
+struct DownstreamLifetime(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for DownstreamLifetime {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
 
 impl StreamCommit {
+    /// RL1h-1: whether the real downstream response body has gone away.
+    fn downstream_gone(&self) -> bool {
+        self.downstream_gone
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Commits the SSE headers. Later calls have no effect (SE1d).
     fn accept(&self, headers: ForwardedHeaders) {
         if let Some(tx) = self.take_sender() {
@@ -74,16 +93,30 @@ impl StreamCommit {
     }
 
     fn take_sender(&self) -> Option<tokio::sync::oneshot::Sender<AppResult<ForwardedHeaders>>> {
-        self.0.lock().expect("commit lock is never poisoned").take()
+        self.sender
+            .lock()
+            .expect("commit lock is never poisoned")
+            .take()
     }
 }
 
-/// Decoders synthesize status 400 for a terminal frame without a `status`
-/// member; well-known retryable classes must not reach the client as a 400.
+const CREDENTIAL_ERROR_SIGNALS: [&str; 4] = [
+    "authentication_error",
+    "invalid_api_key",
+    "permission_error",
+    "permission_denied",
+];
+
+/// STRM-2b: decoders synthesize status 400 for a terminal frame without a
+/// `status` member; well-known retryable classes must not reach the client as
+/// a 400, and a credential signal must reach RTA-8b.
 fn pre_output_error_status(http_status: u16, code: &str, error_type: Option<&str>) -> StatusCode {
     let signal = |expected: &[&str]| {
         expected.contains(&code) || error_type.is_some_and(|value| expected.contains(&value))
     };
+    if signal(&CREDENTIAL_ERROR_SIGNALS) {
+        return StatusCode::UNAUTHORIZED;
+    }
     if http_status == StatusCode::BAD_REQUEST.as_u16() {
         if signal(&["rate_limit_exceeded", "rate_limit_error"]) {
             return StatusCode::TOO_MANY_REQUESTS;
@@ -109,14 +142,25 @@ async fn probe_stream_first_output(
     let mut buffered = Vec::new();
     loop {
         match decoded_rx.recv().await {
-            Some(event @ crate::urp::UrpStreamEvent::ProviderControl { .. })
-                if buffered.len() < PRE_OUTPUT_BUFFER_MAX_EVENTS =>
-            {
+            Some(
+                crate::urp::UrpStreamEvent::ProviderControl { .. }
+                | crate::urp::UrpStreamEvent::ResponseStart { .. },
+            ) if buffered.len() >= PRE_OUTPUT_BUFFER_MAX_EVENTS => {
+                decode_handle.abort();
+                return Err(PreOutputStreamFailure {
+                    error: AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_control_overflow",
+                        "upstream sent too many control events before its first output",
+                    )
+                    .with_type("server_error"),
+                    failure_class: Some(RetryableFailureClass::Transient),
+                });
+            }
+            Some(event @ crate::urp::UrpStreamEvent::ProviderControl { .. }) => {
                 buffered.push(event)
             }
-            Some(event @ crate::urp::UrpStreamEvent::ResponseStart { .. })
-                if buffered.len() < PRE_OUTPUT_BUFFER_MAX_EVENTS =>
-            {
+            Some(event @ crate::urp::UrpStreamEvent::ResponseStart { .. }) => {
                 commit.accept(Vec::new());
                 buffered.push(event)
             }
@@ -131,6 +175,7 @@ async fn probe_stream_first_output(
                     .as_ref()
                     .and_then(|terminal| terminal.error_type.clone());
                 let param = terminal.and_then(|terminal| terminal.param);
+                let reported_code = code.clone();
                 let code = code.unwrap_or_else(|| "upstream_stream_error".to_string());
                 let failure_class = midstream_terminal_failure_class(
                     http_status,
@@ -140,9 +185,9 @@ async fn probe_stream_first_output(
                 // `upstream_status` stays unset: the status is synthesized by the
                 // decoder and must not trigger an RTA-6c shared-origin blast.
                 let status = pre_output_error_status(http_status, &code, error_type.as_deref());
-                let error = AppError::new(status, code.clone(), message).with_upstream_error(
+                let error = AppError::new(status, code, message).with_upstream_error(
                     None,
-                    Some(code),
+                    reported_code,
                     error_type,
                     param,
                 );
@@ -214,12 +259,23 @@ async fn emit_stream_error_if_needed(
     downstream: DownstreamProtocol,
     err: &AppError,
     request_id: Option<&str>,
+    mask_sensitive_info: bool,
     tx: &mpsc::Sender<Event>,
     capture_frames: Option<&crate::request_capture::SseFrameCapture>,
 ) {
     if err.downstream_stream_terminal_sent {
         return;
     }
+    // SAN-11: a stream-stage error never passed through SAN-1.
+    let masked;
+    let err = if mask_sensitive_info {
+        let mut clone = err.clone();
+        clone.message = crate::error_sanitize::mask_sensitive_text(&err.message);
+        masked = clone;
+        &masked
+    } else {
+        err
+    };
     let (event_name, body) = match downstream {
         DownstreamProtocol::Responses => (Some("error"), responses_stream_error_json(0, err)),
         DownstreamProtocol::ChatCompletions => (None, openai_error_json(err)),
@@ -251,12 +307,192 @@ async fn emit_stream_error_if_needed(
     }
 }
 
+/// SE2a: the status used to derive a native type when the frame reports none.
+fn stream_error_status(explicit: Option<u64>, signal: impl Fn(&[&str]) -> bool) -> StatusCode {
+    if let Some(status) = explicit
+        .filter(|status| (400..=599).contains(status))
+        .and_then(|status| StatusCode::from_u16(status as u16).ok())
+    {
+        return status;
+    }
+    if signal(&["rate_limit_exceeded", "rate_limit_error"]) {
+        StatusCode::TOO_MANY_REQUESTS
+    } else if signal(&["server_error", "api_error", "overloaded_error"]) {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::BAD_GATEWAY
+    }
+}
+
+/// SE2a: reduces one error to the fields its downstream protocol renders. Raw
+/// frames, provider metadata and diagnostics stay in the logs and captures.
+fn native_stream_error(
+    downstream: DownstreamProtocol,
+    code: Option<&str>,
+    extra_body: &HashMap<String, Value>,
+    request_id: Option<&str>,
+    mask_sensitive_info: bool,
+) -> (Option<String>, HashMap<String, Value>) {
+    let nested = extra_body.get("error").and_then(Value::as_object);
+    let member = |key: &str| {
+        extra_body
+            .get(key)
+            .or_else(|| nested.and_then(|error| error.get(key)))
+    };
+    // A top-level `type: "error"` names the frame, not the error class.
+    let error_type = extra_body
+        .get("error_type")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            extra_body
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|value| *value != "error")
+        })
+        .or_else(|| {
+            nested
+                .and_then(|error| error.get("type"))
+                .and_then(Value::as_str)
+        })
+        .filter(|value| !value.is_empty());
+    let code = code.filter(|code| !code.is_empty());
+    let signal = |expected: &[&str]| {
+        code.is_some_and(|code| expected.contains(&code))
+            || error_type.is_some_and(|value| expected.contains(&value))
+    };
+    let status = stream_error_status(member("status").and_then(Value::as_u64), signal);
+    let credential =
+        matches!(status.as_u16(), 401 | 403 | 407) || signal(&CREDENTIAL_ERROR_SIGNALS);
+    let mask =
+        |text: &str| crate::error_sanitize::maybe_mask_sensitive_text(text, mask_sensitive_info);
+    let param = member("param")
+        .and_then(Value::as_str)
+        .filter(|_| !credential)
+        .map(mask);
+    let openai_type = if credential {
+        "server_error".to_string()
+    } else {
+        error_type
+            .map(mask)
+            .unwrap_or_else(|| openai_error_type_for_status(status).to_string())
+    };
+    let mut native = HashMap::new();
+    let native_code = match downstream {
+        DownstreamProtocol::AnthropicMessages => {
+            let mut err = AppError::new(
+                if credential {
+                    StatusCode::BAD_GATEWAY
+                } else {
+                    status
+                },
+                "upstream_error",
+                "",
+            );
+            err.upstream_type = error_type.filter(|_| !credential).map(str::to_string);
+            native.insert(
+                "error_type".to_string(),
+                Value::String(anthropic_error_type(&err)),
+            );
+            let request_id = request_id
+                .filter(|value| !value.is_empty())
+                .map(super::messages_wire_request_id)
+                .unwrap_or_else(|| super::messages_wire_request_id(&uuid::Uuid::new_v4().to_string()));
+            native.insert("request_id".to_string(), Value::String(request_id));
+            None
+        }
+        DownstreamProtocol::ChatCompletions => {
+            native.insert("type".to_string(), Value::String(openai_type));
+            native.insert(
+                "param".to_string(),
+                param.map(Value::String).unwrap_or(Value::Null),
+            );
+            Some(if credential {
+                "upstream_error".to_string()
+            } else {
+                code.map(mask)
+                    .unwrap_or_else(|| "upstream_error".to_string())
+            })
+        }
+        DownstreamProtocol::Responses => {
+            if let Some(param) = param {
+                native.insert("param".to_string(), Value::String(param));
+            }
+            Some(if credential {
+                "server_error".to_string()
+            } else {
+                code.map(mask)
+                    .unwrap_or_else(|| "upstream_error".to_string())
+            })
+        }
+    };
+    (native_code, native)
+}
+
+/// SE2a for a stream event: terminal `Error` events and failed outcomes.
+fn normalize_stream_error_event(
+    event: &mut urp::UrpStreamEvent,
+    downstream: DownstreamProtocol,
+    request_id: Option<&str>,
+    mask_sensitive_info: bool,
+) {
+    match event {
+        urp::UrpStreamEvent::Error {
+            code,
+            message,
+            extra_body,
+        } => {
+            let (native_code, native) = native_stream_error(
+                downstream,
+                code.as_deref(),
+                extra_body,
+                request_id,
+                mask_sensitive_info,
+            );
+            *code = native_code;
+            *extra_body = native;
+            *message =
+                crate::error_sanitize::maybe_mask_sensitive_text(message, mask_sensitive_info);
+        }
+        urp::UrpStreamEvent::ResponseDone { outcome, .. } => {
+            normalize_outcome_error(outcome, downstream, request_id, mask_sensitive_info);
+        }
+        _ => {}
+    }
+}
+
+/// SE2a for a response outcome, on stream and non-stream paths.
+pub(super) fn normalize_outcome_error(
+    outcome: &mut Option<urp::ResponseOutcome>,
+    downstream: DownstreamProtocol,
+    request_id: Option<&str>,
+    mask_sensitive_info: bool,
+) {
+    let Some(error) = outcome.as_mut().and_then(|outcome| outcome.error.as_mut()) else {
+        return;
+    };
+    let (native_code, native) = native_stream_error(
+        downstream,
+        error.code.as_deref(),
+        &error.extra_body,
+        request_id,
+        mask_sensitive_info,
+    );
+    error.code = native_code;
+    error.extra_body = native;
+    if let Some(message) = &error.message {
+        error.message = Some(crate::error_sanitize::maybe_mask_sensitive_text(
+            message,
+            mask_sensitive_info,
+        ));
+    }
+}
+
 /// SE1b: gateway-generated in-stream errors carry the same `request_id`.
 fn anthropic_stream_error_json(err: &AppError, request_id: Option<&str>) -> Value {
     let request_id = request_id
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        .map(super::messages_wire_request_id)
+        .unwrap_or_else(|| super::messages_wire_request_id(&uuid::Uuid::new_v4().to_string()));
     anthropic_error_json(err, &request_id)
 }
 
@@ -297,14 +533,25 @@ async fn retain_decoded_terminal_output(
     terminal_output: Arc<Mutex<Vec<urp::Node>>>,
     aliases: HashMap<String, urp::ToolIdentity>,
     foreign_target: Option<urp::ProviderProtocol>,
+    downstream: DownstreamProtocol,
+    request_id: Option<String>,
+    mask_sensitive_info: bool,
 ) -> AppResult<()> {
     while let Some(mut event) = rx.recv().await {
         restore_tool_namespace_event(&mut event, &aliases);
         // XTRA-5a, before any response transform. Settlement reads the decoder
         // usage from the runtime metrics, so it keeps the unstripped values.
-        if let Some(target) = foreign_target {
-            urp::strip_foreign_stream_event(&mut event, target);
+        if let Some(target) = foreign_target
+            && !urp::strip_foreign_stream_event(&mut event, target)
+        {
+            continue;
         }
+        normalize_stream_error_event(
+            &mut event,
+            downstream,
+            request_id.as_deref(),
+            mask_sensitive_info,
+        );
         if let urp::UrpStreamEvent::ResponseDone { output, .. } = &event {
             *terminal_output.lock().await = output.clone();
         }
@@ -415,7 +662,9 @@ fn precommitted_error_stream(
 ) -> ForwardEventStream {
     let (tx, rx) = mpsc::channel::<Event>(8);
     tokio::spawn(async move {
-        emit_stream_error_if_needed(downstream, &err, request_id.as_deref(), &tx, None).await;
+        // `err` already holds client text: RTA-8 or a local error.
+        emit_stream_error_if_needed(downstream, &err, request_id.as_deref(), false, &tx, None)
+            .await;
     });
     receiver_event_stream(rx)
 }
@@ -434,7 +683,12 @@ where
     S: futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 {
     let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
-    let commit = StreamCommit(Arc::new(std::sync::Mutex::new(Some(commit_tx))));
+    let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lifetime = DownstreamLifetime(downstream_gone.clone());
+    let commit = StreamCommit {
+        sender: Arc::new(std::sync::Mutex::new(Some(commit_tx))),
+        downstream_gone,
+    };
     let forwarding = forwarding(commit.clone());
     let (tx, rx) = mpsc::channel::<Event>(64);
     tokio::spawn(async move {
@@ -470,7 +724,11 @@ where
         )
         .with_type("server_error")
     })??;
-    let mut response = Sse::new(receiver_event_stream(rx).boxed())
+    let body = receiver_event_stream(rx).map(move |event| {
+        let _lifetime = &lifetime;
+        event
+    });
+    let mut response = Sse::new(body.boxed())
         .keep_alive(keep_alive)
         .into_response();
     crate::error::append_forwarded_headers(&mut response, forwarded_headers);
@@ -795,7 +1053,8 @@ pub(super) async fn forward_stream_typed(
                             &nonstream_req,
                         ) {
                             Ok(resp) => resp,
-                            Err(err) => {
+                            Err(mut err) => {
+                                err.forwarded_headers = forwarded_headers;
                                 let same_channel_retryable =
                                     is_same_channel_retryable_app_error(&err);
                                 let passive_failure_class = same_channel_retryable
@@ -855,6 +1114,14 @@ pub(super) async fn forward_stream_typed(
                         let foreign_extras =
                             foreign_response_target(downstream, attempt.provider_type)
                                 .map(|target| urp::strip_foreign_response(&mut resp, target));
+                        let mask_sensitive_info_for_stream =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
+                        normalize_outcome_error(
+                            &mut resp.outcome,
+                            downstream,
+                            request_id.as_deref(),
+                            mask_sensitive_info_for_stream,
+                        );
                         // Wrap newly produced encrypted reasoning payloads in
                         // mz2 envelopes BEFORE response-phase transforms run.
                         // See `nonstream.rs` and PIPE-1d in
@@ -979,6 +1246,7 @@ pub(super) async fn forward_stream_typed(
                         if downstream.is_same_family(attempt.provider_type) {
                             commit.accept(forwarded_headers);
                         }
+                        let commit_for_stream = commit.clone();
                         tokio::spawn(async move {
                             let _pending_request_log_guard = pending_request_log_guard_for_stream;
                             let mut resp = resp;
@@ -1000,6 +1268,7 @@ pub(super) async fn forward_stream_typed(
                                     downstream,
                                     err,
                                     request_id_for_error.as_deref(),
+                                    mask_sensitive_info_for_stream,
                                     &tx_err,
                                     None,
                                 )
@@ -1015,6 +1284,7 @@ pub(super) async fn forward_stream_typed(
                             // FP6j-1: dropping the last sender ends the
                             // downstream SSE before settlement and logging.
                             let downstream_closed = tx_err.is_closed()
+                                || commit_for_stream.downstream_gone()
                                 || ws_turn.as_ref().is_some_and(|turn| turn.is_disconnected());
                             drop(tx_err);
                             if let Some(foreign_extras) = foreign_extras {
@@ -1616,6 +1886,8 @@ pub(super) async fn forward_stream_typed(
                     let global_rules_for_transform = global_transforms.clone();
                     let auth_rules_for_transform = auth.transforms.clone();
                     let pending_request_log_guard_for_stream = pending_request_log_guard;
+                    let commit_for_stream = commit.clone();
+                    let request_id_for_retain = request_id.clone();
                     tokio::spawn(async move {
                         let _pending_request_log_guard = pending_request_log_guard_for_stream;
                         let tx_err = tx.clone();
@@ -1643,6 +1915,9 @@ pub(super) async fn forward_stream_typed(
                                         terminal_output,
                                         namespace_aliases,
                                         foreign_target,
+                                        downstream,
+                                        request_id_for_retain,
+                                        mask_sensitive_info,
                                     )
                                     .await
                                 })
@@ -1845,6 +2120,7 @@ pub(super) async fn forward_stream_typed(
                                 downstream,
                                 err,
                                 request_id_for_log.as_deref(),
+                                mask_sensitive_info,
                                 &tx_err,
                                 capture_frames_for_task.as_ref(),
                             )
@@ -1858,6 +2134,7 @@ pub(super) async fn forward_stream_typed(
                         // FP6j-1: dropping the last sender ends the downstream
                         // SSE before settlement, logging, and capture persistence.
                         let downstream_closed = tx_err.is_closed()
+                            || commit_for_stream.downstream_gone()
                             || ws_turn.as_ref().is_some_and(|turn| turn.is_disconnected());
                         drop(tx_err);
 

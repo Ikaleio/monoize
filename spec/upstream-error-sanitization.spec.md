@@ -14,24 +14,29 @@
 
 ## 1. Definitions
 
-SAN-D1. `MASK(text)` is a pure function on strings. It applies the following four rewrites, in this order, to every non-overlapping match, scanning left to right:
+SAN-D1. `MASK(text)` is a pure function on strings. It applies the following five rewrites, in this order, to every non-overlapping match, scanning left to right:
 
-1. **URL masking.** Every substring matching the regex `(http|https)://[^\s/$.?#].[^\s]*` is parsed as a URL. If parsing fails, the substring is kept unchanged. If parsing succeeds, the substring is replaced by `{scheme}://{MASKHOST(host)}{port?}{path'}{query'}` where:
+1. **URL masking.** Every substring matching the regex `(https?|wss?)://[^\s/$.?#].[^\s]*` is parsed as a URL. If parsing fails, the substring is kept unchanged. If parsing succeeds, the substring is replaced by `{scheme}://{MASKHOST(host)}{port?}{path'}{query'}` where:
    - `MASKHOST(host)` splits `host` on `.`; if it has fewer than 2 labels the result is `***`; otherwise the result is `***.` followed by the preserved tail. The preserved tail is the last two labels when the last label has length 2 and the second-to-last label has length <= 3 (country-code TLD heuristic, e.g. `co.uk`), otherwise only the last label.
    - `port?` is `:{port}` when the URL carries an explicit port, otherwise empty.
    - `path'`: when the URL path is empty or `/`, `path'` equals the path unchanged; otherwise every `/`-separated non-empty path segment is replaced by `***` and segments are re-joined with `/` after a leading `/`.
    - `query'`: when the URL has no query, `query'` is empty; otherwise every `key=value` pair is replaced by `key=***`, pairs re-joined with `&` after a leading `?`.
-2. **Bare domain masking.** Every remaining substring matching `\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b` is a candidate. A candidate that `IS_HOST` accepts is replaced by `N` copies of `***.` followed by the preserved tail as in `MASKHOST`, where `N = label_count - tail_label_count`, with a minimum of one `***.` prefix. Every other candidate is a dotted protocol identifier and stays unchanged.
+2. **Configured host masking.** `CONFIGURED` is the set of hostnames of every Channel `base_url`, every Channel `proxy_url`, and the node `upstream_proxy_url`. The runtime MUST load it at startup and MUST add a Channel's hosts no later than building an attempt for that Channel. Entries stay until process exit, up to 4096 hosts. Matching is ASCII case-insensitive. Every occurrence of a dotted `CONFIGURED` host, together with any labels directly to its left, is replaced as in step 3. A single-label `CONFIGURED` host is replaced by `***` only when followed by `:<digits>`, because a bare single word cannot be told apart from prose. This step overrides every identifier exemption in step 3 and also covers final labels with digits (for example `api.vendor1`).
+3. **Bare domain masking.** Every remaining substring matching `\b(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+(?:xn--[a-zA-Z0-9-]{1,59}|\p{L}{2,})\b` is a candidate. A candidate that `IS_HOST` accepts is replaced by `N` copies of `***.` followed by the preserved tail as in `MASKHOST`, where `N = label_count - tail_label_count`, with a minimum of one `***.` prefix. Every other candidate stays unchanged. A candidate directly preceded by `***.` is an already-masked tail and stays unchanged, which keeps `MASK` idempotent.
 
-   `IS_HOST(candidate)` compares lowercase labels. Let `first` be the first label and `last` be the final label. It returns `false` when `last` is not in `TLDS`. It also returns `false` when `last` is in `FIELD_TLDS` and either `first` is in `FIELD_ROOTS` or a label other than `first` consists only of digits. Otherwise it returns `true`.
+   `IS_HOST(candidate)` compares ASCII-lowercase labels. Let `first` and `last` be the first and final labels.
+   - It returns `true` when any label starts with `xn--`, or when `last` contains a non-ASCII letter (IDN hosts).
+   - It returns `false` when `last` is not in `TLDS`. Such a candidate is either a dotted protocol identifier (`response.create`) or an unconfigured private name (`svc.mycompany`); `IS_HOST` cannot distinguish them, and step 2 is the guarantee for hosts Monoize itself uses.
+   - It returns `false` when the candidate is a `PROTOCOL_PATH`: `first` is in `FIELD_ROOTS`, every middle label is in `FIELD_ROOTS` or consists only of digits, and `last` is in `FIELD_LEAVES`.
+   - Otherwise it returns `true`.
 
-   - `TLDS` is the IANA root-zone list snapshot `src/error_sanitize_tlds.txt` (version 2026103000, without `XN--` entries), plus the non-delegated names `cluster`, `corp`, `example`, `home`, `internal`, `intranet`, `invalid`, `lan`, `local`, `localhost`, `onion`, `svc`, and `test`.
-   - `FIELD_TLDS` is the set of `TLDS` members that are also protocol field names: `app`, `audio`, `auto`, `call`, `chat`, `data`, `date`, `delta`, `email`, `events`, `group`, `host`, `id`, `info`, `link`, `live`, `map`, `name`, `new`, `open`, `page`, `parts`, `read`, `run`, `save`, `search`, `select`, `site`, `store`, `stream`, `style`, `target`, `tools`, `total`, `video`, `web`, `zone`.
-   - `FIELD_ROOTS` is `body`, `call`, `choice`, `choices`, `content`, `contents`, `data`, `delta`, `error`, `function`, `functions`, `input`, `instructions`, `item`, `items`, `message`, `messages`, `metadata`, `model`, `output`, `params`, `parts`, `reasoning`, `request`, `response`, `responses`, `stream`, `system`, `text`, `thinking`, `tool`, `tools`, `usage`.
+   - `TLDS` is the IANA root-zone list snapshot `src/error_sanitize_tlds.txt` (version 2026103000, ASCII entries), plus `cluster`, `corp`, `example`, `home`, `internal`, `intranet`, `invalid`, `lan`, `local`, `localhost`, `onion`, `svc`, and `test`. To refresh it, download `https://data.iana.org/TLD/tlds-alpha-by-domain.txt`, lowercase it, remove `XN--` entries, keep the version in the header comment, and update the version in this rule. A delegated TLD newer than the snapshot is not masked by step 3 until the next refresh.
+   - `FIELD_LEAVES` is `audio`, `call`, `data`, `delta`, `events`, `id`, `name`, `parts`, `store`, `stream`, `tools`, `total`.
+   - `FIELD_ROOTS` is `arguments`, `body`, `call`, `choice`, `choices`, `content`, `contents`, `data`, `delta`, `error`, `function`, `functions`, `input`, `instructions`, `item`, `items`, `message`, `messages`, `metadata`, `model`, `output`, `parameters`, `params`, `parts`, `properties`, `reasoning`, `request`, `response`, `responses`, `schema`, `source`, `stream`, `system`, `text`, `thinking`, `tool`, `tools`, `usage`.
 
-   Examples that stay unchanged: `response.create`, `reasoning.effort`, `thinking.signature`, `messages.1.content.0.type`, `messages.0.name`, `tools.0.function.name`, `response.id`, `input[3].id`, `function_call.id`. Examples that are masked: `api.openai.com` → `***.***.com`, `xpa.ikale.io` → `***.***.io`, `generativelanguage.googleapis.com` → `***.***.com`, `foo.co.uk` → `***.co.uk`, `alice.name` → `***.name`, `api.163.com` → `***.***.com`. An unknown private suffix outside `TLDS` (for example `svc.mycompany`) stays unchanged.
-3. **IPv4 masking.** Every substring matching `\b(?:\d{1,3}\.){3}\d{1,3}\b` is replaced by `***.***.***.***`.
-4. **API-key masking.** Every substring matching `(['"]?)api_key:([^\s'"]+)(['"]?)` is replaced by `{quote}api_key:***{quote}`.
+   Examples that stay unchanged: `response.create`, `reasoning.effort`, `thinking.signature`, `messages.1.content.0.type`, `messages.0.name`, `tools.0.function.name`, `response.id`, `input[3].id`, `function_call.id`. Examples that are masked: `api.openai.com` → `***.***.com`, `xpa.ikale.io` → `***.***.io`, `generativelanguage.googleapis.com` → `***.***.com`, `foo.co.uk` → `***.co.uk`, `alice.name` → `***.name`, `api.163.com` → `***.***.com`, `api.1.app` → `***.***.app`, `messages.vendor.app` → `***.***.app`, `upstream.xn--p1ai` → `***.xn--p1ai`, `пример.рф` → `***.рф`.
+4. **IPv4 masking.** Every substring matching `\b(?:\d{1,3}\.){3}\d{1,3}\b` is replaced by `***.***.***.***`.
+5. **API-key masking.** Every substring matching `(['"]?)api_key:([^\s'"]+)(['"]?)` is replaced by `{quote}api_key:***{quote}`.
 
 SAN-D2. `DETAIL_LIMIT = 2048`. `TRUNC(text)` equals `text` when `text` contains at most `DETAIL_LIMIT` Unicode scalar values; otherwise it equals the first `DETAIL_LIMIT` scalar values of `text` followed by the literal suffix `... (truncated)`.
 
@@ -95,7 +100,7 @@ SAN-10. Each `tried_providers_json` entry's `error` field MUST equal the attempt
 
 ## 6. Mid-stream error frames
 
-SAN-11. When a downstream stream encoder renders a `UrpStreamEvent::Error` into a downstream frame (Chat Completions terminal error `data:` frame, Anthropic Messages `error` event, or Responses `response.failed` payload), the rendered `message` string MUST be `MASK(event message)`. This rule covers decoder-origin mid-stream failures whose text never passes through SAN-1.
+SAN-11. When Monoize renders a `UrpStreamEvent::Error`, a failed response outcome, or a stream-stage `AppError` into a downstream frame or body, the rendered `message`, `code`, `type`, and `param` strings MUST be `MASK` of their source. No other upstream-provided member may be rendered (`unified_responses_proxy.spec.md` SE2a). This rule covers decoder-origin mid-stream failures whose text never passes through SAN-1.
 
 ## 7. Diagnostic fields
 

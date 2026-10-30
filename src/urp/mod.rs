@@ -1762,9 +1762,19 @@ pub fn strip_foreign_response(
     }
 }
 
-/// XTRA-5a for one stream event.
-pub fn strip_foreign_stream_event(event: &mut UrpStreamEvent, target: ProviderProtocol) {
+/// XTRA-5a for one stream event. Returns `false` for an envelope control event,
+/// which the caller must drop.
+#[must_use]
+pub fn strip_foreign_stream_event(event: &mut UrpStreamEvent, target: ProviderProtocol) -> bool {
     match event {
+        UrpStreamEvent::NodeStart {
+            header: NodeHeader::NextDownstreamEnvelopeExtra,
+            ..
+        }
+        | UrpStreamEvent::NodeDone {
+            node: Node::NextDownstreamEnvelopeExtra { .. },
+            ..
+        } => return false,
         UrpStreamEvent::ResponseStart {
             usage,
             id,
@@ -1813,6 +1823,7 @@ pub fn strip_foreign_stream_event(event: &mut UrpStreamEvent, target: ProviderPr
         }
         UrpStreamEvent::ProviderControl { .. } | UrpStreamEvent::Error { .. } => {}
     }
+    true
 }
 
 pub fn retain_provider_items_for_protocol(nodes: &mut Vec<Node>, target: ProviderProtocol) {

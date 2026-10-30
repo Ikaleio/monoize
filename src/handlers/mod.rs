@@ -30,6 +30,7 @@ use crate::users::{
 };
 use axum::Json;
 use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
@@ -250,12 +251,20 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
     .into_response())
 }
 
+/// SE1e: a body rejected before decoding uses the endpoint's native envelope.
+#[allow(clippy::result_large_err)]
+fn native_json_body(body: Result<Json<Value>, JsonRejection>) -> AppResult<Value> {
+    body.map(|Json(body)| body).map_err(|rejection| {
+        AppError::new(rejection.status(), "invalid_json", rejection.body_text())
+    })
+}
+
 pub async fn create_response(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> AppResult<Response> {
-    create_response_inner(state, headers, body, None).await
+    create_response_inner(state, headers, native_json_body(body)?, None).await
 }
 
 pub(crate) async fn create_response_prefer_websocket(
@@ -373,8 +382,9 @@ async fn create_response_inner(
 pub async fn create_chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> AppResult<Response> {
+    let body = native_json_body(body)?;
     let auth = auth_tenant(&headers, &state).await?;
     let request_id = extract_request_id(&headers);
     let capture_session = state
@@ -456,10 +466,18 @@ pub async fn create_chat_completions(
 pub async fn create_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> Response {
     let request_id = canonical_request_id(&headers);
     let wire_request_id = messages_wire_request_id(&request_id);
+    let body = match native_json_body(body) {
+        Ok(body) => body,
+        Err(err) => {
+            let mut response = anthropic_error_response(err, Some(&wire_request_id));
+            insert_messages_request_id_header(&mut response, &wire_request_id);
+            return response;
+        }
+    };
     let mut response = match create_messages_inner(state, headers, body, request_id).await {
         Ok(response) => response,
         Err(err) => anthropic_error_response(err, Some(&wire_request_id)),
@@ -867,6 +885,10 @@ struct TriedProvider {
     /// SE1d: `FWD` of this attempt's upstream response. Never persisted.
     #[serde(skip)]
     forwarded_headers: crate::error::ForwardedHeaders,
+    /// RTA-8b: the code the upstream reported, without the local fallback that
+    /// `upstream_code` applies. Never persisted.
+    #[serde(skip)]
+    reported_upstream_code: Option<String>,
     upstream_status: Option<u16>,
     upstream_code: Option<String>,
     upstream_type: Option<String>,
@@ -903,6 +925,10 @@ impl TriedProvider {
                 mask_sensitive_info,
             ),
             forwarded_headers: app_err.forwarded_headers.clone(),
+            reported_upstream_code: app_err
+                .upstream_code
+                .clone()
+                .filter(|code| !code.is_empty()),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(
                 app_err
