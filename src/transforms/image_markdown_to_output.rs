@@ -2,6 +2,7 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData,
 };
+use crate::urp::citations::{Citation, TextSpan, rebase_citation};
 use crate::urp::{ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -28,11 +29,19 @@ struct StreamTextNodeState {
     cleaned_content: String,
     start_emitted: bool,
     saw_delta: bool,
+    /// Source characters consumed so far, including removed image markdown (AMIO-13).
+    source_chars: u64,
+    spans: Vec<TextSpan>,
+    citations: Vec<Citation>,
+    pending_citations: Vec<Citation>,
+    seen_citations: usize,
 }
 
 struct StreamState {
     replacement: Option<Vec<UrpStreamEvent>>,
     node_text_parts: HashMap<u32, StreamTextNodeState>,
+    /// Kept runs of completed text nodes, for late citations.
+    done_spans: HashMap<u32, Vec<TextSpan>>,
     next_synthetic_node_index: u32,
 }
 
@@ -41,6 +50,7 @@ impl Default for StreamState {
         Self {
             replacement: None,
             node_text_parts: HashMap::new(),
+            done_spans: HashMap::new(),
             next_synthetic_node_index: u32::MAX,
         }
     }
@@ -139,7 +149,7 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
             Node::Text {
                 logprobs: _,
                 signature: _,
-                citations: _,
+                citations,
                 id,
                 role: OrdinaryRole::Assistant,
                 content,
@@ -147,12 +157,16 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
                 extra_body,
                 cache_breakpoint,
             } => {
-                let (cleaned, images) = extract_markdown_images_from_text(&content);
+                let (cleaned, images, spans) = extract_markdown_images_from_text(&content);
                 if !cleaned.is_empty() {
+                    let mut citations = citations;
+                    for citation in &mut citations {
+                        rebase_citation(citation, &spans);
+                    }
                     rewritten.push(Node::Text {
                         logprobs: None,
                         signature: None,
-                        citations: Vec::new(),
+                        citations,
                         id,
                         role: OrdinaryRole::Assistant,
                         content: cleaned,
@@ -178,23 +192,48 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
     *nodes = rewritten;
 }
 
-fn extract_markdown_images_from_text(content: &str) -> (String, Vec<ImageSource>) {
+fn extract_markdown_images_from_text(content: &str) -> (String, Vec<ImageSource>, Vec<TextSpan>) {
     let (segments, tail) = split_stream_segments(content, true);
     debug_assert!(tail.is_empty());
     let mut images = Vec::new();
     let mut cleaned = String::new();
+    let mut spans = Vec::new();
     for segment in segments {
         match segment {
-            StreamSegment::Text(text) => cleaned.push_str(&text),
+            StreamSegment::Text {
+                content: text,
+                source_start,
+            } => {
+                spans.push(kept_span(content, 0, source_start, &text, &cleaned));
+                cleaned.push_str(&text);
+            }
             StreamSegment::Image(source) => images.push(source),
         }
     }
-    (cleaned, images)
+    (cleaned, images, spans)
+}
+
+/// The run `text`, found at byte `source_start` of `source`, whose first character has character
+/// position `source_base` plus its position in `source`.
+fn kept_span(
+    source: &str,
+    source_base: u64,
+    source_start: usize,
+    text: &str,
+    cleaned: &str,
+) -> TextSpan {
+    let start = source_base + source[..source_start].chars().count() as u64;
+    TextSpan {
+        group: 0,
+        source_start: start,
+        source_end: start + text.chars().count() as u64,
+        out_start: cleaned.chars().count() as u64,
+    }
 }
 
 #[derive(Debug)]
 enum StreamSegment {
-    Text(String),
+    Text { content: String, source_start: usize },
     Image(ImageSource),
 }
 
@@ -208,6 +247,7 @@ fn split_stream_segments(content: &str, terminal: bool) -> (Vec<StreamSegment>, 
     let bytes = content.as_bytes();
     let mut i = 0usize;
     let mut text = String::new();
+    let mut text_start = 0usize;
     let mut segments = Vec::new();
 
     while i < bytes.len() {
@@ -215,13 +255,19 @@ fn split_stream_segments(content: &str, terminal: bool) -> (Vec<StreamSegment>, 
             match parse_markdown_candidate(content, i) {
                 CandidateParse::Valid { end, source } => {
                     if !text.is_empty() {
-                        segments.push(StreamSegment::Text(std::mem::take(&mut text)));
+                        segments.push(StreamSegment::Text {
+                            content: std::mem::take(&mut text),
+                            source_start: text_start,
+                        });
                     }
                     segments.push(StreamSegment::Image(source));
                     i = end;
                     continue;
                 }
                 CandidateParse::Invalid { safe_end } => {
+                    if text.is_empty() {
+                        text_start = i;
+                    }
                     text.push_str(&content[i..safe_end]);
                     i = safe_end;
                     continue;
@@ -231,6 +277,9 @@ fn split_stream_segments(content: &str, terminal: bool) -> (Vec<StreamSegment>, 
         }
 
         let ch = content[i..].chars().next().expect("stream parser char");
+        if text.is_empty() {
+            text_start = i;
+        }
         text.push(ch);
         i += ch.len_utf8();
     }
@@ -241,11 +290,17 @@ fn split_stream_segments(content: &str, terminal: bool) -> (Vec<StreamSegment>, 
         String::new()
     };
     if terminal && !tail.is_empty() {
+        if text.is_empty() {
+            text_start = i;
+        }
         text.push_str(&tail);
         tail.clear();
     }
     if !text.is_empty() {
-        segments.push(StreamSegment::Text(text));
+        segments.push(StreamSegment::Text {
+            content: text,
+            source_start: text_start,
+        });
     }
     (segments, tail)
 }
@@ -309,6 +364,22 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState) {
         state.replacement = Some(vec![event.clone()]);
         return;
     }
+    if let UrpStreamEvent::ProviderControl {
+        event_name, data, ..
+    } = event
+    {
+        // AMIO-13: late citations of a completed node follow its kept text.
+        if let Some((node_index, mut citations)) =
+            crate::urp::citations::parse_chat_annotations_control(event_name, data)
+            && let Some(spans) = state.done_spans.get(&node_index)
+        {
+            for citation in &mut citations {
+                rebase_citation(citation, spans);
+            }
+            *event = crate::urp::citations::chat_annotations_control(node_index, &citations);
+        }
+        return;
+    }
     if apply_node_stream(event, state) {
         return;
     }
@@ -342,6 +413,11 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                     cleaned_content: String::new(),
                     start_emitted: false,
                     saw_delta: false,
+                    source_chars: 0,
+                    spans: Vec::new(),
+                    citations: Vec::new(),
+                    pending_citations: Vec::new(),
+                    seen_citations: 0,
                 },
             );
             state.replacement = Some(Vec::new());
@@ -353,7 +429,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                 NodeDelta::Text {
                     logprobs: _,
                     signature: _,
-                    citations: _,
+                    citations,
                     content,
                 },
             usage,
@@ -371,10 +447,14 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                 *node_index,
                 state,
                 &mut node_state,
+                &combined,
                 segments,
                 &mut emitted,
                 extra_body,
             );
+            node_state.seen_citations += citations.len();
+            node_state.pending_citations.append(citations);
+            place_citations(*node_index, &mut node_state, false, &mut emitted);
             attach_usage_to_last_node_event(&mut emitted, usage.clone());
             state.node_text_parts.insert(*node_index, node_state);
             state.replacement = Some(emitted);
@@ -386,7 +466,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                 Node::Text {
                     logprobs: _,
                     signature: _,
-                    citations: _,
+                    citations,
                     id,
                     role: OrdinaryRole::Assistant,
                     content,
@@ -409,28 +489,41 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                         cleaned_content: String::new(),
                         start_emitted: false,
                         saw_delta: false,
+                        source_chars: 0,
+                        spans: Vec::new(),
+                        citations: Vec::new(),
+                        pending_citations: Vec::new(),
+                        seen_citations: 0,
                     });
             if !node_state.saw_delta {
                 node_state.buffered_tail.push_str(content);
             }
-            let (segments, tail) = split_stream_segments(&node_state.buffered_tail, true);
+            let source = std::mem::take(&mut node_state.buffered_tail);
+            let (segments, tail) = split_stream_segments(&source, true);
             node_state.buffered_tail = tail;
             let mut emitted = Vec::new();
             emit_node_segments(
                 *node_index,
                 state,
                 &mut node_state,
+                &source,
                 segments,
                 &mut emitted,
                 &HashMap::new(),
             );
+            let seen = node_state.seen_citations.min(citations.len());
+            node_state.pending_citations.extend(citations.drain(seen..));
+            place_citations(*node_index, &mut node_state, true, &mut emitted);
+            state
+                .done_spans
+                .insert(*node_index, std::mem::take(&mut node_state.spans));
             if node_state.start_emitted {
                 emitted.push(UrpStreamEvent::NodeDone {
                     node_index: *node_index,
                     node: Node::Text {
                         logprobs: None,
                         signature: None,
-                        citations: Vec::new(),
+                        citations: std::mem::take(&mut node_state.citations),
                         id: id.clone(),
                         role: OrdinaryRole::Assistant,
                         content: std::mem::take(&mut node_state.cleaned_content),
@@ -513,17 +606,32 @@ fn emit_node_segments(
     node_index: u32,
     state: &mut StreamState,
     node_state: &mut StreamTextNodeState,
+    source: &str,
     segments: Vec<StreamSegment>,
     emitted: &mut Vec<UrpStreamEvent>,
     delta_extra_body: &HashMap<String, Value>,
 ) {
+    let source_base = node_state.source_chars;
+    node_state.source_chars += (source.chars().count()
+        - node_state.buffered_tail.chars().count()) as u64;
     for segment in segments {
         match segment {
-            StreamSegment::Text(text) => {
+            StreamSegment::Text {
+                content: text,
+                source_start,
+            } => {
                 if text.is_empty() {
                     continue;
                 }
                 ensure_text_node_start(node_index, node_state, emitted);
+                let span = kept_span(
+                    source,
+                    source_base,
+                    source_start,
+                    &text,
+                    &node_state.cleaned_content,
+                );
+                node_state.spans.push(span);
                 node_state.cleaned_content.push_str(&text);
                 emitted.push(UrpStreamEvent::NodeDelta {
                     node_index,
@@ -539,6 +647,44 @@ fn emit_node_segments(
             }
             StreamSegment::Image(source) => emit_synthetic_image_node(state, source, emitted),
         }
+    }
+}
+
+/// AMIO-13: moves citations whose range was parsed into cleaned-text coordinates.
+fn place_citations(
+    node_index: u32,
+    node_state: &mut StreamTextNodeState,
+    terminal: bool,
+    emitted: &mut Vec<UrpStreamEvent>,
+) {
+    for mut citation in std::mem::take(&mut node_state.pending_citations) {
+        let ready = terminal
+            || (node_state.start_emitted
+                && citation
+                    .answer_range
+                    .as_ref()
+                    .is_none_or(|range| range.start < node_state.source_chars));
+        if !ready {
+            node_state.pending_citations.push(citation);
+            continue;
+        }
+        // No text remains to cite.
+        if !node_state.start_emitted || rebase_citation(&mut citation, &node_state.spans).is_none()
+        {
+            continue;
+        }
+        node_state.citations.push(citation.clone());
+        emitted.push(UrpStreamEvent::NodeDelta {
+            node_index,
+            delta: NodeDelta::Text {
+                logprobs: None,
+                signature: None,
+                citations: vec![citation],
+                content: String::new(),
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        });
     }
 }
 

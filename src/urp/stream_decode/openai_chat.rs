@@ -462,21 +462,10 @@ async fn decode_chat_stream(
                 &output_text,
                 &mut segments,
             );
-            if !completed_segment_citations.is_empty() {
+            for (node_index, citation) in completed_segment_citations {
                 send_event(
                     &tx,
-                    UrpStreamEvent::ProviderControl {
-                        protocol: "chat_completion".to_string(),
-                        event_name: crate::urp::CHAT_ANNOTATIONS_CONTROL.to_string(),
-                        data: json!({
-                            "annotations": crate::urp::citations::encode(
-                                &completed_segment_citations,
-                                crate::urp::ProviderProtocol::ChatCompletion,
-                                0,
-                            ),
-                        }),
-                        extra_body: HashMap::new(),
-                    },
+                    crate::urp::citations::chat_annotations_control(node_index, &[citation]),
                 )
                 .await?;
             }
@@ -3113,13 +3102,13 @@ fn text_segment_node(content: &str, phase: Option<&str>) -> Node {
 }
 
 /// PC7h: Chat annotation ranges are message-global and URP text citations are node-local.
-/// Returns the citations of the open text node, then the message-global citations whose range
-/// lies wholly inside a completed segment; those also join that segment's terminal node.
+/// Returns the citations of the open text node, then the node-local citations whose range lies
+/// wholly inside a completed segment; those also join that segment's terminal node.
 fn place_chat_citations(
     citations: Vec<crate::urp::Citation>,
     output_text: &str,
     segments: &mut StreamSegments,
-) -> (Vec<crate::urp::Citation>, Vec<crate::urp::Citation>) {
+) -> (Vec<crate::urp::Citation>, Vec<(u32, crate::urp::Citation)>) {
     let base = output_text
         .get(..segments.text_start)
         .unwrap_or_default()
@@ -3131,12 +3120,10 @@ fn place_chat_citations(
     let mut live = Vec::with_capacity(citations.len());
     let mut completed = Vec::new();
     for mut citation in citations {
-        let global = citation.clone();
         match &mut citation.answer_range {
             Some(range) if range.end <= base && range.start < base => {
-                completed.push(global);
                 let mut segment_end = 0u64;
-                let owner = segments.closed.iter_mut().find_map(|(_, node)| {
+                let owner = segments.closed.iter_mut().find_map(|(node_index, node)| {
                     let Node::Text {
                         content, citations, ..
                     } = node
@@ -3145,12 +3132,18 @@ fn place_chat_citations(
                     };
                     let segment_start = segment_end;
                     segment_end += content.chars().count() as u64;
-                    (range.start < segment_end).then_some((segment_start, segment_end, citations))
+                    (range.start < segment_end).then_some((
+                        *node_index,
+                        segment_start,
+                        segment_end,
+                        citations,
+                    ))
                 });
-                if let Some((segment_start, segment_end, target)) = owner {
+                if let Some((node_index, segment_start, segment_end, target)) = owner {
                     range.start -= segment_start;
                     range.end = range.end.min(segment_end) - segment_start;
-                    target.push(citation);
+                    target.push(citation.clone());
+                    completed.push((node_index, citation));
                 }
             }
             Some(range) => {

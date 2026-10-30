@@ -2,6 +2,7 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData,
 };
+use crate::urp::citations::{Citation, TextSpan, rebase_citation};
 use crate::urp::{Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -30,6 +31,8 @@ struct OpenSegment {
     out_index: u32,
     mode: Mode,
     content: String,
+    source_start: u64,
+    citations: Vec<Citation>,
 }
 
 struct TextSplit {
@@ -38,6 +41,14 @@ struct TextSplit {
     mode: Mode,
     buffer: String,
     open: Option<OpenSegment>,
+    /// Source characters consumed so far, including tags (TXI-6).
+    source_pos: u64,
+    /// Kept runs of the closed text segments.
+    spans: Vec<TextSpan>,
+    /// Citations whose range is not segmented yet.
+    pending: Vec<Citation>,
+    /// Citations already received through deltas.
+    seen_citations: usize,
 }
 
 /// TXI-3..TXI-5 state: per-text-node split state plus dense output index assignment.
@@ -136,9 +147,10 @@ impl Transform for ReasoningFromThinkXmlTransform {
                             role: OrdinaryRole::Assistant,
                             content,
                             phase,
+                            citations,
                             ..
                         } => {
-                            out.extend(extract_text_and_reasoning(&content, phase, &cfg.tag));
+                            out.extend(extract_text_and_reasoning(&content, phase, citations, &cfg.tag));
                         }
                         other => out.push(other),
                     }
@@ -157,23 +169,39 @@ impl Transform for ReasoningFromThinkXmlTransform {
     }
 }
 
-fn extract_text_and_reasoning(content: &str, phase: Option<String>, tag: &str) -> Vec<Node> {
+fn extract_text_and_reasoning(
+    content: &str,
+    phase: Option<String>,
+    source_citations: Vec<Citation>,
+    tag: &str,
+) -> Vec<Node> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
+    let chars = |text: &str| text.chars().count() as u64;
     let mut nodes = Vec::new();
+    let mut spans = Vec::new();
     let mut rest = content;
+    let mut source_pos = 0u64;
+    let mut push_text = |nodes: &mut Vec<Node>, text: &str, source_pos: u64| {
+        if !text.is_empty() {
+            spans.push(TextSpan {
+                group: nodes.len() as u32,
+                source_start: source_pos,
+                source_end: source_pos + chars(text),
+                out_start: 0,
+            });
+            nodes.push(text_node(text.to_string(), phase.clone(), None));
+        }
+    };
 
     loop {
         let Some(start) = rest.find(&open) else {
-            if !rest.is_empty() {
-                nodes.push(text_node(rest.to_string(), phase.clone(), None));
-            }
+            push_text(&mut nodes, rest, source_pos);
             break;
         };
         let before = &rest[..start];
-        if !before.is_empty() {
-            nodes.push(text_node(before.to_string(), phase.clone(), None));
-        }
+        push_text(&mut nodes, before, source_pos);
+        source_pos += chars(before) + chars(&open);
         let after_open = &rest[start + open.len()..];
         let Some(end) = after_open.find(&close) else {
             if !after_open.is_empty() {
@@ -185,7 +213,15 @@ fn extract_text_and_reasoning(content: &str, phase: Option<String>, tag: &str) -
         if !reasoning.is_empty() {
             nodes.push(reasoning_node(reasoning.to_string()));
         }
+        source_pos += chars(reasoning) + chars(&close);
         rest = &after_open[end + close.len()..];
+    }
+    for mut citation in source_citations {
+        if let Some(group) = rebase_citation(&mut citation, &spans)
+            && let Some(Node::Text { citations, .. }) = nodes.get_mut(group as usize)
+        {
+            citations.push(citation);
+        }
     }
     nodes
 }
@@ -244,8 +280,18 @@ impl StreamState {
         };
         let node = match segment.mode {
             Mode::Text => {
+                split.spans.push(TextSpan {
+                    group: segment.out_index,
+                    source_start: segment.source_start,
+                    source_end: split.source_pos,
+                    out_start: 0,
+                });
                 let id = split.id.take();
-                text_node(segment.content, split.phase.clone(), id)
+                let mut node = text_node(segment.content, split.phase.clone(), id);
+                if let Node::Text { citations, .. } = &mut node {
+                    *citations = segment.citations;
+                }
+                node
             }
             Mode::Reasoning => reasoning_node(segment.content),
         };
@@ -286,6 +332,8 @@ impl StreamState {
                 out_index,
                 mode,
                 content: String::new(),
+                source_start: split.source_pos,
+                citations: Vec::new(),
             });
             out.push(UrpStreamEvent::NodeStart {
                 node_index: out_index,
@@ -294,6 +342,7 @@ impl StreamState {
             });
         }
         let split = self.text_nodes.get_mut(&source).expect("text split state");
+        split.source_pos += text.chars().count() as u64;
         let segment = split.open.as_mut().expect("open segment");
         segment.content.push_str(text);
         let delta = match mode {
@@ -334,6 +383,7 @@ impl StreamState {
                 self.close_segment(source, &mut out);
                 let split = self.text_nodes.get_mut(&source).expect("text split state");
                 split.buffer.drain(..position + tag.len());
+                split.source_pos += tag.chars().count() as u64;
                 split.mode = match split.mode {
                     Mode::Text => Mode::Reasoning,
                     Mode::Reasoning => Mode::Text,
@@ -359,6 +409,68 @@ impl StreamState {
             self.close_segment(source, &mut out);
         }
         out
+    }
+
+    /// TXI-6: moves held citations to their segments. A citation of a completed segment joins
+    /// that segment's terminal node and goes to Chat downstreams as a control event.
+    fn place_citations(&mut self, source: u32, terminal: bool, out: &mut Vec<UrpStreamEvent>) {
+        let Some(split) = self.text_nodes.get_mut(&source) else {
+            return;
+        };
+        let mut spans = split.spans.clone();
+        if let Some(open) = split.open.as_ref().filter(|open| open.mode == Mode::Text) {
+            spans.push(TextSpan {
+                group: open.out_index,
+                source_start: open.source_start,
+                source_end: split.source_pos,
+                out_start: 0,
+            });
+        }
+        for mut citation in std::mem::take(&mut split.pending) {
+            let ready = terminal
+                || match &citation.answer_range {
+                    Some(range) => spans.iter().any(|span| span.source_end > range.start),
+                    None => !spans.is_empty(),
+                };
+            if !ready {
+                split.pending.push(citation);
+                continue;
+            }
+            // No text segment remains to cite.
+            let Some(group) = rebase_citation(&mut citation, &spans) else {
+                continue;
+            };
+            if let Some(open) = split
+                .open
+                .as_mut()
+                .filter(|open| open.mode == Mode::Text && open.out_index == group)
+            {
+                open.citations.push(citation.clone());
+                out.push(UrpStreamEvent::NodeDelta {
+                    node_index: group,
+                    delta: NodeDelta::Text {
+                        logprobs: None,
+                        signature: None,
+                        citations: vec![citation],
+                        content: String::new(),
+                    },
+                    usage: None,
+                    extra_body: HashMap::new(),
+                });
+                continue;
+            }
+            if let Some((_, Node::Text { citations, .. })) = self
+                .split_done
+                .get_mut(&source)
+                .and_then(|segments| segments.iter_mut().find(|(index, _)| *index == group))
+            {
+                citations.push(citation.clone());
+            }
+            out.push(crate::urp::citations::chat_annotations_control(
+                group,
+                &[citation],
+            ));
+        }
     }
 
     fn remap(&mut self, node_index: &mut u32) {
@@ -391,6 +503,10 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                     mode: Mode::Text,
                     buffer: String::new(),
                     open: None,
+                    source_pos: 0,
+                    spans: Vec::new(),
+                    pending: Vec::new(),
+                    seen_citations: 0,
                 },
             );
             state.replacement = Some(Vec::new());
@@ -409,39 +525,48 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                 content, citations, ..
             } = delta
             {
-                state
-                    .text_nodes
-                    .get_mut(&source)
-                    .expect("text split state")
-                    .buffer
-                    .push_str(content);
+                let split = state.text_nodes.get_mut(&source).expect("text split state");
+                split.buffer.push_str(content);
+                split.seen_citations += citations.len();
+                split.pending.append(citations);
                 out = state.drain(source, &open, &close, false);
-                // A citation-only delta stays on the current text segment.
-                if !citations.is_empty()
-                    && let Some(segment) = state.text_nodes[&source].open.as_ref()
-                    && segment.mode == Mode::Text
-                {
-                    out.push(UrpStreamEvent::NodeDelta {
-                        node_index: segment.out_index,
-                        delta: NodeDelta::Text {
-                            logprobs: None,
-                            signature: None,
-                            citations: std::mem::take(citations),
-                            content: String::new(),
-                        },
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    });
-                }
+                state.place_citations(source, false, &mut out);
             }
             state.replacement = Some(out);
         }
         UrpStreamEvent::NodeDelta { node_index, .. } => state.remap(node_index),
-        UrpStreamEvent::NodeDone { node_index, .. } if state.text_nodes.contains_key(node_index) => {
+        UrpStreamEvent::NodeDone {
+            node_index, node, ..
+        } if state.text_nodes.contains_key(node_index) => {
             let source = *node_index;
-            state.replacement = Some(state.drain(source, &open, &close, true));
+            let split = state.text_nodes.get_mut(&source).expect("text split state");
+            if let Node::Text { citations, .. } = node {
+                let seen = split.seen_citations.min(citations.len());
+                split.pending.extend(citations.drain(seen..));
+            }
+            let mut out = Vec::new();
+            state.place_citations(source, false, &mut out);
+            out.extend(state.drain(source, &open, &close, true));
+            state.place_citations(source, true, &mut out);
+            state.replacement = Some(out);
         }
         UrpStreamEvent::NodeDone { node_index, .. } => state.remap(node_index),
+        UrpStreamEvent::ProviderControl {
+            event_name, data, ..
+        } => {
+            if let Some((source, citations)) =
+                crate::urp::citations::parse_chat_annotations_control(event_name, data)
+            {
+                if let Some(split) = state.text_nodes.get_mut(&source) {
+                    split.pending.extend(citations);
+                    let mut out = Vec::new();
+                    state.place_citations(source, true, &mut out);
+                    state.replacement = Some(out);
+                } else if let Some(mapped) = state.index_map.get(&source) {
+                    *event = crate::urp::citations::chat_annotations_control(*mapped, &citations);
+                }
+            }
+        }
         UrpStreamEvent::ResponseDone { output, .. } => {
             let mut rewritten: Vec<(u32, Node)> = Vec::with_capacity(output.len());
             let mut terminal_only = Vec::new();
@@ -465,8 +590,9 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                         role: OrdinaryRole::Assistant,
                         content,
                         phase,
+                        citations,
                         ..
-                    } => final_output.extend(extract_text_and_reasoning(&content, phase, tag)),
+                    } => final_output.extend(extract_text_and_reasoning(&content, phase, citations, tag)),
                     other => final_output.push(other),
                 }
             }

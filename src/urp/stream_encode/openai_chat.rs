@@ -1459,11 +1459,15 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 data,
                 ..
             } => {
-                // PC7h: message-global citations of a completed text segment.
+                // PC7h: citations of a completed text node, in emitted-content coordinates.
                 if protocol == "chat_completion"
-                    && event_name == urp::CHAT_ANNOTATIONS_CONTROL
-                    && let Some(annotations) = data.get("annotations")
+                    && let Some((node_index, citations)) =
+                        urp::citations::parse_chat_annotations_control(&event_name, &data)
                 {
+                    let offset = node_text_offsets
+                        .get(&node_index)
+                        .copied()
+                        .unwrap_or(text_offset);
                     tx.send_chunk(&json!({
                         "id": chat_id,
                         "object": "chat.completion.chunk",
@@ -1471,7 +1475,13 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         "model": logical_model,
                         "choices": [{
                             "index": 0,
-                            "delta": { "annotations": annotations },
+                            "delta": {
+                                "annotations": urp::citations::encode(
+                                    &citations,
+                                    urp::ProviderProtocol::ChatCompletion,
+                                    offset,
+                                ),
+                            },
                             "finish_reason": Value::Null,
                         }],
                     }))

@@ -679,3 +679,63 @@ pub fn encode_gemini_grounding(nodes: &[super::Node]) -> Option<Value> {
     }
     (!supports.is_empty()).then(|| json!({"groundingChunks":chunks,"groundingSupports":supports}))
 }
+
+/// A run of source text that a text-rewriting transform kept. `group` names the output text
+/// node; `out_start` is the run's character position in that node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSpan {
+    pub group: u32,
+    pub source_start: u64,
+    pub source_end: u64,
+    pub out_start: u64,
+}
+
+/// Moves a citation from source-node coordinates to its output node's coordinates and returns
+/// that node's `group`. The owner is the first kept run ending after the range start, so a range
+/// inside removed text becomes an empty range at the next kept character.
+pub fn rebase_citation(citation: &mut Citation, spans: &[TextSpan]) -> Option<u32> {
+    let last = spans.last()?;
+    let Some(range) = &mut citation.answer_range else {
+        return Some(last.group);
+    };
+    let owner = spans
+        .iter()
+        .find(|span| span.source_end > range.start)
+        .unwrap_or(last);
+    let start = owner.out_start
+        + range.start.clamp(owner.source_start, owner.source_end)
+        - owner.source_start;
+    let end = spans
+        .iter()
+        .rfind(|span| span.group == owner.group && span.source_start < range.end)
+        .map_or(start, |span| {
+            span.out_start + range.end.min(span.source_end) - span.source_start
+        });
+    range.start = start;
+    range.end = end.max(start);
+    Some(owner.group)
+}
+
+/// Chat-only stream control for citations of a completed text node (PC7h). Ranges are local to
+/// `node_index`; the Chat encoder adds that node's position in the emitted content.
+pub fn chat_annotations_control(node_index: u32, citations: &[Citation]) -> super::UrpStreamEvent {
+    super::UrpStreamEvent::ProviderControl {
+        protocol: "chat_completion".to_string(),
+        event_name: super::CHAT_ANNOTATIONS_CONTROL.to_string(),
+        data: json!({ "node_index": node_index, "citations": citations }),
+        extra_body: HashMap::new(),
+    }
+}
+
+/// Reads a control event built by `chat_annotations_control`.
+pub fn parse_chat_annotations_control(
+    event_name: &str,
+    data: &Value,
+) -> Option<(u32, Vec<Citation>)> {
+    if event_name != super::CHAT_ANNOTATIONS_CONTROL {
+        return None;
+    }
+    let node_index = u32::try_from(data.get("node_index")?.as_u64()?).ok()?;
+    let citations = serde_json::from_value(data.get("citations")?.clone()).ok()?;
+    Some((node_index, citations))
+}

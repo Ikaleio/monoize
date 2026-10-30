@@ -529,6 +529,17 @@ impl StreamState {
                     Some(NodeMode::PassThrough) | None => {}
                 }
             }
+            UrpStreamEvent::ProviderControl {
+                event_name, data, ..
+            } => {
+                // TXO-5: late citations follow their text node's output index.
+                if let Some((source, citations)) =
+                    crate::urp::citations::parse_chat_annotations_control(event_name, data)
+                {
+                    let out = self.output_index(source);
+                    *event = crate::urp::citations::chat_annotations_control(out, &citations);
+                }
+            }
             UrpStreamEvent::ResponseDone { output, .. } => {
                 let mut streamed: Vec<(u32, Node)> = Vec::with_capacity(output.len());
                 let mut terminal_only = Vec::new();
