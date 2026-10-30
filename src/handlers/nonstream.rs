@@ -1467,7 +1467,12 @@ pub(super) fn responses_request_echo_for_attempt(
 ) -> Option<Value> {
     (matches!(downstream, DownstreamProtocol::Responses)
         && attempt.provider_type != ProviderType::Responses)
-        .then(|| urp::encode::openai_responses::response_request_echo(req))
+        .then(|| {
+            let mut effective = req.clone();
+            // The echo speaks Responses, so a mapped upstream web search projects back.
+            map_web_search_tools_for_provider(&mut effective, ProviderType::Responses);
+            urp::encode::openai_responses::response_request_echo(effective)
+        })
 }
 
 pub(super) fn encode_response_for_downstream(

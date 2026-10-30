@@ -96,6 +96,8 @@ pub const RESPONSES_REQUEST_ECHO_EXTRA_KEY: &str = "_monoize_responses_request_e
 pub const RESPONSES_IN_PROGRESS_CONTROL: &str = "_monoize.responses.in_progress";
 /// Internal control carrying the item-level fields of an upstream message `output_item.done`.
 pub const RESPONSES_MESSAGE_DONE_CONTROL: &str = "_monoize.responses.message_done";
+/// `phase` carried by an upstream `response.output_text.done` event, on `NodeDone.extra_body`.
+pub const RESPONSES_TEXT_DONE_PHASE_EXTRA_KEY: &str = "_monoize_responses_text_done_phase";
 pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -996,6 +998,17 @@ pub struct ReasoningMetadata {
     /// An identified upstream Responses item with no payload (PR2g.1).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_empty: bool,
+    /// Native summary part lifecycle signal on a delta without summary text (STR3i.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_event: Option<ReasoningSummaryEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningSummaryEvent {
+    PartAdded { part: Value },
+    TextDone { text: String },
+    PartDone { part: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

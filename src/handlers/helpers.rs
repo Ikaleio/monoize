@@ -2227,14 +2227,15 @@ fn selector_matches_tool(
     }
     match selector.get("type").and_then(Value::as_str) {
         Some("function") => {
-            tool.tool_type == "function"
-                && selector_name(selector, "function")
-                    .zip(
-                        tool.function
-                            .as_ref()
-                            .map(|function| function.name.as_str()),
-                    )
-                    .is_some_and(|(selected, available)| selected == available)
+            let available = match tool.tool_type.as_str() {
+                "function" => tool.function.as_ref().map(|function| function.name.as_str()),
+                // A named selector also addresses a native tool (Messages server tools).
+                "custom" | "namespace" => None,
+                _ => tool.name.as_deref(),
+            };
+            selector_name(selector, "function")
+                .zip(available)
+                .is_some_and(|(selected, available)| selected == available)
         }
         Some("custom") => {
             tool.tool_type == "custom"
@@ -2279,7 +2280,10 @@ fn allowed_tool_references_mut(choice: &mut urp::ToolChoice) -> Option<&mut Vec<
 }
 
 /// T1g.1: the Responses and Messages web search definitions are mutual native equivalents.
-fn map_web_search_tool_definition(tool: &mut urp::ToolDefinition, provider_type: ProviderType) {
+fn map_web_search_tool_definition(
+    tool: &mut urp::ToolDefinition,
+    provider_type: ProviderType,
+) -> bool {
     let config = tool.config.as_ref().and_then(Value::as_object);
     let mut mapped = Map::new();
     if let Some(location) = config.and_then(|config| config.get("user_location")) {
@@ -2311,11 +2315,52 @@ fn map_web_search_tool_definition(tool: &mut urp::ToolDefinition, provider_type:
             tool.name = None;
             tool.origin_protocol = Some(urp::ProviderProtocol::Responses);
         }
-        _ => return,
+        _ => return false,
     }
     tool.description = None;
     tool.config = Some(Value::Object(mapped));
     tool.extra_body.clear();
+    true
+}
+
+/// T1g.1: a mapped definition and the forced choice selecting it move together.
+pub(super) fn map_web_search_tools_for_provider(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+) {
+    let Some(tools) = req.tools.as_mut() else {
+        return;
+    };
+    let mut mapped_names = Vec::new();
+    for tool in tools.iter_mut() {
+        let original_name = tool.name.clone();
+        if map_web_search_tool_definition(tool, provider_type) {
+            mapped_names.push(original_name);
+        }
+    }
+    if mapped_names.is_empty() {
+        return;
+    }
+    let Some(urp::ToolChoice::Specific(Value::Object(selector))) = &req.tool_choice else {
+        return;
+    };
+    let selects_mapped_tool = match provider_type {
+        ProviderType::Messages => matches!(
+            selector.get("type").and_then(Value::as_str),
+            Some("web_search" | "web_search_preview")
+        ),
+        _ => {
+            selector.get("type").and_then(Value::as_str) == Some("function")
+                && selector_name(selector, "function")
+                    .is_some_and(|name| mapped_names.iter().flatten().any(|mapped| mapped == name))
+        }
+    };
+    if selects_mapped_tool {
+        req.tool_choice = Some(urp::ToolChoice::Specific(match provider_type {
+            ProviderType::Messages => json!({ "type": "function", "function": { "name": "web_search" } }),
+            _ => json!({ "type": "web_search" }),
+        }));
+    }
 }
 
 /// PR4c.2z and RC4g: controls for chat-shaped clients replaying statelessly through Responses.
@@ -2358,6 +2403,7 @@ pub(super) fn filter_tools_for_provider(
     provider_type: ProviderType,
     downstream: DownstreamProtocol,
 ) {
+    map_web_search_tools_for_provider(req, provider_type);
     let Some(tools) = req.tools.as_mut() else {
         if matches!(req.tool_choice, Some(urp::ToolChoice::Specific(_))) {
             req.tool_choice = None;
@@ -2365,9 +2411,6 @@ pub(super) fn filter_tools_for_provider(
         return;
     };
 
-    for tool in tools.iter_mut() {
-        map_web_search_tool_definition(tool, provider_type);
-    }
     tools.retain(|tool| provider_supports_tool_definition(tool, provider_type, downstream));
     if tools.is_empty() {
         req.tools = None;

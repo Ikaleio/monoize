@@ -83,11 +83,12 @@ fn map_responses_event_to_urp_events_with_state(
                         .to_ordinary()
                         .unwrap_or(OrdinaryRole::Assistant),
                     content: String::new(),
-                    phase: data_val
-                        .get("phase")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| message_phases_by_output_index.get(&output_index).cloned()),
+                    phase: message_phases_by_output_index
+                        .get(&output_index)
+                        .cloned()
+                        .or_else(|| {
+                            data_val.get("phase").and_then(Value::as_str).map(str::to_string)
+                        }),
                     extra_body: extra.clone(),
                 };
                 events.push(UrpStreamEvent::NodeStart {
@@ -170,10 +171,12 @@ fn map_responses_event_to_urp_events_with_state(
                 extra_body,
             }]
         }
-        "response.reasoning_text.done"
+        "response.reasoning_summary_part.added"
         | "response.reasoning_summary_text.done"
-        | "response.reasoning_summary_part.added"
-        | "response.reasoning_summary_part.done"
+        | "response.reasoning_summary_part.done" => {
+            map_reasoning_summary_event(event_name, &data_val, index_state)
+        }
+        "response.reasoning_text.done"
         | "response.output_text.done"
         | "response.refusal.done"
         | "response.function_call_arguments.done"
@@ -292,6 +295,7 @@ struct OutputItemStreamState {
     control_emitted: bool,
     part_done_seen: bool,
     content_done: BTreeSet<u64>,
+    text_done_phases: BTreeMap<u64, String>,
     node_done_seen: bool,
     reasoning_text_delta_seen: bool,
     reasoning_summary_delta_seen: bool,
@@ -300,6 +304,59 @@ struct OutputItemStreamState {
     message_phase: Option<String>,
     text_citations: BTreeMap<(u64, u64), crate::urp::Citation>,
     content_nodes: BTreeMap<u64, Node>,
+}
+
+/// STR3i.1: forwards one native summary part lifecycle event without summary text.
+fn map_reasoning_summary_event(
+    event_name: &str,
+    data_val: &Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Vec<UrpStreamEvent> {
+    let part = || data_val.get("part").cloned().unwrap_or_else(|| json!({"type":"summary_text"}));
+    let summary_event = match event_name {
+        "response.reasoning_summary_part.added" => {
+            crate::urp::ReasoningSummaryEvent::PartAdded { part: part() }
+        }
+        "response.reasoning_summary_text.done" => crate::urp::ReasoningSummaryEvent::TextDone {
+            text: data_val
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        },
+        _ => crate::urp::ReasoningSummaryEvent::PartDone { part: part() },
+    };
+    let output_index = data_val.get("output_index").and_then(Value::as_u64).unwrap_or(0);
+    let output_state = output_state_for(index_state, output_index);
+    output_state.reasoning_summary_delta_seen = true;
+    merge_reasoning_source(
+        &mut output_state.reasoning_source,
+        reasoning_source_from_value(data_val),
+    );
+    let source = output_state.reasoning_source.clone();
+    let item_id = data_val
+        .get("item_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| output_state.item_id.clone());
+    vec![UrpStreamEvent::NodeDelta {
+        node_index: urp_node_index_from_delta(data_val, index_state),
+        delta: NodeDelta::Reasoning {
+            metadata: crate::urp::ReasoningMetadata {
+                item_id,
+                summary_index: data_val.get("summary_index").and_then(Value::as_u64),
+                summary_event: Some(summary_event),
+                ..Default::default()
+            },
+            content: None,
+            encrypted: None,
+            summary: None,
+            source,
+        },
+        usage: None,
+        extra_body: HashMap::new(),
+    }]
 }
 
 fn merge_reasoning_source(dst: &mut Option<String>, source: Option<String>) {
