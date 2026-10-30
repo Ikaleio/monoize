@@ -118,20 +118,24 @@ export function CaptureViewerDialog({
 						<div className='flex flex-wrap items-center gap-1.5 text-xs'>
 							<Badge
 								variant='secondary'
-								className='h-5 px-1.5 font-mono border-0 bg-muted text-muted-foreground'
+								className='h-5 px-1.5 font-mono border-info-border bg-info-soft text-info-foreground'
 							>
 								{data.dump.downstream_protocol}
 							</Badge>
-							<Badge
-								variant='secondary'
-								className='h-5 px-1.5 border-0 bg-muted text-muted-foreground'
-							>
-								{t(
-									data.dump.is_stream ?
-										'requestLogs.capture.stream'
-									:	'requestLogs.capture.nonStream'
-								)}
-							</Badge>
+							{data.dump.is_stream ?
+								<Badge
+									variant='secondary'
+									className='h-5 px-1.5 border-info-border bg-info-soft text-info-foreground'
+								>
+									{t('requestLogs.capture.stream')}
+								</Badge>
+							:	<Badge
+									variant='secondary'
+									className='h-5 px-1.5 border-warning-border bg-warning-soft text-warning-foreground'
+								>
+									{t('requestLogs.capture.nonStream')}
+								</Badge>
+							}
 							<span className='text-muted-foreground'>
 								{formatDateTime(data.created_at)}
 							</span>
@@ -151,7 +155,7 @@ export function CaptureViewerDialog({
 								onValueChange={value => setAttemptIndex(Number(value))}
 							>
 								<SelectTrigger
-									className='h-8 w-full text-xs sm:w-[28rem]'
+									className='h-8 w-full text-xs sm:w-80'
 									aria-label={t('requestLogs.capture.attempt')}
 								>
 									<SelectValue />
@@ -181,19 +185,24 @@ export function CaptureViewerDialog({
 										return (
 											<SelectItem key={index} value={String(index)}>
 												<span className='inline-flex min-w-0 items-center gap-1.5'>
-													<span className='truncate'>
+													<span className='truncate font-mono'>
 														#{attempt.attempt_number}
-														{route ? ` · ${route}` : ''} ·{' '}
-														<span className='font-mono'>{attempt.upstream_model}</span>
+														{route ? ` · ${route}` : ''} · {attempt.upstream_model}
 													</span>
 													{failed ?
-														<span className='shrink-0 rounded-md border border-error-border bg-error-soft px-1 text-[11px] text-error-foreground'>
+														<Badge
+															variant='secondary'
+															className='h-5 shrink-0 px-1.5 border-error-border bg-error-soft text-error-foreground'
+														>
 															{t('requestLogs.capture.attemptFailed')}
-														</span>
+														</Badge>
 													: succeeded ?
-														<span className='shrink-0 rounded-md border border-success-border bg-success-soft px-1 text-[11px] text-success-foreground'>
+														<Badge
+															variant='secondary'
+															className='h-5 shrink-0 px-1.5 border-success-border bg-success-soft text-success-foreground'
+														>
 															{t('requestLogs.capture.attemptSucceeded')}
-														</span>
+														</Badge>
 													:	null}
 												</span>
 											</SelectItem>

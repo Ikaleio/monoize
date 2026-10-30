@@ -95,7 +95,7 @@ Rules:
 - An editor dialog with unsaved edits passes `dirty` to `DialogContent`: outside click, Escape, and the close button then ask "Discard unsaved changes?" instead of closing. Page-level drafts use `useUnsavedChangesGuard`.
 - Closing a dialog returns focus to the element that opened it.
 - Entity editors wrap their fields in `<form onSubmit>` with a `type="submit"` primary button, so Enter submits.
-- Toasts render at the top center so they never cover dialog footers or save bars. Error toasts use `toastApiError` and never show the raw server message.
+- Error toasts use `toastApiError` and never show the raw server message.
 
 ## Motion
 

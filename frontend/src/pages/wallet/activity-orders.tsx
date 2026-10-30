@@ -157,7 +157,7 @@ export function ActivityOrders({
                         </span>
                       </DataListCell>
                       <DataListCell label={t("wallet.orderId")}>
-                        <span className="inline-flex items-center gap-0.5">
+                        <span className="inline-flex items-center gap-1">
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button

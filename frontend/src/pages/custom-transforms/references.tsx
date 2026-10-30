@@ -9,7 +9,7 @@ import type { CustomTransformReference } from "@/lib/api";
 /** Chain editor entry points (custom-js-transforms.spec.md CJS-UI-7). */
 export function ChainEntryLinks() {
   const { t } = useTranslation();
-  const linkClass = "font-medium text-foreground underline underline-offset-4 hover:text-primary";
+  const linkClass = "underline underline-offset-4 hover:text-primary";
   return (
     <>
       {t("customTransforms.attachHint")}{" "}
@@ -75,25 +75,25 @@ export function TransformReferences({
           {t("customTransforms.usedIn", { count: references.length })}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 p-0">
-        <p className="border-b px-4 py-2.5 text-sm font-medium">
+      <PopoverContent align="start" className="w-72 p-0">
+        <p className="flex h-11 items-center border-b px-3 text-sm">
           {t("customTransforms.referencesTitle")}
         </p>
-        <div className="max-h-72 space-y-2 overflow-y-auto p-2">
+        <div className="max-h-[300px] overflow-y-auto overflow-x-hidden">
           {groups.map((group) => {
             const items = references.filter((reference) => reference.kind === group.kind);
             if (items.length === 0) return null;
             return (
-              <div key={group.kind}>
-                <p className="px-2 py-1 text-xs font-medium text-muted-foreground">{group.label}</p>
+              <div key={group.kind} className="overflow-hidden p-1 text-foreground">
+                <p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">{group.label}</p>
                 <ul>
                   {items.map((reference) => (
                     <li key={`${reference.kind}:${reference.id}`}>
                       <Link
                         to={referenceHref(reference, currentUserId)}
-                        className="flex min-h-9 items-center rounded-md px-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="relative flex select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
                       >
-                        <span className="truncate">
+                        <span className="min-w-0 truncate">
                           {reference.kind === "global"
                             ? t("customTransforms.globalChain")
                             : reference.kind === "api_key" &&

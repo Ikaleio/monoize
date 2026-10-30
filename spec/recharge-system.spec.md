@@ -635,10 +635,10 @@ RC-W3. The recharge card:
   cached channel data MUST keep rendering the cached data;
 - when zero enabled channels exist, renders a localized empty state and no
   amount controls;
-- renders, in this order, a channel selector, preset amount buttons for `5`,
-  `10`, `25`, `50`, and `100` USD, and one labeled custom-amount input.
-  The channel selector is a single-select group of buttons, one per channel,
-  each labeled `{name} · {currency} · ${min_credit_usd}–${max_credit_usd}`.
+- renders preset amount buttons for `5`, `10`, `25`, `50`, and `100` USD,
+  one labeled custom-amount input, and a channel selector, in that order.
+  Each channel option is labeled
+  `{name} · {currency} · ${min_credit_usd}–${max_credit_usd}`.
   A preset outside the selected channel's bounds MUST be disabled;
 - when the user switches channel while the entered amount is a valid USD
   decimal outside the new channel's bounds, the amount MUST be replaced by the
@@ -648,12 +648,8 @@ RC-W3. The recharge card:
   a channel switch that needs no clamping. An invalid or empty amount is left
   unchanged;
 - shows a payment summary beside the form at or above `lg`, and below it otherwise.
-  At or above `lg` the summary shows credit in USD, the selected channel rate and currency, the
+  The summary shows credit in USD, the selected channel rate and currency, the
   exact payment preview, a submit button, and a payment-success explanation.
-  Below `lg` the summary collapses to one line directly above the submit
-  button: the localized "pay {pay_amount} {pay_currency}" text and the rate
-  `1 USD = {usd_rate} {currency}`, followed by the submit button and the
-  payment-success explanation.
   Credit preserves every non-zero input decimal place, up to nine places.
   Invalid amounts show unavailable credit and payment previews and disable submission.
   A non-empty invalid input also shows an associated localized validation message;
@@ -734,8 +730,8 @@ Administrators can navigate from that state to `/dashboard/plans`.
 With no payment channels, administrators can navigate to `/dashboard/payments`.
 Ordinary users MUST NOT see these administrator actions.
 At or above `lg`, the recharge form and summary use a 3:2 column ratio.
-The channel selector uses two columns at or above `sm` and one below `sm`; the
-presets and custom amount follow at full form width.
+At or above `sm`, custom amount and payment method share a row.
+Below `sm`, these fields stack in source order.
 Order and ledger rows MUST use the `DataList` primitives (`frontend-design-system.spec.md` §6.1).
 At 390 CSS pixels, the page, tabs, and controls MUST fit without horizontal page scrolling.
 Tab triggers, recharge controls, purchase actions, and pagination buttons have a minimum height of 44 CSS pixels.
@@ -819,9 +815,8 @@ RC-M3. The Orders tab renders the admin view of RC-A2 (all users) with
 username, channel name, credit (`$` + `formatUsdDecimal(credit_usd, 2)`), payment (`pay_amount` +
 `pay_currency`), status badge, order id (first 8 chars followed by a
 `CopyButton` that copies the full id; the tooltip shows the full id and, when
-set, `error_code`), and a column headed "Refund" (zh "退款"). Only rows with
-`status = succeeded` render the refund button in that column; every other row
-renders "—". The refund action opens a confirmation dialog that contains a
+set, `error_code`), and a column headed "Refund" (zh "退款"). Each row has a
+refund action in that column, enabled only when `status = succeeded`. The refund action opens a confirmation dialog that contains a
 key-value block with the full order id and a `CopyButton`, the payment channel
 name, the paid amount `pay_amount pay_currency`, and the credit
 `$` + `formatUsdDecimal(credit_usd, 2)`. For a `supports_refund = false`

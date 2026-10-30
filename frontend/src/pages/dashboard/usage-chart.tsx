@@ -1,10 +1,11 @@
 import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import {
-  Bar,
-  BarChart,
+  Area,
+  AreaChart,
   CartesianGrid,
   ReferenceLine,
   XAxis,
@@ -36,16 +37,14 @@ import {
 } from "@/lib/usage-window";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import {
+  buildCumulativeTokenSeries,
   formatCompactTokens,
-  OTHER_SERIES,
-  OTHER_SERIES_COLOR,
-  type UsageSeries,
+  modelToColor,
 } from "./utils";
 
 interface UsageChartPanelProps extends QueryErrorProps {
   failed?: boolean;
   analytics: DashboardAnalytics | undefined;
-  series: UsageSeries;
   /** First load with no data for the panel (DH-12a): show skeleton. */
   loading?: boolean;
   /** Fetching another window while previous data is shown (DH-12b): dim only. */
@@ -55,6 +54,9 @@ interface UsageChartPanelProps extends QueryErrorProps {
   onRefresh: () => void;
 }
 
+const LEGEND_ITEM_MIN_WIDTH_PX = 160;
+const LEGEND_PAGE_SIZE_MAX = 8;
+
 function updatedAtClock(timeTo: string | undefined): string | null {
   if (!timeTo) return null;
   const date = new Date(timeTo);
@@ -63,7 +65,6 @@ function updatedAtClock(timeTo: string | undefined): string | null {
 
 export function UsageChartPanel({
   analytics,
-  series,
   loading,
   pending,
   window,
@@ -74,16 +75,44 @@ export function UsageChartPanel({
   retrying,
 }: UsageChartPanelProps) {
   const { t } = useTranslation();
-  const otherLabel = t("dashboard.usage.other", "Other");
-  const seriesLabel = (key: string) => (key === OTHER_SERIES ? otherLabel : key);
+  const [legendPage, setLegendPage] = useState(0);
+  const [legendPageSize, setLegendPageSize] = useState(3);
+  const legendRef = useRef<HTMLUListElement>(null);
+  const series = useMemo(
+    () => buildCumulativeTokenSeries(analytics, window),
+    [analytics, window],
+  );
 
-  const chartConfig: ChartConfig = {};
-  for (const key of series.series) {
-    chartConfig[key] = {
-      label: key === OTHER_SERIES ? otherLabel : key,
-      color: series.colors[key],
+  useEffect(() => {
+    const legend = legendRef.current;
+    if (!legend) return;
+
+    const updatePageSize = () => {
+      const nextPageSize = Math.max(
+        1,
+        Math.min(
+          LEGEND_PAGE_SIZE_MAX,
+          Math.floor(legend.clientWidth / LEGEND_ITEM_MIN_WIDTH_PX),
+        ),
+      );
+      setLegendPageSize((current) =>
+        current === nextPageSize ? current : nextPageSize,
+      );
     };
-  }
+
+    updatePageSize();
+    const observer = new ResizeObserver(updatePageSize);
+    observer.observe(legend);
+    return () => observer.disconnect();
+  }, [series.models.length]);
+
+  const chartConfig = useMemo<ChartConfig>(() => {
+    const cfg: ChartConfig = {};
+    for (const model of series.models) {
+      cfg[model] = { label: model, color: modelToColor(model) };
+    }
+    return cfg;
+  }, [series.models]);
 
   const markerLabel =
     series.rows.length > 0
@@ -93,13 +122,21 @@ export function UsageChartPanel({
     ? t("dashboard.usage.today", "Today")
     : t("dashboard.usage.now", "Now");
   const updatedAt = updatedAtClock(analytics?.time_to);
+  const legendPageCount = Math.max(
+    1,
+    Math.ceil(series.models.length / legendPageSize),
+  );
+  const currentLegendPage = Math.min(legendPage, legendPageCount - 1);
+  const visibleLegendModels = series.models.slice(
+    currentLegendPage * legendPageSize,
+    (currentLegendPage + 1) * legendPageSize,
+  );
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.12, ...transitions.normal }}
-      className="min-w-0"
     >
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 p-4 pb-2">
@@ -110,31 +147,19 @@ export function UsageChartPanel({
             <CardDescription className="text-pretty leading-relaxed">
               {t(
                 "dashboard.usage.subtitle",
-                "Tokens per period for the current account",
+                "Token usage for the current account in the selected time range",
               )}
             </CardDescription>
-            {analytics ? (
-              <p className="mt-1 flex items-baseline gap-1.5">
-                <span className="font-display text-xl font-semibold tabular-nums">
-                  {formatCompactTokens(series.windowTotal)}
-                </span>
-                <span className="text-sm text-muted-foreground">
-                  {t("dashboard.usage.windowTotal", {
-                    window: t(`dashboard.usage.windowName.${window}`),
-                  })}
-                </span>
-              </p>
-            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {updatedAt ? (
-              <span className="text-xs text-muted-foreground tabular-nums">
+              <span className="text-xs tabular-nums text-muted-foreground">
                 {t("dashboard.usage.updatedAt", { time: updatedAt })}
               </span>
             ) : null}
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="icon"
               disabled={retrying}
               aria-label={t("dashboard.refreshAction")}
@@ -142,9 +167,7 @@ export function UsageChartPanel({
               onClick={onRefresh}
             >
               <RefreshCw
-                className={cn(
-                  retrying && "animate-spin motion-reduce:animate-none",
-                )}
+                className={cn(retrying && "motion-safe:animate-spin")}
                 aria-hidden="true"
               />
             </Button>
@@ -173,7 +196,7 @@ export function UsageChartPanel({
           {failed && analytics === undefined ? null : loading &&
             analytics === undefined ? (
             <Skeleton className="h-72 w-full rounded-lg" />
-          ) : series.rows.length === 0 || series.series.length === 0 ? (
+          ) : series.rows.length === 0 || series.models.length === 0 ? (
             analytics?.has_any_request === false ? (
               <EmptyState
                 title={t("dashboard.noAnalysisData", "No requests yet")}
@@ -181,7 +204,6 @@ export function UsageChartPanel({
                   "dashboard.noAnalysisDataDescription",
                   "Create an API key and send a request. Statistics then appear here.",
                 )}
-                variant="inline"
                 action={
                   <Button asChild variant="outline">
                     <Link to="/dashboard/tokens">
@@ -196,7 +218,6 @@ export function UsageChartPanel({
                 title={t("dashboard.usage.emptyWindow", {
                   window: t(`dashboard.usage.windowName.${window}`),
                 })}
-                variant="inline"
                 action={
                   window === "30d" ? undefined : (
                     <Button
@@ -217,7 +238,7 @@ export function UsageChartPanel({
                 config={chartConfig}
                 className="h-72 w-full !aspect-auto sm:h-80"
               >
-                <BarChart
+                <AreaChart
                   data={series.rows}
                   // Keep the marker label inside the plot bounds so localized
                   // glyphs cannot be clipped by the chart container (DH-6d).
@@ -237,7 +258,10 @@ export function UsageChartPanel({
                     width={52}
                     tickFormatter={(v) => formatCompactTokens(Number(v))}
                     label={{
-                      value: t("dashboard.usage.tokensAxis", "Tokens per period"),
+                      value: t(
+                        "dashboard.usage.cumulativeTokens",
+                        "Cumulative Tokens",
+                      ),
                       angle: -90,
                       position: "insideLeft",
                       offset: 8,
@@ -256,12 +280,13 @@ export function UsageChartPanel({
                         idx >= 0 ? (series.bucketByModel[idx] ?? {}) : {};
                       const bucketTotal =
                         idx >= 0 ? (series.bucketTotals[idx] ?? 0) : 0;
-                      // Lists real models, so the merged "Other" bar expands here (DH-6e).
-                      const entries = Object.entries(perBucket)
-                        .map(([model, tokens]) => ({
+                      const cumulativeTotal =
+                        idx >= 0 ? (series.cumulativeTotals[idx] ?? 0) : 0;
+                      const entries = series.models
+                        .map((model) => ({
                           model,
-                          tokens,
-                          color: series.colors[model] ?? OTHER_SERIES_COLOR,
+                          tokens: perBucket[model] ?? 0,
+                          color: modelToColor(model),
                         }))
                         .filter((e) => e.tokens > 0)
                         .sort((a, b) => b.tokens - a.tokens);
@@ -310,13 +335,29 @@ export function UsageChartPanel({
                               );
                             })}
                           </ul>
-                          <div className="flex justify-between gap-3 border-t pt-2 text-muted-foreground">
-                            <span>
-                              {t("dashboard.usage.periodTotal", "Period total")}
-                            </span>
-                            <span className="font-medium tabular-nums text-foreground">
-                              {formatCompactTokens(bucketTotal)}
-                            </span>
+                          <div className="flex flex-col gap-1 border-t pt-2 text-muted-foreground">
+                            <div className="flex justify-between gap-3">
+                              <span>
+                                {t(
+                                  "dashboard.usage.periodTotal",
+                                  "Period total",
+                                )}
+                              </span>
+                              <span className="font-medium tabular-nums text-foreground">
+                                {formatCompactTokens(bucketTotal)}
+                              </span>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span>
+                                {t(
+                                  "dashboard.usage.cumulativeTotal",
+                                  "Cumulative total",
+                                )}
+                              </span>
+                              <span className="font-medium tabular-nums text-foreground">
+                                {formatCompactTokens(cumulativeTotal)}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       );
@@ -336,41 +377,94 @@ export function UsageChartPanel({
                       }}
                     />
                   ) : null}
-                  {series.series.map((key) => (
-                    <Bar
-                      key={key}
-                      dataKey={key}
+                  {series.models.map((model) => (
+                    <Area
+                      key={model}
+                      type="monotone"
+                      dataKey={model}
                       stackId="tokens"
-                      fill={series.colors[key]}
-                      maxBarSize={40}
+                      stroke={modelToColor(model)}
+                      fill={modelToColor(model)}
+                      fillOpacity={0.55}
+                      strokeWidth={1.5}
                       // DH-12c: background revalidation must not replay the
                       // grow-from-zero enter animation.
                       isAnimationActive={false}
                     />
                   ))}
-                </BarChart>
+                </AreaChart>
               </ChartContainer>
 
-              <div className="min-w-0 border-t pt-3">
+              <div className="flex min-w-0 items-center gap-3 border-t pt-3">
                 <p className="sr-only">
                   {t("dashboard.usage.legend", "Model legend")}
                 </p>
-                <ul className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-5">
-                  {series.series.map((key) => (
-                    <li key={key} className="flex min-w-0 items-center gap-2">
+                <ul
+                  ref={legendRef}
+                  className="grid min-w-0 flex-1 gap-2"
+                  style={{
+                    gridTemplateColumns: `repeat(${Math.max(1, visibleLegendModels.length)}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {visibleLegendModels.map((model) => (
+                    <li
+                      key={model}
+                      className="flex min-w-0 items-center justify-center gap-2"
+                    >
                       <span
                         className="size-2.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: series.colors[key] }}
+                        style={{ backgroundColor: modelToColor(model) }}
                       />
                       <span
                         className="truncate font-mono text-xs text-muted-foreground"
-                        title={seriesLabel(key)}
+                        title={model}
                       >
-                        {seriesLabel(key)}
+                        {model}
                       </span>
                     </li>
                   ))}
                 </ul>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    disabled={currentLegendPage === 0}
+                    aria-label={t(
+                      "dashboard.usage.previousLegendPage",
+                      "Previous legend page",
+                    )}
+                    onClick={() => setLegendPage(currentLegendPage - 1)}
+                  >
+                    <ChevronLeft data-icon="inline-start" />
+                  </Button>
+                  <span
+                    className="min-w-10 text-center font-mono text-xs tabular-nums text-muted-foreground"
+                    aria-live="polite"
+                  >
+                    {t(
+                      "dashboard.usage.legendPage",
+                      "{{current}} / {{total}}",
+                      {
+                        current: currentLegendPage + 1,
+                        total: legendPageCount,
+                      },
+                    )}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    disabled={currentLegendPage === legendPageCount - 1}
+                    aria-label={t(
+                      "dashboard.usage.nextLegendPage",
+                      "Next legend page",
+                    )}
+                    onClick={() => setLegendPage(currentLegendPage + 1)}
+                  >
+                    <ChevronRight data-icon="inline-end" />
+                  </Button>
+                </div>
               </div>
             </>
           )}

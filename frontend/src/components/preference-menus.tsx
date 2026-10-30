@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
-import { ChevronDown, Languages, Monitor, Moon, Sun } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Languages, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -8,17 +9,16 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AnimatedButton } from "@/components/ui/motion";
 import { useTheme } from "@/hooks/use-theme";
 import { getCurrentLanguage, setLanguage, type SupportedLanguage } from "@/i18n";
 import type { ThemePreference } from "@/lib/theme";
 
 const LANGUAGES: SupportedLanguage[] = ["en", "zh", "zh-TW", "ja"];
 
-const THEMES = [
-  { value: "light", icon: Sun },
-  { value: "dark", icon: Moon },
-  { value: "system", icon: Monitor },
-] as const;
+const THEMES: ThemePreference[] = ["light", "dark", "system"];
+
+const ICON_TRIGGER_CLASS = "size-11 touch-manipulation sm:size-9";
 
 /** Radio items for every supported language; names are native in all locales. */
 export function LanguageRadioGroup() {
@@ -37,52 +37,38 @@ export function LanguageRadioGroup() {
   );
 }
 
-/** Three-state theme radio items, reachable with the menu's arrow-key navigation. */
-export function ThemeRadioGroup({ keepOpen = false }: { keepOpen?: boolean }) {
+/**
+ * Language dropdown. The default trigger is an outline button naming the current
+ * language; `iconOnly` renders the compact ghost icon button used on the login page.
+ */
+export function LanguageDropdown({ iconOnly = false }: { iconOnly?: boolean }) {
   const { t } = useTranslation();
-  const { theme, setTheme } = useTheme();
-  return (
-    <DropdownMenuRadioGroup
-      value={theme}
-      onValueChange={(value) => setTheme(value as ThemePreference)}
-    >
-      {THEMES.map(({ value, icon: Icon }) => (
-        <DropdownMenuRadioItem
-          key={value}
-          value={value}
-          onSelect={keepOpen ? (event) => event.preventDefault() : undefined}
-        >
-          <Icon data-icon="inline-start" aria-hidden="true" />
-          {t(`theme.${value}`)}
-        </DropdownMenuRadioItem>
-      ))}
-    </DropdownMenuRadioGroup>
-  );
-}
-
-/** Language dropdown whose trigger names the current language. */
-export function LanguageDropdown({
-  variant = "outline",
-  className,
-}: {
-  variant?: "outline" | "ghost";
-  className?: string;
-}) {
-  const { t } = useTranslation();
+  const current = t(`language.${getCurrentLanguage()}`);
+  const ariaLabel = `${t("language.switchLanguage")}: ${current}`;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant={variant}
-          className={className}
-          aria-label={`${t("language.switchLanguage")}: ${t(`language.${getCurrentLanguage()}`)}`}
-        >
-          <Languages data-icon="inline-start" aria-hidden="true" />
-          {t(`language.${getCurrentLanguage()}`)}
-          <ChevronDown data-icon="inline-end" aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
+      {iconOnly ? (
+        <AnimatedButton>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={ICON_TRIGGER_CLASS}
+              title={t("language.switchLanguage")}
+              aria-label={ariaLabel}
+            >
+              <Languages aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+        </AnimatedButton>
+      ) : (
+        <DropdownMenuTrigger asChild>
+          <Button type="button" variant="outline" aria-label={ariaLabel}>
+            {current}
+          </Button>
+        </DropdownMenuTrigger>
+      )}
       <DropdownMenuContent align="end">
         <LanguageRadioGroup />
       </DropdownMenuContent>
@@ -90,33 +76,64 @@ export function LanguageDropdown({
   );
 }
 
-/** Theme dropdown whose trigger shows the current preference. */
-export function ThemeDropdown({
-  variant = "outline",
-  className,
-}: {
-  variant?: "outline" | "ghost";
-  className?: string;
-}) {
+/**
+ * Theme dropdown with light, dark and system options. The default trigger is an outline
+ * button naming the preference; `iconOnly` renders the compact ghost icon button used on
+ * the login page.
+ */
+export function ThemeDropdown({ iconOnly = false }: { iconOnly?: boolean }) {
   const { t } = useTranslation();
-  const { theme } = useTheme();
-  const Icon = THEMES.find((item) => item.value === theme)?.icon ?? Monitor;
+  const { theme, resolvedTheme, setTheme } = useTheme();
+  const ariaLabel = `${t("theme.toggle")}: ${t(`theme.${theme}`)}`;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant={variant}
-          className={className}
-          aria-label={`${t("theme.toggle")}: ${t(`theme.${theme}`)}`}
-        >
-          <Icon data-icon="inline-start" aria-hidden="true" />
-          {t(`theme.${theme}`)}
-          <ChevronDown data-icon="inline-end" aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
+      {iconOnly ? (
+        <AnimatedButton>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={ICON_TRIGGER_CLASS}
+              title={t("theme.toggle")}
+              aria-label={ariaLabel}
+            >
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={resolvedTheme}
+                  initial={{ rotate: -90, opacity: 0 }}
+                  animate={{ rotate: 0, opacity: 1 }}
+                  exit={{ rotate: 90, opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  {resolvedTheme === "dark" ? (
+                    <Moon className="h-5 w-5" aria-hidden="true" />
+                  ) : (
+                    <Sun className="h-5 w-5" aria-hidden="true" />
+                  )}
+                </motion.div>
+              </AnimatePresence>
+            </Button>
+          </DropdownMenuTrigger>
+        </AnimatedButton>
+      ) : (
+        <DropdownMenuTrigger asChild>
+          <Button type="button" variant="outline" aria-label={ariaLabel}>
+            {t(`theme.${theme}`)}
+          </Button>
+        </DropdownMenuTrigger>
+      )}
       <DropdownMenuContent align="end">
-        <ThemeRadioGroup />
+        <DropdownMenuRadioGroup
+          value={theme}
+          onValueChange={(value) => setTheme(value as ThemePreference)}
+        >
+          {THEMES.map((value) => (
+            <DropdownMenuRadioItem key={value} value={value}>
+              {t(`theme.${value}`)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

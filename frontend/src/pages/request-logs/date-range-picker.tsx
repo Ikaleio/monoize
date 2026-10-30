@@ -206,7 +206,7 @@ export function DateRangePicker({ value, onChange, language, t }: DateRangePicke
 		: (formatCustomRangeLabel(from, to) ?? t('requestLogs.timeRangeAll'))
 
 	const presetButtonClass = (active: boolean) =>
-		cn('shrink-0 text-xs h-7 px-2', active && 'bg-foreground text-background hover:bg-foreground/90 hover:text-background')
+		cn('shrink-0 text-xs h-7 px-2', active && 'bg-accent text-accent-foreground')
 
 	const errorMessage =
 		inputError === 'order' ? t('requestLogs.timeRangeOrderError')
@@ -227,7 +227,7 @@ export function DateRangePicker({ value, onChange, language, t }: DateRangePicke
 					<span className='truncate text-xs'>{label}</span>
 				</Button>
 			</PopoverTrigger>
-			<PopoverContent className='w-auto min-w-[16rem] p-0' align='start' side='bottom'>
+			<PopoverContent className='w-auto p-0' align='start' side='bottom'>
 				<div>
 					<div className='[contain:inline-size] overflow-x-auto border-b [scrollbar-gutter:stable]'>
 						<div className='flex gap-1 p-2 w-max min-w-full'>
@@ -279,7 +279,7 @@ export function DateRangePicker({ value, onChange, language, t }: DateRangePicke
 							</label>
 							<Input
 								id={fromId}
-								className='h-7 text-xs md:text-xs font-mono w-full'
+								className='h-7 text-xs font-mono w-full'
 								placeholder={t('requestLogs.timeRangeFrom')}
 								value={fromText}
 								aria-invalid={inputError === 'from' || inputError === 'order'}
@@ -294,7 +294,7 @@ export function DateRangePicker({ value, onChange, language, t }: DateRangePicke
 							</label>
 							<Input
 								id={toId}
-								className='h-7 text-xs md:text-xs font-mono w-full'
+								className='h-7 text-xs font-mono w-full'
 								placeholder={t('requestLogs.timeRangeTo')}
 								value={toText}
 								aria-invalid={inputError === 'to' || inputError === 'order'}

@@ -468,11 +468,6 @@ CJS-UI-5b. Edit mode shows the edited transform's id read-only as monospace text
 to the dialog title, with the note "The id cannot be changed. To rename, create a new
 transform and delete the old one."
 
-CJS-UI-5c. Dialog size: from the `sm` breakpoint the dialog is at most `max-w-5xl` wide
-and exactly `85dvh` tall; the editor fills the remaining height (flex `1`) and scrolls
-internally. Below `sm` the dialog is `calc(100dvh - 2rem)` tall (the full viewport minus
-the shared dialog viewport padding).
-
 CJS-UI-5d. Unsaved-change guard: the dialog content passes
 `dirty = (buffer !== initial buffer)` to the shared `DialogContent dirty` guard, so Esc,
 outside click and the close button ask "Discard unsaved changes?" before closing. A
@@ -495,10 +490,11 @@ authoring skill document (§12) to the clipboard. Its feedback follows
 
 CJS-UI-7. The empty state (zero custom transforms, load complete) renders an explicit
 localized empty message plus the create action; it MUST NOT render a bare blank grid.
-Both the page description and the empty-state description state that a created transform
-takes effect only after it is added to a Provider, global, or API key transform chain,
-and link to the three chain editors: Providers `/dashboard/providers`, global
-`/dashboard/admin-settings?setting=global_transforms`, API keys `/dashboard/tokens`.
+The empty-state description states that a created transform takes effect only after it
+is added to a Provider, global, or API key transform chain, and links to the three chain
+editors: Providers `/dashboard/providers`, global
+`/dashboard/admin-settings?setting=global_transforms`, API keys `/dashboard/tokens`. The
+page description keeps its single sentence, so the header actions stay on the title row.
 
 CJS-UI-8. References: the page fetches CJS-API-6 through one shared SWR hook
 (`useCustomTransformReferences`) and revalidates it after every successful custom

@@ -891,8 +891,7 @@ or opening `/dashboard/models?tab=<value>` MUST select that tab.
 
 MP-UI1a. The Unpriced Models trigger MUST show a secondary badge with the MP-A4 model
 count when the count is greater than 0, and no badge when it is 0; its accessible name
-MUST include the count. When the tab row overflows horizontally, the row MUST fade the
-clipped edge(s) to signal scrolling, and tab triggers MUST draw their focus ring inset.
+MUST include the count.
 
 MP-UI2. Every tab uses SWR for data loading, renders a skeleton while loading, and
 applies optimistic updates for user-triggered mutations. Request failures MUST show the

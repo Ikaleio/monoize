@@ -2,7 +2,6 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { FieldError } from "@/components/ui/field";
-import { cn } from "@/lib/utils";
 
 type NativeInputProps = Omit<
   React.ComponentProps<"input">,
@@ -129,8 +128,8 @@ export const NumberField = React.forwardRef<HTMLInputElement, NumberFieldProps>(
     const allowsNegative = min === undefined || min < 0;
 
     return (
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 flex-col gap-3">
+        <div className="flex min-w-0 items-center gap-1.5">
           <Input
             ref={ref}
             id={id}
@@ -140,7 +139,7 @@ export const NumberField = React.forwardRef<HTMLInputElement, NumberFieldProps>(
             value={text}
             aria-invalid={error ? true : undefined}
             aria-describedby={describedBy || undefined}
-            className={cn("tabular-nums", className)}
+            className={className}
             onChange={(event) => setText(event.target.value)}
             onFocus={(event) => {
               setFocused(true);

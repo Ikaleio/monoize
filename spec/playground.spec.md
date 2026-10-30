@@ -521,9 +521,8 @@ attachment).
 
 PG-CMP3a. One inline reason line below the composer MUST explain a send block that the
 user can act on. When no model for the active mode is selected, it MUST show the translated
-`playground.errorNoModel` (zh: `请先选择模型`) and the model selector trigger MUST show a
-`ring` highlight. Otherwise it MUST show the PG-AUTH7 reason when one applies, and it MUST
-be absent when none applies.
+`playground.errorNoModel` (zh: `请先选择模型`). Otherwise it MUST show the PG-AUTH7
+reason when one applies, and it MUST be absent when none applies.
 
 PG-CMP3b. With no model for the active mode selected, loaded selector data, no pending
 request, and PG-CMP3 text satisfied, the PG-CMP2 submitting Enter key MUST open the model

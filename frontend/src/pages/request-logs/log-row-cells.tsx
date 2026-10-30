@@ -452,7 +452,7 @@ export function LogRowCells({
     <Badge
       variant="secondary"
       className={cn(
-        "text-xs h-5 px-1 font-mono rounded-md border-0",
+        "text-[10px] h-5 px-1 font-mono rounded-md border-0 cursor-default",
         "bg-muted text-muted-foreground",
       )}
     >
@@ -462,7 +462,7 @@ export function LogRowCells({
   const ttfbBadge = ttfb ? (
     <Badge
       variant="secondary"
-      className="text-xs h-5 px-1 font-mono rounded-md border-info-border bg-info-soft text-info-foreground"
+      className="text-[10px] h-5 px-1 font-mono rounded-md border-info-border bg-info-soft text-info-foreground"
     >
       {ttfb}
     </Badge>
@@ -470,18 +470,24 @@ export function LogRowCells({
   const hopCountBadge = hasTriedProviders ? (
     <Badge
       variant="secondary"
-      className="text-xs h-5 px-1 font-mono rounded-md border-warning-border bg-warning-soft text-warning-foreground"
+      className="text-[10px] h-5 px-1 font-mono rounded-md border-warning-border bg-warning-soft text-warning-foreground"
     >
       {t("requestLogs.retryHopCount", { count: triedProviders.length })}
     </Badge>
   ) : null;
-  // LOGS-9: stream mode is a property, not a status, so both values stay neutral.
-  const streamBadge = (
+  const streamBadge = log.is_stream ? (
     <Badge
       variant="secondary"
-      className="text-xs h-5 px-1 font-mono rounded-md border-0 bg-muted text-muted-foreground"
+      className="text-[10px] h-5 px-1 font-mono rounded-md border-info-border bg-info-soft text-info-foreground"
     >
-      {t(log.is_stream ? "requestLogs.streamBadge" : "requestLogs.nonStreamBadge")}
+      {t("requestLogs.streamBadge")}
+    </Badge>
+  ) : (
+    <Badge
+      variant="secondary"
+      className="text-[10px] h-5 px-1 font-mono rounded-md border-warning-border bg-warning-soft text-warning-foreground"
+    >
+      {t("requestLogs.nonStreamBadge")}
     </Badge>
   );
   const timingTooltipContent = (
@@ -560,8 +566,6 @@ export function LogRowCells({
             ? t("requestLogs.error")
             : log.status;
   const isFailureRow = log.status === "error" || log.status === "client_gone";
-  // LOGS-5: failed rows without usage replace the empty Input/Output cells with
-  // one readable error chip, so failures do not look like rows missing usage.
   const showErrorChip =
     isFailureRow && inputUsageUnavailable && outputUsageUnavailable;
   const errorChipText =
@@ -596,18 +600,17 @@ export function LogRowCells({
 
   return (
     <>
-      <td className="whitespace-nowrap py-0.5 pl-2 pr-2 align-middle font-mono text-muted-foreground">
+      <td className="whitespace-nowrap py-1 pl-2 pr-2 align-middle font-mono text-muted-foreground">
         <span className="inline-flex w-full flex-col leading-4">
           <span className="h-4 whitespace-nowrap">
             {formatDateTime(log.created_at)}
           </span>
-          <span className="flex h-5 w-full items-center gap-1">
+          <span className="flex h-6 w-full items-center gap-1">
             {log.request_id ? (
               <CellTooltip
                 onOpenChange={requestTooltipOpenChange}
                 triggerClassName="h-4 gap-1"
-                contentClassName="sm:max-w-[480px]"
-                trigger={
+                                trigger={
                   <>
                     <span>{log.request_id.substring(0, 8)}</span>
                     <span
@@ -621,7 +624,7 @@ export function LogRowCells({
                   </>
                 }
               >
-                    <div className="space-y-0.5 text-xs">
+                    <div className="max-w-[480px] space-y-0.5 text-xs">
                       <div className="font-mono">{log.request_id}</div>
                       {isFailureRow && (
                         <>
@@ -663,7 +666,7 @@ export function LogRowCells({
                 aria-haspopup="dialog"
                 title={t("requestLogs.capture.open")}
                 onClick={() => onOpenCapture(log)}
-                className="ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="ml-auto inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <ScanSearch className="h-3.5 w-3.5" />
               </button>
@@ -672,7 +675,7 @@ export function LogRowCells({
         </span>
       </td>
 
-      <td className="px-2 py-0.5 align-middle whitespace-nowrap">
+      <td className="px-2 py-1 align-middle whitespace-nowrap">
         <span className="inline-flex h-9 flex-col items-start justify-center leading-4">
           <CellTooltip
             onOpenChange={modelTooltipOpenChange}
@@ -684,10 +687,10 @@ export function LogRowCells({
                     multiplier={log.provider?.multiplier}
                     showDetails={false}
                     truncateModelText={false}
-                    className="h-5 min-w-max px-1.5 text-xs"
+                    className="h-5 min-w-max px-1.5 text-[10px]"
                   />
                   {showUpstreamResponseModel ? (
-                    <span className="font-mono text-xs text-warning-foreground">
+                    <span className="font-mono text-[10px] text-warning-foreground">
                       ↳ {log.upstream_response_model}
                     </span>
                   ) : null}
@@ -737,15 +740,14 @@ export function LogRowCells({
           {isAdmin ? (
             <CellTooltip
               onOpenChange={channelTooltipOpenChange}
-              triggerClassName="h-4 gap-1 text-[11px] text-muted-foreground"
-              contentClassName="sm:max-w-[480px]"
-              trigger={
+              triggerClassName="h-4 gap-1 text-[10px] text-muted-foreground"
+                            trigger={
                 <>
                     <span>{channelDisplay ?? "-"}</span>
                     {affinityHit ? (
                       <Badge
                         variant="secondary"
-                        className="h-4 shrink-0 rounded-md border-info-border bg-info-soft px-1 text-[11px] font-normal text-info-foreground"
+                        className="h-4 shrink-0 rounded-md border-info-border bg-info-soft px-1 text-[10px] font-normal text-info-foreground"
                       >
                         {t("requestLogs.stickySession")}
                       </Badge>
@@ -753,7 +755,7 @@ export function LogRowCells({
                 </>
               }
             >
-                  <div className="space-y-1 text-xs">
+                  <div className="max-w-[480px] space-y-1 text-xs">
                     {attemptRows.length > 0 && (
                       <RetryAttemptList rows={attemptRows} t={t} />
                     )}
@@ -806,10 +808,10 @@ export function LogRowCells({
         </span>
       </td>
 
-      <td className="min-w-24 whitespace-nowrap px-2 py-0.5 align-middle leading-4">
+      <td className="min-w-24 whitespace-nowrap px-2 py-1 align-middle leading-4">
         <span className="inline-flex max-w-24 flex-col items-start">
           {isAdmin && (
-            <span className="h-4 max-w-full truncate font-medium text-foreground">
+            <span className="h-4 max-w-full truncate text-xs font-medium text-foreground">
               {log.user?.username || "-"}
             </span>
           )}
@@ -817,7 +819,7 @@ export function LogRowCells({
             onOpenChange={tokenTooltipOpenChange}
             triggerClassName={cn(
               "h-4 max-w-full",
-              isAdmin ? "text-[11px] text-muted-foreground" : "text-foreground",
+              isAdmin ? "text-[10px] text-muted-foreground" : "text-[11px] text-muted-foreground",
             )}
             trigger={<span className="min-w-0 truncate">{tokenDisplay}</span>}
           >
@@ -826,7 +828,7 @@ export function LogRowCells({
         </span>
       </td>
 
-      <td className="px-1 py-0.5 whitespace-nowrap align-middle">
+      <td className="px-1 py-1 whitespace-nowrap align-middle">
         <CellTooltip
           onOpenChange={durationTooltipOpenChange}
           triggerClassName="max-w-full gap-1 overflow-x-auto overflow-y-hidden align-middle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -843,25 +845,20 @@ export function LogRowCells({
         </CellTooltip>
       </td>
 
-      {showErrorChip ? (
-        <td
-          colSpan={2}
-          className="whitespace-nowrap px-2 py-0.5 text-right align-middle"
-        >
-          <span
+      <td className="min-w-32 whitespace-nowrap px-2 py-1 text-right align-middle font-mono text-muted-foreground">
+        {showErrorChip ? (
+          <Badge
+            variant="secondary"
             className={cn(
-              "inline-flex h-5 items-center rounded-md border px-1.5 font-mono",
+              "text-[10px] h-5 px-1 font-mono rounded-md",
               log.status === "client_gone"
                 ? "border-warning-border bg-warning-soft text-warning-foreground"
                 : "border-error-border bg-error-soft text-error-foreground",
             )}
           >
             {errorChipText}
-          </span>
-        </td>
-      ) : (
-      <>
-      <td className="min-w-32 whitespace-nowrap px-2 py-0.5 text-right align-middle font-mono text-muted-foreground">
+          </Badge>
+        ) : (
         <CellTooltip
           onOpenChange={inputTooltipOpenChange}
           triggerClassName={cn(
@@ -872,11 +869,11 @@ export function LogRowCells({
           )}
           trigger={
             <>
-                <span className="h-4 whitespace-nowrap font-medium tabular-nums">
+                <span className="h-4 whitespace-nowrap text-sm font-medium tabular-nums">
                   {formatTokenCount(inputTokensForDisplay)}
                 </span>
                 {inputCached != null && inputCachePercentage ? (
-                  <span className="h-4 whitespace-nowrap text-[11px] text-muted-foreground tabular-nums">
+                  <span className="h-4 whitespace-nowrap text-[10px] text-muted-foreground tabular-nums">
                     {formatTokenCount(inputCached)} / {inputCachePercentage}
                   </span>
                 ) : null}
@@ -901,12 +898,13 @@ export function LogRowCells({
                 )}
               </div>
         </CellTooltip>
+        )}
       </td>
 
-      <td className="min-w-24 whitespace-nowrap px-2 py-0.5 text-right align-middle font-mono text-muted-foreground">
+      <td className="min-w-24 whitespace-nowrap px-2 py-1 text-right align-middle font-mono text-muted-foreground">
         <CellTooltip
           onOpenChange={outputTooltipOpenChange}
-          triggerClassName="font-medium tabular-nums"
+          triggerClassName="text-sm font-medium tabular-nums"
           trigger={formatTokenCount(outputTokensForDisplay)}
         >
               <div className="text-xs space-y-0.5 min-w-[220px]">
@@ -928,15 +926,13 @@ export function LogRowCells({
               </div>
         </CellTooltip>
       </td>
-      </>
-      )}
 
-      <td className="px-2 py-0.5 text-right whitespace-nowrap font-mono align-middle">
+      <td className="px-2 py-1 text-right whitespace-nowrap font-mono align-middle">
         {hasBreakdownContent ? (
           <CellTooltip
             onOpenChange={costTooltipOpenChange}
             triggerClassName="align-bottom"
-            contentClassName="sm:max-w-xl"
+            contentClassName="max-w-[calc(100vw-1.5rem)] sm:max-w-xl"
             trigger={costDisplay}
           >
                 <div className="w-[32rem] max-w-full space-y-0.5 text-xs">
@@ -1158,7 +1154,7 @@ export function LogRowCells({
         )}
       </td>
 
-      <td className="pl-2 pr-2 py-0.5 whitespace-nowrap font-mono text-muted-foreground align-middle">
+      <td className="pl-2 pr-2 py-1 whitespace-nowrap font-mono text-muted-foreground text-[11px] align-middle">
         <span
           className={cn(
             "inline-block align-bottom transition-[filter] duration-150",
@@ -1204,19 +1200,14 @@ function CellTooltip({
             aria-expanded={open}
             onClick={() => handleOpenChange(true)}
             className={cn(
-              "inline-flex cursor-default items-center whitespace-nowrap rounded-sm border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "inline-flex cursor-default items-center whitespace-nowrap border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               triggerClassName,
             )}
           >
             {trigger}
           </button>
         </TooltipTrigger>
-        <TooltipContent
-          className={cn(
-            "max-w-[calc(100vw-1.5rem)] break-words",
-            contentClassName,
-          )}
-        >
+        <TooltipContent className={contentClassName}>
           {children}
         </TooltipContent>
       </Tooltip>

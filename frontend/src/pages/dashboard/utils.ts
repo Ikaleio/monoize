@@ -7,15 +7,18 @@ import {
   type UsageWindow,
 } from "@/lib/usage-window";
 
-/** Series beyond this rank merge into OTHER_SERIES (DH-6g). */
-const MAX_NAMED_SERIES = 8;
-export const OTHER_SERIES = "__other__";
-export const OTHER_SERIES_COLOR = "hsl(var(--muted-foreground))";
+export const CHART_COLORS = Array.from(
+  { length: 16 },
+  (_, index) => `hsl(var(--chart-${index + 1}))`
+);
 
-function seriesColor(rank: number): string {
-  return rank < MAX_NAMED_SERIES
-    ? `hsl(var(--chart-${rank + 1}))`
-    : OTHER_SERIES_COLOR;
+/** Stable hash → palette index so the same model always gets the same color. */
+export function modelToColor(modelId: string): string {
+  let hash = 0;
+  for (let i = 0; i < modelId.length; i++) {
+    hash = ((hash << 5) - hash + modelId.charCodeAt(i)) | 0;
+  }
+  return CHART_COLORS[((hash % CHART_COLORS.length) + CHART_COLORS.length) % CHART_COLORS.length];
 }
 
 /** DH-8b: the configured base URL, or the current origin when it is empty. */
@@ -112,23 +115,20 @@ export function formatCacheHit(rate: number | null): string {
   return formatCacheHitRate(rate);
 }
 
-export interface UsageSeries {
-  /** Bar series keys in rank order; ends with OTHER_SERIES when models merged. */
-  series: string[];
-  /** Rank color per real model and per OTHER_SERIES (DH-6g). */
-  colors: Record<string, string>;
-  /** One row per bucket, keyed by series. */
+export interface CumulativeSeries {
+  models: string[];
+  /** Cumulative stacked rows for AreaChart. */
   rows: Array<Record<string, number | string>>;
-  /** Per-bucket tokens per real model; the tooltip expands OTHER_SERIES from this. */
+  /** Per-bucket (non-cumulative) totals by model. */
   bucketByModel: Array<Record<string, number>>;
   bucketTotals: number[];
-  windowTotal: number;
+  cumulativeTotals: number[];
 }
 
-export function buildUsageSeries(
+export function buildCumulativeTokenSeries(
   analytics: DashboardAnalytics | undefined,
-  window: UsageWindow,
-): UsageSeries {
+  window: UsageWindow
+): CumulativeSeries {
   const buckets = analytics?.buckets ?? [];
   // DH-6c: labels come from the response time range; the backend `label`
   // field truncates minutes (`%H:00`) so it cannot distinguish 5-minute
@@ -148,17 +148,12 @@ export function buildUsageSeries(
   const models = [...totals.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([model]) => model);
-  const named = models.slice(0, MAX_NAMED_SERIES);
-  const hasOther = models.length > MAX_NAMED_SERIES;
-  const colors: Record<string, string> = { [OTHER_SERIES]: OTHER_SERIES_COLOR };
-  models.forEach((model, rank) => {
-    colors[model] = seriesColor(rank);
-  });
 
-  let windowTotal = 0;
-  const rows: UsageSeries["rows"] = [];
-  const bucketByModel: UsageSeries["bucketByModel"] = [];
+  const running = new Map<string, number>(models.map((m) => [m, 0]));
+  const rows: Array<Record<string, number | string>> = [];
+  const bucketByModel: Array<Record<string, number>> = [];
   const bucketTotals: number[] = [];
+  const cumulativeTotals: number[] = [];
 
   buckets.forEach((bucket, index) => {
     const perBucket: Record<string, number> = {};
@@ -167,30 +162,24 @@ export function buildUsageSeries(
       const value = Number(bucket.tokens_by_model?.[model] ?? 0) || 0;
       perBucket[model] = value;
       bucketTotal += value;
+      running.set(model, (running.get(model) ?? 0) + value);
     }
     const start = starts?.[index];
     const row: Record<string, number | string> = {
       label: start ? bucketLabelForWindow(window, start) : shortBucketLabel(bucket.label),
       bucketIndex: index,
     };
-    let namedTotal = 0;
-    for (const model of named) {
-      row[model] = perBucket[model] ?? 0;
-      namedTotal += perBucket[model] ?? 0;
+    let cum = 0;
+    for (const model of models) {
+      const value = running.get(model) ?? 0;
+      row[model] = value;
+      cum += value;
     }
-    if (hasOther) row[OTHER_SERIES] = bucketTotal - namedTotal;
-    windowTotal += bucketTotal;
     rows.push(row);
     bucketByModel.push(perBucket);
     bucketTotals.push(bucketTotal);
+    cumulativeTotals.push(cum);
   });
 
-  return {
-    series: hasOther ? [...named, OTHER_SERIES] : named,
-    colors,
-    rows,
-    bucketByModel,
-    bucketTotals,
-    windowTotal,
-  };
+  return { models, rows, bucketByModel, bucketTotals, cumulativeTotals };
 }

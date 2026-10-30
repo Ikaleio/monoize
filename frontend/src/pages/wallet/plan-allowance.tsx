@@ -7,6 +7,7 @@ import { CalendarClock, LoaderCircle, ShoppingCart } from "lucide-react";
 import { toast } from "sonner";
 import type { TFunction } from "i18next";
 import { GroupsBadge } from "@/components/GroupsBadge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -332,13 +333,13 @@ export function PlanAllowance({
           </AlertDialogHeader>
           {purchaseTarget ? (
             <dl className="grid gap-2 rounded-lg border p-3 text-sm">
-              <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">{t("wallet.purchaseDeduct")}</dt>
                 <dd className="font-medium tabular-nums">
                   {formatNanoUsd(purchaseTarget.price.price_nano_usd, 2)}
                 </dd>
               </div>
-              <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">{t("wallet.purchaseBalanceAfter")}</dt>
                 <dd
                   className={
@@ -352,11 +353,11 @@ export function PlanAllowance({
                     : formatNanoUsd(balanceAfter, 2)}
                 </dd>
               </div>
-              <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">{t("wallet.purchaseStarts")}</dt>
                 <dd>{t("wallet.purchaseStartsNow")}</dd>
               </div>
-              <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">{t("wallet.purchaseExpires")}</dt>
                 <dd className="tabular-nums">
                   {formatDateTime(
@@ -367,20 +368,22 @@ export function PlanAllowance({
             </dl>
           ) : null}
           {insufficient ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-error-border bg-error-soft p-3 text-sm text-error-foreground">
-              <span role="alert">{t("wallet.purchaseInsufficient")}</span>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-11 sm:h-9"
-                onClick={() => {
-                  setPurchaseTarget(null);
-                  onRecharge();
-                }}
-              >
-                {t("wallet.goRecharge")}
-              </Button>
-            </div>
+            <Alert variant="destructive">
+              <AlertDescription className="flex flex-col items-start gap-3">
+                <p>{t("wallet.purchaseInsufficient")}</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setPurchaseTarget(null);
+                    onRecharge();
+                  }}
+                >
+                  {t("wallet.goRecharge")}
+                </Button>
+              </AlertDescription>
+            </Alert>
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={purchasing !== null}>

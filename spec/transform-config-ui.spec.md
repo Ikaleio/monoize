@@ -98,18 +98,18 @@ TCU-9. Saved config production is exact:
 
 TCU-10. The config dialog MUST remain operable at viewport width `375px`: field labels stack above widgets, the dialog body scrolls vertically inside the viewport, and touch targets for add/remove/move/clear actions are at least `44px` on coarse pointers.
 
-TCU-10a. Each phase section header MUST stack the section title and the add-transform trigger vertically below the `sm` breakpoint, with the trigger using the full header width. At the `sm` breakpoint and above, the title and the content-width trigger MUST form one horizontal row with the trigger right-aligned. The open list MUST be at least `min(320px, viewport width − 32px)` wide and its entries MUST wrap long names and descriptions instead of overflowing the list border.
+TCU-10a. Each phase section header MUST stack the section title and the add-transform trigger vertically below the `sm` breakpoint, with the trigger using the full header width. At the `sm` breakpoint and above, the title and the content-width trigger MUST form one horizontal row with the trigger right-aligned. The open list MUST be at least `min(320px, viewport width − 32px)` wide and its entries MUST truncate long names and descriptions inside the list border.
 
 TCU-10c. A chain row MUST contain, in order: a drag handle, the name block (resolved name, TCU-12 badges, and one secondary line `type_id · models summary`), the enable switch, and the actions move up, move down, configure, delete. Layout is exact:
 1. at the `sm` breakpoint and above, all parts form one horizontal line; the name block takes the remaining width;
 2. below the `sm` breakpoint, the row has two lines: line 1 holds the drag handle and the name block at full width; line 2 holds the enable switch and the actions, right-aligned;
-3. the name MUST wrap at any character (`overflow-wrap: anywhere`) and MUST NOT be truncated; the secondary line MAY truncate;
+3. the name and the secondary line MUST truncate to one line;
 4. the enable switch MUST carry an accessible name "Enable {name}" (localized); every action button MUST carry an accessible name; action buttons MUST be at least `44px × 44px` below the `sm` breakpoint and `28px × 28px` at `sm` and above.
 
 TCU-10d. Rule reordering within a phase chain MUST be possible both by buttons and by drag and drop:
 1. move up swaps the row with the previous row of the same phase; it is disabled on the first row; move down swaps with the next row; it is disabled on the last row; after a button move, keyboard focus MUST stay on the moved rule: on its button of the same direction, or on the opposite button when the same direction became disabled;
 2. only the drag handle is draggable; text in the rest of the row stays selectable;
-3. while a drag is in progress, the source row renders at `50%` opacity, and the row under the pointer renders a `2px` primary-color insertion line on the edge where the source will land (top edge when the source comes from below, bottom edge when it comes from above); dropping moves the source to the target row's position; ending the drag anywhere clears both indicators;
+3. dropping moves the source to the target row's position;
 4. dragging across phase sections MUST NOT move a rule.
 
 TCU-10e. The editor root element MUST carry `data-transform-layer` equal to its `layer` prop (`provider`, `global`, or `apiKey`). Every chain row MUST carry `data-transform-rule-index` equal to the rule's position in the editor's full `value` array (request rules and response rules share one index space).

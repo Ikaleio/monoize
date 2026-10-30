@@ -56,8 +56,6 @@ interface ModelComboboxProps {
   disabled?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Draws attention to the trigger while no model is selected (PG-CMP3a). */
-  highlighted: boolean;
 }
 
 function ModelRow({
@@ -95,7 +93,6 @@ export function ModelCombobox({
   disabled,
   open,
   onOpenChange,
-  highlighted,
 }: ModelComboboxProps) {
   const { t } = useTranslation();
   const [search, setSearch] = useState("");
@@ -139,10 +136,7 @@ export function ModelCombobox({
           size="sm"
           disabled={disabled}
           aria-label={t(kind === "image" ? "playground.imageModel" : "playground.chatModel")}
-          className={cn(
-            "h-8 max-w-[11rem] gap-1.5 border border-transparent px-2 text-xs font-medium text-muted-foreground hover:border-border hover:text-foreground sm:max-w-[14rem]",
-            highlighted && "ring-2 ring-ring",
-          )}
+          className="h-8 max-w-[11rem] gap-1.5 border border-transparent px-2 text-xs font-medium text-muted-foreground hover:border-border hover:text-foreground sm:max-w-[14rem]"
         >
           {kind === "image" && !value ? (
             <ImageIcon aria-hidden="true" />

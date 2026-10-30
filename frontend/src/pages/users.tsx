@@ -6,7 +6,6 @@ import {
   CalendarClock,
   KeyRound,
   Mail,
-  MoreHorizontal,
   Pencil,
   Plus,
   PlusCircle,
@@ -53,13 +52,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   Field,
@@ -69,6 +61,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { AnimatedButton, PageWrapper } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
@@ -148,11 +141,10 @@ const roleIcons = {
   user: UserIcon,
 };
 
-// Role is an attribute, not a status: neutral badge variants (design.md §4.2).
 const roleVariants = {
-  super_admin: "default" as const,
-  admin: "secondary" as const,
-  user: "outline" as const,
+  super_admin: "destructive" as const,
+  admin: "default" as const,
+  user: "secondary" as const,
 };
 
 interface UserForm {
@@ -394,10 +386,13 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
             <DialogTitle>{t(isEdit ? "users.editUser" : "users.createUser")}</DialogTitle>
             <DialogDescription>{t(isEdit ? "users.updateDetails" : "users.addNewUser")}</DialogDescription>
           </DialogHeader>
-          <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-1">
-            <FieldGroup className="gap-4 py-4">
-              <Field data-invalid={errors.username ? true : undefined}>
-                <FieldLabel htmlFor="user-username">{t("auth.username")}</FieldLabel>
+          <div
+            className="mt-2 min-h-0 flex-1 overflow-y-auto pr-1"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="user-username">{t("auth.username")}</Label>
                 <Input
                   id="user-username"
                   value={form.username}
@@ -407,11 +402,11 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                   placeholder="johndoe"
                 />
                 {errors.username && <FieldError>{errors.username}</FieldError>}
-              </Field>
-              <Field data-invalid={errors.password ? true : undefined}>
-                <FieldLabel htmlFor="user-password">
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="user-password">
                   {t(isEdit ? "users.newPassword" : "auth.password")}
-                </FieldLabel>
+                </Label>
                 <Input
                   id="user-password"
                   type="password"
@@ -419,13 +414,13 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                   value={form.password}
                   aria-invalid={errors.password ? true : undefined}
                   onChange={(event) => patch({ password: event.target.value }, ["password"])}
-                  placeholder="••••••••"
+                  placeholder="  ••••••••"
                 />
                 {errors.password && <FieldError>{errors.password}</FieldError>}
-              </Field>
+              </div>
               {isEdit && (
-                <Field data-invalid={errors.email ? true : undefined}>
-                  <FieldLabel htmlFor="user-email">{t("userSettings.email")}</FieldLabel>
+                <div className="space-y-2">
+                  <Label htmlFor="user-email">{t("userSettings.email")}</Label>
                   <div className="relative">
                     <Mail
                       className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
@@ -441,13 +436,15 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                       className="pl-9"
                     />
                   </div>
-                  <FieldDescription>{t("userSettings.emailDescription")}</FieldDescription>
+                  <p className="text-xs text-muted-foreground">
+                    {t("userSettings.emailDescription")}
+                  </p>
                   {errors.email && <FieldError>{errors.email}</FieldError>}
-                </Field>
+                </div>
               )}
               {canChooseRole && (
-                <Field>
-                  <FieldLabel htmlFor="user-role">{t("users.role")}</FieldLabel>
+                <div className="space-y-2">
+                  <Label htmlFor="user-role">{t("users.role")}</Label>
                   <Select
                     value={form.role}
                     onValueChange={(role) => patch({ role: role as User["role"] })}
@@ -462,10 +459,10 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                       <SelectItem value="user">{t("roles.user")}</SelectItem>
                     </SelectContent>
                   </Select>
-                </Field>
+                </div>
               )}
-              <Field>
-                <FieldLabel htmlFor="user-group">{t("users.group")}</FieldLabel>
+              <div className="space-y-2">
+                <Label htmlFor="user-group">{t("users.group")}</Label>
                 <GroupSingleSelect
                   id="user-group"
                   value={form.groupId || defaultGroupId}
@@ -473,16 +470,18 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                   loading={groupsLoading}
                   onChange={(groupId) => patch({ groupId })}
                 />
-                <FieldDescription>{t("users.groupHelp")}</FieldDescription>
-              </Field>
+                <p className="text-xs text-muted-foreground">
+                  {t("users.groupHelp")}
+                </p>
+              </div>
               {isEdit && (
-                <Field data-invalid={errors.balance ? true : undefined}>
+                <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
-                    <FieldLabel
+                    <Label
                       htmlFor={form.balanceMode === "set" ? "user-balance" : "user-balance-add"}
                     >
                       {t("users.balance")}
-                    </FieldLabel>
+                    </Label>
                     <Tabs
                       value={form.balanceMode}
                       onValueChange={(mode) =>
@@ -519,7 +518,7 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                       placeholder={t("users.balanceAddPlaceholder")}
                     />
                   )}
-                  <FieldDescription className="tabular-nums">
+                  <p className="text-xs text-muted-foreground">
                     {t("users.balanceCurrentHint", { amount: formatNanoUsd(currentNano, 2) })}
                     {form.balanceMode === "add" && addNano !== null && addNano !== 0n && (
                       <>
@@ -535,7 +534,7 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                         <span className="font-medium text-foreground">{formatNanoUsd(setNano, 2)}</span>
                       </>
                     )}
-                  </FieldDescription>
+                  </p>
                   {errors.balance && <FieldError>{errors.balance}</FieldError>}
                   <div className="flex items-center gap-2">
                     <Switch
@@ -543,15 +542,15 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                       checked={form.balanceUnlimited}
                       onCheckedChange={(balanceUnlimited) => patch({ balanceUnlimited })}
                     />
-                    <FieldLabel htmlFor="user-balance-unlimited" className="font-normal text-muted-foreground">
+                    <Label htmlFor="user-balance-unlimited" className="font-normal text-muted-foreground">
                       {t("users.unlimited")}
-                    </FieldLabel>
+                    </Label>
                   </div>
-                </Field>
+                </div>
               )}
               {isEdit && (
-                <Field data-invalid={errors.balanceNote ? true : undefined}>
-                  <FieldLabel htmlFor="user-balance-note">{t("users.balanceNote")}</FieldLabel>
+                <div className="space-y-2">
+                  <Label htmlFor="user-balance-note">{t("users.balanceNote")}</Label>
                   <Textarea
                     id="user-balance-note"
                     rows={2}
@@ -560,11 +559,13 @@ function UserFormDialog({ target, onClose, users, reloadUsers }: UserFormDialogP
                     onChange={(event) => patch({ balanceNote: event.target.value }, ["balanceNote"])}
                     placeholder={t("users.balanceNotePlaceholder")}
                   />
-                  <FieldDescription>{t("users.balanceNoteHelp")}</FieldDescription>
+                  <p className="text-xs text-muted-foreground">
+                    {t("users.balanceNoteHelp")}
+                  </p>
                   {errors.balanceNote && <FieldError>{errors.balanceNote}</FieldError>}
-                </Field>
+                </div>
               )}
-            </FieldGroup>
+            </div>
           </div>
           <DialogFooter className="shrink-0 pt-4">
             <Button type="button" variant="outline" onClick={onClose}>
@@ -672,7 +673,7 @@ function PlanDialog({ user, onClose, onChanged }: PlanDialogProps) {
   return (
     <>
       <Dialog open={user !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("users.planDialogTitle", { name: user?.username })}</DialogTitle>
             <DialogDescription>{t("users.subscriptionHelp")}</DialogDescription>
@@ -710,7 +711,9 @@ function PlanDialog({ user, onClose, onChanged }: PlanDialogProps) {
                     <span className="text-sm font-medium">
                       {subscription?.plan_name ?? t("users.noActivePlan")}
                     </span>
-                    {subscription && <StatusBadge variant="success">{t("users.planActive")}</StatusBadge>}
+                    <Badge variant={subscription ? "default" : "secondary"}>
+                      {subscription ? t("users.planActive") : t("users.noPlan")}
+                    </Badge>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {subscription
@@ -742,12 +745,15 @@ function PlanDialog({ user, onClose, onChanged }: PlanDialogProps) {
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field data-invalid={durationSeconds === null ? true : undefined}>
+                <Field>
                   <FieldLabel htmlFor="plan-duration">{t("users.chooseDuration")}</FieldLabel>
                   <div className="grid grid-cols-[minmax(0,1fr)_7.5rem] gap-2">
                     <Input
                       id="plan-duration"
+                      type="number"
                       inputMode="numeric"
+                      min="1"
+                      step="1"
                       value={durationValue}
                       onChange={(event) => setDurationValue(event.target.value)}
                       disabled={saving}
@@ -768,11 +774,9 @@ function PlanDialog({ user, onClose, onChanged }: PlanDialogProps) {
                       </SelectContent>
                     </Select>
                   </div>
-                  {durationSeconds === null ? (
-                    <FieldError>{t("users.durationInvalid")}</FieldError>
-                  ) : (
-                    <FieldDescription>{t("users.durationHelp")}</FieldDescription>
-                  )}
+                  <FieldDescription role={durationSeconds === null ? "alert" : undefined}>
+                    {durationSeconds === null ? t("users.durationInvalid") : t("users.durationHelp")}
+                  </FieldDescription>
                 </Field>
               </FieldGroup>
               {billingPlans.length === 0 && (
@@ -867,7 +871,7 @@ function UserKeysSheet({
 
   return (
     <Sheet open={user !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent side="right" className="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-md">
+      <SheetContent side="right" className="flex flex-col gap-4 overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{t("users.keysTitle", { name: user?.username })}</SheetTitle>
           <SheetDescription>{t("users.keysDescription")}</SheetDescription>
@@ -892,26 +896,31 @@ function UserKeysSheet({
             {data.map((key) => {
               const expired = key.expires_at != null && new Date(key.expires_at).getTime() < openedAt;
               return (
-                <li key={key.id} className="flex min-w-0 items-start justify-between gap-3 p-3">
+                <li key={key.id} className="flex min-w-0 items-start justify-between gap-3 p-3 text-sm">
                   <div className="min-w-0">
-                    <p className={cn("truncate font-medium", (!key.enabled || expired) && "text-muted-foreground")}>
+                    <p
+                      className={cn("truncate font-medium", (!key.enabled || expired) && "text-muted-foreground")}
+                      title={key.name}
+                    >
                       {key.name}
                     </p>
-                    <code className="text-xs text-muted-foreground">{key.key_prefix}…</code>
+                    <div className="flex min-w-0 items-center gap-1">
+                      <code className="truncate text-muted-foreground">{key.key_prefix}…</code>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1 text-sm">
+                  <div className="flex shrink-0 flex-col items-end gap-1">
                     {expired ? (
                       <StatusBadge variant="warning">{t("apiKeys.expired")}</StatusBadge>
                     ) : key.enabled ? (
                       <StatusBadge variant="success">{t("common.enabled")}</StatusBadge>
                     ) : (
-                      <Badge variant="outline">{t("common.disabled")}</Badge>
+                      <Badge variant="secondary">{t("common.disabled")}</Badge>
                     )}
-                    <span className="tabular-nums text-muted-foreground">
-                      {key.sub_account_enabled
-                        ? formatUsdDecimal(key.sub_account_balance_usd, 2)
-                        : t("apiKeys.usesAccountBalance")}
-                    </span>
+                    {key.sub_account_enabled ? (
+                      <span className="tabular-nums">{formatUsdDecimal(key.sub_account_balance_usd, 2)}</span>
+                    ) : (
+                      <span className="whitespace-nowrap text-muted-foreground">{t("apiKeys.usesAccountBalance")}</span>
+                    )}
                   </div>
                 </li>
               );
@@ -1067,9 +1076,8 @@ export function UsersPage() {
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder={t("users.searchPlaceholder")}
                   aria-label={t("users.searchPlaceholder")}
-                  containerClassName="sm:flex-none"
                 />
-                <p className="text-sm tabular-nums text-muted-foreground">
+                <p className="ml-auto text-sm tabular-nums text-muted-foreground">
                   {t("users.usersTotal", { count: visibleUsers.length })}
                   {" · "}
                   {t("users.todaySummary", {
@@ -1097,13 +1105,16 @@ export function UsersPage() {
               description={t("users.noMatchesDescription", { query: query.trim() })}
             />
           ) : (
-            <DataList columns="minmax(12rem,1.6fr) 6.5rem 6.5rem 8rem 7rem 3.5rem 5rem">
+            <DataList columns="minmax(0,9.25fr) minmax(0,6.5fr) minmax(0,5fr) minmax(0,4.25fr) minmax(0,3.75fr) minmax(0,4.5fr) minmax(0,5.75fr) minmax(0,5.75fr) 4rem 12.25rem">
               <DataListHeader>
                 <DataListHead>{t("users.user")}</DataListHead>
+                <DataListHead>{t("users.role")}</DataListHead>
                 <DataListHead align="end">{t("users.balance")}</DataListHead>
-                <DataListHead align="end">{t("users.today")}</DataListHead>
+                <DataListHead align="end">{t("users.todaySpend")}</DataListHead>
+                <DataListHead align="end">{t("users.todayCalls")}</DataListHead>
                 <DataListHead>{t("users.plan")}</DataListHead>
-                <DataListHead>{t("users.dates")}</DataListHead>
+                <DataListHead>{t("common.created")}</DataListHead>
+                <DataListHead>{t("users.lastLogin")}</DataListHead>
                 <DataListHead>{t("common.status")}</DataListHead>
                 <DataListHead align="end">{t("common.actions")}</DataListHead>
               </DataListHeader>
@@ -1121,7 +1132,7 @@ export function UsersPage() {
                     return (
                       <>
                         <DataListCell primary>
-                          <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex min-w-0 items-center gap-2 whitespace-nowrap">
                             <Avatar className="size-8 shrink-0">
                               {user.email && (
                                 <AvatarImage
@@ -1131,30 +1142,25 @@ export function UsersPage() {
                               )}
                               <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
                             </Avatar>
-                            <div className="min-w-0 flex-1">
-                              <p
-                                className={cn(
-                                  "truncate font-medium",
-                                  !user.enabled && "text-muted-foreground",
-                                )}
-                                title={user.username}
-                              >
-                                {user.username}
-                              </p>
-                              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                                <Badge
-                                  variant={roleVariants[user.role]}
-                                  className="shrink-0 gap-1 whitespace-nowrap px-1.5 text-xs"
-                                >
-                                  <RoleIcon className="size-3 shrink-0" aria-hidden="true" />
-                                  {t(`roles.${user.role}`)}
-                                </Badge>
-                                {user.group_id && (
-                                  <GroupsBadge groupIds={[user.group_id]} className="min-w-0" />
-                                )}
-                              </div>
-                            </div>
+                            <span
+                              className={cn(
+                                "min-w-0 truncate font-medium",
+                                !user.enabled && "text-muted-foreground",
+                              )}
+                              title={user.username}
+                            >
+                              {user.username}
+                            </span>
+                            {user.group_id && (
+                              <GroupsBadge groupIds={[user.group_id]} className="shrink-0" />
+                            )}
                           </div>
+                        </DataListCell>
+                        <DataListCell label={t("users.role")}>
+                          <Badge variant={roleVariants[user.role]} className="gap-1">
+                            <RoleIcon className="size-3 shrink-0" aria-hidden="true" />
+                            {t(`roles.${user.role}`)}
+                          </Badge>
                         </DataListCell>
                         <DataListCell label={t("users.balance")} align="end">
                           <span className="tabular-nums">
@@ -1163,12 +1169,14 @@ export function UsersPage() {
                               : formatUsdDecimal(user.balance_usd, 2)}
                           </span>
                         </DataListCell>
-                        <DataListCell label={t("users.today")} align="end">
-                          <span className="block tabular-nums">
+                        <DataListCell label={t("users.todaySpend")} align="end">
+                          <span className="tabular-nums">
                             {formatNanoUsd(user.today_cost_nano_usd, 2)}
                           </span>
-                          <span className="block text-xs tabular-nums text-muted-foreground">
-                            {t("users.callsCount", { count: user.today_calls ?? 0 })}
+                        </DataListCell>
+                        <DataListCell label={t("users.todayCalls")} align="end">
+                          <span className="tabular-nums">
+                            {(user.today_calls ?? 0).toLocaleString()}
                           </span>
                         </DataListCell>
                         <DataListCell label={t("users.plan")}>
@@ -1187,14 +1195,14 @@ export function UsersPage() {
                             <span className="text-muted-foreground">—</span>
                           )}
                         </DataListCell>
-                        <DataListCell label={t("users.dates")}>
-                          <span className="block tabular-nums text-muted-foreground" title={t("common.created")}>
+                        <DataListCell label={t("common.created")}>
+                          <span className="tabular-nums text-muted-foreground">
                             {formatDate(user.created_at)}
                           </span>
-                          <span className="block text-xs tabular-nums text-muted-foreground" title={t("users.lastLogin")}>
-                            {user.last_login_at
-                              ? t("users.lastLoginAt", { date: formatDate(user.last_login_at) })
-                              : t("users.neverLoggedIn")}
+                        </DataListCell>
+                        <DataListCell label={t("users.lastLogin")}>
+                          <span className="tabular-nums text-muted-foreground">
+                            {user.last_login_at ? formatDate(user.last_login_at) : t("common.never")}
                           </span>
                         </DataListCell>
                         <DataListCell label={t("common.status")}>
@@ -1217,6 +1225,43 @@ export function UsersPage() {
                           )}
                         </DataListCell>
                         <DataListActions>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-11 touch-manipulation sm:size-9"
+                            title={t("users.viewLogs")}
+                            aria-label={t("users.viewLogs")}
+                            onClick={() =>
+                              navigate(`/dashboard/logs?username=${encodeURIComponent(user.username)}`)
+                            }
+                          >
+                            <ScrollText />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-11 touch-manipulation sm:size-9"
+                            title={t("users.viewKeys")}
+                            aria-label={t("users.viewKeys")}
+                            onClick={() => {
+                              setKeysOpenedAt(Date.now());
+                              setKeysUser(user);
+                            }}
+                          >
+                            <KeyRound />
+                          </Button>
+                          {editable && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-11 touch-manipulation sm:size-9"
+                              title={t("users.managePlan")}
+                              aria-label={t("users.managePlan")}
+                              onClick={() => setPlanUser(user)}
+                            >
+                              <CalendarClock />
+                            </Button>
+                          )}
                           {editable && (
                             <Button
                               variant="ghost"
@@ -1228,55 +1273,17 @@ export function UsersPage() {
                               <Pencil />
                             </Button>
                           )}
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-11 touch-manipulation sm:size-9"
-                                aria-label={t("users.moreActions", { name: user.username })}
-                              >
-                                <MoreHorizontal />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onSelect={() =>
-                                  navigate(`/dashboard/logs?username=${encodeURIComponent(user.username)}`)
-                                }
-                              >
-                                <ScrollText aria-hidden="true" />
-                                {t("users.viewLogs")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onSelect={() => {
-                                  setKeysOpenedAt(Date.now());
-                                  setKeysUser(user);
-                                }}
-                              >
-                                <KeyRound aria-hidden="true" />
-                                {t("users.viewKeys")}
-                              </DropdownMenuItem>
-                              {editable && (
-                                <DropdownMenuItem onSelect={() => setPlanUser(user)}>
-                                  <CalendarClock aria-hidden="true" />
-                                  {t("users.managePlan")}
-                                </DropdownMenuItem>
-                              )}
-                              {canDelete(user) && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    className="text-error-foreground focus:text-error-foreground"
-                                    onSelect={() => setDeleteTarget(user)}
-                                  >
-                                    <Trash2 aria-hidden="true" />
-                                    {t("common.delete")}
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          {canDelete(user) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-11 touch-manipulation sm:size-9"
+                              aria-label={t("common.deleteItem", { name: user.username })}
+                              onClick={() => setDeleteTarget(user)}
+                            >
+                              <Trash2 className="text-error-foreground" />
+                            </Button>
+                          )}
                         </DataListActions>
                       </>
                     );

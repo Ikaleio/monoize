@@ -16,14 +16,13 @@ content scroll pane:
 1. greeting header;
 2. getting-started card (only when DH-4a admits it);
 3. account overview;
-4. API information panel;
-5. usage chart panel;
-6. recent usage table;
-7. performance panel (omitted when DH-9d applies).
+4. usage chart panel;
+5. recent usage table and API information panel (side-by-side on `lg+`, stacked below);
+6. performance panel (omitted when DH-9d applies).
 
-Sections 4 through 7 MUST each occupy the full content width. Each of sections 2 through
-7 MUST be wrapped in its own `PanelErrorBoundary`, so a render failure in one section
-leaves every other section usable.
+The getting-started card, account overview, usage chart, recent usage table, API
+information panel, and performance panel MUST each be wrapped in its own
+`PanelErrorBoundary`, so a render failure in one leaves every other panel usable.
 
 DH-2. The page MUST use a compact Vercel/shadcn card layout. Decorative metric icons
 inside metric value rows are forbidden. Section titles MUST use nonlinear typography:
@@ -34,9 +33,8 @@ otherwise.
 DH-3. Desktop content MAY scroll vertically inside the main content pane (DL7). The page
 MUST NOT create page-level horizontal overflow at mobile, tablet, or desktop widths: at
 every viewport width from 320 to 1920 CSS pixels, the dashboard `main` element MUST satisfy
-`scrollWidth <= clientWidth`. Grid tracks MUST be explicit and grid or flex children that
-contain tables MUST set `min-width: 0`, so horizontal overflow stays inside the table
-container.
+`scrollWidth <= clientWidth`. Grid or flex children that contain tables MUST set
+`min-width: 0`, so horizontal overflow stays inside the table container.
 
 ## Greeting Header
 
@@ -70,10 +68,10 @@ available.
 ## Account Overview
 
 DH-5. The account overview MUST render as one full-width Card with one flat metric grid.
-It MUST NOT render separate nested metric cards. At `xl` and above, the grid MUST render
-five columns in one row, with the balance column wider than each other column. Below `xl`,
-the balance cell MUST span two columns and the remaining four cells MUST render in two
-columns, at every width including below `sm`.
+It MUST NOT render separate nested metric cards. On `lg+`, the grid MUST render five
+columns in one row, with the balance column wider than each other column. From `sm` to
+below `lg`, the balance cell MUST span both columns and the remaining cells MUST render
+in two columns. Below `sm`, all cells MUST stack in one column.
 
 DH-5a. The grid MUST render five cells in this order:
 
@@ -127,13 +125,12 @@ DH-5e. The account overview MUST NOT display `my_api_keys_count`.
 DH-6. The usage panel MUST occupy the full content width and MUST render:
 
 - title from `dashboard.usage.title` (default English: "Your Usage");
-- subtitle from `dashboard.usage.subtitle`;
-- the window total: the sum of all `tokens_by_model` values of the selected window, as one
-  compact-formatted number in the card header;
+- subtitle from `dashboard.usage.subtitle` (default English: "Token usage for the
+  current account in the selected time range");
 - the update indicator and refresh button (DH-6j) and the page's only time-window control
   (DH-6i) at the top-right of the card header;
-- a per-bucket stacked bar chart;
-- a wrapping legend below the chart.
+- a horizontal stacked cumulative area chart;
+- a single-row paginated legend below the chart.
 
 The panel MUST NOT render a "Group By" control.
 
@@ -161,9 +158,9 @@ same `i64` column; an uncast `SUM` MUST NOT be used because PostgreSQL decoding 
 fails with a NUMERIC/INT8 mismatch. Models with zero total tokens across all buckets MUST
 be omitted.
 
-DH-6c. The chart Y-axis MUST represent tokens per bucket: for each series at bucket index
-`i`, the plotted value equals that series' `tokens_by_model` in bucket `i` alone. Values
-MUST NOT accumulate across buckets. The X-axis MUST show one label per bucket. Bucket start
+DH-6c. The chart Y-axis MUST represent cumulative tokens: for each model series at bucket
+index `i`, the plotted value equals the sum of that model's `tokens_by_model` over
+buckets `0..i` inclusive. The X-axis MUST show one label per bucket. Bucket start
 instants MUST be computed on the frontend as
 `start_i = time_from + i * (time_to - time_from) / bucket_count` from the analytics
 response `time_from` / `time_to` fields. The label format depends on the selected window
@@ -185,7 +182,7 @@ line label MUST be:
 
 The line label MUST render in the reserved top margin above the plotting area. The
 horizontal center of the label MUST equal the X coordinate of the final reference line.
-The label MUST NOT overlap a bar. No glyph may be clipped by the chart
+The label MUST NOT overlap an Area series. No glyph may be clipped by the chart
 container.
 
 DH-6e. Hover/focus tooltip MUST show:
@@ -196,29 +193,36 @@ DH-6e. Hover/focus tooltip MUST show:
   that bucket, sorted descending by bucket tokens, each with percentage of that bucket's
   total;
 - bucket total tokens labeled by `dashboard.usage.periodTotal` (default English:
-  "Period total").
-
-The per-model list MUST expand the merged "Other" series into its individual models.
+  "Period total");
+- cumulative total tokens through that bucket.
 
 Tooltip copy MUST NOT hardcode a "daily" period because bucket width varies with the
 selected window. Token display MUST use compact SI-style formatting (e.g. `10M`, `1.2B`)
 with at most one fractional digit when abbreviated.
 
-DH-6f. The legend MUST list every chart series (at most 8 models plus "Other", DH-6g)
-without pagination. It MUST wrap: two equal columns below `sm`, more columns at wider
-widths. Each item shows color swatch + model id in monospace. Legend color for a series
-MUST equal the chart series color. Long model ids MUST truncate, expose the full id through
-`title`, and MUST NOT cause horizontal page overflow.
+DH-6f. The legend MUST paginate every model present in the chart series. It MUST compute
+the page size from the available legend width as
+`clamp(floor(legend_width_css_px / 160), 1, 8)`. It MUST recompute the page size when the
+legend width changes. Thus, a wide card shows more models per page than a narrow card.
 
-DH-6g. Series order and color MUST derive from each model's token total in the selected
-window, sorted descending with ties broken by model id. The model at rank `r` (0-based,
-`r < 8`) MUST use `--chart-(r+1)`. Models at rank 8 and later MUST merge into one series
-labeled by `dashboard.usage.other` that uses the muted-foreground token. Therefore no two
-series in one chart share a color. Recent usage swatches (DH-7a) MUST use the same mapping.
+The legend MUST render as one horizontal footer row below the chart. The visible model
+items MUST occupy the available left/center area. Each item shows color swatch + model id
+in monospace. Legend color for a model MUST equal the chart series color for that model.
+Long model ids MUST truncate without causing horizontal page overflow.
 
-DH-6h. The chart MUST be rendered with `@/components/ui/chart` and Recharts `BarChart` /
-stacked `Bar` elements. Empty analytics MUST show an `EmptyState` instead of an empty axes
-frame with fake data. Its copy MUST follow DH-6k.
+The pagination controls MUST appear at the right edge of the same footer row, immediately
+after the visible legend items. They MUST contain, in order: a previous-page icon button,
+localized text in the form `current / total`, and a next-page icon button. The buttons
+MUST be real `<button>` elements with localized accessible names. Previous MUST be
+disabled on page 1. Next MUST be disabled on the final page. The current page MUST clamp
+to the new final page when a data or time-window change reduces the model count.
+
+DH-6g. Chart series colors MUST use CSS variables `--chart-1` … `--chart-16` (stable hash
+of model id → palette index is allowed).
+
+DH-6h. The chart MUST be rendered with `@/components/ui/chart` and Recharts `AreaChart` /
+stacked `Area` elements. Empty analytics MUST show an `EmptyState` instead of an empty
+axes frame with fake data. Its copy MUST follow DH-6k.
 
 DH-6i. Time-window control contract (shared by DH-6 and DH-7):
 
@@ -275,15 +279,14 @@ and zero charge MUST be omitted. While the payload is first loading, the panel M
 skeleton table (DH-12a). When zero rows match the selected window, the panel MUST show the
 DH-6k window-naming empty state.
 
-DH-7b. The Recent Usage card MUST have a bounded ready-state height of at most 28rem. When
-the table is taller than the available card content area, only the table region MUST scroll
-vertically. The card header MUST remain visible. Below `sm` the Cache hit column MUST be
-hidden and its value MUST render as secondary text under the model id. Long model ids MUST
-truncate inside the Model cell, so Tokens and Charge stay visible without horizontal
-scrolling at a 320 CSS pixel viewport.
+DH-7b. The Recent Usage card MUST have a bounded ready-state height. When the table is
+taller than the available card content area, only the table region MUST scroll
+vertically. The card header MUST remain visible. Horizontal table overflow MUST remain
+available for narrow viewports.
 
-DH-7c. The API Information card MUST render the base URL row at full width and the four
-endpoint rows in a grid: one column below `sm`, two from `sm`, four from `xl`.
+DH-7c. The Recent Usage and API Information cards MUST share a maximum height of
+28rem. At `lg` and above, both cards MUST stretch to the same grid-row height.
+API rows MUST scroll within their card when content exceeds the available height.
 
 ## API Information Panel
 
@@ -470,8 +473,8 @@ All motion MUST respect reduced-motion rules (DS32–DS34).
 ## Loading Contract
 
 DH-12. Before required dashboard data resolves, the page MUST render skeleton
-placeholders that mirror the ready layout: greeting, account overview, API information,
-usage chart, recent usage, and performance panel.
+placeholders that mirror the ready layout: greeting, account overview, usage chart,
+recent/API row, and performance panel.
 
 DH-12a. A panel MUST show its skeleton only during the first load of that panel: while
 its SWR hook reports `isLoading` AND the hook exposes no data (neither current nor
@@ -488,7 +491,7 @@ still shows the skeleton.
 
 DH-12c. The usage chart's Card and its `framer-motion` entry wrapper MUST remain mounted
 across revalidations and window switches; page-entry motion plays at most once per page
-mount. Recharts `Bar` elements MUST set `isAnimationActive={false}` so a background
+mount. Recharts `Area` elements MUST set `isAnimationActive={false}` so a background
 data refresh cannot replay the grow-from-zero enter animation. The recent-usage panel
 follows the same mount and motion rules.
 

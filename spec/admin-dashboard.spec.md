@@ -206,10 +206,7 @@ Status, Spend (end-aligned; selected-window cost with 2 fractional digits, and t
 count on a second muted line), and Last probe (end-aligned timestamp or `—`). At a
 content width of 1118 CSS pixels, every column MUST be visible without horizontal scrolling.
 The channel name MUST be a link to
-`/dashboard/providers?provider=<provider_id>&channel=<channel_id>`. In narrow mode each row
-MUST render at most 2 lines of text: line 1 is the channel name, the status badge, and the
-logs button of ADF-5d; line 2 is "provider · window cost · call count". Weight, affinity,
-last probe, and `unhealthy_models` are hidden in narrow mode.
+`/dashboard/providers?provider=<provider_id>&channel=<channel_id>`.
 
 ADF-5b. Status MUST derive from `cooldown_active`, `enabled`, and `healthy`, in this order.
 The client MUST use the server-computed `cooldown_active` (AD-2b) instead of comparing

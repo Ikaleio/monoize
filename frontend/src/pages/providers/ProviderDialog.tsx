@@ -11,7 +11,6 @@ import {
 	CircleGauge,
 	Copy,
 	GitBranch,
-	Globe,
 	Layers3,
 	Plus,
 	Save,
@@ -41,7 +40,7 @@ import {
 	DialogHeader,
 	DialogTitle
 } from '@/components/ui/dialog'
-import { Field as UiField, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field'
+import { FieldError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { ListField } from '@/components/ui/list-field'
 import { NumberField } from '@/components/ui/number-field'
@@ -499,7 +498,7 @@ export function ProviderDialog({
 			<Dialog open={open} onOpenChange={next => { if (!next) requestClose() }}>
 				<DialogContent
 					aria-labelledby={titleId}
-					className='-m-4 flex h-dvh w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:m-0 sm:h-[94vh] sm:w-[96vw] sm:max-w-[1500px] sm:rounded-xl sm:border [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:size-10 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>div:first-child]:h-full [&>div:first-child]:min-h-0 [&>div:first-child]:flex-1 [&>div:first-child]:gap-0 [&>div:first-child]:overflow-hidden'
+					className='flex h-[calc(100dvh-2rem)] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-[94vh] sm:w-[96vw] sm:max-w-[1500px] sm:rounded-xl sm:border [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:size-10 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>div:first-child]:h-full [&>div:first-child]:min-h-0 [&>div:first-child]:flex-1 [&>div:first-child]:gap-0 [&>div:first-child]:overflow-hidden'
 					onPointerDownOutside={event => event.preventDefault()}
 					onOpenAutoFocus={event => {
 						// PL4.1: never land on the enable switch.
@@ -529,7 +528,7 @@ export function ProviderDialog({
 								</DialogDescription>
 							</div>
 							<div className='flex shrink-0 items-center gap-2'>
-								<Label htmlFor='provider-enabled' className='text-xs text-muted-foreground'>
+								<Label htmlFor='provider-enabled' className='hidden text-xs text-muted-foreground sm:block'>
 									{form.enabled ? t('providers.editor.enableOnSave') : t('providers.editor.disableOnSave')}
 								</Label>
 								<Switch id='provider-enabled' checked={form.enabled} onCheckedChange={enabled => setForm(previous => ({ ...previous, enabled }))} />
@@ -556,7 +555,7 @@ export function ProviderDialog({
 							</nav>
 
 							<div className='flex min-w-0 flex-1 flex-col'>
-								<div className='grid shrink-0 grid-cols-5 gap-1 border-b bg-background p-1.5 lg:hidden'>
+								<div className='flex shrink-0 gap-1 overflow-x-auto border-b bg-background px-3 py-2 lg:hidden'>
 									{sections.map(item => (
 										<Button
 											key={item.id}
@@ -565,9 +564,9 @@ export function ProviderDialog({
 											variant={section === item.id ? 'secondary' : 'ghost'}
 											aria-current={section === item.id ? 'page' : undefined}
 											onClick={() => { if (item.id !== section && blockedByInvalidNumber()) return; setSection(item.id); setMobileChannelOpen(item.id === 'channels' && form.channels.length === 1) }}
-											className='relative h-10 min-w-0 px-1 text-xs'
+											className='relative shrink-0'
 										>
-											<span className='truncate'>{item.label}</span>
+											{item.label}
 											{sectionHasError(item.id) ? <ErrorDot label={t('providers.editor.sectionHasErrors')} className='absolute right-1 top-1' /> : null}
 										</Button>
 									))}
@@ -659,12 +658,11 @@ export function ProviderDialog({
 						<AlertDialogTitle>{t('providers.editor.discardTitle')}</AlertDialogTitle>
 						<AlertDialogDescription>{t('providers.editor.discardDescription')}</AlertDialogDescription>
 					</AlertDialogHeader>
-					<AlertDialogFooter className='gap-2'>
+					<AlertDialogFooter className='gap-2 sm:gap-0'>
 						<AlertDialogCancel>{t('providers.editor.keepEditing')}</AlertDialogCancel>
 						<Button
 							type='button'
-							variant='outline'
-							className='hover:bg-destructive hover:text-destructive-foreground'
+							className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
 							onClick={() => {
 								setCloseConfirmOpen(false)
 								onOpenChange(false)
@@ -700,15 +698,15 @@ function SectionHeading({ title, description }: { title: string; description: st
 /** Labelled form field: label bound to `id`, optional "必填" marker, hint and inline error. */
 function Field({ id, label, hint, error, required, children, className }: { id?: string; label: string; hint?: React.ReactNode; error?: string; required?: boolean; children: React.ReactNode; className?: string }) {
 	const { t } = useTranslation()
-	return <UiField data-invalid={Boolean(error) || undefined} className={cn('gap-2', className)}>
-		<FieldLabel htmlFor={id}>
+	return <div className={cn('flex flex-col gap-2', className)}>
+		<Label htmlFor={id}>
 			{label}
-			{required ? <span className='text-xs font-normal text-muted-foreground'>{t('providers.editor.required')}</span> : null}
-		</FieldLabel>
+			{required ? <span className='ml-2 text-xs font-normal text-muted-foreground'>{t('providers.editor.required')}</span> : null}
+		</Label>
 		{children}
-		{hint ? <FieldDescription className='text-xs'>{hint}</FieldDescription> : null}
+		{hint ? <p className='text-xs text-muted-foreground'>{hint}</p> : null}
 		{error ? <FieldError>{error}</FieldError> : null}
-	</UiField>
+	</div>
 }
 
 function ProviderBasics({ form, setForm, nameError, clearNameError }: { form: ProviderForm; setForm: SetForm; nameError?: string; clearNameError: () => void }) {
@@ -727,6 +725,9 @@ function ProviderBasics({ form, setForm, nameError, clearNameError }: { form: Pr
 					loading={groupsLoading}
 					onChange={group_ids => setForm(previous => ({ ...previous, group_ids }))}
 				/>
+			</Field>
+			<Field id='provider-extra-fields' label={t('providers.editor.extraFields')} hint={t('providers.editor.extraFieldsHint')}>
+				<ListField id='provider-extra-fields' value={form.extra_fields_whitelist} placeholder='service_tier, metadata' onValueChange={extra_fields_whitelist => setForm(previous => ({ ...previous, extra_fields_whitelist }))} />
 			</Field>
 		</div>
 		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
@@ -797,7 +798,7 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 									<div className='flex items-center gap-2'>
 										<span className='truncate text-sm font-medium'>{channel.name || t('providers.editor.untitledChannel')}</span>
 										{channelHasError(index) ? <ErrorDot label={t('providers.editor.channelHasErrors')} /> : null}
-										<span className='ml-auto'>{effectiveStatusBadge(channelStatus(channel, healthByChannelId), t)}</span>
+										{effectiveStatusBadge(channelStatus(channel, healthByChannelId), t)}
 									</div>
 									<p className='mt-1 truncate font-mono text-xs text-muted-foreground'>{channel.base_url || t('providers.editor.noBaseUrl')}</p>
 									<p className='mt-1 text-xs text-muted-foreground'>{PROVIDER_TYPE_CONFIG[channel.provider_type]?.label ?? channel.provider_type} · {t('providers.modelCount', { count: channel.models.length })} · {t('providers.weightValue', { weight: channel.weight })}</p>
@@ -828,7 +829,7 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 	const headerCount = Object.keys(parseExtraHeaders(ch.extra_headers) ?? {}).length
 
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
-		<div className='flex flex-wrap items-start justify-between gap-3'>
+		<div className='flex items-start justify-between gap-3'>
 			<div className='flex min-w-0 items-start gap-2'>
 				<Button type='button' size='icon' variant='ghost' className='-ml-2 size-11 touch-manipulation sm:size-9 lg:hidden' onClick={() => setMobileChannelOpen(false)} aria-label={t('providers.editor.backToChannels')}><ArrowLeft data-icon /></Button>
 				<div className='min-w-0'>
@@ -837,10 +838,6 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 				</div>
 			</div>
 			<div className='flex items-center gap-1'>
-				<div className='mr-2 flex items-center gap-2'>
-					<Switch id='channel-enabled' checked={ch.enabled} onCheckedChange={enabled => update({ enabled })} />
-					<Label htmlFor='channel-enabled' className='text-sm'>{ch.enabled ? t('common.enabled') : t('common.disabled')}</Label>
-				</div>
 				<TooltipProvider delayDuration={200}>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -870,8 +867,11 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 					</Tooltip>
 				</TooltipProvider>
 				<Button type='button' size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' onClick={duplicateChannel} aria-label={t('providers.editor.duplicateChannel')}><Copy data-icon /></Button>
-				<Separator orientation='vertical' className='mx-1 h-7' />
-				<Button type='button' size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' disabled={form.channels.length === 1} onClick={removeChannel} aria-label={t('providers.editor.deleteChannel')}><Trash2 className='text-error-foreground' data-icon /></Button>
+				<Button type='button' size='icon' variant='ghost' className='size-11 touch-manipulation sm:size-9' disabled={form.channels.length === 1} onClick={removeChannel} aria-label={t('providers.editor.deleteChannel')}><Trash2 data-icon /></Button>
+				<div className='flex items-center gap-2'>
+					<Label htmlFor='channel-enabled' className='hidden text-xs text-muted-foreground sm:block'>{ch.enabled ? t('common.enabled') : t('common.disabled')}</Label>
+					<Switch id='channel-enabled' checked={ch.enabled} onCheckedChange={enabled => update({ enabled })} />
+				</div>
 			</div>
 		</div>
 
@@ -961,38 +961,30 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 		/>
 
 		<AdvancedGroup
-			icon={Globe}
-			title={t('providers.editor.networkTitle')}
-			forceOpen={Boolean(error('extra_headers'))}
-			summary={overrideSummary([
-				[t('providers.editor.egressProxy'), ch.proxy_url.trim()],
-				[t('providers.editor.extraHeaders'), headerCount > 0 ? t('providers.editor.headerCount', { count: headerCount }) : null]
-			], t)}
-		>
-			<Field id='channel-proxy_url' label={t('providers.editor.egressProxy')} hint={t('providers.editor.egressProxyHint')}>
-				<Input id='channel-proxy_url' value={ch.proxy_url} placeholder='http://proxy:port' onChange={event => update({ proxy_url: event.target.value })} />
-			</Field>
-			<Field id='channel-extra_headers' label={t('providers.editor.extraHeaders')} hint={t('providers.editor.extraHeadersHint')} error={error('extra_headers')} className='sm:col-span-2'>
-				<Textarea id='channel-extra_headers' aria-invalid={Boolean(error('extra_headers')) || undefined} value={ch.extra_headers} rows={3} placeholder={'{"x-session-affinity": "ses_001"}'} className='font-mono text-xs' onChange={event => update({ extra_headers: event.target.value })} />
-			</Field>
-		</AdvancedGroup>
-
-		<AdvancedGroup
 			icon={GitBranch}
 			title={t('providers.editor.affinityTitle')}
+			forceOpen={Boolean(error('extra_headers'))}
 			summary={overrideSummary([
 				[t('providers.editor.affinityEnabled'), ch.affinity_enabled_override],
 				[t('providers.editor.recoveryPolicy'), ch.affinity_failback_mode_override ? t(ch.affinity_failback_mode_override === 'sticky' ? 'providers.editor.failbackSticky' : 'providers.editor.failbackPriority') : null],
 				[t('providers.editor.idleExpiry'), ch.affinity_idle_ttl_seconds_override],
 				[t('providers.editor.failbackDelay'), ch.affinity_failback_delay_seconds_override],
-				[t('providers.editor.autoSessionAffinity'), ch.session_affinity_auto]
+				[t('providers.editor.egressProxy'), ch.proxy_url.trim()],
+				[t('providers.editor.autoSessionAffinity'), ch.session_affinity_auto],
+				[t('providers.editor.extraHeaders'), headerCount > 0 ? t('providers.editor.headerCount', { count: headerCount }) : null]
 			], t)}
 		>
 			<NullableBoolean id='channel-affinity-enabled' label={t('providers.editor.affinityEnabled')} value={ch.affinity_enabled_override} onChange={value => update({ affinity_enabled_override: value })} />
 			<AffinityModeOverride id='channel-affinity-mode' label={t('providers.editor.recoveryPolicy')} value={ch.affinity_failback_mode_override} onChange={value => update({ affinity_failback_mode_override: value })} />
 			<NumberOverride id='channel-affinity-ttl' label={t('providers.editor.idleExpiry')} value={ch.affinity_idle_ttl_seconds_override} placeholder={settings?.monoize_affinity_idle_ttl_seconds} onChange={value => update({ affinity_idle_ttl_seconds_override: value })} trackNumber={trackNumber} />
 			<NumberOverride id='channel-affinity-delay' min={0} label={t('providers.editor.failbackDelay')} value={ch.affinity_failback_delay_seconds_override} placeholder={settings?.monoize_affinity_failback_delay_seconds} onChange={value => update({ affinity_failback_delay_seconds_override: value })} trackNumber={trackNumber} />
+			<Field id='channel-proxy_url' label={t('providers.editor.egressProxy')} hint={t('providers.editor.egressProxyHint')}>
+				<Input id='channel-proxy_url' value={ch.proxy_url} placeholder='http://proxy:port' onChange={event => update({ proxy_url: event.target.value })} />
+			</Field>
 			<NullableBoolean id='channel-session-affinity' label={t('providers.editor.autoSessionAffinity')} hint={t('providers.editor.autoSessionAffinityHint')} nullLabel={t('providers.editor.autoDetectByBaseUrl')} value={ch.session_affinity_auto} onChange={value => update({ session_affinity_auto: value })} />
+			<Field id='channel-extra_headers' label={t('providers.editor.extraHeaders')} hint={t('providers.editor.extraHeadersHint')} error={error('extra_headers')} className='sm:col-span-2'>
+				<Textarea id='channel-extra_headers' aria-invalid={Boolean(error('extra_headers')) || undefined} value={ch.extra_headers} rows={3} placeholder={'{"x-session-affinity": "ses_001"}'} className='font-mono text-xs' onChange={event => update({ extra_headers: event.target.value })} />
+			</Field>
 			<p className='text-xs leading-relaxed text-muted-foreground sm:col-span-2'>{t('providers.editor.recoveryPolicyHint')}</p>
 		</AdvancedGroup>
 
@@ -1027,11 +1019,11 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 function AdvancedGroup({ icon: Icon, title, summary, forceOpen, children }: { icon: typeof Server; title: string; summary: string; forceOpen?: boolean; children: React.ReactNode }) {
 	return <details className='group rounded-xl border bg-card' open={forceOpen || undefined}>
 		<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'>
-			<div className='flex min-w-0 items-center gap-3'>
-				<Icon className='size-4 shrink-0 text-muted-foreground' aria-hidden='true' />
-				<div className='min-w-0'><h4 className='font-medium'>{title}</h4><p className='mt-0.5 truncate text-xs text-muted-foreground group-open:hidden'>{summary}</p></div>
+			<div className='flex items-center gap-3'>
+				<Icon className='size-4 text-muted-foreground' aria-hidden='true' />
+				<div><h4 className='font-medium'>{title}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{summary}</p></div>
 			</div>
-			<ChevronRight className='size-4 shrink-0 transition-transform group-open:rotate-90' aria-hidden='true' />
+			<ChevronRight className='size-4 transition-transform group-open:rotate-90' aria-hidden='true' />
 		</summary>
 		<div className='grid gap-4 border-t p-4 sm:grid-cols-2 sm:p-5'>{children}</div>
 	</details>
@@ -1064,7 +1056,7 @@ function RoutingSettings({ form, setForm, settings, position, trackNumber }: { f
 			{position >= 0 ? t('providers.editor.routingPosition', { position: position + 1 }) : t('providers.editor.routingPositionNew')}
 		</p>
 		<div className='grid gap-4 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
-			<Field id='provider-max-retries' label={t('providers.editor.maxRetries')} hint={t('providers.editor.maxRetriesHint')} className='sm:col-span-2'>
+			<Field id='provider-max-retries' label={t('providers.editor.maxRetries')} hint={t('providers.editor.maxRetriesHint')}>
 				<div className='flex flex-wrap items-center gap-3'>
 					<SegmentedControl
 						value={retryMode}
@@ -1134,10 +1126,7 @@ function ProtocolSettings({ form, setForm }: { form: ProviderForm; setForm: SetF
 			<Button type='button' variant='outline' className='self-start' onClick={() => setForm(previous => ({ ...previous, api_type_overrides: [...previous.api_type_overrides, { pattern: '', api_type: 'chat_completion' }] }))}><Plus data-icon />{t('providers.editor.addOverride')}</Button>
 		</div>
 		<Separator />
-		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:p-5'>
-			<Field id='provider-extra-fields' label={t('providers.editor.extraFields')} hint={t('providers.editor.extraFieldsHint')}>
-				<ListField id='provider-extra-fields' value={form.extra_fields_whitelist} placeholder='service_tier, metadata' onValueChange={extra_fields_whitelist => setForm(previous => ({ ...previous, extra_fields_whitelist }))} />
-			</Field>
+		<div className='rounded-xl border bg-card p-4 sm:p-5'>
 			<NullableBoolean id='provider-strip-nested' label={t('providers.editor.stripNestedExtras')} value={form.strip_cross_protocol_nested_extra} onChange={value => setForm(previous => ({ ...previous, strip_cross_protocol_nested_extra: value }))} />
 		</div>
 	</div>

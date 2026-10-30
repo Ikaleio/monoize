@@ -76,17 +76,17 @@ export function PriceCell({ record, side }: { record: PriceDisplaySource; side: 
       <TooltipTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-baseline gap-1 rounded-sm tabular-nums underline decoration-dotted underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded-sm tabular-nums underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {formatUsdPerM(price)}
           {tiers.length > 1 ? (
-            <span className="text-xs text-muted-foreground">
+            <span className="ml-1 text-xs text-muted-foreground">
               {t("modelPricing.tieredFrom", { count: tiers.length })}
             </span>
           ) : null}
         </button>
       </TooltipTrigger>
-      <TooltipContent className="max-w-xs space-y-2 text-xs">
+      <TooltipContent className="max-w-[min(24rem,calc(100vw-2rem))] space-y-2 text-xs">
         <p className="font-medium">{t("modelPricing.tierTooltipTitle")}</p>
         {tiers.length > 0 ? <TierLines tiers={tiers} /> : (
           <p className="tabular-nums">

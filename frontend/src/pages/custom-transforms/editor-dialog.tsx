@@ -14,7 +14,6 @@ import * as prettierPluginEstree from "prettier/plugins/estree";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Toggle } from "@/components/ui/toggle";
 import {
   Dialog,
   DialogContent,
@@ -30,6 +29,7 @@ import { DashboardApiError, type CustomTransform } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-error";
 import { formatDateTime } from "@/lib/format-time";
 import { createCustomTransformOptimistic, updateCustomTransformOptimistic } from "@/lib/swr";
+import { cn } from "@/lib/utils";
 import { checkFrontmatter, splitLinePrefix } from "./frontmatter";
 
 const CREATE_TEMPLATE = `/**
@@ -272,10 +272,7 @@ export function EditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        dirty={source !== initialSource}
-        className="h-[calc(100dvh-2rem)] sm:h-[85dvh] sm:max-w-5xl"
-      >
+      <DialogContent dirty={source !== initialSource} className="flex max-h-[90dvh] flex-col sm:max-w-3xl">
         <DialogHeader>
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <DialogTitle>
@@ -284,7 +281,7 @@ export function EditorDialog({
                 : t("customTransforms.editorCreateTitle")}
             </DialogTitle>
             {target ? (
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{target.id}</code>
+              <code className="font-mono text-xs text-muted-foreground">{target.id}</code>
             ) : null}
           </div>
           {target ? (
@@ -293,7 +290,7 @@ export function EditorDialog({
           <DialogDescription>{t("customTransforms.editorDescription")}</DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={(event) => void save(event)} className="flex min-h-0 flex-1 flex-col gap-3">
+        <form onSubmit={(event) => void save(event)} className="flex min-h-0 flex-1 flex-col gap-4">
           {pendingDraft ? (
             <Alert>
               <History aria-hidden="true" />
@@ -324,7 +321,7 @@ export function EditorDialog({
                       {issue.line !== null ? (
                         <button
                           type="button"
-                          className="shrink-0 font-medium underline underline-offset-2"
+                          className="shrink-0 underline underline-offset-4 hover:text-primary"
                           onClick={() => jumpToLine(issue.line!)}
                         >
                           {t("customTransforms.lineLabel", { line: issue.line })}
@@ -338,16 +335,18 @@ export function EditorDialog({
             </Alert>
           ) : null}
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Toggle
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
               variant="outline"
               size="sm"
-              pressed={wrap}
-              onPressedChange={setWrap}
+              aria-pressed={wrap}
+              onClick={() => setWrap((current) => !current)}
+              className={cn(wrap && "bg-accent text-accent-foreground")}
             >
-              <WrapText aria-hidden="true" />
+              <WrapText data-icon="inline-start" aria-hidden="true" />
               {t("customTransforms.wrapLines")}
-            </Toggle>
+            </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => void codeCopy.copy(source)}>
               {codeCopy.copied ? (
                 <Check data-icon="inline-start" aria-hidden="true" />
@@ -371,8 +370,7 @@ export function EditorDialog({
             <CodeMirror
               ref={editorRef}
               value={source}
-              height="100%"
-              className="h-full"
+              height="420px"
               theme={resolvedTheme}
               extensions={extensions}
               onChange={updateSource}

@@ -57,7 +57,7 @@ function ImageJobRow({
 
   return (
     <div className="flex w-fit max-w-full flex-wrap items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3">
-      {job.failure && <RequestFailureMessage failure={job.failure} />}
+      {job.failure && <RequestFailureMessage failure={job.failure} className="break-all" />}
       <div className="flex items-center gap-1">
         <Button variant="outline" size="sm" onClick={onRetry} className="h-7 gap-1.5">
           <RefreshCcw aria-hidden="true" />

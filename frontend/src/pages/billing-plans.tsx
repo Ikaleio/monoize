@@ -439,7 +439,7 @@ export function BillingPlansPage() {
                 {errorText("description")}
               </div>
               <fieldset className="grid gap-2" aria-describedby={errors.limits ? `${fieldId("limits")}-error` : undefined}>
-                <legend className="mb-2 text-sm font-medium">
+                <legend className="mb-2 text-sm font-medium leading-none">
                   {t("billingPlans.limitsLegend")}
                   <RequiredMark />
                 </legend>
@@ -525,18 +525,19 @@ export function BillingPlansPage() {
                   </Button>
                 </div>
                 {form.prices.length > 0 ? (
-                  <div aria-hidden="true" className="grid grid-cols-[1fr_1fr_2.25rem] gap-2 text-xs font-medium text-muted-foreground">
+                  <div aria-hidden="true" className="grid grid-cols-[1fr_1fr_2.25rem] gap-2 text-sm font-medium leading-none">
                     <span>{t("billingPlans.priceUsd")}</span>
                     <span>{t("billingPlans.durationDays")}</span>
                   </div>
                 ) : null}
                 {form.prices.map((price, index) => (
-                  <div key={index} className="grid grid-cols-[1fr_1fr_2.25rem] items-start gap-2">
+                  <div key={index} className="grid grid-cols-[1fr_1fr_auto] items-start gap-2">
                     <div className="grid gap-1">
                       <Input
                         id={fieldId(`price-${index}`)}
                         inputMode="decimal"
                         aria-label={t("billingPlans.priceUsdRow", { index: index + 1 })}
+                        placeholder={t("billingPlans.priceUsd")}
                         value={price.priceUsd}
                         {...invalidProps(`price-${index}`)}
                         onChange={(event) =>
@@ -557,6 +558,7 @@ export function BillingPlansPage() {
                         id={fieldId(`days-${index}`)}
                         inputMode="numeric"
                         aria-label={t("billingPlans.durationDaysRow", { index: index + 1 })}
+                        placeholder={t("billingPlans.durationDays")}
                         value={price.durationDays}
                         {...invalidProps(`days-${index}`)}
                         onChange={(event) =>

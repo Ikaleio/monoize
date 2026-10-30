@@ -121,15 +121,14 @@ function ChangeDetail({ change }: { change: PriceSyncChange }) {
   const { t } = useTranslation();
   const values = change.kind === "delete" ? change.before : change.after;
   const fields = change.kind === "update" ? (change.fields ?? []) : Object.keys(values ?? {});
-  if (fields.length === 0) return <span className="text-muted-foreground">—</span>;
+  if (fields.length === 0) return <>—</>;
   return (
     <ul className="space-y-0.5">
       {fields.map((field) => {
         const label = FIELD_LABEL_KEYS[field] ? t(FIELD_LABEL_KEYS[field]) : field;
         return (
-          <li key={field} className="tabular-nums">
-            <span className="text-muted-foreground">{label}: </span>
-            {change.kind === "update" ? (
+          <li key={field}>
+            {label}: {change.kind === "update" ? (
               <>
                 {formatChangeValue(field, change.before?.[field], t)}
                 {" → "}
@@ -345,7 +344,7 @@ export function UpstreamSyncTab() {
               {t("modelPricing.sync.autoDescription")}{" "}
               <Link
                 to="/dashboard/admin-settings?category=billing"
-                className="font-medium text-foreground underline underline-offset-4"
+                className="text-primary underline-offset-4 hover:underline"
               >
                 {t("modelPricing.sync.billingSettingsLink")}
               </Link>
@@ -383,7 +382,7 @@ export function UpstreamSyncTab() {
               </div>
               <p className="text-sm text-muted-foreground">{t(source.descriptionKey)}</p>
               {lastRun ? (
-                <p className="text-xs tabular-nums text-muted-foreground">
+                <p className="font-mono text-xs text-muted-foreground">
                   {formatDateTime(lastRun.started_at)} · {runSummary(lastRun)}
                 </p>
               ) : null}
@@ -441,11 +440,11 @@ export function UpstreamSyncTab() {
                 </div>
               ) : null}
 
-              <div className="mt-auto space-y-1.5 pt-1">
+              <div className="mt-auto flex items-center gap-2 pt-1">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="w-full"
+                  className="flex-1"
                   disabled={previewingSource !== null || previewBlocked}
                   aria-describedby={previewBlocked ? `${connectionId}-preview-blocked` : undefined}
                   onClick={() => void handlePreview(source.id)}
@@ -455,12 +454,12 @@ export function UpstreamSyncTab() {
                     ? t("modelPricing.sync.previewing")
                     : t("modelPricing.sync.preview")}
                 </Button>
-                {previewBlocked ? (
-                  <p id={`${connectionId}-preview-blocked`} className="text-xs text-muted-foreground">
-                    {t("modelPricing.sync.newApiUnconfigured")}
-                  </p>
-                ) : null}
               </div>
+              {previewBlocked ? (
+                <p id={`${connectionId}-preview-blocked`} className="text-xs text-muted-foreground">
+                  {t("modelPricing.sync.newApiUnconfigured")}
+                </p>
+              ) : null}
               {source.id === "models_dev" ? (
                 <Button
                   variant="ghost"
@@ -520,14 +519,14 @@ export function UpstreamSyncTab() {
               <tbody className="[&_tr:last-child]:border-0">
                 {runs.map((run) => (
                   <tr key={run.id} className="border-b">
-                    <VirtualTableCell>
+                    <VirtualTableCell className="font-mono text-xs">
                       {SOURCE_NAMES[run.source as PriceSyncSource] ?? run.source}
                     </VirtualTableCell>
                     <VirtualTableCell>{runStatusBadge(run, t)}</VirtualTableCell>
-                    <VirtualTableCell className="tabular-nums">
+                    <VirtualTableCell className="font-mono text-xs">
                       {formatDateTime(run.started_at)}
                     </VirtualTableCell>
-                    <VirtualTableCell className="tabular-nums">
+                    <VirtualTableCell className="font-mono text-xs">
                       {t("modelPricing.sync.runSummaryWithSkip", {
                         inserted: run.inserted,
                         updated: run.updated,
@@ -550,7 +549,7 @@ export function UpstreamSyncTab() {
       </div>
 
       <Dialog open={!!preview} onOpenChange={(open) => !open && !applying && setPreview(null)}>
-        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
+        <DialogContent className="flex max-h-[calc(100dvh-4rem)] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader className="shrink-0">
             <DialogTitle>
               {t("modelPricing.sync.previewTitle", {
@@ -587,9 +586,9 @@ export function UpstreamSyncTab() {
               {t("modelPricing.sync.skipsUnlisted", { count: unlistedSkips })}
             </p>
           ) : null}
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border">
+          <div className="max-h-[50dvh] min-h-0 overflow-y-auto rounded-lg border">
             {visibleChanges.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+              <p className="px-6 py-8 text-center text-sm text-muted-foreground">
                 {previewFilter === "skips" && unlistedSkips > 0
                   ? t("modelPricing.sync.skipsAllUnchanged")
                   : t("modelPricing.sync.previewEmpty")}
@@ -605,7 +604,7 @@ export function UpstreamSyncTab() {
                 </thead>
                 <tbody className="[&_tr:last-child]:border-0">
                   {visibleChanges.map((change) => (
-                    <tr key={`${change.kind}:${change.model_id}`} className="border-b align-top">
+                    <tr key={`${change.kind}:${change.model_id}`} className="border-b">
                       <VirtualTableCell className="font-mono text-xs">{change.model_id}</VirtualTableCell>
                       <VirtualTableCell>
                         <Badge
@@ -615,7 +614,7 @@ export function UpstreamSyncTab() {
                           {t(`modelPricing.sync.kind.${change.kind}`)}
                         </Badge>
                       </VirtualTableCell>
-                      <VirtualTableCell className="text-xs">
+                      <VirtualTableCell className="font-mono text-xs text-muted-foreground">
                         <ChangeDetail change={change} />
                       </VirtualTableCell>
                     </tr>

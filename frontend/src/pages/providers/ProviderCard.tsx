@@ -1,15 +1,16 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+	AlertTriangle,
 	ArrowDown,
 	ArrowUp,
 	ChevronRight,
 	GripVertical,
 	Layers,
-	ListChecks,
 	Loader2,
 	Pencil,
 	Radio,
+	Server,
 	Trash2,
 	Zap
 } from 'lucide-react'
@@ -21,7 +22,7 @@ import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { StackedModelList } from '@/components/StackedModelList'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { motion, transitions } from '@/components/ui/motion'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status'
@@ -42,20 +43,16 @@ import type {
 	Provider
 } from '@/lib/api'
 import { useChannelTests } from './channel-test-context'
-import { useMediaQuery } from './use-media-query'
 import {
 	ChannelRuntimeStatus,
 	ProviderModelRuntimeBadge
 } from './ProviderRuntimeStatus'
 import {
-	PROVIDER_CHANNEL_ROW_HEIGHT,
-	PROVIDER_CHANNEL_ROW_HEIGHT_COMPACT,
+	PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
 	PROVIDER_TYPE_CONFIG,
 	providerRoutingSummary,
 	resolveQuickTestModel
 } from './shared'
-
-export type ProviderDragState = 'source' | 'before' | 'after' | null
 
 type ProviderCardProps = {
 	provider: Provider
@@ -67,9 +64,7 @@ type ProviderCardProps = {
 	onToggle: (provider: Provider, enabled: boolean) => void
 	onToggleChannel: (provider: Provider, channel: MonoizeChannel, enabled: boolean) => void
 	canDrag: boolean
-	dragState: ProviderDragState
 	onDragStart: (providerId: string) => void
-	onDragOver: (providerId: string) => void
 	onDrop: (providerId: string) => void
 	onDragEnd: () => void
 	modelMetadata: ModelMetadataRecord[]
@@ -90,9 +85,7 @@ export function ProviderCard({
 	onToggle,
 	onToggleChannel,
 	canDrag,
-	dragState,
 	onDragStart,
-	onDragOver,
 	onDrop,
 	onDragEnd,
 	modelMetadata,
@@ -106,13 +99,12 @@ export function ProviderCard({
 		[i18n.resolvedLanguage, i18n.language]
 	)
 	const contentId = useId()
+	const titleId = useId()
 	const cardRef = useRef<HTMLDivElement>(null)
 	const channelListRef = useRef<VirtuosoHandle>(null)
 	const [expanded, setExpanded] = useState(false)
 	const [highlightChannelId, setHighlightChannelId] = useState<string | null>(null)
 	const [quickTestingChannelId, setQuickTestingChannelId] = useState<string | null>(null)
-	const isWide = useMediaQuery('(min-width: 640px)')
-	const rowHeight = isWide ? PROVIDER_CHANNEL_ROW_HEIGHT : PROVIDER_CHANNEL_ROW_HEIGHT_COMPACT
 
 	useEffect(() => {
 		if (!focusRequest) return
@@ -148,18 +140,22 @@ export function ProviderCard({
 		() => new Map((provider.model_runtime_statuses ?? []).map(status => [status.model, status])),
 		[provider.model_runtime_statuses]
 	)
-	const statusCounts = useMemo(() => {
-		const statuses = provider.model_runtime_statuses ?? []
-		const unpriced = new Set(provider.unpriced_model_ids ?? [])
-		for (const status of statuses) {
-			if (status.pricing_status !== 'complete') unpriced.add(status.model)
-		}
-		return {
-			unavailable: statuses.filter(status => status.availability_status === 'unavailable').length,
-			degraded: statuses.filter(status => status.availability_status === 'degraded').length,
-			unpriced: unpriced.size
-		}
-	}, [provider.model_runtime_statuses, provider.unpriced_model_ids])
+	const attentionModelCount = useMemo(
+		() =>
+			(provider.model_runtime_statuses ?? []).filter(
+				status =>
+					status.availability_status !== 'healthy' ||
+					status.pricing_status !== 'complete'
+			).length || unpricedModelIdSet.size,
+		[provider.model_runtime_statuses, unpricedModelIdSet]
+	)
+	const unavailableModelCount = useMemo(
+		() =>
+			(provider.model_runtime_statuses ?? []).filter(
+				status => status.availability_status === 'unavailable'
+			).length,
+		[provider.model_runtime_statuses]
+	)
 	const { data: registryGroups = [] } = useDashboardGroups(provider.group_ids.length > 0)
 	const groupNameById = useMemo(
 		() => new Map(registryGroups.map(group => [group.id, group.name])),
@@ -170,19 +166,48 @@ export function ProviderCard({
 		[provider.channels]
 	)
 
-	const metadataBadges = useMemo(() => {
+	const headerBadges = useMemo(() => {
 		const channelTypeLabel = Array.from(new Set(provider.channels.map(channel => PROVIDER_TYPE_CONFIG[channel.provider_type]?.label ?? channel.provider_type)))
 			.sort()
 			.join(' / ')
-		const labels = [
-			...(channelTypeLabel ? [{ key: 'channel-types', label: channelTypeLabel }] : []),
-			...provider.group_ids.map(groupId => ({ key: `group-${groupId}`, label: groupNameById.get(groupId) ?? groupId }))
-		]
-		return labels.map(({ key, label }) => {
-			const badge = <Badge variant='outline' className='max-w-none text-xs'><span className='whitespace-nowrap'>{label}</span></Badge>
-			return { key, collapsed: badge, full: badge }
+		const outlineItem = (key: string, label: string) => ({
+			key,
+			collapsed: (
+				<Badge variant='outline' className='max-w-[10rem] text-xs'>
+					<span className='truncate'>{label}</span>
+				</Badge>
+			),
+			full: (
+				<Badge variant='outline' className='max-w-none text-xs'>
+					<span className='whitespace-nowrap'>{label}</span>
+				</Badge>
+			)
 		})
-	}, [groupNameById, provider.channels, provider.group_ids])
+		const attentionVariant = unavailableModelCount > 0 ? 'destructive' : 'warning'
+		return [
+			...(channelTypeLabel ? [outlineItem('channel-types', channelTypeLabel)] : []),
+			...(attentionModelCount > 0 ?
+				[{
+					key: 'model-attention',
+					collapsed: (
+						<StatusBadge variant={attentionVariant}>
+							<AlertTriangle className='h-3 w-3 mr-1 shrink-0' />
+							{t('providers.modelsRequireAttention', { count: attentionModelCount })}
+						</StatusBadge>
+					),
+					full: (
+						<StatusBadge variant={attentionVariant}>
+							{t('providers.modelAttentionSummary', {
+								count: attentionModelCount,
+								unavailable: unavailableModelCount
+							})}
+						</StatusBadge>
+					)
+				}]
+			: 	[]),
+			...provider.group_ids.map(groupId => outlineItem(`group-${groupId}`, groupNameById.get(groupId) ?? `${groupId.slice(0, 8)}…`))
+		]
+	}, [attentionModelCount, groupNameById, provider.channels, provider.group_ids, t, unavailableModelCount])
 
 	const handleQuickTest = async (channel: MonoizeChannel, model: string) => {
 		setQuickTestingChannelId(channel.id)
@@ -216,31 +241,25 @@ export function ProviderCard({
 		<motion.div
 			ref={cardRef}
 			initial={{ opacity: 0, y: 20 }}
-			animate={{ opacity: dragState === 'source' ? 0.5 : 1, y: 0 }}
+			animate={{ opacity: 1, y: 0 }}
 			transition={{ delay: index * 0.08, ...transitions.normal }}
-			className='relative'
-			onDragOver={event => {
-				if (!canDrag) return
-				event.preventDefault()
-				onDragOver(provider.id)
-			}}
-			onDrop={event => {
-				if (!canDrag) return
-				event.preventDefault()
-				onDrop(provider.id)
-			}}
+			whileHover={canDrag ? { y: -2, transition: { duration: 0.2 } } : undefined}
 		>
-			{dragState === 'before' || dragState === 'after' ?
-				<div
-					aria-hidden='true'
-					className={cn('pointer-events-none absolute inset-x-0 z-10 h-0.5 rounded-full bg-primary', dragState === 'before' ? '-top-2' : '-bottom-2')}
-				/>
-			: 	null}
 			<TooltipProvider delayDuration={300}>
-			<Card className='transition-shadow hover:shadow-md'>
+			<Card
+				className='transition-shadow hover:shadow-md'
+				onDragOver={event => {
+					if (canDrag) event.preventDefault()
+				}}
+				onDrop={event => {
+					if (!canDrag) return
+					event.preventDefault()
+					onDrop(provider.id)
+				}}
+			>
 				<CardHeader className={cn('py-3', expanded && 'pb-4')}>
-					<div className='flex flex-col items-stretch gap-3 lg:flex-row lg:items-center'>
-						<div className='flex min-w-0 items-start gap-1 lg:flex-1'>
+					<div className='flex flex-col items-stretch justify-between gap-3 lg:flex-row lg:items-center'>
+						<div className='flex min-w-0 items-center gap-3 lg:flex-1'>
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<button
@@ -254,57 +273,52 @@ export function ProviderCard({
 										onDragEnd={onDragEnd}
 										aria-label={t('providers.dragHandle', { name: provider.name })}
 										className={cn(
-											'hidden size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex',
-											canDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+											'shrink-0 rounded-sm text-muted-foreground/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+											canDrag ? 'cursor-grab hover:text-muted-foreground' : 'hidden sm:block'
 										)}
 									>
-										<GripVertical className='size-4' aria-hidden='true' />
+										<GripVertical className='h-4 w-4' aria-hidden='true' />
 									</button>
 								</TooltipTrigger>
 								<TooltipContent>{t('providers.dragHint')}</TooltipContent>
 							</Tooltip>
-							<div className='min-w-0 flex-1'>
-								<div className='flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1'>
-									<button
-										type='button'
-										aria-expanded={expanded}
-										aria-controls={expanded ? contentId : undefined}
-										onClick={() => setExpanded(value => !value)}
-										className='-ml-1 flex min-w-0 items-center gap-2 rounded-sm px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-									>
-										<motion.span
-											animate={{ rotate: expanded ? 90 : 0 }}
-											transition={{ duration: 0.15 }}
-											className='shrink-0'
-										>
-											<ChevronRight className='size-4 text-muted-foreground' aria-hidden='true' />
-										</motion.span>
-										<span className='min-w-0 break-words text-base font-semibold leading-normal [overflow-wrap:anywhere]'>
-											{provider.name}
-										</span>
-									</button>
-									{!provider.enabled ? <Badge variant='secondary' className='shrink-0'>{t('providers.statusDisabled')}</Badge> : null}
-									<div className={cn('flex min-w-0 flex-wrap items-center gap-1.5', !provider.enabled && 'opacity-60')}>
-										{statusCounts.unavailable > 0 ?
-											<StatusBadge variant='destructive' className='shrink-0'>{t('providers.modelsUnavailable', { count: statusCounts.unavailable })}</StatusBadge>
-										: 	null}
-										{statusCounts.degraded > 0 ?
-											<StatusBadge variant='warning' className='shrink-0'>{t('providers.modelsDegraded', { count: statusCounts.degraded })}</StatusBadge>
-										: 	null}
-										{statusCounts.unpriced > 0 ?
-											<StatusBadge variant='warning' className='shrink-0'>{t('providers.modelsUnpriced', { count: statusCounts.unpriced })}</StatusBadge>
-										: 	null}
-										<BadgeOverflowList
-											items={metadataBadges}
-											visibleCount={2}
-											ariaLabel={t('providers.metadataBadgesAria', { name: provider.name })}
-											contentClassName='max-w-[min(28rem,calc(100vw-2rem))]'
-										/>
-									</div>
-								</div>
-								<p className='pl-7 text-xs text-muted-foreground'>
-									{providerRoutingSummary(index, provider.max_retries, t)}
-								</p>
+							<button
+								type='button'
+								aria-labelledby={titleId}
+								aria-expanded={expanded}
+								aria-controls={expanded ? contentId : undefined}
+								onClick={() => setExpanded(value => !value)}
+								className='flex shrink-0 items-center gap-3 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+							>
+								<motion.span
+									animate={{ rotate: expanded ? 90 : 0 }}
+									transition={{ duration: 0.15 }}
+									className='shrink-0'
+								>
+									<ChevronRight className='h-4 w-4 text-muted-foreground' aria-hidden='true' />
+								</motion.span>
+								<span className='flex h-8 w-8 items-center justify-center rounded-lg bg-secondary shrink-0'>
+									<Server className='h-4 w-4' aria-hidden='true' />
+								</span>
+							</button>
+							<div className='flex items-center gap-2 min-w-0 flex-wrap'>
+								<CardTitle
+									id={titleId}
+									onClick={() => setExpanded(value => !value)}
+									className='min-w-0 cursor-pointer break-words text-base leading-normal [overflow-wrap:anywhere]'
+								>
+									{provider.name}
+								</CardTitle>
+								{!provider.enabled ? <Badge variant='secondary'>{t('providers.statusDisabled')}</Badge> : null}
+								<BadgeOverflowList
+									items={headerBadges}
+									visibleCount={3}
+									ariaLabel={t('providers.metadataBadgesAria', { name: provider.name })}
+									contentClassName='max-w-[min(28rem,calc(100vw-2rem))]'
+								/>
+								<span className='hidden lg:inline text-xs text-muted-foreground whitespace-nowrap'>
+									[{providerRoutingSummary(index, provider.max_retries, t)}]
+								</span>
 							</div>
 						</div>
 						<div className='flex w-full flex-wrap items-center gap-4 lg:w-auto lg:shrink-0 lg:flex-nowrap'>
@@ -314,10 +328,7 @@ export function ProviderCard({
 											tabIndex={0}
 											role='group'
 											aria-label={t('providers.liveUsageLabel', { name: provider.name })}
-											className={cn(
-												'grid w-40 shrink-0 cursor-help grid-cols-[2.5rem_minmax(0,1fr)] gap-x-2 rounded-sm text-left font-mono text-sm font-normal leading-5 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-												!provider.enabled && 'opacity-60'
-											)}
+											className='grid w-40 shrink-0 cursor-help grid-cols-[2.5rem_minmax(0,1fr)] gap-x-2 rounded-sm text-left font-mono text-sm font-normal leading-5 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 										>
 											<span>{t('providers.liveRpm')}</span>
 											<span className='tabular-nums [overflow-wrap:anywhere]'>
@@ -333,12 +344,14 @@ export function ProviderCard({
 										{t('providers.liveUsageHelp')}
 									</TooltipContent>
 								</Tooltip>
-								<Switch
-									aria-label={t('providers.providerEnabledAria', { name: provider.name })}
-									checked={provider.enabled}
-									onCheckedChange={value => onToggle(provider, value)}
-								/>
-								<div className='ml-auto flex items-center gap-0.5 sm:gap-1 lg:ml-0'>
+								<div className='hidden md:flex items-center gap-2'>
+									<Switch
+										aria-label={t('providers.providerEnabledAria', { name: provider.name })}
+										checked={provider.enabled}
+										onCheckedChange={value => onToggle(provider, value)}
+									/>
+								</div>
+								<div className='flex items-center gap-0.5 sm:gap-1'>
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<Button
@@ -370,7 +383,7 @@ export function ProviderCard({
 										<TooltipContent>{t('providers.moveDown')}</TooltipContent>
 									</Tooltip>
 
-									<Separator orientation='vertical' className='mx-1 h-7 sm:h-6' />
+									<Separator orientation='vertical' className='h-7 mx-1 sm:h-6' />
 
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -403,6 +416,16 @@ export function ProviderCard({
 								</div>
 						</div>
 					</div>
+					<div className='md:hidden mt-2 flex items-center justify-between gap-2 text-sm text-muted-foreground'>
+						<span>[{providerRoutingSummary(index, provider.max_retries, t)}]</span>
+						<div className='flex items-center gap-2'>
+							<Switch
+								aria-label={t('providers.providerEnabledAria', { name: provider.name })}
+								checked={provider.enabled}
+								onCheckedChange={value => onToggle(provider, value)}
+							/>
+						</div>
+					</div>
 				</CardHeader>
 				<AnimatePresence initial={false}>
 					{expanded && (
@@ -415,7 +438,7 @@ export function ProviderCard({
 							style={{ overflow: 'hidden' }}
 						>
 							<CardContent className='space-y-5 pt-2'>
-								<div className={cn(!provider.enabled && 'opacity-60')}>
+								<div>
 									<div className='mb-3 flex items-center gap-2'>
 										<Layers className='size-4 text-muted-foreground' aria-hidden='true' />
 										<h4 className='text-sm font-medium'>
@@ -453,7 +476,10 @@ export function ProviderCard({
 										<Virtuoso
 											ref={channelListRef}
 											style={{
-												height: Math.min(provider.channels.length * rowHeight, isWide ? 190 : 300)
+												height: Math.min(
+													provider.channels.length * PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
+													190
+												)
 											}}
 											data={provider.channels}
 											computeItemKey={(_index, channel) => channel.id}
@@ -462,47 +488,36 @@ export function ProviderCard({
 												const quickModel = resolveQuickTestModel(channel, provider, globalProbeModel)
 												return (
 													<div
-														style={{ minHeight: rowHeight }}
 														className={cn(
-															'flex flex-col justify-center gap-2 border-b px-3 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/50 sm:grid sm:grid-cols-[6.5rem_minmax(0,11rem)_minmax(0,1fr)_minmax(0,11rem)_auto_auto] sm:items-center sm:gap-3 sm:py-1.5',
-															highlightChannelId === channel.id && 'bg-primary/10 ring-1 ring-inset ring-primary'
+															'flex min-h-10 items-center gap-3 px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors border-b last:border-b-0',
+															highlightChannelId === channel.id && 'bg-muted/50'
 														)}
 													>
-														<div className='flex min-w-0 items-center gap-2 sm:contents'>
-															<span className='flex shrink-0 items-center'>
-																<ChannelRuntimeStatus
-																	channel={channel}
-																	perModelCircuitBreak={provider.per_model_circuit_break}
-																/>
-															</span>
-															<span className='min-w-0 flex-1 truncate font-medium'>{channel.name}</span>
-															{/* Line 1 on narrow screens; pinned to grid column 5 at sm so the weight text keeps line 2's width. */}
-															<Switch
-																className='shrink-0 sm:col-start-5 sm:row-start-1'
-																aria-label={t('providers.channelEnabledAria', { name: channel.name })}
-																checked={channel.enabled}
-																onCheckedChange={value => onToggleChannel(provider, channel, value)}
+														<span className='flex min-w-0 items-center gap-3'>
+															<ChannelRuntimeStatus
+																channel={channel}
+																perModelCircuitBreak={provider.per_model_circuit_break}
 															/>
-														</div>
-														<span className='hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:block'>
-															{channel.base_url}
-														</span>
-														<div className='flex items-center gap-3 sm:contents'>
-															<span className='min-w-0 flex-1 text-xs text-muted-foreground sm:truncate'>
-																{weightText(channel)}
+															<span className='min-w-0 truncate font-medium'>
+																{channel.name}
 															</span>
-															<span className='inline-flex h-11 shrink-0 items-center overflow-hidden rounded-md border sm:h-7'>
+															<span className='hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:inline'>
+																{channel.base_url}
+															</span>
+														</span>
+														<span className='ml-auto flex items-center gap-3 shrink-0'>
+															<span className='inline-flex items-center rounded-md border overflow-hidden h-7'>
 																<Tooltip>
 																	<TooltipTrigger asChild>
 																		<button
 																			type='button'
-																			className='flex h-full cursor-pointer items-center gap-1.5 border-r px-2.5 text-xs font-medium transition-colors hover:bg-muted/80 disabled:pointer-events-none disabled:opacity-50'
+																			className='flex items-center gap-1.5 px-2.5 h-full text-xs font-medium hover:bg-muted/80 transition-colors disabled:opacity-50 disabled:pointer-events-none border-r cursor-pointer'
 																			disabled={quickTestingChannelId === channel.id || !quickModel}
 																			onClick={() => quickModel && handleQuickTest(channel, quickModel)}
 																		>
 																			{quickTestingChannelId === channel.id ?
-																				<Loader2 className='size-3 animate-spin' aria-hidden='true' />
-																			: 	<Zap className='size-3' aria-hidden='true' />}
+																				<Loader2 className='h-3 w-3 animate-spin' aria-hidden='true' />
+																			: 	<Zap className='h-3 w-3' aria-hidden='true' />}
 																			{t('providers.quickTest')}
 																		</button>
 																	</TooltipTrigger>
@@ -514,7 +529,7 @@ export function ProviderCard({
 																	<TooltipTrigger asChild>
 																		<button
 																			type='button'
-																			className='flex h-full w-11 cursor-pointer items-center justify-center transition-colors hover:bg-muted/80 sm:w-7'
+																			className='flex items-center justify-center w-7 h-full hover:bg-muted/80 transition-colors cursor-pointer'
 																			aria-label={t('providers.testSelectModels')}
 																			onClick={() => openTest({
 																				providerId: provider.id,
@@ -525,13 +540,21 @@ export function ProviderCard({
 																				models
 																			})}
 																		>
-																			<ListChecks className='size-3.5 text-muted-foreground' aria-hidden='true' />
+																			<ChevronRight className='h-3.5 w-3.5 text-muted-foreground' aria-hidden='true' />
 																		</button>
 																	</TooltipTrigger>
 																	<TooltipContent>{t('providers.testSelectModels')}</TooltipContent>
 																</Tooltip>
 															</span>
-														</div>
+															<span className='text-xs text-muted-foreground'>
+																{weightText(channel)}
+															</span>
+															<Switch
+																aria-label={t('providers.channelEnabledAria', { name: channel.name })}
+																checked={channel.enabled}
+																onCheckedChange={value => onToggleChannel(provider, channel, value)}
+															/>
+														</span>
 													</div>
 												)
 											}}

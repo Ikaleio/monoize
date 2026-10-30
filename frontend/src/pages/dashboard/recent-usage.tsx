@@ -23,14 +23,12 @@ import {
   formatCacheHit,
   formatCharge,
   formatCompactTokens,
-  OTHER_SERIES_COLOR,
+  modelToColor,
 } from "./utils";
 
 interface RecentUsagePanelProps extends QueryErrorProps {
   failed?: boolean;
   analytics: DashboardAnalytics | undefined;
-  /** Model colors shared with the chart (DH-6g). */
-  colors: Record<string, string>;
   username: string | undefined;
   isAdmin: boolean;
   /** First load with no data for the panel (DH-12a): show skeleton. */
@@ -43,7 +41,6 @@ interface RecentUsagePanelProps extends QueryErrorProps {
 
 export function RecentUsagePanel({
   analytics,
-  colors,
   username,
   isAdmin,
   loading,
@@ -65,9 +62,9 @@ export function RecentUsagePanel({
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.18, ...transitions.normal }}
-      className="min-w-0"
+      className="h-full min-h-0"
     >
-      <Card className="flex max-h-[28rem] min-h-0 flex-col">
+      <Card className="flex h-full max-h-[28rem] min-h-0 flex-col">
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 p-4 pb-2">
           <div className="flex min-w-0 flex-col gap-1">
             <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
@@ -77,7 +74,7 @@ export function RecentUsagePanel({
               {t("dashboard.recentUsage.subtitle", { window: windowName })}
             </p>
           </div>
-          <Button asChild variant="outline" size="sm">
+          <Button asChild variant="outline">
             <Link to={`/dashboard/logs?${logsParams.toString()}`}>
               {t("dashboard.recentUsage.viewLogs", "View logs")}
             </Link>
@@ -106,7 +103,6 @@ export function RecentUsagePanel({
           ) : rows.length === 0 ? (
             <EmptyState
               title={t("dashboard.usage.emptyWindow", { window: windowName })}
-              variant="inline"
               action={
                 window === "30d" ? undefined : (
                   <Button type="button" variant="outline" onClick={onShowThirtyDays}>
@@ -121,16 +117,16 @@ export function RecentUsagePanel({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-full">
+                    <TableHead>
                       {t("dashboard.recentUsage.model", "Model")}
                     </TableHead>
-                    <TableHead className="whitespace-nowrap text-right">
+                    <TableHead className="text-right">
                       {t("dashboard.recentUsage.tokens", "Tokens")}
                     </TableHead>
-                    <TableHead className="hidden whitespace-nowrap text-right sm:table-cell">
+                    <TableHead className="text-right">
                       {t("dashboard.recentUsage.cacheHit", "Cache hit")}
                     </TableHead>
-                    <TableHead className="whitespace-nowrap text-right">
+                    <TableHead className="text-right">
                       {t("dashboard.recentUsage.charge", "Charge")}
                     </TableHead>
                   </TableRow>
@@ -138,15 +134,11 @@ export function RecentUsagePanel({
                 <TableBody>
                   {rows.map((row) => (
                     <TableRow key={row.model}>
-                      {/* max-w-0 with w-full lets the id truncate inside an auto-layout table. */}
-                      <TableCell className="w-full max-w-0">
+                      <TableCell>
                         <div className="flex min-w-0 items-center gap-2">
                           <span
                             className="h-2 w-2 shrink-0 rounded-sm"
-                            style={{
-                              backgroundColor:
-                                colors[row.model] ?? OTHER_SERIES_COLOR,
-                            }}
+                            style={{ backgroundColor: modelToColor(row.model) }}
                           />
                           <span
                             className="truncate font-mono text-xs"
@@ -155,18 +147,14 @@ export function RecentUsagePanel({
                             {row.model}
                           </span>
                         </div>
-                        <p className="mt-0.5 pl-4 text-xs text-muted-foreground tabular-nums sm:hidden">
-                          {t("dashboard.recentUsage.cacheHit", "Cache hit")}{" "}
-                          {formatCacheHit(row.cacheHitRate)}
-                        </p>
                       </TableCell>
-                      <TableCell className="whitespace-nowrap text-right font-mono text-xs tabular-nums">
+                      <TableCell className="text-right font-mono text-xs tabular-nums">
                         {formatCompactTokens(row.tokens)}
                       </TableCell>
-                      <TableCell className="hidden whitespace-nowrap text-right font-mono text-xs tabular-nums sm:table-cell">
+                      <TableCell className="text-right font-mono text-xs tabular-nums">
                         {formatCacheHit(row.cacheHitRate)}
                       </TableCell>
-                      <TableCell className="whitespace-nowrap text-right font-mono text-xs tabular-nums">
+                      <TableCell className="text-right font-mono text-xs tabular-nums">
                         {formatCharge(row.chargeNano)}
                       </TableCell>
                     </TableRow>

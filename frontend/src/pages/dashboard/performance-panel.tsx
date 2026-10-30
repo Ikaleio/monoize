@@ -268,7 +268,6 @@ export function PerformancePanel({
                 "dashboard.performance.emptyDescription",
                 "Select the groups and models to monitor in system settings.",
               )}
-              variant="inline"
               action={
                 <Button asChild variant="outline">
                   <Link to="/dashboard/admin-settings?setting=dashboard_performance_targets">

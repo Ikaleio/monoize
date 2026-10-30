@@ -244,6 +244,7 @@ function PriceInput({
   disabled,
   placeholder,
   inputMode = "decimal",
+  mono = true,
   onChange,
 }: {
   id: string;
@@ -253,6 +254,7 @@ function PriceInput({
   disabled?: boolean;
   placeholder?: string;
   inputMode?: "decimal" | "numeric";
+  mono?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
@@ -267,7 +269,7 @@ function PriceInput({
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-error` : undefined}
         onChange={(event) => onChange(event.target.value)}
-        className="font-mono"
+        className={mono ? "font-mono" : undefined}
       />
       {error ? <FieldError id={`${id}-error`}>{error}</FieldError> : null}
     </>
@@ -651,6 +653,7 @@ export function PricingEditorDialog({
         <PriceInput
           id={fieldId}
           inputMode="numeric"
+          mono={false}
           value={metaForm[key]}
           placeholder={placeholder}
           error={errors[fieldId]}
@@ -716,7 +719,7 @@ export function PricingEditorDialog({
                   <div
                     id={id("model-id-error")}
                     role="alert"
-                    className="flex flex-wrap items-center gap-2 text-sm text-error-foreground"
+                    className="flex flex-wrap items-center gap-2 text-sm font-normal text-destructive"
                   >
                     {t("modelPricing.errorModelExists")}
                     <Button
@@ -763,30 +766,6 @@ export function PricingEditorDialog({
                   />
                 </div>
 
-                <Tabs
-                  value={form.billingMode}
-                  onValueChange={(value) => {
-                    setErrors({});
-                    setAppliedVariant(null);
-                    setForm((previous) => ({
-                      ...previous,
-                      billingMode: value as BillingMode,
-                    }));
-                  }}
-                >
-                  <TabsList className="w-full">
-                    {BILLING_MODES.map((mode) => (
-                      <TabsTrigger key={mode} value={mode} className="flex-1">
-                        {mode === "per_token"
-                          ? t("modelPricing.modePerToken")
-                          : mode === "per_request"
-                            ? t("modelPricing.modePerRequest")
-                            : t("modelPricing.modeTiered")}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                </Tabs>
-
                 {variants.length > 0 && form.billingMode !== "per_request" ? (
                   <div className="space-y-2">
                     <Label htmlFor={id("variant")}>{t("modelPricing.variantSource")}</Label>
@@ -832,6 +811,30 @@ export function PricingEditorDialog({
                     </p>
                   </div>
                 ) : null}
+
+                <Tabs
+                  value={form.billingMode}
+                  onValueChange={(value) => {
+                    setErrors({});
+                    setAppliedVariant(null);
+                    setForm((previous) => ({
+                      ...previous,
+                      billingMode: value as BillingMode,
+                    }));
+                  }}
+                >
+                  <TabsList className="w-full">
+                    {BILLING_MODES.map((mode) => (
+                      <TabsTrigger key={mode} value={mode} className="flex-1">
+                        {mode === "per_token"
+                          ? t("modelPricing.modePerToken")
+                          : mode === "per_request"
+                            ? t("modelPricing.modePerRequest")
+                            : t("modelPricing.modeTiered")}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
 
                 {form.billingMode === "per_token" ? (
                   <div className="grid grid-cols-2 gap-3">
@@ -950,7 +953,7 @@ export function PricingEditorDialog({
 
                 {form.lockedFields.length > 0 ? (
                   <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">{t("modelPricing.lockedFields")}</p>
+                    <p className="text-xs font-medium leading-none text-muted-foreground">{t("modelPricing.lockedFields")}</p>
                     <div className="flex flex-wrap gap-1.5">
                       {form.lockedFields.map((field) => (
                         <Badge key={field} variant="outline" className="gap-1 font-mono text-xs">

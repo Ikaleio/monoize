@@ -24,7 +24,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { CardsPageSkeleton } from '@/components/ui/page-skeleton'
 import { ChannelTestProvider } from './providers/ChannelTestDialog'
-import { ProviderCard, type ProviderDragState } from './providers/ProviderCard'
+import { ProviderCard } from './providers/ProviderCard'
 import { ProviderDialog } from './providers/ProviderDialog'
 import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
 import { useMediaQuery } from './providers/use-media-query'
@@ -60,7 +60,6 @@ function ProvidersPageContent() {
 	const [editProvider, setEditProvider] = useState<Provider | null>(null)
 	const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null)
 	const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null)
-	const [dragOverProviderId, setDragOverProviderId] = useState<string | null>(null)
 	const [focusRequest, setFocusRequest] = useState<{ providerId: string; request: { channelId: string | null } } | null>(null)
 	const hasGroups = providers.some(provider => provider.group_ids.length > 0)
 
@@ -101,24 +100,13 @@ function ProvidersPageContent() {
 		void applyOrder(next)
 	}
 
-	const endDrag = () => {
-		setDraggingProviderId(null)
-		setDragOverProviderId(null)
-	}
+	const endDrag = () => setDraggingProviderId(null)
 
 	const handleDrop = (targetProviderId: string) => {
 		const from = providers.findIndex(provider => provider.id === draggingProviderId)
 		const to = providers.findIndex(provider => provider.id === targetProviderId)
 		endDrag()
 		if (from >= 0 && to >= 0) moveProvider(from, to)
-	}
-
-	const dragStateFor = (providerId: string, index: number): ProviderDragState => {
-		if (!draggingProviderId) return null
-		if (providerId === draggingProviderId) return 'source'
-		if (providerId !== dragOverProviderId) return null
-		const from = providers.findIndex(provider => provider.id === draggingProviderId)
-		return from < index ? 'after' : 'before'
 	}
 
 	const confirmDelete = async () => {
@@ -240,9 +228,7 @@ function ProvidersPageContent() {
 						onToggle={handleToggle}
 						onToggleChannel={handleToggleChannel}
 						canDrag={canDrag}
-						dragState={dragStateFor(provider.id, index)}
 						onDragStart={setDraggingProviderId}
-						onDragOver={setDragOverProviderId}
 						onDrop={handleDrop}
 						onDragEnd={endDrag}
 						modelMetadata={modelMetadata}

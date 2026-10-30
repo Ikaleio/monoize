@@ -72,7 +72,7 @@ export function ModelRedirectsEditor({
           return (
             <div
               key={`${idPrefix}-${index}`}
-              className="grid min-w-0 gap-3 rounded-md border p-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] sm:items-start"
+              className="grid min-w-0 gap-3 rounded-md border p-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] sm:items-end"
             >
               <Field className="min-w-0">
                 <FieldLabel htmlFor={patternId}>
@@ -93,12 +93,14 @@ export function ModelRedirectsEditor({
                     setBlurredPatterns((previous) => new Set(previous).add(rule.pattern))
                   }
                 />
-                {patternInvalid ? (
-                  <FieldError>{t("settings.modelRedirectPatternInvalid")}</FieldError>
-                ) : null}
               </Field>
+              {patternInvalid ? (
+                <FieldError className="sm:col-start-1 sm:row-start-2">
+                  {t("settings.modelRedirectPatternInvalid")}
+                </FieldError>
+              ) : null}
 
-              <div className="flex justify-center sm:mt-6 sm:h-9 sm:items-center">
+              <div className="flex justify-center sm:h-9 sm:items-center">
                 <ArrowRight
                   aria-hidden="true"
                   className="size-6 text-muted-foreground rotate-90 sm:rotate-0"
@@ -127,7 +129,7 @@ export function ModelRedirectsEditor({
                 variant="ghost"
                 size="icon"
                 disabled={disabled}
-                className="justify-self-end sm:mt-6"
+                className="justify-self-end sm:mb-0"
                 aria-label={t("settings.removeModelRedirect", {
                   index: index + 1,
                 })}

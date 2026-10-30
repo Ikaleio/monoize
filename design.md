@@ -23,7 +23,7 @@ version: 2026-10-30
 |系统设置|`/dashboard/admin-settings`|管理员|
 
 [必须] 不将本文件用于登录页、文档站、Playground、请求日志、首页仪表盘、用户设置（`/settings`）和其他未列出页面。
-[必须] 沿用 `DESIGN_SYSTEM.md` 与 `spec/frontend-design-system.spec.md` 的全局规则。未保存修改保护、字段校验与错误提示、数值与列表输入、加载失败与无权限、URL 状态、颜色语义、确认与撤销、焦点顺序（DS72–DS81）适用于控制台全部页面，包括上一条排除的页面；第 4.6 节只摘录这些规则。
+[必须] 沿用 `DESIGN_SYSTEM.md` 与 `spec/frontend-design-system.spec.md` 的全局规则。未保存修改保护、字段校验与错误提示、数值与列表输入、加载失败与无权限、URL 状态、颜色语义、确认与撤销、焦点顺序（DS73–DS81）适用于控制台全部页面，包括上一条排除的页面；第 4.6 节只摘录这些规则。
 [必须] 以 `spec/dashboard-ui-layout.spec.md`、`spec/recharge-system.spec.md`、`spec/admin-dashboard.spec.md`、`spec/model-marketplace.spec.md`、`spec/billing-plan-subscriptions.spec.md`、`spec/system-settings-ui.spec.md` 的页面条目为行为依据。
 [必须] 冲突时依次保护：spec 与用户要求、无障碍与可用性、读者任务、本文件、装饰细节。
 
@@ -63,7 +63,7 @@ version: 2026-10-30
 |API 密钥|创建密钥；有选中时加“删除所选”|全选、按名称或密钥前缀搜索|计数|名称（行首为行选择框，含分组徽标）、密钥、限制、过期时间、独立余额（仅当有密钥开启独立余额）、状态、操作|
 |支付管理·支付渠道|无|Tab|添加支付渠道|名称、类型、币种、汇率、充值范围、启用、操作|
 |支付管理·订单|无|Tab|状态筛选、用户名筛选|创建时间、用户、支付渠道、到账、支付、状态、订单号、退款|
-|用户管理|添加用户|按用户名或邮箱搜索（`?q=`）|计数与今日消耗、调用次数|用户（头像；第一行用户名，第二行角色与分组徽标）、余额、今日（消耗与调用两行）、套餐（名称与到期两行）、日期（创建与最后登录两行）、状态、操作（编辑与“更多操作”菜单）|
+|用户管理|添加用户|按用户名或邮箱搜索（`?q=`）|计数与今日消耗、调用次数|用户（头像、用户名、分组徽标）、角色、余额、今日消耗、今日调用、套餐（名称与到期两行）、创建时间、最后登录、状态、操作（行内按钮）|
 |模型定价·模型定价|无|Tab（`?tab=` 取 pricing、unpriced、tools、sync；未定价 Tab 带数量徽标）、搜索|添加定价|模型、计费模式、输入价格、输出价格、来源、状态（启用/不完整/停用与锁定数）、更新时间、操作|
 |模型定价·未定价模型|无|搜索|计数|模型（第二行为 `Provider / Channel` 来源）、操作|
 |分组|新建分组|无|计数|位置、名称与描述、计费倍率、允许用户自选、操作|
@@ -75,7 +75,6 @@ version: 2026-10-30
 [必须] API 密钥页在页头下方放一行只读“API 基址”、等宽 URL 与复制按钮，不加边框；创建结果面板重复这一行。未配置时显示当前站点地址并注明。
 [必须] 令牌对话框只把名称、有效期、分组、独立余额放在基础区；其余字段收进默认折叠的“高级设置”，折叠标题显示“已配置 N 项”。
 [必须] 令牌子账户余额的管理员调整使用行内“调整余额”对话框，放在“划转”旁边；编辑对话框不含余额字段。
-[必须] 用户行把用户名放在第一行，把角色与分组徽标放在第二行。
 [必须] 用户的套餐管理使用行内“套餐”对话框；用户编辑对话框只含点“保存”才生效的字段。
 [必须] 用户的状态开关在当前登录账户那一行禁用并说明原因；停用他人前确认，重新启用不确认。
 [必须] 分组行把名称与默认徽标放在第一行，把描述放在第二行。
@@ -86,7 +85,7 @@ version: 2026-10-30
 [必须] 删除分组前用已加载的套餐检查：有套餐的可用分组恰为该分组时，确认框列出这些套餐并链接到订阅套餐页，禁用“删除”。
 [必须] 支付管理只在“支付渠道”Tab 激活时显示“添加支付渠道”。
 [必须] 支付管理的 Tab 与订单筛选写入 URL：`?tab=<channels|orders>&status=&username=`。
-[必须] 支付管理“退款”列只在已到账（`succeeded`）的行显示退款按钮，其余行显示“—”；退款确认框用键值块列出完整订单号（带 `CopyButton`）、支付渠道、实付金额与到账金额。
+[必须] 支付管理订单的每一行都有退款按钮，只在已到账（`succeeded`）时可用；退款确认框用键值块列出完整订单号（带 `CopyButton`）、支付渠道、实付金额与到账金额。
 [必须] 支付渠道对话框使用 `<form>`，底部为 outline“取消”与提交“保存”；汇率与充值范围的错误显示在字段下方；已保存的 Stripe 支付渠道显示只读“回调地址”与 `CopyButton`。
 [必须] `recharge_public_origin` 为空时，支付渠道 Tab 顶部显示 `Alert`“未设置充值公网 Origin，用户无法下单”，并链接到系统设置对应项。
 [必须] 套餐行把名称放在第一行，把描述放在第二行；限额每个已配置窗口一行，窗口标签保留 `5h`、`24h`、`7d`、`30d` 原文。
@@ -104,20 +103,17 @@ version: 2026-10-30
 [必须] 资金记录面板的卡片头只放“充值订单 / 余额流水”切换，不重复“资金记录”标题与说明。
 [必须] 资金记录子 Tab 写入 URL：`?activity=<orders|ledger>`（默认 `orders` 时省略），与 `?tab=` 并存。
 [必须] 余额流水主单元格第二行用次要文字显示上下文：备注、API 密钥名或“订单 {前 8 位}”，依次取第一个可用值。
-[必须] 充值表单按“支付渠道（每项显示‘名称 · 币种 · $min–$max’）→ 预设金额 → 自定义金额”的顺序排列；切换支付渠道后金额越界时夹到最近边界并显示一行说明（RC-W3）。
-[必须] 窄于 `lg` 时付款明细压成一行“实付 X 币种”，紧贴提交按钮上方。
+[必须] 充值表单按“预设金额 → 自定义金额 → 支付渠道 `Select`（每项显示‘名称 · 币种 · $min–$max’）”的顺序排列；切换支付渠道后金额越界时夹到最近边界并显示一行说明（RC-W3）。
 [必须] 套餐价格按钮只打开购买确认框，确认框写明扣除金额、购买后余额、立即生效与到期时间；余额不足时禁用“确认购买”并提供“去充值”（BP-UI4）。
-[建议] 概览与充值面板其余结构保持不变（`spec/recharge-system.spec.md` RC-W2a、RC-W3、RC-W7）。
+[建议] 概览与充值面板保持现有结构（`spec/recharge-system.spec.md` RC-W2a、RC-W3、RC-W7）。
 
 ## 3.4 Provider 页（列表与编辑器）
 
 [必须] 页面标题为“Provider”，说明写明路由模型：按列表顺序尝试 Provider，同一 Provider 内按权重随机选择 Channel，失败后回退；有 Provider 绑定分组时补一句分组优先级先于此顺序。
-[必须] 卡片头不放装饰图标底板；名称下方固定一行次要文字“第 N 位 · 尝试全部 Channel / 最多 N 次”，不用方括号，不显示 0 基数字或 -1。
-[必须] 卡片头徽标顺序：不可用、部分可用、未定价（完整显示，计数为 0 时不显示）→ 协议 → 分组（可折叠进 +N）。禁用的 Provider 名称旁显示“已禁用”，指标与模型区降低对比度，操作按钮不降。
+[必须] 禁用的 Provider 名称旁显示“已禁用”。
 [必须] 只有拖拽手柄可拖动；手柄是可聚焦按钮。展开控制是带 `aria-expanded` 的真实按钮。
 [必须] 在桌面开关左侧放置 RPM、TPM 两行文字。
 [必须] 让所有 Provider 的指标列拥有相同宽度和相同左边缘。
-[必须] Channel 行使用固定列栅格：有效状态徽标、名称、Base URL、“N 个模型 · 权重 W（P%）”、启用开关、测试操作。窄屏（< `sm`）分两行：第一行状态与名称，第二行文字、开关与测试。
 [必须] Channel 只显示一个有效状态徽标，优先级：已禁用 > 不接收流量（权重 0）> 不健康 > 探测中 > 健康。
 [必须] 列表中的 Provider、Channel 开关立即生效；Provider 启停给出带“撤销”的 toast。编辑器内的开关只改草稿，文案为“保存后启用/保存后禁用”。
 [必须] 编辑器校验错误显示在字段下方并聚焦字段，分区栏与 Channel 行显示错误点；不只用 toast。
@@ -144,7 +140,6 @@ version: 2026-10-30
 [必须] 消费窗口只有 `24h`、`7d`、`30d`，同时作用于渠道健康与用户使用排名，写入 URL `?window=`。排名标题不写窗口值，空状态写明窗口。
 [必须] 渠道健康行按状态严重度排序：不健康 → 冷却中 → 已停用 → 健康，同级内保持 Provider 优先级。来源：25 个 Channel 时，异常行排在第 21 行，桌面端要滚动约 1343px。
 [必须] 仪表盘直达处置页面：Channel 名链接到 `/dashboard/providers?provider=&channel=`；不健康与冷却中的行带“查看日志”幽灵图标按钮，链接到 `/dashboard/logs?channel_id=&status=error`；排名用户名链接到 `/dashboard/logs?username=`。
-[必须] 窄屏渠道健康行 ≤ 2 行文字：第一行 Channel 名、状态徽标、日志按钮；第二行 Provider、消耗、调用次数。权重、亲和、最近探测只在宽模式显示。来源：展开全部键值对时每行约 275px，排名被推到 6000px 以下。
 [必须] 系统状态与从机状态使用键值行：每行左侧标签、右侧值，行间 `divide-y`。
 [必须] 页面不使用固定页脚；原页脚的健康状态条目与亲和绑定数并入系统状态。
 
@@ -206,7 +201,7 @@ version: 2026-10-30
 [必须] 管理页主要操作使用 `Button` 默认 variant（`bg-foreground`）。
 [必须] 钱包主要操作使用 `bg-wallet-action text-wallet-action-foreground`。
 [必须] 状态色只用于 `OrderStatusBadge`、`StatusBadge`、账本带符号金额和错误反馈。
-[建议] 属性类标签（流式/非流、协议、类型、角色）使用中性 `bg-muted text-muted-foreground` 或 `Badge variant="secondary"`；状态色只表达结果或风险。一个条目只显示一个有效状态，优先级：已停用 > 不接流量 > 不健康 > 健康。
+[建议] 一个条目只显示一个有效状态，优先级：已停用 > 不接流量 > 不健康 > 健康。
 [必须] 账本金额为正时使用 `text-success`，为负时使用 `text-error-foreground`。
 [必须] 充值订单行的到账金额使用 `text-foreground`，不带正负号。
 [必须] 停用或已过期条目的名称使用 `text-muted-foreground`；不降低整行 `opacity`。
@@ -267,7 +262,7 @@ version: 2026-10-30
 [必须] 不可执行的操作使用 `disabled`，并用 `title` 或提示说明原因。
 [必须] 令牌过期时，过期时间单元格显示 `StatusBadge variant="warning"`“已过期”。
 [必须] 紧跟标识符的复制按钮使用 `CopyButton`；复制成功后图标切换为 `Check` 2 秒，失败时显示 `common.copyFailed` 错误提示，成功时不弹提示。
-[必须] 分段控件的每个按钮设 `aria-pressed`；选中项使用 `bg-foreground text-background font-semibold`，与未选中项的非文本对比度 ≥ 3:1。来源：基线选中项与未选中项背景只差 `rgb(245,245,245)` 对 `rgb(250,250,250)`（`/dashboard`，1440 × 900，light）。
+[必须] 分段控件的每个按钮设 `aria-pressed`，选中项使用 `bg-accent text-accent-foreground`。
 [必须] 首次加载失败使用 `QueryError`；有缓存时在缓存数据上方显示 `QueryError stale`，不显示原始错误信息。
 [必须] 先判断加载错误，再判断空数据；加载失败不显示空状态。403 显示 `QueryError forbidden`（无重试按钮）；管理页的无权限状态由路由统一渲染，页面不自建。
 [必须] 有未保存修改的编辑器对话框向 `DialogContent` 传 `dirty`：点外部、Esc 和关闭按钮不关闭，改为询问“放弃未保存的修改？”（继续编辑 / 放弃）。页面级草稿渲染 `useUnsavedChangesGuard(dirty)` 返回的节点。对话框关闭后，焦点回到打开它的元素。
@@ -277,8 +272,7 @@ version: 2026-10-30
 [必须] 扣款、批量写库、删除、停用他人之前，用 `AlertDialog` 写出具体后果（金额、条数、受影响的密钥数）。可逆的立即生效操作不弹确认，改为带“撤销”的 toast。
 [必须] 实体编辑器用 `<form onSubmit>` 包裹字段，主要按钮为 `type="submit"`，单行输入框内按 Enter 即提交；`Label` 用 `htmlFor` 绑定 `useId` 生成的 id。
 [必须] 动效包裹层（`AnimatedButton`、品牌标识）不成为 Tab 停靠点。
-[必须] toast 显示在顶部居中，不遮挡对话框底栏和吸底保存条。
-[必须] “已自定义”“筛选生效”标记使用 `ModifiedDot`，相邻控件的可访问名称说明该状态。
+[必须] “已自定义”标记使用 `ModifiedDot`，相邻控件的可访问名称说明该状态。
 
 ## 4.7 动效
 
@@ -309,7 +303,7 @@ version: 2026-10-30
 |虚拟列表适配|`virtualDataListComponents`|`frontend/src/components/ui/data-list-virtual.tsx`|`Virtuoso` 的 `components`；列表 `aria-label` 通过 `context.label` 传入|已实现|
 |加载失败|`QueryError`（`onRetry`、`retrying`、`stale`、`forbidden`）|`frontend/src/components/ui/query-error.tsx`|数据加载或刷新失败|已实现|
 |模型标识|`ModelIcon`|`frontend/src/components/ModelIcon.tsx`|模型广场模型 ID 前|已实现|
-|分段选择|`SegmentedControl`（`value`、`options`、`onChange`、`ariaLabel`、`label`）|`frontend/src/components/ui/segmented-control.tsx`|时间窗口、对话框内视图切换（2–6 个固定短选项）；选中项实心反色|已实现|
+|分段选择|`SegmentedControl`（`value`、`options`、`onChange`、`ariaLabel`、`label`）|`frontend/src/components/ui/segmented-control.tsx`|时间窗口、对话框内视图切换（2–6 个固定短选项）|已实现|
 |复制|`CopyButton`（`value`、`label`）、`useCopyToClipboard`|`frontend/src/components/ui/copy-button.tsx`、`frontend/src/hooks/use-copy-to-clipboard.ts`|紧跟标识符的复制按钮；带文字的复制按钮|已实现|
 |删除确认|`ConfirmDeleteDialog`（`open`、`title`、`description`、`onConfirm`、`onOpenChange`）|`frontend/src/components/ui/confirm-delete-dialog.tsx`|所有删除持久化条目的操作|已实现|
 |模型多选|`ModelMultiSelect`（`value`、`options`、`loading`、`error`、`onRetry`、`onChange`、`allowCustom`）|`frontend/src/components/models/model-multi-select.tsx`|编辑精确模型 ID 集合|已实现|
@@ -325,7 +319,7 @@ version: 2026-10-30
 |请求错误|`apiErrorMessage`、`toastApiError`、`apiErrorParam`|`frontend/src/lib/api-error.ts`|按 `apiErrors.<code>` 显示错误；按 `param` 定位字段|已实现|
 |URL 状态|`useSearchParamState(key, default, allowed)`|`frontend/src/hooks/use-search-param-state.ts`|Tab 与单值筛选|已实现|
 |面板容错|`PanelErrorBoundary`（`title`）|`frontend/src/components/ui/error-boundary.tsx`|页面内相互独立的面板|已实现|
-|修改标记|`ModifiedDot`|`frontend/src/components/ui/modified-dot.tsx`|“已自定义”“筛选生效”|已实现|
+|修改标记|`ModifiedDot`|`frontend/src/components/ui/modified-dot.tsx`|“已自定义”|已实现|
 |颜色与字体|语义 token、`font-display`、`font-mono`|`frontend/src/index.css`、`tailwind.config.cjs`|全部页面|已实现|
 |设置模型|`SETTINGS_CATEGORIES`、`SETTINGS_GROUPS`、`SETTING_ENTRIES`|`frontend/src/components/settings/settings-categories.ts`|设置分类、分组与可搜索设置项的唯一来源|已实现|
 |设置搜索|`SettingsSearchContext`、`matchSettingEntries`、`normalizeSettingsQuery`|`frontend/src/components/settings/settings-search.ts`|过滤设置行|已实现|
@@ -378,7 +372,7 @@ version: 2026-10-30
 [必须] 充值范围写成“$min – $max”。
 [必须] 订单、账本、用户与定价记录的时间使用 `formatDateTime`；令牌过期日期与用户创建、登录日期使用 `formatDate`。
 [必须] 订单号显示前 8 个字符，完整订单号与 `error_code` 放在提示中。紧跟一个 `CopyButton` 复制完整订单号。
-[必须] API 密钥列表的独立余额列只在至少一个密钥开启独立余额时出现；未开启的行显示 `—`。不在任何行写“使用账户余额”。未设置过期时间的密钥显示次要文字“永不过期”。
+[必须] API 密钥列表的独立余额列只在至少一个密钥开启独立余额时出现；未开启的行显示 `—`。不在任何行写“使用账户余额”。未设置过期时间的密钥显示“永不过期”。
 [必须] 钱包错误状态不显示原始错误信息。
 [必须] Provider 指标帮助文字说明最近 60 秒、已落库请求及输入加输出 token。
 [必须] 模型价格（模型定价列表与模型广场共用一个格式函数）显示精确十进制：去掉末尾 0 但至少保留 2 位小数（`$5.00`、`$0.60306`），不四舍五入；单位“每 1M tokens”写在表头与窄屏标签中，单元格不重复“/ 1M”。按次计费写“$x / 次”。

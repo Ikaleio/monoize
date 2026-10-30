@@ -21,7 +21,7 @@ export function RequestFailureMessage({
       {failure.requestId && (
         <Link
           to={`/dashboard/logs?q=${encodeURIComponent(failure.requestId)}`}
-          className="ml-2 whitespace-nowrap underline underline-offset-2 hover:text-foreground"
+          className="ml-2 whitespace-nowrap underline underline-offset-4 hover:text-primary"
         >
           {t("playground.viewInLogs")}
         </Link>

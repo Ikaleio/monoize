@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -24,7 +24,6 @@ import { UsageChartPanel } from "./dashboard/usage-chart";
 import { RecentUsagePanel } from "./dashboard/recent-usage";
 import { ApiInfoPanel } from "./dashboard/api-info-panel";
 import { PerformancePanel } from "./dashboard/performance-panel";
-import { buildUsageSeries } from "./dashboard/utils";
 
 const ACCOUNT_OVERVIEW_QUERY = USAGE_WINDOW_QUERY["24h"];
 const USAGE_REFRESH_INTERVAL_MS = 60000;
@@ -91,11 +90,6 @@ export function DashboardPage() {
   const { data: apiKeys } = useApiKeys();
   const { data: rechargeChannels } = useRechargeChannels();
 
-  const series = useMemo(
-    () => buildUsageSeries(usageAnalytics, usageWindow),
-    [usageAnalytics, usageWindow],
-  );
-
   const tt = useCallback(
     (
       key: string,
@@ -128,7 +122,7 @@ export function DashboardPage() {
     apiKeys?.length === 0 || hasAnyRequest === false;
 
   return (
-    <PageWrapper className="flex min-h-0 min-w-0 flex-col gap-4 pb-6">
+    <PageWrapper className="flex min-h-0 flex-col gap-4 pb-6">
       <motion.header
         initial={{ opacity: 0, y: -12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -177,19 +171,8 @@ export function DashboardPage() {
       </PanelErrorBoundary>
 
       <PanelErrorBoundary>
-        <ApiInfoPanel
-          settings={publicSettings}
-          loading={publicSettingsLoading}
-          failed={Boolean(settingsError)}
-          onRetry={retrySettings}
-          retrying={settingsValidating}
-        />
-      </PanelErrorBoundary>
-
-      <PanelErrorBoundary>
         <UsageChartPanel
           analytics={usageAnalytics}
-          series={series}
           failed={Boolean(usageError)}
           onRetry={retryUsage}
           retrying={usageValidating}
@@ -201,21 +184,35 @@ export function DashboardPage() {
         />
       </PanelErrorBoundary>
 
-      <PanelErrorBoundary>
-        <RecentUsagePanel
-          analytics={usageAnalytics}
-          colors={series.colors}
-          username={user?.username}
-          isAdmin={user?.role === "admin" || user?.role === "super_admin"}
-          failed={Boolean(usageError)}
-          onRetry={retryUsage}
-          retrying={usageValidating}
-          loading={usageLoading && !usageAnalytics}
-          pending={usageLoading && usageAnalytics !== undefined}
-          window={usageWindow}
-          onShowThirtyDays={() => setUsageWindow("30d")}
-        />
-      </PanelErrorBoundary>
+      <section className="grid min-h-0 items-stretch gap-4 lg:grid-cols-3">
+        <div className="min-h-0 min-w-0 lg:col-span-2">
+          <PanelErrorBoundary>
+            <RecentUsagePanel
+              analytics={usageAnalytics}
+              username={user?.username}
+              isAdmin={user?.role === "admin" || user?.role === "super_admin"}
+              failed={Boolean(usageError)}
+              onRetry={retryUsage}
+              retrying={usageValidating}
+              loading={usageLoading && !usageAnalytics}
+              pending={usageLoading && usageAnalytics !== undefined}
+              window={usageWindow}
+              onShowThirtyDays={() => setUsageWindow("30d")}
+            />
+          </PanelErrorBoundary>
+        </div>
+        <div className="min-h-0 min-w-0">
+          <PanelErrorBoundary>
+            <ApiInfoPanel
+              settings={publicSettings}
+              loading={publicSettingsLoading}
+              failed={Boolean(settingsError)}
+              onRetry={retrySettings}
+              retrying={settingsValidating}
+            />
+          </PanelErrorBoundary>
+        </div>
+      </section>
 
       <PanelErrorBoundary>
         <PerformancePanel

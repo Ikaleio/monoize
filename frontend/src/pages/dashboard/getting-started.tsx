@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { PublicSystemSettings, User } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { resolveApiBase } from "./utils";
 
 const API_BASE_COPIED_KEY = "monoize-home-api-base-copied";
@@ -31,19 +30,16 @@ function Step({
   action: ReactNode;
 }) {
   return (
-    <li className="flex min-w-0 flex-col gap-3 p-4">
-      <div className="flex min-w-0 items-center gap-2">
-        <span
-          className={cn(
-            "flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums",
-            done && "border-success text-success",
-          )}
-        >
-          {done ? <Check className="size-3.5" aria-hidden="true" /> : number}
+    <li className="flex min-h-14 items-center gap-3 rounded-lg border bg-muted/30 p-2.5">
+      {done ? (
+        <Check className="size-4 shrink-0 text-success" aria-hidden="true" />
+      ) : (
+        <span className="w-4 shrink-0 text-center font-mono text-xs tabular-nums text-muted-foreground">
+          {number}
         </span>
-        <span className="min-w-0 text-sm font-medium">{title}</span>
-      </div>
-      <div>{action}</div>
+      )}
+      <span className="min-w-0 flex-1 text-sm">{title}</span>
+      {action}
     </li>
   );
 }
@@ -81,24 +77,19 @@ export function GettingStartedCard({
   return (
     <section>
       <Card>
-        <CardHeader className="p-4 pb-0">
-          <CardTitle className="text-base font-semibold leading-none tracking-tight">
+        <CardHeader className="p-4 pb-2">
+          <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
             {t("dashboard.gettingStarted.title")}
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          <ol
-            className={cn(
-              "grid grid-cols-1 divide-y sm:divide-x sm:divide-y-0",
-              canTopUp ? "sm:grid-cols-3" : "sm:grid-cols-2",
-            )}
-          >
+        <CardContent className="p-4 pt-2">
+          <ol className="flex flex-col gap-2">
             <Step
               number={1}
               done={hasApiKey}
               title={t("dashboard.gettingStarted.createKey")}
               action={
-                <Button asChild variant="outline" size="sm">
+                <Button asChild variant="outline">
                   <Link to="/dashboard/tokens">
                     {t("dashboard.gettingStarted.createKeyAction")}
                   </Link>
@@ -113,7 +104,6 @@ export function GettingStartedCard({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
                   disabled={settings === undefined}
                   onClick={() => void copyApiBase()}
                 >
@@ -132,7 +122,7 @@ export function GettingStartedCard({
                 done={hasBalance}
                 title={t("dashboard.gettingStarted.topUp")}
                 action={
-                  <Button asChild variant="outline" size="sm">
+                  <Button asChild variant="outline">
                     <Link to="/dashboard/wallet?tab=recharge">
                       {t("dashboard.gettingStarted.topUpAction")}
                     </Link>

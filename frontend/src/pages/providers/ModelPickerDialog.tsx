@@ -153,8 +153,8 @@ function ModelPickerDialogContent({
 		: t('providers.pickerNoExistingModels')
 
 	return (
-		<DialogContent className='flex max-h-[min(85dvh,52rem)] max-w-4xl flex-col gap-4 overflow-hidden'>
-			<DialogHeader className='shrink-0'>
+		<DialogContent className='max-h-[85vh] flex flex-col overflow-hidden max-w-4xl'>
+			<DialogHeader>
 				<div className='flex flex-wrap items-center justify-between gap-3 pr-8'>
 					<DialogTitle>{t('providers.selectModels')}</DialogTitle>
 					<SegmentedControl
@@ -179,85 +179,87 @@ function ModelPickerDialogContent({
 				</DialogDescription>
 			</DialogHeader>
 
-			<div className='flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center'>
-				<div className='relative min-w-0 flex-1'>
-					<Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' aria-hidden='true' />
-					<Input
-						className='pl-10'
-						placeholder={t('providers.searchModels')}
-						aria-label={t('providers.searchModels')}
-						value={search}
-						onChange={event => setSearch(event.target.value)}
-					/>
+			<div className='flex flex-col gap-4'>
+				<div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
+					<div className='relative min-w-0 flex-1'>
+						<Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' aria-hidden='true' />
+						<Input
+							className='pl-10'
+							placeholder={t('providers.searchModels')}
+							aria-label={t('providers.searchModels')}
+							value={search}
+							onChange={event => setSearch(event.target.value)}
+						/>
+					</div>
+					<div className='flex gap-2'>
+						<Button type='button' variant='outline' size='sm' disabled={filtered.length === 0} onClick={() => setFiltered(true)}>
+							{t('providers.pickerSelectFiltered')}
+						</Button>
+						<Button type='button' variant='outline' size='sm' disabled={filtered.length === 0} onClick={() => setFiltered(false)}>
+							{t('providers.pickerClearFiltered')}
+						</Button>
+					</div>
 				</div>
-				<div className='flex gap-2'>
-					<Button type='button' variant='outline' size='sm' disabled={filtered.length === 0} onClick={() => setFiltered(true)}>
-						{t('providers.pickerSelectFiltered')}
-					</Button>
-					<Button type='button' variant='outline' size='sm' disabled={filtered.length === 0} onClick={() => setFiltered(false)}>
-						{t('providers.pickerClearFiltered')}
-					</Button>
-				</div>
-			</div>
 
-			{tab === 'existing' ?
-				<p className='shrink-0 text-xs text-muted-foreground'>{t('providers.pickerExistingHint')}</p>
-			: 	null}
-
-			<div className='flex min-h-0 flex-1 flex-col'>
-				{tab === 'new' && error ?
-					<Alert variant='destructive'>
-						<AlertTriangle className='size-4' aria-hidden='true' />
-						<AlertTitle>{t('providers.fetchModelsError')}</AlertTitle>
-						<AlertDescription className='flex flex-col items-start gap-2'>
-							<span>{apiErrorMessage(error, t)}</span>
-							{error instanceof Error && error.message ?
-								<details className='w-full text-xs'>
-									<summary className='cursor-pointer'>{t('providers.errorDetails')}</summary>
-									<code className='mt-1 block whitespace-pre-wrap break-words font-mono'>{error.message}</code>
-								</details>
-							: 	null}
-							<Button type='button' size='sm' variant='outline' disabled={isValidating} onClick={() => void retry()}>
-								{isValidating ? t('common.loading') : t('common.retry')}
-							</Button>
-						</AlertDescription>
-					</Alert>
-				: 	<StackedModelList className='flex min-h-0 flex-1 flex-col' listClassName='max-h-none min-h-[10rem] flex-1 gap-2'>
-						{tab === 'new' && loading ?
-							<div className='w-full py-8 text-center text-sm text-muted-foreground'>
-								{t('providers.fetchingModels')}
-							</div>
-						: filtered.length === 0 ?
-							<div className='w-full py-8 text-center text-sm text-muted-foreground'>
-								{emptyText}
-							</div>
-						: 	filtered.map(model => (
-								<label key={model} className='inline-flex cursor-pointer items-center gap-2'>
-									<Checkbox
-										checked={checked.has(model)}
-										onCheckedChange={() => toggleModel(model)}
-									/>
-									<ModelBadge
-										model={model}
-										provider={modelProviderMap.get(model)}
-										highlightUnpriced={isUnpriced(model)}
-									/>
-								</label>
-							))
-						}
-					</StackedModelList>
-				}
-				{anyUnpriced ?
-					<p className='mt-2 text-xs text-muted-foreground'>
-						{t('providers.unpricedLegend')}{' '}
-						<Link to='/dashboard/models?tab=unpriced' className='text-primary underline underline-offset-4'>
-							{t('providers.unpricedLegendLink')}
-						</Link>
-					</p>
+				{tab === 'existing' ?
+					<p className='text-xs text-muted-foreground'>{t('providers.pickerExistingHint')}</p>
 				: 	null}
+
+				<div>
+					{tab === 'new' && error ?
+						<Alert variant='destructive'>
+							<AlertTriangle className='size-4' aria-hidden='true' />
+							<AlertTitle>{t('providers.fetchModelsError')}</AlertTitle>
+							<AlertDescription className='flex flex-col items-start gap-2'>
+								<span>{apiErrorMessage(error, t)}</span>
+								{error instanceof Error && error.message ?
+									<details className='w-full text-xs'>
+										<summary className='cursor-pointer'>{t('providers.errorDetails')}</summary>
+										<code className='mt-1 block whitespace-pre-wrap break-words font-mono'>{error.message}</code>
+									</details>
+								: 	null}
+								<Button type='button' size='sm' variant='outline' disabled={isValidating} onClick={() => void retry()}>
+									{isValidating ? t('common.loading') : t('common.retry')}
+								</Button>
+							</AlertDescription>
+						</Alert>
+					: 	<StackedModelList listClassName='max-h-none h-[clamp(220px,45vh,420px)] gap-2'>
+							{tab === 'new' && loading ?
+								<div className='w-full py-8 text-center text-sm text-muted-foreground'>
+									{t('providers.fetchingModels')}
+								</div>
+							: filtered.length === 0 ?
+								<div className='w-full py-8 text-center text-sm text-muted-foreground'>
+									{emptyText}
+								</div>
+							: 	filtered.map(model => (
+									<label key={model} className='inline-flex cursor-pointer items-center gap-2'>
+										<Checkbox
+											checked={checked.has(model)}
+											onCheckedChange={() => toggleModel(model)}
+										/>
+										<ModelBadge
+											model={model}
+											provider={modelProviderMap.get(model)}
+											highlightUnpriced={isUnpriced(model)}
+										/>
+									</label>
+								))
+							}
+						</StackedModelList>
+					}
+					{anyUnpriced ?
+						<p className='mt-2 text-xs text-muted-foreground'>
+							{t('providers.unpricedLegend')}{' '}
+							<Link to='/dashboard/models?tab=unpriced' className='text-primary underline underline-offset-4'>
+								{t('providers.unpricedLegendLink')}
+							</Link>
+						</p>
+					: 	null}
+				</div>
 			</div>
 
-			<DialogFooter className='shrink-0 items-center gap-2 sm:justify-between'>
+			<DialogFooter className='items-center gap-2 sm:justify-between'>
 				<p className='text-xs text-muted-foreground'>{hasChanges ? null : t('providers.pickerNoChanges')}</p>
 				<div className='flex flex-col-reverse gap-2 sm:flex-row'>
 					<Button variant='outline' onClick={() => onOpenChange(false)}>

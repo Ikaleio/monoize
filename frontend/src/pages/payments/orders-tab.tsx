@@ -245,7 +245,7 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
                     <OrderStatusBadge status={order.status} />
                   </DataListCell>
                   <DataListCell label={t("wallet.orderId")}>
-                    <span className="inline-flex items-center gap-0.5">
+                    <span className="inline-flex items-center gap-1">
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
@@ -266,21 +266,18 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
                     </span>
                   </DataListCell>
                   <DataListActions>
-                    {order.status === "succeeded" ? (
-                      <Button
-                        variant="ghost"
-                        className="h-11 px-3 sm:h-9"
-                        onClick={() => {
-                          setManualChecked(false);
-                          setRefundTarget(order);
-                        }}
-                      >
-                        <Undo2 aria-hidden="true" />
-                        {t("payments.refund")}
-                      </Button>
-                    ) : (
-                      <span className="px-3 text-muted-foreground">—</span>
-                    )}
+                    <Button
+                      variant="ghost"
+                      className="h-11 px-3 sm:h-9"
+                      disabled={order.status !== "succeeded"}
+                      onClick={() => {
+                        setManualChecked(false);
+                        setRefundTarget(order);
+                      }}
+                    >
+                      <Undo2 aria-hidden="true" />
+                      {t("payments.refund")}
+                    </Button>
                   </DataListActions>
                 </DataListRow>
               ))}
@@ -325,17 +322,17 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
                   <CopyButton value={refundTarget.id} label={t("wallet.copyOrderId")} />
                 </dd>
               </div>
-              <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">{t("wallet.channelCol")}</dt>
                 <dd className="min-w-0 break-words">{refundTarget.channel_name}</dd>
               </div>
-              <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">{t("payments.paidAmount")}</dt>
                 <dd className="font-medium tabular-nums">
                   {refundTarget.pay_amount} {refundTarget.pay_currency}
                 </dd>
               </div>
-              <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">{t("wallet.credit")}</dt>
                 <dd className="font-medium tabular-nums">
                   {formatUsdDecimal(refundTarget.credit_usd, 2)}

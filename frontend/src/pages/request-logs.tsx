@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+	useCallback,
+	useEffect,
+	useEffectEvent,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState
+} from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import useSWR from 'swr'
@@ -17,7 +25,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ModifiedDot } from '@/components/ui/modified-dot'
 import { QueryError } from '@/components/ui/query-error'
 import {
 	Select,
@@ -446,10 +453,9 @@ export function RequestLogsPage() {
 		[countBufferedNewRows, prependSSELogs]
 	)
 
-	// Server responses arrive through SWR `onSuccess` (an external callback), and
-	// are either applied or buffered per FL38 (tooltip open) and FL37e (scrolled).
-	// Both hooks share a cache key at offset 0, where the two merges coincide, so
-	// whichever hook started the request applying it is equivalent.
+	// Server responses are either applied or buffered per FL38 (tooltip open) and
+	// FL37e (scrolled). Both hooks share a cache key at offset 0, where the two
+	// merges coincide, so applying one response through both paths is idempotent.
 	const applyPageData = (data: RequestLogsResponse) => {
 		setTotalCount(data.total)
 		setTotalCharge(data.total_charge_nano_usd)
@@ -507,9 +513,15 @@ export function RequestLogsPage() {
 		refreshInterval: 0,
 		revalidateOnFocus: automaticUpdatesEnabled,
 		revalidateOnReconnect: automaticUpdatesEnabled,
-		isPaused: isTooltipPaused,
-		onSuccess: handlePageResponse
+		isPaused: isTooltipPaused
 	})
+	// SWR serves a cached page synchronously on mount and on key change without
+	// calling `onSuccess`, so pages are applied by data identity. Otherwise the
+	// first live SSE row would replace the cached page after a revisit.
+	const onPageData = useEffectEvent(handlePageResponse)
+	useEffect(() => {
+		if (pageData) onPageData(pageData)
+	}, [pageData])
 	const pageSettled = pageData != null || logsError != null
 	const { data: providers } = useProviders(undefined, isAdmin && pageSettled)
 	const affinityTargetNames = useMemo(() => {
@@ -844,7 +856,7 @@ export function RequestLogsPage() {
 						type='button'
 						variant='ghost'
 						size='sm'
-						className='relative h-9 gap-1 px-2 text-muted-foreground'
+						className='h-9 gap-1 px-2 text-muted-foreground'
 						onClick={() => setFiltersExpanded(prev => !prev)}
 						aria-expanded={filtersExpanded}
 					>
@@ -860,7 +872,6 @@ export function RequestLogsPage() {
 						>
 							<ChevronDown className='h-4 w-4' />
 						</motion.span>
-						{panelFilterCount > 0 && <ModifiedDot className='absolute right-0.5 top-1' />}
 					</Button>
 					<div className='ml-auto flex items-center gap-3 text-xs text-muted-foreground'>
 						{hasAnyFilter && (
@@ -987,7 +998,7 @@ export function RequestLogsPage() {
 									t={t}
 								/>
 								{channelFilterLabel && (
-									<span className='inline-flex h-9 items-center gap-1 rounded-md border bg-muted px-2 text-xs'>
+									<span className='inline-flex h-9 items-center gap-1 rounded-md border border-border bg-background px-3 text-sm'>
 										<span className='text-muted-foreground'>{t('requestLogs.channel')}:</span>
 										<span className='max-w-48 truncate'>{channelFilterLabel}</span>
 										<button
@@ -1036,7 +1047,7 @@ export function RequestLogsPage() {
 						<Button
 							type='button'
 							size='sm'
-							className='pointer-events-auto h-7 gap-1 rounded-full px-3 text-xs shadow-md'
+							className='pointer-events-auto h-7 gap-1 px-2 text-xs shadow-md'
 							onClick={jumpToNewest}
 						>
 							<ArrowUp className='size-3.5' aria-hidden='true' />

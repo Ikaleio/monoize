@@ -50,8 +50,6 @@ const STATUS_SEVERITY: Record<ChannelStatus, number> = {
   healthy: 3,
 };
 
-const WIDE_ONLY = "hidden [@container(min-width:56rem)]:block";
-const NARROW_ONLY = "[@container(min-width:56rem)]:hidden";
 const LINK_CLASS =
   "rounded-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -332,52 +330,43 @@ function ChannelStatusCell({ channel, status }: { channel: AdminOverviewChannelH
 
 function ChannelHealthRow({ channel }: { channel: AdminOverviewChannelHealth }) {
   const { t } = useTranslation();
-  const status = channelStatus(channel);
   const providerParams = new URLSearchParams({
     provider: channel.provider_id,
     channel: channel.channel_id,
   });
-  const cost = formatNanoUsd(channel.window_cost_nano_usd ?? "0", 2);
-  const calls = t("adminDashboard.callsCount", { count: channel.window_calls ?? 0 });
 
   return (
     <>
       <DataListCell primary>
-        <div className="flex min-w-0 items-center gap-2">
-          <Link
-            to={`/dashboard/providers?${providerParams}`}
-            className={cn("min-w-0 truncate font-medium", LINK_CLASS)}
-            title={channel.channel_name}
-          >
-            {channel.channel_name}
-          </Link>
-          <span className={cn("ml-auto flex shrink-0 items-center gap-1", NARROW_ONLY)}>
-            <ChannelStatusBadge status={status} />
-            {isAbnormal(status) ? <ChannelLogsLink channel={channel} /> : null}
-          </span>
-        </div>
+        <Link
+          to={`/dashboard/providers?${providerParams}`}
+          className={cn("block truncate font-medium", LINK_CLASS)}
+          title={channel.channel_name}
+        >
+          {channel.channel_name}
+        </Link>
         <span className="block truncate text-muted-foreground" title={channel.provider_name}>
           {channel.provider_name}
-          <span className={cn("tabular-nums", NARROW_ONLY)}>
-            {" · "}
-            {cost} · {calls}
-          </span>
         </span>
       </DataListCell>
-      <DataListCell label={t("adminDashboard.weight")} align="end" className={WIDE_ONLY}>
+      <DataListCell label={t("adminDashboard.weight")} align="end">
         <span className="tabular-nums">{channel.weight}</span>
       </DataListCell>
-      <DataListCell label={t("adminDashboard.affinity")} className={WIDE_ONLY}>
+      <DataListCell label={t("adminDashboard.affinity")}>
         {channel.session_affinity_auto ? "auto" : <span className="text-muted-foreground">—</span>}
       </DataListCell>
-      <DataListCell label={t("adminDashboard.status")} className={WIDE_ONLY}>
-        <ChannelStatusCell channel={channel} status={status} />
+      <DataListCell label={t("adminDashboard.status")}>
+        <ChannelStatusCell channel={channel} status={channelStatus(channel)} />
       </DataListCell>
-      <DataListCell label={t("adminDashboard.spend")} align="end" className={WIDE_ONLY}>
-        <span className="block tabular-nums">{cost}</span>
-        <span className="block tabular-nums text-muted-foreground">{calls}</span>
+      <DataListCell label={t("adminDashboard.spend")} align="end">
+        <span className="block tabular-nums">
+          {formatNanoUsd(channel.window_cost_nano_usd ?? "0", 2)}
+        </span>
+        <span className="block tabular-nums text-muted-foreground">
+          {t("adminDashboard.callsCount", { count: channel.window_calls ?? 0 })}
+        </span>
       </DataListCell>
-      <DataListCell label={t("adminDashboard.lastProbe")} align="end" className={WIDE_ONLY}>
+      <DataListCell label={t("adminDashboard.lastProbe")} align="end">
         <span className="tabular-nums text-muted-foreground">
           {channel.last_probe_at == null ? "—" : formatDateTime(channel.last_probe_at)}
         </span>
@@ -429,7 +418,7 @@ export function ChannelHealthCard({
               {unhealthy > 0 ? (
                 <button
                   type="button"
-                  className={cn("underline", LINK_CLASS)}
+                  className={LINK_CLASS}
                   onClick={() => setAbnormalOnlyRequested(true)}
                 >
                   {t("adminDashboard.channelSummaryUnhealthy", { count: unhealthy })}
@@ -439,18 +428,14 @@ export function ChannelHealthCard({
               )}
             </CardDescription>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <Button
               type="button"
               variant="outline"
               aria-pressed={abnormalOnly}
               disabled={unhealthy === 0}
               onClick={() => setAbnormalOnlyRequested(!abnormalOnly)}
-              className={cn(
-                "h-9 px-3 text-sm",
-                abnormalOnly &&
-                  "bg-foreground text-background hover:bg-foreground/90 hover:text-background"
-              )}
+              className={cn("h-9 px-3 text-sm", abnormalOnly && "bg-accent text-accent-foreground")}
             >
               {t("adminDashboard.abnormalOnly", { count: unhealthy })}
             </Button>
@@ -480,7 +465,7 @@ export function ChannelHealthCard({
         {rows.length === 0 ? (
           <EmptyState variant="inline" title={t("adminDashboard.noChannels")} className="py-8" />
         ) : (
-          <DataList columns="minmax(0,1fr) 4.5rem 5rem 11rem 8rem 10.5rem">
+          <DataList columns="minmax(0,1fr) 4.5rem 5rem 10rem 8rem 10.5rem">
             <DataListHeader>
               <DataListHead>{t("adminDashboard.channel")}</DataListHead>
               <DataListHead align="end">{t("adminDashboard.weight")}</DataListHead>

@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Field,
   FieldDescription,
@@ -165,7 +166,7 @@ export function UserSettingsPage() {
         <PageHeader title={t("userSettings.title")} description={t("userSettings.description")} />
       </motion.div>
 
-      <StaggerList className="grid max-w-2xl gap-6">
+      <StaggerList className="grid gap-6">
         <StaggerItem>
           <Card>
             <CardHeader>
@@ -183,41 +184,43 @@ export function UserSettingsPage() {
                     {user?.username?.[0]?.toUpperCase() || "U"}
                   </AvatarFallback>
                 </Avatar>
-                <Field className="min-w-0 flex-1">
-                  <FieldLabel htmlFor={usernameId}>{t("auth.username")}</FieldLabel>
+                <div className="flex-1 space-y-2">
+                  <Label htmlFor={usernameId}>{t("auth.username")}</Label>
                   <Input id={usernameId} value={user?.username || ""} disabled />
-                  <FieldDescription>{t("userSettings.usernameCannotChange")}</FieldDescription>
-                </Field>
+                  <p className="text-sm text-muted-foreground">
+                    {t("userSettings.usernameCannotChange")}
+                  </p>
+                </div>
               </div>
               {user?.group_id && (
                 <div className="space-y-2">
-                  <p className="text-sm font-medium">{t("users.group")}</p>
+                  <p className="text-sm text-muted-foreground">{t("users.group")}</p>
                   <GroupsBadge groupIds={[user.group_id]} />
                 </div>
               )}
               <Separator />
-              <form onSubmit={handleSaveEmail} noValidate className="space-y-3">
-                <Field data-invalid={emailError ? true : undefined}>
-                  <FieldLabel htmlFor={emailId} className="inline-flex items-center gap-1">
-                    <Mail className="size-4" />
-                    {t("userSettings.email")}
-                  </FieldLabel>
-                  <Input
-                    ref={emailRef}
-                    id={emailId}
-                    type="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => {
-                      setEmail(e.target.value);
-                      setEmailError("");
-                    }}
-                    placeholder="you@example.com"
-                    aria-invalid={emailError ? true : undefined}
-                  />
-                  <FieldDescription>{t("userSettings.emailDescription")}</FieldDescription>
-                  {emailError && <FieldError>{emailError}</FieldError>}
-                </Field>
+              <form onSubmit={handleSaveEmail} noValidate className="space-y-2">
+                <Label htmlFor={emailId} className="inline-flex items-center gap-1">
+                  <Mail className="size-4" />
+                  {t("userSettings.email")}
+                </Label>
+                <Input
+                  ref={emailRef}
+                  id={emailId}
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setEmailError("");
+                  }}
+                  placeholder="you@example.com"
+                  aria-invalid={emailError ? true : undefined}
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("userSettings.emailDescription")}
+                </p>
+                {emailError && <FieldError>{emailError}</FieldError>}
                 <Button type="submit" disabled={savingEmail} size="sm">
                   <Save data-icon="inline-start" aria-hidden="true" />
                   {savingEmail ? t("common.saving") : savedEmail ? t("common.saved") : t("common.save")}
@@ -322,9 +325,9 @@ export function UserSettingsPage() {
               <CardDescription>{t("userSettings.preferencesDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0 space-y-0.5">
-                  <p className="text-sm font-medium">{t("userSettings.language")}</p>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium leading-none">{t("userSettings.language")}</p>
                   <p className="text-sm text-muted-foreground">
                     {t("userSettings.languageDescription")}
                   </p>
@@ -332,9 +335,9 @@ export function UserSettingsPage() {
                 <LanguageDropdown />
               </div>
               <Separator />
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0 space-y-0.5">
-                  <p className="text-sm font-medium">{t("userSettings.theme")}</p>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium leading-none">{t("userSettings.theme")}</p>
                   <p className="text-sm text-muted-foreground">
                     {t("userSettings.themeDescription")}
                   </p>

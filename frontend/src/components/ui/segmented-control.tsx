@@ -33,9 +33,7 @@ export function SegmentedControl<T extends string>({
           onClick={() => onChange(option)}
           className={cn(
             "h-9 px-3 text-sm tabular-nums",
-            // The selected fill must reach 3:1 non-text contrast against unselected options (DS65).
-            value === option &&
-              "border-foreground bg-foreground font-semibold text-background hover:bg-foreground/90 hover:text-background",
+            value === option && "bg-accent text-accent-foreground",
           )}
         >
           {label ? label(option) : option}

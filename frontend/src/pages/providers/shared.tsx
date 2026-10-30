@@ -87,10 +87,7 @@ export const PROVIDER_TYPE_CONFIG: Record<
 	openai_decisions: { label: 'OpenAI Decisions', path: '/v1/decisions', icon: OpenAI }
 }
 
-// PL18: row height constants shared by the Virtuoso container and the rows. The compact
-// row is py-2 + a 22px status line + gap-2 + the 44px touch-target action line.
-export const PROVIDER_CHANNEL_ROW_HEIGHT = 40
-export const PROVIDER_CHANNEL_ROW_HEIGHT_COMPACT = 90
+export const PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT = 40
 export const DEFAULT_REASONING_SUFFIX_MAP: Record<string, string> = {
 	'-thinking': 'high',
 	'-reasoning': 'high',
@@ -300,17 +297,17 @@ export function effectiveChannelStatus(
 
 export function healthBadge(status: HealthStatus, t: TFunction) {
 	if (status === 'healthy') {
-		return <StatusBadge variant='success' className='shrink-0'><StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusHealthy')}</StatusBadge>
+		return <StatusBadge variant='success'><StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusHealthy')}</StatusBadge>
 	}
 	if (status === 'probing') {
-		return <StatusBadge variant='warning' className='shrink-0'><StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusProbing')}</StatusBadge>
+		return <StatusBadge variant='warning'><StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusProbing')}</StatusBadge>
 	}
-	return <StatusBadge variant='destructive' className='shrink-0'><StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusUnhealthy')}</StatusBadge>
+	return <StatusBadge variant='destructive'><StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusUnhealthy')}</StatusBadge>
 }
 
 export function effectiveStatusBadge(status: EffectiveChannelStatus, t: TFunction) {
-	if (status === 'disabled') return <Badge variant='secondary' className='shrink-0'>{t('providers.statusDisabled')}</Badge>
-	if (status === 'no_traffic') return <Badge variant='secondary' className='shrink-0'>{t('providers.statusNoTraffic')}</Badge>
-	if (status === 'unsaved') return <Badge variant='secondary' className='shrink-0'>{t('providers.editor.unsaved')}</Badge>
+	if (status === 'disabled') return <Badge variant='secondary'>{t('providers.statusDisabled')}</Badge>
+	if (status === 'no_traffic') return <Badge variant='secondary'>{t('providers.statusNoTraffic')}</Badge>
+	if (status === 'unsaved') return <Badge variant='secondary'>{t('providers.editor.unsaved')}</Badge>
 	return healthBadge(status, t)
 }

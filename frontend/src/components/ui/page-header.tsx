@@ -15,7 +15,7 @@ const PageHeader = React.forwardRef<HTMLDivElement, PageHeaderProps>(
       className={cn("flex flex-wrap items-center justify-between gap-4 pb-1", className)}
       {...props}
     >
-      <div className="min-w-0">
+      <div className="min-w-0 flex-[1_1_16rem]">
         <h1 className="truncate font-display text-2xl font-semibold tracking-tight text-balance">{title}</h1>
         {description ? (
           <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>

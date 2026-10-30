@@ -54,7 +54,7 @@ DS5a. Dashboard status soft backgrounds and borders SHOULD use lower saturation 
 
 DS5b. The dashboard body background MAY use the product grid texture. Implementations MUST NOT remove the grid texture unless the product specification is updated.
 
-DS5c. Property badges (for example stream/non-stream, protocol, type, or role) MUST use neutral `bg-muted text-muted-foreground` or `Badge variant="secondary"`. Status tokens (`success`, `warning`, `info`, `error`) MUST express only an outcome or a risk. An entity MUST show one effective status. When several apply, the precedence is: disabled, then not receiving traffic, then unhealthy, then healthy.
+DS5c. An entity MUST show one effective status. When several apply, the precedence is: disabled, then not receiving traffic, then unhealthy, then healthy.
 
 ## 2. Cards
 
@@ -176,8 +176,6 @@ DS28. Text inputs and textareas MUST use focus ring feedback from shadcn primiti
 
 DS29. Text inputs and textareas MUST NOT scale on focus.
 
-DS29a. `Input`, `Textarea`, and `SelectTrigger` MUST render text at 16 px (`text-base`) below the `md` breakpoint and at 14 px (`text-sm`) at `md` and above, so iOS Safari does not zoom the page on focus. A call-site font-size class MAY change the `md`-and-above size only.
-
 DS30. Field validation errors MUST render inline when the error is tied to a specific field. DS74 defines the inline error contract.
 
 DS31. Operation failures that are not tied to a specific field MUST render as toast or alert feedback. DS74 defines the toast content.
@@ -275,7 +273,7 @@ Badge-shaped containers MUST NOT use `rounded-full`.
 
 DS40g. Fully circular (`rounded-full`) shapes are reserved for non-badge elements: status dots, avatars, switch tracks and thumbs, segmented-control indicators, and loading/ping indicators.
 
-DS40h. Table body cells within one table MUST share the table's base font size for primary values and badges. In a fixed two-line dense row, the secondary (second) line of a cell MAY use exactly one smaller step (11px, `text-[11px]`) and MUST then use muted foreground. No other sizes are allowed. Secondary detail text nested inside a badge (for example the `ModelBadge` bracket details) MAY be one visual step smaller than the badge label.
+DS40h. Table body cells within one table MUST share the table's base font size. Adjacent sibling cells MUST NOT mix arbitrary smaller sizes (for example `text-[10px]` or `text-[11px]`) with the base size. Secondary detail text nested inside a badge (for example the `ModelBadge` bracket details) MAY be one visual step smaller than the badge label.
 
 ## 12. Sidebar and Navigation
 
@@ -316,8 +314,7 @@ DS49. Icon-only dashboard action buttons intended for touch use MUST expose an a
 ## 16. Accessible Feedback and Controls
 
 DS53. Error notices MUST use the `error-foreground`, `error-soft`, and `error-border`
-semantic tokens. Inline field errors (`FieldError` and an invalid `Field`) MUST use
-`text-error-foreground`. Error text on its soft surface MUST have contrast of at least 4.5:1
+semantic tokens. Error text on its soft surface MUST have contrast of at least 4.5:1
 in both themes. The destructive button palette MUST remain independent.
 
 DS54. Shared data-load failure notices MUST expose an alert and a localized retry
@@ -383,7 +380,7 @@ DS63. Model set selection. Every control that edits a set of exact model IDs MUS
 
 DS64. Model redirect rules MUST be edited with `ModelRedirectsEditor` from `components/settings/model-redirects-editor.tsx`. Pages MUST NOT define a second redirect editor.
 
-DS65. Segmented choice. A control that selects one value from 2 to 6 fixed short options (for example a time window, or a view switch inside a dialog) MUST use `SegmentedControl` from `components/ui/segmented-control.tsx`. Each option MUST be `Button variant="outline"` with `h-9 px-3 text-sm tabular-nums` and `aria-pressed`. The selected option MUST have at least 3:1 non-text contrast against the unselected options in both themes. It MUST use `border-foreground bg-foreground text-background font-semibold`. The option label is the option value unless the caller passes `label`. Text links separated by `/` MUST NOT be used as a segmented choice.
+DS65. Segmented choice. A control that selects one value from 2 to 6 fixed short options (for example a time window, or a view switch inside a dialog) MUST use `SegmentedControl` from `components/ui/segmented-control.tsx`. Each option MUST be `Button variant="outline"` with `h-9 px-3 text-sm tabular-nums` and `aria-pressed`. The selected option MUST use `bg-accent text-accent-foreground`. The option label is the option value unless the caller passes `label`. Text links separated by `/` MUST NOT be used as a segmented choice.
 
 DS66. Time display. Absolute timestamps in tables, lists, dialogs, and key-value rows MUST use `formatDateTime` (local `YYYY-MM-DD HH:mm:ss`). Calendar dates without a time of day MUST use `formatDate` (local `YYYY-MM-DD`). Both MUST come from `lib/format-time.ts`. These surfaces MUST NOT use relative time strings or `toLocaleString`, `toLocaleDateString`, or `toLocaleTimeString`. Chart axis ticks and compact menu metadata are exempt.
 
@@ -393,13 +390,13 @@ DS68. Entity lists. A list of persisted entities with row actions MUST use `Data
 
 DS69. Page-header primary action. The primary action in `PageHeader` MUST render `Button` with the default variant inside `AnimatedButton`. Its leading icon MUST use `data-icon="inline-start"` and MUST NOT set size or margin classes.
 
+DS69a. Page-header layout. The `PageHeader` title block MUST have a 16rem flex basis and MUST grow into the free width. The actions group MUST stay end-aligned on the title row while the header is at least 16rem plus the actions width; the description text wraps inside the title block. Below that width the actions group MUST wrap below the title block.
+
 DS70. Mutation feedback. A successful create or update submitted from an editor dialog MUST close the dialog and show one success toast that names the entity type. If the page renders a persistent result panel for the created entity (for example the one-time API key value), that panel replaces the toast. A successful inline toggle, reorder, or deletion MUST NOT show a toast; the changed row is the feedback. The undo toast required by DS78 for immediate reversible actions is the only exception. Every failed mutation MUST restore the previous visible state and show one error toast through `toastApiError` (DS74).
 
 DS71. Button icons. `Button` and `DropdownMenuItem` size their icons to 16 px and separate icon and label with an 8 px gap. An icon inside either element MUST NOT set `h-*`, `w-*`, `size-*`, `mr-*`, or `ml-*` classes. An icon that precedes a label MUST use `data-icon="inline-start"`. A decorative icon MUST set `aria-hidden="true"`. Color classes (for example `text-error-foreground` on a delete icon) remain allowed. Elements without a built-in gap, such as `TabsTrigger` and badges, are out of scope.
 
 ## 18. Editing Safety, Errors, and URL State
-
-DS72. Toast placement. The shared `Toaster` MUST render toasts at `top-center`. A toast MUST NOT cover a dialog footer, a sticky save bar, or another bottom-anchored action.
 
 DS73. Unsaved edits. An editor that holds unsaved edits MUST NOT discard them without confirmation.
 
@@ -409,7 +406,7 @@ DS73. Unsaved edits. An editor that holds unsaved edits MUST NOT discard them wi
 
 DS74. Validation and error feedback.
 
-- A validation error tied to a field MUST render below that field through `FieldError` (`role="alert"`, `text-error-foreground`), and the control MUST set `aria-invalid="true"`. Each label MUST be bound with `htmlFor` to a `useId` id.
+- A validation error tied to a field MUST render below that field through `FieldError` (`role="alert"`, `text-destructive`), and the control MUST set `aria-invalid="true"`. Each label MUST be bound with `htmlFor` to a `useId` id.
 - On submit with invalid fields, the editor MUST show the section that contains the first invalid field and focus that field.
 - A server error whose `DashboardApiError.param` names a field MUST render on that field. `apiErrorParam(error)` from `lib/api-error.ts` returns the param.
 - A failure not tied to a field MUST render one toast through `toastApiError(error, t, title?)`. The message MUST be `apiErrors.<code>` when that key exists, otherwise `common.requestFailed`. UI text MUST NOT show the raw server `message`, an SDK error class name, or an internal id.

@@ -11,12 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldLabel,
-} from "@/components/ui/field";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -317,8 +312,8 @@ export function ChannelDialog({
           </DialogHeader>
 
           <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto py-2 pr-1">
-            <Field data-invalid={errors.name ? true : undefined}>
-              <FieldLabel htmlFor={fieldId("name")}>{t("payments.name")}</FieldLabel>
+            <div className="grid gap-2">
+              <Label htmlFor={fieldId("name")}>{t("payments.name")}</Label>
               <Input
                 id={fieldId("name")}
                 value={form.name}
@@ -326,11 +321,11 @@ export function ChannelDialog({
                 {...invalidProps("name")}
               />
               {fieldErrorNode("name")}
-            </Field>
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field>
-                <FieldLabel htmlFor={fieldId("type")}>{t("payments.type")}</FieldLabel>
+              <div className="grid gap-2">
+                <Label htmlFor={fieldId("type")}>{t("payments.type")}</Label>
                 <Select
                   value={form.type_id}
                   onValueChange={setType}
@@ -347,11 +342,11 @@ export function ChannelDialog({
                     ))}
                   </SelectContent>
                 </Select>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor={fieldId("currency")}>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor={fieldId("currency")}>
                   {t("payments.currency")}
-                </FieldLabel>
+                </Label>
                 <Input
                   id={fieldId("currency")}
                   value={form.currency}
@@ -360,11 +355,11 @@ export function ChannelDialog({
                   placeholder="USD"
                   className="uppercase"
                 />
-              </Field>
+              </div>
             </div>
 
-            <Field data-invalid={errors.usd_rate ? true : undefined}>
-              <FieldLabel htmlFor={fieldId("usd_rate")}>{t("payments.usdRate")}</FieldLabel>
+            <div className="grid gap-2">
+              <Label htmlFor={fieldId("usd_rate")}>{t("payments.usdRate")}</Label>
               <Input
                 id={fieldId("usd_rate")}
                 inputMode="decimal"
@@ -373,15 +368,15 @@ export function ChannelDialog({
                 placeholder={t("payments.ratePlaceholder")}
                 {...invalidProps("usd_rate")}
               />
-              <FieldDescription>{t("payments.usdRateHelp")}</FieldDescription>
+              <p className="text-xs text-muted-foreground">{t("payments.usdRateHelp")}</p>
               {fieldErrorNode("usd_rate")}
-            </Field>
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field data-invalid={errors.min_credit_usd ? true : undefined}>
-                <FieldLabel htmlFor={fieldId("min_credit_usd")}>
+              <div className="grid gap-2">
+                <Label htmlFor={fieldId("min_credit_usd")}>
                   {t("payments.minCredit")}
-                </FieldLabel>
+                </Label>
                 <Input
                   id={fieldId("min_credit_usd")}
                   inputMode="decimal"
@@ -395,11 +390,11 @@ export function ChannelDialog({
                   {...invalidProps("min_credit_usd")}
                 />
                 {fieldErrorNode("min_credit_usd")}
-              </Field>
-              <Field data-invalid={errors.max_credit_usd ? true : undefined}>
-                <FieldLabel htmlFor={fieldId("max_credit_usd")}>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor={fieldId("max_credit_usd")}>
                   {t("payments.maxCredit")}
-                </FieldLabel>
+                </Label>
                 <Input
                   id={fieldId("max_credit_usd")}
                   inputMode="decimal"
@@ -410,18 +405,18 @@ export function ChannelDialog({
                   {...invalidProps("max_credit_usd")}
                 />
                 {fieldErrorNode("max_credit_usd")}
-              </Field>
+              </div>
             </div>
 
             {configFields.map((field) => {
               const key = `config.${field.key}`;
               return (
-                <Field key={field.key} data-invalid={errors[key] ? true : undefined}>
-                  <FieldLabel htmlFor={fieldId(key)}>
+                <div key={field.key} className="grid gap-2">
+                  <Label htmlFor={fieldId(key)}>
                     {t(`payments.config.${form.type_id}.${field.key}`, {
                       defaultValue: field.key,
                     })}
-                  </FieldLabel>
+                  </Label>
                   <Input
                     id={fieldId(key)}
                     type={field.secret ? "password" : "text"}
@@ -436,22 +431,22 @@ export function ChannelDialog({
                     {...invalidProps(key)}
                   />
                   {fieldErrorNode(key)}
-                </Field>
+                </div>
               );
             })}
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field>
-                <FieldLabel htmlFor={fieldId("sort_order")}>
+              <div className="grid gap-2">
+                <Label htmlFor={fieldId("sort_order")}>
                   {t("payments.sortOrder")}
-                </FieldLabel>
+                </Label>
                 <Input
                   id={fieldId("sort_order")}
                   inputMode="numeric"
                   value={form.sort_order}
                   onChange={(e) => update({ sort_order: e.target.value }, [])}
                 />
-              </Field>
+              </div>
               <div className="flex items-center justify-between rounded-lg border p-3">
                 <Label htmlFor={fieldId("enabled")}>{t("payments.enabled")}</Label>
                 <Switch
@@ -463,10 +458,10 @@ export function ChannelDialog({
             </div>
 
             {isEdit && channel.type_id === "stripe" ? (
-              <Field>
-                <FieldLabel htmlFor={fieldId("notify_url")}>
+              <div className="grid gap-2">
+                <Label htmlFor={fieldId("notify_url")}>
                   {t("payments.notifyUrl")}
-                </FieldLabel>
+                </Label>
                 {notifyUrl ? (
                   <div className="flex min-w-0 items-center gap-1">
                     <Input
@@ -478,12 +473,12 @@ export function ChannelDialog({
                     <CopyButton value={notifyUrl} label={t("payments.copyNotifyUrl")} />
                   </div>
                 ) : null}
-                <FieldDescription>
+                <p className="text-xs text-muted-foreground">
                   {notifyUrl
                     ? t("payments.notifyUrlHelp")
                     : t("payments.notifyUrlOriginUnset")}
-                </FieldDescription>
-              </Field>
+                </p>
+              </div>
             ) : null}
           </div>
 

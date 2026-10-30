@@ -286,7 +286,6 @@ export function Composer({
             isLoading={modelsLoading}
             open={modelPickerOpen}
             onOpenChange={setModelPickerOpen}
-            highlighted={modelMissing}
           />
           <ApiKeyDropdown
             value={prefs.apiKeyId}

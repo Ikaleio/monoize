@@ -93,11 +93,7 @@ export function CustomTransformsPage() {
       <div className="space-y-6">
         <PageHeader
           title={t("customTransforms.title")}
-          description={
-            <>
-              {t("customTransforms.description")} <ChainEntryLinks />
-            </>
-          }
+          description={t("customTransforms.description")}
           actions={
             <>
               <Button variant="outline" onClick={() => void skillCopy.copy(skillMarkdown)}>
@@ -311,37 +307,36 @@ function TransformCard({
         ))}
       </div>
 
-      <div className="mt-auto space-y-2 border-t pt-3">
-        <div className="flex min-h-8 items-center">{references}</div>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-            <UserRound className="size-4 shrink-0" aria-hidden="true" />
-            <span className="truncate">{item.author}</span>
-            <span className="shrink-0">·</span>
-            <span className="truncate tabular-nums">
-              {t("customTransforms.updatedAt", { date: formatDate(item.updated_at) })}
-            </span>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-11 touch-manipulation sm:size-9"
-              aria-label={t("common.editItem", { name: item.name })}
-              onClick={onEdit}
-            >
-              <Pencil />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-11 touch-manipulation sm:size-9"
-              aria-label={t("common.deleteItem", { name: item.name })}
-              onClick={onDelete}
-            >
-              <Trash2 className="text-error-foreground" />
-            </Button>
-          </div>
+      <div className="flex items-center">{references}</div>
+
+      <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3">
+        <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+          <UserRound className="size-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">{item.author}</span>
+          <span className="shrink-0">·</span>
+          <span className="truncate tabular-nums">
+            {t("customTransforms.updatedAt", { date: formatDate(item.updated_at) })}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-11 touch-manipulation sm:size-9"
+            aria-label={t("common.editItem", { name: item.name })}
+            onClick={onEdit}
+          >
+            <Pencil />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-11 touch-manipulation sm:size-9"
+            aria-label={t("common.deleteItem", { name: item.name })}
+            onClick={onDelete}
+          >
+            <Trash2 className="text-error-foreground" />
+          </Button>
         </div>
       </div>
     </Card>

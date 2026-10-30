@@ -326,7 +326,10 @@ function TransformItemConfigDialogInner({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("transforms.keepEditing")}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => onOpenChange(false)}>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => onOpenChange(false)}
+            >
               {t("transforms.discard")}
             </AlertDialogAction>
           </AlertDialogFooter>

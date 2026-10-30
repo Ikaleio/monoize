@@ -13,7 +13,7 @@ export function NoPermissionState({ title }: { title?: string }) {
     <PageWrapper className="space-y-6">
       {title ? <PageHeader title={title} /> : null}
       <EmptyState
-        icon={<ShieldAlert aria-hidden="true" className="size-8" />}
+        icon={<ShieldAlert aria-hidden="true" className="size-10" />}
         title={t("guards.forbiddenTitle")}
         description={t("guards.forbiddenDescription")}
         action={

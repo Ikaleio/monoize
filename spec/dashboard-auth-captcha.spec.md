@@ -130,5 +130,5 @@ field MUST have a toggle button with a localized accessible name and `aria-press
 
 CAP-U15. The theme control MUST be a dropdown with the three options light, dark, and
 system. The language control MUST be a dropdown that lists all supported languages by native
-name and whose trigger shows the current language name. Both MUST use the same components as
-the account menu.
+name. Each trigger's accessible name MUST include the current value. Both MUST use the
+`ThemeDropdown` and `LanguageDropdown` components that `/settings` uses.

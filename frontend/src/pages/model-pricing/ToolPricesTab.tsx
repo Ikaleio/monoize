@@ -246,7 +246,7 @@ export function ToolPricesTab({ onDirtyChange }: { onDirtyChange: (dirty: boolea
                   updateRows(rows.map((item, i) => (i === index ? { ...item, ...patch } : item)));
                 const minimumEnabled = row.per !== "1k_calls";
                 return (
-                  <tr key={index} className="border-b align-top">
+                  <tr key={index} className="border-b">
                     <VirtualTableCell>
                       {cellInput(
                         index,

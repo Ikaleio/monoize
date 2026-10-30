@@ -207,7 +207,7 @@ function ChannelTestDialog({
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
-				className='flex max-h-[85dvh] max-w-2xl flex-col overflow-hidden'
+				className='flex max-h-[85vh] max-w-2xl flex-col overflow-hidden'
 				onInteractOutside={event => { if (running) event.preventDefault() }}
 			>
 				<DialogHeader>
@@ -274,7 +274,7 @@ function ChannelTestDialog({
 								</span>
 								<Button
 									size='sm'
-									variant='ghost'
+									variant='outline'
 									disabled={failedModels.length === 0}
 									onClick={() => start(target, failedModels, run?.lastMode ?? 'sequential', stream)}
 								>
@@ -342,13 +342,15 @@ function ChannelTestDialog({
 											</span>
 											<Button
 												variant='ghost'
-												size='icon'
-												className='size-11 shrink-0 touch-manipulation sm:size-8'
+												size='sm'
+												className='h-7 shrink-0 px-2'
 												aria-label={t('providers.testModelAria', { model })}
 												disabled={running !== null}
 												onClick={() => start(target, [model], 'single', stream)}
 											>
-												<Zap aria-hidden='true' />
+												{status === 'testing' ?
+													<Loader2 className='animate-spin' aria-hidden='true' />
+												: 	<Zap aria-hidden='true' />}
 											</Button>
 										</div>
 										{status === 'failed' && state?.error && (

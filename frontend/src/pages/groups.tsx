@@ -306,7 +306,7 @@ export function GroupsPage() {
           />
         }
       >
-        <DataList columns="5.5rem minmax(0,1fr) 6rem 9rem 12.5rem">
+        <DataList columns="5.5rem minmax(0,1fr) 6rem 9rem 10rem">
           <DataListHeader>
             <DataListHead>{t("groups.position")}</DataListHead>
             <DataListHead>{t("groups.nameAndDescription")}</DataListHead>
@@ -514,7 +514,7 @@ export function GroupsPage() {
                   <FieldError id={`${fieldId("billing_ratio")}-error`}>{errors.billing_ratio}</FieldError>
                 ) : null}
               </div>
-              <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+              <div className="flex items-center justify-between rounded-lg border p-3">
                 <div>
                   <Label htmlFor={`${formId}-user-selectable`}>{t("groups.userSelectable")}</Label>
                   <p id={`${formId}-user-selectable-help`} className="mt-1 text-xs text-muted-foreground">
@@ -562,7 +562,7 @@ export function GroupsPage() {
                   <li key={plan.id}>{plan.name}</li>
                 ))}
               </ul>
-              <Link to="/dashboard/plans" className="font-medium underline underline-offset-4">
+              <Link to="/dashboard/plans" className="text-primary underline-offset-4 hover:underline">
                 {t("groups.goToPlans")}
               </Link>
             </div>

@@ -11,13 +11,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldLabel,
-} from "@/components/ui/field";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { DashboardApiError } from "@/lib/api";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -223,10 +219,10 @@ export function LoginPage() {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-          className="flex shrink-0 flex-wrap justify-end gap-2"
+          className="flex shrink-0 justify-end gap-2"
         >
-          <ThemeDropdown variant="ghost" className="h-11 touch-manipulation sm:h-9" />
-          <LanguageDropdown variant="ghost" className="h-11 touch-manipulation sm:h-9" />
+          <ThemeDropdown iconOnly />
+          <LanguageDropdown iconOnly />
         </motion.div>
 
         <motion.div
@@ -265,83 +261,85 @@ export function LoginPage() {
               ) : publicSettingsError ? null : (
                 <Skeleton className="mx-auto h-4 w-40" />
               )}
+              <motion.div variants={itemVariants}>
+                <CardDescription>
+                  <h2>{isLogin ? t("auth.signInToAccount") : t("auth.createAccount")}</h2>
+                </CardDescription>
+              </motion.div>
             </CardHeader>
             <CardContent>
-              <h2 className="mb-4 text-center text-sm font-medium">
-                {isLogin ? t("auth.signInToAccount") : t("auth.createAccount")}
-              </h2>
               <motion.form
                 variants={containerVariants}
                 onSubmit={handleSubmit}
                 noValidate
                 className="space-y-4"
               >
-                <motion.div variants={itemVariants}>
-                  <Field data-invalid={fieldErrors.username ? true : undefined}>
-                    <FieldLabel htmlFor={usernameId}>{t("auth.username")}</FieldLabel>
-                    <Input
-                      ref={usernameRef}
-                      id={usernameId}
-                      name="username"
-                      type="text"
-                      autoComplete="username"
-                      value={username}
-                      onChange={(e) => {
-                        setUsername(e.target.value);
-                        setFieldErrors((current) => ({ ...current, username: undefined }));
-                      }}
-                      placeholder={t("auth.enterUsername")}
-                      required
-                      aria-invalid={fieldErrors.username ? true : undefined}
-                      className="transition-all"
-                    />
-                    {!isLogin && (
-                      <FieldDescription>{t("auth.usernameRequirements")}</FieldDescription>
-                    )}
-                    {fieldErrors.username && (
-                      <FieldError>{t(fieldErrors.username)}</FieldError>
-                    )}
-                  </Field>
+                <motion.div variants={itemVariants} className="space-y-2">
+                  <Label htmlFor={usernameId}>{t("auth.username")}</Label>
+                  <Input
+                    ref={usernameRef}
+                    id={usernameId}
+                    name="username"
+                    type="text"
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => {
+                      setUsername(e.target.value);
+                      setFieldErrors((current) => ({ ...current, username: undefined }));
+                    }}
+                    placeholder={t("auth.enterUsername")}
+                    required
+                    aria-invalid={fieldErrors.username ? true : undefined}
+                    className="transition-all"
+                  />
+                  {!isLogin && (
+                    <p className="text-sm text-muted-foreground">
+                      {t("auth.usernameRequirements")}
+                    </p>
+                  )}
+                  {fieldErrors.username && (
+                    <FieldError>{t(fieldErrors.username)}</FieldError>
+                  )}
                 </motion.div>
-                <motion.div variants={itemVariants}>
-                  <Field data-invalid={fieldErrors.password ? true : undefined}>
-                    <FieldLabel htmlFor={passwordId}>{t("auth.password")}</FieldLabel>
-                    <div className="relative">
-                      <Input
-                        ref={passwordRef}
-                        id={passwordId}
-                        name="password"
-                        type={showPassword ? "text" : "password"}
-                        autoComplete={isLogin ? "current-password" : "new-password"}
-                        value={password}
-                        onChange={(e) => {
-                          setPassword(e.target.value);
-                          setFieldErrors((current) => ({ ...current, password: undefined }));
-                        }}
-                        placeholder={t("auth.enterPassword")}
-                        required
-                        aria-invalid={fieldErrors.password ? true : undefined}
-                        className="pr-11 transition-all"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-1/2 size-9 -translate-y-1/2 touch-manipulation"
-                        aria-label={t(showPassword ? "auth.hidePassword" : "auth.showPassword")}
-                        aria-pressed={showPassword}
-                        onClick={() => setShowPassword((current) => !current)}
-                      >
-                        {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-                      </Button>
-                    </div>
-                    {!isLogin && (
-                      <FieldDescription>{t("auth.passwordRequirements")}</FieldDescription>
-                    )}
-                    {fieldErrors.password && (
-                      <FieldError>{t(fieldErrors.password)}</FieldError>
-                    )}
-                  </Field>
+                <motion.div variants={itemVariants} className="space-y-2">
+                  <Label htmlFor={passwordId}>{t("auth.password")}</Label>
+                  <div className="relative">
+                    <Input
+                      ref={passwordRef}
+                      id={passwordId}
+                      name="password"
+                      type={showPassword ? "text" : "password"}
+                      autoComplete={isLogin ? "current-password" : "new-password"}
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setFieldErrors((current) => ({ ...current, password: undefined }));
+                      }}
+                      placeholder={t("auth.enterPassword")}
+                      required
+                      aria-invalid={fieldErrors.password ? true : undefined}
+                      className="pr-11 transition-all"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0 top-1/2 size-9 -translate-y-1/2 touch-manipulation"
+                      aria-label={t(showPassword ? "auth.hidePassword" : "auth.showPassword")}
+                      aria-pressed={showPassword}
+                      onClick={() => setShowPassword((current) => !current)}
+                    >
+                      {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                    </Button>
+                  </div>
+                  {!isLogin && (
+                    <p className="text-sm text-muted-foreground">
+                      {t("auth.passwordRequirements")}
+                    </p>
+                  )}
+                  {fieldErrors.password && (
+                    <FieldError>{t(fieldErrors.password)}</FieldError>
+                  )}
                 </motion.div>
                 <motion.div variants={itemVariants} className="space-y-2">
                   {publicSettingsError && !publicSettings ? (
@@ -382,7 +380,7 @@ export function LoginPage() {
                         onError={handleCaptchaError}
                       />
                       {captchaHint && !captchaToken ? (
-                        <p role="alert" className="text-sm text-error-foreground">
+                        <p role="alert" className="text-sm text-destructive">
                           {t(captchaHint)}
                         </p>
                       ) : null}

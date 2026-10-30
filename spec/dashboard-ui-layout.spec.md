@@ -60,7 +60,7 @@ exactly these sections in order, separated by menu separators:
 3. active-plan block when an active subscription exists,
 4. live-usage block,
 5. settings item,
-6. theme radio group and language submenu,
+6. the theme pill toggle and the language submenu,
 7. sign out.
 
 The dropdown MUST use the shared DropdownMenu (Radix) component so keyboard and
@@ -110,14 +110,14 @@ viewers. While no data is cached, the block MUST render skeleton placeholders. W
 fetch fails, the block MUST render a compact localized error message with a retry action
 that revalidates the SWR key; the failure MUST NOT unmount or break the rest of the menu.
 
-DL3f. The actions MUST be exactly: a settings item navigating to `/settings`; a
-`DropdownMenuRadioGroup` with the options light, dark, and system, each with visible text
-and arrow-key reachable; a `DropdownMenuSub` language submenu that lists the supported
+DL3f. The actions MUST be exactly: a settings item navigating to `/settings`; the theme
+pill toggle with the options light, dark, and system, rendered as menu radio items so they
+are arrow-key reachable; a `DropdownMenuSub` language submenu that lists the supported
 languages by native name in a radio group (below the `lg` breakpoint, where the menu sits in
 the mobile sheet and a side submenu would overflow the viewport, the same radio group MUST
 render inline under a "language" label instead); and a sign-out item. The theme options MUST NOT
 close the menu when selected. While the current route is `/settings`, the account trigger
-MUST use the sidebar active background and MUST set `aria-current="page"`.
+MUST set `aria-current="page"`.
 
 DL3g. The mobile sheet sidebar (DL4) MUST render the same account dropdown component,
 so DL3b through DL3f hold on both desktop and mobile.
@@ -150,15 +150,17 @@ Model Pricing, 订阅套餐 / Subscription Plans, 支付管理 / Payments, 用�
 System Settings. The account page `/settings` is titled 账户设置 / Account Settings. Two
 navigation items MUST NOT share a label in any locale.
 
-DL6. Sidebar admin navigation group (visible only when user role is `admin` or `super_admin`) MUST be labeled `nav.admin` and MUST include exactly these items in five
-blocks, in this order. A `SidebarSeparator` MUST separate adjacent blocks. Blocks MUST
-NOT have their own labels.
+DL6. Sidebar admin navigation group (visible only when user role is `admin` or `super_admin`) MUST be labeled `nav.admin` and MUST include exactly these items, in this order:
 
-1. `/dashboard/admin`
-2. `/dashboard/providers`, `/dashboard/groups`, `/dashboard/custom-transforms`
-3. `/dashboard/models`, `/dashboard/plans`, `/dashboard/payments`
-4. `/dashboard/users`
-5. `/dashboard/admin-settings`
+- `/dashboard/admin`
+- `/dashboard/providers`
+- `/dashboard/models`
+- `/dashboard/plans`
+- `/dashboard/payments`
+- `/dashboard/users`
+- `/dashboard/groups`
+- `/dashboard/custom-transforms`
+- `/dashboard/admin-settings`
 
 The `/dashboard/custom-transforms` page content is governed by
 `spec/custom-js-transforms.spec.md` §11 (CJS-UI-1 through CJS-UI-7).
@@ -193,19 +195,18 @@ DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pa
 
 DL7a. The right main pane MUST receive a definite remaining viewport height (`flex-1` and `min-height: 0` inside the `h-dvh` shell). Fill-height pages such as request logs MAY consume that height with an internal scroll region. Other pages MAY grow and scroll inside the same main pane.
 
-DL7c. The right main pane MUST span the full width between the sidebar and the right viewport edge, so its vertical scrollbar renders at the right viewport edge. The right main pane MUST also span the full height of the viewport. The page padding (horizontal `1.5rem`, `2rem` at `lg` and above; bottom `1.5rem`; top `4rem` below `lg` to clear the menu button and `1.5rem` at `lg` and above) MUST be inside the main pane, so scrolled content reaches the viewport edges. Page content MUST render inside a child of the main pane that is centered and limited to `max-w-6xl` (72rem). That child MUST pass the definite height of DL7a to fill-height pages.
+DL7c. The right main pane MUST span the full width between the sidebar and the right viewport edge, so its vertical scrollbar renders at the right viewport edge. The horizontal page padding (`1.5rem`, `2rem` at `lg` and above) MUST be inside the main pane. Page content MUST render inside a child of the main pane that is centered and limited to `max-w-6xl` (72rem). That child MUST pass the definite height of DL7a to fill-height pages.
 
 DL7b. The shell MUST expose the right main pane element to pages through
 `DashboardScrollParentContext` from `frontend/src/lib/dashboard-scroll.ts`, provided by `frontend/src/pages/layout.tsx`. The context value
 MUST be `null` until the element mounts. A virtualized page list MUST use this element
 as its scroll parent and MUST NOT create a second vertical scroll container.
 
-DL8. Site identity. The expanded sidebar brand link MUST show the public setting
-`site_name` (trimmed), or `Monoize` while it loads or when it is empty, wrapping to at most
-two lines and exposing the full name as the `title` attribute. `document.title` MUST be
-`{page title} · {site name}`, where the page title is the
-translation of the deepest matched route's `handle.titleKey`, and MUST update on every
-route change and language change. The `/login` route uses `auth.signIn`.
+DL8. Site identity. The expanded sidebar brand link MUST show the two-line lockup "Monoize"
+over "Console". `document.title` MUST be `{page title} · {site name}`. The site name is the
+trimmed public setting `site_name`, or `Monoize` while it loads or when it is empty. The page
+title is the translation of the deepest matched route's `handle.titleKey`. `document.title`
+MUST update on every route change and language change. The `/login` route uses `auth.signIn`.
 `document.documentElement.lang` MUST equal the active i18n language on startup and after
 every language change.
 
@@ -233,7 +234,6 @@ PL2a. The page description MUST state the routing model: Providers are tried in 
 PL3. Provider list MUST support reordering by drag-and-drop AND by move-up/move-down buttons, and persist order through `/api/dashboard/providers/reorder`.
 
 - Only the grip handle is draggable. The handle is a focusable button with an accessible name. Text inside the card (e.g. Base URL) MUST remain selectable.
-- While dragging, the source card MUST render at reduced opacity and the drop target MUST show a 2px primary insertion line.
 - Reordering MUST update the list optimistically. A second move issued before the first request completes MUST start from the optimistic order. A failed request MUST show a localized error toast and revalidate the list from the server.
 
 PL4. Provider detail/editor MUST display:
@@ -245,7 +245,7 @@ PL4. Provider detail/editor MUST display:
 
 PL4.0. Provider detail/editor MUST NOT render or maintain a Provider-level model selector or Provider-level model editor.
 
-PL4.1. Provider detail/editor MUST place the provider `enabled` switch in the top title row, right-aligned from the provider editor title. Because the switch edits the draft, its visible label (shown at every width) MUST read "保存后启用" when on and "保存后禁用" when off. When the editor opens, initial focus MUST go to the Provider name input in create mode and to the dialog title in edit mode; it MUST NOT land on the switch.
+PL4.1. Provider detail/editor MUST place the provider `enabled` switch in the top title row, right-aligned from the provider editor title. Because the switch edits the draft, its visible label (shown at `sm` and wider) MUST read "保存后启用" when on and "保存后禁用" when off. When the editor opens, initial focus MUST go to the Provider name input in create mode and to the dialog title in edit mode; it MUST NOT land on the switch.
 
 PL4.3. Create mode MUST open on the `provider` section. Edit mode MUST open on the `channels` section. When the draft has exactly one Channel, the mobile layout (`< lg`) MUST open that Channel's detail pane directly.
 
@@ -301,15 +301,14 @@ PL10. If a provider transform item type is not present in transform registry, ed
 
 PL11. In the selected Channel detail, when the `base_url` value ends with `/v1` (or `/v1/`), the UI MUST show an inline warning under the field: "末尾的 /v1 通常会由适配器自动追加，可能导致路径重复。" with a "移除 /v1" action that replaces the value with the value without the trailing `/v1`. The warning MUST NOT open a dialog, MUST NOT block save, and disappears when the value no longer ends with `/v1`.
 
-PL12. Provider list card header MUST place provider metadata and controls in a compact layout on desktop:
+PL12. Provider list card header MUST place provider metadata and controls in a compact single-row layout on desktop:
 
-- the metadata line (PL2 position and retry policy) MUST render as plain secondary text on a fixed line directly below the Provider name at every width; it MUST NOT use square brackets;
-- the header MUST NOT render a decorative icon tile before the Provider name;
+- metadata block MUST include `priority` and `max_retries` aligned near action buttons;
 - provider enable switch MUST be colocated in the header action zone;
 - edit/delete/reorder controls MUST remain available without expanding card height;
-- the expand/collapse control MUST be a real `<button>` covering the chevron and the Provider name, with `aria-expanded` and `aria-controls` pointing at the expanded region, so keyboard users can expand a card.
+- the expand/collapse control MUST be a real `<button>` covering the chevron and the Provider icon tile, with `aria-expanded` and `aria-controls` pointing at the expanded region, so keyboard users can expand a card. The Provider name MUST remain clickable to expand the card.
 
-PL12c. The list Provider enable switch applies immediately (no confirmation dialog). Disabling MUST show a toast "已禁用 {name}，新请求将不再路由到它" with an "撤销" action that re-enables it; enabling MUST show a toast "已启用 {name}" with an "撤销" action. A failed toggle MUST revert the switch and show a localized error toast. A disabled Provider card MUST show a secondary "已禁用" badge next to its name and render its metrics and model area at reduced contrast; action buttons keep full contrast.
+PL12c. The list Provider enable switch applies immediately (no confirmation dialog). Disabling MUST show a toast "已禁用 {name}，新请求将不再路由到它" with an "撤销" action that re-enables it; enabling MUST show a toast "已启用 {name}" with an "撤销" action. A failed toggle MUST revert the switch and show a localized error toast. A disabled Provider card MUST show a secondary "已禁用" badge next to its name.
 
 PL12d. Deleting a Provider MUST show a success toast. When the Provider's `live_usage.rpm > 0`, the delete confirmation MUST add "最近 1 分钟有 N 个请求".
 
@@ -317,10 +316,12 @@ PL12e. Deep link: `/dashboard/providers?provider=<provider_id>&channel=<channel_
 
 PL12b. Provider headers MUST show RPM and TPM as two left-aligned rows immediately before the enable switch on desktop. Every card MUST reserve the same metric-column width. Labels and values MUST share consistent starting positions across cards. Both labels and values MUST use secondary typography: `font-mono`, `text-sm`, normal weight, and `text-muted-foreground`. Values MUST use tabular numerals. Do not add a card or badge. On narrow screens, place metrics below Provider identity without horizontal overflow or loss of actions. Initial list loading MUST use the existing page skeleton. Missing usage MUST render an em dash, not zero. Failed refreshes MUST retain cached values and preserve the existing list error notice.
 
-PL12a. Provider list card header badges are ordered: model-unavailable status, model-degraded status, model-unpriced status, channel type, groups.
+PL12a. Provider list card header metadata badges MUST render through a collapsed badge collection when the number of metadata badges is greater than 3.
 
-- Status badges ("N 个模型不可用", destructive, `availability_status = unavailable`; "N 个模型部分可用", warning, `availability_status = degraded`; "N 个模型未定价", warning, `pricing_status != complete` or listed in `unpriced_model_ids`, deduplicated by logical model ID) MUST render in full (`shrink-0`, no truncation) at every width and are omitted when their count is 0.
-- The remaining badges (channel type, one per `group_ids` entry showing the group name resolved from `GET /api/dashboard/groups`, raw id fallback) MAY collapse into a `+N` overflow badge; the overflow popover lists all of them. Collapsed badges MAY wrap to the next line on narrow screens; text MUST NOT be cut mid-word.
+- The header badge preview MUST render no more than 3 badges before a `+N` overflow badge.
+- The preview row MUST NOT wrap.
+- The complete popover list MUST include channel type, enabled state, one model-attention badge when any model has a breaker or pricing warning, and one badge per provider `group_ids` entry showing the group name resolved from `GET /api/dashboard/groups` (raw id fallback for unknown ids).
+- The model-attention badge count MUST deduplicate logical model IDs. It MUST use destructive styling when any model has `availability_status = unavailable`, and warning styling otherwise.
 
 PL13. The selected Channel model section MUST include an explicit "Fetch upstream" action that opens a model-diff selection dialog before insertion.
 
@@ -387,10 +388,12 @@ PL17. Provider edit dialog initialization MUST be resilient to fast-open timing.
 - Hydrated Channel models are listed in ascending model ID order.
 - Runtime health shown in the editor is read-only and MAY come from the latest list data; it is not part of the draft.
 
-PL18. In expanded provider card overview, channel runtime list rows MUST use a fixed-column grid so that the status badge, name, Base URL, weight/model text, enable switch and test actions align across rows.
+PL18. In expanded provider card overview, channel runtime list row spacing MUST be deterministic.
 
-- At `sm` and wider, each row MUST be at least `40px` high; the virtual list container height MUST be computed as `min(channel_count * 40, 190)` and the same constant MUST be used by rows and the container.
-- Below `sm`, each row MUST render two lines with a height of `90px`: line 1 = effective status badge + Channel name (truncating) + the enable switch at the right end; line 2 = "N 个模型 · 权重 W（P%）" (wrapping to at most two lines, never truncated) and the test actions right-aligned (44px touch targets). The list container height MUST be `min(channel_count * 90, 300)`, so up to three Channels show without an inner scroll.
+- Each rendered channel row MUST use a minimum row height of `40px`.
+- Virtual list container height MUST be computed as `min(channel_count * 40, 190)`.
+- The row height constant used by the virtual list and the row element style MUST be the same value to prevent visible trailing blank space.
+- The runtime health label, Channel name, and Channel Base URL MUST share one visual vertical center at every viewport width. The row action group MUST remain vertically centered independently.
 - Weight text MUST read "权重 W（P%）" where P is W divided by the sum of weights of enabled Channels with weight > 0 in that Provider, rounded to an integer; P is omitted for a disabled or zero-weight Channel. Model count reads "N 个模型".
 - Each row MUST include a Channel enable switch with an accessible name containing the Channel name. Toggling it saves immediately through `PUT /api/dashboard/providers/{provider_id}/channels/{channel_id}/enabled` (CM-CH-EN-1), updates optimistically, and on failure reverts and shows a localized error toast.
 - The detail-test button MUST have the visible text "选择模型测试" (or an accessible name with the same text when icon-only) and the quick test button MUST state the model it will use in its tooltip ("使用 {model} 测试"), where the model is resolved like the server (Channel `active_probe_model_override` → Provider `active_probe_model_override` → global `monoize_active_probe_model` → smallest Channel model ID).
@@ -465,13 +468,13 @@ Clicking an action button inside any such child dialog MUST execute only that ch
 PL25. Provider editor MUST use an explicit workbench information architecture.
 
 - Desktop (`lg` and above) MUST render a Provider section rail, Channel master list, and selected Channel detail pane simultaneously.
-- Mobile (`< lg`) MUST render one pane at a time. Selecting a Channel MUST open a full-width Channel editor with an explicit back action. Below `sm` the editor dialog MUST cover the full viewport (no outer margin). The mobile section tabs MUST fit the width without horizontal overflow (five equal columns).
+- Mobile (`< lg`) MUST render one pane at a time. Selecting a Channel MUST open a full-width Channel editor with an explicit back action.
 - Mobile save/cancel actions MUST remain reachable in a sticky bottom action bar.
 - Primary connection and model controls MUST appear before breaker, probe, retry, transform, and protocol override controls.
-- Channel advanced groups, in order after Supported Models: "网络" (`proxy_url`, `extra_headers`), "路由亲和" (affinity overrides, `session_affinity_auto`), "健康检查与熔断" (PL23 fields). They MUST be collapsed by default and, when closed, MUST display a summary generated from the current values: "继承全局设置" when no field in the group is set, otherwise "N 项覆盖：" followed by up to two set fields as "label：value" (e.g. "冷却时间（秒）：120") joined by " · ", and "…" when more are set.
-- `extra_fields_whitelist` MUST be edited in the protocol section through the shared `ListField` (comma separated).
+- Channel advanced groups, in order after Supported Models: "路由亲和" (affinity overrides, `session_affinity_auto`, `proxy_url`, `extra_headers`), "健康检查与熔断" (PL23 fields). They MUST be collapsed by default and, when closed, MUST display a summary generated from the current values: "继承全局设置" when no field in the group is set, otherwise "N 项覆盖：" followed by up to two set fields as "label：value" (e.g. "冷却时间（秒）：120") joined by " · ", and "…" when more are set.
+- `extra_fields_whitelist` MUST be edited in the Provider basics section through the shared `ListField` (comma separated).
 - The Channel weight field MUST use `NumberField` (integer, min 0) with the hint "同一 Provider 内按权重分配流量；0 表示不接收请求". When the value is 0 it MUST additionally show "权重为 0 时此 Channel 不接收请求".
-- The Channel detail header MUST place the enable switch with the visible label "已启用"/"已禁用" apart from the delete button (separated by the duplicate/test actions and a divider).
+- The Channel detail header MUST contain the duplicate, delete, and enable-switch controls in that order; the switch has the visible label "已启用"/"已禁用".
 - The Channel detail header MUST include a "测试" button that opens the Channel test dialog (CP-FE-9) for the saved Channel. It is disabled with a tooltip "请先保存更改" while the draft is dirty or the Channel is unsaved.
 
 PL26. Provider editor validation runs on Save and on "保存并关闭". The first error MUST switch to its section (and Channel, for Channel fields), focus the invalid control, render the message under the field with `FieldError` and set `aria-invalid` on it. "First" means on-screen order: Provider fields, then each Channel in list order with its fields top to bottom (name, Base URL, API key, models). While a numeric field holds invalid text, switching section, switching or adding/duplicating a Channel, and the mobile "back to Channel list" action MUST NOT happen; the editor focuses the invalid field instead, so the last valid value is never saved silently. The section rail/tabs and the Channel master list rows MUST show an error dot for sections/Channels containing errors until the next validation. Errors are cleared per field when that field changes. Validation rules: Provider name required; at least one Channel; at least one Channel has a model; each Channel needs a name and Base URL; a Channel without `id` needs an API key ("新 Channel 需要填写 API Key"); weight is an integer ≥ 0; numeric overrides are positive integers (failback delay ≥ 0); `extra_headers` is a JSON object; transform rules are valid (error names rule and field per `transform-config-ui.spec.md` and reveals the rule). Required fields (Provider name, Channel name, Base URL, API Key of a new Channel) MUST display a "必填" marker. Every field label MUST be bound to its control (`htmlFor`/`id`). Server errors MUST be shown through the shared localized API error mapping; when the error carries `param`, the editor maps it to the field when possible. Raw server messages MUST NOT be shown.
@@ -603,18 +606,19 @@ This section restates the layout binding for `/dashboard` and MUST stay aligned 
 file.
 
 DH1. `/dashboard` MUST render these sections in order: greeting header; conditional
-getting-started card; account overview; API information; usage chart; recent-usage table;
-performance panel. Details: `dashboard-home-overview.spec.md` DH-1 through DH-9e.
+getting-started card; account overview; full-width usage chart; recent-usage table + API
+information; performance panel. Details: `dashboard-home-overview.spec.md` DH-1 through DH-9e.
 
 DH2. The flat five-cell account overview, its fixed 24-hour Analytics data, and its
 conditional active-model/subscription cell MUST follow
 `dashboard-home-overview.spec.md` DH-5 through DH-5e.
 
-DH3. The usage chart MUST be a per-bucket stacked token `BarChart` driven by
+DH3. The usage chart MUST be a stacked cumulative token `AreaChart` driven by
 `GET /api/dashboard/analytics` with `buckets` and `range_hours` derived from the
 selected time window (`1h`, `24h`, `7d`, `30d`; default `24h`, persisted) per the
 `dashboard-home-overview.spec.md` DH-6a mapping, including `tokens_by_model`, a
-fully visible Today/Now marker, and a wrapping legend without pagination
+fully visible Today/Now marker, and a width-adaptive paginated horizontal legend whose
+controls appear on the right of the same row
 (`dashboard-home-overview.spec.md` DH-6 through DH-6k).
 
 DH4. Recent usage and API information panels MUST follow
@@ -642,11 +646,11 @@ UP3. The users list MUST NOT establish its own horizontal or vertical scroll con
 
 UP4. The users list body MUST be virtualized with `Virtuoso`, `virtualDataListComponents`, and the dashboard main pane as `customScrollParent`. The list header MUST stay sticky relative to the main pane in wide mode.
 
-UP5. In the `/dashboard/users` list table, the user cell MUST render the avatar followed by two lines: line 1 is the username, line 2 is the role badge (UP1) followed by the user's group badge.
+UP5. In the `/dashboard/users` list table, the username text and the user's group badge MUST render in a single non-wrapping inline row inside the user cell.
 
-- The username MAY truncate only when the user column is narrower than its 12rem minimum track (below wide mode).
+- If horizontal space is insufficient, the username text MAY truncate.
 - The group badge MUST display the group **name** resolved from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to the raw id.
-- The group badge MUST remain single-line.
+- The group badge MUST remain single-line and MUST NOT move below the username.
 
 UP12. The user create and edit dialogs MUST select the user's group through the shared
 single-select group selector (GS rules, §11). They MUST NOT offer freeform group text
@@ -657,7 +661,7 @@ UP13. Subscription management MUST use the separate per-row dialog defined by
 contain only deferred-submit fields (applied by its "Save" button); it MUST NOT contain
 any control that takes effect before "Save".
 
-UP6. The users table wide-mode columns MUST be, in order: user (UP5, includes the role), prepaid balance, today (spend on line 1, call count on line 2), plan, dates (created on line 1, last login on line 2), status, actions, with the grid track list `minmax(12rem,1.6fr) 6.5rem 6.5rem 8rem 7rem 3.5rem 5rem`, so the UP2 56rem budget holds including column gaps. The plan cell MUST show `active_plan_name` on line 1 and the localized expiry (`formatDate(active_plan_expires_at)`) on line 2, or `—` when the user has no active plan. The actions cell MUST show the edit button (when editable) and one "More actions" menu button; the menu contains, in order: view request logs (UP11), view API keys (UP15), plan (BP-UI6, editable rows only), and delete (deletable rows only).
+UP6. The users table wide-mode columns MUST be, in order: user (UP5), role, prepaid balance, UTC-calendar-day spend, UTC-calendar-day call count, plan, created, last login, status, actions, with the grid track list `minmax(0,9.25fr) minmax(0,6.5fr) minmax(0,5fr) minmax(0,4.25fr) minmax(0,3.75fr) minmax(0,4.5fr) minmax(0,5.75fr) minmax(0,5.75fr) 4rem 12.25rem`. The plan cell MUST show `active_plan_name` on line 1 and the localized expiry (`formatDate(active_plan_expires_at)`) on line 2, or `—` when the user has no active plan. The actions cell MUST show inline ghost icon buttons, in order: view request logs (UP11), view API keys (UP15), plan (BP-UI6, editable rows only), edit (editable rows only), and delete (deletable rows only).
 
 UP14. The users toolbar left side MUST contain a `TableToolbarSearch` that filters the loaded list by case-insensitive substring of username or email. The query MUST be stored in the URL as `?q=` (replace navigation; removed when empty) and initialized from it. The count and the UP10 totals MUST reflect the filtered rows. When the query matches nothing, the list MUST show an inline no-match empty state that names the query.
 
@@ -687,8 +691,7 @@ initialize the request-log username filter as defined by `spec/request-logs.spec
 ## 8. User Settings Page
 
 US1. `/settings` MUST render exactly these cards in order: profile, security, preferences.
-It MUST NOT render a billing card, a balance value, or plan data. The card column MUST be
-limited to `max-w-2xl`.
+It MUST NOT render a billing card, a balance value, or plan data.
 
 US2. The profile card MUST show the avatar, the read-only username, the user's group when
 `group_id` is set, and the email form. It MUST NOT call `GET /api/dashboard/billing-plans`.
@@ -718,8 +721,8 @@ least 8 characters, confirmation equal to the new password. Each failure MUST re
 MUST use `apiErrorParam` to render these errors below the named field, using localized
 text. Other failures MUST use `toastApiError`, so raw server messages are never displayed.
 
-US8. The language and theme controls MUST use the same dropdown components as the login
-page (CAP-U15).
+US8. The language and theme controls MUST be the outline-button variants of the shared
+dropdown components that the login page also uses (CAP-U15).
 
 ## 7. Token Management Page (UI)
 
@@ -738,7 +741,7 @@ AK-UI-LIST-1. `/dashboard/tokens` MUST render, in order: the page header, a tool
 - The name cell MUST render the AK11 name row. The key cell MUST render the displayed key prefix (AK-UI-SEARCH-1) in `font-mono` followed by `…` and its copy action.
 - The sub-account balance column MUST render only when at least one loaded key has `sub_account_enabled = true`. Its header MUST read "Independent Balance" (localized). A key with `sub_account_enabled = false` MUST render `—` in that column. The page MUST NOT render "Uses account balance" or an equivalent sentence in any row.
 - The actions column width MUST follow `design.md` §4.3 for the largest number of row actions among the loaded keys: 2 (edit, delete), 3 when any key has a sub-account, and 4 when any key has a sub-account and the viewer is an admin.
-- A key without `expires_at` MUST render the localized text "Never expires" in `text-muted-foreground`. A key whose `expires_at` is earlier than the current time MUST render a warning status badge equivalent to "Expired" in the expiry cell.
+- A key without `expires_at` MUST render the localized text "Never expires". A key whose `expires_at` is earlier than the current time MUST render a warning status badge equivalent to "Expired" in the expiry cell.
 - A disabled or expired key MUST render its name in `text-muted-foreground`. The row opacity MUST remain 1.
 
 AK-UI-LIST-2. Below wide mode, each key row MUST render: (1) a primary line with the row checkbox, the AK11 name row, and the enable switch at the inline end; (2) one wrapping metadata group with the key prefix and its copy action, the restriction badges (nothing when the key has none), the expiry text, and, for a key with `sub_account_enabled = true`, the localized "Independent Balance" label followed by the balance. The row actions MUST end-align on the first metadata line when that leaves the metadata group at least 14rem of inline size; otherwise they MUST wrap to one end-aligned last line. In both cases the actions are the last content of the row, as DS22i requires. The wide-mode key, restrictions, expiry, balance, status, and `DataListActions` cells MUST NOT render below wide mode, and the metadata group MUST NOT render in wide mode. This is the only `/dashboard/tokens` exception to DS22d.

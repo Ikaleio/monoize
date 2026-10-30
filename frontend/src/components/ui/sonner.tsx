@@ -17,9 +17,6 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
-      // Dialog footers and sticky save bars sit at the bottom edge; toasts stay at the top so
-      // they never cover those actions (frontend-design-system.spec.md DS72).
-      position="top-center"
       icons={{
         success: <CircleCheck className="h-4 w-4" />,
         info: <Info className="h-4 w-4" />,

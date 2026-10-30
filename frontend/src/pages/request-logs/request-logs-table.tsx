@@ -34,7 +34,7 @@ const tableComponents = {
 		/>
 	),
 	TableHead: (props: ComponentProps<'thead'>) => (
-		<thead {...props} className='bg-card [&_tr]:border-b' />
+		<thead {...props} className='[&_tr]:border-b' />
 	),
 	TableBody: (props: ComponentProps<'tbody'>) => (
 		<tbody {...props} className='[&_tr:last-child]:border-0' />
@@ -115,7 +115,7 @@ export function RequestLogsTable({
 				</div>
 			)
 		}
-		return <EmptyState variant='inline' title={emptyTitle} className='h-full min-h-[20rem] px-4 py-0' />
+		return <EmptyState title={emptyTitle} className='h-full min-h-[20rem] px-4 py-0' />
 	}
 
 	return (

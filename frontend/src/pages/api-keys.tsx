@@ -50,7 +50,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ListField } from "@/components/ui/list-field";
@@ -350,8 +350,8 @@ function KeyGroupsSection({
         />
       </div>
       {!useUserGroup && (
-        <Field data-invalid={error ? true : undefined}>
-          <FieldLabel id={`${idPrefix}-groups-label`}>{t("apiKeys.groups")}</FieldLabel>
+        <div className="space-y-2">
+          <Label id={`${idPrefix}-groups-label`}>{t("apiKeys.groups")}</Label>
           <div id={`${idPrefix}-groups`} tabIndex={-1} aria-labelledby={`${idPrefix}-groups-label`}>
             <GroupMultiSelect
               value={groupIds}
@@ -366,9 +366,9 @@ function KeyGroupsSection({
               onChange={onGroupIdsChange}
             />
           </div>
-          <FieldDescription>{t("apiKeys.groupsHelp")}</FieldDescription>
+          <p className="text-xs text-muted-foreground">{t("apiKeys.groupsHelp")}</p>
           {error && <FieldError>{error}</FieldError>}
-        </Field>
+        </div>
       )}
     </div>
   );
@@ -482,7 +482,6 @@ interface KeyFormDialogProps {
   form: KeyForm;
   initialForm: KeyForm;
   errors: KeyFormErrors;
-  expiryDaysValid: boolean;
   advancedOpen: boolean;
   onAdvancedOpenChange: (open: boolean) => void;
   onExpiryDaysValidityChange: (valid: boolean) => void;
@@ -504,7 +503,6 @@ function KeyFormDialog({
   form,
   initialForm,
   errors,
-  expiryDaysValid,
   advancedOpen,
   onAdvancedOpenChange,
   onExpiryDaysValidityChange,
@@ -545,7 +543,7 @@ function KeyFormDialog({
     <Dialog open={target !== null} onOpenChange={onOpenChange}>
       <DialogContent
         dirty={dirty}
-        className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-3xl"
+        className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-4xl"
       >
         <form noValidate onSubmit={handleSubmit} className="flex min-h-0 flex-col p-6">
           <DialogHeader className="shrink-0">
@@ -555,8 +553,8 @@ function KeyFormDialog({
             </DialogDescription>
           </DialogHeader>
           <div className="-mx-1 min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-4">
-            <Field data-invalid={errors.name ? true : undefined}>
-              <FieldLabel htmlFor="key-name">{t("common.name")}</FieldLabel>
+            <div className="space-y-2">
+              <Label htmlFor="key-name">{t("common.name")}</Label>
               <Input
                 id="key-name"
                 value={form.name}
@@ -565,10 +563,10 @@ function KeyFormDialog({
                 placeholder={t("apiKeys.namePlaceholder")}
               />
               {errors.name && <FieldError>{errors.name}</FieldError>}
-            </Field>
+            </div>
             {isCreate ? (
-              <Field data-invalid={errors.expiry || !expiryDaysValid ? true : undefined}>
-                <FieldLabel htmlFor="key-expires">{t("apiKeys.expiresInDays")}</FieldLabel>
+              <div className="space-y-2">
+                <Label htmlFor="key-expires">{t("apiKeys.expiresInDays")}</Label>
                 <NumberField
                   id="key-expires"
                   value={form.expiresInDays}
@@ -579,12 +577,12 @@ function KeyFormDialog({
                   unit={t("apiKeys.daysUnit")}
                   placeholder="30"
                 />
-                <FieldDescription>{t("apiKeys.expiresInDaysHelp")}</FieldDescription>
+                <p className="text-sm text-muted-foreground">{t("apiKeys.expiresInDaysHelp")}</p>
                 {errors.expiry && <FieldError>{errors.expiry}</FieldError>}
-              </Field>
+              </div>
             ) : (
-              <Field data-invalid={errors.expiry ? true : undefined}>
-                <FieldLabel htmlFor="key-expires">{t("apiKeys.expiryDate")}</FieldLabel>
+              <div className="space-y-2">
+                <Label htmlFor="key-expires">{t("apiKeys.expiryDate")}</Label>
                 <div className="flex flex-wrap items-center gap-3">
                   <Input
                     id="key-expires"
@@ -606,9 +604,9 @@ function KeyFormDialog({
                     </Label>
                   </div>
                 </div>
-                <FieldDescription>{t("apiKeys.expiryDateHelp")}</FieldDescription>
+                <p className="text-sm text-muted-foreground">{t("apiKeys.expiryDateHelp")}</p>
                 {errors.expiry && <FieldError>{errors.expiry}</FieldError>}
-              </Field>
+              </div>
             )}
             <KeyGroupsSection
               idPrefix="key"
@@ -622,7 +620,7 @@ function KeyFormDialog({
               onUseUserGroupChange={(useUserGroup) => onFormChange({ useUserGroup })}
               onGroupIdsChange={(groupIds) => onFormChange({ groupIds })}
             />
-            <div className="space-y-3">
+            <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <Switch
                   id="key-sub-account"
@@ -632,31 +630,32 @@ function KeyFormDialog({
                 <Label htmlFor="key-sub-account">{t("apiKeys.subAccountEnabled")}</Label>
               </div>
               <p className="text-sm text-muted-foreground">{t("apiKeys.subAccountHelp")}</p>
-              {isCreate && canManageSystem && form.subAccountEnabled && (
-                <Field data-invalid={errors.initialBalance ? true : undefined}>
-                  <FieldLabel htmlFor="key-initial-balance">{t("apiKeys.initialBalance")}</FieldLabel>
-                  <Input
-                    id="key-initial-balance"
-                    inputMode="decimal"
-                    value={form.initialBalanceUsd}
-                    aria-invalid={errors.initialBalance ? true : undefined}
-                    onChange={(event) => onFormChange({ initialBalanceUsd: event.target.value })}
-                    placeholder="0.00"
-                  />
-                  <FieldDescription className="tabular-nums">
-                    {initialBalanceNano !== null
-                      ? t("apiKeys.initialBalanceNano", { nano: initialBalanceNano.toString() })
-                      : t("apiKeys.initialBalanceHelp")}
-                  </FieldDescription>
-                  {errors.initialBalance && <FieldError>{errors.initialBalance}</FieldError>}
-                </Field>
-              )}
             </div>
+            {isCreate && canManageSystem && form.subAccountEnabled && (
+              <div className="space-y-2">
+                <Label htmlFor="key-initial-balance">{t("apiKeys.initialBalance")}</Label>
+                <Input
+                  id="key-initial-balance"
+                  type="text"
+                  inputMode="decimal"
+                  value={form.initialBalanceUsd}
+                  aria-invalid={errors.initialBalance ? true : undefined}
+                  onChange={(event) => onFormChange({ initialBalanceUsd: event.target.value })}
+                  placeholder="0.00"
+                />
+                <p className="text-sm tabular-nums text-muted-foreground">
+                  {initialBalanceNano !== null
+                    ? t("apiKeys.initialBalanceNano", { nano: initialBalanceNano.toString() })
+                    : t("apiKeys.initialBalanceHelp")}
+                </p>
+                {errors.initialBalance && <FieldError>{errors.initialBalance}</FieldError>}
+              </div>
+            )}
 
             <div className="rounded-lg border">
               <button
                 type="button"
-                className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex w-full items-center justify-between gap-3 rounded-lg p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-expanded={advancedOpen}
                 aria-controls={advancedId}
                 onClick={() => onAdvancedOpenChange(!advancedOpen)}
@@ -754,29 +753,30 @@ function KeyFormDialog({
                       <p className="text-sm text-muted-foreground">{t("apiKeys.modelsHelp")}</p>
                     </div>
                   )}
-                  <Field>
-                    <FieldLabel htmlFor="key-ip-whitelist">{t("apiKeys.ipWhitelist")}</FieldLabel>
+                  <div className="space-y-2">
+                    <Label htmlFor="key-ip-whitelist">{t("apiKeys.ipWhitelist")}</Label>
                     <ListField
                       id="key-ip-whitelist"
                       value={form.ipWhitelist}
                       onValueChange={(ipWhitelist) => onFormChange({ ipWhitelist })}
                       placeholder="192.168.1.1, 10.0.0.0/8"
                     />
-                    <FieldDescription>{t("apiKeys.ipHelp")}</FieldDescription>
-                  </Field>
-                  <Field data-invalid={errors.maxMultiplier ? true : undefined}>
-                    <FieldLabel htmlFor="key-max-multiplier">{t("apiKeys.maxMultiplier")}</FieldLabel>
+                    <p className="text-sm text-muted-foreground">{t("apiKeys.ipHelp")}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="key-max-multiplier">{t("apiKeys.maxMultiplier")}</Label>
                     <Input
                       id="key-max-multiplier"
+                      type="text"
                       inputMode="decimal"
                       value={form.maxMultiplier}
                       aria-invalid={errors.maxMultiplier ? true : undefined}
                       onChange={(event) => onFormChange({ maxMultiplier: event.target.value })}
                       placeholder={t("apiKeys.maxMultiplierPlaceholder")}
                     />
-                    <FieldDescription>{t("apiKeys.maxMultiplierHelp")}</FieldDescription>
+                    <p className="text-sm text-muted-foreground">{t("apiKeys.maxMultiplierHelp")}</p>
                     {errors.maxMultiplier && <FieldError>{errors.maxMultiplier}</FieldError>}
-                  </Field>
+                  </div>
                   {canManageSystem && (
                     <div id="key-transforms" tabIndex={-1} className="space-y-3">
                       <div className="flex items-center gap-2">
@@ -887,10 +887,11 @@ function TransferDialog({ apiKey, onClose }: TransferDialogProps) {
               {t("apiKeys.transferDescription", { name: apiKey?.name })}
             </DialogDescription>
           </DialogHeader>
-          <Field data-invalid={amountError ? true : undefined}>
-            <FieldLabel htmlFor="transfer-amount">{t("apiKeys.transferAmount")}</FieldLabel>
+          <div className="space-y-2">
+            <Label htmlFor="transfer-amount">{t("apiKeys.transferAmount")}</Label>
             <Input
               id="transfer-amount"
+              type="text"
               inputMode="decimal"
               value={amount}
               aria-invalid={amountError ? true : undefined}
@@ -900,10 +901,10 @@ function TransferDialog({ apiKey, onClose }: TransferDialogProps) {
               }}
               placeholder="1.00"
             />
-            <FieldDescription>{t("apiKeys.transferAmountHelp")}</FieldDescription>
+            <p className="text-sm text-muted-foreground">{t("apiKeys.transferAmountHelp")}</p>
             {amountError && <FieldError>{amountError}</FieldError>}
-          </Field>
-          <p className="rounded-lg border bg-muted/30 p-3 text-sm tabular-nums">
+          </div>
+          <p className="text-sm tabular-nums">
             {unlimited
               ? t("apiKeys.transferPreviewUnlimited", {
                   keyBefore: formatNanoUsd(keyNano, 2),
@@ -1007,14 +1008,15 @@ function AdjustBalanceDialog({ apiKey, keys, onClose, onReload }: AdjustBalanceD
             <DialogTitle>{t("apiKeys.adjustTitle")}</DialogTitle>
             <DialogDescription>{t("apiKeys.adjustDescription", { name: apiKey?.name })}</DialogDescription>
           </DialogHeader>
-          <p className="text-sm">
-            {t("apiKeys.currentBalance")}:{" "}
-            <span className="font-medium tabular-nums">{formatNanoUsd(currentNano, 2)}</span>
-          </p>
-          <Field data-invalid={inputError ? true : undefined}>
-            <FieldLabel htmlFor="adjust-balance">{t("apiKeys.newBalance")}</FieldLabel>
+          <div className="space-y-2">
+            <Label>{t("apiKeys.currentBalance")}</Label>
+            <p className="text-sm tabular-nums">{formatNanoUsd(currentNano, 2)}</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="adjust-balance">{t("apiKeys.newBalance")}</Label>
             <Input
               id="adjust-balance"
+              type="text"
               inputMode="decimal"
               value={newBalance}
               aria-invalid={inputError ? true : undefined}
@@ -1022,16 +1024,16 @@ function AdjustBalanceDialog({ apiKey, keys, onClose, onReload }: AdjustBalanceD
               placeholder="0.00"
             />
             {nextNano !== null && !unchanged && (
-              <FieldDescription className="tabular-nums">
+              <p className="text-sm tabular-nums text-muted-foreground">
                 {formatNanoUsd(currentNano, 2)} → {formatNanoUsd(nextNano, 2)}
                 {" · "}
                 {difference < 0n
                   ? t("apiKeys.adjustRefundNote", { amount: formatNanoUsd(-difference, 2) })
                   : t("apiKeys.adjustIncreaseNote", { amount: formatNanoUsd(difference, 2) })}
-              </FieldDescription>
+              </p>
             )}
             {inputError && <FieldError>{inputError}</FieldError>}
-          </Field>
+          </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={close}>
               {t("common.cancel")}
@@ -1415,15 +1417,13 @@ export function ApiKeysPage() {
                         {key.key && <CopyButton value={key.key} />}
                       </span>
                     );
-                    const expiry = key.expires_at ? (
+                    const expiry = (
                       <span className="inline-flex items-center gap-2 whitespace-nowrap">
                         <span className={cn("tabular-nums", expired && "text-muted-foreground")}>
-                          {formatDate(key.expires_at)}
+                          {key.expires_at ? formatDate(key.expires_at) : t("apiKeys.noExpiry")}
                         </span>
                         {expired && <StatusBadge variant="warning">{t("apiKeys.expired")}</StatusBadge>}
                       </span>
-                    ) : (
-                      <span className="whitespace-nowrap text-muted-foreground">{t("apiKeys.noExpiry")}</span>
                     );
                     const subAccountBalance = (
                       <span className="tabular-nums">{formatUsdDecimal(key.sub_account_balance_usd, 2)}</span>
@@ -1492,7 +1492,7 @@ export function ApiKeysPage() {
                               onCheckedChange={() => toggleSelectKey(key.id)}
                             />
                             {/* AK11: the group badges yield to the name when the name cell is narrow. */}
-                            <div className="flex min-w-0 flex-1 items-center gap-3 [container-type:inline-size]">
+                            <div className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap [container-type:inline-size]">
                               <span
                                 className={cn(
                                   "min-w-0 truncate font-medium",
@@ -1561,7 +1561,6 @@ export function ApiKeysPage() {
         form={form}
         initialForm={initialForm}
         errors={formErrors}
-        expiryDaysValid={expiryDaysValid}
         advancedOpen={advancedOpen}
         onAdvancedOpenChange={setAdvancedOpen}
         onExpiryDaysValidityChange={setExpiryDaysValid}

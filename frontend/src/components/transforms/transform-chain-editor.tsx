@@ -27,7 +27,6 @@ import { StatusBadge } from "@/components/ui/status";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/hooks/use-auth";
 import type { Phase, TransformRegistryItem, TransformRuleConfig } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { resolveLocalizedText } from "./localized-text";
 import { TransformItemConfigDialog } from "./transform-item-config-dialog";
 import { transformRequiresConfig, validateTransformRule } from "./transform-schema";
@@ -244,7 +243,7 @@ function PhaseChainSection({
 }: PhaseChainSectionProps) {
   const { t, i18n } = useTranslation();
   // Drag state is section-local, so a drop in the other phase section is never accepted.
-  const [drag, setDrag] = useState<{ from: number; over: number | null } | null>(null);
+  const [draggingPosition, setDraggingPosition] = useState<number | null>(null);
   const available = useMemo(
     () => registry.filter((item) => item.supported_phases.includes(phase)),
     [registry, phase]
@@ -261,7 +260,7 @@ function PhaseChainSection({
     if (row) {
       event.dataTransfer.setDragImage(row, 16, 16);
     }
-    setDrag({ from: position, over: null });
+    setDraggingPosition(position);
   };
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -308,56 +307,39 @@ function PhaseChainSection({
             !rule.models || rule.models.length === 0
               ? t("transforms.modelsAllModels")
               : rule.models.join(", ");
-          const isDragSource = drag?.from === position;
-          const isDropTarget = drag !== null && drag.over === position && drag.from !== position;
           return (
             <div
               key={`${phase}-${index}-${rule.transform}`}
               data-transform-rule-index={index}
-              className={cn(
-                "relative flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 sm:flex-nowrap",
-                isDragSource && "opacity-50"
-              )}
+              className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 sm:flex-nowrap"
               onDragOver={(event) => {
-                if (!drag) {
+                if (draggingPosition === null) {
                   return;
                 }
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
-                if (drag.over !== position) {
-                  setDrag({ ...drag, over: position });
-                }
               }}
               onDrop={(event) => {
-                if (!drag) {
+                if (draggingPosition === null) {
                   return;
                 }
                 event.preventDefault();
-                onMove(rules, drag.from, position);
-                setDrag(null);
+                onMove(rules, draggingPosition, position);
+                setDraggingPosition(null);
               }}
             >
-              {isDropTarget && (
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "pointer-events-none absolute inset-x-0 h-0.5 rounded-full bg-primary",
-                    (drag?.from ?? 0) > position ? "-top-[5px]" : "-bottom-[5px]"
-                  )}
-                />
-              )}
               <span
                 draggable
                 aria-hidden="true"
-                className="flex shrink-0 cursor-grab touch-none items-center text-muted-foreground active:cursor-grabbing"
+                className="flex shrink-0 cursor-grab touch-none items-center text-muted-foreground"
                 onDragStart={(event) => startDrag(event, position)}
-                onDragEnd={() => setDrag(null)}
+                onDragEnd={() => setDraggingPosition(null)}
               >
                 <GripVertical className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-sm font-medium [overflow-wrap:anywhere]">{name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium">{name}</span>
                   <RuleStatusBadge
                     registered={Boolean(registryItem)}
                     custom={rule.transform.startsWith(CUSTOM_TRANSFORM_PREFIX)}
@@ -444,7 +426,7 @@ function RuleStatusBadge({
   const { t } = useTranslation();
   if (!registered) {
     return custom ? (
-      <StatusBadge variant="warning" className="whitespace-normal">
+      <StatusBadge variant="warning">
         {t("transforms.customUnavailable")}
       </StatusBadge>
     ) : (
@@ -510,13 +492,15 @@ function AddTransformCombobox({
                         onSelect(item);
                       }}
                     >
-                      <span className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
-                        <span className="text-sm">{name}</span>
-                        <span className="font-mono text-[10px] text-muted-foreground">
+                      <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="truncate text-sm">{name}</span>
+                        <span className="truncate font-mono text-[10px] text-muted-foreground">
                           {item.type_id}
                         </span>
                         {description && (
-                          <span className="text-xs text-muted-foreground">{description}</span>
+                          <span className="max-w-[280px] truncate text-xs text-muted-foreground">
+                            {description}
+                          </span>
                         )}
                       </span>
                     </CommandItem>

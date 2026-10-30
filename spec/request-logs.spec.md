@@ -435,7 +435,6 @@ FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a 
 - The row MUST render the TTFB badge when `ttfb_ms` is present.
 - The row MUST render exactly one stream-mode badge (`流` or `非流`).
 - When `tried_providers` is non-empty, the row MUST also render a hop-count badge whose text is the localized retry-hop count for `tried_providers.length`. This hop-count badge is not a timing-value overflow control.
-- The stream-mode badge describes a property, not an outcome: both values MUST use the same neutral muted style (`bg-muted text-muted-foreground`) and MUST differ only by text. The hop-count badge MUST use the warning style. No other timing-cell badge may use the warning style.
 - The row MUST NOT render a `+N` overflow badge for timing values.
 - Timing badges MUST NOT wrap.
 - The timing cell MAY use horizontal overflow when viewport space is insufficient; it MUST NOT hide badges behind a collapsed popover.
@@ -473,7 +472,7 @@ FL7. The top of the page MUST include a search bar and filter controls:
   - **Time range filter**: dropdown with preset options `All Time`, `Last 1 Hour`, `Last 24 Hours`, `Last 7 Days`, `Last 30 Days`, `Today`, `Yesterday`, `This Month`, `Last Month`. Selecting a preset computes `time_from` / `time_to` as ISO 8601 strings in the browser's local timezone and sends them as query parameters to the API.
   - **Channel filter** (admin only, URL-driven): when `channel_id` is applied, the filter row MUST show a removable chip `Channel: <provider_name>/<channel_name>` resolved from the admin Provider list (falling back to names on a visible row, then a localized "Unknown Channel"). The chip's remove button MUST clear `channel_id`. The raw `channel_id` MUST NOT be rendered.
 
-FL7e. The filter-expansion toggle MUST render the localized text "Filters" (`筛选`). When N > 0 filters inside the expandable row are applied (model, status, API key, username, Channel, time range; the free-text search is excluded because it is always visible), the text MUST read `筛选 · N` and the toggle MUST render the shared `ModifiedDot`, whether the row is expanded or collapsed. The toggle MUST expose `aria-expanded`.
+FL7e. The filter-expansion toggle MUST render the localized text "Filters" (`筛选`). When N > 0 filters inside the expandable row are applied (model, status, API key, username, Channel, time range; the free-text search is excluded because it is always visible), the text MUST read `筛选 · N` whether the row is expanded or collapsed. The toggle MUST expose `aria-expanded`.
 
 FL7f. When any filter including the free-text search is applied, the summary area MUST render a "Clear filters" (`清除筛选`) text button left of the total charge. Activating it MUST clear the search input, every filter in FL7b, and their URL parameters in one history replacement.
 
@@ -493,9 +492,8 @@ FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping 
 
 FL8c. Every request-log detail tooltip trigger (request-id, model, Channel, API key, timing, input, output, cost) MUST be a native `<button type="button">`, so keyboard focus opens the tooltip and the trigger appears in the tab order. The FL36 status indicator MUST have `role="img"` and an `aria-label` equal to the localized status (success / error / pending / client gone).
 
-FL8b. Every request-log body row MUST have a fixed height of 44 pixels; cell content plus vertical padding MUST fit inside it (two-line cells use 16 px + 20 px lines with 2 px vertical padding). The merged leading cells, the admin-visible merged User/API key cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
+FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells, the admin-visible merged User/API key cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
 
-FL8d. The table MUST use one base font size of 12 px (`text-xs`) for every primary value, badge, ModelBadge label, placeholder, and IP text. The secondary (second) line of a two-line cell (Channel line, admin API key line, cached-input line) MUST use 11 px muted text. No other font size MAY appear in table body cells.
 
 FL9. The merged `model/[channel]` cell MUST use a non-wrapping column layout inside the fixed-height row:
 
@@ -588,7 +586,7 @@ FL26c. If the cost breakdown tooltip would contain no visible line items (all pe
 
 FL26d. Legacy snapshot exception to FL26c: if an existing historical `billing_breakdown_json.exemption_reason = "admin_unpriced_model"`, the Cost cell MUST still render a tooltip. That tooltip MUST include a localized note stating that an admin-used unpriced model was exempted from billing, so a visible `$0.000000` charge is not mistaken for missing data. New metered-billing requests MUST NOT create this exemption.
 
-FL26e. The cost breakdown tooltip width MUST NOT exceed the mobile viewport width minus 24 pixels. On viewports narrower than the `sm` breakpoint, each line-item price expression MUST render below its localized label. On wider viewports, the label and expression MAY render in two columns. The same width bound (`max-width: calc(100vw - 24px)`) applies to every tooltip listed in FL32, and long error text and retry-chain rows in them MUST wrap (`break-words`) instead of overflowing the viewport.
+FL26e. The cost breakdown tooltip width MUST NOT exceed the mobile viewport width minus 24 pixels. On viewports narrower than the `sm` breakpoint, each line-item price expression MUST render below its localized label. On wider viewports, the label and expression MAY render in two columns.
 
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 
@@ -608,7 +606,7 @@ FL30. For rows where `request_kind = "active_probe_connectivity"` and `api_key_n
 
 FL31. The rightmost `request_ip` column MUST keep a trailing right inset equal to the leading left inset of the merged `created_at/request_id` column, so IP text does not visually touch the table's right boundary.
 
-FL32. Tooltip overlays for request-log table detail cells (request-id, model, token, channel, duration, input/output, cost) MUST render in a portal layer attached to `document.body` so overlay width/position is not constrained by table/cell/container layout width or overflow clipping. Their width MUST follow the viewport bound in FL26e.
+FL32. Tooltip overlays for request-log table detail cells (request-id, model, token, channel, duration, input/output, cost) MUST render in a portal layer attached to `document.body` so overlay width/position is not constrained by table/cell/container layout width or overflow clipping.
 
 FL33. On coarse-pointer devices (touch-first), those tooltip overlays MUST open on tap and close on outside tap, while preserving hover behavior on fine-pointer devices.
 
@@ -625,7 +623,7 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 
 Hovering a `client_gone` row MUST show `error_code`, `error_message`, and `error_http_status` the same way FL28 shows those fields for `error` rows. The status filter MUST include a `client_gone` option.
 
-FL36a. An `error` or `client_gone` row whose Input and Output usage are both unavailable (FL27b) MUST replace those two cells with one cell (`colspan=2`) showing an inline error chip whose text is `<error_http_status> · <error_code>` (only the present parts; the localized status when neither is present). The chip MUST use the `error-soft` style for `error` and the `warning-soft` style for `client_gone`. The Cost cell keeps its normal rendering. Rows with usage keep the normal Input/Output cells.
+FL36a. An `error` or `client_gone` row whose Input and Output usage are both unavailable (FL27b) MUST keep the Input and Output cells; the Input cell MUST render, in place of its token count, an inline 10 px text badge whose text is `<error_http_status> · <error_code>` (only the present parts; the localized status when neither is present). The chip MUST use the `error-soft` style for `error` and the `warning-soft` style for `client_gone`. The Output cell and the Cost cell keep their normal rendering. Rows with usage keep the normal Input/Output cells.
 
 FL37e. While the table viewport is scrolled away from its top (more than 8 px), live updates that would insert rows above the visible ones (SSE `log_batch` rows, newest-page refreshes, and first-page refetches) MUST be buffered and MUST NOT move the currently visible rows. While anything is buffered for this reason and at least one buffered row is not yet shown, the table MUST show a floating pill near its top reading `N 条新日志 · 回到顶部` (localized), where N counts distinct buffered rows (by `request_id`, else `id`) that match the active filters and are not already visible. Activating the pill MUST apply the buffer and scroll the table to the first row. Scrolling back to the top MUST also apply the buffer. Appended pages from infinite loading (offset > 0) are not buffered for this reason. Changing the filter set MUST reset the viewport state to "at top" and discard buffered page responses of the previous filter set. At the top, rows keep being inserted live per FL37/FL49.
 
