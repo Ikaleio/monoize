@@ -8,7 +8,7 @@ pub async fn count_messages_tokens(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    let request_id = messages_request_id(&headers);
+    let request_id = messages_wire_request_id(&canonical_request_id(&headers));
     let mut response = match count_messages_tokens_inner(&state, &headers, body, &request_id).await
     {
         Ok(response) => response,
