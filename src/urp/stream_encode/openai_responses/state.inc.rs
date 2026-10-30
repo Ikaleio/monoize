@@ -175,6 +175,7 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
                 content,
                 phase: phase.clone(),
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             })
         }
         urp::NodeHeader::Reasoning { metadata, id } => {
@@ -246,6 +247,7 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
                 .unwrap_or_default()
                 .to_string(),
             extra_body: state.node_extra_body.clone(),
+            cache_breakpoint: None,
         }),
         urp::NodeHeader::ProviderItem {
             body: start_body,

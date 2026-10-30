@@ -429,7 +429,7 @@ T1c. Monoize MUST normalize semantic tool fields before any unknown-field fallba
 
 T1c1. For OpenAI Responses `type = "custom"` tool descriptors, Monoize MUST preserve the descriptor as a flat tool object. The fields `name`, `description`, and `format` MUST remain fields of the emitted custom tool object. Non-semantic custom-tool fields such as `defer_loading` MUST remain at the same tool object layer through decode, IR storage, and encode.
 
-T1c2. For Anthropic Messages tool descriptors, Monoize MUST preserve user-defined tool fields as a flat Anthropic tool object. The fields `name`, `description`, `input_schema`, optional `type = "custom"`, and `strict` MUST remain at the tool object layer. Anthropic tool metadata fields including `cache_control`, `defer_loading`, `allowed_callers`, `input_examples`, and `eager_input_streaming` MUST remain at the same tool object layer and MUST NOT be moved into `input_schema`. Anthropic provider-native built-in or versioned descriptors, including `computer_20251124`, `web_search_20260209`, `web_search_20250305`, and `mcp_toolset`, MUST remain flat non-function descriptors with their explicit `type`, native `name` when present, and config fields in the same tool object.
+T1c2. For Anthropic Messages tool descriptors, Monoize MUST preserve user-defined tool fields as a flat Anthropic tool object. The fields `name`, `description`, `input_schema`, optional `type = "custom"`, and `strict` MUST remain at the tool object layer. The typed `ToolDefinition.cache_breakpoint` encodes as `cache_control` at the same layer. Anthropic tool metadata fields including `defer_loading`, `allowed_callers`, `input_examples`, and `eager_input_streaming` MUST remain at the same tool object layer and MUST NOT be moved into `input_schema`. Anthropic provider-native built-in or versioned descriptors, including `computer_20251124`, `web_search_20260209`, `web_search_20250305`, and `mcp_toolset`, MUST remain flat non-function descriptors with their explicit `type`, native `name` when present, and config fields in the same tool object.
 
 T1d. `extra_body` fallback for tool definitions is allowed only for fields that are not semantic tool fields for the source protocol layer. A decoder MAY place an unknown or private tool field into `ToolDefinition.extra_body` or a function-owned extra map only if the owning layer is preserved through decode, IR storage, and encode. The owner MUST distinguish at least tool-descriptor scope from Chat Completions `function` scope. A later encoder MUST NOT move a preserved function-owned field to tool-descriptor scope, and MUST NOT move a preserved tool-descriptor field into the Chat Completions `function` object.
 
@@ -1101,7 +1101,7 @@ PC2.2. Content-block extra preservation for chat adapter:
 
 - When encoding URP v2 nodes to upstream chat `messages[].content[]` blocks, Monoize MUST merge each node's `extra_body` into the generated block object, subject to the precedence rule in §7.6.
 - Monoize MAY collapse a single text block to scalar string `content` only when that block has no extra fields beyond adapter-generated keys.
-- If a single text block contains any extra field, for example `cache_control`, Monoize MUST keep array or block form and MUST preserve that extra field in the encoded block.
+- If a single text block contains any extra field, or `urp-v2-flat-structure.spec.md` CB-12 emits a cache marker on it, Monoize MUST keep array or block form and MUST preserve that field in the encoded block.
 
 PC2.3. Chat content-block compatibility decode:
 
@@ -1153,7 +1153,7 @@ PC2.9. Deprecated Chat function-call lifecycle preservation:
 - A Chat stream decoder MUST normalize `delta.function_call` and terminal `message.function_call` through the same marked `ToolCall` lifecycle. A Chat stream encoder MUST emit marked call chunks under `delta.function_call`, preserve argument-fragment order, and use terminal `finish_reason = "function_call"`.
 - Legacy markers are internal metadata under `XTRA-10`. They MUST remain available until target encoding and MUST NOT appear on the wire.
 
-PC2.10. Chat tool-result content encode. For a `ToolResult` encoded as a Chat `role = "tool"` or `role = "function"` message, let `T` be the ordered text entries of its content. If `T` has at most one entry, `content` MUST be that entry's text, or `""` when `T` is empty. If `T` has two or more entries, `content` MUST be an array of `{ "type": "text", "text": <entry> }` objects in order; Monoize MUST NOT join the entries. If `ToolResult.is_error = true`, Monoize MUST prefix the first text entry with `"Error: "`, or use `"Error"` when `T` is empty, because Chat tool messages have no error flag.
+PC2.10. Chat tool-result content encode. For a `ToolResult` encoded as a Chat `role = "tool"` or `role = "function"` message, let `T` be the ordered text entries of its content. If `T` is empty, `content` MUST be `""`. If `T` has exactly one entry and that entry has no wire field other than its text, `content` MUST be that text. Otherwise `content` MUST be an array of `{ "type": "text", "text": <entry> }` objects in order, each merged with that entry's non-internal `extra_body` and any cache marker that CB-12 emits; Monoize MUST NOT join the entries. If `ToolResult.is_error = true`, Monoize MUST prefix the first text entry with `"Error: "`, or use `"Error"` when `T` is empty, because Chat tool messages have no error flag.
 
 PC2.11. An assistant `Text` node with empty `content`, no citations, and no node-local wire extra carries no Chat wire content. The Chat request encoder MUST drop it before message grouping, so it neither emits an assistant message nor splits the surrounding assistant turn into two messages.
 
@@ -1361,7 +1361,7 @@ PM5e. When encoding a URP v2 request to an upstream `type=responses` provider, M
 
 PM6. Monoize MUST convert Messages streaming deltas into canonical URP v2 stream events.
 
-PM6.1. Messages message-envelope unknown fields MUST decode into `NextDownstreamEnvelopeExtra` immediately before the first node derived from that message. They MUST NOT be copied into the first content block node. Block-local fields such as `cache_control`, `citations`, and `caller` remain only on that block node.
+PM6.1. Messages message-envelope unknown fields MUST decode into `NextDownstreamEnvelopeExtra` immediately before the first node derived from that message. They MUST NOT be copied into the first content block node. Block-local fields such as `citations` and `caller` remain only on that block node, and block-local `cache_control` becomes that block node's typed `cache_breakpoint`.
 
 PM6.2. Monoize MUST preserve all current Anthropic stop reasons: `end_turn`, `max_tokens`, `stop_sequence`, `tool_use`, `pause_turn`, `refusal`, `model_context_window_exceeded`, and `compaction`. A same-Messages response MUST re-emit the exact source reason. In particular, `pause_turn`, `refusal`, and context-window exhaustion MUST NOT become `end_turn`.
 
@@ -1614,6 +1614,7 @@ XF4. Node-local unknown fields:
 - When decoding a downstream request, Monoize MUST preserve unknown fields on individual content blocks into the corresponding URP node `extra_body` or `ToolResultContent.extra_body`.
 - When encoding an upstream request, Monoize MUST merge each node or tool-result-content `extra_body` map into the generated protocol object, subject to the same precedence rule as XF3.
 - This applies to all content-block types, including `text`, `image`, `document` or `file`, `thinking`, `tool_use`, and `tool_result` inner content blocks.
+- `cache_control` and `prompt_cache_breakpoint` on a request carrier are not unknown fields. `urp-v2-flat-structure.spec.md` section 4a governs them, so a Chat or Responses marker never reaches a Messages upstream under its source key.
 
 XF4a. Envelope-level unknown fields:
 

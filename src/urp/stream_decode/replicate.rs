@@ -132,6 +132,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
             content: output_text.clone(),
             phase: None,
             extra_body: HashMap::new(),
+            cache_breakpoint: None,
         }]
     } else {
         Vec::new()

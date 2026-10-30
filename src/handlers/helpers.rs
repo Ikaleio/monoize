@@ -531,6 +531,8 @@ enum CanonicalAffinityNode<'a> {
         content: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         phase: &'a Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: &'a Option<urp::CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
@@ -592,6 +594,8 @@ enum CanonicalAffinityNode<'a> {
         call_id: &'a str,
         name: &'a str,
         arguments: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: &'a Option<urp::CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
@@ -615,6 +619,8 @@ enum CanonicalAffinityNode<'a> {
         call_id: &'a str,
         is_error: bool,
         content: Vec<CanonicalAffinityToolResultContent<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: &'a Option<urp::CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
@@ -662,6 +668,8 @@ impl Serialize for CanonicalAffinityReasoningParts<'_> {
 enum CanonicalAffinityToolResultContent<'a> {
     Text {
         text: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: &'a Option<urp::CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: BTreeMap<&'a String, &'a Value>,
     },
@@ -694,9 +702,14 @@ fn canonical_affinity_tool_result_content(
     content: &urp::ToolResultContent,
 ) -> CanonicalAffinityToolResultContent<'_> {
     match content {
-        urp::ToolResultContent::Text { text, extra_body } => {
+        urp::ToolResultContent::Text {
+            text,
+            extra_body,
+            cache_breakpoint,
+        } => {
             CanonicalAffinityToolResultContent::Text {
                 text,
+                cache_breakpoint,
                 extra_body: sorted_extra(extra_body),
             }
         }
@@ -743,7 +756,9 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             content,
             phase,
             extra_body,
+            cache_breakpoint,
         } => CanonicalAffinityNode::Text {
+            cache_breakpoint,
             signature,
             citations,
             id,
@@ -844,8 +859,10 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             name,
             arguments,
             extra_body,
+            cache_breakpoint,
             ..
         } => CanonicalAffinityNode::ToolCall {
+            cache_breakpoint,
             namespace,
             signature,
             id,
@@ -880,8 +897,10 @@ fn canonical_affinity_node(node: &urp::Node) -> CanonicalAffinityNode<'_> {
             is_error,
             content,
             extra_body,
+            cache_breakpoint,
             ..
         } => CanonicalAffinityNode::ToolResult {
+            cache_breakpoint,
             signature,
             namespace,
             name,
@@ -1326,6 +1345,7 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
             content: pending_markdown,
             phase: None,
             extra_body: std::collections::HashMap::new(),
+            cache_breakpoint: None,
         });
     }
 
@@ -1768,6 +1788,7 @@ fn messages_custom_bridge_function(tool: urp::ToolDefinition) -> urp::ToolDefini
         }),
         custom: None,
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }
 }
 

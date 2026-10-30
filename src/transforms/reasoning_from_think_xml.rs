@@ -200,6 +200,7 @@ fn text_node(content: String, phase: Option<String>, id: Option<String>) -> Node
         content,
         phase,
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }
 }
 

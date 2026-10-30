@@ -1,16 +1,16 @@
 use crate::transforms::anthropic_cache::CacheConfig;
+use crate::transforms::anthropic_cache::anthropic_slot_count;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{AnthropicCacheTarget, Node, OrdinaryRole};
+use crate::urp::{AnthropicCacheTarget, OrdinaryRole};
 use async_trait::async_trait;
 use serde_json::Value;
 
 pub struct CacheAnthropicSystemTransform;
 
-/// If the system prompt has no cache_control on any of its parts,
-/// add cache_control: {type: "ephemeral"} to its last part.
+/// Marks the last system or developer carrier unless the client already marked it.
 /// Respects the max-4 cache breakpoint limit.
 #[async_trait]
 impl Transform for CacheAnthropicSystemTransform {
@@ -70,50 +70,28 @@ impl Transform for CacheAnthropicSystemTransform {
             return Ok(());
         };
 
-        let system_idx = req.input.iter().rposition(|node| {
+        let system_idx = req.input.iter_mut().rposition(|node| {
             matches!(
                 node.role(),
                 Some(OrdinaryRole::System | OrdinaryRole::Developer)
-            )
+            ) && node.cache_breakpoint_mut().is_some()
         });
         let Some(idx) = system_idx else {
             return Ok(());
         };
 
-        let slot_free = count_cache_breakpoints(req) < 4;
-        CacheConfig::from_dyn(config)?.apply_marker(
-            req.input[idx].extra_body_mut(),
+        let slot_free = anthropic_slot_count(req) < 4;
+        let slot = req.input[idx]
+            .cache_breakpoint_mut()
+            .expect("checked marker carrier");
+        CacheConfig::from_dyn(config)?.apply_breakpoint(
+            slot,
             &mut req.context.anthropic_cache_markers,
             AnthropicCacheTarget::System,
             slot_free,
         );
 
         Ok(())
-    }
-}
-
-fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
-    req.input
-        .iter()
-        .filter(|node| node_has_cache_control(node))
-        .count()
-        + usize::from(req.extra_body.contains_key("cache_control"))
-}
-
-fn node_has_cache_control(node: &Node) -> bool {
-    match node {
-        Node::Text { extra_body, .. }
-        | Node::Image { extra_body, .. }
-        | Node::Audio { extra_body, .. }
-        | Node::File { extra_body, .. }
-        | Node::Refusal { extra_body, .. }
-        | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. }
-        | Node::ProviderItem { extra_body, .. }
-        | Node::ToolResult { extra_body, .. }
-        | Node::NextDownstreamEnvelopeExtra { extra_body } => {
-            extra_body.contains_key("cache_control")
-        }
     }
 }
 

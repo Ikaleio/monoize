@@ -145,6 +145,7 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
                 content,
                 phase,
                 extra_body,
+                cache_breakpoint,
             } => {
                 let (cleaned, images) = extract_markdown_images_from_text(&content);
                 if !cleaned.is_empty() {
@@ -157,6 +158,7 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
                         content: cleaned,
                         phase,
                         extra_body,
+                        cache_breakpoint,
                     });
                 }
                 for source in images {
@@ -390,6 +392,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                     content,
                     phase,
                     extra_body: node_extra_body,
+                    cache_breakpoint: _,
                 },
             usage,
             extra_body: event_extra_body,
@@ -433,6 +436,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                         content: std::mem::take(&mut node_state.cleaned_content),
                         phase: phase.clone(),
                         extra_body: node_extra_body.clone(),
+                        cache_breakpoint: None,
                     },
                     usage: None,
                     extra_body: event_extra_body.clone(),

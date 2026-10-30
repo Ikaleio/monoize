@@ -1074,6 +1074,7 @@ pub(crate) fn encode_request_node_part(
             name,
             arguments,
             extra_body,
+            cache_breakpoint: _,
         } => {
             if *tool_type == crate::urp::ToolCallType::Custom {
                 return None;
