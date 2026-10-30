@@ -1453,7 +1453,31 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 .await?;
                 finished = true;
             }
-            UrpStreamEvent::ProviderControl { .. } => {}
+            UrpStreamEvent::ProviderControl {
+                protocol,
+                event_name,
+                data,
+                ..
+            } => {
+                // PC7h: message-global citations of a completed text segment.
+                if protocol == "chat_completion"
+                    && event_name == urp::CHAT_ANNOTATIONS_CONTROL
+                    && let Some(annotations) = data.get("annotations")
+                {
+                    tx.send_chunk(&json!({
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": logical_model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": { "annotations": annotations },
+                            "finish_reason": Value::Null,
+                        }],
+                    }))
+                    .await?;
+                }
+            }
             UrpStreamEvent::Error {
                 code,
                 message,

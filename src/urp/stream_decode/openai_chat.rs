@@ -454,7 +454,7 @@ async fn decode_chat_stream(
         }
 
         if let Some(annotations) = delta.get("annotations").and_then(Value::as_array) {
-            let live = place_chat_citations(
+            let (live, completed_segment_citations) = place_chat_citations(
                 crate::urp::citations::decode(
                     annotations.clone(),
                     crate::urp::ProviderProtocol::ChatCompletion,
@@ -462,6 +462,24 @@ async fn decode_chat_stream(
                 &output_text,
                 &mut segments,
             );
+            if !completed_segment_citations.is_empty() {
+                send_event(
+                    &tx,
+                    UrpStreamEvent::ProviderControl {
+                        protocol: "chat_completion".to_string(),
+                        event_name: crate::urp::CHAT_ANNOTATIONS_CONTROL.to_string(),
+                        data: json!({
+                            "annotations": crate::urp::citations::encode(
+                                &completed_segment_citations,
+                                crate::urp::ProviderProtocol::ChatCompletion,
+                                0,
+                            ),
+                        }),
+                        extra_body: HashMap::new(),
+                    },
+                )
+                .await?;
+            }
             // Citations that all belong to completed segments must not open an empty node.
             if annotations.is_empty() || !live.is_empty() {
                 let node_index = ensure_node_started(
@@ -3095,25 +3113,28 @@ fn text_segment_node(content: &str, phase: Option<&str>) -> Node {
 }
 
 /// PC7h: Chat annotation ranges are message-global and URP text citations are node-local.
-/// Returns the citations of the open text node; a range wholly inside a completed segment
-/// joins that segment's terminal node.
+/// Returns the citations of the open text node, then the message-global citations whose range
+/// lies wholly inside a completed segment; those also join that segment's terminal node.
 fn place_chat_citations(
     citations: Vec<crate::urp::Citation>,
     output_text: &str,
     segments: &mut StreamSegments,
-) -> Vec<crate::urp::Citation> {
+) -> (Vec<crate::urp::Citation>, Vec<crate::urp::Citation>) {
     let base = output_text
         .get(..segments.text_start)
         .unwrap_or_default()
         .chars()
         .count() as u64;
     if base == 0 {
-        return citations;
+        return (citations, Vec::new());
     }
     let mut live = Vec::with_capacity(citations.len());
+    let mut completed = Vec::new();
     for mut citation in citations {
+        let global = citation.clone();
         match &mut citation.answer_range {
             Some(range) if range.end <= base && range.start < base => {
+                completed.push(global);
                 let mut segment_end = 0u64;
                 let owner = segments.closed.iter_mut().find_map(|(_, node)| {
                     let Node::Text {
@@ -3140,7 +3161,7 @@ fn place_chat_citations(
             None => live.push(citation),
         }
     }
-    live
+    (live, completed)
 }
 
 /// `force` also completes details awaiting a signature, at the terminal snapshot.
