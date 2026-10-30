@@ -1301,14 +1301,72 @@ pub(crate) fn parse_chat_usage(obj: &Map<String, Value>) -> Usage {
             obj.insert(canonical.to_string(), value);
         }
     }
+    for (key, aliases) in [
+        ("prompt_tokens_details", INPUT_DETAIL_ALIASES),
+        ("input_tokens_details", INPUT_DETAIL_ALIASES),
+        ("completion_tokens_details", OUTPUT_DETAIL_ALIASES),
+        ("output_tokens_details", OUTPUT_DETAIL_ALIASES),
+    ] {
+        match obj.get_mut(key) {
+            Some(Value::Object(details)) => canonicalize_usage_detail_aliases(details, aliases),
+            Some(_) => {
+                obj.remove(key);
+            }
+            None => {}
+        }
+    }
     serde_json::from_value::<OpenAiChatUsage>(Value::Object(obj.clone()))
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
             iterations: None,
-            input_tokens: 0,
-            output_tokens: 0,
+            input_tokens: obj
+                .get("prompt_tokens")
+                .and_then(crate::urp::decode::value_to_u64)
+                .unwrap_or(0),
+            output_tokens: obj
+                .get("completion_tokens")
+                .and_then(crate::urp::decode::value_to_u64)
+                .unwrap_or(0),
             input_details: None,
             output_details: None,
             extra_body: split_extra(&obj, &[]),
         })
+}
+
+const INPUT_DETAIL_ALIASES: &[(&str, &str)] = &[
+    ("cache_read_tokens", "cached_tokens"),
+    ("tool_prompt_input_tokens", "tool_prompt_tokens"),
+];
+const OUTPUT_DETAIL_ALIASES: &[(&str, &str)] = &[
+    (
+        "accepted_prediction_output_tokens",
+        "accepted_prediction_tokens",
+    ),
+    (
+        "rejected_prediction_output_tokens",
+        "rejected_prediction_tokens",
+    ),
+];
+
+/// PC9a: an alias next to its canonical field is a serde duplicate-field error, which must not
+/// discard the rest of the usage. The larger counter wins.
+fn canonicalize_usage_detail_aliases(
+    details: &mut Map<String, Value>,
+    aliases: &[(&str, &str)],
+) {
+    for (alias, canonical) in aliases {
+        let Some(alias_value) = details.remove(*alias) else {
+            continue;
+        };
+        let keep_alias = match details.get(*canonical) {
+            Some(existing) => {
+                crate::urp::decode::value_to_u64(&alias_value).unwrap_or(0)
+                    > crate::urp::decode::value_to_u64(existing).unwrap_or(0)
+            }
+            None => true,
+        };
+        if keep_alias {
+            details.insert((*canonical).to_string(), alias_value);
+        }
+    }
 }

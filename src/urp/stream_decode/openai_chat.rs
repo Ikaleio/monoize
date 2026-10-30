@@ -1849,17 +1849,28 @@ fn reasoning_detail_completion(
 
     let (content, encrypted, summary, payload_delta) = match payload_key {
         "text" => {
-            let existing = existing_raw
+            let existing_text = existing_raw
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let terminal = merged_raw.get("text").and_then(Value::as_str).unwrap_or("");
-            let suffix = snapshot_suffix(existing, terminal)?;
+            let suffix = snapshot_suffix(existing_text, terminal);
+            // PC8: a signature first seen (or changed) in the snapshot has no other delta.
+            let signature = match (existing, &merged_node) {
+                (
+                    Node::Reasoning { encrypted: old, .. },
+                    Node::Reasoning { encrypted: new, .. },
+                ) if new != old => new.clone(),
+                _ => None,
+            };
+            if suffix.is_none() && signature.is_none() {
+                return None;
+            }
             (
-                Some(suffix.to_string()),
+                suffix.map(str::to_string),
+                signature,
                 None,
-                None,
-                Value::String(suffix.to_string()),
+                Value::String(suffix.unwrap_or_default().to_string()),
             )
         }
         "summary" => {

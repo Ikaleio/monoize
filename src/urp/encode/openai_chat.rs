@@ -371,11 +371,7 @@ fn flush_pending_chat_message(
     insert_reasoning_fields(
         &mut reasoning_fields,
         &pending_msg.reasoning_parts,
-        ReasoningTarget::Request {
-            dialect,
-            has_tool_calls: !pending_msg.tool_calls.is_empty()
-                || pending_msg.legacy_function_call.is_some(),
-        },
+        ReasoningTarget::Request { dialect },
     );
     if pending_msg.content_parts.is_empty()
         && pending_msg.tool_calls.is_empty()
@@ -812,7 +808,15 @@ fn encode_reasoning_controls(
         }
         obj.insert("reasoning".into(), Value::Object(controls));
     } else if let Some(effort) = effort {
-        obj.insert("reasoning_effort".into(), json!(effort));
+        if dialect == ChatDialect::DeepSeek && effort == "none" {
+            // DeepSeek toggles thinking only via `thinking.type`; `reasoning_effort` takes
+            // low/high/max.
+            if native_thinking.is_none() {
+                obj.insert("thinking".into(), json!({ "type": "disabled" }));
+            }
+        } else {
+            obj.insert("reasoning_effort".into(), json!(effort));
+        }
     } else if matches!(dialect, ChatDialect::OpenRouter | ChatDialect::Vercel) {
         if let Some(budget) = budget {
             obj.insert("reasoning".into(), json!({ "max_tokens": budget }));
@@ -821,7 +825,8 @@ fn encode_reasoning_controls(
         }
     }
 
-    if let Some(native) = native_thinking {
+    // OpenAI Chat defines no `thinking` parameter.
+    if let Some(native) = native_thinking.filter(|_| dialect != ChatDialect::OpenAi) {
         let mut thinking = native.clone();
         thinking.retain(|key, _| !matches!(key.as_str(), "type" | "budget_tokens" | "display"));
         if reasoning.disabled() {
@@ -1399,6 +1404,11 @@ fn encode_tools(
         } else if tool.origin_protocol == Some(ProviderProtocol::ChatCompletion)
             && tool.tool_type.starts_with("openrouter:")
         {
+            if !matches!(dialect, ChatDialect::OpenRouter | ChatDialect::Generic) {
+                dropped.push(tool.name.clone().unwrap_or_else(|| tool.tool_type.clone()));
+                dropped.push(tool.tool_type.clone());
+                continue;
+            }
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!(tool.tool_type));
             if let Some(name) = &tool.name {
@@ -1539,10 +1549,7 @@ enum ReasoningTarget {
     /// A downstream Chat response message (DC5).
     Response,
     /// An assistant-history message of an upstream Chat request (PC8a).
-    Request {
-        dialect: ChatDialect,
-        has_tool_calls: bool,
-    },
+    Request { dialect: ChatDialect },
 }
 
 fn reasoning_surface(extra_body: &HashMap<String, Value>) -> Option<&str> {
@@ -1576,9 +1583,19 @@ fn insert_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part], tar
     let mut details = Vec::new();
     let mut reasoning_text = String::new();
     let mut reasoning_content = String::new();
-    let mut deepseek_surface = false;
     let mut opaque: Option<Value> = None;
-    let mut next_index = 0u64;
+    // Synthesized details take indexes above every native one (DC5).
+    let mut next_index = parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Reasoning { extra_body, .. } => extra_body
+                .get(CHAT_REASONING_DETAIL_EXTRA_KEY)?
+                .get("index")?
+                .as_u64(),
+            _ => None,
+        })
+        .max()
+        .map_or(0, |index| index + 1);
 
     for part in parts {
         let Part::Reasoning {
@@ -1598,8 +1615,6 @@ fn insert_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part], tar
             match dialect {
                 ChatDialect::OpenAi => continue,
                 ChatDialect::DeepSeek => {
-                    deepseek_surface |= reasoning_surface(extra_body)
-                        == Some(CHAT_REASONING_SURFACE_REASONING_CONTENT);
                     reasoning_content.push_str(plain.unwrap_or_default());
                     continue;
                 }
@@ -1612,7 +1627,6 @@ fn insert_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part], tar
         let mut encrypted = encrypted.as_ref();
         match reasoning_surface(extra_body) {
             Some(CHAT_REASONING_SURFACE_REASONING_CONTENT) => {
-                deepseek_surface = true;
                 reasoning_content.push_str(content.take().unwrap_or_default());
             }
             Some(CHAT_REASONING_SURFACE_REASONING_OPAQUE) => {
@@ -1646,17 +1660,10 @@ fn insert_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part], tar
         }
     }
 
-    let emit_reasoning_content = match target {
-        ReasoningTarget::Request {
-            dialect: ChatDialect::DeepSeek,
-            has_tool_calls,
-        } => has_tool_calls || deepseek_surface,
-        _ => true,
-    };
     if !reasoning_text.is_empty() {
         message.insert("reasoning".to_string(), Value::String(reasoning_text));
     }
-    if emit_reasoning_content && !reasoning_content.is_empty() {
+    if !reasoning_content.is_empty() {
         message.insert(
             "reasoning_content".to_string(),
             Value::String(reasoning_content),
