@@ -583,6 +583,14 @@ impl ResponsesWsSlot {
     }
 }
 
+/// WS4b: one event the handler must order into a response's egress stream.
+pub(crate) struct ResponsesWsRelay {
+    pub(crate) value: Value,
+    /// Read after the upstream terminal of its response, so it must not reach
+    /// the client before that terminal does.
+    pub(crate) post_terminal: bool,
+}
+
 /// WS2i: a stashed automatic successor waiting for its WS18 turn.
 pub(crate) struct ResponsesWsSuccessor {
     pub(crate) steer_inputs: Vec<Value>,
@@ -592,7 +600,7 @@ pub(crate) struct ResponsesWsSuccessor {
 
 pub(crate) struct ResponsesWsLane {
     slot: Arc<AsyncMutex<ResponsesWsSlot>>,
-    relay: mpsc::UnboundedSender<Value>,
+    relay: mpsc::UnboundedSender<ResponsesWsRelay>,
     successor: std::sync::Mutex<Option<ResponsesWsSuccessor>>,
     /// WS2h item 6: an idle watcher holds the slot between turns until woken.
     watching: AtomicBool,
@@ -601,7 +609,7 @@ pub(crate) struct ResponsesWsLane {
 
 impl ResponsesWsLane {
     /// `relay` receives acknowledgement events that bypass the stream decoder.
-    pub(crate) fn new(relay: mpsc::UnboundedSender<Value>) -> Self {
+    pub(crate) fn new(relay: mpsc::UnboundedSender<ResponsesWsRelay>) -> Self {
         Self {
             slot: Arc::new(AsyncMutex::new(ResponsesWsSlot::default())),
             relay,
@@ -624,6 +632,20 @@ impl ResponsesWsLane {
             self.wake.notify_one();
         }
         self.slot.clone().lock_owned().await
+    }
+
+    /// WS17: releases the encoded history of an evicted entry. Late notifications
+    /// stay attributable, and a queued pending steer still forces a fresh session.
+    pub(crate) async fn forget_continuation(self: &Arc<Self>) {
+        let mut slot = self.lock_slot().await;
+        slot.last_upstream_id = None;
+        slot.last_public_id = None;
+        slot.basis = Vec::new();
+        slot.last_output = Vec::new();
+        if slot.session.is_some() && slot.stashed.is_empty() {
+            self.watching.store(true, Ordering::Release);
+            tokio::spawn(watch_idle_session(slot, self.clone()));
+        }
     }
 
     pub(crate) async fn close(&self) {
@@ -679,7 +701,7 @@ fn relay_idle_frame(slot: &mut ResponsesWsSlot, lane: &ResponsesWsLane, text: &s
     }
     capture_turn_state(slot, &value);
     map_known_response_ids(&mut value, &slot.public_ids);
-    let _ = lane.relay.send(value);
+    let _ = lane.relay.send(ResponsesWsRelay { value, post_terminal: true });
     true
 }
 
@@ -717,7 +739,7 @@ fn map_known_response_ids(value: &mut Value, public_ids: &HashMap<String, String
 }
 
 /// The first `response_id` member at any depth (e.g. `timing_metrics.response_id`).
-fn find_response_id(value: &Value) -> Option<&str> {
+pub(crate) fn find_response_id(value: &Value) -> Option<&str> {
     match value {
         Value::Object(object) => object
             .get("response_id")
@@ -1339,7 +1361,10 @@ impl TurnFeeder {
     }
 
     fn relay(&self, value: Value) {
-        let _ = self.turn.lane.relay.send(value);
+        let _ = self.turn.lane.relay.send(ResponsesWsRelay {
+            value,
+            post_terminal: self.terminal,
+        });
     }
 
     async fn feed_frame(&mut self, text: String) -> FeedFlow {
@@ -1617,19 +1642,22 @@ impl TurnFeeder {
             match timeout(self.idle, session.send_text(frame.to_string())).await {
                 Ok(Ok(())) => self.sent_steers.push_back(input),
                 _ => {
-                    let _ = self.turn.lane.relay.send(json!({
-                        "type": "response.steer.failed",
-                        "steer": {
-                            "id": format!("steer_{}", uuid::Uuid::new_v4().simple()),
-                            "previous_response_id": self.turn.public_response_id,
-                            "input": input,
-                        },
-                        "error": {
-                            "type": "invalid_request_error",
-                            "code": "response_not_active",
-                            "message": "This response no longer accepts steering input.",
-                        },
-                    }));
+                    let _ = self.turn.lane.relay.send(ResponsesWsRelay {
+                        value: json!({
+                            "type": "response.steer.failed",
+                            "steer": {
+                                "id": format!("steer_{}", uuid::Uuid::new_v4().simple()),
+                                "previous_response_id": self.turn.public_response_id,
+                                "input": input,
+                            },
+                            "error": {
+                                "type": "invalid_request_error",
+                                "code": "response_not_active",
+                                "message": "This response no longer accepts steering input.",
+                            },
+                        }),
+                        post_terminal: false,
+                    });
                 }
             }
         }
