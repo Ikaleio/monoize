@@ -812,6 +812,8 @@ pub(crate) struct ResponsesWsTurn {
     /// WS18: Channel id and upstream model of the session the successor reads.
     pub(crate) successor: Option<(String, String)>,
     pub(crate) client_metadata: Option<Value>,
+    /// WS5a: Monoize appended `reasoning.encrypted_content` to `include`.
+    pub(crate) encrypted_include_added: bool,
     /// True once the downstream connection closed; outlives the turn's own
     /// control so post-terminal reading still observes disconnects (WS2g).
     pub(crate) connection_closed: watch::Receiver<bool>,

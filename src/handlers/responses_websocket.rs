@@ -128,7 +128,6 @@ struct Connection {
     /// WS8a: lane creation order for `item_reference` resolution.
     lane_order: StdMutex<HashMap<LaneKey, usize>>,
     /// WS5a: request models whose responses contained reasoning items.
-    reasoning_models: StdMutex<std::collections::HashSet<String>>,
     active: StdMutex<HashMap<LaneKey, ActiveTurn>>,
     generating: Arc<Semaphore>,
     /// WS14: started turns; rejected events never count.
@@ -431,7 +430,6 @@ async fn serve_responses_websocket(
         closed: AtomicBool::new(false),
         entries: StdMutex::new(Vec::new()),
         lane_order: StdMutex::new(HashMap::new()),
-        reasoning_models: StdMutex::new(std::collections::HashSet::new()),
         active: StdMutex::new(HashMap::new()),
         generating: Arc::new(Semaphore::new(MAX_GENERATING_TURNS)),
         accepted_turns: std::sync::atomic::AtomicUsize::new(0),
@@ -809,13 +807,8 @@ fn concat_history(
 }
 
 /// WS5a: request encrypted reasoning for replay; strip it downstream when the
-/// client did not ask for it. Without an explicit `reasoning` object this only
-/// happens for models observed to reason on this connection, because
-/// non-reasoning models reject the include with 400.
-fn ensure_encrypted_reasoning(request: &mut Map<String, Value>, model_reasons: bool) -> bool {
-    if request.get("reasoning").is_none_or(Value::is_null) && !model_reasons {
-        return false;
-    }
+/// client did not ask for it.
+fn ensure_encrypted_reasoning(request: &mut Map<String, Value>) -> bool {
     let include = request
         .entry("include")
         .or_insert_with(|| Value::Array(Vec::new()));
@@ -871,8 +864,9 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
             evict: Some(previous.clone()),
         };
         let full_input = concat_history(limits, entry, incoming).map_err(evict)?;
-        let controls = entry.controls.clone();
-        let strip_encrypted = entry.strip_encrypted;
+        let mut controls = entry.controls.clone();
+        // A warmup entry never requested encrypted reasoning (WS5a).
+        let strip_encrypted = ensure_encrypted_reasoning(&mut controls) || entry.strip_encrypted;
         drop(entries);
         let client_metadata = controls.get("client_metadata").cloned();
         let request = finish_request(limits, controls, &full_input).map_err(evict)?;
@@ -946,11 +940,7 @@ fn prepare_create(
         }
         None => (incoming, false),
     };
-    let model_reasons = event
-        .get("model")
-        .and_then(Value::as_str)
-        .is_some_and(|model| conn.reasoning_models.lock().is_ok_and(|models| models.contains(model)));
-    let strip_encrypted = !warmup && ensure_encrypted_reasoning(&mut event, model_reasons);
+    let strip_encrypted = !warmup && ensure_encrypted_reasoning(&mut event);
     let client_metadata = event.get("client_metadata").cloned();
     let request = finish_request(limits, event, &full_input)?;
     Ok(PreparedTurn {
@@ -1052,6 +1042,7 @@ async fn run_turn(
         warmup: prepared.warmup,
         successor: prepared.successor.clone(),
         client_metadata: prepared.client_metadata.clone(),
+        encrypted_include_added: prepared.strip_encrypted,
         connection_closed: conn.lifetime.subscribe(),
     };
 
@@ -1117,15 +1108,6 @@ async fn run_turn(
     }
     drop(control_tx);
 
-    if outcome
-        .output
-        .iter()
-        .any(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
-        && let Some(model) = prepared.request.get("model").and_then(Value::as_str)
-        && let Ok(mut models) = conn.reasoning_models.lock()
-    {
-        models.insert(model.to_string());
-    }
     let mut finished = if outcome.disconnected {
         None
     } else {
