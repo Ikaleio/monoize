@@ -49,7 +49,7 @@ Monoize 将每个接入协议解码为 URP v2。URP v2 是扁平的类型化表�
 4. 当前路由耗尽后推进到下一个路由。
 5. 发送首个响应字节后停止回退。
 
-网络错误、超时、`429` 与指定的 `5xx` 推进瀑布；`400`、`401`、`403`、`422` 终止瀑布。熔断器、被动健康检测、主动探测与冷却期将异常 Channel 排除在路径之外。Monoize 不会在可见流的中途切换 Provider。规则见[路由规范](spec/monoize-upstream-routing.spec.md)。
+HTTP `408`、HTTP `429`、HTTP `5xx`、超时与连接错误可在重试限制内重试同一 Channel。其他上游错误（包括 HTTP `400`、`401`、`403`、`422`）不重试同一 Channel，但仍推进到下一个符合条件的 Channel 或 Provider。Monoize 自身的认证、授权、余额、请求校验、请求编码、变换、计费与内部错误会终止路由。熔断器、被动健康检测、主动探测与冷却期将异常 Channel 排除在路径之外。Monoize 不会在可见流的中途切换 Provider。规则见[路由规范](spec/monoize-upstream-routing.spec.md)。
 
 ### 3. 低转发开销
 

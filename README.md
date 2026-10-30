@@ -49,7 +49,7 @@ A logical model can match several ordered Providers. Each Provider contains weig
 4. When the current route is exhausted, advance to the next route.
 5. Stop fallback after sending the first response byte.
 
-Network errors, timeouts, `429`, and selected `5xx` responses advance the waterfall. `400`, `401`, `403`, and `422` stop it. Circuit breakers, passive health checks, active probes, and cooldowns exclude unhealthy Channels from the path. Monoize never switches Providers in the middle of a visible stream. See the [routing specification](spec/monoize-upstream-routing.spec.md).
+HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, and connection errors can retry the same Channel within the retry limits. Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, do not retry the same Channel. They still advance to the next eligible Channel or Provider. Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, and internal errors stop routing. Circuit breakers, passive health checks, active probes, and cooldowns exclude unhealthy Channels from the path. Monoize never switches Providers in the middle of a visible stream. See the [routing specification](spec/monoize-upstream-routing.spec.md).
 
 ### 3. Low forwarding overhead
 
