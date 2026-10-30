@@ -640,7 +640,7 @@ fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
 
         let message_phase = msg_obj.get("phase").and_then(|v| v.as_str());
         let mut parts = Vec::new();
-        let extra_body = split_extra(
+        let mut extra_body = split_extra(
             msg_obj,
             &[
                 "role",
@@ -715,6 +715,7 @@ fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
             parts.push(function_call);
         }
 
+        crate::urp::cache_breakpoint::attach_chat_message_marker(&mut parts, &mut extra_body);
         push_message_nodes(&mut input_nodes, role, parts, extra_body);
     }
 

@@ -339,10 +339,11 @@ ROLE-9. Within one maximal run of adjacent ordinary nodes, `role_merge_consecuti
 1. both nodes are ordinary nodes;
 2. both nodes carry the same ordinary `role`;
 3. neither node is `Reasoning` or `ToolCall` if the downstream encoder treats those node kinds as distinct top-level semantic units;
-4. no `ToolResult` node lies between them; and
-5. no control node lies between them.
+4. no `ToolResult` node lies between them;
+5. no control node lies between them; and
+6. the earlier node has no `cache_breakpoint`, because a marker ends a cached prefix and content after it MUST stay outside that prefix.
 
-ROLE-10. If `role_merge_consecutive` merges neighboring ordinary nodes, it MUST preserve node order and MUST preserve all surviving typed fields. If conflicting nested passthrough keys survive on merged ordinary-node state, the earlier surviving node's typed fields remain authoritative and merge policy for residual passthrough keys MUST be deterministic.
+ROLE-10. If `role_merge_consecutive` merges neighboring ordinary nodes, it MUST preserve node order and MUST preserve all surviving typed fields. If conflicting nested passthrough keys survive on merged ordinary-node state, the earlier surviving node's typed fields remain authoritative and merge policy for residual passthrough keys MUST be deterministic. A later node's `cache_breakpoint`, including its ownership flag, MUST move to the merged node, so the boundary stays at the end of the same text.
 
 ROLE-11. `role_merge_consecutive` MUST NOT merge `ToolResult` into ordinary nodes and MUST NOT cross a control-node boundary.
 

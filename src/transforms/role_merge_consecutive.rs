@@ -94,6 +94,7 @@ fn merge_same_role_nodes(nodes: &[Node]) -> Vec<Node> {
                 role: last_role,
                 content: last_content,
                 phase: last_phase,
+                cache_breakpoint: last_breakpoint,
                 extra_body: last_extra,
                 ..
             }),
@@ -101,14 +102,18 @@ fn merge_same_role_nodes(nodes: &[Node]) -> Vec<Node> {
                 role,
                 content,
                 phase,
+                cache_breakpoint,
                 extra_body,
                 ..
             },
         ) = (merged.last_mut(), node)
             && last_role == role
             && last_phase == phase
+            // ROLE-9: content after a marker must stay outside the cached prefix.
+            && last_breakpoint.is_none()
         {
             last_content.push_str(content);
+            last_breakpoint.clone_from(cache_breakpoint);
             for (k, v) in extra_body {
                 last_extra.entry(k.clone()).or_insert_with(|| v.clone());
             }

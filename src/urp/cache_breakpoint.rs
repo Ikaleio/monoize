@@ -1,6 +1,7 @@
 //! Canonical prompt-cache breakpoints (`spec/urp-v2-flat-structure.spec.md` section 4a).
 
 use super::encode::openai_chat::ChatDialect;
+use super::internal_legacy_bridge::Part;
 use super::{Node, OrdinaryRole, ProviderProtocol, ToolDefinition, ToolResultContent, UrpRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -9,6 +10,11 @@ use std::collections::{BTreeMap, HashMap};
 const CACHE_CONTROL_KEY: &str = "cache_control";
 const PROMPT_CACHE_BREAKPOINT_KEY: &str = "prompt_cache_breakpoint";
 const MESSAGES_BREAKPOINT_LIMIT: usize = 4;
+/// The source key and value of a Chat message-level marker, held on its node between the Chat
+/// decoder and the decode post-pass.
+const CHAT_MESSAGE_MARKER_EXTRA_KEY: &str = "_monoize_chat_message_cache_marker";
+/// Keeps one Chat message boundary after its marker left the envelope (CB-3a).
+const CHAT_MESSAGE_BOUNDARY_EXTRA_KEY: &str = "_monoize_chat_message_cache_boundary";
 
 /// One marker at the end of a reusable prompt prefix (CB-1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,6 +23,12 @@ pub struct CacheBreakpoint {
     pub ttl: Option<String>,
     pub origin: ProviderProtocol,
     pub wire: CacheBreakpointWire,
+    #[serde(default, skip_serializing_if = "CacheBreakpointOwner::is_carrier")]
+    pub owner: CacheBreakpointOwner,
+    /// Set only by an Anthropic `cache_*` rule (CB-1a). Serialization drops it, so a marker that
+    /// passes through a JavaScript transform falls back to client-owned, the safe direction.
+    #[serde(skip)]
+    pub anthropic_rule: bool,
     /// A map with deterministic order, because affinity hashes serialize this value.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra_body: BTreeMap<String, Value>,
@@ -29,6 +41,22 @@ pub enum CacheBreakpointWire {
     PromptCacheBreakpoint,
 }
 
+/// The native marker layer when it is not the carrier object (CB-1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheBreakpointOwner {
+    #[default]
+    Carrier,
+    MessageEnvelope,
+    ToolPayload,
+}
+
+impl CacheBreakpointOwner {
+    fn is_carrier(&self) -> bool {
+        *self == Self::Carrier
+    }
+}
+
 impl CacheBreakpoint {
     /// The marker of the Anthropic `cache_*` transforms (`auto-cache-transforms.spec.md` DEF-12).
     pub fn anthropic(ttl: Option<&str>) -> Self {
@@ -36,6 +64,8 @@ impl CacheBreakpoint {
             ttl: ttl.map(str::to_string),
             origin: ProviderProtocol::Messages,
             wire: CacheBreakpointWire::CacheControl,
+            owner: CacheBreakpointOwner::Carrier,
+            anthropic_rule: true,
             extra_body: BTreeMap::new(),
         }
     }
@@ -46,6 +76,8 @@ impl CacheBreakpoint {
             ttl: None,
             origin: ProviderProtocol::Responses,
             wire: CacheBreakpointWire::PromptCacheBreakpoint,
+            owner: CacheBreakpointOwner::Carrier,
+            anthropic_rule: false,
             extra_body: BTreeMap::new(),
         }
     }
@@ -70,8 +102,17 @@ impl CacheBreakpoint {
             ttl,
             origin,
             wire,
+            owner: CacheBreakpointOwner::Carrier,
+            anthropic_rule: false,
             extra_body: object.into_iter().collect(),
         }
+    }
+
+    fn replay_member(&self) -> (&'static str, Value) {
+        (
+            self.wire.key(),
+            self.to_wire(self.wire, self.ttl.as_deref(), true),
+        )
     }
 
     /// The wire object of this marker under `wire`. Unknown members exist only on a replay (CB-9).
@@ -105,36 +146,74 @@ impl CacheBreakpointWire {
     }
 }
 
-/// CB-4: `cache_control` wins when one carrier holds both keys.
-fn take_wire_marker(
-    extra_body: &mut HashMap<String, Value>,
-    origin: ProviderProtocol,
-) -> Option<CacheBreakpoint> {
-    let cache_control = extra_body.remove(CACHE_CONTROL_KEY);
-    let breakpoint = extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY);
-    marker_from_values(cache_control, breakpoint, origin)
-}
-
+/// CB-4: selection is by key presence, so a malformed `cache_control` does not fall back.
 fn marker_from_values(
     cache_control: Option<Value>,
     breakpoint: Option<Value>,
     origin: ProviderProtocol,
 ) -> Option<CacheBreakpoint> {
-    if let Some(Value::Object(object)) = cache_control {
-        return Some(CacheBreakpoint::from_wire(
-            object,
-            origin,
-            CacheBreakpointWire::CacheControl,
-        ));
-    }
-    let Some(Value::Object(object)) = breakpoint else {
+    let (value, wire) = match (cache_control, breakpoint) {
+        (Some(value), _) => (value, CacheBreakpointWire::CacheControl),
+        (None, Some(value)) => (value, CacheBreakpointWire::PromptCacheBreakpoint),
+        (None, None) => return None,
+    };
+    let Value::Object(object) = value else {
         return None;
     };
-    Some(CacheBreakpoint::from_wire(
-        object,
-        origin,
-        CacheBreakpointWire::PromptCacheBreakpoint,
-    ))
+    Some(CacheBreakpoint::from_wire(object, origin, wire))
+}
+
+fn take_wire_marker(
+    extra_body: &mut HashMap<String, Value>,
+    origin: ProviderProtocol,
+) -> Option<CacheBreakpoint> {
+    let own_cache_control = extra_body.remove(CACHE_CONTROL_KEY);
+    let own_breakpoint = extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY);
+    let envelope = extra_body.remove(CHAT_MESSAGE_MARKER_EXTRA_KEY);
+    marker_from_values(own_cache_control, own_breakpoint, origin).or_else(|| {
+        let Value::Object(mut envelope) = envelope? else {
+            return None;
+        };
+        let mut marker = marker_from_values(
+            envelope.remove(CACHE_CONTROL_KEY),
+            envelope.remove(PROMPT_CACHE_BREAKPOINT_KEY),
+            origin,
+        )?;
+        marker.owner = CacheBreakpointOwner::MessageEnvelope;
+        Some(marker)
+    })
+}
+
+/// CB-3a: moves a Chat message-level marker from the envelope to the message's last carrier.
+pub(crate) fn attach_chat_message_marker(
+    parts: &mut [Part],
+    extra_body: &mut HashMap<String, Value>,
+) {
+    let cache_control = extra_body.remove(CACHE_CONTROL_KEY);
+    let breakpoint = extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY);
+    let (key, value) = match (cache_control, breakpoint) {
+        (Some(value), _) => (CACHE_CONTROL_KEY, value),
+        (None, Some(value)) => (PROMPT_CACHE_BREAKPOINT_KEY, value),
+        (None, None) => return,
+    };
+    extra_body.insert(
+        CHAT_MESSAGE_BOUNDARY_EXTRA_KEY.to_string(),
+        Value::Bool(true),
+    );
+    let carrier = parts.iter_mut().rev().find_map(|part| match part {
+        Part::Text { extra_body, .. }
+        | Part::Image { extra_body, .. }
+        | Part::Audio { extra_body, .. }
+        | Part::File { extra_body, .. }
+        | Part::ToolCall { extra_body, .. } => Some(extra_body),
+        Part::Reasoning { .. } | Part::Refusal { .. } | Part::ProviderItem { .. } => None,
+    });
+    if let Some(carrier) = carrier {
+        carrier.insert(
+            CHAT_MESSAGE_MARKER_EXTRA_KEY.to_string(),
+            Value::Object(Map::from_iter([(key.to_string(), value)])),
+        );
+    }
 }
 
 /// CB-3: moves native markers from the extras of every carrier to the typed field.
@@ -166,18 +245,43 @@ pub(crate) fn decode_request_markers(req: &mut UrpRequest, origin: ProviderProto
     }
 }
 
+/// CB-3 layer order: tool descriptor, payload, `config`. Every layer loses both keys.
 fn decode_tool_marker(tool: &mut ToolDefinition, origin: ProviderProtocol) {
-    let mut cache_control = tool.extra_body.remove(CACHE_CONTROL_KEY);
-    let mut breakpoint = tool.extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY);
+    let mut layers: Vec<(Option<Value>, Option<Value>, CacheBreakpointOwner)> = Vec::new();
+    layers.push((
+        tool.extra_body.remove(CACHE_CONTROL_KEY),
+        tool.extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY),
+        CacheBreakpointOwner::Carrier,
+    ));
+    if let Some(function) = &mut tool.function {
+        layers.push((
+            function.extra_body.remove(CACHE_CONTROL_KEY),
+            function.extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY),
+            CacheBreakpointOwner::ToolPayload,
+        ));
+    }
     if let Some(custom) = &mut tool.custom {
-        cache_control = cache_control.or(custom.extra_body.remove(CACHE_CONTROL_KEY));
-        breakpoint = breakpoint.or(custom.extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY));
+        layers.push((
+            custom.extra_body.remove(CACHE_CONTROL_KEY),
+            custom.extra_body.remove(PROMPT_CACHE_BREAKPOINT_KEY),
+            CacheBreakpointOwner::ToolPayload,
+        ));
     }
     if let Some(Value::Object(config)) = &mut tool.config {
-        cache_control = cache_control.or(config.remove(CACHE_CONTROL_KEY));
-        breakpoint = breakpoint.or(config.remove(PROMPT_CACHE_BREAKPOINT_KEY));
+        layers.push((
+            config.remove(CACHE_CONTROL_KEY),
+            config.remove(PROMPT_CACHE_BREAKPOINT_KEY),
+            CacheBreakpointOwner::Carrier,
+        ));
     }
-    tool.cache_breakpoint = marker_from_values(cache_control, breakpoint, origin);
+    tool.cache_breakpoint = layers
+        .into_iter()
+        .find(|(cache_control, breakpoint, _)| cache_control.is_some() || breakpoint.is_some())
+        .and_then(|(cache_control, breakpoint, owner)| {
+            let mut marker = marker_from_values(cache_control, breakpoint, origin)?;
+            marker.owner = owner;
+            Some(marker)
+        });
     for child in tool.tools.iter_mut().flatten() {
         decode_tool_marker(child, origin);
     }
@@ -185,13 +289,18 @@ fn decode_tool_marker(tool: &mut ToolDefinition, origin: ProviderProtocol) {
 
 /// The DEF-2 count of `auto-cache-transforms.spec.md`.
 pub(crate) fn anthropic_breakpoint_count(req: &UrpRequest) -> usize {
-    let tools = req
-        .tools
-        .iter()
-        .flatten()
-        .filter(|tool| tool.cache_breakpoint.is_some())
-        .count();
+    let tools = req.tools.as_deref().map_or(0, tool_breakpoint_count);
     tools + input_breakpoint_count(req) + native_provider_marker_count(req)
+}
+
+fn tool_breakpoint_count(tools: &[ToolDefinition]) -> usize {
+    tools
+        .iter()
+        .map(|tool| {
+            usize::from(tool.cache_breakpoint.is_some())
+                + tool.tools.as_deref().map_or(0, tool_breakpoint_count)
+        })
+        .sum()
 }
 
 /// The DEF-7 count of `auto-cache-transforms.spec.md`.
@@ -291,16 +400,12 @@ enum Carrier {
 
 /// Visits every marker slot in render order: tools, then input nodes, with the nested content of
 /// a tool result before its own marker (CB-11).
-fn for_each_slot(
-    req: &mut UrpRequest,
-    visit: &mut impl FnMut(Carrier, &mut Option<CacheBreakpoint>, &mut HashMap<String, Value>),
-) {
-    for tool in req.tools.iter_mut().flatten() {
-        visit(
-            Carrier::Tool,
-            &mut tool.cache_breakpoint,
-            &mut tool.extra_body,
-        );
+fn for_each_slot<F>(req: &mut UrpRequest, visit: &mut F)
+where
+    F: FnMut(Carrier, &mut Option<CacheBreakpoint>, &mut HashMap<String, Value>),
+{
+    if let Some(tools) = &mut req.tools {
+        for_each_tool_slot(tools, visit);
     }
     let assistant = |role: &OrdinaryRole| *role == OrdinaryRole::Assistant;
     for node in &mut req.input {
@@ -386,20 +491,53 @@ fn for_each_slot(
     }
 }
 
+fn for_each_tool_slot<F>(tools: &mut [ToolDefinition], visit: &mut F)
+where
+    F: FnMut(Carrier, &mut Option<CacheBreakpoint>, &mut HashMap<String, Value>),
+{
+    for tool in tools {
+        visit(
+            Carrier::Tool,
+            &mut tool.cache_breakpoint,
+            &mut tool.extra_body,
+        );
+        if let Some(children) = &mut tool.tools {
+            for_each_tool_slot(children, visit);
+        }
+    }
+}
+
 /// CB-10: Anthropic rejects a marker on an empty text block.
 fn drop_converted_empty_text_markers(req: &mut UrpRequest) {
-    for node in &mut req.input {
-        if let Node::Text {
-            content,
-            cache_breakpoint,
-            ..
-        } = node
-            && content.is_empty()
-            && cache_breakpoint
-                .as_ref()
-                .is_some_and(|marker| marker.origin != ProviderProtocol::Messages)
+    let drop_converted = |slot: &mut Option<CacheBreakpoint>| {
+        if slot
+            .as_ref()
+            .is_some_and(|marker| marker.origin != ProviderProtocol::Messages)
         {
-            *cache_breakpoint = None;
+            *slot = None;
+        }
+    };
+    for node in &mut req.input {
+        match node {
+            Node::Text {
+                content,
+                cache_breakpoint,
+                ..
+            } if content.is_empty() => drop_converted(cache_breakpoint),
+            Node::ToolResult { content, .. } => {
+                for item in content {
+                    if let ToolResultContent::Text {
+                        text,
+                        cache_breakpoint,
+                        ..
+                    } = item
+                        && text.is_empty()
+                    {
+                        drop_converted(cache_breakpoint);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -469,6 +607,23 @@ fn accepted_ttl<'a>(marker: &'a CacheBreakpoint, accepted: &[&str]) -> Option<&'
         .filter(|ttl| accepted.iter().any(|value| value == ttl))
 }
 
+/// CB-8, CB-10, CB-12, CB-13: whether a marker replays on this target.
+fn replays(marker: &CacheBreakpoint, target: CacheWireTarget) -> bool {
+    use CacheBreakpointWire::{CacheControl, PromptCacheBreakpoint};
+
+    if marker.origin != target.protocol() {
+        return false;
+    }
+    match target {
+        CacheWireTarget::Messages => marker.wire == CacheControl,
+        CacheWireTarget::Chat(ChatDialect::DeepSeek) => false,
+        CacheWireTarget::Chat(ChatDialect::OpenAi) | CacheWireTarget::Responses => {
+            marker.wire == PromptCacheBreakpoint
+        }
+        CacheWireTarget::Chat(_) => true,
+    }
+}
+
 /// CB-8 through CB-14: the wire member for one marker, or `None` when the target omits it.
 fn wire_member(
     marker: &CacheBreakpoint,
@@ -478,13 +633,9 @@ fn wire_member(
 ) -> Option<(&'static str, Value)> {
     use CacheBreakpointWire::{CacheControl, PromptCacheBreakpoint};
 
-    let same_family = marker.origin == target.protocol();
-    let replay = |wire: CacheBreakpointWire| {
-        (
-            wire.key(),
-            marker.to_wire(wire, marker.ttl.as_deref(), true),
-        )
-    };
+    if replays(marker, target) {
+        return Some(marker.replay_member());
+    }
     let convert = |wire: CacheBreakpointWire, accepted: &[&str]| {
         (
             wire.key(),
@@ -493,37 +644,102 @@ fn wire_member(
     };
     const CACHE_CONTROL_TTLS: &[&str] = &["5m", "1h"];
     match target {
-        CacheWireTarget::Messages => {
-            if same_family && marker.wire == CacheControl {
-                return Some(replay(CacheControl));
-            }
-            Some(convert(CacheControl, CACHE_CONTROL_TTLS))
-        }
+        CacheWireTarget::Messages => Some(convert(CacheControl, CACHE_CONTROL_TTLS)),
         CacheWireTarget::Chat(ChatDialect::DeepSeek) => None,
-        CacheWireTarget::Chat(ChatDialect::OpenAi) => {
-            if same_family && marker.wire == PromptCacheBreakpoint {
-                return Some(replay(PromptCacheBreakpoint));
-            }
-            (explicit_model && chat_part_carrier(carrier))
-                .then(|| convert(PromptCacheBreakpoint, &["30m"]))
-        }
-        CacheWireTarget::Chat(_) => {
-            if same_family {
-                return Some(replay(marker.wire));
-            }
-            (chat_part_carrier(carrier) || matches!(carrier, Carrier::Tool))
-                .then(|| convert(CacheControl, CACHE_CONTROL_TTLS))
-        }
+        CacheWireTarget::Chat(ChatDialect::OpenAi) => (explicit_model
+            && chat_part_carrier(carrier))
+        .then(|| convert(PromptCacheBreakpoint, &["30m"])),
+        CacheWireTarget::Chat(_) => (chat_part_carrier(carrier)
+            || matches!(carrier, Carrier::Tool))
+        .then(|| convert(CacheControl, CACHE_CONTROL_TTLS)),
         CacheWireTarget::Responses => {
-            if same_family && marker.wire == PromptCacheBreakpoint {
-                return Some(replay(PromptCacheBreakpoint));
-            }
             let eligible = match carrier {
                 Carrier::Text { assistant } | Carrier::Media { assistant } => !assistant,
                 Carrier::ToolResultText | Carrier::ToolResultMedia => true,
                 Carrier::ToolCall | Carrier::ToolResult | Carrier::Tool => false,
             };
             (explicit_model && eligible).then(|| convert(PromptCacheBreakpoint, &["30m", "12h"]))
+        }
+    }
+}
+
+/// CB-18: keys outside CB-3, on nodes that hold no typed marker.
+fn drop_forbidden_native_keys(req: &mut UrpRequest, target: CacheWireTarget) {
+    let forbidden: &[&str] = match target {
+        CacheWireTarget::Messages => &[PROMPT_CACHE_BREAKPOINT_KEY],
+        CacheWireTarget::Chat(ChatDialect::OpenAi) | CacheWireTarget::Responses => {
+            &[CACHE_CONTROL_KEY]
+        }
+        CacheWireTarget::Chat(ChatDialect::DeepSeek) => {
+            &[CACHE_CONTROL_KEY, PROMPT_CACHE_BREAKPOINT_KEY]
+        }
+        CacheWireTarget::Chat(_) => &[],
+    };
+    for node in &mut req.input {
+        if let Node::Reasoning { extra_body, .. }
+        | Node::Refusal { extra_body, .. }
+        | Node::NextDownstreamEnvelopeExtra { extra_body } = node
+        {
+            for key in forbidden {
+                extra_body.remove(*key);
+            }
+        }
+    }
+}
+
+/// CB-8: restores a replayed message-level marker on the control node of its message.
+fn replay_message_markers(req: &mut UrpRequest, target: CacheWireTarget) {
+    let mut envelope = None;
+    for index in 0..req.input.len() {
+        if matches!(req.input[index], Node::NextDownstreamEnvelopeExtra { .. }) {
+            envelope = Some(index);
+            continue;
+        }
+        let Some(envelope) = envelope else {
+            continue;
+        };
+        let Some(slot) = req.input[index].cache_breakpoint_mut() else {
+            continue;
+        };
+        let member = slot
+            .as_ref()
+            .filter(|marker| {
+                marker.owner == CacheBreakpointOwner::MessageEnvelope && replays(marker, target)
+            })
+            .map(CacheBreakpoint::replay_member);
+        let Some((key, value)) = member else {
+            continue;
+        };
+        *slot = None;
+        if let Node::NextDownstreamEnvelopeExtra { extra_body } = &mut req.input[envelope] {
+            extra_body.insert(key.to_string(), value);
+        }
+    }
+}
+
+/// CB-8: restores a replayed tool marker on the payload that held it.
+fn replay_tool_payload_markers(tools: &mut [ToolDefinition], target: CacheWireTarget) {
+    for tool in tools {
+        let member = tool
+            .cache_breakpoint
+            .as_ref()
+            .filter(|marker| {
+                marker.owner == CacheBreakpointOwner::ToolPayload && replays(marker, target)
+            })
+            .map(CacheBreakpoint::replay_member);
+        if let Some((key, value)) = member {
+            let payload = match (&mut tool.function, &mut tool.custom) {
+                (Some(function), _) => Some(&mut function.extra_body),
+                (None, Some(custom)) => Some(&mut custom.extra_body),
+                (None, None) => None,
+            };
+            if let Some(payload) = payload {
+                payload.insert(key.to_string(), value);
+                tool.cache_breakpoint = None;
+            }
+        }
+        if let Some(children) = &mut tool.tools {
+            replay_tool_payload_markers(children, target);
         }
     }
 }
@@ -548,6 +764,11 @@ pub(crate) fn materialize_wire_markers(
         enforce_messages_limit(req);
     } else {
         move_converted_tool_result_markers(req, target);
+    }
+    drop_forbidden_native_keys(req, target);
+    replay_message_markers(req, target);
+    if let Some(tools) = &mut req.tools {
+        replay_tool_payload_markers(tools, target);
     }
     let explicit_model = supports_openai_explicit_breakpoints(upstream_model);
     for_each_slot(req, &mut |carrier, slot, extra_body| {

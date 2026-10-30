@@ -4,7 +4,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{AnthropicCacheTarget, Node};
+use crate::urp::Node;
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -80,12 +80,7 @@ impl Transform for CacheAnthropicToolUseTransform {
             .last_mut()
             .and_then(Node::cache_breakpoint_mut)
             .expect("checked trailing tool result");
-        CacheConfig::from_dyn(config)?.apply_breakpoint(
-            slot,
-            &mut req.context.anthropic_cache_markers,
-            AnthropicCacheTarget::LastToolResult,
-            slot_free,
-        );
+        CacheConfig::from_dyn(config)?.apply_breakpoint(slot, slot_free);
 
         Ok(())
     }

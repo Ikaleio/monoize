@@ -260,10 +260,13 @@ CacheBreakpoint {
   ttl: Option<String>,
   origin: ProviderProtocol,
   wire: CacheBreakpointWire,
+  owner: CacheBreakpointOwner,
+  anthropic_rule: bool (serde skip),
   extra_body: BTreeMap<String, JsonValue>
 }
 
 CacheBreakpointWire = CacheControl | PromptCacheBreakpoint
+CacheBreakpointOwner = Carrier | MessageEnvelope | ToolPayload
 
 MediaResource {
   protocol: ProviderProtocol,

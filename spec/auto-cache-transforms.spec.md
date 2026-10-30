@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-- Version: `1.7.0`
+- Version: `1.8.0`
 - Scope: Six request-phase `cache_*` domain transforms that optimize provider prompt caching by setting typed URP cache breakpoints (`urp-v2-flat-structure.spec.md` section 4a), Anthropic top-level `cache_control`, OpenAI prompt-cache request fields, and user identity fields.
 - Dependency: URP Transform System (see `urp-transform-system.spec.md`, TF-1 through TF-7b; historical IDs map to the canonical `cache_*` IDs through TF-17).
 
@@ -14,7 +14,7 @@ DEF-2. The **Anthropic cache breakpoint count** of a request is the total number
 
 DEF-3. The **Anthropic cache slot count** is the Anthropic cache breakpoint count plus one when `req.extra_body` contains top-level `"cache_control"`. The maximum is `4`. No transform in this specification SHALL increase the slot count beyond `4`.
 
-DEF-4. The **Monoize username** is the string value of `req.extra_body["__monoize_username"]`, if present and non-null. The **Monoize API key ID** is the string value of `req.extra_body["__monoize_api_key_id"]`, if present and non-null. These fields are injected by the request handler before transforms run and stripped after transforms complete. Transforms MUST NOT assume their presence.
+DEF-4. The **Monoize username** is `req.context.username` and the **Monoize API key ID** is `req.context.api_key_id`. The request handler sets both before transforms run and clears both after transforms complete. They never serialize. Transforms MUST NOT assume their presence.
 
 DEF-5. The canonical Anthropic cache breakpoint is a `CacheBreakpoint` with absent `ttl`, `origin = messages`, `wire = cache_control`, and empty `extra_body`. It encodes as `{"type": "ephemeral"}` for a Messages upstream.
 
@@ -32,15 +32,15 @@ DEF-11. The **Anthropic cache TTL config** is an object with one optional field 
 
 DEF-12. The **configured Anthropic cache breakpoint** is the value of DEF-5 when `ttl = "5m"`. It is that value with `ttl = "1h"` when `ttl = "1h"`. The `"5m"` value omits `ttl` because Anthropic applies a 5-minute TTL when `ttl` is absent.
 
-DEF-13. An **Anthropic cache target** is one of `System` (the target node of ACS-7), `LastToolResult` (the target node of ACTU-6), or `Request` (top-level `req.extra_body`). `req.context.anthropic_cache_markers` is the set of Anthropic cache targets whose current marker a Monoize rule inserted during the current attempt. The marker of `System` and `LastToolResult` is the typed `cache_breakpoint` of the target node. The marker of `Request` is top-level `req.extra_body["cache_control"]`. Decoding MUST produce an empty set. Each attempt starts from a fresh clone of the decoded request, so the set never carries over between attempts.
+DEF-13. An **Anthropic cache target** is one of `System` (the target node of ACS-7), `LastToolResult` (the target node of ACTU-6), or `Request` (top-level `req.extra_body["cache_control"]`). The marker of `System` and `LastToolResult` is the typed `cache_breakpoint` of the target node. Ownership belongs to the concrete marker, not to a target name, so a transform that moves or merges nodes cannot transfer ownership to another marker. Each attempt starts from a fresh clone of the decoded request, so ownership never carries over between attempts.
 
-DEF-14. An existing marker on an Anthropic cache target is **Monoize-owned** when that target is in `req.context.anthropic_cache_markers`. Every other existing marker is **client-owned**.
+DEF-14. A typed marker is **Monoize-owned** when its runtime ownership flag (`urp-v2-flat-structure.spec.md` CB-1a) is set. A top-level `cache_control` is Monoize-owned when `req.context.anthropic_request_cache_owned` is true. Decoding MUST produce neither. Every other existing marker is **client-owned**.
 
 DEF-15. **Applying the configured marker** to an Anthropic cache target means:
 1. If the target has a client-owned marker, the transform is a no-op.
 2. If the target has a Monoize-owned marker, the transform MUST replace that value with the configured Anthropic cache breakpoint (DEF-12), or for target `Request` with its JSON form. The slot count does not change, so the slot limit does not apply.
 3. If the target has no marker and the slot limit of the transform is reached, the transform is a no-op.
-4. Otherwise, the transform MUST insert the configured marker and add the target to `req.context.anthropic_cache_markers`.
+4. Otherwise, the transform MUST insert the configured marker as Monoize-owned.
 
 DEF-16. A marker set by a transform on a target whose upstream is not `messages` follows the conversion rules of `urp-v2-flat-structure.spec.md` CB-12 through CB-15. The encoder never sends `cache_control` to an `openai` Chat upstream or a Responses upstream.
 
@@ -56,7 +56,7 @@ ACUID-3. Config schema: empty object, no configuration parameters.
 
 ### 2.2 Preconditions
 
-ACUID-4. If `req.extra_body["__monoize_username"]` is absent or not a string, the transform is a no-op.
+ACUID-4. If `req.context.username` is absent, the transform is a no-op.
 
 ACUID-5. If the Anthropic cache breakpoint count is `0`, the transform is a no-op.
 
@@ -80,13 +80,13 @@ ACS-3. Config schema: the Anthropic cache TTL config (DEF-11).
 
 ### 3.2 Preconditions
 
-ACS-4. If `req.input` contains no `Text`, `Image`, `Audio`, or `File` node with `role == System` or `role == Developer`, the transform is a no-op.
+ACS-4. If `req.input` contains no target node as defined by ACS-7, the transform is a no-op.
 
 ACS-5. Otherwise, the transform MUST apply the configured marker (DEF-15) to the target node of ACS-7 as Anthropic cache target `System`. Its slot limit is reached when the Anthropic cache slot count is `>= 4`.
 
 ### 3.3 Behavior
 
-ACS-7. The **target node** is the last `Text`, `Image`, `Audio`, or `File` node in `req.input` whose role is `System` or `Developer` (searched via reverse-position scan). A `ProviderItem` with such a role is not a marker carrier and is skipped.
+ACS-7. The **target node** is the last `Text`, `Image`, `Audio`, or `File` node in `req.input` whose role is `System` or `Developer` (searched via reverse-position scan). A `ProviderItem` with such a role is not a marker carrier and is skipped. A `Text` node with empty `content` is skipped, because Anthropic documents that empty text blocks cannot be cached.
 
 ACS-8. A new marker increases the Anthropic cache breakpoint count by exactly `1`. A replaced marker leaves the count unchanged.
 
@@ -134,11 +134,11 @@ ACAA-8. Anthropic rejects a request when the automatic breakpoint target already
 
 ## 5. Context Injection Lifecycle
 
-CTX-1. Before request-phase transforms execute, the request handler MUST inject `req.extra_body["__monoize_username"]` from `auth.username` when `auth.username` is `Some(...)`.
+CTX-1. Before request-phase transforms execute, the request handler MUST set `req.context.username` from `auth.username`.
 
-CTX-2. Before request-phase transforms execute, the request handler MUST inject `req.extra_body["__monoize_api_key_id"]` from `auth.api_key_id` when `auth.api_key_id` is `Some(...)`.
+CTX-2. Before request-phase transforms execute, the request handler MUST set `req.context.api_key_id` from `auth.api_key_id`.
 
-CTX-3. After all request-phase transforms complete (provider, global, and API-key scopes), the request handler MUST remove `req.extra_body["__monoize_username"]` and `req.extra_body["__monoize_api_key_id"]` to prevent leaking internal fields to upstream providers.
+CTX-3. After all request-phase transforms complete (provider, global, and API-key scopes), the request handler MUST clear `req.context.username` and `req.context.api_key_id`. `RequestContext` never reaches a provider request.
 
 CTX-4. `auth.username` is populated from `User.username` during API key authentication. If authentication does not resolve to a user record, `auth.username` is `None`.
 
@@ -179,13 +179,13 @@ ACOP-11. If `key_mode = "prefix"`, `key_material["tools"]` MUST equal `req.tools
 
 ACOP-12. If `key_mode = "prefix"`, `key_material["response_format"]` MUST equal `req.response_format` when `req.response_format` is present. It MUST be absent when `req.response_format` is absent.
 
-ACOP-13. If `key_mode = "prefix"` and `include_user_in_key = true`, `key_material["user"]` MUST equal `req.user` when `req.user` is present. If `req.user` is absent, it MUST equal `req.extra_body["__monoize_username"]` when that value is a string. If both are absent, `key_material["user"]` MUST be absent.
+ACOP-13. If `key_mode = "prefix"` and `include_user_in_key = true`, `key_material["user"]` MUST equal `req.user` when `req.user` is present. If `req.user` is absent, it MUST equal `req.context.username` when that value is present. If both are absent, `key_material["user"]` MUST be absent.
 
 ACOP-14. If `key_mode = "prefix"` and `include_full_input_in_key = true`, `key_material["input"]` MUST equal `req.input` and `key_material["prefix_nodes"]` MUST be absent.
 
 ACOP-14a. If `key_mode = "identity"`, `key_material` MUST contain exactly:
-1. `username`, equal to `req.extra_body["__monoize_username"]` when that value is a string, otherwise JSON null; and
-2. `api_key_id`, equal to `req.extra_body["__monoize_api_key_id"]` when that value is a string, otherwise JSON null.
+1. `username`, equal to `req.context.username` when present, otherwise JSON null; and
+2. `api_key_id`, equal to `req.context.api_key_id` when present, otherwise JSON null.
 
 ACOP-14b. If `key_mode = "identity"`, `key_material` MUST NOT include `req.model`, `req.input`, `req.tools`, `req.response_format`, `req.user`, or any node content.
 

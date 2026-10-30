@@ -10,7 +10,7 @@ pub mod logprobs;
 pub mod outcome;
 pub mod sampling;
 pub mod usage;
-pub use cache_breakpoint::{CacheBreakpoint, CacheBreakpointWire};
+pub use cache_breakpoint::{CacheBreakpoint, CacheBreakpointOwner, CacheBreakpointWire};
 pub use citations::Citation;
 pub use image_generation::ImageGenerationOptions;
 pub use logprobs::{LogprobConfig, TokenLogprob};
@@ -23,7 +23,7 @@ pub mod encode;
 pub mod greedy;
 pub(crate) mod internal_legacy_bridge;
 pub use context::{
-    AnthropicCacheTarget, AnthropicClientHeaders, RequestContext, ResponseHistoryContext,
+    AnthropicClientHeaders, RequestContext, ResponseHistoryContext,
     ToolIdentity, ToolTransport,
 };
 pub mod media;
