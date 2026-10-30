@@ -1511,7 +1511,6 @@
 		"unknownChannel": "Unknown Channel",
 		"clearChannelFilter": "Clear Channel filter",
 		"noMatchingLogs": "No request logs match the filters",
-		"newLogsPill": "{{count}} new logs · Back to top",
 		"timeRangeApply": "Apply",
 		"timeRangeFormatError": "Use the format yyyy-MM-dd HH:mm:ss",
 		"timeRangeOrderError": "Start time must be earlier than end time",

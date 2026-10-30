@@ -1492,7 +1492,6 @@
 		"unknownChannel": "未知 Channel",
 		"clearChannelFilter": "清除 Channel 筛选",
 		"noMatchingLogs": "没有符合筛选条件的请求日志",
-		"newLogsPill": "{{count}} 条新日志 · 回到顶部",
 		"timeRangeApply": "应用",
 		"timeRangeFormatError": "格式应为 yyyy-MM-dd HH:mm:ss",
 		"timeRangeOrderError": "开始时间必须早于结束时间",

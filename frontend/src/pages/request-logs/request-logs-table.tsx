@@ -1,5 +1,5 @@
-import type { ComponentProps, Ref } from 'react'
-import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
+import type { ComponentProps } from 'react'
+import { TableVirtuoso } from 'react-virtuoso'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { QueryError } from '@/components/ui/query-error'
@@ -22,7 +22,6 @@ interface RequestLogsTableProps {
 	retrying: boolean
 	showIp: boolean
 	t: (key: string, options?: Record<string, unknown>) => string
-	virtuosoRef: Ref<TableVirtuosoHandle>
 }
 
 const tableComponents = {
@@ -94,8 +93,7 @@ export function RequestLogsTable({
 	onTooltipOpenChange,
 	retrying,
 	showIp,
-	t,
-	virtuosoRef
+	t
 }: RequestLogsTableProps) {
 	if (isInitialLoading) {
 		return (
@@ -121,7 +119,6 @@ export function RequestLogsTable({
 	return (
 		<div className='absolute inset-0 min-h-[240px]'>
 			<TableVirtuoso
-				ref={virtuosoRef}
 				style={{ height: '100%', overflowX: 'auto' }}
 				data={logs}
 				computeItemKey={(_index, log) => log.id}

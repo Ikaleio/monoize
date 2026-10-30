@@ -1492,7 +1492,6 @@
 		"unknownChannel": "不明な Channel",
 		"clearChannelFilter": "Channel フィルターをクリア",
 		"noMatchingLogs": "フィルター条件に一致するリクエストログはありません",
-		"newLogsPill": "新しいログ {{count}} 件 · 先頭へ戻る",
 		"timeRangeApply": "適用",
 		"timeRangeFormatError": "yyyy-MM-dd HH:mm:ss の形式で入力してください",
 		"timeRangeOrderError": "開始時刻は終了時刻より前にしてください",

@@ -10,9 +10,7 @@ import {
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import useSWR from 'swr'
-import type { TableVirtuosoHandle } from 'react-virtuoso'
 import {
-	ArrowUp,
 	ChevronDown,
 	Eye,
 	EyeOff,
@@ -176,17 +174,9 @@ export function RequestLogsPage() {
 	// LOGS-7: while the table is scrolled away from the top, live rows are
 	// buffered so the rows being read do not move.
 	const atTopRef = useRef(true)
-	const [atTop, setAtTop] = useState(true)
-	const [bufferedNewRowCount, setBufferedNewRowCount] = useState(0)
-	const loadedLogsRef = useRef<RequestLog[]>([])
-	const virtuosoRef = useRef<TableVirtuosoHandle>(null)
 	const [captureOpen, setCaptureOpen] = useState(false)
 	const [captureTarget, setCaptureTarget] = useState<RequestLog | null>(null)
 	const captureRevalidateTimerRef = useRef<number | null>(null)
-
-	useEffect(() => {
-		loadedLogsRef.current = loadedLogs
-	}, [loadedLogs])
 
 	const handleOpenCapture = useCallback((log: RequestLog) => {
 		if (!log.request_id || !log.user?.id) return
@@ -208,7 +198,6 @@ export function RequestLogsPage() {
 
 	const handleAtTopChange = useCallback((next: boolean) => {
 		atTopRef.current = next
-		setAtTop(next)
 		if (next) flushBuffersRef.current()
 	}, [])
 
@@ -236,8 +225,6 @@ export function RequestLogsPage() {
 		pendingPageDataRef.current = null
 		pendingNewestDataRef.current = null
 		atTopRef.current = true
-		setAtTop(true)
-		setBufferedNewRowCount(0)
 	}, [filterKey])
 
 	// LOGS-1 / FL38a: tooltip pause applies to periodic and focus revalidation
@@ -419,38 +406,15 @@ export function RequestLogsPage() {
 		[matchesActiveFilters]
 	)
 
-	// Counts buffered rows that are not on screen yet, for the "N new logs" pill.
-	const countBufferedNewRows = useCallback(() => {
-		const known = new Set<string>()
-		for (const log of loadedLogsRef.current) {
-			known.add(log.id)
-			if (log.request_id) known.add(log.request_id)
-		}
-		const fresh = new Set<string>()
-		const consider = (log: RequestLog) => {
-			if (known.has(log.id) || (log.request_id && known.has(log.request_id))) return
-			fresh.add(log.request_id || log.id)
-		}
-		for (const log of pendingNewestDataRef.current?.data ?? []) consider(log)
-		if (pendingPageDataRef.current?.offset === 0) {
-			for (const log of pendingPageDataRef.current.data) consider(log)
-		}
-		for (const log of pendingSSERef.current) {
-			if (matchesActiveFilters(log)) consider(log)
-		}
-		setBufferedNewRowCount(fresh.size)
-	}, [matchesActiveFilters])
-
 	const receiveSSELogs = useCallback(
 		(logs: RequestLog[]) => {
 			if (openTooltipIdsRef.current.size > 0 || !atTopRef.current) {
 				pendingSSERef.current = [...pendingSSERef.current, ...logs]
-				if (!atTopRef.current) countBufferedNewRows()
 				return
 			}
 			prependSSELogs(logs)
 		},
-		[countBufferedNewRows, prependSSELogs]
+		[prependSSELogs]
 	)
 
 	// Server responses are either applied or buffered per FL38 (tooltip open) and
@@ -486,7 +450,6 @@ export function RequestLogsPage() {
 		const holdForScroll = data.offset === 0 && !atTopRef.current
 		if (openTooltipIdsRef.current.size > 0 || holdForScroll) {
 			pendingPageDataRef.current = data
-			if (holdForScroll) countBufferedNewRows()
 			return
 		}
 		pendingPageDataRef.current = null
@@ -496,7 +459,6 @@ export function RequestLogsPage() {
 	const handleNewestResponse = (data: RequestLogsResponse) => {
 		if (openTooltipIdsRef.current.size > 0 || !atTopRef.current) {
 			pendingNewestDataRef.current = data
-			if (!atTopRef.current) countBufferedNewRows()
 			return
 		}
 		pendingNewestDataRef.current = null
@@ -653,24 +615,15 @@ export function RequestLogsPage() {
 			applyPageData(bufferedPage)
 		}
 
-		if (!atTopNow) return
-		if (pendingSSERef.current.length > 0) {
+		if (atTopNow && pendingSSERef.current.length > 0) {
 			const bufferedSSE = pendingSSERef.current
 			pendingSSERef.current = []
 			prependSSELogs(bufferedSSE)
 		}
-		setBufferedNewRowCount(0)
 	}
 	useEffect(() => {
 		flushBuffersRef.current = flushBuffers
 	})
-
-	const jumpToNewest = () => {
-		atTopRef.current = true
-		setAtTop(true)
-		flushBuffers()
-		virtuosoRef.current?.scrollToIndex({ index: 0 })
-	}
 
 	const visibleLogs = useMemo(() => {
 		if (loadedLogs.length > 0) return loadedLogs
@@ -1040,21 +993,7 @@ export function RequestLogsPage() {
 					retrying={isValidating}
 					showIp={showIp}
 					t={t}
-					virtuosoRef={virtuosoRef}
 				/>
-				{!atTop && bufferedNewRowCount > 0 && (
-					<div className='pointer-events-none absolute inset-x-0 top-10 z-10 flex justify-center'>
-						<Button
-							type='button'
-							size='sm'
-							className='pointer-events-auto h-7 gap-1 px-2 text-xs shadow-md'
-							onClick={jumpToNewest}
-						>
-							<ArrowUp className='size-3.5' aria-hidden='true' />
-							{t('requestLogs.newLogsPill', { count: bufferedNewRowCount })}
-						</Button>
-					</div>
-				)}
 			</motion.div>
 
 			<CaptureViewerDialog
