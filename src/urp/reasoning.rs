@@ -34,8 +34,24 @@ pub fn encode_text_parts(
     shapes: Option<&[ReasoningTextPart]>,
     kind: &str,
 ) -> Value {
+    let part = |shape: &ReasoningTextPart, text: &str| {
+        let mut part: Map<String, Value> = shape.extra_body.clone().into_iter().collect();
+        part.entry("type").or_insert_with(|| json!(kind));
+        part.insert("text".into(), json!(text));
+        Value::Object(part)
+    };
     let Some(text) = text else {
-        return json!([]);
+        // A native array whose parts are all empty decodes to no text; its zero-length shapes
+        // keep the part count and metadata. Shapes with any length describe text that is gone
+        // (deleted or rewritten), so they are never replayed.
+        return match shapes {
+            Some(shapes)
+                if !shapes.is_empty() && shapes.iter().all(|shape| shape.byte_length == 0) =>
+            {
+                Value::Array(shapes.iter().map(|shape| part(shape, "")).collect())
+            }
+            _ => json!([]),
+        };
     };
     if let Some(shapes) = shapes {
         let total = shapes
@@ -55,15 +71,9 @@ pub fn encode_text_parts(
                 shapes
                     .iter()
                     .map(|shape| {
-                        let mut part: Map<String, Value> =
-                            shape.extra_body.clone().into_iter().collect();
-                        part.entry("type").or_insert_with(|| json!(kind));
-                        part.insert(
-                            "text".into(),
-                            json!(&text[offset..offset + shape.byte_length]),
-                        );
+                        let value = part(shape, &text[offset..offset + shape.byte_length]);
                         offset += shape.byte_length;
-                        Value::Object(part)
+                        value
                     })
                     .collect(),
             );
