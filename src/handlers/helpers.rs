@@ -1451,6 +1451,8 @@ const EXTRA_WHITELIST_GEMINI: &[&str] = &[
     "serviceTier",
     // Mapped to `serviceTier` by the Gemini encoder.
     "service_tier",
+    // Mapped to `labels.safety_identifier` by the Gemini encoder.
+    "safety_identifier",
 ];
 
 const EXTRA_WHITELIST_OPENAI_IMAGE: &[&str] = &[
