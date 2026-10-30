@@ -1518,7 +1518,8 @@ fn messages_native_thinking_field_deletions_do_not_trigger_defaults() {
     urp.reasoning.as_mut().unwrap().budget_tokens = None;
     let encoded = encode::encode_request(&urp, "claude-test");
     assert!(encoded["thinking"].get("budget_tokens").is_none());
-    assert!(encode::encode_request_checked(&urp, "claude-test").is_err());
+    // Explicit client controls are forwarded unvalidated; the upstream decides (RC4d).
+    assert!(encode::encode_request_checked(&urp, "claude-test").is_ok());
     let mut urp = decode::decode_request(&source).unwrap();
     let reasoning = urp.reasoning.as_mut().unwrap();
     reasoning.mode = None;
@@ -2277,7 +2278,7 @@ async fn messages_truncated_tool_json_is_not_fabricated_as_raw_object() {
 }
 
 #[test]
-fn messages_invalid_thinking_combinations_are_rejected_before_dispatch() {
+fn messages_thinking_validation_applies_only_to_generated_controls() {
     for stream in [false, true] {
         for patch in [
             json!({"thinking":{"type":"enabled","budget_tokens":1023}}),
@@ -2291,6 +2292,7 @@ fn messages_invalid_thinking_combinations_are_rejected_before_dispatch() {
             json!({"thinking":{"type":"adaptive"},"temperature":0.5}),
             json!({"thinking":{"type":"adaptive"},"top_k":5}),
             json!({"thinking":{"type":"adaptive"},"top_p":0.5}),
+            json!({"thinking":{"type":"between_tools"}}),
         ] {
             let mut native = json!({"model":"claude-sonnet-4-6","max_tokens":4096,"stream":stream,
                 "messages":[{"role":"user","content":"Hello"}]});
@@ -2299,9 +2301,33 @@ fn messages_invalid_thinking_combinations_are_rejected_before_dispatch() {
                 .unwrap()
                 .extend(patch.as_object().unwrap().clone());
             let canonical = decode::decode_request(&native).unwrap();
+            let encoded = encode::encode_request_checked(&canonical, "claude-sonnet-4-6")
+                .unwrap_or_else(|err| panic!("{native}: {err}"));
+            assert_eq!(encoded["thinking"], native["thinking"], "{native}");
+        }
+        for (model, effort, patch) in [
+            ("claude-haiku-4-5", "high", json!({"max_tokens":4096})),
+            ("claude-haiku-4-5", "low", json!({"tool_choice":{"type":"any"}})),
+            ("claude-sonnet-4-6", "high", json!({"temperature":0.5})),
+            ("claude-sonnet-4-6", "high", json!({"top_k":5})),
+            ("claude-opus-5-5", "high", json!({"tool_choice":{"type":"any"}})),
+            ("claude-sonnet-4-6", "xhigh", json!({})),
+        ] {
+            let mut native = json!({"model":model,"max_tokens":64000,"stream":stream,
+                "messages":[{"role":"user","content":"Hello"}],
+                "tools":[{"name":"f","input_schema":{"type":"object"}}]});
+            native
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            let mut canonical = decode::decode_request(&native).unwrap();
+            canonical.reasoning = Some(super::ReasoningConfig {
+                effort: Some(effort.to_string()),
+                ..Default::default()
+            });
             assert!(
-                encode::encode_request_checked(&canonical, "claude-sonnet-4-6").is_err(),
-                "{native}"
+                encode::encode_request_checked(&canonical, model).is_err(),
+                "{model} {effort} {patch}"
             );
         }
     }

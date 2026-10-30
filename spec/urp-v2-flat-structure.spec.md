@@ -401,24 +401,36 @@ CTL-11. If a decoder or encoder reaches terminal end-of-sequence or end-of-strea
 
 ## 4. Unknown-field passthrough and cross-family stripping
 
-XTRA-1. URP v2 MUST preserve unknown top-level request and response fields in top-level `extra_body`.
+XTRA-1. URP v2 MUST preserve unknown top-level request and response fields in top-level `extra_body`. XTRA-4 limits how far a response member travels.
 
 XTRA-2. URP v2 MUST preserve unknown node-local fields in the owning ordinary node, `ToolResult`, or `ToolResultContent` `extra_body`.
 
 XTRA-3. URP v2 MUST preserve unknown envelope-level fields with `NextDownstreamEnvelopeExtra` rather than inventing a synthetic message wrapper.
 
-XTRA-4. Cross-family stripping applies only to nested passthrough state. Top-level request and response `extra_body` are not nested and are not removed by this rule.
+XTRA-4. Top-level request `extra_body` is not nested and is not removed by XTRA-5; its own whitelist rules govern it. Top-level response `extra_body` MUST NOT cross protocol families: XTRA-5a removes it. Top-level response members survive only on a same-family route.
 
-XTRA-5. Immediately before an encode step into a different protocol family, the runtime MUST:
+XTRA-5. Immediately before an encode step into a different protocol family, in the request direction, the runtime MUST:
 
-1. remove every non-internal member from `extra_body` on every ordinary node;
+1. remove every non-internal member from `extra_body` on every ordinary node, and set the `phase` of every `Text` node to absent;
 2. remove every non-internal member from `extra_body` on every `ToolResult` node;
 3. remove every non-internal member from `extra_body` on every `ToolResultContent` entry; and
 4. remove every `NextDownstreamEnvelopeExtra` control node.
 
 A decoder-created or transform-created member reserved by XTRA-10 is internal semantic provenance, not nested wire passthrough. The runtime MUST retain such a member through XTRA-5 until the target adapter consumes or discards it. The target adapter MUST NOT emit the reserved member on the wire. This retained provenance includes `_monoize_chat_reasoning_detail`, which is required to apply MSG-6 to adjacent Chat reasoning-detail nodes after a Chat-to-Messages family transition.
 
-XTRA-6. After XTRA-5, later transforms or adapters for the target family MAY add new target-family passthrough fields.
+XTRA-5a. Response direction. An upstream response is cross-family when its provider type is `responses`, `chat_completion`, `messages`, or `gemini` and the downstream protocol is not that same family (`/v1/responses`↔`responses`, `/v1/chat/completions`↔`chat_completion`, `/v1/messages`↔`messages`). `gemini` has no downstream endpoint, so a `gemini` upstream is always cross-family. Image and media provider types (`openai_image`, `openrouter_image`, `replicate`) and the Image API do not take part in this rule. For a cross-family response, on stream and non-stream paths, after decoding and before any response-phase transform, the runtime MUST:
+
+1. apply XTRA-5 items 1 through 4 to every output node, and drop every `NodeStart` and `NodeDone` stream event whose payload is a `NextDownstreamEnvelopeExtra`;
+2. set the `phase` of every `Text` node and `Text` stream header to absent;
+3. remove every non-internal member from top-level response `extra_body`, including `ResponseStart`, `NodeStart`, `NodeDelta`, `NodeDone`, and `ResponseDone` event `extra_body`;
+4. remove every non-internal member from every `Usage.extra_body` that reaches the downstream encoder; and
+5. rewrite the response id to the target family prefix when it does not already carry it: `resp_` for `/v1/responses`, `chatcmpl-` for `/v1/chat/completions`, `msg_` for `/v1/messages`. The rewrite replaces a known foreign prefix (`resp_`, `chatcmpl-`, `msg_`) and otherwise prepends the target prefix. The rewrite is deterministic for one upstream id.
+
+Billing, request logs, and capture dumps MUST read the unstripped usage and service tier. `Error` events and failed outcomes are not governed by this list; they follow `unified_responses_proxy.spec.md` SE2a on every route. `ProviderControl` events keep their `extra_body`, and encoders forward them only for their own protocol. XTRA-5a is unconditional and is not controlled by `strip_cross_protocol_nested_extra`, because that setting governs request passthrough only (XSTRIP-7). Examples removed from a Responses upstream served to Chat or Messages: `internal_chat_message_metadata_passthrough`, `metadata`, `status`, `phase`, `caller`, `access_programs`, `instructions`, `prompt_cache_key`, `usage.attribution`. Examples removed from a Messages upstream served to Chat or Responses: `container`, `diagnostics`, `input_transformations`, `stop_details`.
+
+XTRA-5b. The request-envelope extra a stream decoder may attach to a response message item MUST be absent on a cross-family route.
+
+XTRA-6. After XTRA-5 or XTRA-5a, later transforms or adapters for the target family MAY add new target-family passthrough fields.
 
 XTRA-7. On a same-family encode step, the runtime MUST preserve node `extra_body`, `ToolResultContent.extra_body`, and control nodes.
 
@@ -614,10 +626,11 @@ RESP-7. Responses streaming output MUST preserve canonical event lifecycle seman
 1. `response.created` occurs before any output-item lifecycle event;
 2. every emitted `response.output_item.done` has exactly one earlier matching `response.output_item.added` with the same `output_index`;
 3. `response.content_part.added` and `response.content_part.done` are emitted for each Responses content-bearing item part, including `message` content and `reasoning.content[]` entries of type `reasoning_text`;
-4. `response.completed` reflects the same reconstructed `response.output` ordering used by the terminal item lifecycle; and
-5. the stream terminates with exactly one plain `data: [DONE]` sentinel.
+4. the terminal response event reflects the same reconstructed `response.output` ordering used by the terminal item lifecycle;
+5. the stream ends by connection close after the terminal JSON event, without a `[DONE]` frame; and
+6. each reasoning summary part has its own `response.reasoning_summary_part.added`, text delta, text done, and part done lifecycle addressed by `summary_index`.
 
-RESP-8. The Responses encoder MUST preserve externally visible addressing and lifecycle semantics for `response_id`, `item_id`, `output_index`, `content_index`, and item `status`. These fields are encoder-owned output coordinates derived from the flat node order.
+RESP-8. The Responses encoder MUST preserve externally visible addressing and lifecycle semantics for `response_id`, `item_id`, `output_index`, `content_index`, `summary_index`, and item `status`. Coordinates are encoder-owned and derived from the flat node order, except that `summary_index` comes from `ReasoningMetadata.summary_index` on deltas and from `summary[]` positions on terminal nodes. A native item status is preserved under STR3p and MUST NOT be overwritten with `completed`.
 
 RESP-9. Responses external reasoning behavior remains stable:
 
@@ -626,6 +639,8 @@ RESP-9. Responses external reasoning behavior remains stable:
 3. opaque reasoning payload remains typed reasoning data rather than plain text;
 4. `source` is preserved when present upstream; and
 5. `source` is omitted when upstream omitted it.
+
+RESP-9a. A reasoning item with a native `id` and no payload is a `Reasoning` node with `ReasoningMetadata.native_empty = true`. It MUST keep its identity and position under PR2g.1.
 
 RESP-10. Downstream `/v1/responses` streaming MUST NOT introduce a custom `response.reasoning_signature.delta` event. Opaque reasoning state is surfaced only through canonical reasoning item events and terminal response state.
 
@@ -641,8 +656,11 @@ It MUST preserve separate native system envelopes, block order, block extras, an
 An empty system envelope with message controls MUST remain in `messages[]`.
 Current typed node roles and content MUST remain authoritative after mutation or deletion.
 Without a native boundary, leading system or developer nodes MUST encode as top-level `system[]`.
-System or developer nodes after a user or assistant envelope MUST encode as system messages at their current positions.
-The encoder MUST NOT move these nodes into top-level `system[]`, concatenate their text, or insert synthetic conversation turns.
+System or developer nodes after a user or assistant envelope and without a native boundary (cross-protocol mid-conversation instructions) MUST NOT become a `role: "system"` message when the next encoded message is a `user` message, because Anthropic requires a mid-conversation system message to precede an assistant message or end the array.
+In that case the encoder MUST render each such text node as a `text` block wrapped as `<system-reminder>\n<text>\n</system-reminder>` and MUST insert those blocks, in order, at the start of the following user message's content, after any leading `tool_result` blocks (PM4).
+When the next encoded message is an assistant message, or no message follows, such nodes MUST encode as one system message at their current position.
+Native system envelopes (with the boundary) MUST remain system messages at their current positions in every case.
+The encoder MUST NOT move these nodes into top-level `system[]` or insert synthetic conversation turns.
 Upstream model support and placement validation remain the upstream API's responsibility.
 Cross-family stripping MUST remove the native envelope boundary under XTRA-5 while retaining typed system nodes in their current order.
 
@@ -753,6 +771,8 @@ CTRL-10. Session affinity MUST derive instruction content from current instructi
 SEM-1. Text citations MUST use typed citations. URL citations contain a URL, an optional title, and an optional answer range.
 Answer ranges use zero-based Unicode scalar offsets with an exclusive end, relative to the owning Text node.
 Document citations MUST distinguish source character, page, and block ranges from answer ranges.
+Document citations carry an optional document title and an optional source `file_id`; a Messages document citation's `file_id` MUST round-trip through decode and encode.
+Messages declares `document_title` (document citations) and `title` (`web_search_result_location`) as required nullable members. A Messages encoder MUST always write those keys, using JSON `null` when the typed title is absent.
 Unknown citation shapes MUST retain an exact origin protocol and MAY replay only to that protocol.
 Encoders MUST omit a citation when its target protocol cannot represent its source or required range.
 Chat message concatenation MUST shift answer ranges by the preceding text and inserted separators.
@@ -792,6 +812,8 @@ Compatible responses with an output array MAY omit status when error is absent o
 SEM-4. Usage MAY contain ordered typed iterations. Each iteration records its kind and normalized inclusive token counters.
 Usage top-level counters retain their existing primary-generation meaning. Complete accounting MUST sum iterations when present, without adding top-level counters again.
 Each iteration normalizes cache buckets by the same rules as ordinary Usage.
+
+SEM-4a. Usage extension counters. Non-native usage counters are `cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`, and their `*_input` and `*_output` variants, whenever the target protocol's official usage schema does not define that field. A downstream encoder MUST emit a non-native counter only when its value is non-zero. A native usage field of the target protocol MUST keep its native zero value and native nested object. Native examples are Messages `cache_creation { ephemeral_5m_input_tokens, ephemeral_1h_input_tokens }` and `output_tokens_details { thinking_tokens }`, and Responses `input_tokens_details.cached_tokens` and `output_tokens_details.reasoning_tokens`. Each protocol encoder implements this rule.
 Messages wire encoders MUST reconstruct disjoint cache counters per iteration and preserve the primary-generation top-level counters.
 Other protocols MUST receive aggregate iteration totals where they have no iteration representation.
 Cumulative stream snapshots MUST replace iterations; they MUST NOT append repeated snapshots.

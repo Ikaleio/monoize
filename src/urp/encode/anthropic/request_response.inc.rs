@@ -54,9 +54,11 @@ fn encode_supported_response(resp: &UrpResponse, logical_model: &str) -> Value {
         .get("stop_reason")
         .and_then(Value::as_str)
         .filter(|reason| messages_finish_reason(reason) == resp.finish_reason)
-        .unwrap_or_else(|| finish_reason_to_stop_reason(resp.finish_reason));
+        .unwrap_or_else(|| {
+            messages_stop_reason_for_output(resp.finish_reason, response_nodes)
+        });
     let mut body = json!({
-        "id": resp.id,
+        "id": messages_response_id(&resp.id),
         "type": "message",
         "role": "assistant",
         "model": logical_model,
@@ -88,6 +90,52 @@ struct AnthropicMessageEnvelope {
     role: OrdinaryRole,
     content: Vec<Value>,
     extra_body: HashMap<String, Value>,
+    /// Mid-conversation instruction text rendered inside a user message (MSG-1a).
+    system_reminders: Vec<Value>,
+}
+
+/// A cross-protocol mid-conversation system or developer block waiting for the next message.
+struct DeferredSystemBlock {
+    block: Value,
+    text: Option<String>,
+}
+
+fn flush_deferred_system_message(deferred: &mut Vec<DeferredSystemBlock>, out: &mut Vec<Value>) {
+    if deferred.is_empty() {
+        return;
+    }
+    let mut message = Some(AnthropicMessageEnvelope {
+        role: OrdinaryRole::System,
+        content: deferred.drain(..).map(|deferred| deferred.block).collect(),
+        extra_body: HashMap::new(),
+        system_reminders: Vec::new(),
+    });
+    flush_pending_anthropic_message(&mut message, out);
+}
+
+/// Moves deferred instruction text into the open user message when every deferred block is
+/// text; Anthropic rejects a `system` message that precedes a `user` message.
+fn attach_deferred_system_reminders(
+    deferred: &mut Vec<DeferredSystemBlock>,
+    pending: &mut Option<AnthropicMessageEnvelope>,
+) {
+    let Some(message) = pending
+        .as_mut()
+        .filter(|message| message.role == OrdinaryRole::User)
+    else {
+        return;
+    };
+    if deferred.is_empty() || deferred.iter().any(|deferred| deferred.text.is_none()) {
+        return;
+    }
+    for deferred in deferred.drain(..) {
+        let mut block = deferred.block;
+        block["text"] = json!(format!(
+            "<system-reminder>\n{}\n</system-reminder>",
+            deferred.text.unwrap_or_default()
+        ));
+        message.system_reminders.push(block);
+    }
 }
 
 fn flush_pending_anthropic_message(
@@ -98,12 +146,20 @@ fn flush_pending_anthropic_message(
         return;
     };
     if message.content.is_empty()
+        && message.system_reminders.is_empty()
         && (message.role != OrdinaryRole::System || message.extra_body.is_empty())
     {
         return;
     }
 
     let mut content = message.content;
+    if !message.system_reminders.is_empty() {
+        let insert_at = content
+            .iter()
+            .take_while(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+            .count();
+        content.splice(insert_at..insert_at, message.system_reminders);
+    }
     if matches!(message.role, OrdinaryRole::System | OrdinaryRole::Developer)
         && let Some(note) = system_tool_change_text(&content)
         && !has_nonempty_text_block(&content)
@@ -187,6 +243,7 @@ fn append_node_to_pending_anthropic_message(
         role,
         content: Vec::new(),
         extra_body: std::mem::take(pending_envelope_extra),
+        system_reminders: Vec::new(),
     });
     entry.content.push(block);
 }
@@ -216,6 +273,7 @@ fn append_tool_result_to_pending_anthropic_message(
         role: OrdinaryRole::User,
         content: Vec::new(),
         extra_body: std::mem::take(pending_envelope_extra),
+        system_reminders: Vec::new(),
     });
     entry.content.push(encode_tool_result_block(
         call_id, namespace, content, is_error, extra_body,
@@ -250,17 +308,12 @@ fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
 fn encode_system_block(node: &Node) -> Option<Value> {
     match node {
         Node::Text {
-            logprobs,
             content,
-            phase,
             extra_body,
             ..
         } if !content.is_empty() => {
             let mut block = json!({ "type": "text", "text": content });
             if let Some(obj) = block.as_object_mut() {
-                if let Some(phase) = phase {
-                    obj.insert("phase".to_string(), Value::String(phase.clone()));
-                }
                 merge_extra(obj, extra_body);
             }
             Some(block)
@@ -289,7 +342,7 @@ pub(crate) fn validate_complete_tool_inputs(nodes: &[Node]) -> Result<(), String
             ..
         } = node
         {
-            if !serde_json::from_str::<Value>(arguments).is_ok_and(|value| value.is_object()) {
+            if !messages_tool_input(arguments).is_some_and(|value| value.is_object()) {
                 return Err("Messages tool input must be a complete JSON object".to_string());
             }
         }

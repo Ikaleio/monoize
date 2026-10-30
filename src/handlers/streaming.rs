@@ -1,5 +1,5 @@
 use super::*;
-use crate::upstream_websocket::ResponsesWsControl;
+use crate::error::ForwardedHeaders;
 use crate::urp::stream_decode::stream_upstream_to_urp_events;
 use crate::urp::stream_encode::encode_urp_stream;
 use futures_util::StreamExt;
@@ -7,9 +7,11 @@ use futures_util::StreamExt;
 enum StreamUpstreamSource {
     Http(reqwest::Response),
     ResponsesWebSocket {
-        session: Box<dyn crate::upstream_websocket::ResponsesWsSession>,
-        interrupt: tokio::sync::watch::Receiver<ResponsesWsControl>,
+        source: crate::upstream_websocket::ResponsesWsTurnSource,
+        turn: crate::upstream_websocket::ResponsesWsTurn,
     },
+    /// WS2c/WS6: synthetic Responses frames for a warmup without an upstream.
+    LocalFrames(Vec<String>),
 }
 
 type ForwardEventStream = futures_util::stream::Map<
@@ -27,7 +29,8 @@ fn receiver_event_stream(rx: mpsc::Receiver<Event>) -> ForwardEventStream {
 }
 
 /// STRM-2a: an upstream stream that produced its first output event. The
-/// buffered `ResponseStart` events precede that event in decoder order.
+/// buffered `ResponseStart` and `ProviderControl` events precede that event in
+/// decoder order.
 struct CommittedUpstreamStream {
     buffered: Vec<crate::urp::UrpStreamEvent>,
     decoded_rx: mpsc::Receiver<crate::urp::UrpStreamEvent>,
@@ -40,17 +43,127 @@ struct PreOutputStreamFailure {
     failure_class: Option<RetryableFailureClass>,
 }
 
+/// STRM-2a: upper bound on events held before the first output event.
+const PRE_OUTPUT_BUFFER_MAX_EVENTS: usize = 256;
+
+/// FP4h: the single transition from "no downstream response yet" to committed
+/// SSE headers. Cloned into the forwarding task and every attempt.
+#[derive(Clone)]
+pub(super) struct StreamCommit {
+    sender:
+        Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<AppResult<ForwardedHeaders>>>>>,
+    downstream_gone: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// RL1h-1: sets the flag when the waiting handler or the returned response body
+/// is dropped. The forwarding task feeds an internal channel, whose open state
+/// says nothing about the real client.
+struct DownstreamLifetime(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for DownstreamLifetime {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl StreamCommit {
+    /// RL1h-1: whether the real downstream response body has gone away.
+    fn downstream_gone(&self) -> bool {
+        self.downstream_gone
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Commits the SSE headers. Later calls have no effect (SE1d).
+    fn accept(&self, headers: ForwardedHeaders) {
+        if let Some(tx) = self.take_sender() {
+            let _ = tx.send(Ok(headers));
+        }
+    }
+
+    /// Returns `err` to the caller when the headers were already committed,
+    /// so it can render the in-stream error instead (SE2).
+    fn reject(&self, err: AppError) -> Option<AppError> {
+        match self.take_sender() {
+            Some(tx) => {
+                let _ = tx.send(Err(err));
+                None
+            }
+            None => Some(err),
+        }
+    }
+
+    fn take_sender(&self) -> Option<tokio::sync::oneshot::Sender<AppResult<ForwardedHeaders>>> {
+        self.sender
+            .lock()
+            .expect("commit lock is never poisoned")
+            .take()
+    }
+}
+
+const CREDENTIAL_ERROR_SIGNALS: [&str; 4] = [
+    "authentication_error",
+    "invalid_api_key",
+    "permission_error",
+    "permission_denied",
+];
+
+/// STRM-2b: decoders synthesize status 400 for a terminal frame without a
+/// `status` member; well-known retryable classes must not reach the client as
+/// a 400, and a credential signal must reach RTA-8b.
+fn pre_output_error_status(http_status: u16, code: &str, error_type: Option<&str>) -> StatusCode {
+    let signal = |expected: &[&str]| {
+        expected.contains(&code) || error_type.is_some_and(|value| expected.contains(&value))
+    };
+    if signal(&CREDENTIAL_ERROR_SIGNALS) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if http_status == StatusCode::BAD_REQUEST.as_u16() {
+        if signal(&["rate_limit_exceeded", "rate_limit_error"]) {
+            return StatusCode::TOO_MANY_REQUESTS;
+        }
+        if signal(&["server_error", "api_error", "overloaded_error"]) {
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
+    StatusCode::from_u16(http_status).unwrap_or(StatusCode::BAD_GATEWAY)
+}
+
 /// Waits for the decoder's first output event. A terminal error or stream end
 /// inside the window ends the attempt so the router can fall back (STRM-2b).
+/// Provider-control events never close the window and never count as the first
+/// WebSocket frame for FP4h, so an upstream rejection after them keeps its
+/// native status.
 async fn probe_stream_first_output(
     mut decoded_rx: mpsc::Receiver<crate::urp::UrpStreamEvent>,
     decode_handle: tokio::task::JoinHandle<AppResult<()>>,
     runtime_metrics: &Arc<Mutex<StreamRuntimeMetrics>>,
+    commit: &StreamCommit,
 ) -> Result<CommittedUpstreamStream, PreOutputStreamFailure> {
     let mut buffered = Vec::new();
     loop {
         match decoded_rx.recv().await {
-            Some(event @ crate::urp::UrpStreamEvent::ResponseStart { .. }) => buffered.push(event),
+            Some(
+                crate::urp::UrpStreamEvent::ProviderControl { .. }
+                | crate::urp::UrpStreamEvent::ResponseStart { .. },
+            ) if buffered.len() >= PRE_OUTPUT_BUFFER_MAX_EVENTS => {
+                decode_handle.abort();
+                return Err(PreOutputStreamFailure {
+                    error: AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_control_overflow",
+                        "upstream sent too many control events before its first output",
+                    )
+                    .with_type("server_error"),
+                    failure_class: Some(RetryableFailureClass::Transient),
+                });
+            }
+            Some(event @ crate::urp::UrpStreamEvent::ProviderControl { .. }) => {
+                buffered.push(event)
+            }
+            Some(event @ crate::urp::UrpStreamEvent::ResponseStart { .. }) => {
+                commit.accept(Vec::new());
+                buffered.push(event)
+            }
             Some(crate::urp::UrpStreamEvent::Error { code, message, .. }) => {
                 let _ = decode_handle.await;
                 let terminal = runtime_metrics.lock().await.terminal.terminal_error.clone();
@@ -62,6 +175,7 @@ async fn probe_stream_first_output(
                     .as_ref()
                     .and_then(|terminal| terminal.error_type.clone());
                 let param = terminal.and_then(|terminal| terminal.param);
+                let reported_code = code.clone();
                 let code = code.unwrap_or_else(|| "upstream_stream_error".to_string());
                 let failure_class = midstream_terminal_failure_class(
                     http_status,
@@ -70,14 +184,20 @@ async fn probe_stream_first_output(
                 );
                 // `upstream_status` stays unset: the status is synthesized by the
                 // decoder and must not trigger an RTA-6c shared-origin blast.
-                let error = AppError::new(StatusCode::BAD_GATEWAY, code.clone(), message)
-                    .with_upstream_error(None, Some(code), error_type, param);
+                let status = pre_output_error_status(http_status, &code, error_type.as_deref());
+                let error = AppError::new(status, code, message).with_upstream_error(
+                    None,
+                    reported_code,
+                    error_type,
+                    param,
+                );
                 return Err(PreOutputStreamFailure {
                     error,
                     failure_class,
                 });
             }
             Some(event) => {
+                commit.accept(Vec::new());
                 buffered.push(event);
                 return Ok(CommittedUpstreamStream {
                     buffered,
@@ -138,19 +258,30 @@ mod stream_terminal_tests;
 async fn emit_stream_error_if_needed(
     downstream: DownstreamProtocol,
     err: &AppError,
+    request_id: Option<&str>,
+    mask_sensitive_info: bool,
     tx: &mpsc::Sender<Event>,
     capture_frames: Option<&crate::request_capture::SseFrameCapture>,
 ) {
     if err.downstream_stream_terminal_sent {
         return;
     }
+    // SAN-11: a stream-stage error never passed through SAN-1.
+    let masked;
+    let err = if mask_sensitive_info {
+        let mut clone = err.clone();
+        clone.message = crate::error_sanitize::mask_sensitive_text(&err.message);
+        masked = clone;
+        &masked
+    } else {
+        err
+    };
     let (event_name, body) = match downstream {
-        DownstreamProtocol::Responses => (Some("error"), responses_stream_error_json(1, err)),
+        DownstreamProtocol::Responses => (Some("error"), responses_stream_error_json(0, err)),
         DownstreamProtocol::ChatCompletions => (None, openai_error_json(err)),
-        DownstreamProtocol::AnthropicMessages => (
-            Some("error"),
-            json!({"type": "error", "error": {"type": err.code, "message": err.message}}),
-        ),
+        DownstreamProtocol::AnthropicMessages => {
+            (Some("error"), anthropic_stream_error_json(err, request_id))
+        }
     };
     let data = body.to_string();
     let event = match event_name {
@@ -168,15 +299,201 @@ async fn emit_stream_error_if_needed(
     if tx.send(event).await.is_err() {
         return;
     }
-    if matches!(
-        downstream,
-        DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses
-    ) {
+    if matches!(downstream, DownstreamProtocol::ChatCompletions) {
         if let Some(frames) = capture_frames {
             frames.record("data: [DONE]\n\n".to_string()).await;
         }
         let _ = tx.send(Event::default().data("[DONE]")).await;
     }
+}
+
+/// SE2a: the status used to derive a native type when the frame reports none.
+fn stream_error_status(explicit: Option<u64>, signal: impl Fn(&[&str]) -> bool) -> StatusCode {
+    if let Some(status) = explicit
+        .filter(|status| (400..=599).contains(status))
+        .and_then(|status| StatusCode::from_u16(status as u16).ok())
+    {
+        return status;
+    }
+    if signal(&["rate_limit_exceeded", "rate_limit_error"]) {
+        StatusCode::TOO_MANY_REQUESTS
+    } else if signal(&["server_error", "api_error", "overloaded_error"]) {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::BAD_GATEWAY
+    }
+}
+
+/// SE2a: reduces one error to the fields its downstream protocol renders. Raw
+/// frames, provider metadata and diagnostics stay in the logs and captures.
+fn native_stream_error(
+    downstream: DownstreamProtocol,
+    code: Option<&str>,
+    extra_body: &HashMap<String, Value>,
+    request_id: Option<&str>,
+    mask_sensitive_info: bool,
+) -> (Option<String>, HashMap<String, Value>) {
+    let nested = extra_body.get("error").and_then(Value::as_object);
+    let member = |key: &str| {
+        extra_body
+            .get(key)
+            .or_else(|| nested.and_then(|error| error.get(key)))
+    };
+    // A top-level `type: "error"` names the frame, not the error class.
+    let error_type = extra_body
+        .get("error_type")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            extra_body
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|value| *value != "error")
+        })
+        .or_else(|| {
+            nested
+                .and_then(|error| error.get("type"))
+                .and_then(Value::as_str)
+        })
+        .filter(|value| !value.is_empty());
+    let code = code.filter(|code| !code.is_empty());
+    let signal = |expected: &[&str]| {
+        code.is_some_and(|code| expected.contains(&code))
+            || error_type.is_some_and(|value| expected.contains(&value))
+    };
+    let status = stream_error_status(member("status").and_then(Value::as_u64), signal);
+    let credential =
+        matches!(status.as_u16(), 401 | 403 | 407) || signal(&CREDENTIAL_ERROR_SIGNALS);
+    let mask =
+        |text: &str| crate::error_sanitize::maybe_mask_sensitive_text(text, mask_sensitive_info);
+    let param = member("param")
+        .and_then(Value::as_str)
+        .filter(|_| !credential)
+        .map(mask);
+    let openai_type = if credential {
+        "server_error".to_string()
+    } else {
+        error_type
+            .map(mask)
+            .unwrap_or_else(|| openai_error_type_for_status(status).to_string())
+    };
+    let mut native = HashMap::new();
+    let native_code = match downstream {
+        DownstreamProtocol::AnthropicMessages => {
+            let mut err = AppError::new(
+                if credential {
+                    StatusCode::BAD_GATEWAY
+                } else {
+                    status
+                },
+                "upstream_error",
+                "",
+            );
+            err.upstream_type = error_type.filter(|_| !credential).map(str::to_string);
+            native.insert(
+                "error_type".to_string(),
+                Value::String(anthropic_error_type(&err)),
+            );
+            let request_id = request_id
+                .filter(|value| !value.is_empty())
+                .map(super::messages_wire_request_id)
+                .unwrap_or_else(|| super::messages_wire_request_id(&uuid::Uuid::new_v4().to_string()));
+            native.insert("request_id".to_string(), Value::String(request_id));
+            None
+        }
+        DownstreamProtocol::ChatCompletions => {
+            native.insert("type".to_string(), Value::String(openai_type));
+            native.insert(
+                "param".to_string(),
+                param.map(Value::String).unwrap_or(Value::Null),
+            );
+            Some(if credential {
+                "upstream_error".to_string()
+            } else {
+                code.map(mask)
+                    .unwrap_or_else(|| "upstream_error".to_string())
+            })
+        }
+        DownstreamProtocol::Responses => {
+            if let Some(param) = param {
+                native.insert("param".to_string(), Value::String(param));
+            }
+            Some(if credential {
+                "server_error".to_string()
+            } else {
+                code.map(mask)
+                    .unwrap_or_else(|| "upstream_error".to_string())
+            })
+        }
+    };
+    (native_code, native)
+}
+
+/// SE2a for a stream event: terminal `Error` events and failed outcomes.
+fn normalize_stream_error_event(
+    event: &mut urp::UrpStreamEvent,
+    downstream: DownstreamProtocol,
+    request_id: Option<&str>,
+    mask_sensitive_info: bool,
+) {
+    match event {
+        urp::UrpStreamEvent::Error {
+            code,
+            message,
+            extra_body,
+        } => {
+            let (native_code, native) = native_stream_error(
+                downstream,
+                code.as_deref(),
+                extra_body,
+                request_id,
+                mask_sensitive_info,
+            );
+            *code = native_code;
+            *extra_body = native;
+            *message =
+                crate::error_sanitize::maybe_mask_sensitive_text(message, mask_sensitive_info);
+        }
+        urp::UrpStreamEvent::ResponseDone { outcome, .. } => {
+            normalize_outcome_error(outcome, downstream, request_id, mask_sensitive_info);
+        }
+        _ => {}
+    }
+}
+
+/// SE2a for a response outcome, on stream and non-stream paths.
+pub(super) fn normalize_outcome_error(
+    outcome: &mut Option<urp::ResponseOutcome>,
+    downstream: DownstreamProtocol,
+    request_id: Option<&str>,
+    mask_sensitive_info: bool,
+) {
+    let Some(error) = outcome.as_mut().and_then(|outcome| outcome.error.as_mut()) else {
+        return;
+    };
+    let (native_code, native) = native_stream_error(
+        downstream,
+        error.code.as_deref(),
+        &error.extra_body,
+        request_id,
+        mask_sensitive_info,
+    );
+    error.code = native_code;
+    error.extra_body = native;
+    if let Some(message) = &error.message {
+        error.message = Some(crate::error_sanitize::maybe_mask_sensitive_text(
+            message,
+            mask_sensitive_info,
+        ));
+    }
+}
+
+/// SE1b: gateway-generated in-stream errors carry the same `request_id`.
+fn anthropic_stream_error_json(err: &AppError, request_id: Option<&str>) -> Value {
+    let request_id = request_id
+        .filter(|value| !value.is_empty())
+        .map(super::messages_wire_request_id)
+        .unwrap_or_else(|| super::messages_wire_request_id(&uuid::Uuid::new_v4().to_string()));
+    anthropic_error_json(err, &request_id)
 }
 
 fn combine_stream_stage_results(results: [AppResult<()>; 4]) -> AppResult<()> {
@@ -215,9 +532,26 @@ async fn retain_decoded_terminal_output(
     tx: mpsc::Sender<urp::UrpStreamEvent>,
     terminal_output: Arc<Mutex<Vec<urp::Node>>>,
     aliases: HashMap<String, urp::ToolIdentity>,
+    foreign_target: Option<urp::ProviderProtocol>,
+    downstream: DownstreamProtocol,
+    request_id: Option<String>,
+    mask_sensitive_info: bool,
 ) -> AppResult<()> {
     while let Some(mut event) = rx.recv().await {
         restore_tool_namespace_event(&mut event, &aliases);
+        // XTRA-5a, before any response transform. Settlement reads the decoder
+        // usage from the runtime metrics, so it keeps the unstripped values.
+        if let Some(target) = foreign_target
+            && !urp::strip_foreign_stream_event(&mut event, target)
+        {
+            continue;
+        }
+        normalize_stream_error_event(
+            &mut event,
+            downstream,
+            request_id.as_deref(),
+            mask_sensitive_info,
+        );
         if let urp::UrpStreamEvent::ResponseDone { output, .. } = &event {
             *terminal_output.lock().await = output.clone();
         }
@@ -319,60 +653,48 @@ fn spawn_stream_attempt_error(
     );
 }
 
-fn prestream_error_stream(downstream: DownstreamProtocol, err: AppError) -> ForwardEventStream {
+/// SE2: the in-stream error of a failure after `COMMIT` and before any
+/// protocol event. `[DONE]` belongs only to Chat Completions.
+fn precommitted_error_stream(
+    downstream: DownstreamProtocol,
+    err: AppError,
+    request_id: Option<String>,
+) -> ForwardEventStream {
     let (tx, rx) = mpsc::channel::<Event>(8);
     tokio::spawn(async move {
-        match downstream {
-            DownstreamProtocol::Responses => {
-                let responses_error = responses_stream_error_json(1, &err);
-                let _ = tx
-                    .send(
-                        Event::default()
-                            .event("error")
-                            .data(responses_error.to_string()),
-                    )
-                    .await;
-                let _ = tx.send(Event::default().data("[DONE]")).await;
-            }
-            DownstreamProtocol::ChatCompletions => {
-                let error_json = openai_error_json(&err);
-                let _ = tx.send(Event::default().data(error_json.to_string())).await;
-                let _ = tx.send(Event::default().data("[DONE]")).await;
-            }
-            DownstreamProtocol::AnthropicMessages => {
-                let code = stream_error_code(&err);
-                let anthropic_error = json!({
-                    "type": "error",
-                    "error": {
-                        "type": code,
-                        "message": err.message
-                    }
-                });
-                let _ = tx
-                    .send(
-                        Event::default()
-                            .event("error")
-                            .data(anthropic_error.to_string()),
-                    )
-                    .await;
-            }
-        }
+        // `err` already holds client text: RTA-8 or a local error.
+        emit_stream_error_if_needed(downstream, &err, request_id.as_deref(), false, &tx, None)
+            .await;
     });
     receiver_event_stream(rx)
 }
 
-pub(super) fn deferred_forward_event_stream<F, S>(
+/// FP4e/FP4h: runs `forwarding` in its own task and answers once the first
+/// upstream attempt is accepted or the request has failed. A failure before
+/// the commit becomes a native JSON error; after it, an in-stream error.
+pub(super) async fn commit_forward_event_stream<F, S>(
     downstream: DownstreamProtocol,
-    forwarding: F,
-) -> futures_util::stream::BoxStream<'static, Result<Event, std::convert::Infallible>>
+    request_id: Option<String>,
+    keep_alive: KeepAlive,
+    forwarding: impl FnOnce(StreamCommit) -> F,
+) -> AppResult<Response>
 where
     F: std::future::Future<Output = AppResult<S>> + Send + 'static,
     S: futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 {
+    let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
+    let downstream_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lifetime = DownstreamLifetime(downstream_gone.clone());
+    let commit = StreamCommit {
+        sender: Arc::new(std::sync::Mutex::new(Some(commit_tx))),
+        downstream_gone,
+    };
+    let forwarding = forwarding(commit.clone());
     let (tx, rx) = mpsc::channel::<Event>(64);
     tokio::spawn(async move {
         match forwarding.await {
             Ok(stream) => {
+                commit.accept(Vec::new());
                 tokio::pin!(stream);
                 while let Some(Ok(event)) = stream.next().await {
                     if tx.send(event).await.is_err() {
@@ -381,7 +703,10 @@ where
                 }
             }
             Err(err) => {
-                let err_stream = prestream_error_stream(downstream, err);
+                let Some(err) = commit.reject(err) else {
+                    return;
+                };
+                let err_stream = precommitted_error_stream(downstream, err, request_id);
                 tokio::pin!(err_stream);
                 while let Some(Ok(event)) = err_stream.next().await {
                     if tx.send(event).await.is_err() {
@@ -391,7 +716,23 @@ where
             }
         }
     });
-    receiver_event_stream(rx).boxed()
+    let forwarded_headers = commit_rx.await.map_err(|_| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "task_panic",
+            "stream forwarding task ended before commit",
+        )
+        .with_type("server_error")
+    })??;
+    let body = receiver_event_stream(rx).map(move |event| {
+        let _lifetime = &lifetime;
+        event
+    });
+    let mut response = Sse::new(body.boxed())
+        .keep_alive(keep_alive)
+        .into_response();
+    crate::error::append_forwarded_headers(&mut response, forwarded_headers);
+    Ok(response)
 }
 
 pub(super) async fn forward_stream_typed(
@@ -404,7 +745,8 @@ pub(super) async fn forward_stream_typed(
     request_ip: Option<String>,
     client_session_id: Option<String>,
     capture: RequestCaptureContext,
-    websocket_interrupt: Option<tokio::sync::watch::Receiver<ResponsesWsControl>>,
+    ws_turn: Option<crate::upstream_websocket::ResponsesWsTurn>,
+    commit: StreamCommit,
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 > {
@@ -426,6 +768,31 @@ pub(super) async fn forward_stream_typed(
     // Session affinity derives from the request as decoded, before media
     // routes are bound into its input nodes.
     attach_client_session_id(&mut attempts, client_session_id, Some(&req));
+    if let Some(turn) = ws_turn.as_ref() {
+        if let Some((channel_id, upstream_model)) = turn.successor.as_ref() {
+            // WS18: a steering successor can only read the pinned session.
+            attempts.retain(|attempt| {
+                attempt.channel_id == *channel_id && attempt.upstream_model == *upstream_model
+            });
+            if attempts.is_empty() {
+                return Err(AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "steer_successor_unavailable",
+                    "the steering successor's upstream session is not routable",
+                ));
+            }
+        } else if turn.warmup
+            && attempts.first().is_none_or(|attempt| {
+                attempt.provider_type != ProviderType::Responses
+                    || attempt.websocket_supported == Some(false)
+            })
+        {
+            // WS6: no upstream WebSocket can prepare this warmup; the handler
+            // answers it locally without a request log or charge.
+            turn.state.set_local_warmup();
+            return Ok(receiver_event_stream(mpsc::channel::<Event>(1).1));
+        }
+    }
     bind_media_request_routes(&mut req, &mut attempts)?;
     let mut history_context =
         responses_history::HistoryContext::from_request(&state, &req, downstream);
@@ -468,6 +835,15 @@ pub(super) async fn forward_stream_typed(
             &logical_model,
             downstream,
         ) || attempt.provider_type == ProviderType::Replicate;
+        // WS6/WS18: warmups and steering successors never make an HTTP call.
+        let requires_buffered_stream = requires_buffered_stream
+            && !ws_turn
+                .as_ref()
+                .is_some_and(|turn| turn.warmup || turn.successor.is_some());
+        if requires_buffered_stream && let Some(turn) = ws_turn.as_ref() {
+            turn.state
+                .set_upstream_kind(crate::upstream_websocket::UPSTREAM_KIND_HTTP);
+        }
         let max_channel_attempts = same_channel_attempt_slots(&attempt);
 
         'channel_attempts: for channel_attempt in 0..max_channel_attempts {
@@ -613,6 +989,8 @@ pub(super) async fn forward_stream_typed(
                             return Err(err);
                         }
                     };
+                let responses_echo =
+                    responses_request_echo_for_attempt(&nonstream_req, &attempt, downstream);
                 release_encoded_input(&mut nonstream_req, &capture);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
@@ -625,7 +1003,7 @@ pub(super) async fn forward_stream_typed(
                 // serialization.
                 let body = upstream::JsonBody::new(&upstream_body);
                 let capture_upstream_body = capture.session.is_some().then_some(upstream_body);
-                let call = upstream::call_upstream_with_timeout_and_headers(
+                let call = upstream::call_upstream_json_with_response_headers(
                     &http,
                     &provider,
                     &attempt.api_key,
@@ -636,7 +1014,7 @@ pub(super) async fn forward_stream_typed(
                 )
                 .await;
                 match call {
-                    Ok(value) => {
+                    Ok((value, forwarded_headers)) => {
                         if let (Some(session), Some(upstream_body)) =
                             (capture.session.as_ref(), capture_upstream_body)
                         {
@@ -681,7 +1059,8 @@ pub(super) async fn forward_stream_typed(
                             &nonstream_req,
                         ) {
                             Ok(resp) => resp,
-                            Err(err) => {
+                            Err(mut err) => {
+                                err.forwarded_headers = forwarded_headers;
                                 let same_channel_retryable =
                                     is_same_channel_retryable_app_error(&err);
                                 let passive_failure_class = same_channel_retryable
@@ -738,6 +1117,17 @@ pub(super) async fn forward_stream_typed(
                         }
                         mark_channel_success(&state, &attempt).await;
                         refresh_channel_affinity(&state, &attempt).await;
+                        let foreign_extras =
+                            foreign_response_target(downstream, attempt.provider_type)
+                                .map(|target| urp::strip_foreign_response(&mut resp, target));
+                        let mask_sensitive_info_for_stream =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
+                        normalize_outcome_error(
+                            &mut resp.outcome,
+                            downstream,
+                            request_id.as_deref(),
+                            mask_sensitive_info_for_stream,
+                        );
                         // Wrap newly produced encrypted reasoning payloads in
                         // mz2 envelopes BEFORE response-phase transforms run.
                         // See `nonstream.rs` and PIPE-1d in
@@ -843,6 +1233,10 @@ pub(super) async fn forward_stream_typed(
                         if let Some(history) = &history_for_stream {
                             history.decorate_response(&mut resp);
                         }
+                        if let Some(echo) = responses_echo {
+                            resp.extra_body
+                                .insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo);
+                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -854,8 +1248,14 @@ pub(super) async fn forward_stream_typed(
                         let tried_providers_for_log = tried_providers;
                         let capture_session = capture.session.clone();
                         let pending_request_log_guard_for_stream = pending_request_log_guard;
+                        let request_id_for_error = request_id.clone();
+                        if downstream.is_same_family(attempt.provider_type) {
+                            commit.accept(forwarded_headers);
+                        }
+                        let commit_for_stream = commit.clone();
                         tokio::spawn(async move {
                             let _pending_request_log_guard = pending_request_log_guard_for_stream;
+                            let mut resp = resp;
                             let tx_err = tx.clone();
                             let synthetic_reasoning_duration_secs =
                                 Some(started_at.elapsed().as_secs());
@@ -871,7 +1271,15 @@ pub(super) async fn forward_stream_typed(
                                 )
                                 .await;
                             if let Err(err) = &stream_result {
-                                emit_stream_error_if_needed(downstream, err, &tx_err, None).await;
+                                emit_stream_error_if_needed(
+                                    downstream,
+                                    err,
+                                    request_id_for_error.as_deref(),
+                                    mask_sensitive_info_for_stream,
+                                    &tx_err,
+                                    None,
+                                )
+                                .await;
                             }
                             // Retained before EOF so a client chaining
                             // `previous_response_id` right after EOF finds it.
@@ -883,10 +1291,12 @@ pub(super) async fn forward_stream_typed(
                             // FP6j-1: dropping the last sender ends the
                             // downstream SSE before settlement and logging.
                             let downstream_closed = tx_err.is_closed()
-                                || websocket_interrupt.as_ref().is_some_and(|control| {
-                                    *control.borrow() == ResponsesWsControl::Disconnected
-                                });
+                                || commit_for_stream.downstream_gone()
+                                || ws_turn.as_ref().is_some_and(|turn| turn.is_disconnected());
                             drop(tx_err);
+                            if let Some(foreign_extras) = foreign_extras {
+                                foreign_extras.restore(&mut resp);
+                            }
                             match stream_result {
                                 Ok(()) => {
                                     match maybe_charge_response(
@@ -1061,6 +1471,8 @@ pub(super) async fn forward_stream_typed(
                         return Err(err);
                     }
                 };
+            let responses_echo =
+                responses_request_echo_for_attempt(&req_attempt, &attempt, downstream);
             attempt.session_affinity_value =
                 resolve_session_affinity_value(&attempt, &upstream_body);
             let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
@@ -1072,7 +1484,7 @@ pub(super) async fn forward_stream_typed(
             let mut upstream_body = Some(upstream_body);
             let mut websocket_source = None;
             let mut websocket_send_error = None;
-            if let Some(interrupt) = websocket_interrupt.as_ref()
+            if let Some(turn) = ws_turn.as_ref()
                 && attempt.provider_type == ProviderType::Responses
                 && attempt.websocket_supported != Some(false)
             {
@@ -1086,40 +1498,62 @@ pub(super) async fn forward_stream_typed(
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .or(state.node.upstream_proxy_url.as_deref());
-                match crate::upstream_websocket::connect_responses_websocket(
-                    &attempt.base_url,
-                    &ws_headers,
+                    .or(state.node.upstream_proxy_url.as_deref())
+                    .map(str::to_string);
+                let target = crate::upstream_websocket::UpstreamWsTarget {
+                    base_url: attempt.base_url.clone(),
+                    headers: ws_headers,
                     proxy,
-                    attempt.request_timeout_ms,
-                )
-                .await
+                    timeout_ms: attempt.request_timeout_ms,
+                    channel_id: attempt.channel_id.clone(),
+                    upstream_model: req_attempt.model.clone(),
+                };
+                let create_body = if capture.session.is_some() {
+                    upstream_body.clone()
+                } else {
+                    upstream_body.take()
+                }
+                .expect("the encoded body is present until dispatch");
+                match crate::upstream_websocket::open_turn_source(turn, target, create_body).await
                 {
-                    Ok(mut ws) => {
+                    Ok(source) => {
                         remember_websocket_supported(&state, &mut attempt, true).await;
-                        let create_body = if capture.session.is_some() {
-                            upstream_body.clone()
-                        } else {
-                            upstream_body.take()
-                        }
-                        .expect("the encoded body is present until dispatch");
-                        let payload =
-                            crate::upstream_websocket::responses_ws_create_payload(create_body);
-                        let text = upstream::JsonBody::new(&payload).into_string();
-                        drop(payload);
-                        match ws.send_text(text).await {
-                            Ok(()) => {
-                                websocket_source = Some(StreamUpstreamSource::ResponsesWebSocket {
-                                    session: ws,
-                                    interrupt: interrupt.clone(),
-                                });
-                            }
-                            Err(err) => websocket_send_error = Some(err),
-                        }
+                        turn.state
+                            .set_upstream_kind(crate::upstream_websocket::UPSTREAM_KIND_WEBSOCKET);
+                        websocket_source = Some(StreamUpstreamSource::ResponsesWebSocket {
+                            source,
+                            turn: turn.clone(),
+                        });
                     }
-                    Err(_) => {
+                    Err(crate::upstream_websocket::TurnOpenError::Handshake { error, body }) => {
+                        tracing::debug!(
+                            channel_id = %attempt.channel_id,
+                            http_status = ?error.http_status,
+                            "upstream WebSocket handshake failed; using HTTP SSE: {}",
+                            error.message
+                        );
                         remember_websocket_supported(&state, &mut attempt, false).await;
+                        if upstream_body.is_none() {
+                            upstream_body = Some(body);
+                        }
                     }
+                    Err(crate::upstream_websocket::TurnOpenError::Send(err)) => {
+                        websocket_send_error = Some(err);
+                    }
+                }
+            }
+            if websocket_source.is_none()
+                && websocket_send_error.is_none()
+                && let Some(turn) = ws_turn.as_ref()
+            {
+                if turn.warmup {
+                    // WS2c/WS6: a warmup never reaches an HTTP upstream.
+                    websocket_source = Some(StreamUpstreamSource::LocalFrames(
+                        crate::upstream_websocket::local_warmup_frames(&req_attempt.model),
+                    ));
+                } else {
+                    turn.state
+                        .set_upstream_kind(crate::upstream_websocket::UPSTREAM_KIND_HTTP);
                 }
             }
             if let Some(err) = websocket_send_error {
@@ -1222,6 +1656,15 @@ pub(super) async fn forward_stream_typed(
                 capture_upstream_request.map(move |upstream| (req_attempt, upstream));
             match call {
                 Ok(upstream_source) => {
+                    // FP4h: an HTTP attempt is accepted by its 2xx headers; a
+                    // WebSocket attempt only by its first non-control frame.
+                    if let StreamUpstreamSource::Http(upstream_resp) = &upstream_source {
+                        commit.accept(if downstream.is_same_family(attempt.provider_type) {
+                            upstream::forwarded_response_headers(upstream_resp.headers())
+                        } else {
+                            Vec::new()
+                        });
+                    }
                     let legacy = match legacy {
                         Ok(legacy) => legacy,
                         Err(err) => {
@@ -1241,7 +1684,10 @@ pub(super) async fn forward_stream_typed(
                             return Err(err);
                         }
                     };
-                    let pending_request_envelope_extra = pending_request_envelope_extra.clone();
+                    // XTRA-5b: request-envelope members never cross families.
+                    let pending_request_envelope_extra = pending_request_envelope_extra
+                        .clone()
+                        .filter(|_| downstream.is_same_family(attempt.provider_type));
                     let provider_type = attempt.provider_type;
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                         ttfb_ms: None,
@@ -1280,16 +1726,39 @@ pub(super) async fn forward_stream_typed(
                                     )
                                     .await
                                 }
-                                StreamUpstreamSource::ResponsesWebSocket { session, interrupt } => {
-                                    crate::urp::stream_decode::openai_responses::stream_responses_websocket_to_urp_events(
+                                StreamUpstreamSource::ResponsesWebSocket { source, turn } => {
+                                    let (frame_tx, frame_rx) = mpsc::channel(32);
+                                    crate::upstream_websocket::spawn_turn_feeder(
+                                        source,
+                                        turn,
+                                        frame_tx,
+                                        stream_idle_timeout_ms,
+                                    );
+                                    crate::urp::stream_decode::openai_responses::stream_responses_frames_to_urp_events(
                                         &legacy,
                                         pending_request_envelope_extra,
-                                        session,
+                                        frame_rx,
                                         decoded_tx,
                                         Some(started_at),
                                         Some(metrics),
                                         stream_idle_timeout_ms,
-                                        interrupt,
+                                    )
+                                    .await
+                                }
+                                StreamUpstreamSource::LocalFrames(local_frames) => {
+                                    let (frame_tx, frame_rx) = mpsc::channel(local_frames.len().max(1));
+                                    for frame in local_frames {
+                                        let _ = frame_tx.try_send(Ok((String::new(), frame)));
+                                    }
+                                    drop(frame_tx);
+                                    crate::urp::stream_decode::openai_responses::stream_responses_frames_to_urp_events(
+                                        &legacy,
+                                        pending_request_envelope_extra,
+                                        frame_rx,
+                                        decoded_tx,
+                                        Some(started_at),
+                                        Some(metrics),
+                                        stream_idle_timeout_ms,
                                     )
                                     .await
                                 }
@@ -1301,6 +1770,7 @@ pub(super) async fn forward_stream_typed(
                         decoded_rx,
                         decode_handle,
                         &runtime_metrics,
+                        &commit,
                     )
                     .await
                     {
@@ -1404,6 +1874,7 @@ pub(super) async fn forward_stream_typed(
                     let capture_channel_id = attempt.channel_id.clone();
                     let capture_provider_type = attempt.provider_type;
                     let transform_provider_type = attempt.provider_type;
+                    let foreign_target = foreign_response_target(downstream, attempt.provider_type);
                     let reasoning_envelope_for_transform =
                         auth.reasoning_envelope_enabled.then(|| {
                             (
@@ -1422,6 +1893,8 @@ pub(super) async fn forward_stream_typed(
                     let global_rules_for_transform = global_transforms.clone();
                     let auth_rules_for_transform = auth.transforms.clone();
                     let pending_request_log_guard_for_stream = pending_request_log_guard;
+                    let commit_for_stream = commit.clone();
+                    let request_id_for_retain = request_id.clone();
                     tokio::spawn(async move {
                         let _pending_request_log_guard = pending_request_log_guard_for_stream;
                         let tx_err = tx.clone();
@@ -1448,6 +1921,10 @@ pub(super) async fn forward_stream_typed(
                                         retained_tx,
                                         terminal_output,
                                         namespace_aliases,
+                                        foreign_target,
+                                        downstream,
+                                        request_id_for_retain,
+                                        mask_sensitive_info,
                                     )
                                     .await
                                 })
@@ -1515,6 +1992,7 @@ pub(super) async fn forward_stream_typed(
                                         started_at,
                                         sse_max_frame_length,
                                         mask_sensitive_info,
+                                        responses_echo,
                                         chat_include_usage,
                                     )
                                     .await
@@ -1649,6 +2127,8 @@ pub(super) async fn forward_stream_typed(
                             emit_stream_error_if_needed(
                                 downstream,
                                 err,
+                                request_id_for_log.as_deref(),
+                                mask_sensitive_info,
                                 &tx_err,
                                 capture_frames_for_task.as_ref(),
                             )
@@ -1662,9 +2142,8 @@ pub(super) async fn forward_stream_typed(
                         // FP6j-1: dropping the last sender ends the downstream
                         // SSE before settlement, logging, and capture persistence.
                         let downstream_closed = tx_err.is_closed()
-                            || websocket_interrupt.as_ref().is_some_and(|control| {
-                                *control.borrow() == ResponsesWsControl::Disconnected
-                            });
+                            || commit_for_stream.downstream_gone()
+                            || ws_turn.as_ref().is_some_and(|turn| turn.is_disconnected());
                         drop(tx_err);
 
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {
@@ -1974,7 +2453,12 @@ pub(super) async fn forward_stream_typed(
             }
         }
     }
-    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+    let final_err = build_exhausted_error_for_downstream(
+        &logical_model,
+        &tried_providers,
+        last_failed_attempt.as_ref(),
+        downstream,
+    );
     if let Some(attempt) = last_failed_attempt {
         let terminal_error = stream_terminal_error_from_app(&final_err);
         spawn_request_log_stream_terminal_error(
@@ -2008,5 +2492,5 @@ pub(super) async fn forward_stream_typed(
     if let Some(session) = capture.session.as_ref() {
         session.persist_with_result(None, true).await;
     }
-    Ok(prestream_error_stream(downstream, final_err))
+    Err(final_err)
 }

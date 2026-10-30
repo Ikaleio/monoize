@@ -825,7 +825,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(done_indices, vec![0, 1, 2, 3, 4, 5]);
+        // CTRL-8: a reserved signature transport (index 1) may finish after the
+        // later-indexed control node (index 2).
+        assert_eq!(done_indices, vec![0, 2, 1, 3, 4, 5]);
         let UrpStreamEvent::ResponseDone {
             outcome: _,
             output: mut nodes,
@@ -1250,6 +1252,7 @@ mod tests {
                         std::time::Instant::now(),
                         None,
                         false,
+                        None,
                         true,
                     ),
                 )
@@ -1546,6 +1549,7 @@ mod tests {
                         std::time::Instant::now(),
                         None,
                         false,
+                        None,
                         true,
                     )
                     .await

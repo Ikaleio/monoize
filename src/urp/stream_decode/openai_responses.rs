@@ -8,7 +8,6 @@ use crate::handlers::usage::{
     record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
-use crate::upstream_websocket::{ResponsesWsControl, ResponsesWsSession};
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,
@@ -22,7 +21,7 @@ use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 

@@ -52,7 +52,11 @@ fn map_response_completed_with_accumulated(
                         item_obj.insert("id".to_string(), Value::String(streamed_id.to_string()));
                         borrowed_streamed_id = true;
                     }
-                    let mut nodes = nodes_from_item_value(&item);
+                    let mut nodes = crate::urp::decode::openai_responses::decode_response(
+                        &json!({"output": [&item]}),
+                    )
+                    .map(|response| response.output)
+                    .unwrap_or_default();
                     if terminal_id_missing && !borrowed_streamed_id {
                         for node in &mut nodes {
                             node.set_id(None);
@@ -66,7 +70,17 @@ fn map_response_completed_with_accumulated(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let outputs = match merge_response_completed_outputs(terminal_outputs, accumulated_outputs) {
+    let terminal_is_authoritative = response_obj.get("output").is_some_and(Value::is_array)
+        && (index_state.discard_requested
+            || matches!(
+                response_obj.get("status").and_then(Value::as_str),
+                Some("incomplete" | "cancelled" | "failed")
+            ));
+    let outputs = match merge_response_completed_outputs(
+        terminal_outputs,
+        accumulated_outputs,
+        terminal_is_authoritative,
+    ) {
         Ok(outputs) => outputs,
         Err(reason) => {
             events.push(UrpStreamEvent::Error {
@@ -91,6 +105,31 @@ fn map_response_completed_with_accumulated(
             .or(Some(FinishReason::Stop)),
         _ => decoded.as_ref().and_then(|resp| resp.finish_reason),
     };
+    let mut terminal_extra = split_known_fields(
+        response_value.clone(),
+        &[
+            "id",
+            "object",
+            "created",
+            "created_at",
+            "model",
+            "output",
+            "usage",
+            "status",
+            "error",
+            "incomplete_details",
+        ],
+    );
+    terminal_extra.insert(
+        crate::urp::RESPONSES_RESPONSE_SOURCE_EXTRA_KEY.to_string(),
+        Value::Object(Default::default()),
+    );
+    if terminal_is_authoritative && index_state.discard_requested {
+        terminal_extra.insert(
+            crate::urp::RESPONSES_ITEMS_DISCARDED_EXTRA_KEY.to_string(),
+            Value::Bool(true),
+        );
+    }
     events.push(UrpStreamEvent::ResponseDone {
         outcome: crate::urp::ResponseOutcome::from_responses(&response_obj),
         finish_reason,
@@ -98,21 +137,7 @@ fn map_response_completed_with_accumulated(
             .and_then(|resp| resp.usage)
             .or_else(|| parse_usage_from_responses_object(&response_value)),
         output: outputs,
-        extra_body: split_known_fields(
-            response_value,
-            &[
-                "id",
-                "object",
-                "created",
-                "created_at",
-                "model",
-                "output",
-                "usage",
-                "status",
-                "error",
-                "incomplete_details",
-            ],
-        ),
+        extra_body: terminal_extra,
     });
     events
 }
@@ -122,6 +147,25 @@ fn map_response_completed(
     index_state: &mut ResponsesStreamIndexState,
 ) -> Vec<UrpStreamEvent> {
     map_response_completed_with_accumulated(data_val, index_state, &[])
+}
+
+/// `NodeDone.extra_body` for one message part, carrying a native done-event `phase`.
+fn text_done_extra_body(
+    mut extra_body: HashMap<String, Value>,
+    output_index: u64,
+    content_index: u64,
+    index_state: &mut ResponsesStreamIndexState,
+) -> HashMap<String, Value> {
+    if let Some(phase) = output_state_for(index_state, output_index)
+        .text_done_phases
+        .remove(&content_index)
+    {
+        extra_body.insert(
+            crate::urp::RESPONSES_TEXT_DONE_PHASE_EXTRA_KEY.to_string(),
+            Value::String(phase),
+        );
+    }
+    extra_body
 }
 
 fn urp_node_index_from_delta(data_val: &Value, index_state: &mut ResponsesStreamIndexState) -> u32 {
@@ -169,8 +213,17 @@ fn text_delta_extra_body(data_val: Value) -> HashMap<String, Value> {
             "item_id",
             "logprobs",
             "phase",
+            "obfuscation",
         ],
     )
+}
+
+/// Fields of a native delta event that the downstream delta event must repeat unchanged.
+fn wire_delta_extra_body(data_val: &Value) -> HashMap<String, Value> {
+    ["obfuscation", "phase"]
+        .into_iter()
+        .filter_map(|key| data_val.get(key).map(|value| (key.to_string(), value.clone())))
+        .collect()
 }
 
 fn role_from_item(item: &Value) -> Role {

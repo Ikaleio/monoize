@@ -60,6 +60,7 @@ pub(crate) async fn encode_urp_stream(
     stream_started_at: Instant,
     sse_max_frame_length: Option<usize>,
     mask_sensitive_info: bool,
+    responses_request_echo: Option<serde_json::Value>,
     chat_include_usage: bool,
 ) -> AppResult<()> {
     match downstream {
@@ -71,6 +72,7 @@ pub(crate) async fn encode_urp_stream(
                 stream_started_at,
                 sse_max_frame_length,
                 mask_sensitive_info,
+                responses_request_echo,
             )
             .await
         }
