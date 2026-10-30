@@ -684,10 +684,14 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         attach_candidate_citations(candidate, &mut output_nodes);
         crate::urp::logprobs::attach_gemini(candidate, &mut output_nodes);
     }
-    let mut output_nodes: Vec<Node> = output_nodes
-        .into_iter()
-        .flat_map(project_response_node)
-        .collect();
+    let mut projected: Vec<Node> = Vec::with_capacity(output_nodes.len());
+    let mut text_offset = 0;
+    for node in output_nodes {
+        let nodes = project_response_node(node, text_offset);
+        text_offset += text_bytes(&nodes);
+        projected.extend(nodes);
+    }
+    let mut output_nodes = projected;
     if let Some(token) = candidate.and_then(continuation_token) {
         output_nodes.push(continuation_carrier(token));
     }
@@ -960,11 +964,24 @@ fn carrier_id(prefix: &str) -> String {
     format!("{prefix}{}", uuid::Uuid::new_v4().simple())
 }
 
-/// Owner binding for a text signature: `rs_gemini_part_t<byte length>h<xxh3 hex>r<random>`.
-/// It lets the encoder find the owning text after a downstream merged or moved Parts.
-fn text_carrier_id(text: &str) -> String {
+/// Bytes of Text content in `nodes`: the position of a following Part in the response text.
+pub(crate) fn text_bytes(nodes: &[Node]) -> u64 {
+    nodes
+        .iter()
+        .map(|node| match node {
+            Node::Text { content, .. } => content.len() as u64,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Owner binding for a text signature:
+/// `rs_gemini_part_t<byte length>h<xxh3 hex>o<response text offset>r<random>`.
+/// It lets the encoder find the owning text, even among equal texts, after a downstream merged
+/// or moved Parts.
+fn text_carrier_id(text: &str, offset: u64) -> String {
     format!(
-        "{GEMINI_PART_SIGNATURE_ID_PREFIX}t{}h{:016x}r{}",
+        "{GEMINI_PART_SIGNATURE_ID_PREFIX}t{}h{:016x}o{offset}r{}",
         text.len(),
         xxhash_rust::xxh3::xxh3_64(text.as_bytes()),
         &uuid::Uuid::new_v4().simple().to_string()[..8]
@@ -972,11 +989,22 @@ fn text_carrier_id(text: &str) -> String {
 }
 
 /// Parses the owner binding of a text signature carrier id.
-pub(crate) fn text_carrier_owner(id: &str) -> Option<(usize, u64)> {
+pub(crate) fn text_carrier_owner(id: &str) -> Option<(usize, u64, u64)> {
     let rest = id.strip_prefix(GEMINI_PART_SIGNATURE_ID_PREFIX)?.strip_prefix('t')?;
     let (length, rest) = rest.split_once('h')?;
-    let (hash, _) = rest.split_once('r')?;
-    Some((length.parse().ok()?, u64::from_str_radix(hash, 16).ok()?))
+    let (hash, rest) = rest.split_once('o')?;
+    let (offset, _) = rest.split_once('r')?;
+    Some((
+        length.parse().ok()?,
+        u64::from_str_radix(hash, 16).ok()?,
+        offset.parse().ok()?,
+    ))
+}
+
+/// Parses the response text offset of a server-tool Part carrier id.
+pub(crate) fn item_carrier_offset(id: &str) -> Option<u64> {
+    let rest = id.strip_prefix(GEMINI_ITEM_CARRIER_ID_PREFIX)?.strip_prefix('o')?;
+    rest.split_once('r')?.0.parse().ok()
 }
 
 fn reasoning_carrier(id: String, payload: Value, extra_body: HashMap<String, Value>) -> Node {
@@ -1016,11 +1044,11 @@ pub(crate) fn continuation_carrier(token: &str) -> Node {
 }
 
 /// Encodes a server-tool Part as an opaque carrier payload (unpadded base64url of its JSON).
-fn item_carrier(body: &Value) -> Node {
+fn item_carrier(body: &Value, offset: u64) -> Node {
     use base64::Engine as _;
     let wire = crate::urp::encode::sanitize_provider_item_wire_body(body);
     reasoning_carrier(
-        carrier_id(GEMINI_ITEM_CARRIER_ID_PREFIX),
+        carrier_id(&format!("{GEMINI_ITEM_CARRIER_ID_PREFIX}o{offset}r")),
         json!(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(wire.to_string())),
         HashMap::new(),
     )
@@ -1103,7 +1131,7 @@ fn render_code_execution(node: Node) -> Node {
 /// becomes one standalone carrier with id prefix `rs_gemini_`; a signed thought receives an
 /// `rs_gemini_` id; server-tool Parts become `rs_gemini_item_` carriers. Function-call
 /// signatures stay on the ToolCall.
-pub(crate) fn project_response_node(node: Node) -> Vec<Node> {
+pub(crate) fn project_response_node(node: Node, text_offset: u64) -> Vec<Node> {
     if let Node::ProviderItem {
         origin_protocol: ProviderProtocol::Gemini,
         item_type,
@@ -1112,7 +1140,7 @@ pub(crate) fn project_response_node(node: Node) -> Vec<Node> {
     } = &node
         && matches!(item_type.as_str(), "toolCall" | "toolResponse")
     {
-        return vec![item_carrier(body)];
+        return vec![item_carrier(body, text_offset)];
     }
     let mut node = render_code_execution(node);
     let (signature, carrier) = match &mut node {
@@ -1136,7 +1164,7 @@ pub(crate) fn project_response_node(node: Node) -> Vec<Node> {
             let signature = signature.take();
             let carrier = signature
                 .as_ref()
-                .map(|_| text_carrier_id(content))
+                .map(|_| text_carrier_id(content, text_offset))
                 .unwrap_or_default();
             (signature, carrier)
         }

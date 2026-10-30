@@ -11,7 +11,7 @@ use crate::urp::decode::gemini::{
     continuation_carrier, continuation_token, decode_stream_part, is_signature_carrier,
     parse_finish_reason, parse_usage,
     project_response_node, prompt_block_reason, prompt_refusal, response_outcome,
-    restore_custom_bridge_call, selected_candidate,
+    restore_custom_bridge_call, selected_candidate, text_bytes,
 };
 use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, UrpStreamEvent};
 use axum::http::StatusCode;
@@ -193,8 +193,10 @@ pub(crate) async fn stream_gemini_to_urp_events(
                                 }
                                 continue;
                             }
-                            for (position, node) in
-                                project_response_node(node).into_iter().enumerate()
+                            let text_offset = text_bytes(&output);
+                            for (position, node) in project_response_node(node, text_offset)
+                                .into_iter()
+                                .enumerate()
                             {
                                 // An open Text node stays open only for its own signature
                                 // carrier, so late citations can still reach it; any other
