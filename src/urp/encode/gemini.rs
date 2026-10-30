@@ -1027,8 +1027,22 @@ pub(crate) fn encode_request_node_part(
             summary,
             extra_body,
             ..
-        } if content.is_some() || summary.is_some() || encrypted.is_some() => {
-            let text = content.as_deref().or(summary.as_deref());
+        } if content.as_deref().is_some_and(|text| !text.is_empty())
+            || summary.as_deref().is_some_and(|text| !text.is_empty())
+            || encrypted.is_some() =>
+        {
+            // Explicit empty text (RTYPE-NEW-4a) is not reasoning text: without a signature it
+            // never becomes a thought Part; a signature keeps its existing carrier shape.
+            let text = content
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .or(summary.as_deref().filter(|text| !text.is_empty()))
+                .or_else(|| {
+                    encrypted
+                        .is_some()
+                        .then(|| content.as_deref().or(summary.as_deref()))
+                        .flatten()
+                });
             let carrier_id = id.as_deref().or(metadata.item_id.as_deref());
             let carrier = |prefix: &str| carrier_id.is_some_and(|id| id.starts_with(prefix));
             let part = match (text, encrypted) {

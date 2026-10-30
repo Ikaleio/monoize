@@ -245,9 +245,9 @@ pub fn extract_reasoning_plain(parts: &[Part]) -> String {
             content, summary, ..
         } = p
         {
-            if let Some(content) = content {
+            if let Some(content) = content.as_deref().filter(|text| !text.is_empty()) {
                 out.push_str(content);
-            } else if let Some(summary) = summary {
+            } else if let Some(summary) = summary.as_deref().filter(|text| !text.is_empty()) {
                 out.push_str(summary);
             }
         }
@@ -357,9 +357,9 @@ pub fn extract_reasoning_plain_from_nodes(nodes: &[Node]) -> String {
             content, summary, ..
         } = n
         {
-            if let Some(content) = content {
+            if let Some(content) = content.as_deref().filter(|text| !text.is_empty()) {
                 out.push_str(content);
-            } else if let Some(summary) = summary {
+            } else if let Some(summary) = summary.as_deref().filter(|text| !text.is_empty()) {
                 out.push_str(summary);
             }
         }

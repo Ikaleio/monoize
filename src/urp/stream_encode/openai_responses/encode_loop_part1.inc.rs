@@ -2073,7 +2073,7 @@ fn reasoning_summary_parts_from_node(node: &urp::Node) -> Vec<String> {
     let urp::Node::Reasoning { metadata, summary, .. } = node else {
         return Vec::new();
     };
-    if summary.as_deref().is_none_or(str::is_empty) {
+    if summary.is_none() {
         return Vec::new();
     }
     reasoning_summary_parts_from_item(&json!({
@@ -2576,7 +2576,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             obj.insert(
                 "summary".to_string(),
                 urp::reasoning::encode_text_parts(
-                    summary.as_deref().filter(|text| !text.is_empty()),
+                    summary.as_deref(),
                     metadata.summary_parts.as_deref(),
                     "summary_text",
                 ),
@@ -2584,7 +2584,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             obj.insert(
                 "content".to_string(),
                 urp::reasoning::encode_text_parts(
-                    content.as_deref().filter(|text| !text.is_empty()),
+                    content.as_deref(),
                     metadata.content_parts.as_deref(),
                     "reasoning_text",
                 ),
