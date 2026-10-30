@@ -1117,7 +1117,6 @@ async fn run_turn(
     }
     drop(control_tx);
 
-    let mut fits = false;
     if outcome
         .output
         .iter()
@@ -1135,7 +1134,7 @@ async fn run_turn(
                 let mut controls = prepared.request;
                 controls.remove("input");
                 controls.remove("stream");
-                fits = conn.limits.fits(
+                let fits = conn.limits.fits(
                     prepared.full_input.len().saturating_add(outcome.output.len()),
                     input_bytes.saturating_add(serialized_len(&outcome.output)),
                 );
@@ -1202,8 +1201,8 @@ async fn run_turn(
             }
         }
     }
-    // A finished turn is kept only for a successor or while it is retainable.
-    if !fits && !lane.has_successor() {
+    // WS17: only a successor reads the finished turn; the cache entry holds the rest.
+    if !lane.has_successor() {
         finished = None;
     }
     finished

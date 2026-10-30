@@ -562,7 +562,7 @@ pub(crate) struct ResponsesWsSlot {
     last_output: Vec<(String, Option<String>)>,
     /// Number of input items of steers the upstream left pending after `last_output`;
     /// the upstream prepends them itself on an incremental create.
-    pending_steer_items: usize,
+    pending_steer_parts: usize,
     turn_state: Option<String>,
     turn_state_channel: String,
     stashed: Vec<String>,
@@ -578,7 +578,7 @@ impl ResponsesWsSlot {
         self.last_public_id = None;
         self.basis.clear();
         self.last_output.clear();
-        self.pending_steer_items = 0;
+        self.pending_steer_parts = 0;
         self.stashed.clear();
     }
 }
@@ -962,9 +962,15 @@ pub(crate) async fn open_turn_source(
     };
     drop(payload);
     let incremental = incremental_text.is_some();
-    let sent = session
-        .send_text(incremental_text.unwrap_or_else(|| full_text.clone()))
-        .await;
+    // WS2h item 2: the session still queues pending steering, which a full create
+    // already contains, so a full replay must not run on it.
+    let sent = if reused && !incremental && slot.pending_steer_parts > 0 {
+        Err("pending steering needs a fresh session".to_string())
+    } else {
+        session
+            .send_text(incremental_text.unwrap_or_else(|| full_text.clone()))
+            .await
+    };
     match sent {
         Ok(()) => Ok(ResponsesWsTurnSource {
             slot,
@@ -1000,6 +1006,21 @@ pub(crate) async fn open_turn_source(
     }
 }
 
+fn content_parts(content: &Value) -> usize {
+    content.as_array().map_or(1, Vec::len)
+}
+
+/// WS2h item 2: content parts a steer input contributes to the encoded history.
+fn steer_content_parts(input: &Value) -> usize {
+    match input {
+        Value::Array(items) => items
+            .iter()
+            .map(|item| item.get("content").map_or(1, content_parts))
+            .sum(),
+        _ => 1,
+    }
+}
+
 /// WS2h item 2: the incremental create text, when the encoded input extends the
 /// session basis and the turn continues the session's last public response.
 fn incremental_create(
@@ -1015,8 +1036,7 @@ fn incremental_create(
     }
     let basis = slot.basis.len();
     let replayed = basis.saturating_add(slot.last_output.len());
-    let prefix = replayed.saturating_add(slot.pending_steer_items);
-    if full_input.len() < prefix || full_input[..basis] != slot.basis[..] {
+    if full_input.len() < replayed || full_input[..basis] != slot.basis[..] {
         return None;
     }
     // The replayed previous output must be exactly the upstream's own output
@@ -1028,10 +1048,19 @@ fn incremental_create(
             return None;
         }
     }
-    if full_input[replayed..prefix]
-        .iter()
-        .any(|item| item.get("role").and_then(Value::as_str) != Some("user"))
-    {
+    // The encoder merges adjacent user messages, so pending steering must span
+    // whole items by content part count; a merge with new input needs the full create.
+    let mut prefix = replayed;
+    let mut parts = 0;
+    while parts < slot.pending_steer_parts {
+        let item = full_input.get(prefix)?;
+        if item.get("role").and_then(Value::as_str) != Some("user") {
+            return None;
+        }
+        parts += item.get("content").map_or(1, content_parts);
+        prefix += 1;
+    }
+    if parts != slot.pending_steer_parts {
         return None;
     }
     let mut object = serde_json::Map::new();
@@ -1121,7 +1150,7 @@ struct TurnFeeder {
     upstream_id: Option<String>,
     terminal_id: Option<String>,
     terminal_output: Vec<(String, Option<String>)>,
-    pending_steer_items: usize,
+    pending_steer_parts: usize,
     terminal: bool,
     got_frame: bool,
     decided: bool,
@@ -1152,7 +1181,7 @@ pub(crate) fn spawn_turn_feeder(
         upstream_id: None,
         terminal_id: None,
         terminal_output: Vec::new(),
-        pending_steer_items: 0,
+        pending_steer_parts: 0,
         terminal: false,
         got_frame: false,
         decided: false,
@@ -1339,6 +1368,11 @@ impl TurnFeeder {
         }
         match kind.as_str() {
             "response.interrupt.accepted" | "response.interrupt.failed" => {
+                if kind == "response.interrupt.failed"
+                    && value.get("response_id").and_then(Value::as_str) == self.upstream_id.as_deref()
+                {
+                    self.signal_discard_requested(false).await;
+                }
                 if !self.turn.is_disconnected() {
                     if let Some(public) = value
                         .get("response_id")
@@ -1375,10 +1409,7 @@ impl TurnFeeder {
                             // The upstream prepends this input to the next create;
                             // full replays must contain it too (WS7, WS2h item 2).
                             let (_, input) = self.accepted_steers.remove(position);
-                            self.pending_steer_items += match &input {
-                                Value::Array(items) => items.len(),
-                                _ => 1,
-                            };
+                            self.pending_steer_parts += steer_content_parts(&input);
                             if let Ok(mut pending) = self.turn.state.pending_steers.lock() {
                                 pending.push(input);
                             }
@@ -1545,12 +1576,28 @@ impl TurnFeeder {
             "mode": "discard_partial_items",
         });
         match timeout(self.idle, session.send_text(frame.to_string())).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => self.signal_discard_requested(true).await,
             Ok(Err(error)) => {
                 tracing::warn!(%error, "upstream WebSocket interrupt send failed; draining usage")
             }
             Err(_) => tracing::warn!("upstream WebSocket interrupt send timed out; draining usage"),
         }
+    }
+
+    /// WS2g: while true, the decoder treats the terminal `output` as authoritative
+    /// (partial items discarded upstream). Sent on interrupt send, not on
+    /// acknowledgement, because some upstreams never acknowledge.
+    async fn signal_discard_requested(&mut self, requested: bool) {
+        if self.decoder_gone {
+            return;
+        }
+        let _ = self
+            .frames
+            .send(Ok((
+                crate::urp::RESPONSES_DISCARD_REQUESTED_FRAME.to_string(),
+                requested.to_string(),
+            )))
+            .await;
     }
 
     async fn send_steers_if_ready(&mut self) {
@@ -1640,7 +1687,7 @@ impl TurnFeeder {
             slot.last_public_id = Some(self.turn.public_response_id.clone());
             slot.basis = std::mem::take(&mut self.source.full_input);
             slot.last_output = std::mem::take(&mut self.terminal_output);
-            slot.pending_steer_items = self.pending_steer_items;
+            slot.pending_steer_parts = self.pending_steer_parts;
         } else {
             if let Some(mut session) = self.source.session.take() {
                 session.close().await;
