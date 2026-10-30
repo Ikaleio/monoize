@@ -479,6 +479,9 @@ pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
     model: &str,
     enforce_match: bool,
 ) {
+    if provider_type == ProviderProtocol::Gemini.as_str() {
+        crate::urp::encode::gemini::retain_gemini_signature_provenance(nodes);
+    }
     nodes.retain_mut(|node| {
         if let Node::ToolCall { signature, .. } = node {
             if let Some(envelope) = signature.as_ref().and_then(parse_reasoning_envelope) {

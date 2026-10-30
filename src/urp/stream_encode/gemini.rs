@@ -195,10 +195,17 @@ impl GeminiStreamEncoder {
                         error.insert(key, value);
                     }
                 }
-                if let Some(code) = code {
-                    error.insert("code".into(), json!(code));
-                }
+                // Google errors carry the numeric HTTP code and the canonical status name.
+                let status = code
+                    .as_deref()
+                    .filter(|code| google_status_http_code(code).is_some())
+                    .unwrap_or("INTERNAL");
+                error.insert(
+                    "code".into(),
+                    json!(google_status_http_code(status).unwrap_or(500)),
+                );
                 error.insert("message".into(), json!(message));
+                error.insert("status".into(), json!(status));
                 self.terminal = true;
                 Ok(vec![json!({"error":error})])
             }
@@ -323,6 +330,23 @@ impl GeminiStreamEncoder {
     }
 }
 
+fn google_status_http_code(status: &str) -> Option<u16> {
+    Some(match status {
+        "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => 400,
+        "UNAUTHENTICATED" => 401,
+        "PERMISSION_DENIED" => 403,
+        "NOT_FOUND" => 404,
+        "ABORTED" | "ALREADY_EXISTS" => 409,
+        "RESOURCE_EXHAUSTED" => 429,
+        "CANCELLED" => 499,
+        "UNKNOWN" | "INTERNAL" | "DATA_LOSS" => 500,
+        "UNIMPLEMENTED" => 501,
+        "UNAVAILABLE" => 503,
+        "DEADLINE_EXCEEDED" => 504,
+        _ => return None,
+    })
+}
+
 fn plain_fragment_kind(part: &Value) -> Option<bool> {
     let part = part.as_object()?;
     part.get("text")?.as_str()?;
@@ -338,9 +362,7 @@ fn rebase_terminal_grounding(
     emitted: &BTreeMap<u32, Vec<Value>>,
 ) -> Result<(), String> {
     use crate::urp::decode::gemini::{GEMINI_CONTENT_EXTRA_KEY, decode_stream_part};
-    use crate::urp::stream_decode::gemini::{
-        append_fragment, bind_signature, continuation_signature,
-    };
+    use crate::urp::stream_decode::gemini::append_fragment;
 
     let Some(supports) = candidate
         .get_mut("groundingMetadata")
@@ -364,15 +386,6 @@ fn rebase_terminal_grounding(
             })
             .unwrap_or_default();
         for (part_index, part) in parts.iter().enumerate() {
-            if let Some(signature) = continuation_signature(part) {
-                if last
-                    .as_mut()
-                    .is_some_and(|last| bind_signature(last, part, signature))
-                {
-                    positions.push((logical_parts - 1, 0u64));
-                    continue;
-                }
-            }
             let mut position = None;
             for (offset, mut node) in decode_stream_part(part)?.into_iter().enumerate() {
                 if part_index == 0 && offset == 0 && !envelope.is_empty() {
