@@ -812,11 +812,15 @@ pub(crate) struct ResponsesWsTurn {
     /// WS18: Channel id and upstream model of the session the successor reads.
     pub(crate) successor: Option<(String, String)>,
     pub(crate) client_metadata: Option<Value>,
+    /// True once the downstream connection closed; outlives the turn's own
+    /// control so post-terminal reading still observes disconnects (WS2g).
+    pub(crate) connection_closed: watch::Receiver<bool>,
 }
 
 impl ResponsesWsTurn {
     pub(crate) fn is_disconnected(&self) -> bool {
         *self.control.borrow() == ResponsesWsControl::Disconnected
+            || *self.connection_closed.borrow()
     }
 }
 
@@ -1126,6 +1130,7 @@ struct TurnFeeder {
     interrupt_requested: bool,
     interrupt_sent: bool,
     control_closed: bool,
+    connection_seen: bool,
     decoder_gone: bool,
     pending_steers: VecDeque<Value>,
     sent_steers: VecDeque<Value>,
@@ -1156,6 +1161,7 @@ pub(crate) fn spawn_turn_feeder(
         interrupt_requested: false,
         interrupt_sent: false,
         control_closed: false,
+        connection_seen: false,
         decoder_gone: false,
         pending_steers: VecDeque::new(),
         sent_steers: VecDeque::new(),
@@ -1176,7 +1182,7 @@ async fn recv_steer(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> Option<V
 impl TurnFeeder {
     async fn run(mut self) {
         let mut steer_rx = self.turn.steer.lock().ok().and_then(|mut rx| rx.take());
-        if *self.turn.control.borrow() != ResponsesWsControl::Running {
+        if self.turn.is_disconnected() || *self.turn.control.borrow() != ResponsesWsControl::Running {
             self.interrupt_requested = true;
         }
         let keep = 'feed: {
@@ -1203,6 +1209,18 @@ impl TurnFeeder {
                                     self.send_interrupt_if_ready().await;
                                 }
                             }
+                        }
+                        continue;
+                    }
+                    changed = self.turn.connection_closed.changed(), if !self.connection_seen => {
+                        if changed.is_err() || *self.turn.connection_closed.borrow() {
+                            self.connection_seen = true;
+                            if self.terminal {
+                                // Only steering follow-ups remain; nobody can receive them.
+                                break 'feed false;
+                            }
+                            self.interrupt_requested = true;
+                            self.send_interrupt_if_ready().await;
                         }
                         continue;
                     }

@@ -23,6 +23,8 @@ const DEFAULT_MAX_AGE_SECS: usize = 3_600;
 const MAX_GENERATING_TURNS: usize = 16;
 const MAX_NAMED_LANES: usize = 32;
 const MAX_STREAM_ID_LEN: usize = 256;
+/// WS15a: bound on each downstream write and on the final close.
+const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 const FIRST_EVENT_MESSAGE: &str = "Expected a 'response.create' message as the first websocket event.";
 
 #[derive(Clone, Copy, Debug)]
@@ -122,14 +124,19 @@ struct Connection {
     outbound: mpsc::Sender<Message>,
     v1: AtomicBool,
     closed: AtomicBool,
-    /// Ordered by lane creation; the default lane is scanned first (WS8a).
     entries: StdMutex<Vec<CacheEntry>>,
+    /// WS8a: lane creation order for `item_reference` resolution.
+    lane_order: StdMutex<HashMap<LaneKey, usize>>,
+    /// WS5a: request models whose responses contained reasoning items.
+    reasoning_models: StdMutex<std::collections::HashSet<String>>,
     active: StdMutex<HashMap<LaneKey, ActiveTurn>>,
     generating: Arc<Semaphore>,
     /// WS14: started turns; rejected events never count.
     accepted_turns: std::sync::atomic::AtomicUsize,
     /// Wakes the reader when a lane ends the connection (WS15).
     shutdown: tokio::sync::Notify,
+    /// WS2g: observed by upstream feeders after their turn left `active`.
+    lifetime: watch::Sender<bool>,
 }
 
 #[derive(Debug)]
@@ -269,6 +276,11 @@ impl Connection {
         self.closed.load(Ordering::Acquire)
     }
 
+    fn mark_closed(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.lifetime.send_replace(true);
+    }
+
     fn is_v1(&self) -> bool {
         self.v1.load(Ordering::Acquire)
     }
@@ -329,11 +341,14 @@ impl Connection {
         let Ok(entries) = self.entries.lock() else {
             return;
         };
-        let ordered = entries
-            .iter()
-            .filter(|entry| entry.lane.is_none())
-            .chain(entries.iter().filter(|entry| entry.lane.is_some()));
-        let ordered: Vec<&CacheEntry> = ordered.collect();
+        let order = self.lane_order.lock().map(|order| order.clone()).unwrap_or_default();
+        let mut ordered: Vec<&CacheEntry> = entries.iter().collect();
+        ordered.sort_by_key(|entry| {
+            (
+                entry.lane.is_some(),
+                order.get(&entry.lane).copied().unwrap_or(usize::MAX),
+            )
+        });
         for item in items.iter_mut() {
             if item.get("type").and_then(Value::as_str) != Some("item_reference") {
                 continue;
@@ -389,11 +404,13 @@ async fn serve_responses_websocket(
     let writer = tokio::spawn(async move {
         while let Some(message) = outbound_rx.recv().await {
             let close = matches!(message, Message::Close(_));
-            if sink.send(message).await.is_err() || close {
+            // WS15a: a peer that stops reading cannot hold the connection open.
+            let sent = tokio::time::timeout(WRITE_DEADLINE, sink.send(message)).await;
+            if !matches!(sent, Ok(Ok(()))) || close {
                 break;
             }
         }
-        let _ = sink.close().await;
+        let _ = tokio::time::timeout(WRITE_DEADLINE, sink.close()).await;
     });
 
     let beta = headers
@@ -413,10 +430,13 @@ async fn serve_responses_websocket(
         v1: AtomicBool::new(v1_header),
         closed: AtomicBool::new(false),
         entries: StdMutex::new(Vec::new()),
+        lane_order: StdMutex::new(HashMap::new()),
+        reasoning_models: StdMutex::new(std::collections::HashSet::new()),
         active: StdMutex::new(HashMap::new()),
         generating: Arc::new(Semaphore::new(MAX_GENERATING_TURNS)),
         accepted_turns: std::sync::atomic::AtomicUsize::new(0),
         shutdown: tokio::sync::Notify::new(),
+        lifetime: watch::channel(false).0,
     });
 
     let mut lanes: HashMap<LaneKey, LaneHandle> = HashMap::new();
@@ -432,9 +452,11 @@ async fn serve_responses_websocket(
             () = conn.shutdown.notified() => break,
             _ = &mut max_age => {
                 // WS15a: the official 60-minute connection lifetime.
-                let _ = conn
-                    .send_error(&None, WsError::connection_limit("60 minutes"))
-                    .await;
+                let _ = tokio::time::timeout(
+                    WRITE_DEADLINE,
+                    conn.send_error(&None, WsError::connection_limit("60 minutes")),
+                )
+                .await;
                 break;
             }
         };
@@ -554,6 +576,10 @@ async fn serve_responses_websocket(
                     if lane.is_some() {
                         named_lanes += 1;
                     }
+                    if let Ok(mut order) = conn.lane_order.lock() {
+                        let next = order.len();
+                        order.entry(lane.clone()).or_insert(next);
+                    }
                     spawn_lane(conn.clone(), lane.clone())
                 });
                 let _ = handle.jobs.send(LaneJob { append, event });
@@ -588,16 +614,19 @@ async fn serve_responses_websocket(
         }
     }
 
-    conn.closed.store(true, Ordering::Release);
+    conn.mark_closed();
     if let Ok(active) = conn.active.lock() {
         for turn in active.values() {
             turn.control.send_replace(ResponsesWsControl::Disconnected);
         }
     }
     drop(lanes);
-    let _ = conn.outbound.send(Message::Close(None)).await;
+    let _ = tokio::time::timeout(WRITE_DEADLINE, conn.outbound.send(Message::Close(None))).await;
     drop(conn);
-    let _ = writer.await;
+    let mut writer = writer;
+    if tokio::time::timeout(WRITE_DEADLINE, &mut writer).await.is_err() {
+        writer.abort();
+    }
 }
 
 fn valid_stream_id(stream_id: &str) -> bool {
@@ -732,7 +761,7 @@ async fn run_lane(
             let _ = conn
                 .send_error(&None, WsError::connection_limit("turn quota"))
                 .await;
-            conn.closed.store(true, Ordering::Release);
+            conn.mark_closed();
             conn.shutdown.notify_one();
             break;
         }
@@ -780,9 +809,11 @@ fn concat_history(
 }
 
 /// WS5a: request encrypted reasoning for replay; strip it downstream when the
-/// client did not ask for it.
-fn ensure_encrypted_reasoning(request: &mut Map<String, Value>) -> bool {
-    if request.get("reasoning").is_none_or(Value::is_null) {
+/// client did not ask for it. Without an explicit `reasoning` object this only
+/// happens for models observed to reason on this connection, because
+/// non-reasoning models reject the include with 400.
+fn ensure_encrypted_reasoning(request: &mut Map<String, Value>, model_reasons: bool) -> bool {
+    if request.get("reasoning").is_none_or(Value::is_null) && !model_reasons {
         return false;
     }
     let include = request
@@ -915,7 +946,11 @@ fn prepare_create(
         }
         None => (incoming, false),
     };
-    let strip_encrypted = !warmup && ensure_encrypted_reasoning(&mut event);
+    let model_reasons = event
+        .get("model")
+        .and_then(Value::as_str)
+        .is_some_and(|model| conn.reasoning_models.lock().is_ok_and(|models| models.contains(model)));
+    let strip_encrypted = !warmup && ensure_encrypted_reasoning(&mut event, model_reasons);
     let client_metadata = event.get("client_metadata").cloned();
     let request = finish_request(limits, event, &full_input)?;
     Ok(PreparedTurn {
@@ -1017,6 +1052,7 @@ async fn run_turn(
         warmup: prepared.warmup,
         successor: prepared.successor.clone(),
         client_metadata: prepared.client_metadata.clone(),
+        connection_closed: conn.lifetime.subscribe(),
     };
 
     // WS11: every turn has its own request id; the upgrade id only correlates.
@@ -1082,6 +1118,15 @@ async fn run_turn(
     drop(control_tx);
 
     let mut fits = false;
+    if outcome
+        .output
+        .iter()
+        .any(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
+        && let Some(model) = prepared.request.get("model").and_then(Value::as_str)
+        && let Ok(mut models) = conn.reasoning_models.lock()
+    {
+        models.insert(model.to_string());
+    }
     let mut finished = if outcome.disconnected {
         None
     } else {
