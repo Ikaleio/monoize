@@ -181,7 +181,7 @@ async fn gemini_nested_function_parts_preserve_media_and_compatible_text() {
         let wire = encode::gemini::encode_response_checked(&canonical, "gemini-test").unwrap();
         let result = &wire["candidates"][0]["content"]["parts"][0]["functionResponse"];
         assert!(
-            result["response"]["result"]
+            result["response"]["output"]
                 .as_str()
                 .unwrap()
                 .ends_with("between")
@@ -385,7 +385,9 @@ async fn gemini_media_only_terminal_keeps_prior_text_citations() {
     );
     assert!(matches!(&canonical.output[1], Node::Image { .. }));
     assert!(matches!(&canonical.output[2], Node::Image { .. }));
-    assert_eq!(events.iter().filter(|event| matches!(event,UrpStreamEvent::NodeDelta{node_index:0,delta:NodeDelta::Text{content,citations,..},..} if content.is_empty() && citations==&vec![crate::urp::Citation::decode(citation.clone(),crate::urp::ProviderProtocol::Gemini)])).count(),1);
+    // The text node completes when the first image starts, so the late citation reaches only
+    // the authoritative terminal output, never a delta on the completed node.
+    assert_eq!(events.iter().filter(|event| matches!(event,UrpStreamEvent::NodeDelta{node_index:0,delta:NodeDelta::Text{content,citations,..},..} if content.is_empty() && citations==&vec![crate::urp::Citation::decode(citation.clone(),crate::urp::ProviderProtocol::Gemini)])).count(),0);
     let (tx, rx) = tokio::sync::mpsc::channel(32);
     for event in events.iter().cloned() {
         tx.send(event).await.unwrap();
@@ -547,8 +549,10 @@ async fn gemini_signed_compatible_media_keeps_the_media_and_one_typed_signature(
             decode::gemini::decode_response(&native).unwrap(),
             terminal(&stream_decode(&[native]).await.unwrap()),
         ] {
-            assert_eq!(canonical.output.len(), 1);
-            assert!(!matches!(canonical.output[0], Node::Reasoning { .. }));
+            // Response decoding moves the media signature into one following carrier node.
+            assert_eq!(canonical.output.len(), 2);
+            assert!(matches!(canonical.output[0], Node::Image { .. } | Node::Audio { .. } | Node::File { .. }));
+            assert!(matches!(&canonical.output[1], Node::Reasoning { id: Some(id), .. } if id.starts_with("rs_gemini_part_")));
             let wire = encode::gemini::encode_response_checked(&canonical, "gemini-test").unwrap();
             assert!(
                 wire["candidates"][0]["content"]["parts"][0]
@@ -836,7 +840,7 @@ fn gemini_pdf_tool_result_metadata_is_typed_and_context_remains_visible() {
             result["parts"][0],
             json!({"inlineData":{"mimeType":"application/pdf","data":"JVBERi0="}})
         );
-        let text = result["response"]["result"].as_str().unwrap();
+        let text = result["response"]["output"].as_str().unwrap();
         assert!(text.contains("Title") && text.contains("Context"), "{wire}");
         assert!(!wire.to_string().contains("displayName"));
         assert!(!wire.to_string().contains("filename"));
@@ -1298,16 +1302,42 @@ async fn gemini_stream_rejects_missing_terminal_and_malformed_payload() {
 }
 
 fn assert_nonstream_part(part: Value) {
-    let native = response(vec![part.clone()]);
+    assert_nonstream_part_as(part.clone(), part);
+}
+
+fn assert_nonstream_part_as(part: Value, expected: Value) {
+    let native = response(vec![part]);
     let canonical = decode::gemini::decode_response(&native).unwrap();
     let encoded = encode::gemini::encode_response(&canonical, "gemini-test");
-    assert_eq!(encoded["candidates"][0]["content"]["parts"], json!([part]));
+    assert_eq!(encoded["candidates"][0]["content"]["parts"], json!([expected]));
     let decoded = decode::gemini::decode_response(&encoded).unwrap();
     let replay = encode::gemini::encode_response(&decoded, "gemini-test");
     assert_eq!(replay, encoded);
 }
 
+/// The stream encoder cannot attach a signature carrier to an already emitted Part, so a
+/// signed text or media Part streams as the Part plus a standalone empty-text signed Part.
+fn stream_wire_shape(part: &Value) -> Vec<Value> {
+    let carrier = part.get("thought").is_none()
+        && (part.get("text").is_some_and(|text| text != "")
+            || part.get("inlineData").is_some()
+            || part.get("fileData").is_some());
+    match part.get("thoughtSignature") {
+        Some(signature) if carrier => {
+            let mut unsigned = part.clone();
+            unsigned.as_object_mut().unwrap().remove("thoughtSignature");
+            vec![unsigned, json!({"text":"","thoughtSignature":signature})]
+        }
+        _ => vec![part.clone()],
+    }
+}
+
 async fn assert_stream_part(part: Value) {
+    let expected = stream_wire_shape(&part);
+    assert_stream_part_as(part, expected).await;
+}
+
+async fn assert_stream_part_as(part: Value, expected: Vec<Value>) {
     let events = stream_decode(&[response(vec![part.clone()])])
         .await
         .unwrap();
@@ -1326,15 +1356,25 @@ async fn assert_stream_part(part: Value) {
         })
         .cloned()
         .collect();
-    assert_eq!(parts, vec![part.clone()]);
+    assert_eq!(parts, expected);
     let decoded = terminal(&stream_decode(&frames).await.unwrap());
     assert_eq!(
         encode::gemini::encode_response(&decoded, "gemini-test")["candidates"][0]["content"]["parts"],
-        json!([part])
+        json!(expected)
     );
 }
 
 macro_rules! part_feature {
+    ($nonstream:ident, $stream:ident, $fixture:expr => $expected:expr) => {
+        #[test]
+        fn $nonstream() {
+            assert_nonstream_part_as($fixture, $expected);
+        }
+        #[tokio::test]
+        async fn $stream() {
+            assert_stream_part_as($fixture, vec![$expected]).await;
+        }
+    };
     ($nonstream:ident, $stream:ident, $fixture:expr) => {
         #[test]
         fn $nonstream() {
@@ -1368,7 +1408,7 @@ part_feature!(
 part_feature!(
     gemini_signature_only_nonstream,
     gemini_signature_only_stream,
-    json!({"thoughtSignature":"b3BhcXVl"})
+    json!({"thoughtSignature":"b3BhcXVl"}) => json!({"text":"","thoughtSignature":"b3BhcXVl"})
 );
 part_feature!(
     gemini_function_call_nonstream,
@@ -1419,11 +1459,13 @@ part_feature!(
     gemini_code_execution_nonstream,
     gemini_code_execution_stream,
     json!({"executableCode":{"id":"exec-1","language":"PYTHON","code":"print(2+2)"}})
+        => json!({"text":"\n```python\nprint(2+2)\n```\n"})
 );
 part_feature!(
     gemini_code_result_nonstream,
     gemini_code_result_stream,
     json!({"codeExecutionResult":{"id":"exec-1","outcome":"OUTCOME_OK","output":"4\n"}})
+        => json!({"text":"\n```output\n4\n```\n"})
 );
 part_feature!(
     gemini_server_tool_call_nonstream,
@@ -1500,8 +1542,26 @@ fn gemini_function_schema_choice_and_unknown_config_roundtrip() {
                 "toolConfig":{"functionCallingConfig":{"mode":mode,"allowedFunctionNames":["first","second"],"future":true},"retrievalConfig":{"latLng":{"latitude":1,"longitude":2}}}});
             let mut canonical = decode::gemini::decode_request(&native).unwrap();
             let encoded = encode::gemini::encode_request(&canonical, "gemini-test");
-            assert_eq!(encoded["tools"], native["tools"]);
-            assert_eq!(encoded["toolConfig"], native["toolConfig"]);
+            // FunctionDeclaration.description is required; absent descriptions encode as "".
+            let mut tools = native["tools"].clone();
+            for declaration in tools[0]["functionDeclarations"].as_array_mut().unwrap() {
+                declaration["description"] = json!("");
+            }
+            assert_eq!(encoded["tools"], tools);
+            // allowedFunctionNames is valid only with ANY or VALIDATED: AUTO plus names is
+            // VALIDATED, and NONE drops the names.
+            let mut tool_config = native["toolConfig"].clone();
+            match mode {
+                "AUTO" => tool_config["functionCallingConfig"]["mode"] = json!("VALIDATED"),
+                "NONE" => {
+                    tool_config["functionCallingConfig"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("allowedFunctionNames");
+                }
+                _ => {}
+            }
+            assert_eq!(encoded["toolConfig"], tool_config);
             canonical.tools.as_mut().unwrap()[0]
                 .function
                 .as_mut()
@@ -1529,7 +1589,17 @@ fn gemini_signed_nodes_have_no_shadow_payload_and_obey_mutation() {
         json!({"inlineData":{"mimeType":"image/png","data":"b2xk"},"thoughtSignature":"old"}),
         json!({"text":"old","thoughtSignature":"old"}),
     ])).unwrap();
-    assert_eq!(canonical.output.len(), 3);
+    // Text and media signatures move into following `rs_gemini_part_` carriers.
+    assert_eq!(canonical.output.len(), 5);
+    for index in [2, 4] {
+        assert!(
+            matches!(&canonical.output[index], Node::Reasoning { id: Some(id), encrypted: Some(signature), .. }
+                if id.starts_with("rs_gemini_part_") && signature == "old")
+        );
+    }
+    canonical
+        .output
+        .retain(|node| !crate::urp::decode::gemini::is_signature_carrier(node));
     let Node::ToolCall {
         signature,
         arguments,
@@ -1613,8 +1683,15 @@ fn gemini_synthetic_call_result_matching_preserves_parallel_name_correlation() {
         .collect();
     assert_eq!(calls, results);
     assert_ne!(calls[0], calls[1]);
+    // The current-turn step's first unsigned call receives the documented dummy signature.
+    let mut expected = native["contents"].clone();
+    expected[0]["parts"][0]["thoughtSignature"] = json!("skip_thought_signature_validator");
     assert_eq!(
         encode::gemini::encode_request(&canonical, "gemini-test")["contents"],
+        expected
+    );
+    assert_eq!(
+        encode::gemini::encode_request(&canonical, "gemini-2.5-flash")["contents"],
         native["contents"]
     );
 }
@@ -1932,7 +2009,7 @@ fn mutate_provider_identity(response: &mut UrpResponse, delete: bool) {
 fn opaque_parts() -> Vec<Value> {
     vec![
         json!({"id":"old","type":"vendor","payload":{"value":7}}),
-        json!({"executableCode":{"language":"PYTHON","code":"print(1)"}}),
+        json!({"toolResponse":{"id":"nested","toolType":"GOOGLE_SEARCH","response":{"ok":true}}}),
         json!({"toolCall":{"id":"nested","toolType":"GOOGLE_SEARCH","args":{"q":"test"}}}),
     ]
 }

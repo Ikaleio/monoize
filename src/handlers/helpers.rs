@@ -1440,6 +1440,10 @@ const EXTRA_WHITELIST_GEMINI: &[&str] = &[
     "safetySettings",
     "cachedContent",
     "labels",
+    "continuationToken",
+    "serviceTier",
+    // Mapped to `serviceTier` by the Gemini encoder.
+    "service_tier",
 ];
 
 const EXTRA_WHITELIST_OPENAI_IMAGE: &[&str] = &[
@@ -1771,10 +1775,13 @@ fn active_tool_transports(
 }
 
 fn messages_custom_bridge_names(req: &urp::UrpRequest) -> HashSet<String> {
+    // Messages and Gemini share the `{"input": string}` function bridge for custom tools.
     active_tool_transports(req)
         .filter(|(_, transport)| {
-            transport.protocol == urp::ProviderProtocol::Messages
-                && transport.original.tool_type == urp::ToolCallType::Custom
+            matches!(
+                transport.protocol,
+                urp::ProviderProtocol::Messages | urp::ProviderProtocol::Gemini
+            ) && transport.original.tool_type == urp::ToolCallType::Custom
                 && transport.wire_type == urp::ToolCallType::Function
         })
         .map(|(name, _)| name.to_owned())
@@ -1924,9 +1931,10 @@ pub(super) fn promote_responses_additional_tools(
                 custom.name = alias;
             }
         }
-        if provider_type == ProviderType::Messages
+        if (provider_type == ProviderType::Messages
             && tool.tool_type == "custom"
-            && !custom_tool_has_messages_input_schema(&tool)
+            && !custom_tool_has_messages_input_schema(&tool))
+            || (provider_type == ProviderType::Gemini && tool.tool_type == "custom")
         {
             tool = messages_custom_bridge_function(tool);
         }
@@ -1990,7 +1998,7 @@ pub(super) fn promote_responses_additional_tools(
     if let Some(urp::ToolChoice::Specific(choice)) = &mut req.tool_choice {
         bridge_namespace_selector(choice, &aliases);
     }
-    if provider_type == ProviderType::Messages {
+    if matches!(provider_type, ProviderType::Messages | ProviderType::Gemini) {
         bridge_messages_custom_history(req);
     }
 }
@@ -2163,6 +2171,13 @@ fn provider_supports_tool_definition(
 
     if tool.tool_type == "custom" {
         return provider_supports_custom_tool(tool, provider_type);
+    }
+
+    if provider_type == ProviderType::Gemini
+        && tool.origin_protocol != Some(urp::ProviderProtocol::Gemini)
+        && urp::encode::gemini::is_gemini_mappable_tool(&tool.tool_type)
+    {
+        return true;
     }
 
     if let Some(origin) = tool.origin_protocol {

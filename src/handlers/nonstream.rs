@@ -1338,7 +1338,7 @@ pub(super) fn decode_response_from_provider(
         }
     }
     .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))?;
-    if provider_type == ProviderType::Messages {
+    if matches!(provider_type, ProviderType::Messages | ProviderType::Gemini) {
         restore_messages_custom_tool_calls(request, &mut decoded);
     }
     if provider_type == ProviderType::ChatCompletion {

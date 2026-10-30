@@ -348,14 +348,20 @@ fn apply_auth(
     }
 }
 
+/// API version path segments recognized at the end of a base URL and at the start of a path.
+const API_VERSION_SEGMENTS: [&str; 3] = ["v1", "v1beta", "v1alpha"];
+
 pub(crate) fn join_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let mut path = path.trim_start_matches('/');
-    if base.ends_with("/v1") {
-        if path == "v1" {
-            path = "";
-        } else if let Some(stripped) = path.strip_prefix("v1/") {
-            path = stripped;
+    let base_has_version = base
+        .rsplit_once('/')
+        .is_some_and(|(_, last)| API_VERSION_SEGMENTS.contains(&last));
+    if base_has_version {
+        // The configured base version wins over the version baked into the path.
+        let (first, rest) = path.split_once('/').unwrap_or((path, ""));
+        if API_VERSION_SEGMENTS.contains(&first) {
+            path = rest;
         }
     }
     if path.is_empty() {
