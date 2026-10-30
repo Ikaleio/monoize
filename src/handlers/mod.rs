@@ -458,21 +458,30 @@ pub async fn create_messages(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    let request_id = messages_request_id(&headers);
-    let mut response = match create_messages_inner(state, headers, body, request_id.clone()).await
-    {
+    let request_id = canonical_request_id(&headers);
+    let wire_request_id = messages_wire_request_id(&request_id);
+    let mut response = match create_messages_inner(state, headers, body, request_id).await {
         Ok(response) => response,
-        Err(err) => anthropic_error_response(err, Some(&request_id)),
+        Err(err) => anthropic_error_response(err, Some(&wire_request_id)),
     };
-    insert_messages_request_id_header(&mut response, &request_id);
+    insert_messages_request_id_header(&mut response, &wire_request_id);
     response
 }
 
-/// DM4b: the downstream `x-request-id`, or a generated `req_` id.
-pub(super) fn messages_request_id(headers: &HeaderMap) -> String {
+/// The canonical request id keyed by request logs: the (middleware-normalized) `x-request-id`.
+pub(super) fn canonical_request_id(headers: &HeaderMap) -> String {
     extract_request_id(headers)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("req_{}", uuid::Uuid::new_v4().simple()))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string())
+}
+
+/// DM4b: Messages wire request ids carry the `req_` prefix of Anthropic request ids.
+pub(super) fn messages_wire_request_id(canonical: &str) -> String {
+    if canonical.starts_with("req_") {
+        canonical.to_string()
+    } else {
+        format!("req_{canonical}")
+    }
 }
 
 pub(super) fn insert_messages_request_id_header(response: &mut Response, request_id: &str) {
