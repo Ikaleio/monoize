@@ -1,6 +1,6 @@
 use super::*;
 use crate::upstream_websocket::{
-    ResponsesWsControl, ResponsesWsLane, ResponsesWsTurn, ResponsesWsTurnState,
+    ResponsesWsControl, ResponsesWsLane, ResponsesWsRelay, ResponsesWsTurn, ResponsesWsTurnState,
     UPSTREAM_KIND_WEBSOCKET,
 };
 use axum::extract::State;
@@ -636,24 +636,48 @@ fn valid_stream_id(stream_id: &str) -> bool {
 }
 
 fn spawn_lane(conn: Arc<Connection>, key: LaneKey) -> LaneHandle {
-    let (relay_tx, relay_rx) = mpsc::unbounded_channel::<Value>();
+    let (relay_tx, relay_rx) = mpsc::unbounded_channel::<ResponsesWsRelay>();
     let lane = Arc::new(ResponsesWsLane::new(relay_tx));
     let (jobs, jobs_rx) = mpsc::unbounded_channel();
     tokio::spawn(run_lane(conn, key, lane, jobs_rx, relay_rx));
     LaneHandle { jobs }
 }
 
-/// WS4a/WS2i: interrupt and steer acknowledgements share the response's
-/// sequence space; provider-control notifications keep their upstream fields.
-async fn forward_relay(conn: &Connection, key: &LaneKey, mut value: Value, next_sequence: &mut i64) {
+/// WS4b: the public response a relayed event belongs to.
+fn relay_response_id(value: &Value) -> Option<String> {
+    value
+        .pointer("/steer/previous_response_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| crate::upstream_websocket::find_response_id(value).map(str::to_string))
+}
+
+/// WS4b: an acknowledgement takes the next number of the response it names;
+/// provider-control notifications keep their upstream fields.
+async fn forward_relay(
+    conn: &Connection,
+    key: &LaneKey,
+    mut value: Value,
+    sequences: &mut HashMap<String, i64>,
+) -> bool {
     let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
     if (kind.starts_with("response.interrupt.") || kind.starts_with("response.steer."))
-        && let Some(object) = value.as_object_mut()
+        && value.is_object()
     {
-        object.insert("sequence_number".to_string(), json!(*next_sequence));
-        *next_sequence += 1;
+        let next = relay_response_id(&value).and_then(|id| sequences.get_mut(&id));
+        match next {
+            Some(next) => {
+                value["sequence_number"] = json!(*next);
+                *next += 1;
+            }
+            None => {
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("sequence_number");
+                }
+            }
+        }
     }
-    let _ = conn.send(key, value).await;
+    conn.send(key, value).await
 }
 
 /// The input of one turn after WS8/WS10/WS18 assembly.
@@ -666,6 +690,9 @@ struct PreparedTurn {
     strip_encrypted: bool,
     client_metadata: Option<Value>,
     successor: Option<(String, String)>,
+    /// WS18: `full_input` was cut to the steer input because the history exceeds
+    /// the limit, so the turn can never be retained.
+    oversized: bool,
 }
 
 struct PrepareError {
@@ -687,6 +714,8 @@ struct FinishedTurn {
     output: Vec<Value>,
     pending_steers: Vec<Value>,
     strip_encrypted: bool,
+    /// WS17: history exceeds the limit; the vectors above hold nothing retained.
+    oversized: bool,
 }
 
 async fn run_lane(
@@ -694,10 +723,11 @@ async fn run_lane(
     key: LaneKey,
     lane: Arc<ResponsesWsLane>,
     mut jobs: mpsc::UnboundedReceiver<LaneJob>,
-    mut relay: mpsc::UnboundedReceiver<Value>,
+    mut relay: mpsc::UnboundedReceiver<ResponsesWsRelay>,
 ) {
     let mut last: Option<FinishedTurn> = None;
-    let mut next_sequence = 0i64;
+    // WS4b: next sequence number per public response of this lane.
+    let mut sequences: HashMap<String, i64> = HashMap::new();
     loop {
         if conn.is_closed() {
             break;
@@ -710,7 +740,7 @@ async fn run_lane(
                     biased;
                     value = relay.recv() => {
                         if let Some(value) = value {
-                            forward_relay(&conn, &key, value, &mut next_sequence).await;
+                            forward_relay(&conn, &key, value.value, &mut sequences).await;
                         }
                         continue;
                     }
@@ -735,7 +765,7 @@ async fn run_lane(
         let prepared = match job {
             Ok(job) => prepare_job(&conn, &key, job),
             Err(successor) => match last.take() {
-                Some(steered) => Ok(prepare_successor(steered, successor)),
+                Some(steered) => Ok(prepare_successor(&conn.limits, steered, successor)),
                 None => {
                     // No steered turn to continue: drop the upstream successor
                     // instead of letting a later turn read its frames.
@@ -763,7 +793,7 @@ async fn run_lane(
             conn.shutdown.notify_one();
             break;
         }
-        last = run_turn(&conn, &key, &lane, prepared, &mut relay, &mut next_sequence).await;
+        last = run_turn(&conn, &key, &lane, prepared, &mut relay, &mut sequences).await;
         drop(permit);
     }
     lane.close().await;
@@ -806,8 +836,24 @@ fn concat_history(
     Ok(full)
 }
 
-/// WS5a: request encrypted reasoning for replay; strip it downstream when the
-/// client did not ask for it.
+/// WS5: `include` is absent or an array of strings; null means absent.
+fn normalize_include(request: &mut Map<String, Value>) -> Result<(), WsError> {
+    match request.get("include") {
+        None => Ok(()),
+        Some(Value::Null) => {
+            request.remove("include");
+            Ok(())
+        }
+        Some(Value::Array(values)) if values.iter().all(Value::is_string) => Ok(()),
+        Some(_) => Err(WsError::invalid_request(
+            "include must be an array of strings",
+            "include",
+        )),
+    }
+}
+
+/// WS5a: request encrypted reasoning for replay; true when the client did not
+/// ask for it, so it must be stripped downstream. `include` is normalized.
 fn ensure_encrypted_reasoning(request: &mut Map<String, Value>) -> bool {
     let include = request
         .entry("include")
@@ -879,6 +925,7 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
             strip_encrypted,
             client_metadata,
             successor: None,
+            oversized: false,
         });
     }
 
@@ -916,6 +963,7 @@ fn prepare_create(
     event.remove("type");
     event.remove("stream_id");
     let warmup = matches!(event.remove("generate"), Some(Value::Bool(false)));
+    normalize_include(&mut event)?;
     if event.get("background").and_then(Value::as_bool) == Some(true) {
         return Err(WsError::new(
             400,
@@ -952,6 +1000,7 @@ fn prepare_create(
         strip_encrypted,
         client_metadata,
         successor: None,
+        oversized: false,
     })
 }
 
@@ -965,15 +1014,34 @@ fn steer_items(input: Value) -> Vec<Value> {
 }
 
 /// WS18: the request of an automatic steering successor. The upstream already
-/// generates it, so history limits only decide retention (WS17), never admission.
+/// generates it, so history limits decide retention (WS17), never admission; an
+/// oversized history is not materialized.
 fn prepare_successor(
+    limits: &ResponsesWebsocketLimits,
     steered: FinishedTurn,
     successor: crate::upstream_websocket::ResponsesWsSuccessor,
 ) -> PreparedTurn {
-    let mut full_input = steered.full_input;
-    full_input.extend(steered.output);
-    full_input.extend(steered.pending_steers);
-    full_input.extend(successor.steer_inputs.into_iter().flat_map(steer_items));
+    let mut steers = steered.pending_steers;
+    steers.extend(successor.steer_inputs.into_iter().flat_map(steer_items));
+    let oversized = steered.oversized
+        || !limits.fits(
+            steered
+                .full_input
+                .len()
+                .saturating_add(steered.output.len())
+                .saturating_add(steers.len()),
+            serialized_len(&steered.full_input)
+                .saturating_add(serialized_len(&steered.output))
+                .saturating_add(serialized_len(&steers)),
+        );
+    let full_input = if oversized {
+        steers
+    } else {
+        let mut full_input = steered.full_input;
+        full_input.extend(steered.output);
+        full_input.extend(steers);
+        full_input
+    };
     let client_metadata = steered.controls.get("client_metadata").cloned();
     let mut request = steered.controls;
     request.insert("input".to_string(), Value::Array(full_input.clone()));
@@ -987,6 +1055,7 @@ fn prepare_successor(
         strip_encrypted: steered.strip_encrypted,
         client_metadata,
         successor: Some((successor.channel_id, successor.upstream_model)),
+        oversized,
     }
 }
 
@@ -1005,8 +1074,8 @@ async fn run_turn(
     key: &LaneKey,
     lane: &Arc<ResponsesWsLane>,
     prepared: PreparedTurn,
-    relay: &mut mpsc::UnboundedReceiver<Value>,
-    next_sequence: &mut i64,
+    relay: &mut mpsc::UnboundedReceiver<ResponsesWsRelay>,
+    sequences: &mut HashMap<String, i64>,
 ) -> Option<FinishedTurn> {
     let public_id = format!("resp_monoize_{}", uuid::Uuid::new_v4().simple());
     let (control_tx, control_rx) = watch::channel(ResponsesWsControl::Running);
@@ -1068,6 +1137,7 @@ async fn run_turn(
         state: state.clone(),
         strip_encrypted: prepared.strip_encrypted,
         input_items: prepared.full_input.len(),
+        oversized: prepared.oversized,
         input_bytes,
     };
     let result = super::create_response_prefer_websocket(
@@ -1093,13 +1163,13 @@ async fn run_turn(
                 .await;
             TurnOutcome::default()
         }
-        Ok(response) => bridge.run(response, relay).await,
+        Ok(response) => bridge.run(response, relay, sequences).await,
     };
     if state.local_warmup() && outcome.status.is_none() && !outcome.disconnected {
         outcome = send_local_warmup(conn, key, &public_id, &prepared).await;
     }
     if let Some(sequence) = outcome.next_sequence {
-        *next_sequence = sequence;
+        sequences.insert(public_id.clone(), sequence);
     }
     if let Ok(mut active) = conn.active.lock()
         && active.get(key).is_some_and(|turn| turn.public_id == public_id)
@@ -1116,10 +1186,11 @@ async fn run_turn(
                 let mut controls = prepared.request;
                 controls.remove("input");
                 controls.remove("stream");
-                let fits = conn.limits.fits(
-                    prepared.full_input.len().saturating_add(outcome.output.len()),
-                    input_bytes.saturating_add(serialized_len(&outcome.output)),
-                );
+                let fits = !prepared.oversized
+                    && conn.limits.fits(
+                        prepared.full_input.len().saturating_add(outcome.output.len()),
+                        input_bytes.saturating_add(serialized_len(&outcome.output)),
+                    );
                 if fits {
                     conn.set_entry(CacheEntry {
                         lane: key.clone(),
@@ -1138,10 +1209,11 @@ async fn run_turn(
                 Some(FinishedTurn {
                     public_id: public_id.clone(),
                     controls,
-                    full_input: prepared.full_input,
-                    output: outcome.output,
+                    full_input: if fits { prepared.full_input } else { Vec::new() },
+                    output: if fits { outcome.output } else { Vec::new() },
                     pending_steers: Vec::new(),
                     strip_encrypted: prepared.strip_encrypted,
+                    oversized: !fits,
                 })
             }
             _ => {
@@ -1163,7 +1235,9 @@ async fn run_turn(
             tokio::select! {
                 biased;
                 value = relay.recv() => match value {
-                    Some(value) => forward_relay(conn, key, value, next_sequence).await,
+                    Some(value) => {
+                        forward_relay(conn, key, value.value, sequences).await;
+                    }
                     None => break,
                 },
                 () = &mut feeders => break,
@@ -1176,11 +1250,33 @@ async fn run_turn(
             .into_iter()
             .flat_map(steer_items)
             .collect();
-        if !pending.is_empty() {
-            conn.set_pending_steers(key, &public_id, &pending);
-            if let Some(finished) = finished.as_mut() {
+        if !pending.is_empty()
+            && let Some(finished) = finished.as_mut()
+            && !finished.oversized
+        {
+            let fits = conn.limits.fits(
+                finished
+                    .full_input
+                    .len()
+                    .saturating_add(finished.output.len())
+                    .saturating_add(pending.len()),
+                input_bytes
+                    .saturating_add(serialized_len(&finished.output))
+                    .saturating_add(serialized_len(&pending)),
+            );
+            if fits {
+                conn.set_pending_steers(key, &public_id, &pending);
                 finished.pending_steers = pending;
+            } else {
+                conn.remove_entry(key, None);
+                finished.full_input = Vec::new();
+                finished.output = Vec::new();
+                finished.oversized = true;
             }
+        }
+        // WS17: an evicted entry takes its encoded history with it.
+        if finished.as_ref().is_some_and(|finished| finished.oversized) {
+            lane.forget_continuation().await;
         }
     }
     // WS17: only a successor reads the finished turn; the cache entry holds the rest.
@@ -1270,6 +1366,7 @@ async fn send_local_warmup(
 /// Converts one turn's pipeline SSE body into WebSocket events (WS4, WS12a,
 /// WS12c, WS19, WS5a).
 struct TurnBridge {
+    oversized: bool,
     conn: Arc<Connection>,
     key: LaneKey,
     public_id: String,
@@ -1285,6 +1382,8 @@ struct BridgeTracker {
     created: Option<Value>,
     done_items: BTreeMap<u64, Value>,
     next_sequence: Option<i64>,
+    /// WS4b: this response's relays waiting for its lifecycle barrier.
+    held: Vec<ResponsesWsRelay>,
     outcome: TurnOutcome,
     failed: bool,
 }
@@ -1298,7 +1397,8 @@ impl TurnBridge {
     async fn run(
         mut self,
         response: Response,
-        relay: &mut mpsc::UnboundedReceiver<Value>,
+        relay: &mut mpsc::UnboundedReceiver<ResponsesWsRelay>,
+        sequences: &mut HashMap<String, i64>,
     ) -> TurnOutcome {
         let mut body = response.into_body().into_data_stream();
         let mut buffer = Vec::new();
@@ -1335,7 +1435,7 @@ impl TurnBridge {
                 }
                 value = relay.recv() => {
                     if let Some(value) = value
-                        && !self.forward_relay(value, &mut tracker).await
+                        && !self.accept_relay(value, &mut tracker, sequences).await
                     {
                         return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
                     }
@@ -1359,6 +1459,7 @@ impl TurnBridge {
                             )
                             .await;
                     }
+                    let _ = self.release_relays(&mut tracker, true).await;
                     tracker.outcome.status = None;
                     tracker.outcome.next_sequence = tracker.next_sequence;
                     return tracker.outcome;
@@ -1378,6 +1479,9 @@ impl TurnBridge {
             };
             for data in frames {
                 if let BridgeFlow::Disconnected = self.forward_event(data, &mut tracker).await {
+                    return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
+                }
+                if !self.release_relays(&mut tracker, false).await {
                     return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
                 }
                 if interrupt_pending
@@ -1402,6 +1506,9 @@ impl TurnBridge {
                 return TurnOutcome::default();
             }
         }
+        if !self.release_relays(&mut tracker, true).await {
+            return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
+        }
         if tracker.failed {
             tracker.outcome.status = None;
         }
@@ -1410,10 +1517,62 @@ impl TurnBridge {
     }
 
     fn retainable(&self, output: &[Value]) -> bool {
-        self.conn.limits.fits(
+        !self.oversized
+            && self.conn.limits.fits(
             self.input_items.saturating_add(output.len()),
             self.input_bytes.saturating_add(serialized_len(output)),
         )
+    }
+
+    /// WS4b: orders a relay into the egress of the response it names. This
+    /// response's relays wait for their lifecycle barrier; an earlier response's
+    /// go out now, numbered from that response's own counter.
+    async fn accept_relay(
+        &self,
+        relay: ResponsesWsRelay,
+        tracker: &mut BridgeTracker,
+        sequences: &mut HashMap<String, i64>,
+    ) -> bool {
+        match relay_response_id(&relay.value) {
+            Some(id) if id == self.public_id => {
+                if tracker.created.is_none() || (relay.post_terminal && !Self::ended(tracker)) {
+                    tracker.held.push(relay);
+                    true
+                } else {
+                    self.forward_relay(relay.value, tracker).await
+                }
+            }
+            _ => forward_relay(&self.conn, &self.key, relay.value, sequences).await,
+        }
+    }
+
+    fn ended(tracker: &BridgeTracker) -> bool {
+        tracker.outcome.status.is_some() || tracker.failed
+    }
+
+    /// WS4b: sends held relays whose barrier passed. At the end of the stream the
+    /// rest go out, unless the response never reached the client.
+    async fn release_relays(&self, tracker: &mut BridgeTracker, finished: bool) -> bool {
+        if tracker.held.is_empty() {
+            return true;
+        }
+        if tracker.created.is_none() {
+            if finished {
+                tracker.held.clear();
+            }
+            return true;
+        }
+        let ended = finished || Self::ended(tracker);
+        let (release, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut tracker.held)
+            .into_iter()
+            .partition(|relay| ended || !relay.post_terminal);
+        tracker.held = keep;
+        for relay in release {
+            if !self.forward_relay(relay.value, tracker).await {
+                return false;
+            }
+        }
+        true
     }
 
     /// Interleaves a relayed acknowledgement into this response's sequence.

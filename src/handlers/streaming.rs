@@ -28,6 +28,32 @@ fn receiver_event_stream(rx: mpsc::Receiver<Event>) -> ForwardEventStream {
         .map(event_ok as fn(Event) -> Result<Event, std::convert::Infallible>)
 }
 
+/// WS5a: the final encoded body of a generated Responses attempt requests
+/// encrypted reasoning, whatever the request transforms did to `include`.
+fn enforce_ws_encrypted_include(
+    turn: Option<&crate::upstream_websocket::ResponsesWsTurn>,
+    provider_type: ProviderType,
+    body: &mut Value,
+) {
+    if provider_type != ProviderType::Responses || turn.is_none_or(|turn| turn.warmup) {
+        return;
+    }
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    let include = object.entry("include").or_insert(Value::Null);
+    if !include.is_array() {
+        *include = Value::Array(Vec::new());
+    }
+    if let Some(values) = include.as_array_mut()
+        && !values
+            .iter()
+            .any(|value| value.as_str() == Some("reasoning.encrypted_content"))
+    {
+        values.push(Value::String("reasoning.encrypted_content".to_string()));
+    }
+}
+
 /// STRM-2a: an upstream stream that produced its first output event. The
 /// buffered `ResponseStart` and `ProviderControl` events precede that event in
 /// decoder order.
@@ -981,7 +1007,7 @@ pub(super) async fn forward_stream_typed(
                 // request moves instead of being copied.
                 let mut nonstream_req = req_attempt;
                 nonstream_req.stream = Some(false);
-                let upstream_body =
+                let mut upstream_body =
                     match encode_request_for_provider(&mut nonstream_req, &attempt, downstream) {
                         Ok(body) => body,
                         Err(err) => {
@@ -1001,6 +1027,7 @@ pub(super) async fn forward_stream_typed(
                             return Err(err);
                         }
                     };
+                enforce_ws_encrypted_include(ws_turn.as_ref(), attempt.provider_type, &mut upstream_body);
                 let responses_echo =
                     responses_request_echo_for_attempt(&nonstream_req, &attempt, downstream);
                 release_encoded_input(&mut nonstream_req, &capture);
@@ -1463,7 +1490,7 @@ pub(super) async fn forward_stream_typed(
                 }
             }
 
-            let upstream_body =
+            let mut upstream_body =
                 match encode_request_for_provider(&mut req_attempt, &attempt, downstream) {
                     Ok(body) => body,
                     Err(err) => {
@@ -1483,6 +1510,7 @@ pub(super) async fn forward_stream_typed(
                         return Err(err);
                     }
                 };
+            enforce_ws_encrypted_include(ws_turn.as_ref(), attempt.provider_type, &mut upstream_body);
             let responses_echo =
                 responses_request_echo_for_attempt(&req_attempt, &attempt, downstream);
             attempt.session_affinity_value =
