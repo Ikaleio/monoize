@@ -401,6 +401,22 @@ pub fn nodes_to_items(nodes: &[Node]) -> Vec<Item> {
     items
 }
 
+/// Whether `next` shares the grouped wire message of the ordinary node `previous`, by the same
+/// rule as `nodes_to_items`.
+pub(crate) fn continues_message(previous: &Node, next: &Node) -> bool {
+    let role = |node: &Node| node.role().map(Role::from).unwrap_or(Role::Assistant);
+    let phase = |node: &Node| match node {
+        Node::Text { phase, .. } => phase.clone(),
+        _ => None,
+    };
+    let (previous_zone, next_zone) = (bridge_zone_for_node(previous), bridge_zone_for_node(next));
+    role(previous) == role(next)
+        && !(previous_zone == BridgeZone::Content
+            && next_zone == BridgeZone::Content
+            && phase(previous) != phase(next))
+        && !bridge_zone_should_flush(Some(previous_zone), next_zone)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BridgeZone {
     Reasoning,

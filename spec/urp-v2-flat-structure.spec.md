@@ -499,11 +499,19 @@ CB-12. Chat target. Let `D` be the PC0 dialect of the attempt.
 | `openai` | `origin = chat_completion`, `wire = prompt_cache_breakpoint` | replay |
 | `openai` | other | `prompt_cache_breakpoint` when CB-14 passes, else omit |
 | `openrouter`, `vercel`, `generic` | `origin = chat_completion` | replay |
-| `openrouter`, `vercel`, `generic` | other | `cache_control` |
+| `openrouter`, `generic` | other | `cache_control` on the part |
+| `vercel` | other | `cache_control` on the message, under CB-12a |
 
-A converted marker exists only on a content part: `Text`, media nodes, and `ToolResultContent::Text`. A converted marker on a `ToolCall` MUST be omitted, because a Chat `tool_calls` entry has no marker. A marker on a `ToolDefinition` maps to `cache_control` on the tool descriptor for `openrouter`, `vercel`, and `generic`, which OpenRouter documents, and MUST be omitted for `openai`.
+A converted marker exists only on a content part: `Text`, media nodes, and `ToolResultContent::Text`. A converted marker on a `ToolCall` MUST be omitted, because a Chat `tool_calls` entry has no marker. A converted marker on a `ToolDefinition` maps to `cache_control` on the tool descriptor for `openrouter`, which documents it, and for `generic`. It MUST be omitted for `openai` and `vercel`.
 
-For `vercel`, a converted marker uses the content part, like the other non-`openai` dialects. Vercel documents only the message-level form of CB-3a, so this placement is not a documented Vercel shape and a Vercel upstream may ignore it. A native message-level marker replays on the message. `generic` receives `cache_control` by policy, without a universal OpenAI-compatible contract, so a strict gateway may reject it.
+`generic` receives `cache_control` by policy, without a universal OpenAI-compatible contract, so a strict gateway may reject it.
+
+CB-12a. Vercel conversion. Vercel documents manual caching only as `cache_control` on the Chat message object (CB-3a). A message-level marker means that the prefix ends at the end of that message, so the encoder MUST NOT widen a boundary by lifting a part marker to a later message end:
+
+1. For a converted marker on a `Text` or media node, the encoder MUST end the wire message at that node, MUST emit `cache_control` on that message, and MUST start a new message of the same role for any following node that would otherwise share it. Splitting keeps node order and content. A resulting single-text message collapses to scalar `content` under PC2.2.
+2. A `tool` message cannot be split. A converted marker on the last text entry of a `ToolResult`, including one moved there by CB-15, MUST be emitted on the `tool` message. A converted marker on an earlier text entry MUST be dropped.
+3. A converted marker on a `Text` node with empty `content` or a `ToolResultContent::Text` with empty `text` MUST be dropped.
+4. A marker with `origin = chat_completion` replays under CB-8 and is not split, including a part-level marker, because the client chose that shape.
 
 CB-13. Responses target. `origin = responses` with `wire = prompt_cache_breakpoint` replays. Any other marker is converted to `prompt_cache_breakpoint` when CB-14 passes and its carrier is a non-assistant `Text` node, a non-assistant media node, or a `ToolResultContent` text or media entry; these encode to `input_text`, `input_image`, and `input_file`. It MUST be omitted on an assistant node (`output_text` has no marker), on a `ToolCall`, and on a `ToolDefinition`. A `system` or `developer` `Text` node that carries an emitted marker MUST encode as an input message, because top-level `instructions` cannot hold a breakpoint.
 
