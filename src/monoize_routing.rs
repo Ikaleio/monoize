@@ -3058,7 +3058,8 @@ fn build_probe_request(
             } else {
                 "generateContent"
             };
-            let url = format!("{base}/v1beta/models/{model}:{method}");
+            let url =
+                crate::upstream::join_url(base, &format!("/v1beta/models/{model}:{method}"));
             let body = serde_json::json!({
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
                 "generationConfig": {"maxOutputTokens": 16}

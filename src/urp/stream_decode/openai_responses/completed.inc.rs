@@ -13,6 +13,11 @@ fn accumulate_message_content_event(
         .and_then(Value::as_u64).unwrap_or(0);
     let item_id = stable_message_item_id_for_output(index_state, output_index);
     let state = output_state_for(index_state, output_index);
+    if event_name == "response.output_text.done"
+        && let Some(value) = data.get("phase").and_then(Value::as_str)
+    {
+        state.text_done_phases.insert(content_index, value.to_owned());
+    }
     let citations: Vec<_> = state.text_citations.iter()
         .filter(|((part, _), _)| *part == content_index)
         .map(|(_, annotation)| annotation.clone()).collect();
@@ -64,7 +69,9 @@ fn accumulate_message_content_event(
                     *logprobs = Some(scores);
                 }
             }
-            if let Some(value) = data.get("phase").and_then(Value::as_str) {
+            if let Some(value) = data.get("phase").and_then(Value::as_str)
+                && phase.is_none()
+            {
                 *phase = Some(value.to_owned());
             }
             *stored_citations = citations;
@@ -160,6 +167,22 @@ struct AccumulatedReasoningSlot {
 impl AccumulatedReasoningSlot {
     fn has_typed_output(&self) -> bool {
         !self.content.is_empty() || self.summary_text().is_some() || self.encrypted.is_some()
+    }
+
+    fn summary_part_shapes(&self) -> Option<Vec<crate::urp::ReasoningTextPart>> {
+        if self.summary_parts.len() < 2 || !self.summary.is_empty() {
+            return None;
+        }
+        Some(
+            self.summary_parts
+                .values()
+                .filter(|part| !part.is_empty())
+                .map(|part| crate::urp::ReasoningTextPart {
+                    byte_length: part.len(),
+                    extra_body: HashMap::from([("type".to_string(), json!("summary_text"))]),
+                })
+                .collect(),
+        )
     }
 
     fn summary_text(&self) -> Option<String> {
@@ -389,8 +412,10 @@ fn build_accumulated_output_entries(
                 entries.push(AccumulatedOutputEntry {
                     output_index,
                     nodes: vec![Node::Reasoning {
-                        metadata: Default::default(),
-
+                        metadata: crate::urp::ReasoningMetadata {
+                            summary_parts: slot.summary_part_shapes(),
+                            ..Default::default()
+                        },
                         id,
                         content: (!slot.content.is_empty()).then(|| slot.content.clone()),
                         summary: slot.summary_text(),
@@ -553,6 +578,7 @@ fn part_extra_body_from_value(part: &Value) -> HashMap<String, Value> {
             "summary",
             "refusal",
             "annotations",
+            "logprobs",
             "call_id",
             "name",
             "arguments",

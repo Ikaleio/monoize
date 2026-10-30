@@ -72,6 +72,7 @@ pub(super) async fn prepare(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     req: &mut urp::UrpRequest,
+    ws_turn: Option<&crate::upstream_websocket::ResponsesWsTurn>,
 ) -> AppResult<()> {
     let scope = json!([
         auth.tenant_id,
@@ -132,11 +133,23 @@ pub(super) async fn prepare(
     };
     req.extra_body
         .insert("store".to_string(), Value::Bool(false));
+    // WS19: a WebSocket turn reports its pre-allocated public id and the
+    // connection-local lineage the handler resolved before removing the field.
+    let (id, previous_response_id) = match ws_turn {
+        Some(turn) => (
+            turn.public_response_id.clone(),
+            turn.previous_response_id.clone(),
+        ),
+        None => (
+            format!("resp_monoize_{}", uuid::Uuid::new_v4().simple()),
+            previous.as_str().map(str::to_owned),
+        ),
+    };
     req.context.response_history = Some(urp::ResponseHistoryContext {
-        id: format!("resp_monoize_{}", uuid::Uuid::new_v4().simple()),
+        id,
         scope,
         store,
-        previous_response_id: previous.as_str().map(str::to_owned),
+        previous_response_id,
     });
     Ok(())
 }
@@ -474,6 +487,7 @@ mod media_history_tests {
                 Instant::now(),
                 None,
                 false,
+                None,
             )
             .await;
             if result.is_ok() {

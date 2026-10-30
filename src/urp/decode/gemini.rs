@@ -103,6 +103,8 @@ impl TryFrom<GeminiUsage> for Usage {
             .extra
             .remove("toolUsePromptTokensDetails")
             .and_then(parse_modality);
+        // Usage extras carry counters only; enum metadata such as `serviceTier` is not usage.
+        value.extra.retain(|_, value| value.is_number());
         let input_tokens = value
             .prompt_token_count
             .checked_add(value.tool_prompt_tokens)
@@ -180,7 +182,190 @@ fn parse_modality(value: Value) -> Option<crate::urp::ModalityBreakdown> {
     Some(result)
 }
 
+/// Renames documented proto-JSON snake_case fields to camelCase at structural positions only.
+/// User payloads (function args, responses, schemas, labels) are never rewritten.
+fn normalize_proto_json_names(value: &Value) -> Value {
+    fn rename(obj: &mut Map<String, Value>, names: &[(&str, &str)]) {
+        for (snake, camel) in names {
+            if !obj.contains_key(*camel)
+                && let Some(value) = obj.remove(*snake)
+            {
+                obj.insert((*camel).to_string(), value);
+            }
+        }
+    }
+    fn object<'a>(
+        obj: &'a mut Map<String, Value>,
+        key: &str,
+    ) -> Option<&'a mut Map<String, Value>> {
+        obj.get_mut(key).and_then(Value::as_object_mut)
+    }
+    fn part(value: &mut Value) {
+        let Some(obj) = value.as_object_mut() else {
+            return;
+        };
+        // OpenAI-compatible media parts use `file_data` as a string, so only proto-shaped
+        // object members are renamed.
+        for (snake, camel) in [
+            ("inline_data", "inlineData"),
+            ("file_data", "fileData"),
+            ("function_call", "functionCall"),
+            ("function_response", "functionResponse"),
+            ("executable_code", "executableCode"),
+            ("code_execution_result", "codeExecutionResult"),
+            ("video_metadata", "videoMetadata"),
+            ("media_resolution", "mediaResolution"),
+            ("part_metadata", "partMetadata"),
+        ] {
+            if obj.get(snake).is_some_and(Value::is_object) {
+                rename(obj, &[(snake, camel)]);
+            }
+        }
+        rename(obj, &[("thought_signature", "thoughtSignature")]);
+        for key in ["inlineData", "fileData"] {
+            if let Some(data) = object(obj, key) {
+                rename(
+                    data,
+                    &[
+                        ("mime_type", "mimeType"),
+                        ("file_uri", "fileUri"),
+                        ("display_name", "displayName"),
+                    ],
+                );
+            }
+        }
+        if let Some(metadata) = object(obj, "videoMetadata") {
+            rename(
+                metadata,
+                &[("start_offset", "startOffset"), ("end_offset", "endOffset")],
+            );
+        }
+        if let Some(response) = object(obj, "functionResponse") {
+            rename(response, &[("will_continue", "willContinue")]);
+            if let Some(parts) = response.get_mut("parts").and_then(Value::as_array_mut) {
+                parts.iter_mut().for_each(part);
+            }
+        }
+    }
+    fn content(content: &mut Value) {
+        match content.get_mut("parts") {
+            Some(Value::Array(parts)) => parts.iter_mut().for_each(part),
+            Some(single) => part(single),
+            None => {}
+        }
+    }
+
+    let mut value = value.clone();
+    let Some(obj) = value.as_object_mut() else {
+        return value;
+    };
+    rename(
+        obj,
+        &[
+            ("system_instruction", "systemInstruction"),
+            ("generation_config", "generationConfig"),
+            ("tool_config", "toolConfig"),
+            ("safety_settings", "safetySettings"),
+            ("cached_content", "cachedContent"),
+            ("continuation_token", "continuationToken"),
+            ("service_tier", "serviceTier"),
+        ],
+    );
+    if let Some(contents) = obj.get_mut("contents").and_then(Value::as_array_mut) {
+        contents.iter_mut().for_each(content);
+    }
+    if let Some(system) = obj.get_mut("systemInstruction") {
+        content(system);
+    }
+    if let Some(config) = object(obj, "generationConfig") {
+        rename(
+            config,
+            &[
+                ("stop_sequences", "stopSequences"),
+                ("response_mime_type", "responseMimeType"),
+                ("response_schema", "responseSchema"),
+                ("response_json_schema", "responseJsonSchema"),
+                ("response_modalities", "responseModalities"),
+                ("candidate_count", "candidateCount"),
+                ("max_output_tokens", "maxOutputTokens"),
+                ("top_p", "topP"),
+                ("top_k", "topK"),
+                ("presence_penalty", "presencePenalty"),
+                ("frequency_penalty", "frequencyPenalty"),
+                ("response_logprobs", "responseLogprobs"),
+                ("thinking_config", "thinkingConfig"),
+                ("media_resolution", "mediaResolution"),
+                ("image_config", "imageConfig"),
+                ("speech_config", "speechConfig"),
+                ("response_format", "responseFormat"),
+            ],
+        );
+        if let Some(thinking) = object(config, "thinkingConfig") {
+            rename(
+                thinking,
+                &[
+                    ("thinking_budget", "thinkingBudget"),
+                    ("thinking_level", "thinkingLevel"),
+                    ("include_thoughts", "includeThoughts"),
+                ],
+            );
+        }
+        if let Some(image) = object(config, "imageConfig") {
+            rename(
+                image,
+                &[("aspect_ratio", "aspectRatio"), ("image_size", "imageSize")],
+            );
+        }
+    }
+    if let Some(tools) = obj.get_mut("tools").and_then(Value::as_array_mut) {
+        for tool in tools.iter_mut().filter_map(Value::as_object_mut) {
+            rename(
+                tool,
+                &[
+                    ("function_declarations", "functionDeclarations"),
+                    ("google_search", "googleSearch"),
+                    ("google_search_retrieval", "googleSearchRetrieval"),
+                    ("code_execution", "codeExecution"),
+                    ("url_context", "urlContext"),
+                    ("file_search", "fileSearch"),
+                    ("google_maps", "googleMaps"),
+                    ("computer_use", "computerUse"),
+                    ("mcp_servers", "mcpServers"),
+                ],
+            );
+            if let Some(declarations) = tool
+                .get_mut("functionDeclarations")
+                .and_then(Value::as_array_mut)
+            {
+                for declaration in declarations.iter_mut().filter_map(Value::as_object_mut) {
+                    rename(
+                        declaration,
+                        &[
+                            ("parameters_json_schema", "parametersJsonSchema"),
+                            ("response_json_schema", "responseJsonSchema"),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+    if let Some(config) = object(obj, "toolConfig") {
+        rename(
+            config,
+            &[
+                ("function_calling_config", "functionCallingConfig"),
+                ("retrieval_config", "retrievalConfig"),
+            ],
+        );
+        if let Some(function) = object(config, "functionCallingConfig") {
+            rename(function, &[("allowed_function_names", "allowedFunctionNames")]);
+        }
+    }
+    value
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
+    let value = &normalize_proto_json_names(value);
     let obj = value
         .as_object()
         .ok_or_else(|| "gemini request must be object".to_string())?;
@@ -499,6 +684,10 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         attach_candidate_citations(candidate, &mut output_nodes);
         crate::urp::logprobs::attach_gemini(candidate, &mut output_nodes);
     }
+    let mut output_nodes: Vec<Node> = output_nodes
+        .into_iter()
+        .flat_map(project_response_node)
+        .collect();
     let mut finish_reason = candidate
         .and_then(|candidate| candidate.get("finishReason"))
         .and_then(Value::as_str)
@@ -526,15 +715,16 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .get("responseId")
             .or_else(|| obj.get("id"))
             .and_then(|v| v.as_str())
-            .unwrap_or("gemini_response")
-            .to_string(),
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("resp_{}", uuid::Uuid::new_v4())),
         model: obj
             .get("modelVersion")
             .or_else(|| obj.get("model"))
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        created_at: None,
+        // GenerateContentResponse has no creation time; record the decode time.
+        created_at: Some(chrono::Utc::now().timestamp()),
         output: output_nodes,
         finish_reason,
         usage,
@@ -751,6 +941,178 @@ pub(crate) const GEMINI_SYSTEM_EXTRA_KEY: &str = "_monoize_gemini_system";
 pub(crate) const GEMINI_TEXT_FORMAT_KEY: &str = "_monoize_gemini_text_response_format";
 pub(crate) const GEMINI_ENUM_FORMAT_KEY: &str = "_monoize_gemini_enum_response";
 pub(crate) const GEMINI_SYNTHETIC_CALL_PREFIX: &str = "call_gemini_";
+/// Id prefix of Reasoning nodes that carry a Gemini-produced signature (provenance marker).
+pub(crate) const GEMINI_SIGNATURE_ID_PREFIX: &str = "rs_gemini_";
+/// Id prefix of a signature carrier bound to the adjacent text or media Part.
+pub(crate) const GEMINI_PART_SIGNATURE_ID_PREFIX: &str = "rs_gemini_part_";
+pub(crate) const GEMINI_CONTINUATION_TOKEN_KEY: &str = "continuation_token";
+
+fn signature_carrier_id(bound: bool) -> String {
+    let prefix = if bound {
+        GEMINI_PART_SIGNATURE_ID_PREFIX
+    } else {
+        GEMINI_SIGNATURE_ID_PREFIX
+    };
+    format!("{prefix}{}", uuid::Uuid::new_v4().simple())
+}
+
+fn signature_carrier(signature: Value, bound: bool, extra_body: HashMap<String, Value>) -> Node {
+    Node::Reasoning {
+        metadata: Default::default(),
+        id: Some(signature_carrier_id(bound)),
+        content: None,
+        encrypted: Some(signature),
+        summary: None,
+        source: None,
+        extra_body,
+    }
+}
+
+/// Renders a Gemini code-execution Part as assistant text so non-Gemini clients can see it.
+fn render_code_execution(node: Node) -> Node {
+    let Node::ProviderItem {
+        origin_protocol: ProviderProtocol::Gemini,
+        role,
+        item_type,
+        body,
+        ..
+    } = &node
+    else {
+        return node;
+    };
+    let content = match item_type.as_str() {
+        "executableCode" => {
+            let code = &body["executableCode"];
+            format!(
+                "\n```{}\n{}\n```\n",
+                code.get("language")
+                    .and_then(Value::as_str)
+                    .filter(|language| *language != "LANGUAGE_UNSPECIFIED")
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+                code.get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim_end_matches('\n')
+            )
+        }
+        "codeExecutionResult" => {
+            let result = &body["codeExecutionResult"];
+            let outcome = result
+                .get("outcome")
+                .and_then(Value::as_str)
+                .filter(|outcome| *outcome != "OUTCOME_OK")
+                .map(|outcome| format!("[{outcome}]\n"))
+                .unwrap_or_default();
+            format!(
+                "\n```output\n{outcome}{}\n```\n",
+                result
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim_end_matches('\n')
+            )
+        }
+        _ => return node,
+    };
+    Node::Text {
+        signature: body.get("thoughtSignature").cloned(),
+        id: None,
+        role: *role,
+        content,
+        phase: None,
+        logprobs: None,
+        citations: Vec::new(),
+        extra_body: HashMap::new(),
+    }
+}
+
+/// Canonical response form for one decoded Gemini Part node.
+/// Text and media Part signatures move into a following Reasoning carrier with id prefix
+/// `rs_gemini_part_`; a signed empty text Part becomes one standalone carrier with id prefix
+/// `rs_gemini_`; a signed thought receives an `rs_gemini_` id. Function-call signatures stay
+/// on the ToolCall.
+pub(crate) fn project_response_node(node: Node) -> Vec<Node> {
+    let mut node = render_code_execution(node);
+    let signature = match &mut node {
+        Node::Text {
+            content,
+            signature,
+            citations,
+            logprobs,
+            extra_body,
+            ..
+        } => {
+            if signature.is_some() && content.is_empty() && citations.is_empty() && logprobs.is_none()
+            {
+                let signature = signature.take().expect("checked signature");
+                return vec![signature_carrier(
+                    signature,
+                    false,
+                    std::mem::take(extra_body),
+                )];
+            }
+            signature.take()
+        }
+        Node::Image { metadata, .. } | Node::Audio { metadata, .. } | Node::File { metadata, .. } => {
+            metadata.signature.take()
+        }
+        Node::Reasoning {
+            id: id @ None,
+            encrypted: Some(_),
+            ..
+        } => {
+            *id = Some(signature_carrier_id(false));
+            None
+        }
+        _ => None,
+    };
+    match signature {
+        Some(signature) => vec![node, signature_carrier(signature, true, HashMap::new())],
+        None => vec![node],
+    }
+}
+
+/// True for a Reasoning node that carries only a signature (no thought text).
+pub(crate) fn is_signature_carrier(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Reasoning {
+            content,
+            summary,
+            encrypted: Some(_),
+            ..
+        } if content.as_deref().is_none_or(str::is_empty)
+            && summary.as_deref().is_none_or(str::is_empty)
+    )
+}
+
+/// Restores a custom tool call that was bridged through a Gemini function declaration.
+pub(crate) fn restore_custom_bridge_call(
+    node: &mut Node,
+    names: &std::collections::HashSet<String>,
+) {
+    let Node::ToolCall {
+        tool_type,
+        name,
+        arguments,
+        ..
+    } = node
+    else {
+        return;
+    };
+    if *tool_type != crate::urp::ToolCallType::Function || !names.contains(name) {
+        return;
+    }
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(arguments) else {
+        return;
+    };
+    let Some(input) = object.get("input").and_then(Value::as_str) else {
+        return;
+    };
+    *tool_type = crate::urp::ToolCallType::Custom;
+    *arguments = input.to_string();
+}
 fn part_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, Value> {
     let native = split_extra(obj, known);
     let mut extra = HashMap::new();
@@ -783,9 +1145,9 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Result<Vec<Part>, String> {
                     metadata: Default::default(),
 
                     id: None,
-                    content: Some(text.to_string()),
+                    content: None,
                     encrypted: obj.get("thoughtSignature").cloned(),
-                    summary: None,
+                    summary: Some(text.to_string()),
                     source: None,
                     extra_body: part_extra(obj, &["text", "thought", "thoughtSignature"]),
                 }
@@ -1195,16 +1557,22 @@ fn take_output_extra(
 
 pub(crate) fn parse_finish_reason(reason: &str) -> FinishReason {
     match reason {
-        "MAX_TOKENS" => FinishReason::Length,
+        // CONTINUATION stops at the per-request token cap; the answer is resumable, not failed.
+        "MAX_TOKENS" | "CONTINUATION" => FinishReason::Length,
         "SAFETY"
         | "RECITATION"
+        | "LANGUAGE"
         | "BLOCKLIST"
         | "PROHIBITED_CONTENT"
         | "SPII"
         | "IMAGE_SAFETY"
         | "IMAGE_PROHIBITED_CONTENT"
-        | "IMAGE_RECITATION" => FinishReason::ContentFilter,
+        | "IMAGE_RECITATION"
+        | "ESCALATION"
+        | "PUP_LIMITED_DISABLED" => FinishReason::ContentFilter,
         "STOP" => FinishReason::Stop,
+        // OTHER, MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, TOO_MANY_TOOL_CALLS,
+        // MISSING_THOUGHT_SIGNATURE, MALFORMED_RESPONSE, IMAGE_OTHER, NO_IMAGE and unknown values.
         _ => FinishReason::Other,
     }
 }
@@ -1370,12 +1738,23 @@ pub(crate) fn response_outcome(
     finish: Option<FinishReason>,
 ) -> Option<ResponseOutcome> {
     let mut outcome = ResponseOutcome::from_finish(Some(finish?));
+    let native_reason = candidate
+        .and_then(|candidate| candidate.get("finishReason"))
+        .and_then(Value::as_str);
+    if native_reason == Some("CONTINUATION") {
+        if let Some(token) = candidate
+            .and_then(|candidate| candidate.get("continuationToken"))
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+        {
+            outcome
+                .incomplete_extra
+                .insert(GEMINI_CONTINUATION_TOKEN_KEY.into(), json!(token));
+        }
+    }
     if finish == Some(FinishReason::Other) {
         outcome.error = Some(crate::urp::outcome::ResponseError {
-            code: candidate
-                .and_then(|candidate| candidate.get("finishReason"))
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            code: native_reason.map(str::to_owned),
             message: candidate
                 .and_then(|candidate| candidate.get("finishMessage"))
                 .and_then(Value::as_str)

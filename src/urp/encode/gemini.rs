@@ -1,7 +1,8 @@
 use crate::urp::decode::gemini::{
     GEMINI_CANDIDATE_EXTRA_KEY, GEMINI_CONTENT_EXTRA_KEY, GEMINI_ENUM_FORMAT_KEY,
-    GEMINI_PART_EXTRA_KEY, GEMINI_SYNTHETIC_CALL_PREFIX, GEMINI_SYSTEM_EXTRA_KEY,
-    GEMINI_TEXT_FORMAT_KEY, native_schema_types, strip_text_response_format,
+    GEMINI_PART_EXTRA_KEY, GEMINI_PART_SIGNATURE_ID_PREFIX, GEMINI_SIGNATURE_ID_PREFIX,
+    GEMINI_SYNTHETIC_CALL_PREFIX, GEMINI_SYSTEM_EXTRA_KEY, GEMINI_TEXT_FORMAT_KEY,
+    native_schema_types, strip_text_response_format,
 };
 use crate::urp::encode::{
     merge_extra, sanitize_provider_item_wire_body, usage_input_details, usage_output_details,
@@ -26,6 +27,20 @@ pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<
         .is_some_and(|config| config.enabled && config.top_k.is_some_and(|count| count > 20))
     {
         return Err("Gemini logprobs must be in the range 0 through 20.".into());
+    }
+    if matches!(&req.stop, Some(StopControl::Multiple(stops)) if stops.len() > 5) {
+        return Err("Gemini accepts at most 5 stop sequences.".into());
+    }
+    for tool in req.tools.as_deref().unwrap_or_default() {
+        if tool.tool_type != "function"
+            && tool.origin_protocol != Some(ProviderProtocol::Gemini)
+            && !is_gemini_mappable_tool(&tool.tool_type)
+        {
+            return Err(format!(
+                "Gemini has no equivalent for tool type {}.",
+                tool.tool_type
+            ));
+        }
     }
     let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Gemini)?;
     validate_media_nodes(&prepared.input)?;
@@ -55,13 +70,13 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         }
     }
 
+    let model = GeminiModel::parse(upstream_model);
     let mut pending_content: Option<GeminiMessageEnvelope> = None;
-    let mut next_extra = HashMap::new();
     let mut system_extra = HashMap::new();
     for node in request_nodes {
-        if let Node::NextDownstreamEnvelopeExtra { extra_body } = node {
-            flush_pending_gemini_message(&mut pending_content, &mut contents);
-            next_extra.extend(extra_body.clone());
+        // Gemini's decoder never emits envelope controls, so every control is foreign: it
+        // neither splits Content nor adds Content members.
+        if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
             continue;
         }
         let encoded = if matches!(node, Node::ToolResult { .. }) {
@@ -70,13 +85,15 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         } else {
             encode_request_node_part(node)
         };
-        let Some((role, part, mut extra)) = encoded else {
+        let Some((role, mut part, extra)) = encoded else {
             continue;
         };
-        if node_extra(node).contains_key(GEMINI_CONTENT_EXTRA_KEY) || !next_extra.is_empty() {
+        if model.media_resolution {
+            add_media_resolution(node, &mut part);
+        }
+        if node_extra(node).contains_key(GEMINI_CONTENT_EXTRA_KEY) {
             flush_pending_gemini_message(&mut pending_content, &mut contents);
         }
-        extra.extend(std::mem::take(&mut next_extra));
         if matches!(role, OrdinaryRole::System | OrdinaryRole::Developer) {
             flush_pending_gemini_message(&mut pending_content, &mut contents);
             if let Some(native) = node_extra(node)
@@ -106,6 +123,9 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         pending.parts.push(part);
     }
     flush_pending_gemini_message(&mut pending_content, &mut contents);
+    if model.requires_call_signatures {
+        sign_current_turn_calls(&mut contents);
+    }
 
     let mut body = json!({ "contents": contents });
     let obj = body.as_object_mut().expect("gemini request object");
@@ -262,21 +282,47 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         thinking.remove(key);
     }
     if let Some(reasoning) = &req.reasoning {
-        if reasoning.disabled() {
-            thinking.insert("thinkingBudget".into(), json!(0));
-        } else if let Some(budget) = reasoning.budget_tokens {
-            thinking.insert("thinkingBudget".into(), json!(budget));
-        } else if let Some(effort) = &reasoning.effort {
-            thinking.insert("thinkingLevel".into(), json!(effort.to_ascii_uppercase()));
-        } else if reasoning.mode.as_deref() == Some("adaptive") {
-            thinking.insert("thinkingBudget".into(), json!(-1));
-        }
-        if let Some(summary) = &reasoning.summary {
-            thinking.insert("includeThoughts".into(), json!(summary != "none"));
-        }
+        thinking.extend(model.thinking_config(reasoning));
     }
     if !thinking.is_empty() {
         generation_config.insert("thinkingConfig".into(), Value::Object(thinking));
+    }
+    let image_tool = req.tools.as_deref().and_then(|tools| {
+        tools.iter().find(|tool| {
+            tool.origin_protocol != Some(ProviderProtocol::Gemini)
+                && tool.tool_type == "image_generation"
+        })
+    });
+    // Explicit Images requests always ask for image output; a declared image_generation tool
+    // only applies to image-capable models and is otherwise a dropped definition.
+    let image_size = match (&req.image_generation, image_tool) {
+        (Some(options), _) => Some(options.size.clone()),
+        (None, Some(tool)) if model.image_output => Some(
+            tool.config
+                .as_ref()
+                .and_then(|config| config.get("size"))
+                .or_else(|| tool.extra_body.get("size"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ),
+        _ => None,
+    };
+    if let Some(size) = image_size {
+        generation_config
+            .entry("responseModalities")
+            .or_insert_with(|| json!(["TEXT", "IMAGE"]));
+        if let Some(config) = size.as_deref().and_then(image_config_from_size) {
+            let native = generation_config
+                .entry("imageConfig")
+                .or_insert_with(|| json!({}));
+            if !native.is_object() {
+                *native = json!({});
+            }
+            let native = native.as_object_mut().expect("image config object");
+            for (key, value) in config {
+                native.entry(key).or_insert(value);
+            }
+        }
     }
     if !generation_config.is_empty() {
         obj.insert(
@@ -291,11 +337,17 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         if !declarations.is_empty() {
             encoded.push(json!({"functionDeclarations":declarations}));
         }
+        let mut builtin = Vec::new();
         for tool in tools {
             if tool.origin_protocol == Some(ProviderProtocol::Gemini) {
                 if let Some(config) = &tool.config {
                     encoded.push(json!({tool.tool_type.clone():config}));
                 }
+            } else if let Some(key) = gemini_builtin_tool_key(&tool.tool_type)
+                && !builtin.contains(&key)
+            {
+                builtin.push(key);
+                encoded.push(json!({ key: {} }));
             }
         }
         if !encoded.is_empty() {
@@ -314,9 +366,17 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         .unwrap_or_default();
     function_config.remove("mode");
     function_config.remove("allowedFunctionNames");
+    // Function-calling modes constrain function declarations only; without declarations a
+    // typed choice has nothing to select and is omitted.
+    let has_declarations = req.tools.as_deref().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool.tool_type == "function" && tool.function.is_some())
+    });
     if let Some(choice) = req
         .tool_choice
         .as_ref()
+        .filter(|_| has_declarations)
         .and_then(encode_tool_choice)
         .and_then(|value| value.as_object().cloned())
     {
@@ -328,13 +388,26 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
     if !config.is_empty() {
         obj.insert("toolConfig".into(), json!(config));
     }
+    if let Some(tier) = req
+        .extra_body
+        .get("service_tier")
+        .and_then(Value::as_str)
+        .and_then(gemini_service_tier)
+    {
+        obj.insert("serviceTier".into(), json!(tier));
+    }
     let extra = req
         .extra_body
         .iter()
         .filter(|(key, _)| {
             !matches!(
                 key.as_str(),
-                "generationConfig" | "tools" | "toolConfig" | "contents" | "systemInstruction"
+                "generationConfig"
+                    | "tools"
+                    | "toolConfig"
+                    | "contents"
+                    | "systemInstruction"
+                    | "service_tier"
             )
         })
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -393,6 +466,8 @@ pub(crate) fn encode_response_node_parts(node: &Node) -> Result<Vec<Value>, Stri
             }
         }
     }
+    // A single streamed node has no adjacent Part to bind; carriers stay standalone.
+    resolve_bound_signatures(&mut parts);
     Ok(parts)
 }
 
@@ -407,16 +482,16 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
             }
         }
     }
+    for removed in resolve_bound_signatures(&mut parts) {
+        emitted_nodes.remove(removed);
+    }
     let mut usage_metadata = json!({
         "promptTokenCount": 0,
         "candidatesTokenCount": 0,
         "totalTokenCount": 0,
         "thoughtsTokenCount": 0,
         "cachedContentTokenCount": 0,
-        "cacheCreationTokenCount": 0,
-        "toolUsePromptTokenCount": 0,
-        "acceptedPredictionOutputTokenCount": 0,
-        "rejectedPredictionOutputTokenCount": 0
+        "toolUsePromptTokenCount": 0
     });
     if let Some(usage) = &resp.usage {
         let usage = usage.accounting();
@@ -474,21 +549,28 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 Value::from(input_details.cache_read_tokens),
             );
             obj.insert(
-                "cacheCreationTokenCount".to_string(),
-                Value::from(input_details.cache_creation_tokens),
-            );
-            obj.insert(
                 "toolUsePromptTokenCount".to_string(),
                 Value::from(input_details.tool_prompt_tokens),
             );
-            obj.insert(
-                "acceptedPredictionOutputTokenCount".to_string(),
-                Value::from(output_details.accepted_prediction_tokens),
-            );
-            obj.insert(
-                "rejectedPredictionOutputTokenCount".to_string(),
-                Value::from(output_details.rejected_prediction_tokens),
-            );
+            // Counters absent from UsageMetadata are extensions, emitted only when non-zero.
+            for (key, count) in [
+                (
+                    "cacheCreationTokenCount",
+                    input_details.cache_creation_tokens,
+                ),
+                (
+                    "acceptedPredictionOutputTokenCount",
+                    output_details.accepted_prediction_tokens,
+                ),
+                (
+                    "rejectedPredictionOutputTokenCount",
+                    output_details.rejected_prediction_tokens,
+                ),
+            ] {
+                if count > 0 {
+                    obj.insert(key.to_string(), Value::from(count));
+                }
+            }
             for (k, v) in &usage.extra_body {
                 if !k.starts_with("_monoize_")
                     && !matches!(
@@ -627,9 +709,11 @@ fn encode_function_declarations(tools: &[ToolDefinition]) -> Vec<Value> {
 fn encode_function_declaration(function: &FunctionDefinition) -> Value {
     let mut obj = Map::new();
     obj.insert("name".to_string(), Value::String(function.name.clone()));
-    if let Some(desc) = &function.description {
-        obj.insert("description".to_string(), Value::String(desc.clone()));
-    }
+    // FunctionDeclaration.description is a required field.
+    obj.insert(
+        "description".to_string(),
+        Value::String(function.description.clone().unwrap_or_default()),
+    );
     if let Some(params) = &function.parameters {
         let key = if function
             .extra_body
@@ -702,13 +786,12 @@ fn encode_tool_choice(tc: &ToolChoice) -> Option<Value> {
         },
         ToolChoice::Specific(v) => {
             if v.get("type").and_then(Value::as_str) == Some("allowed_tools") {
-                let mode = match v.get("mode").and_then(Value::as_str) {
-                    Some("required") => "ANY",
-                    Some("validated") => "VALIDATED",
-                    Some("none") => "NONE",
-                    _ => "AUTO",
-                };
-                let names: Vec<_> = v
+                // Responses uses a flat selector; Chat nests it under `allowed_tools`.
+                let selector = v
+                    .get("allowed_tools")
+                    .filter(|nested| nested.is_object())
+                    .unwrap_or(v);
+                let names: Vec<_> = selector
                     .get("tools")
                     .and_then(Value::as_array)
                     .into_iter()
@@ -722,6 +805,18 @@ fn encode_tool_choice(tc: &ToolChoice) -> Option<Value> {
                     .filter(|value| value.is_string())
                     .cloned()
                     .collect();
+                // allowedFunctionNames is valid only with ANY or VALIDATED; an `auto` choice
+                // restricted to named functions is Gemini VALIDATED.
+                let mode = match selector.get("mode").and_then(Value::as_str) {
+                    Some("required" | "any") => "ANY",
+                    Some("none") => "NONE",
+                    Some("validated") => "VALIDATED",
+                    _ if !names.is_empty() => "VALIDATED",
+                    _ => "AUTO",
+                };
+                if names.is_empty() || mode == "NONE" {
+                    return Some(json!({ "mode": mode }));
+                }
                 return Some(json!({"mode":mode,"allowedFunctionNames":names}));
             }
             let name = v
@@ -796,7 +891,9 @@ fn flush_pending_gemini_message(pending: &mut Option<GeminiMessageEnvelope>, out
     };
     let mut obj = Map::new();
     obj.insert("role".to_string(), Value::String(role.to_string()));
-    obj.insert("parts".to_string(), Value::Array(message.parts));
+    let mut parts = message.parts;
+    resolve_bound_signatures(&mut parts);
+    obj.insert("parts".to_string(), Value::Array(parts));
     merge_extra(&mut obj, &message.extra_body);
     out.push(Value::Object(obj));
 }
@@ -898,19 +995,35 @@ pub(crate) fn encode_request_node_part(
             extra_body.clone(),
         )),
         Node::Reasoning {
+            id,
+            metadata,
             content,
             encrypted,
             summary,
             extra_body,
             ..
         } if content.is_some() || summary.is_some() || encrypted.is_some() => {
-            let mut part = match content.as_deref().or(summary.as_deref()) {
-                Some(text) => json!({"text": text, "thought": true}),
-                None => json!({}),
+            let text = content.as_deref().or(summary.as_deref());
+            let part = match (text, encrypted) {
+                (Some(text), signature) => {
+                    let mut part = json!({"text": text, "thought": true});
+                    if let Some(signature) = signature {
+                        part["thoughtSignature"] = signature.clone();
+                    }
+                    part
+                }
+                (None, Some(signature))
+                    if id
+                        .as_deref()
+                        .or(metadata.item_id.as_deref())
+                        .is_some_and(|id| id.starts_with(GEMINI_PART_SIGNATURE_ID_PREFIX)) =>
+                {
+                    json!({ BOUND_SIGNATURE_KEY: signature })
+                }
+                // A Part needs a data member; Gemini streams standalone signatures this way.
+                (None, Some(signature)) => json!({"text": "", "thoughtSignature": signature}),
+                (None, None) => unreachable!("guarded by the match arm"),
             };
-            if let Some(signature) = encrypted {
-                part["thoughtSignature"] = signature.clone();
-            }
             Some((OrdinaryRole::Assistant, part, extra_body.clone()))
         }
         Node::ToolCall {
@@ -971,7 +1084,12 @@ pub(crate) fn encode_request_node_part(
         Node::ToolResult { .. } => Some((
             OrdinaryRole::Assistant,
             encode_tool_result(node, &Map::new())?,
-            content_extra(node),
+            node_extra(node)
+                .get(GEMINI_CONTENT_EXTRA_KEY)
+                .map(|value| {
+                    HashMap::from([(GEMINI_CONTENT_EXTRA_KEY.to_string(), value.clone())])
+                })
+                .unwrap_or_default(),
         )),
         Node::NextDownstreamEnvelopeExtra { .. } => None,
     }?;
@@ -1038,11 +1156,13 @@ pub(crate) fn encode_request_node_part(
             }
         }
     }
-    if let Some(Value::Object(content)) = extra.remove(GEMINI_CONTENT_EXTRA_KEY) {
-        extra.extend(content);
-    }
-    extra.remove(GEMINI_SYSTEM_EXTRA_KEY);
-    Some((role, part, extra))
+    // Content carries only `role` and `parts` plus native Gemini Content fields; node extras
+    // from other protocols never become Content members.
+    let content = match extra.remove(GEMINI_CONTENT_EXTRA_KEY) {
+        Some(Value::Object(content)) => content.into_iter().collect(),
+        _ => HashMap::new(),
+    };
+    Some((role, part, content))
 }
 
 fn node_has_video_source(node: &Node) -> bool {
@@ -1321,9 +1441,12 @@ fn encode_tool_result(node: &Node, tool_names_by_call_id: &Map<String, Value>) -
         serde_json::from_str::<Value>(&result)
             .ok()
             .filter(Value::is_object)
-            .unwrap_or_else(|| json!({"result": result}))
+            .unwrap_or_else(|| json!({"output": result}))
+    } else if *is_error {
+        // FunctionResponse.response documents `output` for results and `error` for failures.
+        json!({"error": result})
     } else {
-        json!({"result": result, "is_error": is_error})
+        json!({"output": result})
     };
     let mut response = response;
     if *is_error && response.get("error").is_none() {
@@ -1372,4 +1495,452 @@ fn encode_tool_result(node: &Node, tool_names_by_call_id: &Map<String, Value>) -
         }
     }
     Some(part)
+}
+
+/// Encoder-local placeholder for a signature bound to an adjacent Part; resolved before any
+/// Part reaches the wire.
+const BOUND_SIGNATURE_KEY: &str = "_monoize_gemini_bound_signature";
+/// Documented validator-skip value for a current-turn function call without a Gemini signature.
+const DUMMY_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ThinkingLevel {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl ThinkingLevel {
+    fn wire(self) -> &'static str {
+        match self {
+            ThinkingLevel::Minimal => "MINIMAL",
+            ThinkingLevel::Low => "LOW",
+            ThinkingLevel::Medium => "MEDIUM",
+            ThinkingLevel::High => "HIGH",
+        }
+    }
+}
+
+const ALL_LEVELS: &[ThinkingLevel] = &[
+    ThinkingLevel::Minimal,
+    ThinkingLevel::Low,
+    ThinkingLevel::Medium,
+    ThinkingLevel::High,
+];
+const LEVELS_WITHOUT_MINIMAL: &[ThinkingLevel] =
+    &[ThinkingLevel::Low, ThinkingLevel::Medium, ThinkingLevel::High];
+const MINIMAL_OR_HIGH: &[ThinkingLevel] = &[ThinkingLevel::Minimal, ThinkingLevel::High];
+
+enum ThinkingTarget {
+    Lowest,
+    Level(ThinkingLevel),
+    Highest,
+}
+
+enum ThinkingProfile {
+    /// The model has no thinking controls; typed reasoning is not encoded.
+    Unsupported,
+    /// Gemini 2.5-style integer budget.
+    Budget {
+        min: u64,
+        max: u64,
+        can_disable: bool,
+    },
+    /// Gemini 3+/4 thinkingLevel; the slice lists supported levels in ascending order.
+    Levels(&'static [ThinkingLevel]),
+}
+
+/// Model-family facts the encoder needs, derived from the upstream model id.
+struct GeminiModel {
+    thinking: ThinkingProfile,
+    /// Gemini 3+ validates current-turn function-call signatures.
+    requires_call_signatures: bool,
+    /// Per-Part `mediaResolution` exists for Gemini 3+.
+    media_resolution: bool,
+    image_output: bool,
+}
+
+impl GeminiModel {
+    fn parse(model: &str) -> Self {
+        let name = model
+            .trim()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let version = name.strip_prefix("gemini-").and_then(|rest| {
+            let mut numbers = rest.split('-').next()?.split('.');
+            let major = numbers.next()?.parse::<u32>().ok()?;
+            let minor = match numbers.next() {
+                Some(minor) => minor.parse::<u32>().ok()?,
+                None => 0,
+            };
+            Some((major, minor))
+        });
+        let thinking = if name.contains("robotics-er-1") {
+            ThinkingProfile::Budget {
+                min: 0,
+                max: 24576,
+                can_disable: true,
+            }
+        } else if name.starts_with("gemma") || name.starts_with("learnlm") {
+            ThinkingProfile::Unsupported
+        } else {
+            match version {
+                Some(version) if version < (2, 5) => ThinkingProfile::Unsupported,
+                Some((2, _)) if name.contains("pro") => ThinkingProfile::Budget {
+                    min: 128,
+                    max: 32768,
+                    can_disable: false,
+                },
+                Some((2, _)) if name.contains("flash-lite") => ThinkingProfile::Budget {
+                    min: 512,
+                    max: 24576,
+                    can_disable: true,
+                },
+                Some((2, _)) => ThinkingProfile::Budget {
+                    min: 0,
+                    max: 24576,
+                    can_disable: true,
+                },
+                Some((3, _)) if name.contains("flash-lite-image") => {
+                    ThinkingProfile::Levels(MINIMAL_OR_HIGH)
+                }
+                Some((3, minor)) if name.contains("pro") || minor == 8 => {
+                    ThinkingProfile::Levels(LEVELS_WITHOUT_MINIMAL)
+                }
+                Some((3, _)) => ThinkingProfile::Levels(ALL_LEVELS),
+                _ if name.contains("robotics-er-2") => ThinkingProfile::Levels(ALL_LEVELS),
+                // Gemini 4, `-latest` aliases and unknown ids: the level set every current
+                // generation accepts.
+                _ => ThinkingProfile::Levels(LEVELS_WITHOUT_MINIMAL),
+            }
+        };
+        let current = matches!(thinking, ThinkingProfile::Levels(_));
+        Self {
+            thinking,
+            requires_call_signatures: current,
+            media_resolution: current,
+            image_output: name.contains("image"),
+        }
+    }
+
+    fn thinking_config(&self, reasoning: &crate::urp::ReasoningConfig) -> Map<String, Value> {
+        let mut config = Map::new();
+        let dynamic = matches!(reasoning.mode.as_deref(), Some("adaptive" | "enabled"));
+        match self.thinking {
+            ThinkingProfile::Unsupported => return config,
+            ThinkingProfile::Budget {
+                min,
+                max,
+                can_disable,
+            } => {
+                let off = if can_disable { 0 } else { min };
+                let clamp = |budget: u64| budget.clamp(min.max(1), max);
+                let budget = if reasoning.disabled() {
+                    Some(off as i64)
+                } else if let Some(budget) = reasoning.budget_tokens {
+                    Some(if budget == 0 { off } else { clamp(budget) } as i64)
+                } else if let Some(effort) = reasoning.effort.as_deref() {
+                    effort_budget(effort).map(|budget| clamp(budget) as i64)
+                } else if dynamic {
+                    Some(-1)
+                } else {
+                    None
+                };
+                if let Some(budget) = budget {
+                    config.insert("thinkingBudget".into(), json!(budget));
+                }
+            }
+            ThinkingProfile::Levels(levels) => {
+                let target = if reasoning.disabled() {
+                    Some(ThinkingTarget::Lowest)
+                } else if let Some(budget) = reasoning.budget_tokens {
+                    Some(match budget {
+                        0 => ThinkingTarget::Lowest,
+                        1..=1024 => ThinkingTarget::Level(ThinkingLevel::Low),
+                        1025..=8192 => ThinkingTarget::Level(ThinkingLevel::Medium),
+                        _ => ThinkingTarget::Level(ThinkingLevel::High),
+                    })
+                } else {
+                    match reasoning.effort.as_deref() {
+                        Some("minimal") => Some(ThinkingTarget::Level(ThinkingLevel::Minimal)),
+                        Some("low") => Some(ThinkingTarget::Level(ThinkingLevel::Low)),
+                        Some("medium") => Some(ThinkingTarget::Level(ThinkingLevel::Medium)),
+                        Some("high") => Some(ThinkingTarget::Level(ThinkingLevel::High)),
+                        Some("xhigh" | "max") => Some(ThinkingTarget::Highest),
+                        // Adaptive or unknown effort keeps the model's default dynamic level.
+                        _ => None,
+                    }
+                };
+                if let Some(target) = target {
+                    config.insert(
+                        "thinkingLevel".into(),
+                        json!(select_level(levels, target).wire()),
+                    );
+                }
+            }
+        }
+        let include_thoughts = if let Some(summary) = &reasoning.summary {
+            Some(summary != "none")
+        } else if reasoning.disabled() {
+            None
+        } else if dynamic {
+            Some(reasoning.display.as_deref() != Some("omitted"))
+        } else if reasoning.effort.is_some() || reasoning.budget_tokens.is_some() {
+            Some(true)
+        } else {
+            None
+        };
+        if let Some(include) = include_thoughts {
+            config.insert("includeThoughts".into(), json!(include));
+        }
+        config
+    }
+}
+
+fn effort_budget(effort: &str) -> Option<u64> {
+    Some(match effort {
+        "minimal" => 512,
+        "low" => 1024,
+        "medium" => 8192,
+        "high" => 24576,
+        "xhigh" | "max" => u64::MAX,
+        _ => return None,
+    })
+}
+
+/// Picks the supported level nearest to the target; ties resolve to the higher level.
+fn select_level(levels: &[ThinkingLevel], target: ThinkingTarget) -> ThinkingLevel {
+    let first = levels[0];
+    let last = levels[levels.len() - 1];
+    match target {
+        ThinkingTarget::Lowest => first,
+        ThinkingTarget::Highest => last,
+        ThinkingTarget::Level(level) => levels
+            .iter()
+            .copied()
+            .min_by_key(|candidate| {
+                let distance = (*candidate as i8 - level as i8).unsigned_abs();
+                (distance, std::cmp::Reverse(*candidate))
+            })
+            .unwrap_or(last),
+    }
+}
+
+/// Gemini Tool member equivalent to a cross-protocol built-in tool type.
+pub(crate) fn gemini_builtin_tool_key(tool_type: &str) -> Option<&'static str> {
+    if tool_type == "web_search" || tool_type.starts_with("web_search_") {
+        Some("googleSearch")
+    } else if tool_type == "code_interpreter" || tool_type.starts_with("code_execution") {
+        Some("codeExecution")
+    } else if tool_type.starts_with("web_fetch") {
+        Some("urlContext")
+    } else {
+        None
+    }
+}
+
+/// True for a cross-protocol built-in tool the Gemini encoder can represent.
+pub(crate) fn is_gemini_mappable_tool(tool_type: &str) -> bool {
+    gemini_builtin_tool_key(tool_type).is_some() || tool_type == "image_generation"
+}
+
+fn gemini_service_tier(tier: &str) -> Option<&'static str> {
+    match tier {
+        "default" | "standard" | "standard_only" => Some("standard"),
+        "flex" => Some("flex"),
+        "priority" => Some("priority"),
+        _ => None,
+    }
+}
+
+/// Maps an OpenAI-style `WxH` size to the nearest documented Gemini aspect ratio and size.
+fn image_config_from_size(size: &str) -> Option<Map<String, Value>> {
+    const RATIOS: [(u32, u32); 14] = [
+        (1, 1),
+        (1, 4),
+        (4, 1),
+        (1, 8),
+        (8, 1),
+        (2, 3),
+        (3, 2),
+        (3, 4),
+        (4, 3),
+        (4, 5),
+        (5, 4),
+        (9, 16),
+        (16, 9),
+        (21, 9),
+    ];
+    let (width, height) = size.split_once('x')?;
+    let width = width.trim().parse::<u32>().ok().filter(|value| *value > 0)?;
+    let height = height.trim().parse::<u32>().ok().filter(|value| *value > 0)?;
+    let target = (f64::from(width) / f64::from(height)).ln();
+    let distance = |(w, h): (u32, u32)| ((f64::from(w) / f64::from(h)).ln() - target).abs();
+    let (ratio_width, ratio_height) = RATIOS
+        .into_iter()
+        .min_by(|left, right| distance(*left).total_cmp(&distance(*right)))?;
+    let longest = width.max(height);
+    let image_size = match longest {
+        0..=512 => "512",
+        513..=1024 => "1K",
+        1025..=2048 => "2K",
+        _ => "4K",
+    };
+    Some(Map::from_iter([
+        (
+            "aspectRatio".to_string(),
+            json!(format!("{ratio_width}:{ratio_height}")),
+        ),
+        ("imageSize".to_string(), json!(image_size)),
+    ]))
+}
+
+/// Maps a typed image `detail` to the Gemini 3+ per-Part media resolution.
+fn add_media_resolution(node: &Node, part: &mut Value) {
+    let Node::Image {
+        source, metadata, ..
+    } = node
+    else {
+        return;
+    };
+    let detail = metadata.detail.as_deref().or(match source {
+        ImageSource::Url { detail, .. } => detail.as_deref(),
+        _ => None,
+    });
+    let level = match detail {
+        Some("low") => "MEDIA_RESOLUTION_LOW",
+        Some("high") => "MEDIA_RESOLUTION_HIGH",
+        Some("original") => "MEDIA_RESOLUTION_ULTRA_HIGH",
+        _ => return,
+    };
+    if let Some(part) = part.as_object_mut() {
+        part.entry("mediaResolution")
+            .or_insert_with(|| json!({ "level": level }));
+    }
+}
+
+/// Gemini 3+ rejects a current-turn step whose first functionCall lacks a signature. The
+/// current turn starts after the last user Content that holds anything besides function
+/// responses; each model Content after it is one step.
+fn sign_current_turn_calls(contents: &mut [Value]) {
+    let start = contents
+        .iter()
+        .rposition(|content| {
+            content.get("role").and_then(Value::as_str) == Some("user")
+                && content
+                    .get("parts")
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        parts.iter().any(|part| part.get("functionResponse").is_none())
+                    })
+        })
+        .map_or(0, |index| index + 1);
+    for content in &mut contents[start..] {
+        if content.get("role").and_then(Value::as_str) != Some("model") {
+            continue;
+        }
+        let Some(part) = content
+            .get_mut("parts")
+            .and_then(Value::as_array_mut)
+            .and_then(|parts| parts.iter_mut().find(|part| part.get("functionCall").is_some()))
+        else {
+            continue;
+        };
+        let unsigned = match part.get("thoughtSignature") {
+            None | Some(Value::Null) => true,
+            Some(Value::String(signature)) => signature.is_empty(),
+            Some(_) => false,
+        };
+        if unsigned {
+            part["thoughtSignature"] = json!(DUMMY_THOUGHT_SIGNATURE);
+        }
+    }
+}
+
+/// Attaches each bound signature placeholder to the adjacent unsigned text or media Part
+/// (preceding first, then following); otherwise it becomes a standalone empty-text Part.
+/// Returns the removed placeholder positions in removal order.
+fn resolve_bound_signatures(parts: &mut Vec<Value>) -> Vec<usize> {
+    fn accepts(part: &Value) -> bool {
+        part.get(BOUND_SIGNATURE_KEY).is_none()
+            && part.get("thoughtSignature").is_none()
+            && (part.get("inlineData").is_some()
+                || part.get("fileData").is_some()
+                || (part.get("text").is_some()
+                    && part.get("thought").and_then(Value::as_bool) != Some(true)))
+    }
+    let mut removed = Vec::new();
+    let mut index = 0;
+    while index < parts.len() {
+        let Some(signature) = parts[index].get(BOUND_SIGNATURE_KEY).cloned() else {
+            index += 1;
+            continue;
+        };
+        let target = [index.checked_sub(1), Some(index + 1)]
+            .into_iter()
+            .flatten()
+            .find(|target| parts.get(*target).is_some_and(accepts));
+        match target {
+            Some(target) => {
+                parts[target]["thoughtSignature"] = signature;
+                parts.remove(index);
+                removed.push(index);
+            }
+            None => {
+                parts[index] = json!({"text": "", "thoughtSignature": signature});
+                index += 1;
+            }
+        }
+    }
+    removed
+}
+
+/// Gemini accepts only its own signatures. Before envelope unwrapping, clears call signatures
+/// and drops reasoning signatures whose provenance is not Gemini: an `mz2.` envelope must name
+/// provider type `gemini`, an `mz1.` sigil must bind an `rs_gemini_` item id, and a raw
+/// reasoning value must belong to an `rs_gemini_` Reasoning id. Raw call signatures can only
+/// arrive through the Gemini call transport and are kept. Reasoning left without text is
+/// removed.
+pub fn retain_gemini_signature_provenance(nodes: &mut Vec<Node>) {
+    fn gemini_provenance(value: &Value, id: Option<&str>, raw_accepted: bool) -> bool {
+        let gemini_id = |id: &str| id.starts_with(GEMINI_SIGNATURE_ID_PREFIX);
+        match crate::urp::parse_reasoning_envelope(value) {
+            Some(envelope) if envelope.v == 2 => envelope.provider_type == "gemini",
+            Some(envelope) => envelope.item_id.as_deref().is_some_and(gemini_id),
+            None => raw_accepted || id.is_some_and(gemini_id),
+        }
+    }
+    nodes.retain_mut(|node| match node {
+        Node::ToolCall { signature, .. } => {
+            if signature
+                .as_ref()
+                .is_some_and(|value| !gemini_provenance(value, None, true))
+            {
+                *signature = None;
+            }
+            true
+        }
+        Node::Reasoning {
+            id,
+            metadata,
+            content,
+            summary,
+            encrypted,
+            ..
+        } => {
+            let foreign = encrypted.as_ref().is_some_and(|value| {
+                !gemini_provenance(value, id.as_deref().or(metadata.item_id.as_deref()), false)
+            });
+            if foreign {
+                *encrypted = None;
+                return content.as_deref().is_some_and(|text| !text.is_empty())
+                    || summary.as_deref().is_some_and(|text| !text.is_empty());
+            }
+            true
+        }
+        _ => true,
+    });
 }

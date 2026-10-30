@@ -8,8 +8,9 @@ use crate::handlers::usage::{
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::gemini::{
     GEMINI_CANDIDATE_EXTRA_KEY, GEMINI_CONTENT_EXTRA_KEY, candidate_extra, content_parts,
-    decode_stream_part, parse_finish_reason, parse_usage, prompt_block_reason, prompt_refusal,
-    response_outcome, selected_candidate,
+    decode_stream_part, is_signature_carrier, parse_finish_reason, parse_usage,
+    project_response_node, prompt_block_reason, prompt_refusal, response_outcome,
+    restore_custom_bridge_call, selected_candidate,
 };
 use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, UrpStreamEvent};
 use axum::http::StatusCode;
@@ -41,16 +42,22 @@ pub(crate) async fn stream_gemini_to_urp_events(
     let mut grounding = StreamGrounding::default();
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(event) = tokio::time::timeout(idle_timeout, stream.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
+    loop {
+        let next = match tokio::time::timeout(idle_timeout, stream.next()).await {
+            Ok(next) => next,
+            // A finish reason already established completion; trailing silence is not a failure.
+            Err(_) if finish_reason.is_some() => break,
+            Err(_) => {
+                return Err(AppError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "upstream_idle_timeout",
+                    format!("upstream stream idle for {idle_timeout_ms}ms without data"),
+                ));
+            }
+        };
+        let Some(event) = next else {
+            break;
+        };
         let event = event.map_err(|err| {
             stream_error(
                 "upstream_stream_decode_failed",
@@ -134,27 +141,11 @@ pub(crate) async fn stream_gemini_to_urp_events(
                         .map(|candidate| frame_text_scores(candidate, content_parts(parts)))
                         .unwrap_or_default();
                     for (part_index, part) in content_parts(parts).iter().enumerate() {
-                        if let Some(signature) = continuation_signature(part) {
-                            if let Some(last) = output.last_mut() {
-                                if bind_signature(last, part, signature) {
-                                    if let Some(delta) = signature_delta(last) {
-                                        let _ = tx
-                                            .send(UrpStreamEvent::NodeDelta {
-                                                node_index: (output.len() - 1) as u32,
-                                                delta,
-                                                usage: None,
-                                                extra_body: HashMap::new(),
-                                            })
-                                            .await;
-                                    }
-                                    continue;
-                                }
-                            }
-                        }
                         let nodes = decode_stream_part(part).map_err(|error| {
                             stream_error("upstream_stream_decode_failed", error)
                         })?;
                         for (offset, mut node) in nodes.into_iter().enumerate() {
+                            restore_custom_bridge_call(&mut node, &urp.messages_custom_tool_names);
                             if let Node::Text { logprobs, .. } = &mut node {
                                 if output.iter().all(|node| match node {
                                     Node::Text {
@@ -184,20 +175,50 @@ pub(crate) async fn stream_gemini_to_urp_events(
                                 && output
                                     .last_mut()
                                     .is_some_and(|last| append_fragment(last, &mut node));
-                            let delta = initial_delta(&node);
-                            if !merged {
-                                if let Some(last) = output.last() {
-                                    let index = (output.len() - 1) as u32;
-                                    if !matches!(last, Node::Text { .. }) && closed.insert(index) {
-                                        let _ = tx
-                                            .send(UrpStreamEvent::NodeDone {
-                                                node_index: index,
-                                                node: last.clone(),
-                                                usage: None,
-                                                extra_body: node_extra(last).clone(),
-                                            })
-                                            .await;
-                                    }
+                            if merged {
+                                frame_parts
+                                    .entry(part_index)
+                                    .or_insert((output.len() - 1, previous_text_bytes));
+                                if let Some(delta) = initial_delta(&node) {
+                                    let event = UrpStreamEvent::NodeDelta {
+                                        node_index: (output.len() - 1) as u32,
+                                        delta,
+                                        usage: None,
+                                        extra_body: node_extra(&node).clone(),
+                                    };
+                                    record_visible_stream_event_delta(&runtime_metrics, &event)
+                                        .await;
+                                    let _ = tx.send(event).await;
+                                }
+                                continue;
+                            }
+                            for (position, node) in
+                                project_response_node(node).into_iter().enumerate()
+                            {
+                                // An open Text node stays open only for its own signature
+                                // carrier, so late citations can still reach it; any other
+                                // following node completes every earlier node.
+                                let carrier = is_signature_carrier(&node);
+                                let completed: Vec<_> = output
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(index, prior)| {
+                                        !closed.contains(&(*index as u32))
+                                            && !(carrier && matches!(prior, Node::Text { .. }))
+                                    })
+                                    .map(|(index, prior)| (index as u32, prior.clone()))
+                                    .collect();
+                                for (index, prior) in completed {
+                                    closed.insert(index);
+                                    let extra_body = node_extra(&prior).clone();
+                                    let _ = tx
+                                        .send(UrpStreamEvent::NodeDone {
+                                            node_index: index,
+                                            node: prior,
+                                            usage: None,
+                                            extra_body,
+                                        })
+                                        .await;
                                 }
                                 let event = UrpStreamEvent::NodeStart {
                                     node_index: output.len() as u32,
@@ -207,20 +228,20 @@ pub(crate) async fn stream_gemini_to_urp_events(
                                 record_visible_stream_event_delta(&runtime_metrics, &event).await;
                                 let _ = tx.send(event).await;
                                 output.push(node.clone());
-                            }
-                            frame_parts.entry(part_index).or_insert((
-                                output.len() - 1,
-                                if merged { previous_text_bytes } else { 0 },
-                            ));
-                            if let Some(delta) = delta {
-                                let event = UrpStreamEvent::NodeDelta {
-                                    node_index: (output.len() - 1) as u32,
-                                    delta,
-                                    usage: None,
-                                    extra_body: node_extra(&node).clone(),
-                                };
-                                record_visible_stream_event_delta(&runtime_metrics, &event).await;
-                                let _ = tx.send(event).await;
+                                if position == 0 {
+                                    frame_parts.entry(part_index).or_insert((output.len() - 1, 0));
+                                }
+                                if let Some(delta) = initial_delta(&node) {
+                                    let event = UrpStreamEvent::NodeDelta {
+                                        node_index: (output.len() - 1) as u32,
+                                        delta,
+                                        usage: None,
+                                        extra_body: node_extra(&node).clone(),
+                                    };
+                                    record_visible_stream_event_delta(&runtime_metrics, &event)
+                                        .await;
+                                    let _ = tx.send(event).await;
+                                }
                             }
                         }
                     }
@@ -266,7 +287,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
                         .collect::<Map<String, Value>>(),
                 );
             }
-            grounding.ingest(candidate, &frame_parts);
+            grounding.ingest(candidate, &frame_parts, &output);
             merge_candidate_metadata(&mut candidate_metadata, candidate, &output);
             let metadata = candidate_extra(candidate);
             if !metadata.is_empty() {
@@ -313,6 +334,10 @@ pub(crate) async fn stream_gemini_to_urp_events(
         .collect();
     crate::urp::logprobs::attach_gemini(&candidate_metadata, &mut output);
     for (index, node) in output.iter().enumerate() {
+        if closed.contains(&(index as u32)) {
+            // A completed node receives no deltas; ResponseDone.output carries late metadata.
+            continue;
+        }
         if let Node::Text {
             citations,
             logprobs,
@@ -381,6 +406,45 @@ fn stream_error(code: &'static str, message: String) -> AppError {
     AppError::new(StatusCode::BAD_GATEWAY, code, message)
 }
 
+/// Resolves a streamed grounding segment to `(output node index, start, end)` byte offsets by
+/// checking which offset reading reproduces the segment text, falling back to a text search.
+fn resolve_grounding_segment(
+    output: &[Node],
+    frame: Option<(usize, u64)>,
+    start: u64,
+    text: &str,
+) -> Option<(usize, u64, u64)> {
+    let matches = |node: usize, start: u64| -> bool {
+        let Some(Node::Text { content, .. }) = output.get(node) else {
+            return false;
+        };
+        let Ok(start) = usize::try_from(start) else {
+            return false;
+        };
+        content
+            .get(start..start.saturating_add(text.len()))
+            .is_some_and(|slice| slice == text)
+    };
+    let length = text.len() as u64;
+    if let Some((node, offset)) = frame {
+        for candidate in [start.checked_add(offset), Some(start)].into_iter().flatten() {
+            if matches(node, candidate) {
+                return Some((node, candidate, candidate + length));
+            }
+        }
+    }
+    let preferred = frame.map(|(node, _)| node);
+    preferred
+        .into_iter()
+        .chain((0..output.len()).rev().filter(|node| Some(*node) != preferred))
+        .find_map(|node| match output.get(node) {
+            Some(Node::Text { content, .. }) => content
+                .find(text)
+                .map(|found| (node, found as u64, found as u64 + length)),
+            _ => None,
+        })
+}
+
 #[derive(Default)]
 struct StreamGrounding {
     chunks: Vec<Value>,
@@ -393,6 +457,7 @@ impl StreamGrounding {
         &mut self,
         candidate: &Map<String, Value>,
         frame_parts: &HashMap<usize, (usize, u64)>,
+        output: &[Node],
     ) {
         let Some(grounding) = candidate
             .get("groundingMetadata")
@@ -416,37 +481,42 @@ impl StreamGrounding {
             .flatten()
         {
             let mut support = support.clone();
-            if !frame_parts.is_empty() {
-                let Some(segment) = support.get_mut("segment").and_then(Value::as_object_mut)
-                else {
+            let Some(segment) = support.get_mut("segment").and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let part = segment
+                .get("partIndex")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let start = segment
+                .get("startIndex")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let end = segment.get("endIndex").and_then(Value::as_u64);
+            let text = segment
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty());
+            let frame = frame_parts.get(&part).copied();
+            // Gemini does not document whether streamed segment offsets are relative to the
+            // frame Part or to the accumulated text. A segment `text` decides; without it the
+            // frame-relative reading is used.
+            let resolved = match text {
+                Some(text) => resolve_grounding_segment(output, frame, start, text),
+                None if frame_parts.is_empty() => {
+                    self.supports.push(support);
                     continue;
-                };
-                let part = segment
-                    .get("partIndex")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as usize;
-                let Some((node, offset)) = frame_parts.get(&part) else {
-                    continue;
-                };
-                let Some(start) = segment
-                    .get("startIndex")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    .checked_add(*offset)
-                else {
-                    continue;
-                };
-                let Some(end) = segment
-                    .get("endIndex")
-                    .and_then(Value::as_u64)
-                    .and_then(|end| end.checked_add(*offset))
-                else {
-                    continue;
-                };
-                segment.insert("partIndex".into(), Value::from(*node));
-                segment.insert("startIndex".into(), Value::from(start));
-                segment.insert("endIndex".into(), Value::from(end));
-            }
+                }
+                None => frame.and_then(|(node, offset)| {
+                    Some((node, start.checked_add(offset)?, end?.checked_add(offset)?))
+                }),
+            };
+            let Some((node, start, end)) = resolved else {
+                continue;
+            };
+            segment.insert("partIndex".into(), Value::from(node));
+            segment.insert("startIndex".into(), Value::from(start));
+            segment.insert("endIndex".into(), Value::from(end));
             self.supports.push(support);
         }
     }
@@ -525,67 +595,6 @@ async fn emit_native_error(
     AppError::new(StatusCode::BAD_GATEWAY, code, message).with_downstream_stream_terminal_sent(sent)
 }
 
-pub(crate) fn continuation_signature(part: &Value) -> Option<&Value> {
-    let part = part.as_object()?;
-    if part
-        .keys()
-        .any(|key| !matches!(key.as_str(), "text" | "thought" | "thoughtSignature"))
-        || part
-            .get("text")
-            .is_some_and(|text| text.as_str() != Some(""))
-    {
-        return None;
-    }
-    part.get("thoughtSignature")
-        .filter(|signature| !signature.is_null())
-}
-
-pub(crate) fn bind_signature(node: &mut Node, part: &Value, signature: &Value) -> bool {
-    if let Some(thought) = part.get("thought").and_then(Value::as_bool) {
-        if thought != matches!(node, Node::Reasoning { .. }) {
-            return false;
-        }
-    }
-    let target = match node {
-        Node::Text { signature, .. }
-        | Node::ToolCall { signature, .. }
-        | Node::ToolResult { signature, .. } => signature,
-        Node::Reasoning { encrypted, .. } => encrypted,
-        Node::Image { metadata, .. }
-        | Node::Audio { metadata, .. }
-        | Node::File { metadata, .. } => &mut metadata.signature,
-        _ => return false,
-    };
-    if target.is_some() {
-        return false;
-    }
-    *target = Some(signature.clone());
-    true
-}
-
-fn signature_delta(node: &Node) -> Option<NodeDelta> {
-    match node {
-        Node::Text { signature, .. } => Some(NodeDelta::Text {
-            content: String::new(),
-            signature: signature.clone(),
-            citations: Vec::new(),
-            logprobs: None,
-        }),
-        Node::Reasoning {
-            encrypted,
-            metadata,
-            ..
-        } => Some(NodeDelta::Reasoning {
-            metadata: metadata.clone(),
-            content: None,
-            encrypted: encrypted.clone(),
-            summary: None,
-            source: None,
-        }),
-        _ => None,
-    }
-}
-
 fn frame_text_scores(
     candidate: &Map<String, Value>,
     parts: &[Value],
@@ -648,18 +657,20 @@ pub(crate) fn append_fragment(current: &mut Node, next: &mut Node) -> bool {
         (
             Node::Reasoning {
                 id: None,
-                content: Some(content),
+                content: None,
+                summary: Some(summary),
                 encrypted: None,
                 ..
             },
             Node::Reasoning {
                 id: None,
-                content: Some(fragment),
+                content: None,
+                summary: Some(fragment),
                 encrypted: None,
                 ..
             },
         ) => {
-            content.push_str(fragment);
+            summary.push_str(fragment);
             true
         }
         _ => false,

@@ -331,7 +331,7 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
     let source_response = resp.extra_body.contains_key(RESPONSES_RESPONSE_SOURCE_EXTRA_KEY)
         .then(Map::new);
     let mut body = source_response.map(Value::Object).unwrap_or_else(|| {
-        json!({
+        let mut body = json!({
             "id": resp.id,
             "object": "response",
             "created_at": created_at,
@@ -344,24 +344,14 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
                 Some(FinishReason::Length) => json!({"reason": "max_output_tokens"}),
                 _ => Value::Null,
             },
-            "previous_response_id": null,
-            "instructions": null,
             "error": null,
-            "tools": [],
-            "tool_choice": "auto",
-            "truncation": "disabled",
-            "parallel_tool_calls": true,
-            "text": { "format": { "type": "text" } },
-            "top_p": 1.0,
-            "top_logprobs": 0,
-            "temperature": 1.0,
-            "reasoning": null,
-            "max_output_tokens": null,
-            "max_tool_calls": null,
-            "store": false,
-            "background": false,
-            "metadata": {}
-        })
+        });
+        if let Some(obj) = body.as_object_mut() {
+            obj.extend(synthesized_response_controls(
+                resp.extra_body.get(RESPONSES_REQUEST_ECHO_EXTRA_KEY),
+            ));
+        }
+        body
     });
     if let Some(obj) = body.as_object_mut() {
         obj.retain(|key, _| !key.starts_with("_monoize_"));
@@ -397,8 +387,103 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
         .clone()
         .unwrap_or_else(|| crate::urp::ResponseOutcome::from_finish(resp.finish_reason));
     outcome.write_responses(&mut body);
+    finalize_output_item_statuses(&mut body);
 
     body
+}
+
+/// STR3p: fills the status of items that carry no native value from the response outcome.
+fn finalize_output_item_statuses(body: &mut Value) {
+    let last_status = match body.get("status").and_then(Value::as_str) {
+        Some("incomplete" | "failed" | "cancelled") => "incomplete",
+        Some("queued" | "in_progress") => "in_progress",
+        _ => "completed",
+    };
+    let Some(output) = body.get_mut("output").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let is_status_item = |item: &Value| {
+        matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("message" | "function_call" | "custom_tool_call")
+        )
+    };
+    let last = output.iter().rposition(is_status_item);
+    for (index, item) in output.iter_mut().enumerate() {
+        if is_status_item(item)
+            && let Some(obj) = item.as_object_mut()
+            && !obj.contains_key("status")
+        {
+            let status = if Some(index) == last { last_status } else { "completed" };
+            obj.insert("status".to_string(), json!(status));
+        }
+    }
+}
+
+/// STR3t: request controls of a Responses object synthesized for a non-Responses source.
+pub(crate) fn synthesized_response_controls(echo: Option<&Value>) -> Map<String, Value> {
+    let mut controls = json!({
+        "previous_response_id": null,
+        "instructions": null,
+        "tools": [],
+        "tool_choice": "auto",
+        "truncation": "disabled",
+        "parallel_tool_calls": true,
+        "text": { "format": { "type": "text" } },
+        "top_p": 1.0,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "top_logprobs": 0,
+        "temperature": 1.0,
+        "reasoning": null,
+        "max_output_tokens": null,
+        "max_tool_calls": null,
+        "store": false,
+        "background": false,
+        "metadata": {},
+        "safety_identifier": null,
+        "prompt_cache_key": null,
+        "user": null,
+    });
+    if let (Some(controls), Some(Value::Object(echo))) = (controls.as_object_mut(), echo) {
+        controls.extend(echo.iter().map(|(key, value)| (key.clone(), value.clone())));
+    }
+    match controls {
+        Value::Object(controls) => controls,
+        _ => Map::new(),
+    }
+}
+
+/// STR3t: the effective downstream request controls echoed on a synthesized Responses object.
+pub(crate) fn response_request_echo(mut req: UrpRequest) -> Value {
+    req.input.retain(is_retained_responses_instruction_node);
+    let encoded = encode_request_prepared(&req, &req.model);
+    let mut echo = Map::new();
+    for key in [
+        "instructions",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "text",
+        "temperature",
+        "top_p",
+        "top_logprobs",
+        "reasoning",
+        "max_output_tokens",
+        "max_tool_calls",
+        "metadata",
+        "truncation",
+        "service_tier",
+        "prompt_cache_key",
+        "safety_identifier",
+        "user",
+        "background",
+    ] {
+        if let Some(value) = encoded.get(key) {
+            echo.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(echo)
 }
 
 fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
@@ -508,16 +593,23 @@ pub(crate) fn encode_usage(usage: &crate::urp::Usage) -> Value {
         "total_tokens": usage.total_tokens(),
         "output_tokens_details": {
             "reasoning_tokens": output_details.reasoning_tokens,
-            "accepted_prediction_tokens": output_details.accepted_prediction_tokens,
-            "rejected_prediction_tokens": output_details.rejected_prediction_tokens
         },
         "input_tokens_details": {
             "cached_tokens": input_details.cache_read_tokens,
             "cache_write_tokens": input_details.cache_creation_tokens,
-            "cache_creation_tokens": input_details.cache_creation_tokens,
-            "tool_prompt_tokens": input_details.tool_prompt_tokens
         }
     });
+    // STR3s: non-native counters exist on the wire only when they carry a value.
+    for (detail, key, value) in [
+        ("input_tokens_details", "cache_creation_tokens", input_details.cache_creation_tokens),
+        ("input_tokens_details", "tool_prompt_tokens", input_details.tool_prompt_tokens),
+        ("output_tokens_details", "accepted_prediction_tokens", output_details.accepted_prediction_tokens),
+        ("output_tokens_details", "rejected_prediction_tokens", output_details.rejected_prediction_tokens),
+    ] {
+        if value != 0 {
+            usage_value[detail][key] = json!(value);
+        }
+    }
     merge_responses_usage_extra(&mut usage_value, &usage.extra_body);
     usage_value
 }

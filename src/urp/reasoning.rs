@@ -131,6 +131,7 @@ impl ReasoningMetadata {
         self.downstream_only |= other.downstream_only;
         self.chat_content |= other.chat_content;
         self.summary_as_thinking |= other.summary_as_thinking;
+        self.native_empty |= other.native_empty;
         if other.item_id.is_some() {
             self.item_id.clone_from(&other.item_id);
         }
