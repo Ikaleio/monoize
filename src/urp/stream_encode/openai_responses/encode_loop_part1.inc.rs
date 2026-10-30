@@ -1617,12 +1617,11 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     .and_then(Value::as_str)
                     .unwrap_or("completed")
                     .to_string();
-                if terminal_status == "completed" {
-                    reconcile_completed_response_output_statuses(
-                        &mut completed_response,
-                        &completed_output_items,
-                    );
-                }
+                reconcile_terminal_output_with_done_items(
+                    &mut completed_response,
+                    &completed_output_items,
+                    terminal_status == "completed",
+                );
                 if terminal_status == "completed"
                     && completed_response.get("completed_at").is_none()
                 {
@@ -3258,37 +3257,68 @@ fn responses_output_items_semantically_match(left: &Value, right: &Value) -> boo
     }
 }
 
-fn reconcile_completed_response_output_statuses(
+/// STR3l: each terminal `output[]` item that matches an already emitted `output_item.done`
+/// reuses that item's encoder-local wire `id`; a `completed` terminal also takes its status.
+/// Matching is one-to-one and runs in passes over the whole terminal array: equal non-empty
+/// `id` of the same type first, then semantic identity, then the same position and type, so an
+/// earlier item cannot claim an emitted item that a later terminal item matches by exact id.
+fn reconcile_terminal_output_with_done_items(
     response: &mut Value,
     completed_output_items: &[(usize, Value)],
+    reconcile_status: bool,
 ) {
     let Some(output) = response.get_mut("output").and_then(Value::as_array_mut) else {
         return;
     };
-    for (terminal_position, terminal_item) in output.iter_mut().enumerate() {
-        let matching_done_item = completed_output_items
-            .iter()
-            .find(|(_, done_item)| {
-                responses_output_items_semantically_match(done_item, terminal_item)
-            })
-            .or_else(|| {
-                completed_output_items
-                    .iter()
-                    .find(|(output_index, done_item)| {
-                        *output_index == terminal_position
-                            && done_item.get("type").and_then(Value::as_str)
-                                == terminal_item.get("type").and_then(Value::as_str)
-                    })
-            })
-            .map(|(_, item)| item);
-        let Some(done_status) = matching_done_item
-            .and_then(|item| item.get("status"))
-            .cloned()
-        else {
+    let same_type = |left: &Value, right: &Value| {
+        left.get("type").and_then(Value::as_str).is_some()
+            && left.get("type").and_then(Value::as_str) == right.get("type").and_then(Value::as_str)
+    };
+    let mut used = vec![false; completed_output_items.len()];
+    let mut matches: Vec<Option<usize>> = vec![None; output.len()];
+    for pass in 0..3 {
+        for (terminal_position, terminal_item) in output.iter().enumerate() {
+            if matches[terminal_position].is_some() {
+                continue;
+            }
+            let found = completed_output_items.iter().enumerate().position(
+                |(slot, (output_index, done_item))| {
+                    !used[slot]
+                        && match pass {
+                            0 => {
+                                same_type(done_item, terminal_item)
+                                    && non_empty_string_field_matches(done_item, terminal_item, "id")
+                            }
+                            1 => responses_output_items_semantically_match(done_item, terminal_item),
+                            _ => {
+                                *output_index == terminal_position
+                                    && same_type(done_item, terminal_item)
+                            }
+                        }
+                },
+            );
+            if let Some(slot) = found {
+                used[slot] = true;
+                matches[terminal_position] = Some(slot);
+            }
+        }
+    }
+    for (terminal_item, slot) in output.iter_mut().zip(matches) {
+        let Some(slot) = slot else {
             continue;
         };
-        if let Some(obj) = terminal_item.as_object_mut() {
-            obj.insert("status".to_string(), done_status);
+        let done_item = &completed_output_items[slot].1;
+        let Some(obj) = terminal_item.as_object_mut() else {
+            continue;
+        };
+        if let Some(id) = done_item
+            .get("id")
+            .filter(|id| id.as_str().is_some_and(|id| !id.is_empty()))
+        {
+            obj.insert("id".to_string(), id.clone());
+        }
+        if reconcile_status && let Some(status) = done_item.get("status") {
+            obj.insert("status".to_string(), status.clone());
         }
     }
 }

@@ -107,9 +107,50 @@ impl OutputOrderGate {
         released
     }
 
-    fn take_all(&mut self) -> Vec<UrpStreamEvent> {
-        self.open.clear();
-        std::mem::take(&mut self.held).into_values().flatten().collect()
+    /// Releases every held item in `output_index` order and ends the gate. Held items absent
+    /// from `retained` (an authoritative terminal's kept items) are dropped. Each entry says
+    /// whether that item is still open while a later released item follows it, in which case the
+    /// caller closes it before the later item starts, so no node joins another item.
+    fn drain(&mut self, retained: Option<&BTreeSet<u64>>) -> Vec<(u64, Vec<UrpStreamEvent>, bool)> {
+        let open = std::mem::take(&mut self.open);
+        let mut held = std::mem::take(&mut self.held);
+        if let Some(retained) = retained {
+            held.retain(|output_index, _| retained.contains(output_index));
+        }
+        let indices: BTreeSet<u64> = open.iter().chain(held.keys()).copied().collect();
+        indices
+            .into_iter()
+            .map(|output_index| {
+                let close_before_next =
+                    open.contains(&output_index) && held.range(output_index + 1..).next().is_some();
+                let events = held.remove(&output_index).unwrap_or_default();
+                (output_index, events, close_before_next)
+            })
+            .collect()
+    }
+
+    fn drain_with_boundaries(
+        &mut self,
+        index_state: &mut ResponsesStreamIndexState,
+        terminal_output: Option<&[Value]>,
+        accumulated: &[AccumulatedOutputEntry],
+        fallback_status: Option<&str>,
+    ) -> Vec<UrpStreamEvent> {
+        let retained = index_state.retained_output_indices.clone();
+        let mut released = Vec::new();
+        for (output_index, events, close_before_next) in self.drain(retained.as_ref()) {
+            released.extend(events);
+            if close_before_next {
+                released.extend(close_open_output_item(
+                    output_index,
+                    index_state,
+                    terminal_output,
+                    accumulated,
+                    fallback_status,
+                ));
+            }
+        }
+        released
     }
 
     fn canonicalize(&mut self, event: &mut UrpStreamEvent) {
@@ -122,17 +163,100 @@ impl OutputOrderGate {
         }
     }
 
+    /// Failure paths: no terminal snapshot or accumulated entries, so only open message items
+    /// get a boundary close (the only kind a later node can merge into downstream).
     async fn release_all(
         &mut self,
+        index_state: &mut ResponsesStreamIndexState,
         tx: &mpsc::Sender<UrpStreamEvent>,
         runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     ) {
-        for mut event in self.take_all() {
+        for mut event in self.drain_with_boundaries(index_state, None, &[], Some("incomplete")) {
             self.canonicalize(&mut event);
             record_visible_stream_event_delta(runtime_metrics, &event).await;
             let _ = tx.send(event).await;
         }
     }
+}
+
+/// PR5b: closes an item that is still open when a later held item is released, as if its
+/// `response.output_item.done` had arrived. The terminal snapshot of the item is used when one
+/// exists; otherwise the item closes from accumulated stream state, with `fallback_status` on a
+/// failure path where no terminal status will follow.
+fn close_open_output_item(
+    output_index: u64,
+    index_state: &mut ResponsesStreamIndexState,
+    terminal_output: Option<&[Value]>,
+    accumulated: &[AccumulatedOutputEntry],
+    fallback_status: Option<&str>,
+) -> Vec<UrpStreamEvent> {
+    let Some(state) = index_state.output_state_by_index.get(&output_index).cloned() else {
+        return Vec::new();
+    };
+    if !state.emitted_any_node {
+        return Vec::new();
+    }
+    let item_type = state.item_type.clone().unwrap_or_default();
+    let item_id = state.item_id.clone().filter(|id| !id.is_empty());
+    let terminal_item = terminal_output.and_then(|items| {
+        items
+            .iter()
+            .find(|item| {
+                item_id.is_some() && item.get("id").and_then(Value::as_str) == item_id.as_deref()
+            })
+            .or_else(|| {
+                items.get(output_index as usize).filter(|item| {
+                    item_id.is_none()
+                        && item.get("type").and_then(Value::as_str) == Some(item_type.as_str())
+                })
+            })
+            .cloned()
+    });
+    if item_type == "message" {
+        let item = terminal_item.unwrap_or_else(|| {
+            let mut item = serde_json::Map::new();
+            item.insert("type".to_string(), json!("message"));
+            if let Some(item_id) = &item_id {
+                item.insert("id".to_string(), json!(item_id));
+            }
+            item.insert(
+                "role".to_string(),
+                serde_json::to_value(state.role.unwrap_or(Role::Assistant)).unwrap_or(Value::Null),
+            );
+            if let Some(status) = fallback_status {
+                item.insert("status".to_string(), json!(status));
+            }
+            Value::Object(item)
+        });
+        return map_output_item_done(
+            json!({"type": "response.output_item.done", "output_index": output_index, "item": item}),
+            index_state,
+        );
+    }
+    if state.node_done_seen {
+        return Vec::new();
+    }
+    if let Some(item) = terminal_item {
+        return map_output_item_done(
+            json!({"type": "response.output_item.done", "output_index": output_index, "item": item}),
+            index_state,
+        );
+    }
+    let Some(node) = accumulated
+        .iter()
+        .find(|entry| entry.output_index == output_index)
+        .and_then(|entry| entry.nodes.first().cloned())
+    else {
+        return Vec::new();
+    };
+    let node_index = index_state.synthetic_node_index_for_output(output_index);
+    output_state_for(index_state, output_index).node_done_seen = true;
+    vec![UrpStreamEvent::NodeDone {
+        node_index,
+        node,
+        usage: None,
+        extra_body: HashMap::new(),
+    }]
 }
 
 async fn consume_responses_json_frames(
@@ -168,7 +292,7 @@ async fn consume_responses_json_frames(
             Ok(Some(frame)) => frame,
             Ok(None) => break,
             Err(_) => {
-                output_gate.release_all(&tx, &runtime_metrics).await;
+                output_gate.release_all(&mut index_state, &tx, &runtime_metrics).await;
                 return Err(AppError::new(
                     StatusCode::GATEWAY_TIMEOUT,
                     "upstream_idle_timeout",
@@ -179,7 +303,7 @@ async fn consume_responses_json_frames(
         let (mut event_name, data) = match frame {
             Ok(frame) => frame,
             Err(error) => {
-                output_gate.release_all(&tx, &runtime_metrics).await;
+                output_gate.release_all(&mut index_state, &tx, &runtime_metrics).await;
                 return Err(error);
             }
         };
@@ -195,7 +319,7 @@ async fn consume_responses_json_frames(
         let data_val: Value = match serde_json::from_str(&data) {
             Ok(value) => value,
             Err(error) => {
-                output_gate.release_all(&tx, &runtime_metrics).await;
+                output_gate.release_all(&mut index_state, &tx, &runtime_metrics).await;
                 let code = "responses_invalid_sse_json".to_string();
                 let message = format!("invalid JSON in upstream Responses event: {error}");
                 let _ = tx
@@ -233,7 +357,7 @@ async fn consume_responses_json_frames(
             event_name.push_str(payload_type);
         }
         if let Err(message) = validate_responses_event_shape(&event_name, &data_val) {
-            output_gate.release_all(&tx, &runtime_metrics).await;
+            output_gate.release_all(&mut index_state, &tx, &runtime_metrics).await;
             let (code, message, extra_body, terminal_error) = responses_stream_error_parts("error", json!({
                 "error": { "code":"responses_invalid_event", "type":"upstream_protocol_error", "message":message }
             }));
@@ -251,7 +375,7 @@ async fn consume_responses_json_frames(
             _ => None,
         };
         if let Some(Err(message)) = content_validation {
-            output_gate.release_all(&tx, &runtime_metrics).await;
+            output_gate.release_all(&mut index_state, &tx, &runtime_metrics).await;
             let (code, message, extra_body, terminal_error) = responses_stream_error_parts("error", json!({
                 "error": { "code":"malformed_media", "type":"upstream_protocol_error", "message":message }
             }));
@@ -376,7 +500,7 @@ async fn consume_responses_json_frames(
         let bare_error = data_val.get("error").is_some_and(|error| !error.is_null())
             && data_val.get("response").is_none();
         if matches!(event_name.as_str(), "error") || bare_error {
-            output_gate.release_all(&tx, &runtime_metrics).await;
+            output_gate.release_all(&mut index_state, &tx, &runtime_metrics).await;
             let (code, message, extra_body, terminal_error) =
                 responses_stream_error_parts(&event_name, data_val);
             let _ = tx
@@ -705,6 +829,17 @@ async fn consume_responses_json_frames(
             event_name.as_str(),
             "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
         );
+        let mut terminal_accumulated = Vec::new();
+        let terminal_output = is_terminal_response_event
+            .then(|| {
+                data_val
+                    .get("response")
+                    .unwrap_or(&data_val)
+                    .get("output")
+                    .and_then(Value::as_array)
+                    .cloned()
+            })
+            .flatten();
         let stream_events = if is_terminal_response_event {
             for (output_index, output_state) in &index_state.output_state_by_index {
                 if let Some(item_id) = output_state
@@ -728,11 +863,13 @@ async fn consume_responses_json_frames(
                 &call_ids_by_output_index,
                 &index_state,
             );
-            map_response_completed_with_accumulated(
+            let events = map_response_completed_with_accumulated(
                 data_val,
                 &mut index_state,
                 &accumulated_output_entries,
-            )
+            );
+            terminal_accumulated = accumulated_output_entries;
+            events
         } else {
             map_responses_event_to_urp_events_with_state(
                 &event_name,
@@ -743,7 +880,12 @@ async fn consume_responses_json_frames(
         };
         let mut ready_events = Vec::new();
         if is_terminal_response_event {
-            ready_events.extend(output_gate.take_all());
+            ready_events.extend(output_gate.drain_with_boundaries(
+                &mut index_state,
+                terminal_output.as_deref(),
+                &terminal_accumulated,
+                None,
+            ));
             ready_events.extend(stream_events);
         } else if let Some(output_index) = event_output_index
             && output_gate.blocked(output_index)
@@ -795,7 +937,7 @@ async fn consume_responses_json_frames(
     }
 
     if !response_done_sent {
-        output_gate.release_all(&tx, &runtime_metrics).await;
+        output_gate.release_all(&mut index_state, &tx, &runtime_metrics).await;
         let code = "responses_stream_missing_terminal".to_string();
         let message = "upstream Responses stream ended without a terminal response event";
         let _ = tx
