@@ -447,6 +447,7 @@ fn decode_chat_tool_result_content(value: &Value) -> Result<Vec<ToolResultConten
                 content.push(ToolResultContent::Text {
                     text: text.into(),
                     extra_body: split_extra(obj, &["type", "text", "content"]),
+                    cache_breakpoint: None,
                 });
                 continue;
             }
@@ -497,12 +498,19 @@ fn decode_chat_tool_result_content(value: &Value) -> Result<Vec<ToolResultConten
                 .map(str::to_owned)
                 .unwrap_or_else(|| value.to_string()),
             extra_body: HashMap::new(),
+            cache_breakpoint: None,
         });
     }
     Ok(content)
 }
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
+    let mut request = decode_native_request(value)?;
+    crate::urp::cache_breakpoint::decode_request_markers(&mut request, ProviderProtocol::ChatCompletion);
+    Ok(request)
+}
+
+fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "chat request must be object".to_string())?;
@@ -583,6 +591,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 is_error: false,
                 content: decode_chat_tool_result_content(&content)?,
                 extra_body: result_extra,
+                cache_breakpoint: None,
             });
             continue;
         }
@@ -624,6 +633,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     msg_obj,
                     &["role", "id", "name", "tool_call_id", "content"],
                 ),
+                cache_breakpoint: None,
             });
             continue;
         }

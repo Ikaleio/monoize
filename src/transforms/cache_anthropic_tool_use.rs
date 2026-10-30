@@ -1,4 +1,5 @@
 use crate::transforms::anthropic_cache::CacheConfig;
+use crate::transforms::anthropic_cache::anthropic_slot_count;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
@@ -73,41 +74,20 @@ impl Transform for CacheAnthropicToolUseTransform {
             return Ok(());
         }
 
-        let slot_free = count_cache_breakpoints(req) < 4;
-        let last_node = req.input.last_mut().expect("checked trailing tool result");
-        CacheConfig::from_dyn(config)?.apply_marker(
-            last_node.extra_body_mut(),
+        let slot_free = anthropic_slot_count(req) < 4;
+        let slot = req
+            .input
+            .last_mut()
+            .and_then(Node::cache_breakpoint_mut)
+            .expect("checked trailing tool result");
+        CacheConfig::from_dyn(config)?.apply_breakpoint(
+            slot,
             &mut req.context.anthropic_cache_markers,
             AnthropicCacheTarget::LastToolResult,
             slot_free,
         );
 
         Ok(())
-    }
-}
-
-fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
-    req.input
-        .iter()
-        .filter(|node| node_has_cache_control(node))
-        .count()
-        + usize::from(req.extra_body.contains_key("cache_control"))
-}
-
-fn node_has_cache_control(node: &Node) -> bool {
-    match node {
-        Node::Text { extra_body, .. }
-        | Node::Image { extra_body, .. }
-        | Node::Audio { extra_body, .. }
-        | Node::File { extra_body, .. }
-        | Node::Refusal { extra_body, .. }
-        | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. }
-        | Node::ProviderItem { extra_body, .. }
-        | Node::ToolResult { extra_body, .. }
-        | Node::NextDownstreamEnvelopeExtra { extra_body } => {
-            extra_body.contains_key("cache_control")
-        }
     }
 }
 

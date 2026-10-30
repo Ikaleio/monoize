@@ -346,7 +346,9 @@ fn file(
             let content = parts
                 .into_iter()
                 .map(|part| match part {
-                    ToolResultContent::Text { text, extra_body } => {
+                    ToolResultContent::Text {
+                        text, extra_body, ..
+                    } => {
                         let mut obj: serde_json::Map<String, Value> = extra_body
                             .into_iter()
                             .filter(|(key, _)| !key.starts_with("_monoize_"))
@@ -395,6 +397,7 @@ fn document_parts(source: &FileSource) -> Result<Vec<ToolResultContent>, String>
         FileSource::Text { text } => Ok(vec![ToolResultContent::Text {
             text: text.clone(),
             extra_body: Default::default(),
+            cache_breakpoint: None,
         }]),
         FileSource::Content { content } => content
             .iter()
@@ -410,6 +413,7 @@ fn document_parts(source: &FileSource) -> Result<Vec<ToolResultContent>, String>
                             .ok_or("Document text is missing.")?
                             .into(),
                         extra_body: decode::split_extra(obj, &["type", "text"]),
+                        cache_breakpoint: None,
                     }),
                     Some("image") | Some("image_url") | Some("input_image") => {
                         match decode::parse_image_node_from_obj(obj, OrdinaryRole::User)
@@ -475,6 +479,28 @@ fn bound_document_parts(
     Ok(parts)
 }
 
+/// The entries that replace a `Text` or `Content` document on a target without such a source.
+/// Native markers inside the source do not survive as unknown fields, and the document's own
+/// marker moves to the last entry (CB-16).
+fn expanded_document_parts(
+    source: &FileSource,
+    metadata: &MediaMetadata,
+) -> Result<Vec<ToolResultContent>, String> {
+    let mut parts = bound_document_parts(source, metadata)?;
+    for part in &mut parts {
+        let extra_body = part.extra_body_mut();
+        extra_body.remove("cache_control");
+        extra_body.remove("prompt_cache_breakpoint");
+    }
+    if let Some(slot) = parts
+        .last_mut()
+        .and_then(ToolResultContent::cache_breakpoint_mut)
+    {
+        slot.clone_from(&metadata.cache_breakpoint);
+    }
+    Ok(parts)
+}
+
 fn document_prefix(metadata: &MediaMetadata) -> Option<ToolResultContent> {
     let mut text = [
         metadata.document_title.as_deref(),
@@ -490,6 +516,7 @@ fn document_prefix(metadata: &MediaMetadata) -> Option<ToolResultContent> {
     (!text.is_empty()).then_some(ToolResultContent::Text {
         text,
         extra_body: Default::default(),
+        cache_breakpoint: None,
     })
 }
 
@@ -524,8 +551,7 @@ pub fn prepare_tool_result_content(
                 if matches!(source, FileSource::Text { .. } | FileSource::Content { .. })
                     && target != ProviderProtocol::Messages
                 {
-                    let mut parts = Vec::new();
-                    parts.extend(bound_document_parts(source, metadata)?);
+                    let parts = expanded_document_parts(source, metadata)?;
                     result.extend(prepare_tool_result_content(&parts, target)?);
                     continue;
                 }
@@ -581,7 +607,9 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 }
                 file(source, metadata, target, false)?;
                 if target != ProviderProtocol::Messages {
-                    if let Some(ToolResultContent::Text { text, extra_body }) =
+                    if let Some(ToolResultContent::Text {
+                        text, extra_body, ..
+                    }) =
                         document_prefix(metadata)
                     {
                         result.push(Node::Text {
@@ -593,6 +621,7 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                             phase: None,
                             signature: None,
                             extra_body,
+                            cache_breakpoint: None,
                         });
                     }
                     metadata.document_title = None;
@@ -601,14 +630,13 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 if matches!(source, FileSource::Text { .. } | FileSource::Content { .. })
                     && target != ProviderProtocol::Messages
                 {
-                    let mut parts = Vec::new();
-                    parts.extend(bound_document_parts(source, metadata)?);
-                    let expanded: Vec<Node> = parts
+                    let expanded: Vec<Node> = expanded_document_parts(source, metadata)?
                         .into_iter()
                         .map(|part| match part {
                             ToolResultContent::Text {
                                 text,
                                 mut extra_body,
+                                cache_breakpoint,
                             } => Node::Text {
                                 logprobs: None,
                                 id: id.clone(),
@@ -624,6 +652,7 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                                 phase: None,
                                 signature: None,
                                 extra_body,
+                                cache_breakpoint,
                             },
                             ToolResultContent::Image {
                                 source,

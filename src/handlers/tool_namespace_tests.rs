@@ -104,6 +104,7 @@ fn namespace_stream_start_done_and_terminal_restore() {
         name: alias.clone(),
         arguments: "patch".into(),
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     };
     let mut events = [
         urp::UrpStreamEvent::NodeStart {

@@ -661,7 +661,10 @@ fn media_nested_tool_result_metadata_has_one_canonical_owner_and_survives_prepar
             "Nested title"
         );
         assert!(serialized["content"][1].get("title").is_none());
-        assert_eq!(serialized["content"][0]["metadata"], json!({}));
+        assert_eq!(
+            serialized["content"][0]["metadata"],
+            json!({"cache_breakpoint":{"origin":"messages","wire":"cache_control"}})
+        );
         let before = serde_json::to_value(content).unwrap();
         for target in TARGETS {
             if target == ProviderProtocol::ChatCompletion {

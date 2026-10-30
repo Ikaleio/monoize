@@ -294,6 +294,11 @@ pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     match crate::urp::media::prepare_request(req, ProviderProtocol::Messages).and_then(|mut prepared| {
         prepare_schema_custom_tools(&mut prepared)?;
+        crate::urp::cache_breakpoint::materialize_wire_markers(
+            &mut prepared,
+            crate::urp::cache_breakpoint::CacheWireTarget::Messages,
+            upstream_model,
+        );
         Ok(prepared)
     }) {
         Ok(prepared) => encode_prepared_request(&prepared, upstream_model),
@@ -363,6 +368,7 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 content,
                 is_error,
                 extra_body,
+                cache_breakpoint: _,
             } => {
                 if *tool_type == ToolCallType::Custom {
                     node_index += consumed_nodes;

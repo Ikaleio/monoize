@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+pub(crate) mod cache_breakpoint;
 pub mod citations;
 pub mod image_generation;
 pub mod logprobs;
 pub mod outcome;
 pub mod sampling;
 pub mod usage;
+pub use cache_breakpoint::{CacheBreakpoint, CacheBreakpointWire};
 pub use citations::Citation;
 pub use image_generation::ImageGenerationOptions;
 pub use logprobs::{LogprobConfig, TokenLogprob};
@@ -634,6 +636,8 @@ pub enum Node {
         content: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         phase: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: Option<CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -704,6 +708,8 @@ pub enum Node {
         call_id: String,
         name: String,
         arguments: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: Option<CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -732,6 +738,8 @@ pub enum Node {
         #[serde(default)]
         is_error: bool,
         content: Vec<ToolResultContent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: Option<CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -799,6 +807,8 @@ pub enum FileSource {
 pub enum ToolResultContent {
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_breakpoint: Option<CacheBreakpoint>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -832,6 +842,30 @@ impl ToolResultContent {
             | Self::Image { extra_body, .. }
             | Self::File { extra_body, .. }
             | Self::ProviderItem { extra_body, .. } => extra_body,
+        }
+    }
+
+    pub fn cache_breakpoint(&self) -> Option<&CacheBreakpoint> {
+        match self {
+            Self::Text {
+                cache_breakpoint, ..
+            } => cache_breakpoint.as_ref(),
+            Self::Image { metadata, .. } | Self::File { metadata, .. } => {
+                metadata.cache_breakpoint.as_ref()
+            }
+            Self::ProviderItem { .. } => None,
+        }
+    }
+
+    pub fn cache_breakpoint_mut(&mut self) -> Option<&mut Option<CacheBreakpoint>> {
+        match self {
+            Self::Text {
+                cache_breakpoint, ..
+            } => Some(cache_breakpoint),
+            Self::Image { metadata, .. } | Self::File { metadata, .. } => {
+                Some(&mut metadata.cache_breakpoint)
+            }
+            Self::ProviderItem { .. } => None,
         }
     }
 }
@@ -888,6 +922,8 @@ pub struct MediaMetadata {
     pub transcript: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_breakpoint: Option<CacheBreakpoint>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1106,6 +1142,8 @@ pub struct ToolDefinition {
     pub function: Option<FunctionDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<CustomToolDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_breakpoint: Option<CacheBreakpoint>,
     #[serde(default, flatten)]
     pub extra_body: HashMap<String, Value>,
 }
@@ -1482,6 +1520,7 @@ impl Node {
             content: content.into(),
             phase: None,
             extra_body: HashMap::new(),
+            cache_breakpoint: None,
         }
     }
 
@@ -1500,6 +1539,49 @@ impl Node {
                 Some(OrdinaryRole::Assistant)
             }
             Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
+        }
+    }
+
+    pub fn cache_breakpoint(&self) -> Option<&CacheBreakpoint> {
+        match self {
+            Node::Text {
+                cache_breakpoint, ..
+            }
+            | Node::ToolCall {
+                cache_breakpoint, ..
+            }
+            | Node::ToolResult {
+                cache_breakpoint, ..
+            } => cache_breakpoint.as_ref(),
+            Node::Image { metadata, .. }
+            | Node::Audio { metadata, .. }
+            | Node::File { metadata, .. } => metadata.cache_breakpoint.as_ref(),
+            Node::Refusal { .. }
+            | Node::Reasoning { .. }
+            | Node::ProviderItem { .. }
+            | Node::NextDownstreamEnvelopeExtra { .. } => None,
+        }
+    }
+
+    /// The marker slot of a carrier, or `None` for a node that cannot hold a marker (CB-2).
+    pub fn cache_breakpoint_mut(&mut self) -> Option<&mut Option<CacheBreakpoint>> {
+        match self {
+            Node::Text {
+                cache_breakpoint, ..
+            }
+            | Node::ToolCall {
+                cache_breakpoint, ..
+            }
+            | Node::ToolResult {
+                cache_breakpoint, ..
+            } => Some(cache_breakpoint),
+            Node::Image { metadata, .. }
+            | Node::Audio { metadata, .. }
+            | Node::File { metadata, .. } => Some(&mut metadata.cache_breakpoint),
+            Node::Refusal { .. }
+            | Node::Reasoning { .. }
+            | Node::ProviderItem { .. }
+            | Node::NextDownstreamEnvelopeExtra { .. } => None,
         }
     }
 

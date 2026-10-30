@@ -8,9 +8,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
-use std::collections::HashMap;
 
-const BREAKPOINT_KEY: &str = "prompt_cache_breakpoint";
 const MAX_IMPLICIT_MODE_EXPLICIT_BREAKPOINTS: usize = 3;
 const MAX_EXPLICIT_MODE_BREAKPOINTS: usize = 4;
 
@@ -95,7 +93,7 @@ impl Transform for CacheOpenAiToolUseTransform {
         };
 
         if context.upstream_provider_type != Some(ProviderType::Responses)
-            || !supports_explicit_cache_breakpoints(&req.model)
+            || !crate::urp::cache_breakpoint::supports_openai_explicit_breakpoints(&req.model)
             || !matches!(req.input.last(), Some(Node::ToolResult { .. }))
         {
             return Ok(());
@@ -115,7 +113,7 @@ impl Transform for CacheOpenAiToolUseTransform {
             return Ok(());
         }
 
-        let existing_breakpoints = count_explicit_cache_breakpoints(req);
+        let existing_breakpoints = crate::urp::cache_breakpoint::input_breakpoint_count(req);
         let mut remaining =
             explicit_cache_breakpoint_limit(req).saturating_sub(existing_breakpoints);
         if remaining == 0 {
@@ -127,11 +125,13 @@ impl Transform for CacheOpenAiToolUseTransform {
             let Node::ToolResult { content, .. } = &mut req.input[node_idx] else {
                 unreachable!("target resolution only returns ToolResult nodes");
             };
-            let extra_body = content[content_idx].extra_body_mut();
-            if extra_body.contains_key(BREAKPOINT_KEY) {
+            let Some(slot) = content[content_idx].cache_breakpoint_mut() else {
+                unreachable!("eligible tool-result content is a marker carrier");
+            };
+            if slot.is_some() {
                 continue;
             }
-            extra_body.insert(BREAKPOINT_KEY.to_string(), json!({"mode": "explicit"}));
+            *slot = Some(crate::urp::CacheBreakpoint::openai_responses());
             remaining -= 1;
             if remaining == 0 {
                 break;
@@ -139,33 +139,6 @@ impl Transform for CacheOpenAiToolUseTransform {
         }
         Ok(())
     }
-}
-
-fn supports_explicit_cache_breakpoints(model: &str) -> bool {
-    model
-        .split(['/', ':'])
-        .filter_map(parse_gpt_version)
-        .any(|(major, minor)| major > 5 || (major == 5 && minor >= 6))
-}
-
-fn parse_gpt_version(segment: &str) -> Option<(u64, u64)> {
-    let version = segment.strip_prefix("gpt-")?;
-    let major_len = version.bytes().take_while(u8::is_ascii_digit).count();
-    if major_len == 0 {
-        return None;
-    }
-    let major = version[..major_len].parse().ok()?;
-    let suffix = &version[major_len..];
-    if suffix.is_empty() || suffix.starts_with('-') {
-        return Some((major, 0));
-    }
-    let minor_text = suffix.strip_prefix('.')?;
-    let minor_len = minor_text.bytes().take_while(u8::is_ascii_digit).count();
-    if minor_len == 0 {
-        return None;
-    }
-    let minor = minor_text[..minor_len].parse().ok()?;
-    Some((major, minor))
 }
 
 fn explicit_cache_breakpoint_limit(req: &UrpRequest) -> usize {
@@ -181,24 +154,6 @@ fn explicit_cache_breakpoint_limit(req: &UrpRequest) -> usize {
     } else {
         MAX_IMPLICIT_MODE_EXPLICIT_BREAKPOINTS
     }
-}
-
-fn count_explicit_cache_breakpoints(req: &UrpRequest) -> usize {
-    req.input
-        .iter()
-        .map(|node| {
-            usize::from(node_extra_body(node).contains_key(BREAKPOINT_KEY))
-                + match node {
-                    Node::ToolResult { content, .. } => content
-                        .iter()
-                        .filter(|item| {
-                            tool_result_content_extra_body(item).contains_key(BREAKPOINT_KEY)
-                        })
-                        .count(),
-                    _ => 0,
-                }
-        })
-        .sum()
 }
 
 fn find_eligible_tool_result_targets(req: &UrpRequest) -> Vec<(usize, usize)> {
@@ -255,30 +210,6 @@ fn is_eligible_responses_tool_result_content(content: &ToolResultContent) -> boo
             FileSource::Text { .. } | FileSource::Content { .. } => false,
         },
         ToolResultContent::ProviderItem { .. } => false,
-    }
-}
-
-fn node_extra_body(node: &Node) -> &HashMap<String, Value> {
-    match node {
-        Node::Text { extra_body, .. }
-        | Node::Image { extra_body, .. }
-        | Node::Audio { extra_body, .. }
-        | Node::File { extra_body, .. }
-        | Node::Refusal { extra_body, .. }
-        | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. }
-        | Node::ProviderItem { extra_body, .. }
-        | Node::ToolResult { extra_body, .. }
-        | Node::NextDownstreamEnvelopeExtra { extra_body } => extra_body,
-    }
-}
-
-fn tool_result_content_extra_body(content: &ToolResultContent) -> &HashMap<String, Value> {
-    match content {
-        ToolResultContent::Text { extra_body, .. }
-        | ToolResultContent::Image { extra_body, .. }
-        | ToolResultContent::File { extra_body, .. }
-        | ToolResultContent::ProviderItem { extra_body, .. } => extra_body,
     }
 }
 

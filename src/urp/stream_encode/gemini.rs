@@ -456,6 +456,7 @@ fn partial_node(header: NodeHeader, extra_body: HashMap<String, Value>) -> Optio
             content: String::new(),
             logprobs: None,
             extra_body,
+            cache_breakpoint: None,
         }),
         NodeHeader::Reasoning { id, metadata } => Some(Node::Reasoning {
             id,

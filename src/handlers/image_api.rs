@@ -92,6 +92,7 @@ pub async fn create_image_generation(
         content: prompt,
         phase: None,
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }];
 
     if stream_requested {
@@ -207,6 +208,7 @@ pub async fn create_image_edit(
         content: prompt,
         phase: None,
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }];
     inputs.extend(edit.images);
     inputs.extend(edit.mask);

@@ -26,6 +26,11 @@ pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<
     let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Responses)?;
     prepare_image_generation_request(&mut prepared)?;
     validate_stable_responses_audio(&prepared.input)?;
+    crate::urp::cache_breakpoint::materialize_wire_markers(
+        &mut prepared,
+        crate::urp::cache_breakpoint::CacheWireTarget::Responses,
+        upstream_model,
+    );
     Ok(encode_request_prepared(&prepared, upstream_model))
 }
 
@@ -457,6 +462,12 @@ pub(crate) fn synthesized_response_controls(echo: Option<&Value>) -> Map<String,
 /// STR3t: the effective downstream request controls echoed on a synthesized Responses object.
 pub(crate) fn response_request_echo(mut req: UrpRequest) -> Value {
     req.input.retain(is_retained_responses_instruction_node);
+    let model = req.model.clone();
+    crate::urp::cache_breakpoint::materialize_wire_markers(
+        &mut req,
+        crate::urp::cache_breakpoint::CacheWireTarget::Responses,
+        &model,
+    );
     let encoded = encode_request_prepared(&req, &req.model);
     let mut echo = Map::new();
     for key in [

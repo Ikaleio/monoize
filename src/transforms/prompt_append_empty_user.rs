@@ -117,6 +117,7 @@ impl Transform for PromptAppendEmptyUserTransform {
                     content: cfg.content.clone(),
                     phase: None,
                     extra_body: std::collections::HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }

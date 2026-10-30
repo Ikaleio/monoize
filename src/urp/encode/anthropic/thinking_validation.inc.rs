@@ -4,6 +4,11 @@
 pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
     let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Messages)?;
     prepare_schema_custom_tools(&mut prepared)?;
+    crate::urp::cache_breakpoint::materialize_wire_markers(
+        &mut prepared,
+        crate::urp::cache_breakpoint::CacheWireTarget::Messages,
+        upstream_model,
+    );
     validate_complete_tool_inputs(&prepared.input)?;
     let body = encode_prepared_request(&prepared, upstream_model);
     let explicit = |key: &str| {

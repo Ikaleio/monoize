@@ -581,6 +581,7 @@ async fn gemini_custom_calls_and_results_fail_without_discarding_content() {
         tool_type: ToolCallType::Custom,
         arguments: "original custom input".into(),
         extra_body: Default::default(),
+        cache_breakpoint: None,
     };
     let result = Node::ToolResult {
         id: None,
@@ -593,8 +594,10 @@ async fn gemini_custom_calls_and_results_fail_without_discarding_content() {
         content: vec![ToolResultContent::Text {
             text: "original output".into(),
             extra_body: Default::default(),
+            cache_breakpoint: None,
         }],
         extra_body: Default::default(),
+        cache_breakpoint: None,
     };
     let mut media_result = result.clone();
     if let Node::ToolResult { content, .. } = &mut media_result {
