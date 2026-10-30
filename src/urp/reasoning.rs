@@ -40,18 +40,9 @@ pub fn encode_text_parts(
         part.insert("text".into(), json!(text));
         Value::Object(part)
     };
+    // Typed text is authoritative: absent text emits no parts whatever the shapes say.
     let Some(text) = text else {
-        // A native array whose parts are all empty decodes to no text; its zero-length shapes
-        // keep the part count and metadata. Shapes with any length describe text that is gone
-        // (deleted or rewritten), so they are never replayed.
-        return match shapes {
-            Some(shapes)
-                if !shapes.is_empty() && shapes.iter().all(|shape| shape.byte_length == 0) =>
-            {
-                Value::Array(shapes.iter().map(|shape| part(shape, "")).collect())
-            }
-            _ => json!([]),
-        };
+        return json!([]);
     };
     if let Some(shapes) = shapes {
         let total = shapes

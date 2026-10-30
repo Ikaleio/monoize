@@ -1006,8 +1006,8 @@ fn decode_reasoning_node(
         .filter(|source| !source.is_empty())
         .map(|s| s.to_string());
     metadata.native_empty = synthesize_missing_id
-        && text.is_none()
-        && summary.is_none()
+        && text.as_deref().is_none_or(str::is_empty)
+        && summary.as_deref().is_none_or(str::is_empty)
         && encrypted.as_ref().is_none_or(|value| {
             value.is_null() || value.as_str().is_some_and(str::is_empty)
         })
@@ -1046,8 +1046,9 @@ fn reasoning_content_to_text(item_obj: &Map<String, Value>) -> Option<String> {
         .flatten()
         .filter(|part| part.get("type").and_then(Value::as_str) == Some("reasoning_text"))
         .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<String>();
-    (!text.is_empty()).then_some(text)
+        .collect::<Vec<_>>();
+    // RTYPE-NEW-4a: explicit parts with empty text decode to explicit empty text.
+    (!text.is_empty()).then(|| text.concat())
 }
 
 fn responses_output_provider_item(item_type: &str, item_obj: &Map<String, Value>) -> Node {
@@ -1313,16 +1314,19 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
 
 fn summary_to_text(item_obj: &Map<String, Value>) -> Option<String> {
     let mut out = String::new();
+    let mut saw_part = false;
     if let Some(summary) = item_obj.get("summary").and_then(|v| v.as_array()) {
         for s in summary {
             if s.get("type").and_then(|v| v.as_str()) == Some("summary_text") {
                 if let Some(t) = s.get("text").and_then(|v| v.as_str()) {
+                    saw_part = true;
                     out.push_str(t);
                 }
             }
         }
     }
-    if out.is_empty() { None } else { Some(out) }
+    // RTYPE-NEW-4a: explicit parts with empty text decode to explicit empty text.
+    saw_part.then_some(out)
 }
 
 pub(crate) fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {

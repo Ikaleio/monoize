@@ -483,10 +483,8 @@ fn live_text(node: &Node) -> bool {
             summary,
             encrypted: None,
             ..
-        } => content
-            .as_ref()
-            .or(summary.as_ref())
-            .is_some_and(|text| !text.is_empty()),
+        } => content.as_ref().is_some_and(|text| !text.is_empty())
+            || summary.as_ref().is_some_and(|text| !text.is_empty()),
         _ => false,
     }
 }
