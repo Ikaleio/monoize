@@ -557,12 +557,30 @@ pub(crate) struct ResponsesWsSlot {
     last_upstream_id: Option<String>,
     last_public_id: Option<String>,
     basis: Vec<Value>,
+    /// `(type, id)` of each item in the last upstream terminal `output`; the
+    /// incremental create must find these ids right after `basis` (WS2h item 2).
+    last_output: Vec<(String, Option<String>)>,
+    /// Number of input items of steers the upstream left pending after `last_output`;
+    /// the upstream prepends them itself on an incremental create.
+    pending_steer_items: usize,
     turn_state: Option<String>,
     turn_state_channel: String,
     stashed: Vec<String>,
     /// Upstream response id -> public response id for every response read on
     /// this lane, so relayed acknowledgements can be rewritten (WS19).
     public_ids: HashMap<String, String>,
+}
+
+impl ResponsesWsSlot {
+    fn forget_session_state(&mut self) {
+        self.session = None;
+        self.last_upstream_id = None;
+        self.last_public_id = None;
+        self.basis.clear();
+        self.last_output.clear();
+        self.pending_steer_items = 0;
+        self.stashed.clear();
+    }
 }
 
 /// WS2i: a stashed automatic successor waiting for its WS18 turn.
@@ -576,6 +594,9 @@ pub(crate) struct ResponsesWsLane {
     slot: Arc<AsyncMutex<ResponsesWsSlot>>,
     relay: mpsc::UnboundedSender<Value>,
     successor: std::sync::Mutex<Option<ResponsesWsSuccessor>>,
+    /// WS2h item 6: an idle watcher holds the slot between turns until woken.
+    watching: AtomicBool,
+    wake: tokio::sync::Notify,
 }
 
 impl ResponsesWsLane {
@@ -585,6 +606,8 @@ impl ResponsesWsLane {
             slot: Arc::new(AsyncMutex::new(ResponsesWsSlot::default())),
             relay,
             successor: std::sync::Mutex::new(None),
+            watching: AtomicBool::new(false),
+            wake: tokio::sync::Notify::new(),
         }
     }
 
@@ -592,17 +615,116 @@ impl ResponsesWsLane {
         self.successor.lock().ok()?.take()
     }
 
-    /// Waits until no turn holds the slot (its feeder finished WS2i reading).
-    pub(crate) async fn wait_idle(&self) {
-        drop(self.slot.lock().await);
+    pub(crate) fn has_successor(&self) -> bool {
+        self.successor.lock().is_ok_and(|successor| successor.is_some())
+    }
+
+    async fn lock_slot(&self) -> OwnedMutexGuard<ResponsesWsSlot> {
+        if self.watching.load(Ordering::Acquire) {
+            self.wake.notify_one();
+        }
+        self.slot.clone().lock_owned().await
     }
 
     pub(crate) async fn close(&self) {
-        let mut slot = self.slot.lock().await;
-        slot.stashed.clear();
+        let mut slot = self.lock_slot().await;
         if let Some(mut session) = slot.session.take() {
             session.close().await;
         }
+        slot.forget_session_state();
+    }
+}
+
+/// WS2h item 6: reads a pinned session between turns so late notifications
+/// reach the client attributed to their own response.
+async fn watch_idle_session(mut slot: OwnedMutexGuard<ResponsesWsSlot>, lane: Arc<ResponsesWsLane>) {
+    loop {
+        let Some(session) = slot.session.as_mut() else {
+            break;
+        };
+        tokio::select! {
+            biased;
+            _ = lane.wake.notified() => break,
+            next = session.next_text() => {
+                let keep = match next {
+                    Ok(Some(text)) => relay_idle_frame(&mut slot, &lane, &text),
+                    Ok(None) | Err(_) => false,
+                };
+                if !keep {
+                    if let Some(mut session) = slot.session.take() {
+                        session.close().await;
+                    }
+                    slot.forget_session_state();
+                    break;
+                }
+            }
+        }
+    }
+    lane.watching.store(false, Ordering::Release);
+}
+
+/// Returns false when the frame shows the session is no longer idle-consistent.
+fn relay_idle_frame(slot: &mut ResponsesWsSlot, lane: &ResponsesWsLane, text: &str) -> bool {
+    let Ok(mut value) = serde_json::from_str::<Value>(text) else {
+        return false;
+    };
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let ack = kind.starts_with("response.interrupt.") || kind.starts_with("response.steer.");
+    if !ack && (kind.starts_with("response.") || kind == "error") {
+        return false;
+    }
+    capture_turn_state(slot, &value);
+    map_known_response_ids(&mut value, &slot.public_ids);
+    let _ = lane.relay.send(value);
+    true
+}
+
+fn capture_turn_state(slot: &mut ResponsesWsSlot, value: &Value) {
+    if value.get("type").and_then(Value::as_str) == Some("codex.response.metadata")
+        && let Some(turn_state) = value
+            .get("headers")
+            .and_then(|headers| headers.get(TURN_STATE_HEADER))
+            .and_then(Value::as_str)
+    {
+        slot.turn_state = Some(turn_state.to_string());
+    }
+}
+
+/// WS19: rewrites `response_id` and `previous_response_id` members naming a
+/// known upstream response to that response's public id.
+fn map_known_response_ids(value: &mut Value, public_ids: &HashMap<String, String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object.iter_mut() {
+                if matches!(key.as_str(), "response_id" | "previous_response_id")
+                    && let Some(public) = child.as_str().and_then(|id| public_ids.get(id))
+                {
+                    *child = Value::String(public.clone());
+                } else {
+                    map_known_response_ids(child, public_ids);
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| map_known_response_ids(item, public_ids)),
+        _ => {}
+    }
+}
+
+/// The first `response_id` member at any depth (e.g. `timing_metrics.response_id`).
+fn find_response_id(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(object) => object
+            .get("response_id")
+            .and_then(Value::as_str)
+            .or_else(|| object.values().find_map(find_response_id)),
+        Value::Array(items) => items.iter().find_map(find_response_id),
+        _ => None,
     }
 }
 
@@ -611,6 +733,19 @@ pub(crate) struct ResponsesWsTurnState {
     upstream_kind: AtomicU8,
     local_warmup: AtomicBool,
     steer_rejected: AtomicBool,
+    feeders: std::sync::atomic::AtomicUsize,
+    feeder_done: tokio::sync::Notify,
+    /// Inputs of accepted steers answered with `response.steer.pending`.
+    pending_steers: std::sync::Mutex<Vec<Value>>,
+}
+
+impl ResponsesWsTurnState {
+    pub(crate) fn take_pending_steers(&self) -> Vec<Value> {
+        self.pending_steers
+            .lock()
+            .map(|mut pending| std::mem::take(&mut *pending))
+            .unwrap_or_default()
+    }
 }
 
 /// WS2i: Channels whose upstream WebSocket rejected `response.steer`.
@@ -624,6 +759,24 @@ fn channel_rejects_steering(channel_id: &str) -> bool {
 }
 
 impl ResponsesWsTurnState {
+    /// WS2i: waits until every upstream feeder of this turn finished reading,
+    /// including steering follow-ups after the terminal.
+    pub(crate) async fn wait_feeders(&self) {
+        loop {
+            let notified = self.feeder_done.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.feeders.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn feeder_finished(&self) {
+        self.feeders.fetch_sub(1, Ordering::AcqRel);
+        self.feeder_done.notify_waiters();
+    }
     /// WS12b: steering must fail locally for this turn's upstream.
     pub(crate) fn steer_rejected(&self) -> bool {
         self.steer_rejected.load(Ordering::Acquire)
@@ -655,7 +808,6 @@ pub(crate) struct ResponsesWsTurn {
     pub(crate) state: Arc<ResponsesWsTurnState>,
     pub(crate) public_response_id: String,
     pub(crate) previous_response_id: Option<String>,
-    pub(crate) new_input_len: usize,
     pub(crate) warmup: bool,
     /// WS18: Channel id and upstream model of the session the successor reads.
     pub(crate) successor: Option<(String, String)>,
@@ -719,7 +871,7 @@ pub(crate) async fn open_turn_source(
     target: UpstreamWsTarget,
     body: Value,
 ) -> Result<ResponsesWsTurnSource, TurnOpenError> {
-    let mut slot = turn.lane.slot.clone().lock_owned().await;
+    let mut slot = turn.lane.lock_slot().await;
     if channel_rejects_steering(&target.channel_id) {
         turn.state.steer_rejected.store(true, Ordering::Release);
     }
@@ -752,16 +904,16 @@ pub(crate) async fn open_turn_source(
         slot.turn_state = None;
         slot.turn_state_channel = target.channel_id.clone();
     }
+    // A stashed successor belongs to its WS18 turn only; an ordinary turn must
+    // never read its frames, so that session is replaced.
+    let same_route = same_route && slot.stashed.is_empty();
     let (mut session, reused) = match slot.session.take() {
         Some(session) if same_route => (session, true),
         held => {
             if let Some(mut held) = held {
                 held.close().await;
             }
-            slot.last_upstream_id = None;
-            slot.last_public_id = None;
-            slot.basis.clear();
-            slot.stashed.clear();
+            slot.forget_session_state();
             match connect_with_turn_state(&target, slot.turn_state.as_deref()).await {
                 Ok(session) => (session, false),
                 Err(error) => return Err(TurnOpenError::Handshake { error, body }),
@@ -858,8 +1010,24 @@ fn incremental_create(
         return None;
     }
     let basis = slot.basis.len();
-    let new_len = turn.new_input_len;
-    if full_input.len() < basis.saturating_add(new_len) || full_input[..basis] != slot.basis[..] {
+    let replayed = basis.saturating_add(slot.last_output.len());
+    let prefix = replayed.saturating_add(slot.pending_steer_items);
+    if full_input.len() < prefix || full_input[..basis] != slot.basis[..] {
+        return None;
+    }
+    // The replayed previous output must be exactly the upstream's own output
+    // items, proven by item id; anything else needs the full create.
+    for ((kind, id), item) in slot.last_output.iter().zip(&full_input[basis..replayed]) {
+        let id = id.as_deref()?;
+        let item_kind = item.get("type").and_then(Value::as_str).unwrap_or("message");
+        if item_kind != kind || item.get("id").and_then(Value::as_str) != Some(id) {
+            return None;
+        }
+    }
+    if full_input[replayed..prefix]
+        .iter()
+        .any(|item| item.get("role").and_then(Value::as_str) != Some("user"))
+    {
         return None;
     }
     let mut object = serde_json::Map::new();
@@ -870,7 +1038,7 @@ fn incremental_create(
     }
     object.insert(
         "input".to_string(),
-        Value::Array(full_input[full_input.len() - new_len..].to_vec()),
+        Value::Array(full_input[prefix..].to_vec()),
     );
     object.insert(
         "previous_response_id".to_string(),
@@ -948,6 +1116,8 @@ struct TurnFeeder {
     idle: Duration,
     upstream_id: Option<String>,
     terminal_id: Option<String>,
+    terminal_output: Vec<(String, Option<String>)>,
+    pending_steer_items: usize,
     terminal: bool,
     got_frame: bool,
     decided: bool,
@@ -976,6 +1146,8 @@ pub(crate) fn spawn_turn_feeder(
         idle: Duration::from_millis(idle_timeout_ms.max(1)),
         upstream_id: None,
         terminal_id: None,
+        terminal_output: Vec::new(),
+        pending_steer_items: 0,
         terminal: false,
         got_frame: false,
         decided: false,
@@ -990,6 +1162,7 @@ pub(crate) fn spawn_turn_feeder(
         accepted_steers: Vec::new(),
         successor: false,
     };
+    feeder.turn.state.feeders.fetch_add(1, Ordering::AcqRel);
     tokio::spawn(feeder.run());
 }
 
@@ -1095,6 +1268,14 @@ impl TurnFeeder {
         {
             *slot = Some(rx);
         }
+        let state = self.turn.state.clone();
+        let lane = self.turn.lane.clone();
+        // A stashed successor is read by its own turn, not by the idle watcher.
+        if self.source.slot.session.is_some() && self.source.slot.stashed.is_empty() {
+            lane.watching.store(true, Ordering::Release);
+            tokio::spawn(watch_idle_session(self.source.slot, lane));
+        }
+        state.feeder_finished();
     }
 
     async fn fail(&mut self, status: StatusCode, code: &str, message: String) {
@@ -1125,13 +1306,18 @@ impl TurnFeeder {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        if kind == "codex.response.metadata"
-            && let Some(turn_state) = value
-                .get("headers")
-                .and_then(|headers| headers.get(TURN_STATE_HEADER))
-                .and_then(Value::as_str)
+        capture_turn_state(&mut self.source.slot, &value);
+        if !kind.starts_with("response.")
+            && kind != "error"
+            && let Some(id) = find_response_id(&value)
+            && self.source.slot.public_ids.contains_key(id)
+            && self.upstream_id.as_deref() != Some(id)
         {
-            self.source.slot.turn_state = Some(turn_state.to_string());
+            // A late notification of an earlier response on this session keeps
+            // its own public id and never enters this turn's decoder.
+            map_known_response_ids(&mut value, &self.source.slot.public_ids);
+            self.relay(value);
+            return FeedFlow::Continue;
         }
         match kind.as_str() {
             "response.interrupt.accepted" | "response.interrupt.failed" => {
@@ -1157,8 +1343,35 @@ impl TurnFeeder {
                     if let Some(steer_id) = steer_id {
                         self.accepted_steers.push((steer_id, input));
                     }
-                } else if let Some(steer_id) = steer_id {
-                    self.accepted_steers.retain(|(id, _)| *id != steer_id);
+                } else {
+                    let was_accepted = steer_id.as_ref().is_some_and(|steer_id| {
+                        self.accepted_steers.iter().any(|(id, _)| id == steer_id)
+                    });
+                    if was_accepted {
+                        if kind == "response.steer.pending"
+                            && let Some(position) = self
+                                .accepted_steers
+                                .iter()
+                                .position(|(id, _)| Some(id) == steer_id.as_ref())
+                        {
+                            // The upstream prepends this input to the next create;
+                            // full replays must contain it too (WS7, WS2h item 2).
+                            let (_, input) = self.accepted_steers.remove(position);
+                            self.pending_steer_items += match &input {
+                                Value::Array(items) => items.len(),
+                                _ => 1,
+                            };
+                            if let Ok(mut pending) = self.turn.state.pending_steers.lock() {
+                                pending.push(input);
+                            }
+                        }
+                        self.accepted_steers
+                            .retain(|(id, _)| Some(id) != steer_id.as_ref());
+                    } else {
+                        // A rejection without prior acceptance answers the oldest
+                        // unacknowledged sent steer.
+                        self.sent_steers.pop_front();
+                    }
                 }
                 if let Some(public) = value
                     .pointer("/steer/previous_response_id")
@@ -1203,6 +1416,10 @@ impl TurnFeeder {
                 self.source.slot.stashed.push(text);
                 self.successor = true;
                 return FeedFlow::Finish;
+            }
+            if !kind.starts_with("response.") && kind != "error" {
+                map_known_response_ids(&mut value, &self.source.slot.public_ids);
+                self.relay(value);
             }
             return FeedFlow::Continue;
         }
@@ -1249,6 +1466,24 @@ impl TurnFeeder {
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or_else(|| self.upstream_id.clone());
+            self.terminal_output = value
+                .pointer("/response/output")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| {
+                            (
+                                item.get("type")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("message")
+                                    .to_string(),
+                                item.get("id").and_then(Value::as_str).map(str::to_string),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
         }
         drop(value);
         self.forward(kind, text).await;
@@ -1386,15 +1621,13 @@ impl TurnFeeder {
             slot.last_upstream_id = self.terminal_id.clone();
             slot.last_public_id = Some(self.turn.public_response_id.clone());
             slot.basis = std::mem::take(&mut self.source.full_input);
+            slot.last_output = std::mem::take(&mut self.terminal_output);
+            slot.pending_steer_items = self.pending_steer_items;
         } else {
             if let Some(mut session) = self.source.session.take() {
                 session.close().await;
             }
-            slot.session = None;
-            slot.last_upstream_id = None;
-            slot.last_public_id = None;
-            slot.basis.clear();
-            slot.stashed.clear();
+            slot.forget_session_state();
             self.successor = false;
         }
         if self.successor
