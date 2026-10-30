@@ -74,6 +74,8 @@ pub const CHAT_REASONING_SURFACE_REASONING_CONTENT: &str = "reasoning_content";
 pub const CHAT_REASONING_SURFACE_REASONING_OPAQUE: &str = "reasoning_opaque";
 /// Request field name (`max_tokens` or `max_completion_tokens`) a downstream Chat client used.
 pub const CHAT_MAX_TOKENS_FIELD_EXTRA_KEY: &str = "_monoize_chat_max_tokens_field";
+/// Chat-only stream control carrying annotations of a completed text segment (PC7h).
+pub const CHAT_ANNOTATIONS_CONTROL: &str = "_monoize.chat.annotations";
 /// Unknown top-level fields of the first upstream Chat stream chunk, replayed on every
 /// downstream Chat chunk envelope.
 pub const CHAT_CHUNK_EXTRA_KEY: &str = "_monoize_chat_chunk_extra";
