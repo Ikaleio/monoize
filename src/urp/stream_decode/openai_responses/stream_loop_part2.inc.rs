@@ -249,6 +249,7 @@ fn map_responses_event_to_urp_events_with_state(
 
 #[derive(Debug, Default)]
 struct ResponsesStreamIndexState {
+    discard_requested: bool,
     next_node_index: u32,
     node_index_by_content_key: HashMap<(u64, u64), u32>,
     synthetic_node_index_by_output_index: HashMap<u64, u32>,
