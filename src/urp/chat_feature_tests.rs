@@ -84,6 +84,7 @@ async fn encode_stream_with_limit(events: Vec<UrpStreamEvent>, limit: Option<usi
         "chat-test",
         limit,
         false,
+        true,
     )
     .await
     .unwrap();
@@ -94,7 +95,7 @@ async fn synthetic_stream(response: &UrpResponse) -> Vec<Value> {
 }
 async fn synthetic_stream_with_limit(response: &UrpResponse, limit: Option<usize>) -> Vec<Value> {
     let (tx, rx) = mpsc::channel(1024);
-    super::stream_encode::openai_chat::emit_synthetic_chat_stream("chat-test", response, limit, tx)
+    super::stream_encode::openai_chat::emit_synthetic_chat_stream("chat-test", response, limit, true, tx)
         .await
         .unwrap();
     wire_values(rx).await
@@ -219,7 +220,7 @@ fn chat_request_features_both_stream_modes() {
     for stream in [false, true] {
         let source = json!({"model":"chat-test","stream":stream,"messages":[{"role":"developer","content":"Rules"},{"role":"user","content":[{"type":"text","text":"Look"},{"type":"image_url","image_url":{"url":"https://example.com/i.png","detail":"high"}},{"type":"input_audio","input_audio":{"data":"YQ==","format":"wav"}},{"type":"file","file":{"file_id":"file_1"}}]}],"tools":[{"type":"function","function":{"name":"weather","description":"Forecast","parameters":{"type":"object"},"strict":true}},{"type":"custom","custom":{"name":"patch","format":{"type":"grammar","syntax":"lark","definition":"start: WORD"}}}],"tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[{"type":"function","function":{"name":"weather"}}]}},"stop":["END"],"verbosity":"low","user":"caller","max_completion_tokens":123,"parallel_tool_calls":false,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object"},"strict":true}},"web_search_options":{"search_context_size":"low"},"audio":{"voice":"alloy","format":"wav"},"modalities":["text","audio"]});
         let urp = decode::decode_request(&source).unwrap();
-        let encoded = encode::encode_request(&urp, "chat-test");
+        let encoded = encode::encode_request(&urp, "chat-test", encode::ChatDialect::Generic);
         for key in [
             "tools",
             "tool_choice",
@@ -260,7 +261,7 @@ fn chat_tool_results_and_legacy_history_both_stream_modes() {
             )
             .unwrap();
             assert!(urp.input.iter().any(|node|matches!(node,Node::ToolResult {tool_type,content,..} if *tool_type==kind && !content.is_empty())));
-            let again = decode::decode_request(&encode::encode_request(&urp, "chat-test")).unwrap();
+            let again = decode::decode_request(&encode::encode_request(&urp, "chat-test", encode::ChatDialect::Generic)).unwrap();
             assert_eq!(
                 serde_json::to_value(again.input).unwrap(),
                 serde_json::to_value(urp.input).unwrap()
@@ -287,7 +288,7 @@ fn chat_legacy_result_name_uses_typed_state_both_stream_modes() {
             extra_body[super::CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY],
             json!(true)
         );
-        let encoded = encode::encode_request(&request, "chat-test");
+        let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
         assert_eq!(encoded["messages"], source["messages"]);
         let decoded = decode::decode_request(&encoded).unwrap();
         assert_eq!(
@@ -306,7 +307,7 @@ fn chat_legacy_result_name_uses_typed_state_both_stream_modes() {
             super::CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY.into(),
             json!("stale"),
         );
-        let encoded = encode::encode_request(&request, "chat-test");
+        let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
         assert_eq!(encoded["messages"][0]["role"], "function");
         assert_eq!(encoded["messages"][0]["name"], "updated");
         let decoded = decode::decode_request(&encoded).unwrap();
@@ -318,7 +319,7 @@ fn chat_legacy_result_name_uses_typed_state_both_stream_modes() {
             unreachable!();
         };
         *name = None;
-        let encoded = encode::encode_request(&request, "chat-test");
+        let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
         assert_eq!(encoded["messages"][0]["role"], "function");
         assert!(encoded["messages"][0].get("name").is_none());
         assert_eq!(encoded["messages"][0]["vendor"], "kept");
@@ -355,7 +356,7 @@ fn chat_tool_result_identity_uses_typed_state_both_stream_modes() {
             assert_eq!(name.as_deref(), Some("old-name"));
             assert!(!extra_body.contains_key("id"));
             assert!(!extra_body.contains_key("name"));
-            let encoded = encode::encode_request(&request, "chat-test");
+            let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             assert_eq!(encoded["messages"][0], result);
             let decoded = decode::decode_request(&encoded).unwrap();
             assert_eq!(
@@ -376,7 +377,7 @@ fn chat_tool_result_identity_uses_typed_state_both_stream_modes() {
             *name = Some("new-name".into());
             extra_body.insert("id".into(), json!("stale-id"));
             extra_body.insert("name".into(), json!("stale-name"));
-            let encoded = encode::encode_request(&request, "chat-test");
+            let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             assert_eq!(encoded["messages"][0]["id"], "new-id");
             assert_eq!(encoded["messages"][0]["name"], "new-name");
 
@@ -385,7 +386,7 @@ fn chat_tool_result_identity_uses_typed_state_both_stream_modes() {
             };
             *id = None;
             *name = None;
-            let encoded = encode::encode_request(&request, "chat-test");
+            let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             assert!(encoded["messages"][0].get("id").is_none());
             assert!(encoded["messages"][0].get("name").is_none());
             assert_eq!(encoded["messages"][0]["vendor"], "kept");
@@ -556,6 +557,7 @@ async fn assert_chat_media_stream_errors(response: &UrpResponse, events: Vec<Urp
                 "chat-test",
                 response,
                 None,
+                true,
                 out_tx,
             )
             .await
@@ -571,6 +573,7 @@ async fn assert_chat_media_stream_errors(response: &UrpResponse, events: Vec<Urp
                 "chat-test",
                 None,
                 false,
+                true,
             )
             .await
         };
@@ -701,7 +704,7 @@ async fn chat_provider_identity_is_authoritative_in_all_response_modes() {
                 for node in &mut request.input {
                     edit_identity(node, deleted);
                 }
-                let encoded = encode::encode_request(&request, "chat-test");
+                let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
                 let field = if audio_reference { "audio" } else { "content" };
                 assert_eq!(encoded["messages"][0][field], expected[field]);
             }
@@ -732,7 +735,7 @@ fn chat_configuration_update_identity_preserves_native_shape_both_stream_modes()
             )
             .unwrap();
             assert_eq!(
-                encode::encode_request(&request, "chat-test")["messages"][0],
+                encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic)["messages"][0],
                 message
             );
             for deleted in [false, true] {
@@ -748,7 +751,7 @@ fn chat_configuration_update_identity_preserves_native_shape_both_stream_modes()
                 assert_eq!(*body, message);
                 *id = (!deleted).then(|| "new-id".to_string());
                 *item_type = if deleted { "" } else { "new-config" }.to_string();
-                let encoded = encode::encode_request(&request, "chat-test");
+                let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
                 let result = &encoded["messages"][0];
                 assert_eq!(
                     result["configuration_update"],
@@ -795,7 +798,7 @@ fn chat_assistant_history_annotations_bidirectional_both_stream_modes() {
         assert!(
             matches!(&request.input[0], Node::Text {citations,extra_body,..} if citations.len()==1 && !extra_body.contains_key("annotations"))
         );
-        let encoded = encode::encode_request(&request, "chat-test");
+        let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
         assert_eq!(encoded["messages"], source["messages"]);
         let decoded = decode::decode_request(&encoded).unwrap();
         assert_eq!(
@@ -809,7 +812,7 @@ fn chat_assistant_history_annotations_bidirectional_both_stream_modes() {
         .unwrap();
         request.input = response.output;
         assert_eq!(
-            encode::encode_request(&request, "chat-test")["messages"][0]["annotations"],
+            encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic)["messages"][0]["annotations"],
             annotations
         );
         if let Node::Text {
@@ -821,7 +824,7 @@ fn chat_assistant_history_annotations_bidirectional_both_stream_modes() {
             citations.clear();
         }
         assert!(
-            encode::encode_request(&request, "chat-test")["messages"][0]
+            encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic)["messages"][0]
                 .get("annotations")
                 .is_none()
         );
@@ -915,7 +918,7 @@ fn chat_request_media_metadata_and_role_constraints() {
             "file".into(),
             json!({"filename":"stale.pdf","detail":"high","file_id":"stale"}),
         );
-        let wire = encode::encode_request_checked(&request, "chat-test").unwrap();
+        let wire = encode::encode_request_checked(&request, "chat-test", encode::ChatDialect::Generic).unwrap();
         let parts = wire["messages"][0]["content"].as_array().unwrap();
         assert_eq!(parts[0]["image_url"]["detail"], "high");
         assert_eq!(parts[1]["file"]["filename"], "changed.pdf");
@@ -926,7 +929,7 @@ fn chat_request_media_metadata_and_role_constraints() {
             unreachable!()
         };
         metadata.filename = None;
-        let wire = encode::encode_request_checked(&request, "chat-test").unwrap();
+        let wire = encode::encode_request_checked(&request, "chat-test", encode::ChatDialect::Generic).unwrap();
         assert!(
             wire["messages"][0]["content"][1]["file"]
                 .get("filename")
@@ -946,12 +949,12 @@ fn chat_request_media_metadata_and_role_constraints() {
                     _ => {}
                 }
             }
-            assert!(encode::encode_request_checked(&invalid, "chat-test").is_err());
+            assert!(encode::encode_request_checked(&invalid, "chat-test", encode::ChatDialect::Generic).is_err());
         }
         let native = super::decode::openai_responses::decode_request(&json!({"model":"test","stream":stream,"input":[{
             "type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"keep"},{"type":"input_image","image_url":"https://example.com/image.png"}]
         }]})).unwrap();
-        assert!(encode::encode_request_checked(&native, "chat-test").is_err());
+        assert!(encode::encode_request_checked(&native, "chat-test", encode::ChatDialect::Generic).is_err());
     }
 }
 
@@ -978,15 +981,15 @@ async fn chat_audio_context_and_history_reference_are_legal() {
             decode::decode_request(&json!({"model":"chat-test","stream":stream,"messages":[]}))
                 .unwrap();
         request.input = decoded.output.clone();
-        let wire = encode::encode_request_checked(&request, "chat-test").unwrap();
+        let wire = encode::encode_request_checked(&request, "chat-test", encode::ChatDialect::Generic).unwrap();
         assert_eq!(wire["messages"][0]["audio"], json!({"id":"audio_1"}));
         if let Node::Audio { metadata, .. } = &mut request.input[0] {
             metadata.reference_id = None;
         }
-        assert!(encode::encode_request_checked(&request, "chat-test").is_err());
+        assert!(encode::encode_request_checked(&request, "chat-test", encode::ChatDialect::Generic).is_err());
         for role in ["assistant", "system", "developer"] {
             let invalid = decode::decode_request(&json!({"model":"chat-test","stream":stream,"messages":[{"role":role,"content":[{"type":"input_audio","input_audio":{"data":"YQ==","format":"wav"}}]}]})).unwrap();
-            assert!(encode::encode_request_checked(&invalid, "chat-test").is_err());
+            assert!(encode::encode_request_checked(&invalid, "chat-test", encode::ChatDialect::Generic).is_err());
         }
     }
 }
@@ -1094,7 +1097,7 @@ fn chat_compatible_tool_media_preserves_blocks_and_following_user() {
                 );
                 let roundtrip = super::decode::openai_responses::decode_request(&encoded).unwrap();
                 assert!(roundtrip.input.iter().any(|node| matches!(node,Node::ToolResult {content,..} if content.iter().any(|p|matches!(p,ToolResultContent::Image {..}|ToolResultContent::File {..})))));
-                assert!(encode::encode_request_checked(&canonical, "chat-test").is_err());
+                assert!(encode::encode_request_checked(&canonical, "chat-test", encode::ChatDialect::Generic).is_err());
                 for node in &mut canonical.input {
                     if let Node::ToolResult { content, .. } = node {
                         for part in content {
@@ -1274,7 +1277,7 @@ fn chat_reasoning_history_replay_mutation_and_deletion_both_stream_modes() {
             let source = json!({"model":"chat-test","stream":stream,"messages":[message]});
             let mut request = decode::decode_request(&source).unwrap();
             assert_eq!(
-                encode::encode_request(&request, "chat-test")["messages"],
+                encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic)["messages"],
                 source["messages"]
             );
             for node in &mut request.input {
@@ -1296,7 +1299,7 @@ fn chat_reasoning_history_replay_mutation_and_deletion_both_stream_modes() {
                     }
                 }
             }
-            let encoded = encode::encode_request(&request, "chat-test");
+            let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             let again = decode::decode_request(&encoded).unwrap();
             assert_eq!(
                 serde_json::to_value(&again.input).unwrap(),
@@ -1316,7 +1319,7 @@ fn chat_reasoning_history_replay_mutation_and_deletion_both_stream_modes() {
                 }
             }
             let encoded =
-                serde_json::to_string(&encode::encode_request(&request, "chat-test")).unwrap();
+                serde_json::to_string(&encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic)).unwrap();
             for deleted in ["new raw", "new brief", "new cipher"] {
                 assert!(!encoded.contains(deleted));
             }
@@ -1375,12 +1378,12 @@ fn chat_request_logprobs_and_formats_have_typed_ownership_both_stream_modes() {
                     top_k: Some(2)
                 })
             );
-            let encoded = encode::encode_request(&request, "chat-test");
+            let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             assert_eq!(encoded["response_format"], format);
             assert_eq!(encoded["logprobs"], true);
             assert_eq!(encoded["top_logprobs"], 2);
             request.logprobs = None;
-            let encoded = encode::encode_request(&request, "chat-test");
+            let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             assert!(encoded.get("logprobs").is_none());
             assert!(encoded.get("top_logprobs").is_none());
         }
@@ -1434,7 +1437,7 @@ async fn chat_finish_reason_matrix_preserves_partial_output_and_usage_all_modes(
         ("future_stop", super::FinishReason::Other),
     ] {
         let mut native = response(json!({"role":"assistant","content":"partial"}), reason);
-        native["usage"] = json!({"prompt_tokens":20,"completion_tokens":10,"total_tokens":30,"prompt_tokens_details":{"cached_tokens":5,"audio_tokens":2,"cache_creation_tokens":0,"cache_write_tokens":0,"tool_prompt_tokens":0},"completion_tokens_details":{"reasoning_tokens":6,"audio_tokens":1,"accepted_prediction_tokens":2,"rejected_prediction_tokens":1}});
+        native["usage"] = json!({"prompt_tokens":20,"completion_tokens":10,"total_tokens":30,"prompt_tokens_details":{"cached_tokens":5,"audio_tokens":2},"completion_tokens_details":{"reasoning_tokens":6,"audio_tokens":1,"accepted_prediction_tokens":2,"rejected_prediction_tokens":1}});
         let decoded = decode::decode_response(&native).unwrap();
         let events = decode_stream(vec![
             json!({"choices":[{"delta":{"content":"partial"},"finish_reason":reason}]}),
@@ -1465,7 +1468,6 @@ fn chat_malformed_requests_and_nonstream_errors_are_rejected() {
             json!(-1),
             json!(1.5),
             json!("1"),
-            json!(null),
         ] {
             assert!(
                 decode::decode_request(
@@ -1698,7 +1700,7 @@ fn chat_origin_metadata_and_reserved_keys_follow_protocol_boundary() {
         let mut source = source.clone();
         source["stream"] = json!(stream);
         let mut decoded = decode::decode_request(&source).unwrap();
-        let same = encode::encode_request(&decoded, "chat-test");
+        let same = encode::encode_request(&decoded, "chat-test", encode::ChatDialect::Generic);
         assert_eq!(same["messages"][0]["annotations"][0]["chat_only"], "kept");
         assert_eq!(same["messages"][0]["vendor"], "kept");
         assert!(
@@ -1754,7 +1756,7 @@ fn chat_documented_controls_and_tool_choices_both_stream_modes() {
         ] {
             let source = json!({"model":"chat-test","stream":stream,"messages":[{"role":"system","content":"rules"},{"role":"developer","content":"developer"},{"role":"user","content":"question"}],"tools":[{"type":"function","function":{"name":"f","description":"function","parameters":{"type":"object"},"strict":false}},{"type":"custom","custom":{"name":"patch","format":{"type":"text"}}}],"tool_choice":choice,"temperature":0.4,"top_p":0.9,"max_completion_tokens":512,"stop":"END","parallel_tool_calls":true,"reasoning_effort":"high","presence_penalty":0.2,"frequency_penalty":0.1,"logit_bias":{"12":-1},"seed":42,"store":false,"metadata":{"trace":"test"},"service_tier":"default","safety_identifier":"safe","prompt_cache_key":"cache","prompt_cache_retention":"24h","prediction":{"type":"content","content":"predicted"}});
             let mut request = decode::decode_request(&source).unwrap();
-            let output = encode::encode_request(&request, "chat-test");
+            let output = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             for key in [
                 "messages",
                 "tools",
@@ -1788,7 +1790,7 @@ fn chat_documented_controls_and_tool_choices_both_stream_modes() {
             request.stop = None;
             request.reasoning = None;
             request.tool_choice = None;
-            let output = encode::encode_request(&request, "chat-test");
+            let output = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
             for key in [
                 "temperature",
                 "top_p",
@@ -1843,12 +1845,12 @@ async fn chat_native_raw_provenance_cannot_restore_raw_from_summary() {
                 *encrypted = Some(json!("retained cipher"));
             }
         }
-        let encoded = encode::encode_request(&request, "chat-test");
+        let encoded = encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic);
         let message = &encoded["messages"][0];
         assert!(message.get("reasoning_content").is_none(), "{message}");
         assert_eq!(
             message["reasoning_details"],
-            json!([{"type":"reasoning.summary","summary":"retained summary"},{"type":"reasoning.encrypted","data":"retained cipher"}])
+            json!([{"type":"reasoning.summary","summary":"retained summary","index":0},{"type":"reasoning.encrypted","data":"retained cipher","index":1}])
         );
     }
     let mut response = decode::decode_response(&response(
@@ -1941,7 +1943,7 @@ async fn chat_equal_raw_and_summary_bytes_are_not_semantic_duplicates() {
             .unwrap();
             check(&request.input);
             check(
-                &decode::decode_request(&encode::encode_request(&request, "chat-test"))
+                &decode::decode_request(&encode::encode_request(&request, "chat-test", encode::ChatDialect::Generic))
                     .unwrap()
                     .input,
             );

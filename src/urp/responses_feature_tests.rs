@@ -1781,7 +1781,11 @@ fn responses_compatible_content_shapes_and_audio_are_typed() {
             );
             assert!(encode::encode_request_checked(&canonical, "feature-model").is_err());
             let chat =
-                super::encode::openai_chat::encode_request_checked(&canonical, "feature-model")
+                super::encode::openai_chat::encode_request_checked(
+                    &canonical,
+                    "feature-model",
+                    super::encode::openai_chat::ChatDialect::Generic,
+                )
                     .unwrap();
             assert!(
                 chat["messages"][0]["content"]

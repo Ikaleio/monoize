@@ -84,6 +84,7 @@ async fn exercise_media_failure(synthetic: bool) {
                 None,
                 None,
                 tx.clone(),
+                true,
             )
             .await
         } else {
@@ -116,6 +117,7 @@ async fn exercise_media_failure(synthetic: bool) {
                 Instant::now(),
                 None,
                 false,
+                true,
             )
             .await
         };
@@ -213,6 +215,7 @@ async fn failed_terminal_send_is_not_marked_as_sent() {
             None,
             None,
             tx,
+            true,
         )
         .await
         .unwrap_err();

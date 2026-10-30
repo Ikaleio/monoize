@@ -107,30 +107,6 @@ pub(crate) async fn send_responses_delta_string(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn send_chat_chunk_string(
-    tx: &mpsc::Sender<Event>,
-    id: &str,
-    created: i64,
-    logical_model: &str,
-    delta_template: Value,
-    content: &str,
-    patch: fn(&mut Value, &str),
-    max_frame_length: Option<usize>,
-) -> AppResult<()> {
-    let base = json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": logical_model,
-        "choices": [{ "index": 0, "delta": delta_template, "finish_reason": Value::Null }]
-    });
-    for chunk in split_json_value_by_string_patch(base, content, patch, max_frame_length) {
-        send_plain_sse_json(tx, &chunk).await?;
-    }
-    Ok(())
-}
-
 pub(crate) async fn send_messages_delta_string(
     tx: &mpsc::Sender<Event>,
     template: Value,
@@ -305,71 +281,6 @@ pub(crate) fn chat_delta_path_content(value: &mut Value, content: &str) {
         .and_then(Value::as_object_mut)
     {
         delta.insert("content".to_string(), Value::String(content.to_string()));
-    }
-}
-
-pub(crate) fn chat_delta_path_reasoning_text(value: &mut Value, content: &str) {
-    if let Some(delta) = value
-        .get_mut("choices")
-        .and_then(Value::as_array_mut)
-        .and_then(|arr| arr.first_mut())
-        .and_then(Value::as_object_mut)
-        .and_then(|choice| choice.get_mut("delta"))
-        .and_then(Value::as_object_mut)
-    {
-        delta.insert(
-            "reasoning_details".to_string(),
-            Value::Array(vec![reasoning_text_detail_value(content, None)]),
-        );
-    }
-}
-
-pub(crate) fn chat_delta_path_reasoning_summary(value: &mut Value, content: &str) {
-    if let Some(delta) = value
-        .get_mut("choices")
-        .and_then(Value::as_array_mut)
-        .and_then(|arr| arr.first_mut())
-        .and_then(Value::as_object_mut)
-        .and_then(|choice| choice.get_mut("delta"))
-        .and_then(Value::as_object_mut)
-    {
-        delta.insert(
-            "reasoning_details".to_string(),
-            json!([{ "type": "reasoning.summary", "summary": content }]),
-        );
-    }
-}
-
-pub(crate) fn chat_delta_path_reasoning_encrypted(value: &mut Value, content: &str) {
-    if let Some(detail) = value
-        .get_mut("choices")
-        .and_then(Value::as_array_mut)
-        .and_then(|arr| arr.first_mut())
-        .and_then(Value::as_object_mut)
-        .and_then(|choice| choice.get_mut("delta"))
-        .and_then(Value::as_object_mut)
-        .and_then(|delta| delta.get_mut("reasoning_details"))
-        .and_then(Value::as_array_mut)
-        .and_then(|arr| arr.first_mut())
-        .and_then(Value::as_object_mut)
-    {
-        detail.insert("data".to_string(), Value::String(content.to_string()));
-    }
-}
-
-pub(crate) fn chat_delta_path_reasoning_content(value: &mut Value, content: &str) {
-    if let Some(delta) = value
-        .get_mut("choices")
-        .and_then(Value::as_array_mut)
-        .and_then(|arr| arr.first_mut())
-        .and_then(Value::as_object_mut)
-        .and_then(|choice| choice.get_mut("delta"))
-        .and_then(Value::as_object_mut)
-    {
-        delta.insert(
-            "reasoning_content".to_string(),
-            Value::String(content.to_string()),
-        );
     }
 }
 
@@ -576,6 +487,8 @@ pub(crate) struct ChatReasoningContentBlock {
 pub(crate) struct ChatReasoningDeltaChunk {
     pub(crate) text: String,
     pub(crate) format: Option<String>,
+    /// Scalar Chat field that carried the fragment (`CHAT_REASONING_SURFACE_*`), if any.
+    pub(crate) surface: Option<&'static str>,
 }
 
 pub(crate) fn extract_chat_reasoning_content_block(
@@ -607,97 +520,21 @@ pub(crate) fn extract_chat_reasoning_content_block(
     })
 }
 
-pub(crate) fn reasoning_text_detail_value(text: &str, format: Option<&str>) -> Value {
-    let mut value = json!({
-        "type": "reasoning.text",
-        "text": text,
-    });
-    if let Some(format) = format {
-        value["format"] = Value::String(format.to_string());
-    }
-    value
-}
-
-pub(crate) fn reasoning_encrypted_detail_value(data: Value, format: Option<&str>) -> Value {
-    let mut value = json!({
-        "type": "reasoning.encrypted",
-        "data": data,
-    });
-    if let Some(format) = format {
-        value["format"] = Value::String(format.to_string());
-    }
-    value
-}
-
+/// Scalar Chat reasoning fragments of one delta: raw text (`reasoning`, `reasoning_content`) and
+/// opaque `reasoning_opaque` fragments, each tagged with its surface.
 pub(crate) fn extract_chat_reasoning_delta_chunks(
     delta: &Value,
-) -> (
-    Vec<ChatReasoningDeltaChunk>,
-    Vec<ChatReasoningDeltaChunk>,
-    Vec<ChatReasoningDeltaChunk>,
-) {
-    let mut text_parts = Vec::new();
-    let mut summary_parts = Vec::new();
+) -> (Vec<ChatReasoningDeltaChunk>, Vec<ChatReasoningDeltaChunk>) {
+    let mut text_parts: Vec<ChatReasoningDeltaChunk> = Vec::new();
     let mut sig_parts = Vec::new();
-
-    if let Some(details) = delta.get("reasoning_details").and_then(|v| v.as_array()) {
-        for detail in details {
-            let Some(obj) = detail.as_object() else {
-                continue;
-            };
-            let format = obj
-                .get("format")
-                .and_then(|v| v.as_str())
-                .filter(|format| !format.is_empty())
-                .map(|format| format.to_string());
-            match obj.get("type").and_then(|v| v.as_str()).unwrap_or("") {
-                "reasoning.text" => {
-                    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
-                        if !text.is_empty() {
-                            text_parts.push(ChatReasoningDeltaChunk {
-                                text: text.to_string(),
-                                format,
-                            });
-                        }
-                    }
-                }
-                "reasoning.encrypted" => {
-                    if let Some(data) = obj.get("data") {
-                        let text = match data {
-                            Value::String(s) if !s.is_empty() => Some(s.clone()),
-                            Value::String(_) | Value::Null => None,
-                            other => Some(other.to_string()),
-                        };
-                        if let Some(text) = text {
-                            sig_parts.push(ChatReasoningDeltaChunk { text, format });
-                        }
-                    }
-                }
-                "reasoning.summary" => {
-                    if let Some(summary) = obj.get("summary").and_then(|v| v.as_str()) {
-                        if !summary.is_empty() {
-                            summary_parts.push(ChatReasoningDeltaChunk {
-                                text: summary.to_string(),
-                                format,
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
 
     if let Some(reasoning) = delta.get("reasoning").and_then(Value::as_str)
         && !reasoning.is_empty()
-        && !text_parts
-            .iter()
-            .chain(summary_parts.iter())
-            .any(|part| part.text == reasoning)
     {
         text_parts.push(ChatReasoningDeltaChunk {
             text: reasoning.to_string(),
             format: None,
+            surface: Some(crate::urp::CHAT_REASONING_SURFACE_REASONING),
         });
     }
 
@@ -708,6 +545,7 @@ pub(crate) fn extract_chat_reasoning_delta_chunks(
         text_parts.push(ChatReasoningDeltaChunk {
             text: reasoning.to_string(),
             format: None,
+            surface: Some(crate::urp::CHAT_REASONING_SURFACE_REASONING_CONTENT),
         });
     }
     if let Some(sig) = delta.get("reasoning_opaque").and_then(|v| v.as_str()) {
@@ -715,44 +553,12 @@ pub(crate) fn extract_chat_reasoning_delta_chunks(
             sig_parts.push(ChatReasoningDeltaChunk {
                 text: sig.to_string(),
                 format: None,
+                surface: Some(crate::urp::CHAT_REASONING_SURFACE_REASONING_OPAQUE),
             });
         }
     }
 
-    (text_parts, summary_parts, sig_parts)
-}
-
-pub(crate) fn chat_reasoning_delta_from_text(text: &str, format: Option<&str>) -> Value {
-    json!({
-        "reasoning_details": [reasoning_text_detail_value(text, format)]
-    })
-}
-
-pub(crate) fn chat_reasoning_delta_from_summary(summary: &str, format: Option<&str>) -> Value {
-    let mut detail = json!({
-        "type": "reasoning.summary",
-        "summary": summary
-    });
-    if let Some(format) = format {
-        detail["format"] = Value::String(format.to_string());
-    }
-    json!({
-        "reasoning_details": [detail]
-    })
-}
-
-pub(crate) fn chat_reasoning_delta_from_encrypted(
-    signature: &str,
-    format: Option<&str>,
-    id: Option<&str>,
-) -> Value {
-    let mut detail = reasoning_encrypted_detail_value(Value::String(signature.to_string()), format);
-    if let Some(id) = id {
-        detail["id"] = Value::String(id.to_string());
-    }
-    json!({
-        "reasoning_details": [detail]
-    })
+    (text_parts, sig_parts)
 }
 
 pub(crate) fn extract_responses_message_text(item: &Value) -> String {

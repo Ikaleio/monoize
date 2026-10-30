@@ -6,6 +6,7 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::{parse_compatible_media_part, parse_tool_call_arguments_value};
+use crate::urp::reasoning::chat_reasoning_node_from_detail;
 use crate::urp::stream_helpers::{
     extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks,
 };
@@ -95,6 +96,8 @@ async fn decode_chat_stream(
     let mut reasoning_sig = String::new();
     let mut reasoning_summary = String::new();
     let mut reasoning_source: Option<String> = None;
+    let mut reasoning_surface: Option<&'static str> = None;
+    let mut first_chunk_extra: Option<Map<String, Value>> = None;
     let mut reasoning_detail_nodes: Vec<(u32, Node)> = Vec::new();
     let mut call_order: Vec<String> = Vec::new();
     let mut calls: HashMap<String, (ToolCallType, String, String, bool)> = HashMap::new();
@@ -321,23 +324,47 @@ async fn decode_chat_stream(
                 .map(|s| s.to_string());
         }
 
-        if delta.get("role").and_then(|v| v.as_str()) == Some("assistant") {
-            if !response_started && !chat_delta_has_payload(delta) && !delta_extra.is_empty() {
-                ensure_response_started_with_extra(
-                    &tx,
-                    &response_id,
-                    &urp.model,
-                    &mut response_started,
-                    chat_delta_event_extra(std::mem::take(&mut delta_extra)),
-                )
-                .await?;
-            } else {
-                ensure_response_started(&tx, &response_id, &urp.model, &mut response_started)
-                    .await?;
+        if first_chunk_extra.is_none() {
+            let chunk_extra = chat_chunk_extra(&data_val);
+            if !chunk_extra.is_empty() {
+                first_chunk_extra = Some(chunk_extra);
             }
         }
+        if delta.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+            let start_extra =
+                if !response_started && !chat_delta_has_payload(delta) && !delta_extra.is_empty() {
+                    chat_delta_event_extra(std::mem::take(&mut delta_extra))
+                } else {
+                    HashMap::new()
+                };
+            ensure_response_started_with_extra(
+                &tx,
+                &response_id,
+                &urp.model,
+                &mut response_started,
+                with_chunk_extra(start_extra, first_chunk_extra.as_ref()),
+            )
+            .await?;
+        } else if !response_started
+            && (chat_delta_has_payload(delta)
+                || choice.is_some_and(|choice| choice.contains_key("message")))
+        {
+            ensure_response_started_with_extra(
+                &tx,
+                &response_id,
+                &urp.model,
+                &mut response_started,
+                with_chunk_extra(HashMap::new(), first_chunk_extra.as_ref()),
+            )
+            .await?;
+        }
 
-        if let Some(t) = delta.get("content").and_then(Value::as_str) {
+        // PC8: an empty first `content` must not open a text node ahead of reasoning.
+        if let Some(t) = delta
+            .get("content")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+        {
             let scores = crate::urp::logprobs::decode(
                 choice
                     .and_then(|c| c.get("logprobs"))
@@ -526,6 +553,8 @@ async fn decode_chat_stream(
                         &urp.model,
                         reasoning_block.content.as_deref(),
                         reasoning_block.format.as_deref(),
+                        None,
+                        &mut reasoning_surface,
                         &mut response_started,
                         &mut reasoning_node_index,
                         &mut next_node_index,
@@ -540,6 +569,8 @@ async fn decode_chat_stream(
                         &urp.model,
                         reasoning_block.encrypted.as_ref(),
                         reasoning_block.format.as_deref(),
+                        None,
+                        &mut reasoning_surface,
                         &mut response_started,
                         &mut reasoning_node_index,
                         &mut next_node_index,
@@ -636,16 +667,15 @@ async fn decode_chat_stream(
                 .as_object_mut()
                 .expect("chat delta object");
             scalar_obj.remove("reasoning_details");
-            for key in ["reasoning", "reasoning_content", "reasoning_opaque"] {
+            // CHAT-4b: scalar `reasoning` is a view of the chunk's details.
+            scalar_obj.remove("reasoning");
+            for key in ["reasoning_content", "reasoning_opaque"] {
                 let duplicate = delta.get(key).and_then(Value::as_str).is_some_and(|value| {
                     reasoning_details
                         .iter()
                         .any(|detail| match detail["type"].as_str() {
                             Some("reasoning.text") => {
                                 key != "reasoning_opaque" && detail["text"].as_str() == Some(value)
-                            }
-                            Some("reasoning.summary") => {
-                                key == "reasoning" && detail["summary"].as_str() == Some(value)
                             }
                             Some("reasoning.encrypted") => {
                                 key == "reasoning_opaque" && detail["data"].as_str() == Some(value)
@@ -658,24 +688,8 @@ async fn decode_chat_stream(
                 }
             }
         }
-        let (reasoning_text_deltas, reasoning_summary_deltas, reasoning_sig_deltas) =
+        let (reasoning_text_deltas, reasoning_sig_deltas) =
             extract_chat_reasoning_delta_chunks(&scalar_delta);
-        for summary in reasoning_summary_deltas {
-            process_reasoning_summary_delta(
-                &tx,
-                &response_id,
-                &urp.model,
-                Some(&summary.text),
-                summary.format.as_deref(),
-                &mut response_started,
-                &mut reasoning_node_index,
-                &mut next_node_index,
-                &mut reasoning_summary,
-                &mut reasoning_source,
-                &mut delta_extra,
-            )
-            .await?;
-        }
         for text in reasoning_text_deltas {
             process_reasoning_text_delta(
                 &tx,
@@ -683,6 +697,8 @@ async fn decode_chat_stream(
                 &urp.model,
                 Some(&text.text),
                 text.format.as_deref(),
+                text.surface,
+                &mut reasoning_surface,
                 &mut response_started,
                 &mut reasoning_node_index,
                 &mut next_node_index,
@@ -699,6 +715,8 @@ async fn decode_chat_stream(
                 &urp.model,
                 Some(&Value::String(encrypted.text)),
                 encrypted.format.as_deref(),
+                encrypted.surface,
+                &mut reasoning_surface,
                 &mut response_started,
                 &mut reasoning_node_index,
                 &mut next_node_index,
@@ -776,6 +794,7 @@ async fn decode_chat_stream(
                 &mut reasoning_text,
                 &mut reasoning_sig,
                 &mut reasoning_source,
+                &mut reasoning_surface,
                 &mut reasoning_detail_nodes,
                 &mut call_order,
                 &mut calls,
@@ -845,6 +864,7 @@ async fn decode_chat_stream(
         &reasoning_summary,
         &reasoning_sig,
         reasoning_source.as_deref(),
+        reasoning_surface,
         &reasoning_detail_nodes,
         &call_order,
         &calls,
@@ -911,19 +931,55 @@ async fn decode_chat_stream(
         .await?;
     }
 
+    let output: Vec<Node> = output_nodes.into_iter().map(|(_, node)| node).collect();
+    let finish_reason = finish_reason.map(|reason| {
+        crate::urp::decode::openai_chat::normalize_tool_call_finish(reason, &output)
+    });
     send_event(
         &tx,
         UrpStreamEvent::ResponseDone {
             outcome: None,
             finish_reason,
             usage,
-            output: output_nodes.into_iter().map(|(_, node)| node).collect(),
+            output,
             extra_body: terminal_extra_body,
         },
     )
     .await?;
 
     Ok(())
+}
+
+/// DC6a: unknown top-level chunk fields, without OpenRouter's upstream `provider` identity.
+fn chat_chunk_extra(chunk: &Value) -> Map<String, Value> {
+    let Some(chunk) = chunk.as_object() else {
+        return Map::new();
+    };
+    chunk
+        .iter()
+        .filter(|(key, _)| {
+            !crate::urp::decode::is_internal_extra_key(key)
+                && !matches!(
+                    key.as_str(),
+                    "id" | "object" | "created" | "model" | "choices" | "usage" | "error"
+                        | "provider"
+                )
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn with_chunk_extra(
+    mut extra: HashMap<String, Value>,
+    chunk_extra: Option<&Map<String, Value>>,
+) -> HashMap<String, Value> {
+    if let Some(chunk_extra) = chunk_extra {
+        extra.insert(
+            crate::urp::CHAT_CHUNK_EXTRA_KEY.to_string(),
+            Value::Object(chunk_extra.clone()),
+        );
+    }
+    extra
 }
 
 fn chat_choice_extra(choice: &Map<String, Value>) -> Map<String, Value> {
@@ -1347,50 +1403,23 @@ fn resolve_reasoning_source(
     reasoning_source.clone()
 }
 
-fn chat_reasoning_node_from_detail(detail: &Map<String, Value>) -> Option<Node> {
-    let detail_type = detail.get("type").and_then(Value::as_str)?;
-    if !detail_type.starts_with("reasoning.") {
-        return None;
-    }
-
-    let id = detail
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string);
-    let source = detail
-        .get("format")
-        .and_then(Value::as_str)
-        .filter(|format| !format.is_empty())
-        .map(str::to_string);
-    let content = (detail_type == "reasoning.text")
-        .then(|| detail.get("text").and_then(Value::as_str))
-        .flatten()
-        .map(str::to_string);
-    let summary = (detail_type == "reasoning.summary")
-        .then(|| detail.get("summary").and_then(Value::as_str))
-        .flatten()
-        .map(str::to_string);
-    let encrypted = (detail_type == "reasoning.encrypted")
-        .then(|| detail.get("data"))
-        .flatten()
-        .filter(|value| !value.is_null())
-        .cloned();
-    let raw_detail = crate::urp::reasoning::detail_metadata(detail);
-    let extra_body = HashMap::from([(
-        CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
-        Value::Object(raw_detail),
-    )]);
-
-    Some(Node::Reasoning {
-        metadata: Default::default(),
-        id,
-        content,
-        encrypted,
-        summary,
-        source,
-        extra_body,
-    })
+/// CHAT-4d fallback: a fragment without `id` and `index` continues the most recently started
+/// node when that node is an unidentified detail of the same type and format.
+fn continues_unidentified_detail(
+    existing: &Map<String, Value>,
+    fragment: &Map<String, Value>,
+) -> bool {
+    let unidentified = |detail: &Map<String, Value>| {
+        !detail
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+            && detail.get("index").and_then(Value::as_u64).is_none()
+    };
+    unidentified(existing)
+        && unidentified(fragment)
+        && existing.get("type") == fragment.get("type")
+        && existing.get("format") == fragment.get("format")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1424,15 +1453,32 @@ async fn process_reasoning_detail_delta(
     };
 
     ensure_response_started(tx, response_id, model, response_started).await?;
-    if matches!(
+    let latest_node_index = next_node_index.checked_sub(1);
+    let is_text_or_summary = matches!(
         detail.get("type").and_then(Value::as_str),
         Some("reasoning.text" | "reasoning.summary")
-    ) && let Some((node_index, existing_node)) =
-        reasoning_detail_nodes.iter_mut().find(|(_, existing)| {
-            reasoning_detail_raw(existing)
-                .is_some_and(|existing| reasoning_detail_identity_matches(&existing, detail))
+    );
+    let matching_position = is_text_or_summary
+        .then(|| {
+            reasoning_detail_nodes
+                .iter()
+                .position(|(_, existing)| {
+                    reasoning_detail_raw(existing).is_some_and(|existing| {
+                        reasoning_detail_identity_matches(&existing, detail)
+                    })
+                })
+                .or_else(|| {
+                    let (node_index, existing) = reasoning_detail_nodes.last()?;
+                    (Some(*node_index) == latest_node_index
+                        && reasoning_detail_raw(existing).is_some_and(|existing| {
+                            continues_unidentified_detail(&existing, detail)
+                        }))
+                    .then(|| reasoning_detail_nodes.len() - 1)
+                })
         })
-    {
+        .flatten();
+    if let Some(position) = matching_position {
+        let (node_index, existing_node) = &mut reasoning_detail_nodes[position];
         let mut accumulated = reasoning_detail_raw(existing_node).unwrap();
         let payload_key = reasoning_detail_payload_key(detail["type"].as_str().unwrap()).unwrap();
         let mut text = accumulated
@@ -1556,6 +1602,31 @@ async fn process_reasoning_summary_delta(
     Ok(())
 }
 
+fn surface_rank(surface: &str) -> u8 {
+    match surface {
+        crate::urp::CHAT_REASONING_SURFACE_REASONING_CONTENT => 3,
+        crate::urp::CHAT_REASONING_SURFACE_REASONING => 2,
+        _ => 1,
+    }
+}
+
+/// Records the fragment's scalar surface on the node and returns the event extras for it.
+fn reasoning_surface_extra(
+    surface: Option<&'static str>,
+    node_surface: &mut Option<&'static str>,
+) -> HashMap<String, Value> {
+    let Some(surface) = surface else {
+        return HashMap::new();
+    };
+    if node_surface.is_none_or(|current| surface_rank(surface) > surface_rank(current)) {
+        *node_surface = Some(surface);
+    }
+    HashMap::from([(
+        crate::urp::CHAT_REASONING_SURFACE_EXTRA_KEY.to_string(),
+        Value::String(surface.to_string()),
+    )])
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn process_reasoning_text_delta(
     tx: &mpsc::Sender<UrpStreamEvent>,
@@ -1563,6 +1634,8 @@ async fn process_reasoning_text_delta(
     model: &str,
     content: Option<&str>,
     source: Option<&str>,
+    surface: Option<&'static str>,
+    node_surface: &mut Option<&'static str>,
     response_started: &mut bool,
     reasoning_node_index: &mut Option<u32>,
     next_node_index: &mut u32,
@@ -1575,7 +1648,9 @@ async fn process_reasoning_text_delta(
     };
 
     let source = resolve_reasoning_source(reasoning_source, source);
-    let event_extra = chat_delta_event_extra(std::mem::take(delta_extra));
+    let surface_extra = reasoning_surface_extra(surface, node_surface);
+    let mut event_extra = chat_delta_event_extra(std::mem::take(delta_extra));
+    event_extra.extend(surface_extra.clone());
     let node_index = ensure_node_started(
         tx,
         response_id,
@@ -1587,7 +1662,7 @@ async fn process_reasoning_text_delta(
             metadata: Default::default(),
             id: None,
         },
-        HashMap::new(),
+        surface_extra,
     )
     .await?;
     reasoning_text.push_str(content);
@@ -1614,6 +1689,8 @@ async fn process_reasoning_encrypted_delta(
     model: &str,
     encrypted: Option<&Value>,
     source: Option<&str>,
+    surface: Option<&'static str>,
+    node_surface: &mut Option<&'static str>,
     response_started: &mut bool,
     reasoning_node_index: &mut Option<u32>,
     next_node_index: &mut u32,
@@ -1637,7 +1714,9 @@ async fn process_reasoning_encrypted_delta(
     }
 
     let source = resolve_reasoning_source(reasoning_source, source);
-    let event_extra = chat_delta_event_extra(std::mem::take(delta_extra));
+    let surface_extra = reasoning_surface_extra(surface, node_surface);
+    let mut event_extra = chat_delta_event_extra(std::mem::take(delta_extra));
+    event_extra.extend(surface_extra.clone());
     let node_index = ensure_node_started(
         tx,
         response_id,
@@ -1649,7 +1728,7 @@ async fn process_reasoning_encrypted_delta(
             metadata: Default::default(),
             id: None,
         },
-        HashMap::new(),
+        surface_extra,
     )
     .await?;
     reasoning_sig.push_str(&sig);
@@ -2024,6 +2103,7 @@ async fn process_terminal_message_snapshot(
     reasoning_text: &mut String,
     reasoning_sig: &mut String,
     reasoning_source: &mut Option<String>,
+    reasoning_surface: &mut Option<&'static str>,
     reasoning_detail_nodes: &mut Vec<(u32, Node)>,
     call_order: &mut Vec<String>,
     calls: &mut HashMap<String, (ToolCallType, String, String, bool)>,
@@ -2081,17 +2161,18 @@ async fn process_terminal_message_snapshot(
         )
         .await?;
     } else if reasoning_detail_nodes.is_empty() {
-        if let Some(snapshot) = message
-            .get("reasoning")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                message
-                    .get("reasoning_content")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty())
-            })
-            && let Some(suffix) = snapshot_suffix(reasoning_text, snapshot)
+        if let Some((snapshot, surface)) = [
+            ("reasoning_content", crate::urp::CHAT_REASONING_SURFACE_REASONING_CONTENT),
+            ("reasoning", crate::urp::CHAT_REASONING_SURFACE_REASONING),
+        ]
+        .into_iter()
+        .find_map(|(key, surface)| {
+            message
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(|value| (value, surface))
+        }) && let Some(suffix) = snapshot_suffix(reasoning_text, snapshot)
         {
             process_reasoning_text_delta(
                 tx,
@@ -2099,6 +2180,8 @@ async fn process_terminal_message_snapshot(
                 model,
                 Some(suffix),
                 None,
+                Some(surface),
+                reasoning_surface,
                 response_started,
                 reasoning_node_index,
                 next_node_index,
@@ -2120,6 +2203,8 @@ async fn process_terminal_message_snapshot(
                     model,
                     Some(&Value::String(suffix.to_string())),
                     None,
+                    Some(crate::urp::CHAT_REASONING_SURFACE_REASONING_OPAQUE),
+                    reasoning_surface,
                     response_started,
                     reasoning_node_index,
                     next_node_index,
@@ -2578,6 +2663,7 @@ fn sorted_nodes(
     reasoning_summary: &str,
     reasoning_sig: &str,
     reasoning_source: Option<&str>,
+    reasoning_surface: Option<&str>,
     reasoning_detail_nodes: &[(u32, Node)],
     call_order: &[String],
     calls: &HashMap<String, (ToolCallType, String, String, bool)>,
@@ -2597,7 +2683,14 @@ fn sorted_nodes(
                     .then(|| Value::String(reasoning_sig.to_string())),
                 summary: (!reasoning_summary.is_empty()).then(|| reasoning_summary.to_string()),
                 source: reasoning_source.map(|source| source.to_string()),
-                extra_body: HashMap::new(),
+                extra_body: reasoning_surface
+                    .map(|surface| {
+                        HashMap::from([(
+                            crate::urp::CHAT_REASONING_SURFACE_EXTRA_KEY.to_string(),
+                            Value::String(surface.to_string()),
+                        )])
+                    })
+                    .unwrap_or_default(),
             },
         ));
     }

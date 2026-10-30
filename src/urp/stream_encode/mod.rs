@@ -10,6 +10,8 @@ use axum::response::sse::Event;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+/// `chat_include_usage` is the downstream Chat request's `stream_options.include_usage`
+/// (DC7); other downstream protocols ignore it.
 pub(crate) async fn emit_synthetic_stream_from_urp_response(
     downstream: DownstreamProtocol,
     logical_model: &str,
@@ -17,6 +19,7 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
     synthetic_reasoning_duration_secs: Option<u64>,
     sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
+    chat_include_usage: bool,
 ) -> AppResult<()> {
     match downstream {
         DownstreamProtocol::Responses => {
@@ -30,8 +33,14 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
             .await
         }
         DownstreamProtocol::ChatCompletions => {
-            openai_chat::emit_synthetic_chat_stream(logical_model, resp, sse_max_frame_length, tx)
-                .await
+            openai_chat::emit_synthetic_chat_stream(
+                logical_model,
+                resp,
+                sse_max_frame_length,
+                chat_include_usage,
+                tx,
+            )
+            .await
         }
         DownstreamProtocol::AnthropicMessages => {
             anthropic::emit_synthetic_messages_stream(logical_model, resp, sse_max_frame_length, tx)
@@ -40,6 +49,9 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
     }
 }
 
+/// `chat_include_usage` is the downstream Chat request's `stream_options.include_usage`
+/// (DC7); other downstream protocols ignore it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn encode_urp_stream(
     downstream: DownstreamProtocol,
     rx: mpsc::Receiver<UrpStreamEvent>,
@@ -48,6 +60,7 @@ pub(crate) async fn encode_urp_stream(
     stream_started_at: Instant,
     sse_max_frame_length: Option<usize>,
     mask_sensitive_info: bool,
+    chat_include_usage: bool,
 ) -> AppResult<()> {
     match downstream {
         DownstreamProtocol::Responses => {
@@ -68,6 +81,7 @@ pub(crate) async fn encode_urp_stream(
                 logical_model,
                 sse_max_frame_length,
                 mask_sensitive_info,
+                chat_include_usage,
             )
             .await
         }

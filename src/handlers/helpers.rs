@@ -1397,6 +1397,8 @@ const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
     "thinking",
     "include_reasoning",
     "user_id",
+    // Vercel AI Gateway; the Chat encoder emits it only for the vercel dialect (PC0b).
+    "providerOptions",
 ];
 
 const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
@@ -2163,6 +2165,13 @@ fn provider_supports_tool_definition(
 
     if tool.tool_type == "custom" {
         return provider_supports_custom_tool(tool, provider_type);
+    }
+
+    // PC3: the Chat encoder maps web-search built-ins per dialect or drops them.
+    if provider_type == ProviderType::ChatCompletion
+        && urp::encode::openai_chat::is_web_search_builtin(&tool.tool_type)
+    {
+        return true;
     }
 
     if let Some(origin) = tool.origin_protocol {

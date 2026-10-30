@@ -3,15 +3,15 @@ use crate::urp::encode::{
     usage_input_details, usage_output_details,
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
-use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
 use crate::urp::{
     AudioSource, CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY, CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY,
     CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY, CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY,
     CHAT_MESSAGE_AUDIO_EXTRA_KEY, CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
     CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING_CONTENT,
-    CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource, FinishReason, ImageSource, Node, OrdinaryRole,
-    ProviderProtocol, ResponseFormat, StopControl, ToolCallType, ToolChoice, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse, tool_call_arguments_for_wire,
+    CHAT_REASONING_SURFACE_REASONING_OPAQUE, CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource,
+    FinishReason, ImageSource, Node, OrdinaryRole, ProviderProtocol, ResponseFormat, StopControl,
+    ToolCallType, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    tool_call_arguments_for_wire,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -49,13 +49,50 @@ fn encode_chat_tool_call(
     }
 }
 
-fn merge_chat_usage_extra(usage: &mut Value, extra: &HashMap<String, Value>) {
-    let Some(usage_obj) = usage.as_object_mut() else {
-        return;
-    };
+/// DC7b: the Chat completion id for both modes; generated only when the URP id is empty.
+pub(crate) fn chat_completion_id(id: &str) -> String {
+    if id.is_empty() {
+        format!("chatcmpl-{}", uuid::Uuid::new_v4().simple())
+    } else {
+        id.to_string()
+    }
+}
 
+/// DC7a: the Chat `usage` object for non-stream responses and the stream usage chunk.
+pub(crate) fn encode_chat_usage(usage: &crate::urp::Usage) -> Value {
+    let aggregate = usage.accounting();
+    let usage = aggregate.as_ref();
+    let input_details = usage_input_details(usage);
+    let output_details = usage_output_details(usage);
+    let mut prompt_details = Map::from_iter([(
+        "cached_tokens".to_string(),
+        json!(input_details.cache_read_tokens),
+    )]);
+    // Decision 4: counters outside the OpenAI schema appear only when non-zero.
+    for (key, value) in [
+        ("cache_write_tokens", input_details.cache_creation_tokens),
+        ("cache_creation_tokens", input_details.cache_creation_tokens),
+        ("tool_prompt_tokens", input_details.tool_prompt_tokens),
+    ] {
+        if value > 0 {
+            prompt_details.insert(key.to_string(), json!(value));
+        }
+    }
+    let mut usage_value = json!({
+        "prompt_tokens": usage.input_tokens,
+        "completion_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens(),
+        "completion_tokens_details": {
+            "reasoning_tokens": output_details.reasoning_tokens,
+            "accepted_prediction_tokens": output_details.accepted_prediction_tokens,
+            "rejected_prediction_tokens": output_details.rejected_prediction_tokens
+        },
+        "prompt_tokens_details": prompt_details,
+    });
+    let usage_obj = usage_value.as_object_mut().expect("chat usage object");
     for detail_key in ["prompt_tokens_details", "completion_tokens_details"] {
-        let Some(extra_detail) = extra.get(detail_key).and_then(Value::as_object) else {
+        let Some(extra_detail) = usage.extra_body.get(detail_key).and_then(Value::as_object)
+        else {
             continue;
         };
         let Some(generated_detail) = usage_obj.get_mut(detail_key).and_then(Value::as_object_mut)
@@ -70,17 +107,31 @@ fn merge_chat_usage_extra(usage: &mut Value, extra: &HashMap<String, Value>) {
             }
         }
     }
-
-    for (key, value) in extra {
+    for (key, value) in &usage.extra_body {
         if !key.starts_with("_monoize_")
             && !matches!(
                 key.as_str(),
-                "prompt_tokens_details" | "completion_tokens_details"
+                "prompt_tokens_details"
+                    | "completion_tokens_details"
+                    | "input_tokens_details"
+                    | "output_tokens_details"
+                    | "cost"
+                    | "cost_details"
+                    | "is_byok"
             )
         {
-            usage_obj.insert(key.clone(), value.clone());
+            usage_obj.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
+    crate::urp::usage::write_modality(
+        &mut usage_value["prompt_tokens_details"],
+        &input_details.modality_breakdown,
+    );
+    crate::urp::usage::write_modality(
+        &mut usage_value["completion_tokens_details"],
+        &output_details.modality_breakdown,
+    );
+    usage_value
 }
 
 fn encode_chat_content_part(part: &Part) -> Option<Value> {
@@ -304,18 +355,32 @@ fn finalize_chat_response_content(m: &mut Map<String, Value>, content_parts: Vec
                 .map(str::to_string)
         })
         .collect::<Vec<_>>()
-        .join("\n\n");
+        .concat();
     m.insert("content".to_string(), Value::String(content));
 }
 
-fn flush_pending_chat_message(pending: &mut Option<PendingChatMessage>, out: &mut Vec<Value>) {
+fn flush_pending_chat_message(
+    pending: &mut Option<PendingChatMessage>,
+    out: &mut Vec<Value>,
+    dialect: ChatDialect,
+) {
     let Some(pending_msg) = pending.take() else {
         return;
     };
+    let mut reasoning_fields = Map::new();
+    insert_reasoning_fields(
+        &mut reasoning_fields,
+        &pending_msg.reasoning_parts,
+        ReasoningTarget::Request {
+            dialect,
+            has_tool_calls: !pending_msg.tool_calls.is_empty()
+                || pending_msg.legacy_function_call.is_some(),
+        },
+    );
     if pending_msg.content_parts.is_empty()
         && pending_msg.tool_calls.is_empty()
         && pending_msg.refusal.is_none()
-        && pending_msg.reasoning_parts.is_empty()
+        && reasoning_fields.is_empty()
         && pending_msg.legacy_function_call.is_none()
         && pending_msg.message_extra.is_empty()
     {
@@ -340,15 +405,9 @@ fn flush_pending_chat_message(pending: &mut Option<PendingChatMessage>, out: &mu
     if let Some(function_call) = pending_msg.legacy_function_call {
         m.insert("function_call".to_string(), function_call);
     }
-    insert_openrouter_reasoning_fields(&mut m, &pending_msg.reasoning_parts, false);
+    m.extend(reasoning_fields);
     merge_chat_wire_extra(&mut m, &pending_msg.message_extra);
     out.push(Value::Object(m));
-}
-
-fn should_split_chat_message(existing: &PendingChatMessage, part: &Part) -> bool {
-    let _ = existing;
-    let _ = part;
-    false
 }
 
 fn push_part_into_pending_chat_message(
@@ -357,6 +416,7 @@ fn push_part_into_pending_chat_message(
     role: Role,
     extra_body: &HashMap<String, Value>,
     part: &Part,
+    dialect: ChatDialect,
 ) {
     if let Part::ProviderItem {
         id,
@@ -372,7 +432,7 @@ fn push_part_into_pending_chat_message(
             .and_then(Value::as_bool)
             == Some(true)
         {
-            flush_pending_chat_message(pending, out);
+            flush_pending_chat_message(pending, out, dialect);
             out.push(chat_provider_item_wire_body(
                 id.as_deref(),
                 item_type,
@@ -381,12 +441,6 @@ fn push_part_into_pending_chat_message(
             ));
             return;
         }
-    }
-    let should_flush = pending
-        .as_ref()
-        .is_some_and(|existing| should_split_chat_message(existing, part));
-    if should_flush {
-        flush_pending_chat_message(pending, out);
     }
 
     let entry = pending.get_or_insert_with(|| PendingChatMessage {
@@ -490,21 +544,93 @@ fn push_part_into_pending_chat_message(
     }
 }
 
-pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    encode_request_checked(req, upstream_model)
-        .unwrap_or_else(|error| crate::urp::media::error_body(&error))
+/// PC0: the Chat Completions wire dialect of one upstream attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatDialect {
+    OpenAi,
+    DeepSeek,
+    OpenRouter,
+    Vercel,
+    Generic,
 }
 
-pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
-    let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::ChatCompletion)?;
-    Ok(encode_request_prepared(&prepared, upstream_model))
+impl ChatDialect {
+    pub fn resolve(base_url: &str, upstream_model: &str) -> Self {
+        let host = reqwest::Url::parse(base_url.trim())
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .unwrap_or_default();
+        if host == "api.openai.com" || host.ends_with(".openai.azure.com") {
+            Self::OpenAi
+        } else if host == "openrouter.ai" || host.ends_with(".openrouter.ai") {
+            Self::OpenRouter
+        } else if host == "ai-gateway.vercel.sh" {
+            Self::Vercel
+        } else if host == "api.deepseek.com"
+            || upstream_model.to_ascii_lowercase().contains("deepseek")
+        {
+            Self::DeepSeek
+        } else {
+            Self::Generic
+        }
+    }
+
+    fn reasoning_details(self) -> bool {
+        matches!(self, Self::OpenRouter | Self::Vercel | Self::Generic)
+    }
 }
 
-fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
-    let request_items = nodes_to_items(&req.input);
+/// A request the Chat encoder refuses before dispatch; `code` is the HTTP 400 error code.
+#[derive(Debug, Clone)]
+pub struct ChatEncodeError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+pub fn encode_request(req: &UrpRequest, upstream_model: &str, dialect: ChatDialect) -> Value {
+    encode_request_checked(req, upstream_model, dialect)
+        .unwrap_or_else(|error| crate::urp::media::error_body(&error.message))
+}
+
+pub fn encode_request_checked(
+    req: &UrpRequest,
+    upstream_model: &str,
+    dialect: ChatDialect,
+) -> Result<Value, ChatEncodeError> {
+    let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::ChatCompletion)
+        .map_err(|message| ChatEncodeError {
+            code: "unsupported_media",
+            message,
+        })?;
+    encode_request_prepared(&prepared, upstream_model, dialect)
+}
+
+fn encode_request_prepared(
+    req: &UrpRequest,
+    upstream_model: &str,
+    dialect: ChatDialect,
+) -> Result<Value, ChatEncodeError> {
+    // PC2.11: an empty assistant text carries nothing and must not split the assistant turn.
+    let input = req
+        .input
+        .iter()
+        .filter(|node| {
+            !matches!(node, Node::Text {
+                role: OrdinaryRole::Assistant,
+                content,
+                citations,
+                extra_body,
+                ..
+            } if content.is_empty()
+                && citations.is_empty()
+                && extra_body.keys().all(|key| key.starts_with("_monoize_")))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let request_items = nodes_to_items(&input);
     let mut body = json!({
         "model": upstream_model,
-        "messages": encode_messages(&request_items),
+        "messages": encode_messages(&request_items, dialect),
     });
 
     let obj = body.as_object_mut().expect("chat request object");
@@ -518,91 +644,67 @@ fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
         obj.insert("top_p".to_string(), Value::from(top_p));
     }
     if let Some(max) = req.max_output_tokens {
-        let key = if is_deepseek_model(upstream_model) {
-            "max_tokens"
-        } else {
-            "max_completion_tokens"
+        let client_field = req
+            .extra_body
+            .get(crate::urp::CHAT_MAX_TOKENS_FIELD_EXTRA_KEY)
+            .and_then(Value::as_str)
+            .filter(|field| matches!(*field, "max_tokens" | "max_completion_tokens"));
+        let key = match (dialect, client_field) {
+            (ChatDialect::DeepSeek, _) => "max_tokens",
+            (_, Some(field)) => field,
+            (ChatDialect::OpenRouter | ChatDialect::Vercel, None) => "max_tokens",
+            (ChatDialect::OpenAi | ChatDialect::Generic, None) => "max_completion_tokens",
         };
         obj.insert(key.to_string(), Value::from(max));
     }
     if let Some(reasoning) = &req.reasoning {
-        let native_reasoning = reasoning
-            .extra_body
-            .get(CHAT_REASONING_CONFIG_EXTRA_KEY)
-            .and_then(Value::as_object);
-        let native_thinking = reasoning
-            .extra_body
-            .get(CHAT_THINKING_CONFIG_EXTRA_KEY)
-            .and_then(Value::as_object);
-        let mut controls = native_reasoning.cloned().unwrap_or_default();
-        controls.retain(|key, _| {
-            !matches!(
-                key.as_str(),
-                "effort" | "summary" | "max_tokens" | "enabled"
-            )
-        });
-        let effort = if reasoning.disabled() {
-            Some("none")
-        } else {
-            reasoning.effort.as_deref()
-        };
-        if let Some(summary) = &reasoning.summary {
-            controls.insert("summary".into(), json!(summary));
-        }
-        if native_thinking.is_none() {
-            if let Some(budget) = reasoning.budget_tokens {
-                controls.insert("max_tokens".into(), json!(budget));
-            }
-            if let Some(mode) = &reasoning.mode {
-                controls.insert("enabled".into(), json!(mode != "disabled"));
-            }
-        }
-        if native_reasoning.is_some() || !controls.is_empty() {
-            if let Some(effort) = effort {
-                controls.insert("effort".into(), json!(chat_wire_effort(effort)));
-            }
-            obj.insert("reasoning".into(), Value::Object(controls));
-        } else if let Some(effort) = effort {
-            obj.insert("reasoning_effort".into(), json!(chat_wire_effort(effort)));
-        }
-        if let Some(native) = native_thinking {
-            let mut thinking = native.clone();
-            thinking.retain(|key, _| !matches!(key.as_str(), "type" | "budget_tokens" | "display"));
-            if reasoning.disabled() {
-                thinking.insert("type".into(), json!("disabled"));
-            } else if let Some(mode) = &reasoning.mode {
-                thinking.insert("type".into(), json!(mode));
-            }
-            if let Some(budget) = reasoning.budget_tokens {
-                thinking.insert("budget_tokens".into(), json!(budget));
-            }
-            if let Some(display) = &reasoning.display {
-                thinking.insert("display".into(), json!(display));
-            }
-            obj.insert("thinking".into(), Value::Object(thinking));
-        }
+        encode_reasoning_controls(obj, reasoning, dialect);
     }
     if let Some(tools) = &req.tools {
-        let modern_tools = encode_tools(tools);
+        let (modern_tools, dropped_tool_names) = encode_tools(tools, dialect)?;
         let legacy_functions = encode_legacy_functions(tools);
-        if !modern_tools.is_empty() || legacy_functions.is_empty() {
+        if !modern_tools.is_empty() {
             obj.insert("tools".to_string(), Value::Array(modern_tools));
         }
         if !legacy_functions.is_empty() {
             obj.insert("functions".to_string(), Value::Array(legacy_functions));
         }
-    }
-    if let Some(tc) = &req.tool_choice {
-        if let Some(raw_legacy_choice) = req.extra_body.get(CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY) {
-            if let Some(choice) = encode_legacy_function_choice(tc, raw_legacy_choice) {
-                obj.insert("function_call".to_string(), choice);
+        let has_tools = obj.contains_key("tools") || obj.contains_key("functions");
+        if let Some(tc) = &req.tool_choice
+            && has_tools
+        {
+            if let Some(raw_legacy_choice) =
+                req.extra_body.get(CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY)
+            {
+                if let Some(choice) = encode_legacy_function_choice(tc, raw_legacy_choice) {
+                    obj.insert("function_call".to_string(), choice);
+                }
+            } else if tool_choice_names_any(tc, &dropped_tool_names) {
+                obj.insert("tool_choice".to_string(), json!("auto"));
+            } else {
+                obj.insert("tool_choice".to_string(), tool_choice_to_chat_value(tc));
             }
-        } else {
-            obj.insert("tool_choice".to_string(), tool_choice_to_chat_value(tc));
         }
-    }
-    if let Some(parallel) = req.parallel_tool_calls {
-        obj.insert("parallel_tool_calls".to_string(), Value::Bool(parallel));
+        if let Some(parallel) = req.parallel_tool_calls
+            && has_tools
+        {
+            obj.insert("parallel_tool_calls".to_string(), Value::Bool(parallel));
+        }
+    } else {
+        if let Some(tc) = &req.tool_choice {
+            if let Some(raw_legacy_choice) =
+                req.extra_body.get(CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY)
+            {
+                if let Some(choice) = encode_legacy_function_choice(tc, raw_legacy_choice) {
+                    obj.insert("function_call".to_string(), choice);
+                }
+            } else {
+                obj.insert("tool_choice".to_string(), tool_choice_to_chat_value(tc));
+            }
+        }
+        if let Some(parallel) = req.parallel_tool_calls {
+            obj.insert("parallel_tool_calls".to_string(), Value::Bool(parallel));
+        }
     }
     if let Some(stop) = &req.stop {
         let value = match stop {
@@ -630,6 +732,9 @@ fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
     }
 
     merge_chat_wire_extra(obj, &req.extra_body);
+    if dialect != ChatDialect::Vercel {
+        obj.remove("providerOptions");
+    }
 
     if req.stream == Some(true) {
         match obj.get_mut("stream_options") {
@@ -655,7 +760,83 @@ fn encode_request_prepared(req: &UrpRequest, upstream_model: &str) -> Value {
         &req.sampling,
         crate::urp::ProviderProtocol::ChatCompletion,
     );
-    body
+    Ok(body)
+}
+
+/// RC4 for Chat targets, by dialect.
+fn encode_reasoning_controls(
+    obj: &mut Map<String, Value>,
+    reasoning: &crate::urp::ReasoningConfig,
+    dialect: ChatDialect,
+) {
+    let native_reasoning = reasoning
+        .extra_body
+        .get(CHAT_REASONING_CONFIG_EXTRA_KEY)
+        .and_then(Value::as_object)
+        .filter(|_| dialect.reasoning_details());
+    let native_thinking = reasoning
+        .extra_body
+        .get(CHAT_THINKING_CONFIG_EXTRA_KEY)
+        .and_then(Value::as_object);
+    let effort = if reasoning.disabled() {
+        Some("none")
+    } else {
+        reasoning.effort.as_deref()
+    }
+    .map(chat_wire_effort);
+    // A native `thinking` object owns mode and budget.
+    let budget = reasoning.budget_tokens.filter(|_| native_thinking.is_none());
+    let mode = reasoning
+        .mode
+        .as_deref()
+        .filter(|_| native_thinking.is_none());
+
+    if let Some(native) = native_reasoning {
+        let mut controls = native.clone();
+        controls.retain(|key, _| {
+            !matches!(
+                key.as_str(),
+                "effort" | "summary" | "max_tokens" | "enabled"
+            )
+        });
+        if let Some(effort) = effort {
+            controls.insert("effort".into(), json!(effort));
+        } else if let Some(budget) = budget {
+            controls.insert("max_tokens".into(), json!(budget));
+        }
+        if let Some(summary) = &reasoning.summary {
+            controls.insert("summary".into(), json!(summary));
+        }
+        if let Some(mode) = mode {
+            controls.insert("enabled".into(), json!(mode != "disabled"));
+        }
+        obj.insert("reasoning".into(), Value::Object(controls));
+    } else if let Some(effort) = effort {
+        obj.insert("reasoning_effort".into(), json!(effort));
+    } else if matches!(dialect, ChatDialect::OpenRouter | ChatDialect::Vercel) {
+        if let Some(budget) = budget {
+            obj.insert("reasoning".into(), json!({ "max_tokens": budget }));
+        } else if mode.is_some_and(|mode| mode != "disabled") {
+            obj.insert("reasoning".into(), json!({ "enabled": true }));
+        }
+    }
+
+    if let Some(native) = native_thinking {
+        let mut thinking = native.clone();
+        thinking.retain(|key, _| !matches!(key.as_str(), "type" | "budget_tokens" | "display"));
+        if reasoning.disabled() {
+            thinking.insert("type".into(), json!("disabled"));
+        } else if let Some(mode) = &reasoning.mode {
+            thinking.insert("type".into(), json!(mode));
+        }
+        if let Some(budget) = reasoning.budget_tokens {
+            thinking.insert("budget_tokens".into(), json!(budget));
+        }
+        if let Some(display) = &reasoning.display {
+            thinking.insert("display".into(), json!(display));
+        }
+        obj.insert("thinking".into(), Value::Object(thinking));
+    }
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
@@ -754,7 +935,7 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
         .and_then(Value::as_str)
         .filter(|reason| !reason.is_empty());
     let finish_reason = match resp.finish_reason {
-        Some(FinishReason::Other) => native_finish_reason.unwrap_or("error"),
+        Some(FinishReason::Other) => native_finish_reason.unwrap_or("stop"),
         Some(FinishReason::ToolCalls) if has_legacy_function_call => "function_call",
         Some(reason) => finish_reason_to_chat(reason),
         None => {
@@ -775,7 +956,7 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
     };
 
     let mut result = json!({
-        "id": resp.id,
+        "id": chat_completion_id(&resp.id),
         "object": "chat.completion",
         "created": resp
             .created_at
@@ -829,36 +1010,7 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
         });
     }
     if let Some(usage) = &resp.usage {
-        let aggregate = usage.accounting();
-        let usage = aggregate.as_ref();
-        let input_details = usage_input_details(usage);
-        let output_details = usage_output_details(usage);
-        let mut usage_value = json!({
-            "prompt_tokens": usage.input_tokens,
-            "completion_tokens": usage.output_tokens,
-            "total_tokens": usage.total_tokens(),
-            "completion_tokens_details": {
-                "reasoning_tokens": output_details.reasoning_tokens,
-                "accepted_prediction_tokens": output_details.accepted_prediction_tokens,
-                "rejected_prediction_tokens": output_details.rejected_prediction_tokens
-            },
-            "prompt_tokens_details": {
-                "cached_tokens": input_details.cache_read_tokens,
-                "cache_write_tokens": input_details.cache_creation_tokens,
-                "cache_creation_tokens": input_details.cache_creation_tokens,
-                "tool_prompt_tokens": input_details.tool_prompt_tokens
-            }
-        });
-        merge_chat_usage_extra(&mut usage_value, &usage.extra_body);
-        crate::urp::usage::write_modality(
-            &mut usage_value["prompt_tokens_details"],
-            &input_details.modality_breakdown,
-        );
-        crate::urp::usage::write_modality(
-            &mut usage_value["completion_tokens_details"],
-            &output_details.modality_breakdown,
-        );
-        result["usage"] = usage_value;
+        result["usage"] = encode_chat_usage(usage);
     }
 
     if let Some(choice_extra) = resp
@@ -892,7 +1044,7 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
 
     let mut content_parts = Vec::new();
     let mut text_offset = 0u64;
-    let mut text_count = 0usize;
+    let mut text_phases: Vec<Option<&String>> = Vec::new();
     let mut tool_calls = Vec::new();
     let mut refusal: Option<String> = None;
     let mut reasoning_parts = Vec::new();
@@ -915,12 +1067,10 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
                 role: OrdinaryRole::Assistant,
                 content,
                 citations,
+                phase,
                 extra_body,
                 ..
             } => {
-                if text_count > 0 {
-                    text_offset += 2;
-                }
                 if !citations.is_empty() {
                     message
                         .entry("annotations".to_string())
@@ -937,12 +1087,8 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
                 if let Some(obj) = block.as_object_mut() {
                     merge_chat_wire_extra(obj, extra_body);
                 }
-                merge_extra_preserving_existing(
-                    &mut message_extra,
-                    assistant_message_extra_from_node(node),
-                );
+                text_phases.push(phase.as_ref());
                 text_offset += content.chars().count() as u64;
-                text_count += 1;
                 content_parts.push(block);
             }
             Node::Audio {
@@ -960,33 +1106,26 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
                 }
             }
             Node::Refusal { content, .. } => {
-                refusal.get_or_insert_with(|| content.clone());
+                refusal.get_or_insert_with(String::new).push_str(content);
             }
-            Node::Reasoning { .. } => {
-                if let Node::Reasoning {
-                    metadata,
-                    id,
-                    content,
-                    encrypted,
-                    summary,
-                    source,
-                    extra_body,
-                } = node
-                {
-                    reasoning_parts.push(Part::Reasoning {
-                        metadata: metadata.clone(),
-                        id: id.clone(),
-                        content: content.clone(),
-                        encrypted: encrypted.clone(),
-                        summary: summary.clone(),
-                        source: source.clone(),
-                        extra_body: extra_body.clone(),
-                    });
-                }
-                merge_extra_preserving_existing(
-                    &mut message_extra,
-                    assistant_message_extra_from_node(node),
-                );
+            Node::Reasoning {
+                metadata,
+                id,
+                content,
+                encrypted,
+                summary,
+                source,
+                extra_body,
+            } => {
+                reasoning_parts.push(Part::Reasoning {
+                    metadata: metadata.clone(),
+                    id: id.clone(),
+                    content: content.clone(),
+                    encrypted: encrypted.clone(),
+                    summary: summary.clone(),
+                    source: source.clone(),
+                    extra_body: extra_body.clone(),
+                });
             }
             Node::ToolCall {
                 tool_type,
@@ -1045,10 +1184,6 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
                     body,
                     extra_body,
                 ) {
-                    merge_extra_preserving_existing(
-                        &mut message_extra,
-                        assistant_message_extra_from_node(node),
-                    );
                     content_parts.push(part);
                 }
             }
@@ -1056,6 +1191,14 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
         }
     }
 
+    // DC4a: `phase` describes the whole message only when every text node agrees.
+    if let Some(Some(first)) = text_phases.first()
+        && text_phases.iter().all(|phase| *phase == Some(*first))
+    {
+        message_extra
+            .entry("phase".to_string())
+            .or_insert_with(|| Value::String((*first).clone()));
+    }
     let had_content_parts = !content_parts.is_empty();
     finalize_chat_response_content(&mut message, content_parts);
     if let Some(refusal) = refusal {
@@ -1067,7 +1210,7 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
     if let Some(function_call) = legacy_function_call {
         message.insert("function_call".to_string(), function_call);
     }
-    insert_openrouter_reasoning_fields(&mut message, &reasoning_parts, true);
+    insert_reasoning_fields(&mut message, &reasoning_parts, ReasoningTarget::Response);
     merge_chat_wire_extra(&mut message, &message_extra);
     if !had_content_parts
         && (message.contains_key("audio")
@@ -1078,27 +1221,6 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
         message.insert("content".to_string(), Value::Null);
     }
     message
-}
-
-fn assistant_message_extra_from_node(node: &Node) -> HashMap<String, Value> {
-    match node {
-        Node::Text { phase, .. } => {
-            let mut out = HashMap::new();
-            if let Some(phase) = phase {
-                out.insert("phase".to_string(), Value::String(phase.clone()));
-            }
-            out
-        }
-        Node::Image { .. }
-        | Node::Audio { .. }
-        | Node::File { .. }
-        | Node::Refusal { .. }
-        | Node::ToolCall { .. }
-        | Node::ProviderItem { .. }
-        | Node::Reasoning { .. }
-        | Node::ToolResult { .. }
-        | Node::NextDownstreamEnvelopeExtra { .. } => HashMap::new(),
-    }
 }
 
 fn merge_extra_preserving_existing(dst: &mut HashMap<String, Value>, src: HashMap<String, Value>) {
@@ -1118,7 +1240,7 @@ fn merge_chat_wire_extra(
     }
 }
 
-fn encode_messages(messages: &[Item]) -> Vec<Value> {
+fn encode_messages(messages: &[Item], dialect: ChatDialect) -> Vec<Value> {
     let mut out = Vec::new();
     for item in messages {
         match item {
@@ -1127,24 +1249,18 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                 call_id,
                 name,
                 content,
+                is_error,
                 extra_body,
                 ..
             } => {
-                let text = content
-                    .iter()
-                    .filter_map(|content| match content {
-                        ToolResultContent::Text { text, .. } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
+                let content = encode_chat_tool_result_content(content, *is_error);
                 let mut m = Map::new();
                 if extra_body.contains_key(CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY) {
                     m.insert("role".to_string(), Value::String("function".to_string()));
-                    m.insert("content".to_string(), Value::String(text));
+                    m.insert("content".to_string(), content);
                 } else {
                     m.insert("role".to_string(), Value::String("tool".to_string()));
-                    m.insert("content".to_string(), Value::String(text));
+                    m.insert("content".to_string(), content);
                     m.insert("tool_call_id".to_string(), Value::String(call_id.clone()));
                 }
                 merge_chat_wire_extra(&mut m, extra_body);
@@ -1181,17 +1297,57 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                         *role,
                         extra_body,
                         part,
+                        dialect,
                     );
                 }
-                flush_pending_chat_message(&mut pending, &mut out);
+                flush_pending_chat_message(&mut pending, &mut out, dialect);
             }
         }
     }
     out
 }
 
-fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
+/// PC2.10: Chat tool messages accept a string or an array of text parts and have no error flag.
+fn encode_chat_tool_result_content(content: &[ToolResultContent], is_error: bool) -> Value {
+    let mut texts = content
+        .iter()
+        .filter_map(|content| match content {
+            ToolResultContent::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if is_error {
+        match texts.first_mut() {
+            Some(first) => first.insert_str(0, "Error: "),
+            None => texts.push("Error".to_string()),
+        }
+    }
+    match texts.len() {
+        0 => Value::String(String::new()),
+        1 => Value::String(texts.remove(0)),
+        _ => Value::Array(
+            texts
+                .into_iter()
+                .map(|text| json!({ "type": "text", "text": text }))
+                .collect(),
+        ),
+    }
+}
+
+pub(crate) fn is_web_search_builtin(tool_type: &str) -> bool {
+    matches!(tool_type, "web_search" | "web_search_preview")
+        || tool_type
+            .strip_prefix("web_search_")
+            .is_some_and(|date| date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// PC3. Returns the Chat tool descriptors and the names of degraded (dropped) tools.
+fn encode_tools(
+    tools: &[ToolDefinition],
+    dialect: ChatDialect,
+) -> Result<(Vec<Value>, Vec<String>), ChatEncodeError> {
     let mut out = Vec::new();
+    let mut dropped = Vec::new();
     for tool in tools {
         if tool
             .extra_body
@@ -1240,9 +1396,62 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
             obj.insert("custom".to_string(), Value::Object(custom_obj));
             merge_chat_wire_extra(&mut obj, &tool.extra_body);
             out.push(Value::Object(obj));
+        } else if tool.origin_protocol == Some(ProviderProtocol::ChatCompletion)
+            && tool.tool_type.starts_with("openrouter:")
+        {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!(tool.tool_type));
+            if let Some(name) = &tool.name {
+                obj.insert("name".to_string(), json!(name));
+            }
+            if let Some(description) = &tool.description {
+                obj.insert("description".to_string(), json!(description));
+            }
+            if let Some(Value::Object(config)) = &tool.config {
+                for (key, value) in config {
+                    if !key.starts_with("_monoize_") {
+                        obj.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+            merge_chat_wire_extra(&mut obj, &tool.extra_body);
+            out.push(Value::Object(obj));
+        } else if is_web_search_builtin(&tool.tool_type) {
+            if dialect == ChatDialect::OpenRouter {
+                out.push(json!({ "type": "openrouter:web_search" }));
+            }
+            dropped.push(tool.name.clone().unwrap_or_else(|| tool.tool_type.clone()));
+            dropped.push(tool.tool_type.clone());
+        } else {
+            return Err(ChatEncodeError {
+                code: "unsupported_tool",
+                message: format!(
+                    "tool type `{}` cannot be encoded for a Chat Completions upstream",
+                    tool.tool_type
+                ),
+            });
         }
     }
-    out
+    Ok((out, dropped))
+}
+
+/// True when a specific tool choice selects one of `names` (by `type` or nested/flat `name`).
+fn tool_choice_names_any(choice: &ToolChoice, names: &[String]) -> bool {
+    let ToolChoice::Specific(Value::Object(selector)) = choice else {
+        return false;
+    };
+    let selected = [
+        selector.get("type").and_then(Value::as_str),
+        selector.get("name").and_then(Value::as_str),
+        selector
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str),
+    ];
+    selected
+        .into_iter()
+        .flatten()
+        .any(|selected| names.iter().any(|name| name == selected))
 }
 
 fn encode_legacy_functions(tools: &[ToolDefinition]) -> Vec<Value> {
@@ -1325,15 +1534,51 @@ fn encode_response_format(format: &ResponseFormat) -> Value {
     }
 }
 
-fn insert_openrouter_reasoning_fields(
-    message: &mut Map<String, Value>,
-    parts: &[Part],
-    derive_scalar_aliases_from_raw_details: bool,
-) {
+#[derive(Clone, Copy)]
+enum ReasoningTarget {
+    /// A downstream Chat response message (DC5).
+    Response,
+    /// An assistant-history message of an upstream Chat request (PC8a).
+    Request {
+        dialect: ChatDialect,
+        has_tool_calls: bool,
+    },
+}
+
+fn reasoning_surface(extra_body: &HashMap<String, Value>) -> Option<&str> {
+    extra_body
+        .get(CHAT_REASONING_SURFACE_EXTRA_KEY)
+        .and_then(Value::as_str)
+}
+
+/// Plain text of a reasoning node: non-empty content, otherwise non-empty summary.
+fn reasoning_plain_text<'a>(content: Option<&'a str>, summary: Option<&'a str>) -> Option<&'a str> {
+    content
+        .filter(|content| !content.is_empty())
+        .or(summary.filter(|summary| !summary.is_empty()))
+}
+
+/// Assigns sequential `index` values to synthesized details that carry none (DC5).
+pub(crate) fn index_reasoning_details(details: &mut [Map<String, Value>], first: u64) -> u64 {
+    let mut next = first;
+    for detail in details {
+        if let Some(index) = detail.get("index").and_then(Value::as_u64) {
+            next = next.max(index + 1);
+        } else {
+            detail.insert("index".into(), json!(next));
+            next += 1;
+        }
+    }
+    next
+}
+
+fn insert_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part], target: ReasoningTarget) {
     let mut details = Vec::new();
-    let mut reasoning_value: Option<String> = None;
-    let mut reasoning_summary_value: Option<String> = None;
-    let mut reasoning_content_value: Option<String> = None;
+    let mut reasoning_text = String::new();
+    let mut reasoning_content = String::new();
+    let mut deepseek_surface = false;
+    let mut opaque: Option<Value> = None;
+    let mut next_index = 0u64;
 
     for part in parts {
         let Part::Reasoning {
@@ -1348,115 +1593,81 @@ fn insert_openrouter_reasoning_fields(
         else {
             continue;
         };
-        let format = source.as_deref().filter(|format| !format.is_empty());
-        if metadata.chat_content && reasoning_content_value.is_none() {
-            reasoning_content_value = content.clone().or_else(|| summary.clone());
-        }
-
-        if let Some(raw_detail) = extra_body
-            .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
-            .and_then(Value::as_object)
-        {
-            details.extend(crate::urp::reasoning::chat_details(
-                content.as_deref(),
-                summary.as_deref(),
-                encrypted.as_ref(),
-                id.as_deref(),
-                format,
-                Some(raw_detail),
-            ));
-            if derive_scalar_aliases_from_raw_details {
-                if reasoning_value.is_none() {
-                    reasoning_value = content.clone();
+        let plain = reasoning_plain_text(content.as_deref(), summary.as_deref());
+        if let ReasoningTarget::Request { dialect, .. } = target {
+            match dialect {
+                ChatDialect::OpenAi => continue,
+                ChatDialect::DeepSeek => {
+                    deepseek_surface |= reasoning_surface(extra_body)
+                        == Some(CHAT_REASONING_SURFACE_REASONING_CONTENT);
+                    reasoning_content.push_str(plain.unwrap_or_default());
+                    continue;
                 }
-                if reasoning_summary_value.is_none() {
-                    reasoning_summary_value = summary.clone();
+                ChatDialect::OpenRouter | ChatDialect::Vercel | ChatDialect::Generic => {}
+            }
+        }
+        // A scalar surface owns only the typed field it carried; other typed fields that a
+        // transform set still render as details.
+        let mut content = content.as_deref();
+        let mut encrypted = encrypted.as_ref();
+        match reasoning_surface(extra_body) {
+            Some(CHAT_REASONING_SURFACE_REASONING_CONTENT) => {
+                deepseek_surface = true;
+                reasoning_content.push_str(content.take().unwrap_or_default());
+            }
+            Some(CHAT_REASONING_SURFACE_REASONING_OPAQUE) => {
+                if let Some(value) = encrypted.take().filter(|value| !value.is_null()) {
+                    opaque = Some(value.clone());
                 }
             }
-            if metadata.chat_content && reasoning_content_value.is_none() {
-                reasoning_content_value = content.clone().or_else(|| summary.clone());
-            }
-            continue;
+            _ => {}
         }
-
-        let native_raw_surface = extra_body
-            .get(CHAT_REASONING_SURFACE_EXTRA_KEY)
-            .and_then(Value::as_str)
-            == Some(CHAT_REASONING_SURFACE_REASONING_CONTENT);
-        if native_raw_surface && reasoning_content_value.is_none() {
-            reasoning_content_value = content
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
+        let plain = reasoning_plain_text(content, summary.as_deref());
+        if metadata.chat_content {
+            reasoning_content.push_str(plain.unwrap_or_default());
         }
-
-        if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
-            if reasoning_summary_value.is_none() {
-                reasoning_summary_value = Some(summary.to_string());
-            }
-            if metadata.chat_content && reasoning_content_value.is_none() {
-                reasoning_content_value = Some(summary.to_string());
-            }
-            details.push(json!({
-                "type": "reasoning.summary",
-                "summary": summary,
-            }));
-            if let Some(format) = format {
-                details
-                    .last_mut()
-                    .and_then(Value::as_object_mut)
-                    .map(|obj| obj.insert("format".to_string(), Value::String(format.to_string())));
-            }
+        let native = extra_body.contains_key(CHAT_REASONING_DETAIL_EXTRA_KEY);
+        let mut node_details = crate::urp::reasoning::chat_node_details(
+            metadata,
+            id.as_deref(),
+            content,
+            summary.as_deref(),
+            encrypted,
+            source.as_deref(),
+            extra_body,
+        );
+        if !native {
+            next_index = index_reasoning_details(&mut node_details, next_index);
         }
-
-        if !native_raw_surface
-            && let Some(content) = content.as_deref().filter(|content| !content.is_empty())
-        {
-            if reasoning_value.is_none() {
-                reasoning_value = Some(content.to_string());
-            }
-            details.push(reasoning_text_detail_value(content, format));
-        }
-
-        if let Some(enc) = encrypted {
-            if !matches!(enc, Value::Null) {
-                if let Some(s) = enc.as_str() {
-                    if s.is_empty() {
-                        continue;
-                    }
-                }
-
-                let mut detail = reasoning_encrypted_detail_value(enc.clone(), format);
-                if let Some(id) = id
-                    .as_deref()
-                    .filter(|id| !id.is_empty())
-                    .or_else(|| extra_body.get("id").and_then(Value::as_str))
-                {
-                    detail["id"] = Value::String(id.to_string());
-                }
-                details.push(detail);
-            }
+        details.extend(node_details.into_iter().map(Value::Object));
+        // RC4e: same-Chat details are authoritative in requests; no alias is synthesized.
+        if matches!(target, ReasoningTarget::Response) || !native {
+            reasoning_text.push_str(plain.unwrap_or_default());
         }
     }
 
-    if let Some(reasoning_text) = reasoning_value.or(reasoning_summary_value) {
+    let emit_reasoning_content = match target {
+        ReasoningTarget::Request {
+            dialect: ChatDialect::DeepSeek,
+            has_tool_calls,
+        } => has_tool_calls || deepseek_surface,
+        _ => true,
+    };
+    if !reasoning_text.is_empty() {
         message.insert("reasoning".to_string(), Value::String(reasoning_text));
     }
-
-    if let Some(reasoning_content) = reasoning_content_value {
+    if emit_reasoning_content && !reasoning_content.is_empty() {
         message.insert(
             "reasoning_content".to_string(),
             Value::String(reasoning_content),
         );
     }
-
+    if let Some(opaque) = opaque {
+        message.insert("reasoning_opaque".to_string(), opaque);
+    }
     if !details.is_empty() {
         message.insert("reasoning_details".to_string(), Value::Array(details));
     }
-}
-
-fn is_deepseek_model(model: &str) -> bool {
-    model.to_ascii_lowercase().contains("deepseek")
 }
 
 fn chat_wire_effort(effort: &str) -> &str {
@@ -1467,7 +1678,7 @@ fn chat_wire_effort(effort: &str) -> &str {
     }
 }
 
-fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
+pub(crate) fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
     match finish_reason {
         FinishReason::Stop => "stop",
         FinishReason::Length
@@ -1476,7 +1687,7 @@ fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
         | FinishReason::Compaction => "length",
         FinishReason::ToolCalls => "tool_calls",
         FinishReason::ContentFilter => "content_filter",
-        FinishReason::Other => "error",
+        FinishReason::Other => "stop",
     }
 }
 
