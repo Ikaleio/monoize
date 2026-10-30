@@ -1405,9 +1405,13 @@ fn encode_tools(
             && tool.tool_type.starts_with("openrouter:")
         {
             if !matches!(dialect, ChatDialect::OpenRouter | ChatDialect::Generic) {
-                dropped.push(tool.name.clone().unwrap_or_else(|| tool.tool_type.clone()));
-                dropped.push(tool.tool_type.clone());
-                continue;
+                return Err(ChatEncodeError {
+                    code: "unsupported_tool",
+                    message: format!(
+                        "tool type `{}` is not available on this Chat Completions upstream",
+                        tool.tool_type
+                    ),
+                });
             }
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!(tool.tool_type));

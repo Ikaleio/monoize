@@ -957,13 +957,14 @@ fn chat_chunk_extra(chunk: &Value) -> Map<String, Value> {
     };
     chunk
         .iter()
-        .filter(|(key, _)| {
+        .filter(|(key, value)| {
             !crate::urp::decode::is_internal_extra_key(key)
                 && !matches!(
                     key.as_str(),
-                    "id" | "object" | "created" | "model" | "choices" | "usage" | "error"
-                        | "provider"
+                    "id" | "object" | "model" | "choices" | "usage" | "error" | "provider"
                 )
+                // DC7b: an integer `created` is the stream's chunk timestamp.
+                && (key.as_str() != "created" || value.is_i64())
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
