@@ -103,6 +103,10 @@ pub const RESPONSES_REQUEST_ECHO_EXTRA_KEY: &str = "_monoize_responses_request_e
 pub const RESPONSES_IN_PROGRESS_CONTROL: &str = "_monoize.responses.in_progress";
 /// Internal control carrying the item-level fields of an upstream message `output_item.done`.
 pub const RESPONSES_MESSAGE_DONE_CONTROL: &str = "_monoize.responses.message_done";
+/// In-band feeder frame: data `true` when a `discard_partial_items` interrupt stands (PR6c).
+pub const RESPONSES_DISCARD_REQUESTED_FRAME: &str = "_monoize.responses.discard_requested";
+/// Marks a `ResponseDone` whose terminal snapshot discarded accumulated items (PR6c).
+pub const RESPONSES_ITEMS_DISCARDED_EXTRA_KEY: &str = "_monoize_responses_items_discarded";
 /// `phase` carried by an upstream `response.output_text.done` event, on `NodeDone.extra_body`.
 pub const RESPONSES_TEXT_DONE_PHASE_EXTRA_KEY: &str = "_monoize_responses_text_done_phase";
 pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
