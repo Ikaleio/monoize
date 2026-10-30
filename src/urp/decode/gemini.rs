@@ -818,6 +818,7 @@ fn decode_tools(tools: &[Value]) -> Vec<crate::urp::ToolDefinition> {
                         extra_body: extra,
                     }),
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -836,6 +837,7 @@ fn decode_tools(tools: &[Value]) -> Vec<crate::urp::ToolDefinition> {
                 function: None,
                 custom: None,
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             });
         }
     }
@@ -1024,6 +1026,7 @@ fn render_code_execution(node: Node) -> Node {
         logprobs: None,
         citations: Vec::new(),
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }
 }
 
@@ -1393,6 +1396,7 @@ fn decode_function_response(
     let mut content = vec![ToolResultContent::Text {
         text: serde_json::to_string(&response_value).unwrap_or_default(),
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }];
     if let Some(parts) = fr.get("parts") {
         for part in content_parts(parts) {
@@ -1403,7 +1407,11 @@ fn decode_function_response(
                         extra_body,
                         ..
                     } => {
-                        content.push(ToolResultContent::Text { text, extra_body });
+                        content.push(ToolResultContent::Text {
+                            text,
+                            extra_body,
+                            cache_breakpoint: None,
+                        });
                     }
                     Node::Image {
                         source,
@@ -1487,6 +1495,7 @@ fn decode_function_response(
             );
             extra
         },
+        cache_breakpoint: None,
     })
 }
 

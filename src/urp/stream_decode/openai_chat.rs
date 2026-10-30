@@ -2709,6 +2709,7 @@ fn sorted_nodes(
                 content: output_text.to_string(),
                 phase: assistant_message_phase.map(str::to_string),
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             },
         ));
     }
@@ -2740,6 +2741,7 @@ fn sorted_nodes(
                 name: name.clone(),
                 arguments: arguments.clone(),
                 extra_body,
+                cache_breakpoint: None,
             },
         ));
     }

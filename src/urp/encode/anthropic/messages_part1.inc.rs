@@ -90,6 +90,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             name,
             arguments,
             extra_body,
+            cache_breakpoint: _,
         } => {
             if *tool_type == ToolCallType::Custom {
                 return None;
@@ -208,6 +209,7 @@ pub(crate) fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             name,
             arguments,
             extra_body,
+            cache_breakpoint: _,
         } => {
             if *tool_type == ToolCallType::Custom {
                 return None;
@@ -265,7 +267,9 @@ fn encode_tool_result_block(
     let mut content: Vec<Value> = content
         .iter()
         .filter_map(|item| match item {
-            ToolResultContent::Text { text, extra_body } => {
+            ToolResultContent::Text {
+                text, extra_body, ..
+            } => {
                 let mut block = json!({ "type": "text", "text": text });
                 merge_extra(block.as_object_mut()?, extra_body);
                 Some(block)

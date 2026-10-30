@@ -597,11 +597,16 @@ pub fn encode_request_checked(
     upstream_model: &str,
     dialect: ChatDialect,
 ) -> Result<Value, ChatEncodeError> {
-    let prepared = crate::urp::media::prepare_request(req, ProviderProtocol::ChatCompletion)
+    let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::ChatCompletion)
         .map_err(|message| ChatEncodeError {
             code: "unsupported_media",
             message,
         })?;
+    crate::urp::cache_breakpoint::materialize_wire_markers(
+        &mut prepared,
+        crate::urp::cache_breakpoint::CacheWireTarget::Chat(dialect),
+        upstream_model,
+    );
     encode_request_prepared(&prepared, upstream_model, dialect)
 }
 
@@ -1309,29 +1314,40 @@ fn encode_messages(messages: &[Item], dialect: ChatDialect) -> Vec<Value> {
 
 /// PC2.10: Chat tool messages accept a string or an array of text parts and have no error flag.
 fn encode_chat_tool_result_content(content: &[ToolResultContent], is_error: bool) -> Value {
-    let mut texts = content
+    let mut entries = content
         .iter()
         .filter_map(|content| match content {
-            ToolResultContent::Text { text, .. } => Some(text.clone()),
+            ToolResultContent::Text {
+                text, extra_body, ..
+            } => Some((text.clone(), extra_body)),
             _ => None,
         })
         .collect::<Vec<_>>();
+    let no_extra = HashMap::new();
     if is_error {
-        match texts.first_mut() {
-            Some(first) => first.insert_str(0, "Error: "),
-            None => texts.push("Error".to_string()),
+        match entries.first_mut() {
+            Some((first, _)) => first.insert_str(0, "Error: "),
+            None => entries.push(("Error".to_string(), &no_extra)),
         }
     }
-    match texts.len() {
-        0 => Value::String(String::new()),
-        1 => Value::String(texts.remove(0)),
-        _ => Value::Array(
-            texts
-                .into_iter()
-                .map(|text| json!({ "type": "text", "text": text }))
-                .collect(),
-        ),
+    if entries.is_empty() {
+        return Value::String(String::new());
     }
+    let mut parts = entries
+        .into_iter()
+        .map(|(text, extra_body)| {
+            let mut part = Map::from_iter([
+                ("type".to_string(), json!("text")),
+                ("text".to_string(), Value::String(text)),
+            ]);
+            merge_chat_wire_extra(&mut part, extra_body);
+            part
+        })
+        .collect::<Vec<_>>();
+    if parts.len() == 1 && parts[0].len() == 2 {
+        return parts.remove(0).remove("text").unwrap_or_default();
+    }
+    Value::Array(parts.into_iter().map(Value::Object).collect())
 }
 
 pub(crate) fn is_web_search_builtin(tool_type: &str) -> bool {

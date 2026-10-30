@@ -30,6 +30,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     content: system_prompt.to_string(),
                     phase: None,
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -45,6 +46,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     content: prompt.to_string(),
                     phase: None,
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -185,6 +187,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                     content: s.clone(),
                     phase: None,
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -227,6 +230,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                             content: combined,
                             phase: None,
                             extra_body: HashMap::new(),
+                            cache_breakpoint: None,
                         });
                     }
                 }
@@ -242,6 +246,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                         content: serialized,
                         phase: None,
                         extra_body: HashMap::new(),
+                        cache_breakpoint: None,
                     });
                 }
             }
@@ -259,6 +264,7 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                     content: serialized,
                     phase: None,
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }

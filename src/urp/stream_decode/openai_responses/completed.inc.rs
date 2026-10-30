@@ -44,6 +44,7 @@ fn accumulate_message_content_event(
                 signature: None,
                 citations: Vec::new(),
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             }
         }
     });
@@ -469,6 +470,7 @@ fn build_accumulated_output_entries(
                             content: output_text.clone(),
                             phase: message_phases_by_output_index.get(&output_index).cloned(),
                             extra_body: HashMap::new(),
+                            cache_breakpoint: None,
                         },
                     ],
                 });
@@ -485,6 +487,7 @@ fn build_accumulated_output_entries(
                             name: name.clone(),
                             arguments: arguments.clone(),
                             extra_body: HashMap::new(),
+                            cache_breakpoint: None,
                         }],
                     });
                 }

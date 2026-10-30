@@ -269,6 +269,7 @@ fn map_output_item_added(
                     .unwrap_or_default()
                     .to_string(),
                 extra_body: part_extra_body_from_value(item),
+                cache_breakpoint: None,
             });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
             emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
@@ -304,6 +305,7 @@ fn map_output_item_added(
                 is_error: false,
                 content: Vec::new(),
                 extra_body: item_extra_body_from_value(item),
+                cache_breakpoint: None,
             });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
             emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);

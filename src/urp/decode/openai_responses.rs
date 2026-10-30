@@ -490,6 +490,12 @@ fn compatible_content_parts(content: &Value, phase: Option<&str>) -> Vec<Part> {
 }
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
+    let mut request = decode_native_request(value)?;
+    crate::urp::cache_breakpoint::decode_request_markers(&mut request, ProviderProtocol::Responses);
+    Ok(request)
+}
+
+fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
     for key in ["input", "instructions"] {
         if let Some(items) = value.get(key) {
             validate_responses_items(items)?;
@@ -709,6 +715,7 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                         "input",
                     ],
                 ),
+                cache_breakpoint: None,
             });
         }
         "function_call_output" | "custom_tool_call_output" => {
@@ -745,6 +752,7 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                     obj,
                     &["type", "id", "call_id", "namespace", "name", "output"],
                 ),
+                cache_breakpoint: None,
             });
         }
         "reasoning" => {
@@ -824,6 +832,7 @@ fn decode_tool_result_content(output: &Value, content: &mut Vec<ToolResultConten
                 content.push(ToolResultContent::Text {
                     text: text.clone(),
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -839,6 +848,7 @@ fn decode_tool_result_content(output: &Value, content: &mut Vec<ToolResultConten
                 content.push(ToolResultContent::Text {
                     text,
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -851,6 +861,7 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
             content.push(ToolResultContent::Text {
                 text: text.to_string(),
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             });
         }
         return;
@@ -861,6 +872,7 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
             content.push(ToolResultContent::Text {
                 text,
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             });
         }
         return;
@@ -877,6 +889,7 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
                 content.push(ToolResultContent::Text {
                     text: text.to_string(),
                     extra_body: split_extra(obj, &["type", "text", "content"]),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -1143,6 +1156,7 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                                 "input",
                             ],
                         ),
+                        cache_breakpoint: None,
                     });
                 }
                 "function_call_output" | "custom_tool_call_output" => {
@@ -1183,6 +1197,7 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                             item_obj,
                             &["type", "call_id", "id", "namespace", "name", "output"],
                         ),
+                        cache_breakpoint: None,
                     });
                 }
                 "reasoning" => {

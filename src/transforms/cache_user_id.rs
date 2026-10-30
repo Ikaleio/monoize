@@ -2,7 +2,6 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::Node;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -91,7 +90,7 @@ impl Transform for CacheUserIdTransform {
             None => return Ok(()),
         };
 
-        if !has_any_cache_control(req) {
+        if crate::urp::cache_breakpoint::anthropic_breakpoint_count(req) == 0 {
             return Ok(());
         }
 
@@ -112,23 +111,6 @@ impl Transform for CacheUserIdTransform {
 
         Ok(())
     }
-}
-
-fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
-    req.input.iter().any(|node| match node {
-        Node::Text { extra_body, .. }
-        | Node::Image { extra_body, .. }
-        | Node::Audio { extra_body, .. }
-        | Node::File { extra_body, .. }
-        | Node::Refusal { extra_body, .. }
-        | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. }
-        | Node::ProviderItem { extra_body, .. }
-        | Node::ToolResult { extra_body, .. }
-        | Node::NextDownstreamEnvelopeExtra { extra_body } => {
-            extra_body.contains_key("cache_control")
-        }
-    })
 }
 
 inventory::submit!(TransformEntry {

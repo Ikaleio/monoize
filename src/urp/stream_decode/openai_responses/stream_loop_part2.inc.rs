@@ -90,6 +90,7 @@ fn map_responses_event_to_urp_events_with_state(
                             data_val.get("phase").and_then(Value::as_str).map(str::to_string)
                         }),
                     extra_body: extra.clone(),
+                    cache_breakpoint: None,
                 };
                 events.push(UrpStreamEvent::NodeStart {
                     node_index,

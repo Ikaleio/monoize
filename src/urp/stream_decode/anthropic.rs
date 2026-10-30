@@ -1513,6 +1513,7 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             content: content.clone(),
             phase: phase.clone(),
             extra_body: active_node.extra_body.clone(),
+            cache_breakpoint: None,
         },
         ActiveNodeKind::Reasoning {
             metadata,
@@ -1559,6 +1560,7 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             name: name.clone(),
             arguments: arguments.clone(),
             extra_body: active_node.extra_body.clone(),
+            cache_breakpoint: None,
         },
         ActiveNodeKind::ProviderItem {
             id,

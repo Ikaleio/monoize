@@ -60,7 +60,9 @@ pub(crate) fn encode_tool_result_output(content: &[ToolResultContent]) -> Value 
     let mut tool_content = Vec::new();
     for item in content {
         match item {
-            ToolResultContent::Text { text, extra_body } => {
+            ToolResultContent::Text {
+                text, extra_body, ..
+            } => {
                 let mut block = json!({
                     "type": "input_text",
                     "text": text,
