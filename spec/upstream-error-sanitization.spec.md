@@ -99,7 +99,7 @@ SAN-11. When a downstream stream encoder renders a `UrpStreamEvent::Error` into 
 
 ## 7. Diagnostic fields
 
-SAN-12. Downstream error bodies MUST NOT carry the diagnostic members `upstream_status`, `upstream_code`, `upstream_type`, or `upstream_param`. Their values reach the client through the native status, `code`, `type`, and `param` (RTA-8). These fields stay available in persisted request-log attempts (RL17).
+SAN-12. Downstream error bodies MUST NOT carry the diagnostic members `upstream_status`, `upstream_code`, `upstream_type`, or `upstream_param`. Their values reach the client through the native status, `code`, `type`, and `param` (RTA-8). The only exception is RTA-8b, where `upstream_status` and `upstream_code` are present and `upstream_type` and `upstream_param` remain absent. These fields stay available in persisted request-log attempts (RL17).
 
 ## 8. Read-time disclosure of persisted error detail
 

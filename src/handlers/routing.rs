@@ -1290,6 +1290,22 @@ pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider
         .as_deref()
         .filter(|code| !code.is_empty())
         .unwrap_or("upstream_error");
+    if let Some(upstream_status @ (401 | 403 | 407)) = last.upstream_status {
+        let mut err = AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_error",
+            last.client_error.clone(),
+        )
+        .with_internal_message(build_exhausted_error_detail(model, tried))
+        .with_type(openai_error_type_for_status(StatusCode::BAD_GATEWAY));
+        err.credential_failure = Some(crate::error::CredentialFailure {
+            upstream_status,
+            upstream_code: Some(code)
+                .filter(|code| *code != "upstream_error")
+                .map(str::to_string),
+        });
+        return err;
+    }
     let signature_invalid = code == "thinking_signature_invalid";
     let final_status = last
         .upstream_status
@@ -1779,14 +1795,16 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
 }
 
 pub(super) fn openai_error_json(err: &AppError) -> Value {
-    json!({
-        "error": {
-            "message": err.message,
-            "type": err.error_type,
-            "code": err.upstream_code.as_ref().unwrap_or(&err.code),
-            "param": err.param,
-        }
-    })
+    let mut error = json!({
+        "message": err.message,
+        "type": err.error_type,
+        "code": err.upstream_code.as_ref().unwrap_or(&err.code),
+        "param": err.param,
+    });
+    if let Some(failure) = &err.credential_failure {
+        failure.insert_into(&mut error);
+    }
+    json!({ "error": error })
 }
 
 /// SE1c: the native Messages `error.type` of an error.
@@ -1831,12 +1849,16 @@ pub(super) fn anthropic_error_type(err: &AppError) -> String {
 
 /// SE1, SE1b: the native Messages error body.
 pub(super) fn anthropic_error_json(err: &AppError, request_id: &str) -> Value {
+    let mut error = json!({
+        "type": anthropic_error_type(err),
+        "message": err.message,
+    });
+    if let Some(failure) = &err.credential_failure {
+        failure.insert_into(&mut error);
+    }
     json!({
         "type": "error",
-        "error": {
-            "type": anthropic_error_type(err),
-            "message": err.message,
-        },
+        "error": error,
         "request_id": request_id,
     })
 }
@@ -1850,13 +1872,17 @@ pub(super) fn responses_stream_error_json(seq: u64, err: &AppError) -> Value {
             &err.code
         }
     });
-    json!({
+    let mut event = json!({
         "type": "error",
         "sequence_number": seq,
         "code": code,
         "message": err.message,
         "param": err.upstream_param.as_ref().or(err.param.as_ref()),
-    })
+    });
+    if let Some(failure) = &err.credential_failure {
+        failure.insert_into(&mut event);
+    }
+    event
 }
 
 fn merge_extra_fields_whitelist(
