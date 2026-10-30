@@ -1250,6 +1250,7 @@ mod tests {
                         std::time::Instant::now(),
                         None,
                         false,
+                        None,
                     ),
                 )
                 .await
@@ -1544,6 +1545,7 @@ mod tests {
                         std::time::Instant::now(),
                         None,
                         false,
+                        None,
                     )
                     .await
                     .unwrap();

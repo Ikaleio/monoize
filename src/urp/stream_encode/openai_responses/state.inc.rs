@@ -26,7 +26,8 @@ struct StreamedNodeState {
     phase: Option<String>,
     call_id: Option<String>,
     name: Option<String>,
-    reasoning_summary_part_added_sent: bool,
+    /// `phase` carried by the upstream delta event itself (STR3m).
+    wire_phase: Option<String>,
     message_start_emitted: bool,
     output_item_start_emitted: bool,
     output_item_start: Option<Value>,
@@ -169,12 +170,12 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
             let summary = completed_item
                 .and_then(|item| item.get("summary"))
                 .and_then(Value::as_array)
-                .and_then(|summary| {
+                .map(|summary| {
                     summary
                         .iter()
-                        .find_map(|entry| entry.get("text").and_then(Value::as_str))
+                        .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+                        .collect::<String>()
                 })
-                .map(|s| s.to_string())
                 .filter(|s| !s.is_empty());
             if content.is_none() && encrypted.is_none() && summary.is_none() {
                 return None;

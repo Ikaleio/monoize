@@ -1400,6 +1400,7 @@ const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
 ];
 
 const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
+    "access_programs",
     "background",
     "context_management",
     "conversation",
@@ -2277,6 +2278,81 @@ fn allowed_tool_references_mut(choice: &mut urp::ToolChoice) -> Option<&mut Vec<
     obj.get_mut("tools").and_then(Value::as_array_mut)
 }
 
+/// T1g.1: the Responses and Messages web search definitions are mutual native equivalents.
+fn map_web_search_tool_definition(tool: &mut urp::ToolDefinition, provider_type: ProviderType) {
+    let config = tool.config.as_ref().and_then(Value::as_object);
+    let mut mapped = Map::new();
+    if let Some(location) = config.and_then(|config| config.get("user_location")) {
+        mapped.insert("user_location".to_string(), location.clone());
+    }
+    match provider_type {
+        ProviderType::Messages
+            if matches!(tool.tool_type.as_str(), "web_search" | "web_search_preview")
+                && tool.origin_protocol == Some(urp::ProviderProtocol::Responses) =>
+        {
+            if let Some(domains) = config
+                .and_then(|config| config.get("filters"))
+                .and_then(|filters| filters.get("allowed_domains"))
+            {
+                mapped.insert("allowed_domains".to_string(), domains.clone());
+            }
+            tool.tool_type = "web_search_20250305".to_string();
+            tool.name = Some("web_search".to_string());
+            tool.origin_protocol = Some(urp::ProviderProtocol::Messages);
+        }
+        ProviderType::Responses
+            if tool.tool_type.starts_with("web_search_")
+                && tool.origin_protocol == Some(urp::ProviderProtocol::Messages) =>
+        {
+            if let Some(domains) = config.and_then(|config| config.get("allowed_domains")) {
+                mapped.insert("filters".to_string(), json!({ "allowed_domains": domains }));
+            }
+            tool.tool_type = "web_search".to_string();
+            tool.name = None;
+            tool.origin_protocol = Some(urp::ProviderProtocol::Responses);
+        }
+        _ => return,
+    }
+    tool.description = None;
+    tool.config = Some(Value::Object(mapped));
+    tool.extra_body.clear();
+}
+
+/// PR4c.2z and RC4g: controls for chat-shaped clients replaying statelessly through Responses.
+pub(super) fn apply_cross_family_responses_controls(req: &mut urp::UrpRequest) {
+    req.extra_body
+        .entry("include".to_string())
+        .or_insert_with(|| json!(["reasoning.encrypted_content"]));
+    req.extra_body
+        .entry("store".to_string())
+        .or_insert(Value::Bool(false));
+    let Some(reasoning) = req.reasoning.as_mut() else {
+        return;
+    };
+    let Some(mode) = reasoning.mode.as_deref() else {
+        return;
+    };
+    if !matches!(mode, "enabled" | "adaptive") {
+        return;
+    }
+    if reasoning.effort.is_none()
+        && let Some(budget) = reasoning.budget_tokens
+    {
+        reasoning.effort = Some(
+            match budget {
+                0..=1024 => "low",
+                1025..=4096 => "medium",
+                4097..=16384 => "high",
+                _ => "xhigh",
+            }
+            .to_string(),
+        );
+    }
+    if reasoning.summary.is_none() && reasoning.display.as_deref() != Some("omitted") {
+        reasoning.summary = Some("auto".to_string());
+    }
+}
+
 pub(super) fn filter_tools_for_provider(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,
@@ -2289,6 +2365,9 @@ pub(super) fn filter_tools_for_provider(
         return;
     };
 
+    for tool in tools.iter_mut() {
+        map_web_search_tool_definition(tool, provider_type);
+    }
     tools.retain(|tool| provider_supports_tool_definition(tool, provider_type, downstream));
     if tools.is_empty() {
         req.tools = None;
@@ -2342,7 +2421,7 @@ pub(super) fn filter_tools_for_provider(
             .iter()
             .any(|tool| selector_matches_tool(selector, tool))
     {
-        req.tool_choice = None;
+        req.tool_choice = Some(urp::ToolChoice::Mode("auto".to_string()));
     }
 }
 

@@ -690,6 +690,8 @@ pub(super) async fn forward_stream_typed(
                             return Err(err);
                         }
                     };
+                let responses_echo =
+                    responses_request_echo_for_attempt(&nonstream_req, &attempt, downstream);
                 release_encoded_input(&mut nonstream_req, &capture);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
@@ -923,6 +925,10 @@ pub(super) async fn forward_stream_typed(
                         if let Some(history) = &history_for_stream {
                             history.decorate_response(&mut resp);
                         }
+                        if let Some(echo) = responses_echo {
+                            resp.extra_body
+                                .insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo);
+                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -1155,6 +1161,8 @@ pub(super) async fn forward_stream_typed(
                         return Err(err);
                     }
                 };
+            let responses_echo =
+                responses_request_echo_for_attempt(&req_attempt, &attempt, downstream);
             attempt.session_affinity_value =
                 resolve_session_affinity_value(&attempt, &upstream_body);
             let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
@@ -1624,6 +1632,7 @@ pub(super) async fn forward_stream_typed(
                                         started_at,
                                         sse_max_frame_length,
                                         mask_sensitive_info,
+                                        responses_echo,
                                     )
                                     .await
                                 });

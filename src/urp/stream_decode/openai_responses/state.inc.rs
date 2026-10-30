@@ -141,18 +141,53 @@ fn map_output_item_done(
                             .or_else(|| state.item_id.clone()),
                         ..Default::default()
                     };
+                    let summary_parts = item
+                        .get("summary")
+                        .and_then(Value::as_array)
+                        .filter(|parts| parts.len() > 1 && fallback_summary.is_some());
                     events.push(UrpStreamEvent::NodeDelta {
                         node_index,
                         delta: NodeDelta::Reasoning {
-                            metadata,
+                            metadata: metadata.clone(),
                             content: fallback_content,
                             encrypted: fallback_encrypted,
-                            summary: fallback_summary,
+                            summary: if summary_parts.is_some() {
+                                None
+                            } else {
+                                fallback_summary
+                            },
                             source: source.clone(),
                         },
                         usage: None,
                         extra_body: HashMap::new(),
                     });
+                    for (summary_index, text) in summary_parts
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                        .filter_map(|(index, part)| {
+                            part.get("text")
+                                .and_then(Value::as_str)
+                                .filter(|text| !text.is_empty())
+                                .map(|text| (index as u64, text))
+                        })
+                    {
+                        events.push(UrpStreamEvent::NodeDelta {
+                            node_index,
+                            delta: NodeDelta::Reasoning {
+                                metadata: crate::urp::ReasoningMetadata {
+                                    summary_index: Some(summary_index),
+                                    ..metadata.clone()
+                                },
+                                content: None,
+                                encrypted: None,
+                                summary: Some(text.to_string()),
+                                source: source.clone(),
+                            },
+                            usage: None,
+                            extra_body: HashMap::new(),
+                        });
+                    }
                 }
             } else if let Node::ToolCall { arguments, .. } = &node
                 && !state.function_arguments_delta_seen
@@ -194,57 +229,64 @@ fn map_output_item_done(
                     (index, node)
                 }).collect();
             }
-            let (part_done_seen, emitted_any_node) = index_state
-                .output_state_by_index
-                .get(&output_index)
-                .map(|state| (state.part_done_seen, state.emitted_any_node))
-                .unwrap_or((false, false));
-            if !part_done_seen && !emitted_any_node {
+            let content_nodes = output_state_for(index_state, output_index).content_nodes.clone();
+            for (content_index, mut node) in content_nodes {
+                if output_state_for(index_state, output_index)
+                    .content_done
+                    .contains(&content_index)
                 {
-                    let nodes = nodes_from_item_value(item);
-                    for mut node in nodes {
-                        let node_index = index_state.allocate_fresh_node_index();
-                        emit_pending_envelope_control_if_needed(
-                            output_index,
-                            index_state,
-                            &mut events,
-                        );
-                        events.push(UrpStreamEvent::NodeStart {
+                    continue;
+                }
+                let started = index_state
+                    .node_index_by_content_key
+                    .contains_key(&(output_index, content_index));
+                let node_index = index_state.node_index_for_content(output_index, content_index);
+                if !started {
+                    emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+                    events.push(UrpStreamEvent::NodeStart {
+                        node_index,
+                        header: node_header_from_node(&node),
+                        extra_body: node.extra_body_mut().clone(),
+                    });
+                    output_state_for(index_state, output_index).emitted_any_node = true;
+                    if let Node::Text {
+                        content,
+                        citations,
+                        signature,
+                        extra_body,
+                        ..
+                    } = &node
+                        && !content.is_empty()
+                    {
+                        events.push(UrpStreamEvent::NodeDelta {
                             node_index,
-                            header: node_header_from_node(&node),
-                            extra_body: node.extra_body_mut().clone(),
-                        });
-                        output_state_for(index_state, output_index).emitted_any_node = true;
-                        if let Node::Text {
-                            content,
-                            citations,
-                            signature,
-                            extra_body,
-                            ..
-                        } = &node
-                            && !content.is_empty()
-                        {
-                            events.push(UrpStreamEvent::NodeDelta {
-                                node_index,
-                                delta: NodeDelta::Text {
-                                    logprobs: None,
-                                    signature: signature.clone(),
-                                    citations: citations.clone(),
-                                    content: content.clone(),
-                                },
-                                usage: None,
-                                extra_body: extra_body.clone(),
-                            });
-                        }
-                        events.push(UrpStreamEvent::NodeDone {
-                            node_index,
-                            node,
+                            delta: NodeDelta::Text {
+                                logprobs: None,
+                                signature: signature.clone(),
+                                citations: citations.clone(),
+                                content: content.clone(),
+                            },
                             usage: None,
-                            extra_body: HashMap::new(),
+                            extra_body: extra_body.clone(),
                         });
                     }
                 }
+                events.push(UrpStreamEvent::NodeDone {
+                    node_index,
+                    node,
+                    usage: None,
+                    extra_body: HashMap::new(),
+                });
+                output_state_for(index_state, output_index)
+                    .content_done
+                    .insert(content_index);
             }
+            events.push(UrpStreamEvent::ProviderControl {
+                protocol: "responses".to_string(),
+                event_name: crate::urp::RESPONSES_MESSAGE_DONE_CONTROL.to_string(),
+                data: Value::Object(item_extra_body_from_value(item).into_iter().collect()),
+                extra_body: HashMap::new(),
+            });
         }
         _ => {
             let (emitted_any_node, node_done_seen) = index_state
@@ -509,11 +551,25 @@ fn merge_output_node_lists(accumulated: &[Node], terminal: &[Node]) -> Result<Ve
         return Err("completed output item has a different typed node count".to_string());
     }
 
+    // STR3q: the terminal item owns item-level fields over the earlier added snapshot.
+    let terminal_control = terminal.iter().find_map(|node| match node {
+        Node::NextDownstreamEnvelopeExtra { extra_body } => Some(extra_body),
+        _ => None,
+    });
     let mut merged = accumulated
         .iter()
         .filter(|node| matches!(node, Node::NextDownstreamEnvelopeExtra { .. }))
         .cloned()
         .collect::<Vec<_>>();
+    if let Some(terminal_extra) = terminal_control {
+        if let Some(Node::NextDownstreamEnvelopeExtra { extra_body }) = merged.first_mut() {
+            extra_body.extend(terminal_extra.iter().map(|(key, value)| (key.clone(), value.clone())));
+        } else {
+            merged.push(Node::NextDownstreamEnvelopeExtra {
+                extra_body: terminal_extra.clone(),
+            });
+        }
+    }
     for (left, right) in accumulated_typed.iter().zip(terminal_typed.iter()) {
         merged.push(merge_output_node(left, right)?);
     }

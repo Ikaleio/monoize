@@ -66,13 +66,11 @@ fn prepare_responses_media_event(event: &mut UrpStreamEvent) -> Result<(), Strin
 }
 
 async fn emit_responses_media_error(
-    tx: &mpsc::Sender<Event>, seq: &mut u64, response_id: &str, created: i64,
-    logical_model: &str, message: &str,
+    tx: &mpsc::Sender<Event>, seq: &mut u64, message: &str,
 ) -> AppResult<()> {
-    let response = response_failed_payload(response_id, created, logical_model,
-        Some("unsupported_media"), message, &HashMap::new());
-    send_responses_event(tx, seq, "response.failed", json!({ "response": response })).await?;
-    send_plain_sse_data(tx, "[DONE]").await?;
+    send_responses_event(tx, seq, "error", json!({
+        "code": "unsupported_media", "message": message, "param": null,
+    })).await?;
     Err(crate::error::AppError::new(
         axum::http::StatusCode::BAD_GATEWAY,
         "unsupported_media",
@@ -138,8 +136,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
     stream_started_at: Instant,
     sse_max_frame_length: Option<usize>,
     mask_sensitive_info: bool,
+    request_echo: Option<Value>,
 ) -> AppResult<()> {
-    let mut seq = 1u64;
+    let mut seq = 0u64;
     let mut response_id = "resp".to_string();
     let mut created: Option<i64> = None;
     let mut error_terminal_sent = false;
@@ -152,10 +151,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut reasoning_done_indices: HashSet<usize> = HashSet::new();
     let mut reasoning_content_part_added_indices: HashSet<usize> = HashSet::new();
     let mut reasoning_content_part_done_indices: HashSet<usize> = HashSet::new();
-    let mut reasoning_summary_added_indices: HashSet<usize> = HashSet::new();
-    let mut reasoning_summary_delta_indices: HashSet<usize> = HashSet::new();
-    let mut reasoning_summary_text_done_indices: HashSet<usize> = HashSet::new();
-    let mut reasoning_summary_part_done_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_summaries: HashMap<usize, ReasoningSummaryLifecycle> = HashMap::new();
+    let mut pending_in_progress: Option<Value> = None;
     let mut function_args_delta_indices: HashSet<usize> = HashSet::new();
     let mut function_args_done_indices: HashSet<usize> = HashSet::new();
     let mut pending_envelope_extra: HashMap<String, Value> = HashMap::new();
@@ -281,17 +278,37 @@ pub(crate) async fn encode_urp_stream_as_responses(
             continue;
         }
 
+        if let Some(mut payload) = pending_in_progress.take() {
+            let in_progress_source = match &event {
+                UrpStreamEvent::ProviderControl { event_name, data, .. }
+                    if event_name == urp::RESPONSES_IN_PROGRESS_CONTROL => Some(data),
+                _ => None,
+            };
+            let consumed = in_progress_source.is_some();
+            if let (Some(Value::Object(source)), Some(response)) =
+                (in_progress_source, payload["response"].as_object_mut())
+            {
+                for (key, value) in source {
+                    if !key.starts_with("_monoize_") {
+                        response.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+            send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
+            if consumed {
+                continue;
+            }
+        }
+
         if let UrpStreamEvent::NodeDelta { node_index, delta: urp::NodeDelta::Image { .. }, extra_body, .. } = &event
             && !node_states.get(node_index).is_some_and(|state| state.zone == ResponsesOutputZone::ImageGenerationCall)
             && image_generation_call_downstream_event(extra_body).is_none()
         {
-            return emit_responses_media_error(&tx, &mut seq, &response_id,
-                created.unwrap_or_else(now_ts), logical_model,
+            return emit_responses_media_error(&tx, &mut seq,
                 "Responses image fragments require a native image_generation_call lifecycle").await;
         }
         if let Err(error) = prepare_responses_media_event(&mut event) {
-            return emit_responses_media_error(&tx, &mut seq, &response_id,
-                created.unwrap_or_else(now_ts), logical_model, &error).await;
+            return emit_responses_media_error(&tx, &mut seq, &error).await;
         }
         match event {
             UrpStreamEvent::ResponseStart {
@@ -331,10 +348,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         logical_model,
                         "in_progress",
                         Value::Array(Vec::new()),
+                        request_echo.as_ref(),
                     )
                 };
+                let native_start = extra_body.contains_key(urp::RESPONSES_STREAM_START_SOURCE_EXTRA_KEY);
                 payload["response"]["status"] = json!("in_progress");
                 payload["response"]["output"] = json!([]);
+                payload["response"]["error"] = Value::Null;
+                payload["response"]["incomplete_details"] = Value::Null;
                 if let Some(response) = payload["response"].as_object_mut() {
                     for (key, value) in &extra_body {
                         if !key.starts_with("_monoize_") && !matches!(key.as_str(),
@@ -344,18 +365,21 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         }
                     }
                 }
-                payload["response"].as_object_mut().unwrap().remove("usage");
-                if let Some(usage) = usage {
-                    payload["response"]["usage"] =
-                        crate::urp::encode::openai_responses::encode_usage(&usage);
-                }
+                payload["response"]["usage"] = usage.map_or(Value::Null, |usage| {
+                    crate::urp::encode::openai_responses::encode_usage(&usage)
+                });
                 for key in ["store", "previous_response_id"] {
                     if let Some(value) = extra_body.get(key) {
                         payload["response"][key] = value.clone();
                     }
                 }
                 send_responses_event(&tx, &mut seq, "response.created", payload.clone()).await?;
-                send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
+                if native_start {
+                    // A later upstream in_progress object may add fields (PR5d).
+                    pending_in_progress = Some(payload);
+                } else {
+                    send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
+                }
             }
             UrpStreamEvent::NodeStart {
                 node_index,
@@ -391,7 +415,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             phase,
                             call_id: None,
                             name: None,
-                            reasoning_summary_part_added_sent: false,
+                            wire_phase: None,
                             message_start_emitted: false,
                             output_item_start_emitted: false,
                             output_item_start: None,
@@ -415,6 +439,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 .map(str::to_string)
                                 != phase
                     });
+                if zone != ResponsesOutputZone::Message || starts_new_shared_message {
+                    close_active_message_output(
+                        &tx,
+                        &mut seq,
+                        &mut active_node_message_output,
+                        &node_states,
+                        &streamed_output_indices,
+                        &mut completed_output_indices,
+                        &mut completed_output_items,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
                 if zone == ResponsesOutputZone::Message && starts_new_shared_message {
                     let item = stream_output_item_start_stub_from_node_header(
                         zone,
@@ -483,7 +520,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             phase,
                             call_id: node_header_call_id(&header),
                             name: node_header_name(&header),
-                            reasoning_summary_part_added_sent: false,
+                            wire_phase: None,
                             message_start_emitted: true,
                             output_item_start_emitted: !defer_reasoning_start,
                             output_item_start: defer_reasoning_start.then_some(item.clone()),
@@ -518,7 +555,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         phase,
                         call_id: node_header_call_id(&header),
                         name: node_header_name(&header),
-                        reasoning_summary_part_added_sent: false,
+                        wire_phase: None,
                         message_start_emitted,
                         output_item_start_emitted: false,
                         output_item_start: None,
@@ -596,6 +633,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let Some(node_state) = node_states.get_mut(&node_index) else {
                     continue;
                 };
+                if let Some(phase) = extra_body.get("phase").and_then(Value::as_str) {
+                    node_state.wire_phase = Some(phase.to_string());
+                }
                 if deferred_media_decision == Some(Some(true)) {
                     materialize_deferred_message_state(
                         node_state,
@@ -672,20 +712,25 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             )
                             .await?;
                         }
-                        send_responses_scored_text_delta(
-                            &tx,
-                            &mut seq,
-                            responses_text_delta_payload(
-                                node_state.phase.as_deref(),
-                                &json!({"id":node_state.item_id}),
-                                node_state.output_index as u64,
-                                node_state.content_index.unwrap_or(0) as u64,
-                            ),
-                            &content,
-                            crate::urp::logprobs::valid(&logprobs, &content),
-                            sse_max_frame_length,
-                        )
-                        .await?;
+                        if !content.is_empty() || citations.is_empty() {
+                            send_responses_scored_text_delta(
+                                &tx,
+                                &mut seq,
+                                with_delta_wire_fields(
+                                    responses_text_delta_payload(
+                                        node_state.wire_phase.as_deref(),
+                                        &json!({"id":node_state.item_id}),
+                                        node_state.output_index as u64,
+                                        node_state.content_index.unwrap_or(0) as u64,
+                                    ),
+                                    &extra_body,
+                                ),
+                                &content,
+                                crate::urp::logprobs::valid(&logprobs, &content),
+                                sse_max_frame_length,
+                            )
+                            .await?;
+                        }
                     }
                     urp::NodeDelta::Refusal {
                         logprobs: _,
@@ -703,11 +748,11 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             &tx,
                             &mut seq,
                             "response.refusal.delta",
-                            json!({
+                            with_delta_wire_fields(json!({
                                 "item_id": node_state.item_id,
                                 "output_index": node_state.output_index,
                                 "content_index": node_state.content_index.unwrap_or(0)
-                            }),
+                            }), &extra_body),
                             "delta",
                             &content,
                             sse_max_frame_length,
@@ -735,40 +780,21 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         if let Some(summary) =
                             summary.as_deref().filter(|summary| !summary.is_empty())
                         {
-                            if !node_state.reasoning_summary_part_added_sent {
-                                node_state.reasoning_summary_part_added_sent = true;
-                                reasoning_summary_added_indices.insert(node_state.output_index);
-                                send_responses_event(
+                            reasoning_summaries
+                                .entry(node_state.output_index)
+                                .or_default()
+                                .delta(
                                     &tx,
                                     &mut seq,
-                                    "response.reasoning_summary_part.added",
-                                    json!({
-                                        "item_id": node_state.item_id,
-                                        "output_index": node_state.output_index,
-                                        "summary_index": 0,
-                                        "part": { "type": "summary_text", "text": "" },
-                                    }),
+                                    &json!(node_state.item_id),
+                                    node_state.output_index,
+                                    source.as_deref(),
+                                    metadata.summary_index,
+                                    summary,
+                                    &extra_body,
+                                    sse_max_frame_length,
                                 )
                                 .await?;
-                            }
-                            reasoning_summary_delta_indices.insert(node_state.output_index);
-                            send_responses_delta_string(
-                                &tx,
-                                &mut seq,
-                                "response.reasoning_summary_text.delta",
-                                insert_reasoning_source(
-                                    json!({
-                                        "item_id": node_state.item_id,
-                                        "output_index": node_state.output_index,
-                                        "summary_index": 0,
-                                    }),
-                                    source.as_deref(),
-                                ),
-                                "delta",
-                                summary,
-                                sse_max_frame_length,
-                            )
-                            .await?;
                         }
                         if let Some(content) =
                             content.as_deref().filter(|content| !content.is_empty())
@@ -786,14 +812,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 &tx,
                                 &mut seq,
                                 "response.reasoning_text.delta",
-                                insert_reasoning_source(
+                                with_delta_wire_fields(insert_reasoning_source(
                                     json!({
                                         "item_id": node_state.item_id,
                                         "output_index": node_state.output_index,
                                         "content_index": 0,
                                     }),
                                     source.as_deref(),
-                                ),
+                                ), &extra_body),
                                 "delta",
                                 content,
                                 sse_max_frame_length,
@@ -826,10 +852,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             } else {
                                 "response.function_call_arguments.delta"
                             },
-                            json!({
+                            with_delta_wire_fields(json!({
                                 "item_id": node_state.item_id,
                                 "output_index": node_state.output_index,
-                            }),
+                            }), &extra_body),
                             "delta",
                             &arguments,
                             sse_max_frame_length,
@@ -909,7 +935,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     } => {
                         apply_node_done_to_stream_output_item_state(&mut node_state, &node);
                         let mut done_payload = responses_text_delta_payload(
-                            node_state.phase.as_deref(),
+                            node_state.wire_phase.as_deref(),
                             &json!({ "id": node_state.item_id }),
                             node_state.output_index as u64,
                             node_state.content_index.unwrap_or(0) as u64,
@@ -963,41 +989,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             Some(extra_body),
                         );
                         apply_node_done_to_stream_output_item_state(&mut node_state, &node);
-                        if let Some(summary) =
-                            summary.as_deref().filter(|summary| !summary.is_empty())
-                        {
-                            if reasoning_summary_text_done_indices.insert(node_state.output_index) {
-                                send_responses_event(
-                                    &tx,
-                                    &mut seq,
-                                    "response.reasoning_summary_text.done",
-                                    insert_reasoning_source(
-                                        json!({
-                                            "item_id": node_state.item_id,
-                                            "output_index": node_state.output_index,
-                                            "summary_index": 0,
-                                            "text": summary,
-                                        }),
-                                        source.as_deref(),
-                                    ),
-                                )
-                                .await?;
-                            }
-                            if reasoning_summary_part_done_indices.insert(node_state.output_index) {
-                                send_responses_event(
-                                    &tx,
-                                    &mut seq,
-                                    "response.reasoning_summary_part.done",
-                                    json!({
-                                        "item_id": node_state.item_id,
-                                        "output_index": node_state.output_index,
-                                        "summary_index": 0,
-                                        "part": { "type": "summary_text", "text": summary },
-                                    }),
-                                )
-                                .await?;
-                            }
-                        }
+                        reasoning_summaries
+                            .entry(node_state.output_index)
+                            .or_default()
+                            .finish(
+                                &tx,
+                                &mut seq,
+                                &json!(node_state.item_id),
+                                node_state.output_index,
+                                source.as_deref(),
+                                &reasoning_summary_parts_from_node(&node),
+                                sse_max_frame_length,
+                            )
+                            .await?;
                         if let Some(content) =
                             content.as_deref().filter(|content| !content.is_empty())
                         {
@@ -1099,21 +1103,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     if active.item_id.is_empty() {
                         active.item_id = node_state.item_id.clone();
                     }
-                    apply_node_done_to_stream_output_item(active, &node);
+                    apply_node_done_to_stream_output_item(
+                        active,
+                        &node,
+                        node_state.content_index.unwrap_or(0) as usize,
+                    );
+                    // STR3r: the message stays open until its item-done signal or next item.
+                    continue;
                 }
                 let completed_item = if node_state.is_shared_message_output {
                     sanitize_responses_output_item_for_frame_limit(
-                        &active_node_message_output
-                            .as_ref()
-                            .filter(|active| active.output_index == node_state.output_index)
-                            .map(|active| complete_stream_output_item(active.item.clone()))
-                            .unwrap_or_else(|| {
-                                node_state.completed_item.clone().unwrap_or_else(|| {
-                                    complete_stream_output_item(
-                                        encode_stream_output_item_from_node(&node),
-                                    )
-                                })
-                            }),
+                        &node_state.completed_item.clone().unwrap_or_else(|| {
+                            complete_stream_output_item(encode_stream_output_item_from_node(&node))
+                        }),
                         sse_max_frame_length,
                     )
                 } else {
@@ -1154,6 +1156,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 output,
                 extra_body,
             } => {
+                let mut extra_body = extra_body;
+                if let Some(echo) = &request_echo
+                    && !extra_body.contains_key(urp::RESPONSES_RESPONSE_SOURCE_EXTRA_KEY)
+                {
+                    extra_body.insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo.clone());
+                }
                 let terminal_extra = extra_body.clone();
                 let mut remaining_node_indices: Vec<u32> = node_states.keys().copied().collect();
                 remaining_node_indices.sort_unstable();
@@ -1219,7 +1227,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 None,
                             );
                             let mut done_payload = responses_text_delta_payload(
-                                node_state.phase.as_deref(),
+                                node_state.wire_phase.as_deref(),
                                 &json!({ "id": node_state.item_id }),
                                 node_state.output_index as u64,
                                 node_state.content_index.unwrap_or(0) as u64,
@@ -1275,80 +1283,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 },
                                 Some(extra_body),
                             );
-                            if let Some(summary) =
-                                summary.as_deref().filter(|summary| !summary.is_empty())
-                            {
-                                if !node_state.reasoning_summary_part_added_sent {
-                                    node_state.reasoning_summary_part_added_sent = true;
-                                    reasoning_summary_added_indices.insert(node_state.output_index);
-                                    send_responses_event(
-                                        &tx,
-                                        &mut seq,
-                                        "response.reasoning_summary_part.added",
-                                        json!({
-                                            "item_id": node_state.item_id,
-                                            "output_index": node_state.output_index,
-                                            "summary_index": 0,
-                                            "part": { "type": "summary_text", "text": "" },
-                                        }),
-                                    )
-                                    .await?;
-                                }
-                                if reasoning_summary_delta_indices.insert(node_state.output_index) {
-                                    send_responses_delta_string(
-                                        &tx,
-                                        &mut seq,
-                                        "response.reasoning_summary_text.delta",
-                                        insert_reasoning_source(
-                                            json!({
-                                                "item_id": node_state.item_id,
-                                                "output_index": node_state.output_index,
-                                                "summary_index": 0,
-                                            }),
-                                            source.as_deref(),
-                                        ),
-                                        "delta",
-                                        summary,
-                                        sse_max_frame_length,
-                                    )
-                                    .await?;
-                                }
-                                if reasoning_summary_text_done_indices
-                                    .insert(node_state.output_index)
-                                {
-                                    send_responses_event(
-                                        &tx,
-                                        &mut seq,
-                                        "response.reasoning_summary_text.done",
-                                        insert_reasoning_source(
-                                            json!({
-                                                "item_id": node_state.item_id,
-                                                "output_index": node_state.output_index,
-                                                "summary_index": 0,
-                                                "text": summary,
-                                            }),
-                                            source.as_deref(),
-                                        ),
-                                    )
-                                    .await?;
-                                }
-                                if reasoning_summary_part_done_indices
-                                    .insert(node_state.output_index)
-                                {
-                                    send_responses_event(
-                                        &tx,
-                                        &mut seq,
-                                        "response.reasoning_summary_part.done",
-                                        json!({
-                                            "item_id": node_state.item_id,
-                                            "output_index": node_state.output_index,
-                                            "summary_index": 0,
-                                            "part": { "type": "summary_text", "text": summary },
-                                        }),
-                                    )
-                                    .await?;
-                                }
-                            }
+                            reasoning_summaries
+                                .entry(node_state.output_index)
+                                .or_default()
+                                .finish(
+                                    &tx,
+                                    &mut seq,
+                                    &json!(node_state.item_id),
+                                    node_state.output_index,
+                                    source.as_deref(),
+                                    &reasoning_summary_parts_from_node(&node),
+                                    sse_max_frame_length,
+                                )
+                                .await?;
                             if let Some(content) =
                                 content.as_deref().filter(|content| !content.is_empty())
                             {
@@ -1486,21 +1433,20 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         if active.item_id.is_empty() {
                             active.item_id = node_state.item_id.clone();
                         }
-                        apply_node_done_to_stream_output_item(active, &node);
+                        apply_node_done_to_stream_output_item(
+                            active,
+                            &node,
+                            node_state.content_index.unwrap_or(0) as usize,
+                        );
+                        continue;
                     }
                     let completed_item = if node_state.is_shared_message_output {
                         sanitize_responses_output_item_for_frame_limit(
-                            &active_node_message_output
-                                .as_ref()
-                                .filter(|active| active.output_index == node_state.output_index)
-                                .map(|active| complete_stream_output_item(active.item.clone()))
-                                .unwrap_or_else(|| {
-                                    node_state.completed_item.clone().unwrap_or_else(|| {
-                                        complete_stream_output_item(
-                                            encode_stream_output_item_from_node(&node),
-                                        )
-                                    })
-                                }),
+                            &node_state.completed_item.clone().unwrap_or_else(|| {
+                                complete_stream_output_item(
+                                    encode_stream_output_item_from_node(&node),
+                                )
+                            }),
                             sse_max_frame_length,
                         )
                     } else {
@@ -1552,6 +1498,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
                 if let Some(active) = active_node_message_output.take()
                     && active.item.is_object()
+                    && streamed_output_indices.contains(&active.output_index)
                     && completed_output_indices.insert(active.output_index)
                 {
                     let done_item = sanitize_responses_output_item_for_frame_limit(
@@ -1594,10 +1541,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     &mut reasoning_done_indices,
                     &mut reasoning_content_part_added_indices,
                     &mut reasoning_content_part_done_indices,
-                    &mut reasoning_summary_added_indices,
-                    &mut reasoning_summary_delta_indices,
-                    &mut reasoning_summary_text_done_indices,
-                    &mut reasoning_summary_part_done_indices,
+                    &mut reasoning_summaries,
                     &mut function_args_delta_indices,
                     &mut function_args_done_indices,
                     stream_started_at.elapsed().as_secs(),
@@ -1612,18 +1556,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     &mut reasoning_done_indices,
                     &mut reasoning_content_part_added_indices,
                     &mut reasoning_content_part_done_indices,
-                    &mut reasoning_summary_added_indices,
-                    &mut reasoning_summary_delta_indices,
-                    &mut reasoning_summary_text_done_indices,
-                    &mut reasoning_summary_part_done_indices,
+                    &mut reasoning_summaries,
                     &mut function_args_delta_indices,
                     &mut function_args_done_indices,
                     sse_max_frame_length,
                 )
                 .await?;
-                let mut completed_response = ensure_response_object_user_field(
-                    sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length),
-                );
+                let mut completed_response =
+                    sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length);
                 for key in ["completed_at"] {
                     if let Some(value) = terminal_extra.get(key) {
                         completed_response[key] = value.clone();
@@ -1658,7 +1598,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     json!({ "response": completed_response }),
                 )
                 .await?;
-                send_plain_sse_data(&tx, "[DONE]").await?;
             }
             UrpStreamEvent::ProviderControl {
                 protocol,
@@ -1666,7 +1605,28 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 data,
                 ..
             } => {
-                if protocol == "responses"
+                if protocol != "responses" {
+                    continue;
+                }
+                if event_name == urp::RESPONSES_MESSAGE_DONE_CONTROL {
+                    if let (Some(active), Value::Object(fields)) =
+                        (active_node_message_output.as_mut(), &data)
+                        && let Some(item) = active.item.as_object_mut()
+                    {
+                        item.extend(fields.iter().filter(|(key, _)| !key.starts_with("_monoize_")).map(|(key, value)| (key.clone(), value.clone())));
+                    }
+                    close_active_message_output(
+                        &tx,
+                        &mut seq,
+                        &mut active_node_message_output,
+                        &node_states,
+                        &streamed_output_indices,
+                        &mut completed_output_indices,
+                        &mut completed_output_items,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                } else if !event_name.starts_with("_monoize.")
                     && !matches!(
                         event_name.as_str(),
                         "response.created"
@@ -1677,8 +1637,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             | "response.cancelled"
                     )
                 {
-                    let wire_data = sanitize_provider_item_wire_body(&data);
-                    send_responses_event(&tx, &mut seq, &event_name, wire_data).await?;
+                    send_responses_passthrough_event(
+                        &tx,
+                        &mut seq,
+                        &event_name,
+                        sanitize_provider_item_wire_body(&data),
+                    )
+                    .await?;
                 }
             }
             UrpStreamEvent::Error {
@@ -1686,34 +1651,284 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 message,
                 extra_body,
             } => {
-                let created_at = created.unwrap_or_else(now_ts);
                 // SAN-11 / SAN-CFG5: decoder-origin error text may embed
                 // upstream URLs; masking is gated by the runtime setting.
-                let failed_response = response_failed_payload(
-                    &response_id,
-                    created_at,
-                    logical_model,
-                    code.as_deref(),
-                    &crate::error_sanitize::maybe_mask_sensitive_text(
-                        &message,
-                        mask_sensitive_info,
-                    ),
-                    &extra_body,
-                );
                 send_responses_event(
                     &tx,
                     &mut seq,
-                    "response.failed",
-                    json!({ "response": failed_response }),
+                    "error",
+                    json!({
+                        "code": code.as_deref().unwrap_or("upstream_error"),
+                        "message": crate::error_sanitize::maybe_mask_sensitive_text(
+                            &message,
+                            mask_sensitive_info,
+                        ),
+                        "param": extra_body.get("param").cloned().unwrap_or(Value::Null),
+                    }),
                 )
                 .await?;
-                send_plain_sse_data(&tx, "[DONE]").await?;
                 error_terminal_sent = true;
             }
         }
     }
+    if let Some(payload) = pending_in_progress.take() {
+        send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
+    }
 
     Ok(())
+}
+
+/// STR3r: emits `response.output_item.done` for the open message once no part is open.
+#[allow(clippy::too_many_arguments)]
+async fn close_active_message_output(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    active_output: &mut Option<ActiveResponsesOutputItem>,
+    node_states: &HashMap<u32, StreamedNodeState>,
+    streamed_output_indices: &HashSet<usize>,
+    completed_output_indices: &mut HashSet<usize>,
+    completed_output_items: &mut Vec<(usize, Value)>,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let Some(active) = active_output.as_ref() else {
+        return Ok(());
+    };
+    let output_index = active.output_index;
+    if node_states.values().any(|state| {
+        state.is_shared_message_output && state.output_index == output_index
+    }) {
+        return Ok(());
+    }
+    let Some(active) = active_output.take() else {
+        return Ok(());
+    };
+    if !streamed_output_indices.contains(&output_index)
+        || !completed_output_indices.insert(output_index)
+    {
+        return Ok(());
+    }
+    let done_item = sanitize_responses_output_item_for_frame_limit(
+        &complete_stream_output_item(active.item),
+        sse_max_frame_length,
+    );
+    send_responses_event(
+        tx,
+        seq,
+        "response.output_item.done",
+        json!({ "output_index": output_index, "item": done_item }),
+    )
+    .await?;
+    completed_output_items.push((output_index, done_item));
+    Ok(())
+}
+
+/// STR3q: forwards a provider-control event with exactly its upstream fields.
+async fn send_responses_passthrough_event(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    name: &str,
+    mut data: Value,
+) -> AppResult<()> {
+    if let Some(obj) = data.as_object_mut() {
+        obj.entry("type".to_string()).or_insert_with(|| json!(name));
+        if let Some(number) = obj.get_mut("sequence_number") {
+            *number = json!(*seq);
+            *seq += 1;
+        }
+    }
+    send_named_sse_json(tx, name, data).await
+}
+
+fn with_delta_wire_fields(mut payload: Value, event_extra: &HashMap<String, Value>) -> Value {
+    if let Some(obfuscation) = event_extra.get("obfuscation") {
+        payload["obfuscation"] = obfuscation.clone();
+    }
+    payload
+}
+
+/// STR3i: one reasoning item's summary parts, addressed by `summary_index`.
+#[derive(Debug, Default)]
+struct ReasoningSummaryLifecycle {
+    parts: BTreeMap<u64, String>,
+    open: Option<u64>,
+    finished: bool,
+}
+
+impl ReasoningSummaryLifecycle {
+    #[allow(clippy::too_many_arguments)]
+    async fn close_open(
+        &mut self,
+        tx: &mpsc::Sender<Event>,
+        seq: &mut u64,
+        item_id: &Value,
+        output_index: usize,
+        source: Option<&str>,
+        final_text: Option<&str>,
+    ) -> AppResult<()> {
+        let Some(index) = self.open.take() else {
+            return Ok(());
+        };
+        let text = final_text
+            .or_else(|| self.parts.get(&index).map(String::as_str))
+            .unwrap_or_default();
+        send_responses_event(
+            tx,
+            seq,
+            "response.reasoning_summary_text.done",
+            insert_reasoning_source(
+                json!({
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "summary_index": index,
+                    "text": text,
+                }),
+                source,
+            ),
+        )
+        .await?;
+        send_responses_event(
+            tx,
+            seq,
+            "response.reasoning_summary_part.done",
+            json!({
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": index,
+                "part": { "type": "summary_text", "text": text },
+            }),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn delta(
+        &mut self,
+        tx: &mpsc::Sender<Event>,
+        seq: &mut u64,
+        item_id: &Value,
+        output_index: usize,
+        source: Option<&str>,
+        summary_index: Option<u64>,
+        delta: &str,
+        event_extra: &HashMap<String, Value>,
+        sse_max_frame_length: Option<usize>,
+    ) -> AppResult<()> {
+        let index = summary_index.or(self.open).unwrap_or(0);
+        if self.open != Some(index) {
+            self.close_open(tx, seq, item_id, output_index, source, None).await?;
+            self.open = Some(index);
+            self.parts.entry(index).or_default();
+            send_responses_event(
+                tx,
+                seq,
+                "response.reasoning_summary_part.added",
+                json!({
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "summary_index": index,
+                    "part": { "type": "summary_text", "text": "" },
+                }),
+            )
+            .await?;
+        }
+        self.parts.entry(index).or_default().push_str(delta);
+        send_responses_delta_string(
+            tx,
+            seq,
+            "response.reasoning_summary_text.delta",
+            with_delta_wire_fields(
+                insert_reasoning_source(
+                    json!({
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "summary_index": index,
+                    }),
+                    source,
+                ),
+                event_extra,
+            ),
+            "delta",
+            delta,
+            sse_max_frame_length,
+        )
+        .await
+    }
+
+    /// Completes every part. `final_parts` are the terminal `summary[]` texts by position.
+    #[allow(clippy::too_many_arguments)]
+    async fn finish(
+        &mut self,
+        tx: &mpsc::Sender<Event>,
+        seq: &mut u64,
+        item_id: &Value,
+        output_index: usize,
+        source: Option<&str>,
+        final_parts: &[String],
+        sse_max_frame_length: Option<usize>,
+    ) -> AppResult<()> {
+        if std::mem::replace(&mut self.finished, true) {
+            return Ok(());
+        }
+        // A transform may rewrite the summary into fewer parts than were already streamed.
+        let parts_authoritative = final_parts.len() >= self.parts.len();
+        if !parts_authoritative {
+            return self.close_open(tx, seq, item_id, output_index, source, None).await;
+        }
+        for (position, text) in final_parts.iter().enumerate() {
+            let index = position as u64;
+            if self.open != Some(index) {
+                if self.parts.contains_key(&index) {
+                    continue;
+                }
+                self.close_open(tx, seq, item_id, output_index, source, None).await?;
+                if text.is_empty() {
+                    continue;
+                }
+                self.delta(
+                    tx,
+                    seq,
+                    item_id,
+                    output_index,
+                    source,
+                    Some(index),
+                    text,
+                    &HashMap::new(),
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+            self.close_open(tx, seq, item_id, output_index, source, Some(text)).await?;
+        }
+        self.close_open(tx, seq, item_id, output_index, source, None).await
+    }
+}
+
+fn reasoning_summary_parts_from_item(item: &Value) -> Vec<String> {
+    item.get("summary")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .map(|part| part.get("text").and_then(Value::as_str).unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn reasoning_summary_parts_from_node(node: &urp::Node) -> Vec<String> {
+    let urp::Node::Reasoning { metadata, summary, .. } = node else {
+        return Vec::new();
+    };
+    if summary.as_deref().is_none_or(str::is_empty) {
+        return Vec::new();
+    }
+    reasoning_summary_parts_from_item(&json!({
+        "summary": urp::reasoning::encode_text_parts(
+            summary.as_deref(),
+            metadata.summary_parts.as_deref(),
+            "summary_text",
+        )
+    }))
 }
 
 fn zone_from_node_header(
@@ -2181,7 +2396,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             Value::Object(obj)
         }
         urp::Node::Reasoning {
-            metadata: _,
+            metadata,
             id,
             content,
             encrypted,
@@ -2204,20 +2419,22 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
                         .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()))
                 ),
             );
-            if let Some(text) = summary.as_ref().filter(|text| !text.is_empty()) {
-                obj.insert(
-                    "summary".to_string(),
-                    Value::Array(vec![json!({ "type": "summary_text", "text": text })]),
-                );
-            }
-            if let Some(text) = content.as_ref().filter(|text| !text.is_empty()) {
-                obj.insert(
-                    "content".to_string(),
-                    json!([{ "type": "reasoning_text", "text": text }]),
-                );
-            } else {
-                obj.insert("content".to_string(), json!([]));
-            }
+            obj.insert(
+                "summary".to_string(),
+                urp::reasoning::encode_text_parts(
+                    summary.as_deref().filter(|text| !text.is_empty()),
+                    metadata.summary_parts.as_deref(),
+                    "summary_text",
+                ),
+            );
+            obj.insert(
+                "content".to_string(),
+                urp::reasoning::encode_text_parts(
+                    content.as_deref().filter(|text| !text.is_empty()),
+                    metadata.content_parts.as_deref(),
+                    "reasoning_text",
+                ),
+            );
             if let Some(encrypted) = encrypted.as_ref().filter(|encrypted| !encrypted.is_null()) {
                 obj.insert("encrypted_content".to_string(), encrypted.clone());
             }
@@ -2390,7 +2607,7 @@ fn reasoning_text_from_item(item: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn append_reasoning_summary_field(item: &mut Value, delta: &str) {
+fn append_reasoning_summary_field(item: &mut Value, summary_index: Option<u64>, delta: &str) {
     let Some(obj) = item.as_object_mut() else {
         return;
     };
@@ -2400,10 +2617,11 @@ fn append_reasoning_summary_field(item: &mut Value, delta: &str) {
     let Some(entries) = summary.as_array_mut() else {
         return;
     };
-    if entries.is_empty() {
+    let position = summary_index.map_or(entries.len().saturating_sub(1), |index| index as usize);
+    while entries.len() <= position {
         entries.push(json!({ "type": "summary_text", "text": "" }));
     }
-    let Some(last) = entries.last_mut().and_then(Value::as_object_mut) else {
+    let Some(last) = entries.get_mut(position).and_then(Value::as_object_mut) else {
         return;
     };
     let current = last.get("text").and_then(Value::as_str).unwrap_or_default();
@@ -2482,7 +2700,7 @@ fn append_node_delta_to_completed_item(
         (
             ResponsesOutputZone::Reasoning,
             urp::NodeDelta::Reasoning {
-                metadata: _,
+                metadata,
                 content,
                 encrypted,
                 summary,
@@ -2498,7 +2716,7 @@ fn append_node_delta_to_completed_item(
                 );
             }
             if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
-                append_reasoning_summary_field(&mut item, summary);
+                append_reasoning_summary_field(&mut item, metadata.summary_index, summary);
             }
             if let Some(encrypted) = encrypted.as_ref().filter(|encrypted| !encrypted.is_null())
                 && let Some(obj) = item.as_object_mut()
@@ -2631,6 +2849,7 @@ fn insert_reasoning_source(mut payload: Value, source: Option<&str>) -> Value {
 fn apply_node_done_to_stream_output_item(
     active_output: &mut ActiveResponsesOutputItem,
     node: &urp::Node,
+    content_index: usize,
 ) {
     match active_output.zone {
         ResponsesOutputZone::Message => {
@@ -2651,22 +2870,9 @@ fn apply_node_done_to_stream_output_item(
                 let Some(encoded_part) = encode_node_done_content_part(node) else {
                     return;
                 };
-                let encoded_type = encoded_part
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let matches_last_type = content.last().is_some_and(|last| {
-                    last.get("type").and_then(Value::as_str) == Some(encoded_type.as_str())
-                });
-                if content.is_empty() {
-                    content.push(encoded_part);
-                } else if matches_last_type {
-                    if let Some(last_part) = content.last_mut() {
-                        *last_part = encoded_part;
-                    }
-                } else {
-                    content.push(encoded_part);
+                match content.get_mut(content_index) {
+                    Some(part) => *part = encoded_part,
+                    None => content.push(encoded_part),
                 }
             }
         }
@@ -2683,89 +2889,29 @@ fn response_envelope_payload(
     model: &str,
     status: &str,
     output: Value,
+    request_echo: Option<&Value>,
 ) -> Value {
     let completed_at = if status == "completed" {
         Value::Number(serde_json::Number::from(created_at))
     } else {
         Value::Null
     };
-    json!({
-        "response": {
-            "id": id,
-            "object": "response",
-            "created_at": created_at,
-            "completed_at": completed_at,
-            "model": model,
-            "status": status,
-            "output": output,
-            "incomplete_details": null,
-            "previous_response_id": null,
-            "instructions": null,
-            "error": null,
-            "tools": [],
-            "tool_choice": "auto",
-            "truncation": "auto",
-            "parallel_tool_calls": true,
-            "text": { "format": { "type": "text" } },
-            "top_p": 1.0,
-            "presence_penalty": 0,
-            "frequency_penalty": 0,
-            "top_logprobs": 0,
-            "temperature": 1.0,
-            "reasoning": null,
-            "max_output_tokens": null,
-            "max_tool_calls": null,
-            "store": false,
-            "background": false,
-            "metadata": {},
-            "safety_identifier": null,
-            "prompt_cache_key": null,
-            "usage": null,
-            "user": null,
-        }
-    })
-}
-
-fn response_failed_payload(
-    id: &str,
-    created_at: i64,
-    model: &str,
-    code: Option<&str>,
-    message: &str,
-    error_extra_body: &HashMap<String, Value>,
-) -> Value {
-    let mut response =
-        response_envelope_payload(id, created_at, model, "failed", Value::Array(Vec::new()));
-    let mut error = json!({
-        "code": code.unwrap_or("upstream_error"),
-        "message": message,
+    let mut response = json!({
+        "id": id,
+        "object": "response",
+        "created_at": created_at,
+        "completed_at": completed_at,
+        "model": model,
+        "status": status,
+        "output": output,
+        "incomplete_details": null,
+        "error": null,
+        "usage": null,
     });
-    if let Some(error_obj) = error.as_object_mut() {
-        merge_json_extra(error_obj, error_extra_body);
-    }
-    if let Some(obj) = response.get_mut("response").and_then(Value::as_object_mut) {
-        obj.insert("completed_at".to_string(), json!(now_ts()));
-        obj.insert("error".to_string(), error.clone());
-    }
-    response.get("response").cloned().unwrap_or_else(|| {
-        json!({
-            "id": id,
-            "object": "response",
-            "created_at": created_at,
-            "completed_at": now_ts(),
-            "model": model,
-            "status": "failed",
-            "output": [],
-            "error": error
-        })
-    })
-}
-
-fn ensure_response_object_user_field(mut response: Value) -> Value {
     if let Some(obj) = response.as_object_mut() {
-        obj.entry("user".to_string()).or_insert(Value::Null);
+        obj.extend(urp::encode::openai_responses::synthesized_response_controls(request_echo));
     }
-    response
+    json!({ "response": response })
 }
 
 fn complete_stream_output_item(mut item: Value) -> Value {
@@ -2781,7 +2927,11 @@ fn complete_stream_output_item(mut item: Value) -> Value {
                     | "function_call_output"
                     | "custom_tool_call_output"
             )
-        ) {
+        ) && obj
+            .get("status")
+            .and_then(Value::as_str)
+            .is_none_or(|status| status == "in_progress")
+        {
             obj.insert("status".to_string(), json!("completed"));
         }
     }
@@ -2861,11 +3011,13 @@ fn stream_reasoning_node_has_meaningful_payload(node: &urp::Node) -> bool {
     matches!(
         node,
         urp::Node::Reasoning {
+            metadata,
             content,
             encrypted,
             summary,
             ..
-        } if content.as_ref().is_some_and(|value| !value.is_empty())
+        } if metadata.native_empty
+            || content.as_ref().is_some_and(|value| !value.is_empty())
             || summary.as_ref().is_some_and(|value| !value.is_empty())
             || encrypted.as_ref().is_some_and(stream_reasoning_json_value_is_non_empty)
     )
@@ -3083,10 +3235,7 @@ async fn emit_missing_terminal_output_done_events(
     reasoning_done_indices: &mut HashSet<usize>,
     reasoning_content_part_added_indices: &mut HashSet<usize>,
     reasoning_content_part_done_indices: &mut HashSet<usize>,
-    reasoning_summary_added_indices: &mut HashSet<usize>,
-    reasoning_summary_delta_indices: &mut HashSet<usize>,
-    reasoning_summary_text_done_indices: &mut HashSet<usize>,
-    reasoning_summary_part_done_indices: &mut HashSet<usize>,
+    reasoning_summaries: &mut HashMap<usize, ReasoningSummaryLifecycle>,
     function_args_delta_indices: &mut HashSet<usize>,
     function_args_done_indices: &mut HashSet<usize>,
     default_reasoning_duration_secs: u64,
@@ -3148,10 +3297,7 @@ async fn emit_missing_terminal_output_done_events(
             reasoning_done_indices,
             reasoning_content_part_added_indices,
             reasoning_content_part_done_indices,
-            reasoning_summary_added_indices,
-            reasoning_summary_delta_indices,
-            reasoning_summary_text_done_indices,
-            reasoning_summary_part_done_indices,
+            reasoning_summaries,
             function_args_delta_indices,
             function_args_done_indices,
             sse_max_frame_length,
@@ -3182,7 +3328,7 @@ async fn send_responses_scored_text_delta(
     max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     let Some(scores) = scores else {
-        payload["logprobs"] = Value::Null;
+        payload["logprobs"] = json!([]);
         return send_responses_delta_string(
             tx,
             seq,
@@ -3241,7 +3387,7 @@ async fn emit_missing_terminal_message_child_lifecycles(
             let text = part.get(field).and_then(Value::as_str).unwrap_or_default();
             let mut payload = coordinates.clone();
             if field == "text" {
-                payload["logprobs"] = part.get("logprobs").cloned().unwrap_or(Value::Null);
+                payload["logprobs"] = part.get("logprobs").cloned().unwrap_or_else(|| json!([]));
             }
             if !text.is_empty() {
                 if field == "text" {
@@ -3342,10 +3488,7 @@ async fn emit_missing_terminal_sub_lifecycles(
     reasoning_done_indices: &mut HashSet<usize>,
     reasoning_content_part_added_indices: &mut HashSet<usize>,
     reasoning_content_part_done_indices: &mut HashSet<usize>,
-    reasoning_summary_added_indices: &mut HashSet<usize>,
-    reasoning_summary_delta_indices: &mut HashSet<usize>,
-    reasoning_summary_text_done_indices: &mut HashSet<usize>,
-    reasoning_summary_part_done_indices: &mut HashSet<usize>,
+    reasoning_summaries: &mut HashMap<usize, ReasoningSummaryLifecycle>,
     function_args_delta_indices: &mut HashSet<usize>,
     function_args_done_indices: &mut HashSet<usize>,
     sse_max_frame_length: Option<usize>,
@@ -3355,77 +3498,19 @@ async fn emit_missing_terminal_sub_lifecycles(
             "reasoning" => {
                 let item_id = item.get("id").cloned().unwrap_or(Value::Null);
                 let source = item.get("source").and_then(Value::as_str);
-                if let Some(summary_entries) = item.get("summary").and_then(Value::as_array)
-                    && let Some(summary_text) = summary_entries
-                        .iter()
-                        .find_map(|entry| entry.get("text").and_then(Value::as_str))
-                    && !summary_text.is_empty()
-                {
-                    if reasoning_summary_added_indices.insert(*output_index) {
-                        send_responses_event(
-                            tx,
-                            seq,
-                            "response.reasoning_summary_part.added",
-                            json!({
-                                "item_id": item_id,
-                                "output_index": output_index,
-                                "summary_index": 0,
-                                "part": { "type": "summary_text", "text": "" },
-                            }),
-                        )
-                        .await?;
-                    }
-                    if reasoning_summary_delta_indices.insert(*output_index) {
-                        send_responses_delta_string(
-                            tx,
-                            seq,
-                            "response.reasoning_summary_text.delta",
-                            insert_reasoning_source(
-                                json!({
-                                    "item_id": item_id,
-                                    "output_index": output_index,
-                                    "summary_index": 0,
-                                }),
-                                source,
-                            ),
-                            "delta",
-                            summary_text,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
-                    if reasoning_summary_text_done_indices.insert(*output_index) {
-                        send_responses_event(
-                            tx,
-                            seq,
-                            "response.reasoning_summary_text.done",
-                            insert_reasoning_source(
-                                json!({
-                                    "item_id": item_id,
-                                    "output_index": output_index,
-                                    "summary_index": 0,
-                                    "text": summary_text,
-                                }),
-                                source,
-                            ),
-                        )
-                        .await?;
-                    }
-                    if reasoning_summary_part_done_indices.insert(*output_index) {
-                        send_responses_event(
-                            tx,
-                            seq,
-                            "response.reasoning_summary_part.done",
-                            json!({
-                                "item_id": item_id,
-                                "output_index": output_index,
-                                "summary_index": 0,
-                                "part": { "type": "summary_text", "text": summary_text },
-                            }),
-                        )
-                        .await?;
-                    }
-                }
+                reasoning_summaries
+                    .entry(*output_index)
+                    .or_default()
+                    .finish(
+                        tx,
+                        seq,
+                        &item_id,
+                        *output_index,
+                        source,
+                        &reasoning_summary_parts_from_item(item),
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 if let Some(text) = reasoning_text_from_item(item) {
                     ensure_reasoning_content_part_added(
                         tx,

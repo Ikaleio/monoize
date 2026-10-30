@@ -6,7 +6,7 @@ use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::{
     FileSource, FinishReason, ImageSource, Node, ProviderProtocol,
     RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_INSTRUCTION_NODE_EXTRA_KEY,
-    RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ResponseFormat, ToolCallType, ToolDefinition,
+    RESPONSES_REQUEST_ECHO_EXTRA_KEY, RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ResponseFormat, ToolCallType, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{Map, Value, json};

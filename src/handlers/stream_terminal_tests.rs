@@ -35,7 +35,7 @@ async fn collect_wire(mut rx: mpsc::Receiver<Event>) -> String {
 }
 
 fn assert_single_terminal_error(wire: &str, downstream: DownstreamProtocol) {
-    let has_done = !matches!(downstream, DownstreamProtocol::AnthropicMessages);
+    let has_done = matches!(downstream, DownstreamProtocol::ChatCompletions);
     assert_terminal_error_frames(wire, has_done);
 }
 
@@ -56,6 +56,7 @@ fn assert_terminal_error_frames(wire: &str, has_done: bool) {
         })
         .collect();
     assert_eq!(errors.len(), 1, "{wire}");
+
     assert_eq!(
         data.iter().filter(|data| **data == "[DONE]").count(),
         usize::from(has_done),
@@ -120,6 +121,7 @@ async fn exercise_media_failure(synthetic: bool) {
                 Instant::now(),
                 None,
                 false,
+                None,
             )
             .await
         };

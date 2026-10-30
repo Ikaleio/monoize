@@ -86,11 +86,15 @@ pub async fn compact_response(
             "responses compact does not support streaming",
         ));
     }
-    if !body_obj.contains_key("input") {
+    let has_previous_response = body_obj
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty());
+    if !body_obj.contains_key("input") && !has_previous_response {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "missing input",
+            "compact requires input or previous_response_id",
         ));
     }
 

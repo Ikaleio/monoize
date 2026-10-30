@@ -626,10 +626,11 @@ RESP-7. Responses streaming output MUST preserve canonical event lifecycle seman
 1. `response.created` occurs before any output-item lifecycle event;
 2. every emitted `response.output_item.done` has exactly one earlier matching `response.output_item.added` with the same `output_index`;
 3. `response.content_part.added` and `response.content_part.done` are emitted for each Responses content-bearing item part, including `message` content and `reasoning.content[]` entries of type `reasoning_text`;
-4. `response.completed` reflects the same reconstructed `response.output` ordering used by the terminal item lifecycle; and
-5. the stream terminates with exactly one plain `data: [DONE]` sentinel.
+4. the terminal response event reflects the same reconstructed `response.output` ordering used by the terminal item lifecycle;
+5. the stream ends by connection close after the terminal JSON event, without a `[DONE]` frame; and
+6. each reasoning summary part has its own `response.reasoning_summary_part.added`, text delta, text done, and part done lifecycle addressed by `summary_index`.
 
-RESP-8. The Responses encoder MUST preserve externally visible addressing and lifecycle semantics for `response_id`, `item_id`, `output_index`, `content_index`, and item `status`. These fields are encoder-owned output coordinates derived from the flat node order.
+RESP-8. The Responses encoder MUST preserve externally visible addressing and lifecycle semantics for `response_id`, `item_id`, `output_index`, `content_index`, `summary_index`, and item `status`. Coordinates are encoder-owned and derived from the flat node order, except that `summary_index` comes from `ReasoningMetadata.summary_index` on deltas and from `summary[]` positions on terminal nodes. A native item status is preserved under STR3p and MUST NOT be overwritten with `completed`.
 
 RESP-9. Responses external reasoning behavior remains stable:
 
@@ -638,6 +639,8 @@ RESP-9. Responses external reasoning behavior remains stable:
 3. opaque reasoning payload remains typed reasoning data rather than plain text;
 4. `source` is preserved when present upstream; and
 5. `source` is omitted when upstream omitted it.
+
+RESP-9a. A reasoning item with a native `id` and no payload is a `Reasoning` node with `ReasoningMetadata.native_empty = true`. It MUST keep its identity and position under PR2g.1.
 
 RESP-10. Downstream `/v1/responses` streaming MUST NOT introduce a custom `response.reasoning_signature.delta` event. Opaque reasoning state is surfaced only through canonical reasoning item events and terminal response state.
 

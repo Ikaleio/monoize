@@ -90,9 +90,6 @@ fn flush_pending_message_item(
             Value::String(normalize_openai_message_id(None)),
         );
     }
-    if output_item {
-        obj.insert("status".to_string(), Value::String("completed".to_string()));
-    }
     obj.insert(
         "role".to_string(),
         Value::String(role_to_str(pending_item.role).to_string()),

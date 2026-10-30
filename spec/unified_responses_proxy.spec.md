@@ -418,6 +418,15 @@ T1f.3. For every target-specific tool-choice conversion, the semantic `type`, se
 
 T1g. Provider-native tool descriptors MUST be gated by provider family. When the source family and target family are the same, Monoize MUST preserve provider-native tool descriptors that the target provider type supports, including Responses native tool types carried under T1a and Anthropic native tool types carried through a Messages request. When the source family and target family differ, Monoize MAY emit a provider-native tool descriptor only when this specification or provider-adapter code explicitly supports that target shape. Otherwise Monoize MUST filter that provider-native tool descriptor from the outbound payload for that upstream attempt while keeping the IR value intact for later attempts or downstream response rendering. If a specific `tool_choice` names only a descriptor filtered by this rule, Monoize MUST omit that `tool_choice` from the same outbound attempt.
 
+T1g.1. Cross-family built-in tool definitions MUST NOT produce a request error by themselves. For one upstream attempt, Monoize MUST apply this order before encoding:
+
+1. A Responses `web_search` or `web_search_preview` definition routed to `type=messages` MUST become `{ "type": "web_search_20250305", "name": "web_search" }`, copying `filters.allowed_domains` to `allowed_domains` and `user_location` unchanged.
+2. A Messages `web_search_*` definition routed to `type=responses` MUST become `{ "type": "web_search" }`, copying `allowed_domains` to `filters.allowed_domains` and `user_location` unchanged. Messages `blocked_domains` and `max_uses` have no Responses equivalent and MUST be dropped.
+3. Every other built-in definition without a target mapping MUST be dropped under T1g. Chat and Gemini target mappings are defined by their adapters.
+4. If `tool_choice` names a dropped tool, Monoize MUST rewrite it to `auto` when at least one tool remains, and MUST remove `tool_choice` when no tool remains. Monoize MUST NOT emit `tools: []` or a dangling forced choice.
+
+The IR value remains intact for later attempts.
+
 T1h. Tool-definition compatibility rules describe request forwarding only. They MUST NOT authorize local tool execution. Monoize MUST NOT execute tools locally, as required by TCI2.
 
 Stateful fields:
@@ -434,11 +443,11 @@ S4. Monoize MUST accept a Responses `input` item with `type = "item_reference"` 
 
 ### 7.1.0b Native Responses compaction endpoint
 
-CMP1. `POST /v1/responses/compact` accepts a JSON object with a non-empty string `model` and an `input` member. It MUST apply API-key and global model redirects according to `spec/api-key-model-redirects.spec.md`, model allow-list checks, multiplier limits, Provider+Channel routing, balance guard, request logging, usage billing, retry policy, and passive health updates in the same order used by non-streaming forwarding requests.
+CMP1. `POST /v1/responses/compact` accepts a JSON object with a non-empty string `model` and at least one of an `input` member or a non-empty string `previous_response_id`. A request with neither MUST return `400` with code `invalid_request` before upstream dispatch. A request with `previous_response_id` and no `input` MUST be forwarded without an `input` member; Monoize MUST NOT insert an empty `input`. It MUST apply API-key and global model redirects according to `spec/api-key-model-redirects.spec.md`, model allow-list checks, multiplier limits, Provider+Channel routing, balance guard, request logging, usage billing, retry policy, and passive health updates in the same order used by non-streaming forwarding requests.
 
 CMP2. A compact request MUST be eligible only for an effective upstream provider of `type=responses`. Monoize MUST call upstream path `POST /v1/responses/compact`. It MUST NOT adapt the compact request to Chat Completions, Messages, Gemini, image, or Replicate request shapes.
 
-CMP3. For the selected Responses attempt, Monoize MUST preserve the native compact request object and its ordered `input` items. It MAY change only `model` as defined by CMP3 and CMP3a, remove proxy-only `max_multiplier`, and remove keys whose names begin with `_monoize_`. It MUST NOT remove or reinterpret native `message`, `reasoning`, `function_call`, `function_call_output`, `program`, `program_output`, `tool_search_call`, `tool_search_output`, `additional_tools`, or `compaction` input items.
+CMP3. For the selected Responses attempt, Monoize MUST preserve the native compact request object and its ordered `input` items when `input` is present, and `previous_response_id` unchanged when present. It MAY change only `model` as defined by CMP3 and CMP3a, remove proxy-only `max_multiplier`, and remove keys whose names begin with `_monoize_`. It MUST NOT remove or reinterpret native `message`, `reasoning`, `function_call`, `function_call_output`, `program`, `program_output`, `tool_search_call`, `tool_search_output`, `additional_tools`, or `compaction` input items.
 
 CMP3a. After a Responses Channel is selected, Monoize MUST choose the compact wire `model` as follows:
 1. Let `logical` be the compact request model after API-key and global redirects.
@@ -593,7 +602,7 @@ RC2. Monoize MUST accept reasoning effort hints from any of the following downst
 
 - Chat Completions style: top-level `reasoning_effort`.
 - Responses style: top-level `reasoning.effort`.
-- Messages style, legacy: top-level `thinking` object with `type="enabled"`.
+- Messages style, legacy: top-level `thinking` object with `type="enabled"`. For a `responses` upstream its `budget_tokens` maps to effort under RC4g.
 - Messages style, adaptive: top-level `thinking` object with `type="adaptive"` combined with `output_config.effort`.
 
 RC3. If multiple sources in RC2 are present, Monoize MUST use this precedence:
@@ -651,7 +660,15 @@ RC4f.4. Fable 5, Mythos 5, Mythos Preview, Opus 4.7 or later, and Sonnet 5 or la
 
 RC4f.5. When active adaptive thinking carries `output_config.effort`, its value MUST be one of `low`, `medium`, `high`, `xhigh`, or `max`. The value `xhigh` is valid only for Fable 5, Mythos 5 excluding Mythos Preview, Opus 4.7 or later, and Sonnet 5 or later. For active manual or adaptive thinking, an explicit `display` value MUST equal `summarized`, `omitted`, or `updates`. A `thinking` object with `type = "disabled"` MUST NOT contain `budget_tokens` or `display`.
 
-RC4a. For upstream provider type `responses`, Monoize MUST preserve an explicit typed downstream `reasoning.summary` value byte-for-byte. If the typed downstream request does not carry `reasoning.summary`, Monoize MUST omit that key. Monoize MUST NOT synthesize `reasoning.summary = "detailed"`, `reasoning.summary = "auto"`, or any other summary setting because Responses reasoning summaries require explicit opt-in.
+RC4a. For upstream provider type `responses` with a Responses downstream, Monoize MUST preserve an explicit typed downstream `reasoning.summary` value byte-for-byte. If the typed downstream request does not carry `reasoning.summary`, Monoize MUST omit that key. Monoize MUST NOT synthesize `reasoning.summary = "detailed"`, `reasoning.summary = "auto"`, or any other summary setting for that route, because Responses reasoning summaries require explicit opt-in.
+
+RC4g. For a Messages downstream and upstream provider type `responses`, Monoize MUST map the explicit `thinking` object before encoding. Let `mode = thinking.type`.
+
+- If `mode` is `enabled` or `adaptive` and normalized effort is absent and `budget_tokens = B` is present, effort MUST be `low` when `B <= 1024`, `medium` when `1024 < B <= 4096`, `high` when `4096 < B <= 16384`, and `xhigh` when `B > 16384`.
+- A present `output_config.effort` MUST pass through as effort and takes precedence over `budget_tokens`.
+- If `mode` is `enabled` or `adaptive` and `reasoning.summary` is absent, `thinking.display = "omitted"` MUST produce no summary key; any other `display` value, or an absent `display`, MUST produce `reasoning.summary = "auto"`.
+- `mode = "disabled"` MUST encode `reasoning.effort = "none"` and no summary.
+- `budget_tokens`, `display`, and `thinking.type` MUST NOT appear on the upstream Responses request.
 
 RC4e. When replaying an assistant-history message to an upstream Chat Completions provider, a non-empty `reasoning_details` array is authoritative. Monoize MUST preserve its entries and order, and MUST NOT synthesize scalar `reasoning` or `reasoning_content` aliases from those entries. This rule does not prohibit a downstream Chat response from exposing the simple `reasoning` alias allowed by ENC8.
 
@@ -725,6 +742,8 @@ PR2. For non-streaming responses, Monoize MUST parse the upstream response as a 
 
 PR2b. When a non-streaming upstream Responses `output[]` item has `type = "image_generation_call"` and carries non-empty field `result`, Monoize MUST decode that item as one assistant `Image` node with `Image.source = Base64`.
 
+PR2b.1. A Responses `output[]` or stream `item` with `type = "image_generation_call"` whose `result` is absent, null, or an empty or whitespace-only string MUST decode as `ProviderItem(origin_protocol = "responses", item_type = "image_generation_call")` carrying the complete native object, including `id` and `status`. Monoize MUST promote the item to an `Image` node only when non-empty bytes exist. Same-Responses encoding MUST emit that ProviderItem unchanged in `output[]`, `response.output_item.done`, and the terminal response.
+
 - The decoded `media_type` MUST be derived from `output_format` when present: `png -> image/png`, `webp -> image/webp`, `jpeg -> image/jpeg`.
 - If `output_format` is absent or unrecognized, Monoize MUST default the decoded `media_type` to `image/png`.
 - Monoize MUST preserve unknown fields from that item in node-local `extra_body`, excluding adapter-consumed keys `type`, `result`, and `output_format`.
@@ -742,6 +761,8 @@ PR2g. A downstream Responses reasoning item carries a meaningful reasoning paylo
 - `Reasoning.encrypted` is non-null and is not an empty string, array, or object.
 
 For non-streaming downstream Responses output, Monoize MUST omit every `Reasoning` node that does not carry a meaningful reasoning payload. For streaming downstream Responses output, Monoize MUST defer `response.output_item.added` for a reasoning node until a meaningful payload is observed. If the node completes without a meaningful payload, Monoize MUST emit no output-item lifecycle and no reasoning child lifecycle for that node, MUST omit the node from `response.completed.response.output`, and MUST NOT consume a downstream `output_index`. Therefore later emitted output items MUST retain contiguous zero-based downstream output indices. A response transform that removes the only encrypted payload from a reasoning node can cause that node to become empty under this rule.
+
+PR2g.1. Exception for identified native empty items: a Responses decoder that receives an output reasoning item with a non-empty string `id` and no reasoning text, no non-empty summary text, and no `encrypted_content` MUST decode it as a `Reasoning` node with `ReasoningMetadata.native_empty = true` and that `id`. A downstream Responses encoder MUST emit such a node as one `reasoning` item with its id, in non-stream `output[]`, in the stream lifecycle (`response.output_item.added` no later than the node's `NodeDone`, then `response.output_item.done`), and in the terminal `response.output`. It consumes one downstream `output_index`. A reasoning item without `id` remains subject to PR2g. A node that had a payload and lost it through a response transform has `native_empty = false` and remains subject to PR2g. Non-Responses encoders MUST emit nothing for a node with `native_empty = true`.
 
 An upstream Responses `response.output_item.added.item.encrypted_content` value satisfies the meaningful-payload predicate. Monoize MUST preserve that complete snapshot in the matching downstream `response.output_item.added` event. A later completed encrypted snapshot belongs to the same reasoning node but remains a separate lifecycle value.
 
@@ -776,6 +797,10 @@ If neither field supplies a name, the frame MUST retain unknown-event behavior u
 This rule MUST NOT treat EOF or `[DONE]` as a terminal response event under PR6c.
 
 PR4. When constructing upstream `POST /v1/responses` requests, Monoize MUST emit `tools[]` in Responses-style function-tool shape even if the downstream request used another tool schema.
+
+PR4.1. Request-side tool-call item ids: when encoding `ToolCall(tool_type = "function")` into an upstream Responses request `input[]` `function_call` item, Monoize MUST emit `id` only when `ToolCall.id` starts with `fc_`. When encoding `ToolCall(tool_type = "custom")` into `custom_tool_call`, Monoize MUST emit `id` only when `ToolCall.id` starts with `ctc_`. Otherwise Monoize MUST omit `id`, including an `id` present in node extras. `call_id` is unchanged in every case. Monoize MUST NOT synthesize a request-side id. Response and stream output items keep their output-id normalization.
+
+PR4.2. A Responses request without a string `model` MUST be rejected with HTTP 400 and code `invalid_request` before routing. When the request carries `prompt`, the message MUST state that Monoize routes by `model`, that it cannot resolve the model stored in a prompt template, and that the client must send `model` explicitly. Monoize MUST NOT invent a model.
 
 PR4a. Responses `phase` mapping:
 
@@ -826,7 +851,9 @@ PR4c.1. When decoding downstream Responses `input[]`, Monoize MUST decode an ite
 
 If the downstream `input[]` reasoning item omits `id`, Monoize MUST leave `Reasoning.id` absent. Monoize MUST NOT synthesize an id while decoding request-side replay items.
 
-PR4c.2. When encoding an upstream Responses request, Monoize MUST NOT synthesize the top-level `include` field or append `reasoning.encrypted_content` to it. If the request carries `include`, Monoize MUST preserve its value, including array order and duplicates. If `include` is absent, it MUST remain absent. Explicit request transforms MAY set `include` before encoding. This rule applies to both streaming and non-streaming requests.
+PR4c.2. When encoding an upstream Responses request for a Responses downstream, Monoize MUST NOT synthesize the top-level `include` field or append `reasoning.encrypted_content` to it. If the request carries `include`, Monoize MUST preserve its value, including array order and duplicates. If `include` is absent, it MUST remain absent. Explicit request transforms MAY set `include` before encoding. This rule applies to both streaming and non-streaming requests.
+
+PR4c.2z. When the downstream protocol is Chat Completions or Messages and the selected upstream provider type is `responses`, Monoize MUST, after XF6 filtering and before encoding: (a) if `include` is absent from the request extras, set `include = ["reasoning.encrypted_content"]`; and (b) if `store` is absent from the request extras, set `store = false`. A surviving client or transform value of `include` or `store` MUST remain unchanged. The rule applies to streaming and non-streaming requests. It exists because those clients replay history statelessly, so reasoning survives tool turns only through encrypted content.
 
 PR4c.2a. When encoding an upstream `POST /v1/responses` request whose replayed `input[]` history contains tool-calling nodes, Monoize MUST preserve plaintext RawCoT reasoning items from open-source reasoning models. A reasoning item MAY be dropped only when a decoder or transform has explicitly marked it as downstream-only presentation text with `Reasoning.metadata.downstream_only = true`. The presence or absence of `encrypted_content` alone MUST NOT cause a raw `content[].reasoning_text` item to be dropped.
 
@@ -907,7 +934,7 @@ PR5b. Responses stream index normalization:
 - The Responses streaming decoder MUST maintain enough mapping state to correlate later upstream deltas with the correct URP `node_index` and with the encoder-local downstream coordinates required by the target protocol.
 - During downstream Responses re-encoding, Monoize MUST continue to emit `output_index` and `content_index` coordinates required by the Responses wire protocol, but those coordinates are encoder-local and MUST NOT alter URP `node_index` semantics.
 
-PR5d. A same-Responses decoder MUST preserve the non-empty upstream response `id` and integer `created_at` from `response.created` or `response.in_progress`. Before downstream encoding, the HTTP history stage MUST replace the response id under S2. Downstream start and terminal events MUST use the same Monoize id and preserve created_at. Unknown and optional fields present in the upstream start Responses object MUST survive downstream start-envelope reconstruction. Optional start-object fields absent upstream MUST remain absent except for the local history fields in S2/S3. If no upstream start Responses object exists before the first output event, Monoize MAY synthesize the start object and its identity.
+PR5d. A same-Responses decoder MUST preserve the non-empty upstream response `id` and integer `created_at` from `response.created` or `response.in_progress`. Before downstream encoding, the HTTP history stage MUST replace the response id under S2. Downstream start and terminal events MUST use the same Monoize id and preserve created_at. Unknown and optional fields present in the upstream start Responses object MUST survive downstream start-envelope reconstruction. Optional start-object fields absent upstream MUST remain absent except for the local history fields in S2/S3 and the required nullable fields in STR3e. An upstream `response.in_progress` object MAY carry fields absent from `response.created`; the downstream `response.in_progress` event MUST carry them too. If no upstream start Responses object exists before the first output event, Monoize MAY synthesize the start object and its identity.
 
 PR6. If upstream Responses streaming does not emit `response.output_text.delta` but emits assistant message text inside `response.output_item.added` or `response.output_item.done`, Monoize MUST reconstruct semantically equivalent downstream text streaming from the recovered URP v2 `Text` nodes.
 
@@ -949,7 +976,7 @@ PR6c. Final Responses-stream object synthesis:
 - For a successful `response.completed` event, each `response.output[]` item that matches an emitted `response.output_item.done` item MUST use the done item's lifecycle `status`. A terminal item MUST NOT retain a provisional `status = "in_progress"` after the matching done item has `status = "completed"`. Monoize MUST preserve all other terminal item fields and the terminal output order during this status reconciliation.
 - If `response.completed.response.output[]` carries a non-empty reasoning summary for a matched reasoning slot, that terminal summary is the final authoritative presentation and MUST replace any different delta-, summary-done-, or item-done-accumulated summary. Monoize MUST NOT emit `responses_terminal_conflict` solely because `reasoning.summary` changed at this terminal boundary. An absent or empty terminal summary MUST NOT erase a non-empty accumulated summary.
 - If `response.completed.response.output[]` carries a non-empty reasoning `encrypted_content` for a matched reasoning slot, that terminal snapshot is the final authoritative `Reasoning.encrypted` value and MUST replace any different done-event or accumulated encrypted snapshot. Monoize MUST NOT emit `responses_terminal_conflict` solely because `reasoning.encrypted_content` changed at this terminal boundary. Encrypted values from `response.output_item.added`, `response.output_item.done`, and `response.completed` remain distinct complete opaque snapshots (PR4c.5b). An absent or empty terminal encrypted snapshot MUST NOT erase a non-empty accumulated snapshot.
-- On such an inconsistent terminal merge, Monoize MUST emit a terminal canonical `Error` event with code `responses_terminal_conflict`, and downstream `/v1/responses` MUST terminate as `response.failed` followed by the plain `[DONE]` sentinel. Monoize MUST NOT emit a successful `ResponseDone` for that stream.
+- On such an inconsistent terminal merge, Monoize MUST emit a terminal canonical `Error` event with code `responses_terminal_conflict`, and downstream `/v1/responses` MUST terminate with an `error` event under SE3a. Monoize MUST NOT emit a successful `ResponseDone` for that stream.
 - When accumulated assistant text is empty, Monoize MUST NOT synthesize an empty assistant `Text` node solely to carry that empty string.
 - When Monoize emits downstream `response.completed` from `ResponseDone.output`, the `response.output` array MUST be encoded with the same Responses encoder logic used for non-streaming responses so that top-level `reasoning`, `message`, `function_call`, and same-protocol `ProviderItem` items remain in canonical Responses output positions rather than being nested incorrectly inside `message.content[]`.
 - If Monoize synthesizes missing assistant text stream events because upstream omitted text deltas, it MUST synthesize one downstream text segment per recovered text-bearing node run in output order. Each synthesized segment MUST preserve `phase` metadata and MUST allocate fresh encoder-local coordinates instead of reusing URP `node_index` as a wire coordinate.
@@ -1486,7 +1513,7 @@ XF6. When constructing an upstream request body from a URP v2 request, Monoize M
 XF6a. Default whitelists per provider type:
 
 - `chat_completion`: `audio`, `frequency_penalty`, `function_call`, `functions`, `logit_bias`, `logprobs`, `top_logprobs`, `max_completion_tokens`, `max_tokens`, `metadata`, `moderation`, `n`, `presence_penalty`, `prompt_cache_options`, `safety_identifier`, `seed`, `service_tier`, `stop`, `stream_options`, `store`, `web_search_options`, `parallel_tool_calls`, `debug`, `image_config`, `modalities`, `cache_control`, `top_k`, `top_a`, `min_p`, `repetition_penalty`, `prediction`, `prompt_cache_key`, `prompt_cache_retention`, `route`, `structured_outputs`, `verbosity`, `provider`, `plugins`, `session_id`, `stop_server_tools_when`, `trace`, `thinking`, `include_reasoning`, `user_id`.
-- `responses`: `background`, `context_management`, `conversation`, `include`, `instructions`, `metadata`, `max_tool_calls`, `moderation`, `parallel_tool_calls`, `previous_response_id`, `prompt`, `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, `safety_identifier`, `service_tier`, `store`, `stream_options`, `text`, `top_logprobs`, `truncation`.
+- `responses`: `access_programs`, `background`, `context_management`, `conversation`, `include`, `instructions`, `metadata`, `max_tool_calls`, `moderation`, `parallel_tool_calls`, `previous_response_id`, `prompt`, `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, `safety_identifier`, `service_tier`, `store`, `stream_options`, `text`, `top_logprobs`, `truncation`.
 - `messages`: `cache_control`, `container`, `max_tokens`, `metadata`, `output_config`, `service_tier`, `stop_sequences`, `top_k`, `inference_geo`.
 - `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`.
 
@@ -1784,10 +1811,10 @@ At minimum the downstream Responses stream MUST support:
 STR1. Each SSE event `data` MUST be one JSON object whose event metadata lives at the top level. Monoize MUST NOT wrap the protocol payload inside an extra `data` object.
 
 ```json
-{ "type": "response.created", "sequence_number": 1, ... }
+{ "type": "response.created", "sequence_number": 0, ... }
 ```
 
-STR2. `sequence_number` MUST be monotonically increasing starting from 1 within one response stream.
+STR2. `sequence_number` MUST be monotonically increasing by 1 starting from 0 within one response stream, over every event that carries it. A passthrough provider-control event under STR3q that did not carry `sequence_number` upstream MUST NOT carry it downstream and MUST NOT consume a number.
 
 STR3. For downstream `POST /v1/responses` streams synthesized from non-responses upstream event formats, Monoize MUST include a `usage` object in the terminal `response.completed` payload when cumulative stream usage counters are available.
 
@@ -1795,13 +1822,13 @@ STR3a. For downstream `POST /v1/responses` streams, every SSE payload MUST inclu
 
 STR3b. For downstream `POST /v1/responses` SSE, Monoize MUST emit the canonical OpenAI event fields for the selected event family plus Monoize-required top-level `type` and `sequence_number`. Monoize MUST NOT add ad hoc top-level fields such as wrapper `data`, `response_id`, or duplicate text aliases when those fields are not part of the canonical event schema.
 
-STR3c. For downstream `POST /v1/responses` successful SSE streams, Monoize MUST emit exactly one terminal `data: [DONE]` sentinel after the final JSON event payload. The sentinel MUST be a plain `data:` frame and MUST NOT be emitted as a named SSE event.
+STR3c. Downstream `POST /v1/responses` SSE streams MUST NOT emit a `data: [DONE]` frame. The stream ends by closing the connection after the terminal JSON event: `response.completed`, `response.incomplete`, `response.failed`, `response.cancelled`, or `error`.
 
 STR3c.1. For downstream streaming responses emitted by `POST /v1/responses` or `POST /v1/chat/completions`, Monoize MUST configure an SSE heartbeat with an interval of 15 seconds. Each heartbeat MUST be an SSE comment frame whose comment text is `heartbeat`. A heartbeat MUST NOT contain a `data:` line, MUST NOT contain an `event:` line, MUST NOT increment Responses `sequence_number`, and MUST NOT count as a Chat Completions `[DONE]` sentinel. The heartbeat exists only to keep downstream HTTP intermediaries from treating an otherwise-valid idle stream as inactive after Monoize has started the downstream SSE response. For `POST /v1/messages`, downstream keep-alive is specified by DM7b instead of this comment-frame heartbeat.
 
-STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST preserve the distinction between reasoning summary text and raw reasoning text. Reasoning summary lifecycle events MUST use the OpenAI names `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done`, and `response.reasoning_summary_part.done`. Raw reasoning text lifecycle events MUST use the OpenAI names `response.reasoning_text.delta` and `response.reasoning_text.done`. Monoize MUST NOT emit the legacy custom event family `response.reasoning.delta` or `response.reasoning.done`.
+STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST preserve the distinction between reasoning summary text and raw reasoning text. Reasoning summary lifecycle events MUST use the OpenAI names `response.reasoning_summary_part.added`, `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done`, and `response.reasoning_summary_part.done`. Raw reasoning text lifecycle events MUST use the OpenAI names `response.reasoning_text.delta` and `response.reasoning_text.done`. Monoize MUST NOT emit the legacy custom event family `response.reasoning.delta` or `response.reasoning.done`.
 
-STR3e. `response.created` and `response.in_progress` payloads MUST carry the Responses object under top-level field `response`. The nested response object MUST use field name `created_at`, not `created`.
+STR3e. `response.created` and `response.in_progress` payloads MUST carry the Responses object under top-level field `response`. The nested response object MUST use field name `created_at`, not `created`. The nested object MUST always contain `error`, `incomplete_details`, and `usage`; each MUST be JSON `null` when no value is known.
 
 STR3f. Every downstream `/v1/responses` SSE payload that contains a Responses object, `response.created`, `response.in_progress`, `response.completed`, and `response.failed` when present, MUST encode that nested object with canonical Responses object field names. In particular, the timestamp field MUST be `created_at`.
 
@@ -1812,14 +1839,17 @@ STR3g. For downstream `/v1/responses` message text streaming:
 - `response.content_part.added` MUST include `output_index`, `content_index`, `item_id`, and `part`.
 - The first content part in a message item MUST use `content_index = 0`.
 - For `part.type = "output_text"`, the added-event part payload MUST include `annotations: []` and `text: ""`.
-- `response.output_text.delta` MUST include `output_index`, `content_index`, `item_id`, `delta`, and `logprobs`, where `logprobs` is `null` when unavailable.
+- `response.output_text.delta` MUST include `output_index`, `content_index`, `item_id`, `delta`, and `logprobs`, where `logprobs` is the JSON array `[]` when unavailable. It MUST NOT be `null`. An `obfuscation` string on the upstream event MUST be copied unchanged; Monoize MUST NOT synthesize one. The same copy rule applies to `response.refusal.delta`, `response.reasoning_summary_text.delta`, `response.reasoning_text.delta`, `response.function_call_arguments.delta`, and `response.custom_tool_call_input.delta`.
 - `response.output_text.done` MUST include `output_index`, `content_index`, `item_id`, `text`, and `logprobs`, where `text` is the full aggregated content for that output-text part.
+- An annotation-only canonical text delta MUST emit `response.output_text.annotation.added` and no `response.output_text.delta`.
 
 STR3h. For downstream `/v1/responses` function-call streaming, after the last `response.function_call_arguments.delta` for a function-call item and before that item's `response.output_item.done`, Monoize MUST emit exactly one `response.function_call_arguments.done` containing the full aggregated `arguments` plus `call_id`, `item_id`, `name`, and `output_index`.
 
 STR3h.1. Full function-call `arguments` strings emitted to a downstream client MUST apply ENC-8 from `spec/urp-transform-system.spec.md`. Integer-valued floats in parsed JSON become JSON integers. A complete JSON document sent as one arguments delta MUST receive the same rewrite. A partial JSON fragment MUST remain unchanged.
 
-STR3i. For downstream `/v1/responses` reasoning-summary streaming, Monoize MUST emit `response.reasoning_summary_part.added` before the first `response.reasoning_summary_text.delta` for that summary part.
+STR3i. For downstream `/v1/responses` reasoning-summary streaming, summary parts are addressed by `summary_index`. For each part Monoize MUST emit, in order, one `response.reasoning_summary_part.added`, zero or more `response.reasoning_summary_text.delta`, one `response.reasoning_summary_text.done`, and one `response.reasoning_summary_part.done`, all with that index, and MUST close one part before opening the next. Each `done` text is the text of that part only. Parts MUST NOT be concatenated in events or in terminal `summary[]`.
+
+STR3i.1. `NodeDelta::Reasoning.metadata.summary_index` carries the upstream part index. A delta without that index belongs to the open part, or to part `0` when none is open. A terminal node's `summary[]` determines the parts still to be emitted when no delta carried them. Synthetic streams and terminal-only reasoning items MUST emit one lifecycle per non-empty entry of the encoded `summary[]`.
 
 STR3j. Downstream `/v1/responses` SSE MUST obey nested lifecycle ordering. For each `output_index`, every child lifecycle belonging to that output item MUST close before Monoize emits `response.output_item.done` for that same `output_index`. In particular:
 
@@ -1850,11 +1880,25 @@ In that case, different reasoning `id` values MUST NOT cause Monoize to emit a s
 
 STR3l. Downstream `/v1/responses` SSE MUST preserve externally visible item identity continuity. In particular, deltas and terminal item payloads for the same logical output item MUST use the same `item_id`.
 
-STR3m. Downstream `/v1/responses` SSE MUST preserve `phase` on reconstructed message items and text deltas when that metadata is present in URP v2 `Text` nodes.
+STR3m. Downstream `/v1/responses` SSE MUST preserve `phase` on reconstructed message items when that metadata is present in URP v2 `Text` nodes. Monoize MUST NOT add `phase` to `response.output_text.delta` or `response.output_text.done`, unless the upstream delta event itself carried `phase`. A message item MUST NOT carry an item-level `logprobs` field unless the upstream item carried one; part-level `logprobs` remains on the content part.
 
 STR3n. `ResponseDone.output` is the only authoritative terminal flat state used to reconstruct the final downstream `response.completed.response.output` array. Monoize MUST NOT duplicate final outputs by replaying items that were already emitted as completed downstream lifecycles.
 
 STR3o. For downstream `/v1/responses` reasoning items, Monoize MUST preserve item-local `duration` when that field is present on the reconstructed reasoning item. If a streamed reasoning item completes without item-local `duration`, Monoize MUST synthesize integer-second `duration` on that reasoning item before any downstream event can cause a completed or non-last reasoning item to be rendered without duration. At minimum this means the reasoning item carried by `response.output_item.added`, the reasoning item carried by `response.output_item.done`, and the matching item in `response.completed.response.output` MUST all contain `duration` once Monoize can infer that the upstream reasoning item represents completed or terminal reasoning state. The synthesized value MUST be non-negative. The synthesized value SHOULD use elapsed time from the downstream request start when the upstream does not provide item-local duration. Monoize MUST NOT delay or pace SSE frames to fabricate reasoning duration.
+
+STR3p. Item `status` on a downstream Responses output item (non-stream and stream, including the terminal response):
+
+- A native item status other than `in_progress`, carried by the decoded terminal item (`completed`, `incomplete`, `failed`, or another value), MUST be emitted unchanged on `response.output_item.done` and in the terminal output.
+- When no native status exists (cross-family source), the last `message`, `function_call`, or `custom_tool_call` item of a non-stream or terminal response MUST have `status = "incomplete"` when the response status is `incomplete`, `failed`, or `cancelled`, and `status = "in_progress"` when the response status is `queued` or `in_progress`. Every other such item MUST have `status = "completed"`. The terminal response output is authoritative when a cross-family `response.output_item.done` already said `completed`, because the cross-family finish reason arrives after that event.
+- `response.output_item.added` carries `in_progress`.
+
+STR3q. A Responses stream event outside the canonical set, including `codex.*`, `responsesapi.*`, and `response.metadata`, is passthrough provider control. It MUST be emitted with exactly the fields the upstream sent. If it carried `sequence_number`, Monoize MUST replace the value with the next downstream number; if not, Monoize MUST NOT add it. Fields nested in any upstream item, including `internal_chat_message_metadata_passthrough.create_time`, MUST survive intact; the `response.output_item.done` snapshot of a message item owns the item-level fields of that done event and of the terminal item.
+
+STR3r. A downstream message item's `response.output_item.done` MUST follow every content-part lifecycle of that item. A same-Responses encoder emits it when the upstream `response.output_item.done` arrives. When no such signal exists, it emits it before the next output item starts, or before the terminal event.
+
+STR3s. `usage` on a downstream Responses object MUST always contain `input_tokens`, `output_tokens`, `total_tokens`, `input_tokens_details.cached_tokens`, `input_tokens_details.cache_write_tokens`, and `output_tokens_details.reasoning_tokens`, zero values included. `input_tokens_details.cache_creation_tokens`, `input_tokens_details.tool_prompt_tokens`, `output_tokens_details.accepted_prediction_tokens`, and `output_tokens_details.rejected_prediction_tokens` are non-native extension counters and MUST be emitted only when non-zero. Unknown upstream usage fields survive under the usage extras rule.
+
+STR3t. A Responses object synthesized for a non-Responses source (start events, terminal events, and non-stream bodies) MUST echo the effective request controls of the upstream attempt, after XF6 and T1g filtering, when present: `instructions`, `tools`, `tool_choice`, `parallel_tool_calls`, `text`, `temperature`, `top_p`, `top_logprobs`, `reasoning`, `max_output_tokens`, `max_tool_calls`, `metadata`, `truncation`, `service_tier`, `prompt_cache_key`, `safety_identifier`, `user`, and `background`. Absent controls use the same defaults in stream and non-stream bodies, including `truncation = "disabled"`. Fields produced by the response itself or by S2/S3 override the echo. A response decoded from a Responses upstream MUST NOT receive this echo or these defaults.
 
 ### 8.1 Canonical internal stream events
 
@@ -1915,7 +1959,7 @@ SE3. If the downstream channel sender is already closed, client disconnected, Mo
 
 SE3a. For downstream `POST /v1/responses`, Monoize-generated `event: error` SSE payloads MUST NOT nest the error under an `error` object. The fields `type`, `sequence_number`, `code`, `message`, and `param` MUST be top-level fields of the SSE JSON payload.
 
-SE4. If an upstream Responses stream emits an `error` event or `response.failed` event, Monoize MUST treat that event as terminal. Monoize MUST NOT consume or forward any later upstream `response.completed` event or `response.failed` event for that request, and MUST NOT synthesize a successful `ResponseDone` after the error. For downstream `POST /v1/responses`, the externally visible terminal JSON event MUST be `response.failed`. If the upstream failure contains `type`, `code`, `message`, or `param`, Monoize MUST preserve those fields in `response.failed.response.error`.
+SE4. If an upstream Responses stream emits an `error` event or `response.failed` event, Monoize MUST treat that event as terminal. Monoize MUST NOT consume or forward any later upstream `response.completed` event or `response.failed` event for that request, and MUST NOT synthesize a successful `ResponseDone` after the error. For downstream `POST /v1/responses`, an upstream `error` event, and every other canonical stream `Error` (decoder, media, or conflict failures), MUST be emitted as an `error` event under SE3a, carrying the upstream `code`, `message`, and `param`; `param` is `null` when unknown. Monoize MUST NOT fabricate a `response.failed` envelope for it. An upstream `response.failed` event MUST remain `response.failed`, with its response `error`, partial `output`, and `usage`.
 
 
 ### Protocol alignment invariants
