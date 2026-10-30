@@ -21,7 +21,8 @@ pub mod encode;
 pub mod greedy;
 pub(crate) mod internal_legacy_bridge;
 pub use context::{
-    AnthropicCacheTarget, RequestContext, ResponseHistoryContext, ToolIdentity, ToolTransport,
+    AnthropicCacheTarget, AnthropicClientHeaders, RequestContext, ResponseHistoryContext,
+    ToolIdentity, ToolTransport,
 };
 pub mod media;
 #[cfg(test)]
@@ -174,7 +175,11 @@ fn reasoning_envelope_matches(
     provider_type: &str,
     model: &str,
 ) -> bool {
-    envelope.v == 1 || (envelope.provider_type == provider_type && envelope.model == model)
+    // PR4c.6: Anthropic drops thinking the current model cannot read and requires an unbroken
+    // replay, so Messages-to-Messages replay ignores the model.
+    envelope.v == 1
+        || (envelope.provider_type == provider_type
+            && (provider_type == "messages" || envelope.model == model))
 }
 
 fn wrap_reasoning_payload(

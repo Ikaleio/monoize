@@ -58,6 +58,8 @@ pub enum CitationSource {
         index: u64,
         title: Option<String>,
         range: DocumentRange,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
     },
     File {
         citation_type: FileCitationType,
@@ -136,6 +138,7 @@ impl Citation {
                 index,
                 title: string("document_title"),
                 range,
+                file_id: string("file_id"),
             })
         } else if let Some(file_id) = string("file_id").filter(|_| {
             matches!(
@@ -265,6 +268,9 @@ impl Citation {
                 }
                 if let Some(title) = title {
                     body.insert("title".into(), json!(title));
+                } else if protocol == ProviderProtocol::Messages {
+                    // web_search_result_location.title is required-nullable (SEM-1).
+                    body.insert("title".into(), Value::Null);
                 }
                 if let Some(range) = &self.answer_range {
                     let (start, end) = if protocol == ProviderProtocol::Gemini {
@@ -281,6 +287,7 @@ impl Citation {
                 index,
                 title,
                 range,
+                file_id,
             } => {
                 if protocol != ProviderProtocol::Messages {
                     return None;
@@ -310,8 +317,10 @@ impl Citation {
                 };
                 let mut body =
                     json!({"type":kind,"document_index":index,start_key:start,end_key:end});
-                if let Some(title) = title {
-                    body["document_title"] = json!(title);
+                // Messages declares document_title as required-nullable (SEM-1).
+                body["document_title"] = json!(title);
+                if let Some(file_id) = file_id {
+                    body["file_id"] = json!(file_id);
                 }
                 body
             }

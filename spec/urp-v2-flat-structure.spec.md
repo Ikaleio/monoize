@@ -656,8 +656,11 @@ It MUST preserve separate native system envelopes, block order, block extras, an
 An empty system envelope with message controls MUST remain in `messages[]`.
 Current typed node roles and content MUST remain authoritative after mutation or deletion.
 Without a native boundary, leading system or developer nodes MUST encode as top-level `system[]`.
-System or developer nodes after a user or assistant envelope MUST encode as system messages at their current positions.
-The encoder MUST NOT move these nodes into top-level `system[]`, concatenate their text, or insert synthetic conversation turns.
+System or developer nodes after a user or assistant envelope and without a native boundary (cross-protocol mid-conversation instructions) MUST NOT become a `role: "system"` message when the next encoded message is a `user` message, because Anthropic requires a mid-conversation system message to precede an assistant message or end the array.
+In that case the encoder MUST render each such text node as a `text` block wrapped as `<system-reminder>\n<text>\n</system-reminder>` and MUST insert those blocks, in order, at the start of the following user message's content, after any leading `tool_result` blocks (PM4).
+When the next encoded message is an assistant message, or no message follows, such nodes MUST encode as one system message at their current position.
+Native system envelopes (with the boundary) MUST remain system messages at their current positions in every case.
+The encoder MUST NOT move these nodes into top-level `system[]` or insert synthetic conversation turns.
 Upstream model support and placement validation remain the upstream API's responsibility.
 Cross-family stripping MUST remove the native envelope boundary under XTRA-5 while retaining typed system nodes in their current order.
 
@@ -767,6 +770,8 @@ CTRL-10. Session affinity MUST derive instruction content from current instructi
 SEM-1. Text citations MUST use typed citations. URL citations contain a URL, an optional title, and an optional answer range.
 Answer ranges use zero-based Unicode scalar offsets with an exclusive end, relative to the owning Text node.
 Document citations MUST distinguish source character, page, and block ranges from answer ranges.
+Document citations carry an optional document title and an optional source `file_id`; a Messages document citation's `file_id` MUST round-trip through decode and encode.
+Messages declares `document_title` (document citations) and `title` (`web_search_result_location`) as required nullable members. A Messages encoder MUST always write those keys, using JSON `null` when the typed title is absent.
 Unknown citation shapes MUST retain an exact origin protocol and MAY replay only to that protocol.
 Encoders MUST omit a citation when its target protocol cannot represent its source or required range.
 Chat message concatenation MUST shift answer ranges by the preceding text and inserted separators.

@@ -1602,6 +1602,10 @@ fn build_v1_router() -> Router<AppState> {
         .route("/v1/decisions", post(crate::handlers::create_decisions))
         .route("/v1/messages", post(crate::handlers::create_messages))
         .route(
+            "/v1/messages/count_tokens",
+            post(crate::handlers::count_messages_tokens),
+        )
+        .route(
             "/v1/images/generations",
             post(crate::handlers::image_api::create_image_generation),
         )
