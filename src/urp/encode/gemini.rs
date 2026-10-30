@@ -311,7 +311,10 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         generation_config
             .entry("responseModalities")
             .or_insert_with(|| json!(["TEXT", "IMAGE"]));
-        if let Some(config) = size.as_deref().and_then(image_config_from_size) {
+        if let Some(config) = size
+            .as_deref()
+            .and_then(|size| image_config_from_size(&model, size))
+        {
             let native = generation_config
                 .entry("imageConfig")
                 .or_insert_with(|| json!({}));
@@ -1564,6 +1567,10 @@ struct GeminiModel {
     /// Per-Part `mediaResolution` exists for Gemini 3+.
     media_resolution: bool,
     image_output: bool,
+    /// Documented `imageConfig.imageSize` tiers in ascending order; empty means 1K only.
+    image_sizes: &'static [&'static str],
+    /// The model documents the 1:4, 4:1, 1:8 and 8:1 aspect ratios.
+    extended_ratios: bool,
 }
 
 impl GeminiModel {
@@ -1630,11 +1637,26 @@ impl GeminiModel {
             }
         };
         let current = matches!(thinking, ThinkingProfile::Levels(_));
+        // Image generation guide: 2.5 Flash Image and 3.1 Flash Lite Image output 1K only;
+        // 3.1 Flash Image adds 512; Nano Banana 2.1 and 3 Pro Image offer 1K/2K/4K.
+        let flash_image = name.contains("flash-image") && !name.contains("flash-lite-image");
+        let image_sizes: &'static [&'static str] = if !image_output
+            || name.contains("flash-lite-image")
+            || matches!(version, Some((2, _)))
+        {
+            &[]
+        } else if flash_image {
+            &["512", "1K", "2K", "4K"]
+        } else {
+            &["1K", "2K", "4K"]
+        };
         Self {
             thinking,
             requires_call_signatures: current,
             media_resolution: current,
             image_output,
+            image_sizes,
+            extended_ratios: flash_image || name.contains("nano-banana"),
         }
     }
 
@@ -1768,10 +1790,10 @@ fn gemini_service_tier(tier: &str) -> Option<&'static str> {
     }
 }
 
-/// Maps an OpenAI-style `WxH` size to the nearest aspect ratio that every Gemini image model
-/// documents. `imageSize` support differs per model, so the size tier is not derived.
-fn image_config_from_size(size: &str) -> Option<Map<String, Value>> {
-    const RATIOS: [(u32, u32); 10] = [
+/// Maps an OpenAI-style `WxH` size to the nearest aspect ratio and the smallest size tier the
+/// model documents for that request (image generation guide tables).
+fn image_config_from_size(model: &GeminiModel, size: &str) -> Option<Map<String, Value>> {
+    const RATIOS: [(u32, u32); 14] = [
         (1, 1),
         (2, 3),
         (3, 2),
@@ -1782,19 +1804,46 @@ fn image_config_from_size(size: &str) -> Option<Map<String, Value>> {
         (9, 16),
         (16, 9),
         (21, 9),
+        (1, 4),
+        (4, 1),
+        (1, 8),
+        (8, 1),
     ];
+    let ratios = if model.extended_ratios {
+        &RATIOS[..]
+    } else {
+        &RATIOS[..10]
+    };
     let (width, height) = size.split_once('x')?;
     let width = width.trim().parse::<u32>().ok().filter(|value| *value > 0)?;
     let height = height.trim().parse::<u32>().ok().filter(|value| *value > 0)?;
     let target = (f64::from(width) / f64::from(height)).ln();
-    let distance = |(w, h): (u32, u32)| ((f64::from(w) / f64::from(h)).ln() - target).abs();
-    let (ratio_width, ratio_height) = RATIOS
-        .into_iter()
-        .min_by(|left, right| distance(*left).total_cmp(&distance(*right)))?;
-    Some(Map::from_iter([(
+    let distance = |(w, h): &(u32, u32)| ((f64::from(*w) / f64::from(*h)).ln() - target).abs();
+    let (ratio_width, ratio_height) = ratios
+        .iter()
+        .min_by(|left, right| distance(left).total_cmp(&distance(right)))?;
+    let mut config = Map::from_iter([(
         "aspectRatio".to_string(),
         json!(format!("{ratio_width}:{ratio_height}")),
-    )]))
+    )]);
+    // Longest documented edge per tier across ratios: 512 → 792, 1K → 1584, 2K → 3168.
+    let wanted = match width.max(height) {
+        0..=792 => "512",
+        793..=1584 => "1K",
+        1585..=3168 => "2K",
+        _ => "4K",
+    };
+    let tiers = ["512", "1K", "2K", "4K"];
+    let rank = |tier: &str| tiers.iter().position(|candidate| *candidate == tier);
+    if let Some(tier) = model
+        .image_sizes
+        .iter()
+        .find(|tier| rank(tier) >= rank(wanted))
+        .or(model.image_sizes.last())
+    {
+        config.insert("imageSize".to_string(), json!(tier));
+    }
+    Some(config)
 }
 
 /// Maps a typed image `detail` to the Gemini 3+ per-Part media resolution.
