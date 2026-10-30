@@ -114,6 +114,7 @@ async fn decode_chat_stream(
     let mut terminal_extra_body = HashMap::new();
     let mut pending_delta_extra = Map::new();
     let mut segments = StreamSegments::default();
+    let mut held_encrypted_placeholders: Vec<Value> = Vec::new();
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
@@ -453,42 +454,47 @@ async fn decode_chat_stream(
         }
 
         if let Some(annotations) = delta.get("annotations").and_then(Value::as_array) {
-            let node_index = ensure_node_started(
-                &tx,
-                &response_id,
-                &urp.model,
-                &mut response_started,
-                &mut text_node_index,
-                &mut next_node_index,
-                NodeHeader::Text {
-                    id: None,
-                    role: OrdinaryRole::Assistant,
-                    phase: assistant_message_phase.clone(),
-                    citations: vec![],
-                    signature: None,
-                },
-                HashMap::new(),
-            )
-            .await?;
-            citations.extend(crate::urp::citations::decode(
-                annotations.clone(),
-                crate::urp::ProviderProtocol::ChatCompletion,
-            ));
-            send_node_delta(
-                &tx,
-                node_index,
-                NodeDelta::Text {
-                    logprobs: None,
-                    content: String::new(),
-                    citations: crate::urp::citations::decode(
-                        annotations.clone(),
-                        crate::urp::ProviderProtocol::ChatCompletion,
-                    ),
-                    signature: None,
-                },
-                HashMap::new(),
-            )
-            .await?;
+            let live = place_chat_citations(
+                crate::urp::citations::decode(
+                    annotations.clone(),
+                    crate::urp::ProviderProtocol::ChatCompletion,
+                ),
+                &output_text,
+                &mut segments,
+            );
+            // Citations that all belong to completed segments must not open an empty node.
+            if annotations.is_empty() || !live.is_empty() {
+                let node_index = ensure_node_started(
+                    &tx,
+                    &response_id,
+                    &urp.model,
+                    &mut response_started,
+                    &mut text_node_index,
+                    &mut next_node_index,
+                    NodeHeader::Text {
+                        id: None,
+                        role: OrdinaryRole::Assistant,
+                        phase: assistant_message_phase.clone(),
+                        citations: vec![],
+                        signature: None,
+                    },
+                    HashMap::new(),
+                )
+                .await?;
+                citations.extend(live.iter().cloned());
+                send_node_delta(
+                    &tx,
+                    node_index,
+                    NodeDelta::Text {
+                        logprobs: None,
+                        content: String::new(),
+                        citations: live,
+                        signature: None,
+                    },
+                    HashMap::new(),
+                )
+                .await?;
+            }
         }
         if let Some(refusal) = delta.get("refusal").and_then(Value::as_str) {
             let node_index = ensure_node_started(
@@ -705,6 +711,10 @@ async fn decode_chat_stream(
         let mut scalar_delta = Cow::Borrowed(delta);
         if let Some(reasoning_details) = reasoning_details {
             for detail in reasoning_details {
+                if is_encrypted_placeholder(detail) {
+                    held_encrypted_placeholders.push(detail.clone());
+                    continue;
+                }
                 if !detail_continues_open_node(detail, &reasoning_detail_nodes, &segments) {
                     close_text!();
                 }
@@ -860,7 +870,8 @@ async fn decode_chat_stream(
                     .and_then(Value::as_str)
                     .map(str::to_string);
             }
-            if ["reasoning_details", "reasoning", "reasoning_content", "reasoning_opaque"]
+            if !held_encrypted_placeholders.is_empty()
+                || ["reasoning_details", "reasoning", "reasoning_content", "reasoning_opaque"]
                 .iter()
                 .any(|key| match message.get(*key) {
                     Some(Value::String(value)) => !value.is_empty(),
@@ -882,6 +893,18 @@ async fn decode_chat_stream(
                 &mut reasoning_sig,
                 &mut reasoning_source,
                 &mut reasoning_surface,
+                &mut reasoning_detail_nodes,
+                &segments,
+                &mut delta_extra,
+            )
+            .await?;
+            release_encrypted_placeholders(
+                &tx,
+                &response_id,
+                &urp.model,
+                std::mem::take(&mut held_encrypted_placeholders),
+                &mut response_started,
+                &mut next_node_index,
                 &mut reasoning_detail_nodes,
                 &segments,
                 &mut delta_extra,
@@ -925,6 +948,31 @@ async fn decode_chat_stream(
         )
         .await?;
         return Ok(());
+    }
+
+    if !held_encrypted_placeholders.is_empty() {
+        close_text_node(
+            &tx,
+            &mut segments,
+            &mut text_node_index,
+            &output_text,
+            assistant_message_phase.as_deref(),
+            &mut text_logprobs,
+            &mut citations,
+        )
+        .await?;
+        release_encrypted_placeholders(
+            &tx,
+            &response_id,
+            &urp.model,
+            std::mem::take(&mut held_encrypted_placeholders),
+            &mut response_started,
+            &mut next_node_index,
+            &mut reasoning_detail_nodes,
+            &segments,
+            &mut pending_delta_extra,
+        )
+        .await?;
     }
 
     if !pending_delta_extra.is_empty() {
@@ -1946,9 +1994,6 @@ fn reasoning_detail_completion(
     let existing_raw = reasoning_detail_raw(existing)?;
     let detail_type = terminal.get("type").and_then(Value::as_str)?;
     let payload_key = reasoning_detail_payload_key(detail_type)?;
-    if payload_key == "data" {
-        return None;
-    }
     let mut merged_raw = existing_raw.clone();
     for (key, value) in terminal {
         if !crate::urp::decode::is_internal_extra_key(key) {
@@ -1982,6 +2027,21 @@ fn reasoning_detail_completion(
                 None,
                 Value::String(suffix.unwrap_or_default().to_string()),
             )
+        }
+        "data" => {
+            // A terminal snapshot replaces encrypted data atomically.
+            let data = terminal.get("data").filter(|data| match data {
+                Value::Null => false,
+                Value::String(data) => !data.is_empty(),
+                _ => true,
+            })?;
+            let Node::Reasoning { encrypted, .. } = existing else {
+                return None;
+            };
+            if encrypted.as_ref() == Some(data) {
+                return None;
+            }
+            (None, Some(data.clone()), None, data.clone())
         }
         "summary" => {
             let existing = existing_raw
@@ -2075,6 +2135,37 @@ async fn process_terminal_reasoning_details(
         };
         for position in &group {
             matched[*position] = true;
+        }
+        // PC7h: terminal encrypted data that no completed node carries becomes a new node.
+        if segments.done.contains(&reasoning_detail_nodes[position].0)
+            && detail_obj.get("type").and_then(Value::as_str) == Some("reasoning.encrypted")
+        {
+            let data = detail_obj.get("data").filter(|data| match data {
+                Value::Null => false,
+                Value::String(data) => !data.is_empty(),
+                _ => true,
+            });
+            let known = group.iter().any(|position| {
+                matches!(
+                    &reasoning_detail_nodes[*position].1,
+                    Node::Reasoning { encrypted, .. } if encrypted.as_ref() == data
+                )
+            });
+            if data.is_some() && !known {
+                process_reasoning_detail_delta(
+                    tx,
+                    response_id,
+                    model,
+                    detail,
+                    response_started,
+                    next_node_index,
+                    reasoning_detail_nodes,
+                    segments,
+                    delta_extra,
+                )
+                .await?;
+            }
+            continue;
         }
         let Some(detail_obj) =
             terminal_detail_for_last_segment(detail_obj, &group, reasoning_detail_nodes)
@@ -2878,7 +2969,10 @@ struct StreamSegments {
 /// the same node before a Messages downstream closes the block.
 fn detail_awaits_signature(node: &Node) -> bool {
     let Node::Reasoning {
-        encrypted, source, ..
+        encrypted,
+        source,
+        extra_body,
+        ..
     } = node
     else {
         return false;
@@ -2887,8 +2981,58 @@ fn detail_awaits_signature(node: &Node) -> bool {
         && source
             .as_deref()
             .is_some_and(|source| source.starts_with("anthropic"))
-        && reasoning_detail_raw(node)
-            .is_some_and(|raw| raw.get("type").and_then(Value::as_str) == Some("reasoning.text"))
+        && extra_body
+            .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
+            .and_then(|detail| detail.get("type"))
+            .and_then(Value::as_str)
+            == Some("reasoning.text")
+}
+
+/// PC7h: a `reasoning.encrypted` entry whose data has not arrived yet.
+fn is_encrypted_placeholder(detail: &Value) -> bool {
+    detail.get("type").and_then(Value::as_str) == Some("reasoning.encrypted")
+        && match detail.get("data") {
+            None | Some(Value::Null) => true,
+            Some(Value::String(data)) => data.is_empty(),
+            Some(_) => false,
+        }
+}
+
+/// Starts nodes for held placeholders that no later entry of the same identity supplied.
+#[allow(clippy::too_many_arguments)]
+async fn release_encrypted_placeholders(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    held: Vec<Value>,
+    response_started: &mut bool,
+    next_node_index: &mut u32,
+    reasoning_detail_nodes: &mut Vec<(u32, Node)>,
+    segments: &StreamSegments,
+    delta_extra: &mut Map<String, Value>,
+) -> AppResult<()> {
+    for detail in held {
+        let supplied = detail.as_object().is_some_and(|detail| {
+            reasoning_detail_nodes
+                .iter()
+                .any(|(_, node)| reasoning_detail_matches(node, detail))
+        });
+        if !supplied {
+            process_reasoning_detail_delta(
+                tx,
+                response_id,
+                model,
+                &detail,
+                response_started,
+                next_node_index,
+                reasoning_detail_nodes,
+                segments,
+                delta_extra,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// True when a detail fragment only extends an open node or carries no payload.
@@ -2948,6 +3092,55 @@ fn text_segment_node(content: &str, phase: Option<&str>) -> Node {
         extra_body: HashMap::new(),
         cache_breakpoint: None,
     }
+}
+
+/// PC7h: Chat annotation ranges are message-global and URP text citations are node-local.
+/// Returns the citations of the open text node; a range wholly inside a completed segment
+/// joins that segment's terminal node.
+fn place_chat_citations(
+    citations: Vec<crate::urp::Citation>,
+    output_text: &str,
+    segments: &mut StreamSegments,
+) -> Vec<crate::urp::Citation> {
+    let base = output_text
+        .get(..segments.text_start)
+        .unwrap_or_default()
+        .chars()
+        .count() as u64;
+    if base == 0 {
+        return citations;
+    }
+    let mut live = Vec::with_capacity(citations.len());
+    for mut citation in citations {
+        match &mut citation.answer_range {
+            Some(range) if range.end <= base && range.start < base => {
+                let mut segment_end = 0u64;
+                let owner = segments.closed.iter_mut().find_map(|(_, node)| {
+                    let Node::Text {
+                        content, citations, ..
+                    } = node
+                    else {
+                        return None;
+                    };
+                    let segment_start = segment_end;
+                    segment_end += content.chars().count() as u64;
+                    (range.start < segment_end).then_some((segment_start, segment_end, citations))
+                });
+                if let Some((segment_start, segment_end, target)) = owner {
+                    range.start -= segment_start;
+                    range.end = range.end.min(segment_end) - segment_start;
+                    target.push(citation);
+                }
+            }
+            Some(range) => {
+                range.start = range.start.saturating_sub(base);
+                range.end = range.end.saturating_sub(base);
+                live.push(citation);
+            }
+            None => live.push(citation),
+        }
+    }
+    live
 }
 
 /// `force` also completes details awaiting a signature, at the terminal snapshot.
