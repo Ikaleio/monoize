@@ -1251,17 +1251,6 @@ fn messages_body_uses_mid_conversation_output_config(body: &serde_json::Value) -
         })
 }
 
-/// SAN-6: the downstream exhausted-routing message carries only the model and
-/// the last attempt's client-facing error text — no attempt counts, no
-/// provider/channel identity, no upstream URLs.
-pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]) -> String {
-    if tried.is_empty() {
-        return format!("No available upstream provider for model: {model}");
-    }
-    let last_error = &tried[tried.len() - 1].client_error;
-    format!("All upstream attempts failed for model: {model}. Last error: {last_error}")
-}
-
 /// SAN-7: the operator-facing internal detail keeps the attempt count and the
 /// unmasked internal error of the final attempt for request-log persistence.
 pub(super) fn build_exhausted_error_detail(model: &str, tried: &[TriedProvider]) -> String {
@@ -1275,41 +1264,80 @@ pub(super) fn build_exhausted_error_detail(model: &str, tried: &[TriedProvider])
     )
 }
 
+/// RTA-8 `type` for a final attempt that reported no upstream type.
+fn openai_error_type_for_status(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        401 => "authentication_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        429 => "rate_limit_error",
+        400..=499 => "invalid_request_error",
+        _ => "server_error",
+    }
+}
+
+/// RTA-8: the native error of the final failed attempt. SAN-6: its message is
+/// the attempt's client text; the wrapper text stays in `internal_message`.
 pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider]) -> AppError {
-    let last = tried.last();
+    let Some(last) = tried.last() else {
+        let message = build_exhausted_error_detail(model, tried);
+        return AppError::new(StatusCode::BAD_GATEWAY, "upstream_error", message.clone())
+            .with_type(openai_error_type_for_status(StatusCode::BAD_GATEWAY))
+            .with_internal_message(message);
+    };
     let code = last
-        .and_then(|attempt| attempt.upstream_code.as_deref())
+        .upstream_code
+        .as_deref()
         .filter(|code| !code.is_empty())
         .unwrap_or("upstream_error");
     let signature_invalid = code == "thinking_signature_invalid";
+    let final_status = last
+        .upstream_status
+        .and_then(|status| StatusCode::from_u16(status).ok());
     let status = if signature_invalid {
-        last.and_then(|attempt| attempt.upstream_status)
-            .and_then(|status| StatusCode::from_u16(status).ok())
+        final_status
             .filter(StatusCode::is_client_error)
             .unwrap_or(StatusCode::BAD_REQUEST)
     } else {
-        StatusCode::BAD_GATEWAY
-    };
-    // RTA-8a / SAN-8: the signature-invalid exception forwards the final
-    // attempt error without the exhausted wrapper.
-    let message = if signature_invalid {
-        last.map(|attempt| attempt.client_error.clone())
-            .unwrap_or_else(|| build_exhausted_error_message(model, tried))
-    } else {
-        build_exhausted_error_message(model, tried)
+        final_status
+            .filter(|status| status.is_client_error() || status.is_server_error())
+            .unwrap_or(StatusCode::BAD_GATEWAY)
     };
     let internal_message = if signature_invalid {
-        last.map(|attempt| attempt.error.clone())
-            .unwrap_or_else(|| build_exhausted_error_detail(model, tried))
+        last.error.clone()
     } else {
         build_exhausted_error_detail(model, tried)
     };
-    let mut err = AppError::new(status, code, message).with_internal_message(internal_message);
-    if let Some(last) = last {
-        err.upstream_status = last.upstream_status;
-        err.upstream_code = last.upstream_code.clone();
-        err.upstream_type = last.upstream_type.clone();
-        err.upstream_param = last.upstream_param.clone();
+    let error_type = last
+        .upstream_type
+        .as_deref()
+        .filter(|error_type| !error_type.is_empty())
+        .unwrap_or_else(|| openai_error_type_for_status(status))
+        .to_string();
+    let mut err = AppError::new(status, code, last.client_error.clone())
+        .with_internal_message(internal_message)
+        .with_type(error_type);
+    err.param = last.upstream_param.clone();
+    err.upstream_status = last.upstream_status;
+    err.upstream_code = last.upstream_code.clone();
+    err.upstream_type = last.upstream_type.clone();
+    err.upstream_param = last.upstream_param.clone();
+    err
+}
+
+/// RTA-8 plus SE1d: same-family routes also forward the final attempt's retry
+/// and rate-limit headers.
+pub(super) fn build_exhausted_error_for_downstream(
+    model: &str,
+    tried: &[TriedProvider],
+    last_failed_attempt: Option<&MonoizeAttempt>,
+    downstream: DownstreamProtocol,
+) -> AppError {
+    let mut err = build_exhausted_upstream_error(model, tried);
+    if last_failed_attempt.is_some_and(|attempt| downstream.is_same_family(attempt.provider_type))
+        && let Some(last) = tried.last()
+    {
+        err.forwarded_headers = last.forwarded_headers.clone();
     }
     err
 }
@@ -1714,7 +1742,10 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
                 crate::error_sanitize::truncate_error_detail(&err.message)
             )
         }
-        upstream::UpstreamErrorSource::StructuredBody | upstream::UpstreamErrorSource::Internal => {
+        upstream::UpstreamErrorSource::StructuredBody => {
+            crate::error_sanitize::maybe_mask_sensitive_text(&err.message, mask_sensitive_info)
+        }
+        upstream::UpstreamErrorSource::Internal => {
             format!(
                 "upstream status {status}: {}",
                 crate::error_sanitize::maybe_mask_sensitive_text(&err.message, mask_sensitive_info)
@@ -1728,6 +1759,7 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
         "upstream status {status}: {}",
         crate::error_sanitize::truncate_error_detail(&err.message)
     );
+    let forwarded_headers = err.forwarded_headers;
     let mut app_err = AppError::new(status, "upstream_error", client_message)
         .with_internal_message(internal_message)
         .with_upstream_error(
@@ -1742,6 +1774,7 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
     if let Some(param) = err.param {
         app_err = app_err.with_param(param);
     }
+    app_err.forwarded_headers = forwarded_headers;
     app_err
 }
 
@@ -1752,11 +1785,59 @@ pub(super) fn openai_error_json(err: &AppError) -> Value {
             "type": err.error_type,
             "code": err.upstream_code.as_ref().unwrap_or(&err.code),
             "param": err.param,
-            "upstream_status": err.upstream_status,
-            "upstream_code": err.upstream_code,
-            "upstream_type": err.upstream_type,
-            "upstream_param": err.upstream_param,
         }
+    })
+}
+
+/// SE1c: the native Messages `error.type` of an error.
+pub(super) fn anthropic_error_type(err: &AppError) -> String {
+    const NATIVE: [&str; 10] = [
+        "invalid_request_error",
+        "authentication_error",
+        "billing_error",
+        "permission_error",
+        "not_found_error",
+        "request_too_large",
+        "rate_limit_error",
+        "api_error",
+        "timeout_error",
+        "overloaded_error",
+    ];
+    // `AppError::new` defaults `error_type` to `invalid_request_error`, which
+    // says nothing about a local 401 or 403.
+    let local = (err.error_type != "invalid_request_error").then_some(err.error_type.as_str());
+    if let Some(error_type) = err
+        .upstream_type
+        .as_deref()
+        .or(local)
+        .filter(|error_type| NATIVE.contains(error_type))
+    {
+        return error_type.to_string();
+    }
+    match err.status.as_u16() {
+        401 => "authentication_error",
+        402 => "billing_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        413 => "request_too_large",
+        429 => "rate_limit_error",
+        504 => "timeout_error",
+        529 => "overloaded_error",
+        400..=499 => "invalid_request_error",
+        _ => "api_error",
+    }
+    .to_string()
+}
+
+/// SE1, SE1b: the native Messages error body.
+pub(super) fn anthropic_error_json(err: &AppError, request_id: &str) -> Value {
+    json!({
+        "type": "error",
+        "error": {
+            "type": anthropic_error_type(err),
+            "message": err.message,
+        },
+        "request_id": request_id,
     })
 }
 

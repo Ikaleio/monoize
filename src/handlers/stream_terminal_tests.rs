@@ -35,6 +35,11 @@ async fn collect_wire(mut rx: mpsc::Receiver<Event>) -> String {
 }
 
 fn assert_single_terminal_error(wire: &str, downstream: DownstreamProtocol) {
+    let has_done = !matches!(downstream, DownstreamProtocol::AnthropicMessages);
+    assert_terminal_error_frames(wire, has_done);
+}
+
+fn assert_terminal_error_frames(wire: &str, has_done: bool) {
     let data: Vec<&str> = wire
         .lines()
         .filter_map(|line| line.strip_prefix("data: "))
@@ -51,7 +56,6 @@ fn assert_single_terminal_error(wire: &str, downstream: DownstreamProtocol) {
         })
         .collect();
     assert_eq!(errors.len(), 1, "{wire}");
-    let has_done = !matches!(downstream, DownstreamProtocol::AnthropicMessages);
     assert_eq!(
         data.iter().filter(|data| **data == "[DONE]").count(),
         usize::from(has_done),
@@ -139,7 +143,7 @@ async fn exercise_media_failure(synthetic: bool) {
         assert!(err.downstream_stream_terminal_sent);
         let capture = crate::request_capture::SseFrameCapture::new();
         let capture_before = format!("{:?}", capture.snapshot().await);
-        emit_stream_error_if_needed(downstream, &err, &tx, Some(&capture)).await;
+        emit_stream_error_if_needed(downstream, &err, None, &tx, Some(&capture)).await;
         assert_eq!(format!("{:?}", capture.snapshot().await), capture_before);
         drop(tx);
         assert_single_terminal_error(&collect_wire(rx).await, downstream);
@@ -167,13 +171,18 @@ async fn unmarked_transport_failure_emits_one_target_error_sequence() {
         assert!(!err.downstream_stream_terminal_sent);
         let (tx, rx) = mpsc::channel(16);
         let capture = crate::request_capture::SseFrameCapture::new();
-        emit_stream_error_if_needed(downstream, &err, &tx, Some(&capture)).await;
+        emit_stream_error_if_needed(downstream, &err, None, &tx, Some(&capture)).await;
         drop(tx);
         let wire = collect_wire(rx).await;
-        assert_single_terminal_error(&wire, downstream);
+        // SE2: gateway-generated errors append `[DONE]` only on Chat Completions.
+        assert_terminal_error_frames(
+            &wire,
+            matches!(downstream, DownstreamProtocol::ChatCompletions),
+        );
         let expected_code = match downstream {
             DownstreamProtocol::Responses => "server_error",
-            _ => "upstream_transport_failed",
+            DownstreamProtocol::AnthropicMessages => "api_error",
+            DownstreamProtocol::ChatCompletions => "upstream_transport_failed",
         };
         assert!(wire.contains(expected_code) && wire.contains("connection interrupted"));
     }

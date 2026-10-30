@@ -232,21 +232,16 @@ FP4c. The request-shape observability log in FP4b MUST include at minimum:
 
 FP4d. For streaming upstream calls, Monoize MUST track terminal-stream evidence in memory during adaptation. At minimum the tracked evidence consists of whether a literal `[DONE]` sentinel was received, which terminal protocol event was last observed, the terminal finish reason when present, and whether Monoize emitted a synthetic terminal chunk. This evidence is observability-only and MUST NOT change downstream response semantics by itself.
 
-FP4e. If a downstream request has `stream=true` and an upstream attempt returns a non-2xx HTTP response before Monoize receives any upstream SSE frame, Monoize MUST NOT return the upstream HTTP status as the downstream HTTP status. Monoize MUST return a downstream SSE response with HTTP `200` and a protocol-specific terminal error frame:
+FP4e. Native pre-output errors. Let `COMMIT` be the instant Monoize returns downstream SSE response headers (FP4h). For `POST /v1/responses`, `POST /v1/chat/completions`, and `POST /v1/messages`, with `stream` true or false, a terminal failure before `COMMIT` MUST return the error HTTP status and the native JSON error body defined by SE1 instead of an SSE response. This rule covers local validation failures, route exhaustion (`monoize-upstream-routing.spec.md` RTA-8), and every upstream attempt failure. The downstream body MUST carry the final attempt's upstream status, type, code, param, and sanitized message. It MUST NOT contain the text `All upstream attempts failed`.
+FP4e-1. Monoize-generated `/v1/responses` SSE `event: error` payloads emitted after `COMMIT` MUST use the standard fields `type`, `sequence_number`, `code`, `message`, and `param`. They MUST NOT add an HTTP `status` field. If `AppError.upstream_code` is present, `code` MUST preserve it. Otherwise, `code` MUST be `server_error` when the effective error status is in `500..=599`, and MUST equal `AppError.code` for other statuses. The effective error status is `AppError.upstream_status` when present, otherwise `AppError.status.as_u16()`. The original internal error code and status MUST remain unchanged in request logs. These gateway-generated frames MUST use `sequence_number = 0` when no Responses event precedes them.
 
-- `/v1/responses`: one `event: error` frame whose JSON payload has `type = "error"`, `code` equal to the upstream error code when present, and `message` equal to the upstream error message as exposed by Monoize (the sanitized client message defined by `upstream-error-sanitization.spec.md`), followed by one plain `data: [DONE]` frame.
-- `/v1/chat/completions`: one plain `data:` frame whose JSON payload has an `error` object, with `error.code` equal to the upstream error code when present, followed by one plain `data: [DONE]` frame.
-- `/v1/messages`: one `event: error` frame whose JSON payload has `type = "error"` and an `error` object, with `error.type` equal to the upstream error code when present. Monoize MUST NOT append a `[DONE]` frame on `/v1/messages`.
-
-FP4e-1. Monoize-generated `/v1/responses` SSE `event: error` payloads MUST use the standard fields `type`, `sequence_number`, `code`, `message`, and `param`. They MUST NOT add an HTTP `status` field. If `AppError.upstream_code` is present, `code` MUST preserve it. Otherwise, `code` MUST be `server_error` when the effective error status is in `500..=599`, and MUST equal `AppError.code` for other statuses. The effective error status is `AppError.upstream_status` when present, otherwise `AppError.status.as_u16()`. This rule applies before the first upstream event and after streaming starts. The original internal error code and status MUST remain unchanged in request logs. Message sanitization, sequence numbering, terminal framing, and the SSE HTTP status MUST remain unchanged.
-
-FP4f. The synthetic stream error in FP4e MUST finalize the request log with `status = "error"`, `error_code` equal to the upstream error code when present, `error_http_status` equal to the upstream HTTP status when present, no token usage, and no billing charge.
+FP4f. A terminal failure in FP4e MUST finalize the request log with `status = "error"`, `error_code` equal to the upstream error code when present, `error_http_status` equal to the upstream HTTP status when present, no token usage, and no billing charge. The same rule applies to a terminal failure after `COMMIT` and before the first output event.
 
 FP4g. After request-log admission succeeds, every local request-transform, upstream-encode, upstream-decode, response-transform, stream-task, and billing error MUST schedule exactly one terminal request-log row before the forwarding handler returns or its response-stream task exits. A `?` propagation or task-join error MUST NOT bypass terminal scheduling.
 
-FP4h. For a request with `stream=true`, Monoize MUST complete authentication, JSON request decoding, model redirection, and API-key model authorization before it returns the downstream response. After those steps succeed, Monoize MUST return the HTTP `200` SSE response without waiting for suffix resolution, route construction, balance validation, durable request-log admission, request transforms, upstream request encoding, or the first upstream HTTP response headers. The forwarding future MUST execute as part of the downstream response stream so the endpoint's existing 15-second SSE keep-alive can emit while upstream initialization is pending. Durable request-log admission MUST still succeed before any upstream dispatch as required by `spec/request-logs.spec.md` RL1j.
+FP4h. For a request with `stream=true`, Monoize MUST NOT return the downstream SSE headers before the first upstream attempt is accepted. An attempt is accepted when (a) an upstream HTTP call returns a `2xx` status, or (b) an upstream Responses WebSocket returns `101` and the decoder yields its first non-provider-control event, or (c) a buffered synthetic stream attempt (FP6a3, FP6j) produces a complete decoded response and passes every response transform. Monoize MUST commit the headers immediately after acceptance. Durable request-log admission MUST still succeed before any upstream dispatch as required by `spec/request-logs.spec.md`. The 15-second SSE keep-alive (STR3c.1, DM7b) MUST start after `COMMIT` and MUST NOT emit before it. Pre-output retries after `COMMIT` remain invisible to the client except for keep-alive frames (STRM-2).
 
-FP4h-1. An SSE comment or protocol keep-alive event emitted while upstream initialization is pending is transport-only. It MUST NOT count as the first downstream application payload for provider/channel fail-forward eligibility. The first protocol data or error event commits the downstream application stream.
+FP4h-1. An SSE comment or protocol keep-alive event emitted after `COMMIT` is transport-only. It MUST NOT count as the first downstream application payload for provider/channel fail-forward eligibility. The first protocol data or error event commits the downstream application stream. A terminal failure after `COMMIT` MUST use the in-stream error in SE2, because the HTTP status has already been sent.
 
 FP5. **Decode upstream response:**
 
@@ -1772,9 +1767,9 @@ DMO8. If the authenticated API key has `model_limits_enabled = true` and `model_
 
 When the downstream endpoint is `POST /v1/responses` with `stream=true`, Monoize MUST respond using SSE and MUST emit the externally visible Responses lifecycle from canonical URP v2 stream events and terminal `ResponseDone.output`.
 
-STR0. If a downstream request has `stream=true`, terminal errors use the protocol-specific HTTP 200 SSE error contract in FP4e and SE1 even when the upstream failure occurs before the first upstream SSE frame. Monoize MUST preserve the upstream error fields in that SSE error object and MUST NOT emit a successful terminal response event.
+STR0. If a downstream request has `stream=true` and a terminal failure occurs before `COMMIT` (FP4e), Monoize MUST return the native HTTP status and JSON error body defined by SE1. It MUST NOT return an SSE response and MUST NOT emit a successful terminal response event.
 
-STR0a. If Monoize has already returned a downstream SSE response and a later upstream or adapter error occurs, Monoize MUST report that error using the downstream protocol's terminal stream error shape. STR0 does not apply after downstream SSE headers have been committed.
+STR0a. If Monoize has already committed downstream SSE headers and a later upstream or adapter error occurs, Monoize MUST report that error using the downstream protocol's terminal stream error shape (SE2). This applies even when no protocol event has yet been emitted to the client.
 
 At minimum the downstream Responses stream MUST support:
 
@@ -1888,32 +1883,33 @@ STR11. Flat canonical storage MUST NOT weaken downstream protocol lifecycle guar
 
 ## 9. Stream error termination
 
-When a streaming request, `stream=true`, encounters an error, either before any upstream data is received, for example no available provider, or mid-stream, for example upstream connection failure, Monoize MUST:
+Errors split at `COMMIT` (FP4e, FP4h). Before `COMMIT`, section 9.1 applies to streaming and non-streaming requests alike. After `COMMIT`, section 9.2 applies.
 
-1. Emit a protocol-appropriate error event to the downstream client.
-2. Emit the protocol-appropriate terminal sentinel for that downstream endpoint.
-3. Close the SSE connection.
+### 9.1 Pre-commit errors
 
-### 9.1 Pre-stream errors
+SE1. A terminal error before `COMMIT` on `POST /v1/responses`, `POST /v1/chat/completions`, or `POST /v1/messages` MUST be an HTTP response with `content-type: application/json`, the status from SE1a, and exactly this body:
 
-SE1. If an error occurs before any data has been streamed, Monoize MUST return an SSE response, not a JSON error response, containing:
+- `POST /v1/responses` and `POST /v1/chat/completions`: `{ "error": { "message": string, "type": string, "param": string | null, "code": string } }`, with exactly these four `error` members;
+- `POST /v1/messages`: `{ "type": "error", "error": { "type": string, "message": string }, "request_id": string }`, with exactly these two `error` members.
 
-- for `POST /v1/chat/completions`: one `data` event with an OpenAI-compatible error JSON object, followed by `data: [DONE]`;
-- for `POST /v1/responses`: one named `event: error` whose JSON payload contains top-level `type = "error"`, `sequence_number`, `code`, `message`, and `param`, followed by `data: [DONE]`;
-- for `POST /v1/messages`: one named `event: error` with an Anthropic-compatible error object, then close the SSE stream without appending `data: [DONE]`.
+SE1a. For a route-exhaustion failure, the status, `type`, `code`, `param`, and `message` are the RTA-8 values of the final failed attempt. Local validation failures use the status and code of the local `AppError`. `code` is the final non-empty upstream code; it is `upstream_error` only when the final failed attempt has no upstream code. For example, `thinking_signature_invalid` MUST remain `thinking_signature_invalid`.
 
-For `POST /v1/responses`, Monoize MUST NOT emit `response.failed` for the SE1 pre-stream error case. The `response.failed` event is reserved for a Responses response object that has failed after the Responses stream exists.
+SE1b. Every error body and every gateway-generated SSE `error` event on `POST /v1/messages` MUST carry the top-level `request_id`. Every JSON error on `POST /v1/messages` MUST emit the same value in the HTTP `request-id` response header. The value is the canonical `x-request-id` of the request. If that value is absent, Monoize MUST generate one UUIDv4 for the response.
 
-SE1a. If the error was caused by an upstream HTTP error response and that response body contains JSON field `error.code`, `error.type`, or `error.param`, Monoize MUST preserve those values on the downstream error object using `upstream_code`, `upstream_type`, and `upstream_param`. After route exhaustion, a non-stream JSON error and a pre-stream Responses `event: error` SSE payload MUST use the final non-empty `upstream_code` as the top-level `code`. They MUST use `upstream_error` only when the final failed attempt has no upstream code. For example, `thinking_signature_invalid` MUST remain `thinking_signature_invalid`; Monoize MUST NOT replace it with `upstream_error`.
+SE1c. Messages `error.type` MUST be one of `invalid_request_error`, `authentication_error`, `billing_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `timeout_error`, `overloaded_error`. If the upstream type belongs to this set, Monoize MUST use it. Otherwise Monoize MUST use a non-default local `AppError.error_type` that belongs to this set. Otherwise the type is derived from the error HTTP status: 400 → `invalid_request_error`, 401 → `authentication_error`, 402 → `billing_error`, 403 → `permission_error`, 404 → `not_found_error`, 413 → `request_too_large`, 429 → `rate_limit_error`, 504 → `timeout_error`, 529 → `overloaded_error`, other `4xx` → `invalid_request_error`, other statuses → `api_error`. The same rule applies to gateway-generated in-stream Messages `error` events.
 
-SE1b. A non-stream JSON error returned by `POST /v1/messages` MUST use the Anthropic envelope `{ "type": "error", "error": { "type": <error type>, "message": <message> }, "request_id": <request id> }`. If Monoize has a request identifier, it MUST emit the same value in the top-level `request_id` member and the HTTP `request-id` response header. Upstream diagnostic members required by SE1a MAY remain additional members of the nested `error` object. Chat Completions and Responses JSON error envelopes are unchanged.
+SE1d. Forwarded rate-limit headers. Let `FWD(headers)` be the upstream response headers whose lowercased name is `retry-after`, `retry-after-ms`, `x-should-retry`, or starts with `anthropic-ratelimit-` or `x-ratelimit-`. When the upstream provider type belongs to the downstream protocol family (`responses`→`/v1/responses`, `chat_completion`→`/v1/chat/completions`, `messages`→`/v1/messages`), Monoize MUST copy these headers onto the downstream response:
+- on a pre-commit error: `FWD` of the final failed attempt's upstream response;
+- on a non-streaming success: `FWD` of the serving attempt's upstream response;
+- on a streaming success: `FWD` of the attempt that caused `COMMIT`. A later pre-output retry MUST NOT change committed headers.
+On cross-family routes and for WebSocket upstream attempts, Monoize MUST NOT forward any of these headers.
 
 ### 9.2 Mid-stream errors
 
-SE2. If an error occurs after streaming has begun, for example upstream disconnects or parse failure, Monoize MUST emit a protocol-appropriate error event, then:
+SE2. If an error occurs after `COMMIT`, for example upstream disconnects, parse failure, or exhaustion of pre-output retries, Monoize MUST emit a protocol-appropriate error event, then:
 
-- for downstream `POST /v1/chat/completions` and `POST /v1/responses`, emit exactly one terminal `data: [DONE]` sentinel and close the stream;
-- for downstream `POST /v1/messages`, close the stream without appending `data: [DONE]`.
+- for downstream `POST /v1/chat/completions`, emit exactly one terminal `data: [DONE]` sentinel and close the stream. The event data is `{ "error": { "message", "type", "param", "code" } }` with exactly these members;
+- for downstream `POST /v1/responses` and `POST /v1/messages`, close the stream without appending `data: [DONE]`.
 
 SE3. If the downstream channel sender is already closed, client disconnected, Monoize MAY silently discard the error event.
 

@@ -1,6 +1,16 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+
+/// SE1d `FWD`: upstream retry and rate-limit response headers.
+pub type ForwardedHeaders = Vec<(HeaderName, HeaderValue)>;
+
+/// Copies `FWD` headers onto a downstream response.
+pub fn append_forwarded_headers(response: &mut Response, headers: ForwardedHeaders) {
+    for (name, value) in headers {
+        response.headers_mut().append(name, value);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppError {
@@ -18,6 +28,8 @@ pub struct AppError {
     pub internal_message: Option<String>,
     /// The downstream encoder already sent its complete terminal error sequence.
     pub downstream_stream_terminal_sent: bool,
+    /// SE1d: headers copied onto the downstream error response.
+    pub forwarded_headers: ForwardedHeaders,
 }
 
 impl AppError {
@@ -34,6 +46,7 @@ impl AppError {
             upstream_param: None,
             internal_message: None,
             downstream_stream_terminal_sent: false,
+            forwarded_headers: Vec::new(),
         }
     }
 
@@ -83,14 +96,6 @@ struct ErrorBody {
     error_type: String,
     param: Option<String>,
     code: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_status: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_param: Option<String>,
 }
 
 impl IntoResponse for AppError {
@@ -101,13 +106,11 @@ impl IntoResponse for AppError {
                 error_type: self.error_type,
                 param: self.param,
                 code: self.code,
-                upstream_status: self.upstream_status,
-                upstream_code: self.upstream_code,
-                upstream_type: self.upstream_type,
-                upstream_param: self.upstream_param,
             },
         };
-        (self.status, axum::Json(body)).into_response()
+        let mut response = (self.status, axum::Json(body)).into_response();
+        append_forwarded_headers(&mut response, self.forwarded_headers);
+        response
     }
 }
 
