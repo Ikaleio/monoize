@@ -73,7 +73,7 @@ impl Transform for CacheAnthropicAutoTransform {
         let slot_free = crate::urp::cache_breakpoint::anthropic_breakpoint_count(req) < 4;
         CacheConfig::from_dyn(config)?.apply_request_marker(
             &mut req.extra_body,
-            &mut req.context.anthropic_cache_markers,
+            &mut req.context.anthropic_request_cache_owned,
             slot_free,
         );
         Ok(())

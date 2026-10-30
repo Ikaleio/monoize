@@ -2,11 +2,11 @@
 //! (`spec/auto-cache-transforms.spec.md` DEF-11 through DEF-15).
 
 use crate::transforms::{TransformConfig, TransformError};
-use crate::urp::{AnthropicCacheTarget, CacheBreakpoint, UrpRequest};
+use crate::urp::{CacheBreakpoint, UrpRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 enum CacheTtl {
@@ -66,20 +66,11 @@ impl CacheConfig {
     /// Applies this rule's marker to a typed target (DEF-15). A marker inserted by an earlier
     /// Monoize rule is retuned, so later scopes (API key after Provider) win; a client marker is
     /// left untouched. `slot_free` gates only the creation of a new breakpoint.
-    pub(super) fn apply_breakpoint(
-        &self,
-        slot: &mut Option<CacheBreakpoint>,
-        owned: &mut HashSet<AnthropicCacheTarget>,
-        target: AnthropicCacheTarget,
-        slot_free: bool,
-    ) {
+    pub(super) fn apply_breakpoint(&self, slot: &mut Option<CacheBreakpoint>, slot_free: bool) {
         match slot {
-            Some(marker) if owned.contains(&target) => *marker = self.breakpoint(),
+            Some(marker) if marker.anthropic_rule => *marker = self.breakpoint(),
             Some(_) => {}
-            None if slot_free => {
-                *slot = Some(self.breakpoint());
-                owned.insert(target);
-            }
+            None if slot_free => *slot = Some(self.breakpoint()),
             None => {}
         }
     }
@@ -88,16 +79,15 @@ impl CacheConfig {
     pub(super) fn apply_request_marker(
         &self,
         extra_body: &mut HashMap<String, Value>,
-        owned: &mut HashSet<AnthropicCacheTarget>,
+        owned: &mut bool,
         slot_free: bool,
     ) {
-        let target = AnthropicCacheTarget::Request;
         match extra_body.get_mut("cache_control") {
-            Some(marker) if owned.contains(&target) => *marker = self.cache_control(),
+            Some(marker) if *owned => *marker = self.cache_control(),
             Some(_) => {}
             None if slot_free => {
                 extra_body.insert("cache_control".to_string(), self.cache_control());
-                owned.insert(target);
+                *owned = true;
             }
             None => {}
         }

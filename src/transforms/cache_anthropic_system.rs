@@ -4,7 +4,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{AnthropicCacheTarget, OrdinaryRole};
+use crate::urp::{Node, OrdinaryRole};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -74,7 +74,8 @@ impl Transform for CacheAnthropicSystemTransform {
             matches!(
                 node.role(),
                 Some(OrdinaryRole::System | OrdinaryRole::Developer)
-            ) && node.cache_breakpoint_mut().is_some()
+            ) && !matches!(node, Node::Text { content, .. } if content.is_empty())
+                && node.cache_breakpoint_mut().is_some()
         });
         let Some(idx) = system_idx else {
             return Ok(());
@@ -84,12 +85,7 @@ impl Transform for CacheAnthropicSystemTransform {
         let slot = req.input[idx]
             .cache_breakpoint_mut()
             .expect("checked marker carrier");
-        CacheConfig::from_dyn(config)?.apply_breakpoint(
-            slot,
-            &mut req.context.anthropic_cache_markers,
-            AnthropicCacheTarget::System,
-            slot_free,
-        );
+        CacheConfig::from_dyn(config)?.apply_breakpoint(slot, slot_free);
 
         Ok(())
     }
