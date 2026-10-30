@@ -3,7 +3,7 @@ use crate::urp::decode::gemini::{
     GEMINI_CONTINUATION_ID_PREFIX, GEMINI_ITEM_CARRIER_ID_PREFIX, GEMINI_PART_EXTRA_KEY,
     GEMINI_PART_SIGNATURE_ID_PREFIX, GEMINI_SIGNATURE_ID_PREFIX, GEMINI_SYNTHETIC_CALL_PREFIX,
     GEMINI_SYSTEM_EXTRA_KEY, GEMINI_TEXT_FORMAT_KEY, item_carrier_part, native_schema_types,
-    strip_text_response_format, text_carrier_owner,
+    item_carrier_offset, strip_text_response_format, text_carrier_owner,
 };
 use crate::urp::encode::{
     merge_extra, sanitize_provider_item_wire_body, usage_input_details, usage_output_details,
@@ -1048,14 +1048,18 @@ pub(crate) fn encode_request_node_part(
                 (None, Some(payload))
                     if carrier(GEMINI_ITEM_CARRIER_ID_PREFIX) =>
                 {
-                    item_carrier_part(payload)?
+                    let mut part = item_carrier_part(payload)?;
+                    if let Some(offset) = carrier_id.and_then(item_carrier_offset) {
+                        part[BOUND_ITEM_OFFSET_KEY] = json!(offset);
+                    }
+                    part
                 }
                 (None, Some(signature))
                     if carrier(GEMINI_PART_SIGNATURE_ID_PREFIX) =>
                 {
                     let mut part = json!({ BOUND_SIGNATURE_KEY: signature });
-                    if let Some((length, hash)) = carrier_id.and_then(text_carrier_owner) {
-                        part[BOUND_OWNER_KEY] = json!([length, hash]);
+                    if let Some((length, hash, offset)) = carrier_id.and_then(text_carrier_owner) {
+                        part[BOUND_OWNER_KEY] = json!([length, hash, offset]);
                     }
                     part
                 }
@@ -1147,6 +1151,16 @@ pub(crate) fn encode_request_node_part(
                 data.remove("mimeType");
                 if let Some(mime) = &metadata.media_type {
                     data.insert("mimeType".into(), json!(mime));
+                }
+            }
+            if let Some(filename) = &metadata.filename {
+                let key = if part.get("inlineData").is_some() {
+                    "inlineData"
+                } else {
+                    "fileData"
+                };
+                if let Some(data) = part.get_mut(key).and_then(Value::as_object_mut) {
+                    data.insert("displayName".into(), json!(filename));
                 }
             }
         }
@@ -1541,6 +1555,8 @@ fn encode_tool_result(node: &Node, tool_names_by_call_id: &Map<String, Value>) -
 const BOUND_SIGNATURE_KEY: &str = "_monoize_gemini_bound_signature";
 /// Encoder-local `[byte length, xxh3]` owner binding of a bound text signature placeholder.
 const BOUND_OWNER_KEY: &str = "_monoize_gemini_bound_owner";
+/// Encoder-local response text offset of a restored server-tool Part.
+const BOUND_ITEM_OFFSET_KEY: &str = "_monoize_gemini_item_offset";
 /// Documented validator-skip value for a current-turn function call without a Gemini signature.
 const DUMMY_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
@@ -1694,7 +1710,8 @@ impl GeminiModel {
             media_resolution: current,
             image_output,
             image_sizes,
-            extended_ratios: flash_image || name.contains("nano-banana"),
+            extended_ratios: (flash_image && !matches!(version, Some((2, _))))
+                || name.contains("nano-banana"),
         }
     }
 
@@ -1931,7 +1948,8 @@ fn split_continuation(nodes: &[Node]) -> (&[Node], Option<&Value>) {
                     .is_some_and(|role| role != OrdinaryRole::Assistant)
         })
         .map_or(0, |index| index + 1);
-    let token = nodes[turn_start..].iter().find_map(|node| match node {
+    // Appended hops carry one token each; only the latest resumes.
+    let token = nodes[turn_start..].iter().rev().find_map(|node| match node {
         Node::Reasoning {
             id,
             metadata,
@@ -1991,14 +2009,15 @@ fn sign_current_turn_calls(contents: &mut [Value]) {
 }
 
 /// Attaches each bound signature placeholder to its owning Part and removes the placeholder.
-/// A text-owner binding (byte length, xxh3) first selects an unsigned text Part with exactly
-/// that text; when `split` is set it then finds the owned text inside a merged text Part and
-/// splits it there, dropping whitespace-only gaps between two owned segments (downstream join
-/// separators). Remaining placeholders attach to the adjacent unsigned text or media Part
-/// (preceding first, then following) or become a standalone empty-text Part.
-/// Returns removed placeholder positions in removal order (each relative to the vector after
-/// earlier removals); `split` callers must not rely on positions of split Parts.
-fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
+/// A text-owner binding (byte length, xxh3, response text offset) selects, in order: the unsigned
+/// text Part with that text at that offset; with `merged`, that text at or just after the offset
+/// inside a merged text Part, which is split there; the nearest Part with exactly that text,
+/// preceding the placeholder first. Remaining placeholders attach to the adjacent unsigned text
+/// or media Part (preceding first, then following) or become a standalone empty-text Part.
+/// With `merged`, restored server-tool Parts then return to their text offsets.
+/// Returns removed placeholder positions, each relative to the vector after earlier removals;
+/// `merged` callers must not rely on them.
+fn resolve_bound_signatures(parts: &mut Vec<Value>, merged: bool) -> Vec<usize> {
     fn accepts(part: &Value) -> bool {
         part.get(BOUND_SIGNATURE_KEY).is_none()
             && part.get("thoughtSignature").is_none()
@@ -2006,20 +2025,14 @@ fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
                 || part.get("fileData").is_some()
                 || plain_text(part).is_some())
     }
-    fn plain_text(part: &Value) -> Option<&str> {
-        (part.get(BOUND_SIGNATURE_KEY).is_none()
-            && part.get("thought").and_then(Value::as_bool) != Some(true))
-        .then(|| part.get("text").and_then(Value::as_str))
-        .flatten()
-    }
-    fn owner_matches(text: &str, (length, hash): (usize, u64)) -> bool {
+    fn owner_matches(text: &str, length: usize, hash: u64) -> bool {
         text.len() == length && xxhash_rust::xxh3::xxh3_64(text.as_bytes()) == hash
     }
-    // Downstream join separators are short; a longer gap is searched only in bounded text.
-    const MAX_JOIN_GAP: usize = 4;
-    const FULL_SCAN_LIMIT: usize = 64 * 1024;
+    // Tolerance for a downstream that inserted separators between merged texts.
+    const MERGED_SCAN_WINDOW: usize = 1024;
 
-    let placeholders: Vec<(usize, Value, Option<(usize, u64)>)> = parts
+    type Owner = (usize, u64, u64);
+    let placeholders: Vec<(usize, Value, Option<Owner>)> = parts
         .iter()
         .enumerate()
         .filter_map(|(index, part)| {
@@ -2028,13 +2041,21 @@ fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
                 Some((
                     usize::try_from(owner.get(0)?.as_u64()?).ok()?,
                     owner.get(1)?.as_u64()?,
+                    owner.get(2)?.as_u64()?,
                 ))
             });
             Some((index, signature, owner))
         })
         .collect();
     if placeholders.is_empty() {
+        place_server_tool_parts(parts, merged);
         return Vec::new();
+    }
+    let mut offsets = vec![0u64; parts.len()];
+    let mut position = 0;
+    for (index, part) in parts.iter().enumerate() {
+        offsets[index] = position;
+        position += plain_text(part).map_or(0, |text| text.len() as u64);
     }
     let mut signed: HashMap<usize, Value> = HashMap::new();
     let mut splits: HashMap<usize, Vec<(usize, usize, Value)>> = HashMap::new();
@@ -2042,23 +2063,28 @@ fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
     let free = |index: usize, signed: &HashMap<usize, Value>, splits: &HashMap<_, Vec<_>>| {
         !signed.contains_key(&index) && !splits.contains_key(&index)
     };
-    // Exact owner text.
+    let exact = |index: usize, length: usize, hash: u64| {
+        accepts(&parts[index])
+            && plain_text(&parts[index]).is_some_and(|text| owner_matches(text, length, hash))
+    };
+    // Owner text at its offset.
     for (slot, (_, signature, owner)) in placeholders.iter().enumerate() {
-        let Some(owner) = owner else { continue };
+        let Some((length, hash, offset)) = *owner else {
+            continue;
+        };
         if let Some(target) = (0..parts.len()).find(|index| {
-            free(*index, &signed, &splits)
-                && accepts(&parts[*index])
-                && plain_text(&parts[*index]).is_some_and(|text| owner_matches(text, *owner))
+            offsets[*index] == offset
+                && free(*index, &signed, &splits)
+                && exact(*index, length, hash)
         }) {
             signed.insert(target, signature.clone());
             resolved[slot] = true;
         }
     }
-    // Owned text inside a merged text Part.
-    if split {
-        let mut cursors: HashMap<usize, usize> = HashMap::new();
+    // Owner text inside a merged text Part.
+    if merged {
         for (slot, (_, signature, owner)) in placeholders.iter().enumerate() {
-            let (Some((length, hash)), false) = (owner, resolved[slot]) else {
+            let (Some((length, hash, offset)), false) = (*owner, resolved[slot]) else {
                 continue;
             };
             let found = (0..parts.len()).find_map(|index| {
@@ -2066,32 +2092,36 @@ fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
                     return None;
                 }
                 let text = plain_text(&parts[index])?;
-                let cursor = cursors.get(&index).copied().unwrap_or(0);
-                let near = (cursor..=cursor + MAX_JOIN_GAP).collect::<Vec<_>>();
-                let starts: Box<dyn Iterator<Item = usize>> = if text.len() <= FULL_SCAN_LIMIT {
-                    Box::new(near.into_iter().chain(cursor..text.len()))
-                } else {
-                    Box::new(near.into_iter())
-                };
-                starts
+                let local = usize::try_from(offset.checked_sub(offsets[index])?).ok()?;
+                (local..=local.saturating_add(MERGED_SCAN_WINDOW))
+                    .take_while(|start| start + length <= text.len())
                     .filter(|start| {
-                        text.is_char_boundary(*start)
-                            && text.is_char_boundary(start + length)
-                            && start + length <= text.len()
+                        text.is_char_boundary(*start) && text.is_char_boundary(start + length)
                     })
-                    .find(|start| {
-                        owner_matches(&text[*start..start + length], (*length, *hash))
-                    })
+                    .find(|start| owner_matches(&text[*start..start + length], length, hash))
                     .map(|start| (index, start))
             });
             if let Some((index, start)) = found {
-                cursors.insert(index, start + length);
                 splits
                     .entry(index)
                     .or_default()
-                    .push((start, *length, signature.clone()));
+                    .push((start, length, signature.clone()));
                 resolved[slot] = true;
             }
+        }
+    }
+    // Owner text elsewhere, nearest first.
+    for (slot, (index, signature, owner)) in placeholders.iter().enumerate() {
+        let (Some((length, hash, _)), false) = (*owner, resolved[slot]) else {
+            continue;
+        };
+        if let Some(target) = (0..*index)
+            .rev()
+            .chain(*index + 1..parts.len())
+            .find(|target| free(*target, &signed, &splits) && exact(*target, length, hash))
+        {
+            signed.insert(target, signature.clone());
+            resolved[slot] = true;
         }
     }
     // Adjacency.
@@ -2129,10 +2159,9 @@ fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
             segments.sort_by_key(|(start, ..)| *start);
             let text = plain_text(&part).unwrap_or_default().to_string();
             let mut position = 0;
-            for (number, (start, length, signature)) in segments.into_iter().enumerate() {
-                let gap = &text[position..start];
-                if !gap.is_empty() && !(number > 0 && gap.trim().is_empty()) {
-                    rebuilt.push(json!({ "text": gap }));
+            for (start, length, signature) in segments {
+                if start > position {
+                    rebuilt.push(json!({ "text": &text[position..start] }));
                 }
                 rebuilt.push(
                     json!({"text": &text[start..start + length], "thoughtSignature": signature}),
@@ -2150,7 +2179,65 @@ fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
         rebuilt.push(part);
     }
     *parts = rebuilt;
+    place_server_tool_parts(parts, merged);
     removed
+}
+
+fn plain_text(part: &Value) -> Option<&str> {
+    (part.get(BOUND_SIGNATURE_KEY).is_none()
+        && part.get("thought").and_then(Value::as_bool) != Some(true))
+    .then(|| part.get("text").and_then(Value::as_str))
+    .flatten()
+}
+
+/// Removes the encoder-local offset of restored server-tool Parts. With `relocate`, a Part whose
+/// text position differs from its offset (a downstream moved it away from merged text) returns
+/// to that offset, splitting an unsigned text Part when the offset falls inside it.
+fn place_server_tool_parts(parts: &mut Vec<Value>, relocate: bool) {
+    let mut moved = Vec::new();
+    let mut position = 0;
+    let mut index = 0;
+    while index < parts.len() {
+        let offset = parts[index]
+            .as_object_mut()
+            .and_then(|part| part.remove(BOUND_ITEM_OFFSET_KEY))
+            .and_then(|offset| offset.as_u64());
+        if relocate && offset.is_some_and(|offset| offset != position) {
+            moved.push((offset.unwrap_or_default(), parts.remove(index)));
+            continue;
+        }
+        position += plain_text(&parts[index]).map_or(0, |text| text.len() as u64);
+        index += 1;
+    }
+    for (offset, item) in moved {
+        let mut position = 0;
+        let mut index = 0;
+        while index < parts.len() {
+            let length = plain_text(&parts[index]).map_or(0, |text| text.len() as u64);
+            let passable = length == 0
+                && (parts[index].get("toolCall").is_some()
+                    || parts[index].get("toolResponse").is_some()
+                    || parts[index].get("text").is_some());
+            if position == offset && !passable {
+                break;
+            }
+            if position < offset && offset < position + length {
+                let at = (offset - position) as usize;
+                let text = plain_text(&parts[index]).unwrap_or_default();
+                if parts[index].get("thoughtSignature").is_none() && text.is_char_boundary(at) {
+                    let tail = json!({ "text": &text[at..] });
+                    parts[index] = json!({ "text": &text[..at] });
+                    parts.insert(index + 1, tail);
+                }
+                index += 1;
+                position = offset;
+                break;
+            }
+            position += length;
+            index += 1;
+        }
+        parts.insert(index, item);
+    }
 }
 
 /// Gemini accepts only its own signatures. Before envelope unwrapping, clears call signatures
