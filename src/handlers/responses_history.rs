@@ -474,6 +474,7 @@ mod media_history_tests {
                 Instant::now(),
                 None,
                 false,
+                None,
             )
             .await;
             if result.is_ok() {

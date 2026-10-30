@@ -51,6 +51,13 @@ async fn probe_stream_first_output(
     loop {
         match decoded_rx.recv().await {
             Some(event @ crate::urp::UrpStreamEvent::ResponseStart { .. }) => buffered.push(event),
+            // A later `response.in_progress` belongs to the start, not to first output.
+            Some(event @ crate::urp::UrpStreamEvent::ProviderControl { .. })
+                if matches!(&event, crate::urp::UrpStreamEvent::ProviderControl { event_name, .. }
+                    if event_name == crate::urp::RESPONSES_IN_PROGRESS_CONTROL) =>
+            {
+                buffered.push(event)
+            }
             Some(crate::urp::UrpStreamEvent::Error { code, message, .. }) => {
                 let _ = decode_handle.await;
                 let terminal = runtime_metrics.lock().await.terminal.terminal_error.clone();
@@ -168,10 +175,7 @@ async fn emit_stream_error_if_needed(
     if tx.send(event).await.is_err() {
         return;
     }
-    if matches!(
-        downstream,
-        DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses
-    ) {
+    if matches!(downstream, DownstreamProtocol::ChatCompletions) {
         if let Some(frames) = capture_frames {
             frames.record("data: [DONE]\n\n".to_string()).await;
         }
@@ -607,6 +611,8 @@ pub(super) async fn forward_stream_typed(
                             return Err(err);
                         }
                     };
+                let responses_echo =
+                    responses_request_echo_for_attempt(&nonstream_req, &attempt, downstream);
                 release_encoded_input(&mut nonstream_req, &capture);
                 attempt.session_affinity_value =
                     resolve_session_affinity_value(&attempt, &upstream_body);
@@ -837,6 +843,10 @@ pub(super) async fn forward_stream_typed(
                         if let Some(history) = &history_for_stream {
                             history.decorate_response(&mut resp);
                         }
+                        if let Some(echo) = responses_echo {
+                            resp.extra_body
+                                .insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo);
+                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -1054,6 +1064,8 @@ pub(super) async fn forward_stream_typed(
                         return Err(err);
                     }
                 };
+            let responses_echo =
+                responses_request_echo_for_attempt(&req_attempt, &attempt, downstream);
             attempt.session_affinity_value =
                 resolve_session_affinity_value(&attempt, &upstream_body);
             let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
@@ -1508,6 +1520,7 @@ pub(super) async fn forward_stream_typed(
                                         started_at,
                                         sse_max_frame_length,
                                         mask_sensitive_info,
+                                        responses_echo,
                                     )
                                     .await
                                 });

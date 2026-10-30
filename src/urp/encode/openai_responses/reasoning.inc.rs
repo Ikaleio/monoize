@@ -20,7 +20,10 @@ fn encode_reasoning_item_inner(part: &Part, request_item: bool) -> Option<Value>
             if request_item && metadata.downstream_only {
                 return None;
             }
-            if !request_item && !reasoning_payload_is_meaningful(content, summary, encrypted) {
+            if !request_item
+                && !metadata.native_empty
+                && !reasoning_payload_is_meaningful(content, summary, encrypted)
+            {
                 return None;
             }
             let mut obj = Map::new();
@@ -211,9 +214,6 @@ fn encode_tool_call_item(part: &Part, output_item: bool) -> Option<Value> {
                     }),
                 );
             }
-            if output_item {
-                obj.insert("status".to_string(), Value::String("completed".to_string()));
-            }
             obj.insert("call_id".to_string(), Value::String(call_id.clone()));
             obj.insert("name".to_string(), Value::String(name.clone()));
             if let Some(namespace) = namespace { obj.insert("namespace".to_string(), json!(namespace)); }
@@ -226,6 +226,20 @@ fn encode_tool_call_item(part: &Part, output_item: bool) -> Option<Value> {
                 Value::String(if *tool_type == ToolCallType::Custom { arguments.clone() } else { crate::urp::tool_call_arguments_for_wire(arguments) }),
             );
             merge_extra(&mut obj, extra_body);
+            if !output_item {
+                // PR4.1: foreign call identifiers are rejected by Responses as item ids.
+                let prefix = match tool_type {
+                    ToolCallType::Function => "fc_",
+                    ToolCallType::Custom => "ctc_",
+                };
+                if !obj
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with(prefix))
+                {
+                    obj.remove("id");
+                }
+            }
             Some(Value::Object(obj))
         }
         _ => None,

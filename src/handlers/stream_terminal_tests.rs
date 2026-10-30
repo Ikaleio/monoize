@@ -51,7 +51,7 @@ fn assert_single_terminal_error(wire: &str, downstream: DownstreamProtocol) {
         })
         .collect();
     assert_eq!(errors.len(), 1, "{wire}");
-    let has_done = !matches!(downstream, DownstreamProtocol::AnthropicMessages);
+    let has_done = matches!(downstream, DownstreamProtocol::ChatCompletions);
     assert_eq!(
         data.iter().filter(|data| **data == "[DONE]").count(),
         usize::from(has_done),
@@ -116,6 +116,7 @@ async fn exercise_media_failure(synthetic: bool) {
                 Instant::now(),
                 None,
                 false,
+                None,
             )
             .await
         };

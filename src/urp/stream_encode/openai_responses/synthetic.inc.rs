@@ -5,11 +5,10 @@ pub(crate) async fn emit_synthetic_responses_stream(
     sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
-    let mut seq = 1u64;
+    let mut seq = 0u64;
     let encoded = match urp::encode::openai_responses::encode_response_checked(resp, logical_model) {
         Ok(encoded) => encoded,
-        Err(error) => return emit_responses_media_error(&tx, &mut seq, &resp.id,
-            resp.created_at.unwrap_or_else(now_ts), logical_model, &error).await,
+        Err(error) => return emit_responses_media_error(&tx, &mut seq, &error).await,
     };
     let encoded_output = encoded
         .get("output")
@@ -31,6 +30,7 @@ pub(crate) async fn emit_synthetic_responses_stream(
         logical_model,
         "in_progress",
         Value::Array(Vec::new()),
+        resp.extra_body.get(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY),
     );
     for key in ["store", "previous_response_id"] {
         if let Some(value) = encoded.get(key) { base_response["response"][key] = value.clone(); }
@@ -57,58 +57,24 @@ pub(crate) async fn emit_synthetic_responses_stream(
 
         match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
             "reasoning" => {
-                let (text, summary, sig) = extract_reasoning_parts(item);
+                let (text, _, _) = extract_reasoning_parts(item);
                 let source = item
                     .get("source")
                     .and_then(Value::as_str)
                     .filter(|source| !source.is_empty())
                     .map(|source| source.to_string());
-                if !summary.is_empty() {
-                    send_responses_event(
+                let mut summary_lifecycle = ReasoningSummaryLifecycle::default();
+                summary_lifecycle
+                    .finish(
                         &tx,
                         &mut seq,
-                        "response.reasoning_summary_part.added",
-                        json!({
-                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                            "output_index": output_index,
-                            "summary_index": 0,
-                            "part": { "type": "summary_text", "text": "" },
-                        }),
-                    )
-                    .await?;
-                    send_responses_delta_string(
-                        &tx,
-                        &mut seq,
-                        "response.reasoning_summary_text.delta",
-                        insert_reasoning_source(
-                            json!({
-                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                            "output_index": output_index,
-                            "summary_index": 0,
-                            }),
-                            source.as_deref(),
-                        ),
-                        "delta",
-                        &summary,
+                        item.get("id").unwrap_or(&Value::Null),
+                        output_index,
+                        source.as_deref(),
+                        &reasoning_summary_parts_from_item(item),
                         sse_max_frame_length,
                     )
                     .await?;
-                    send_responses_event(
-                        &tx,
-                        &mut seq,
-                        "response.reasoning_summary_text.done",
-                        insert_reasoning_source(
-                            json!({
-                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                            "output_index": output_index,
-                            "summary_index": 0,
-                            "text": summary,
-                            }),
-                            source.as_deref(),
-                        ),
-                    )
-                    .await?;
-                }
                 if !text.is_empty() {
                     send_responses_event(
                         &tx,
@@ -167,21 +133,6 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     )
                     .await?;
                 }
-                if !summary.is_empty() {
-                    send_responses_event(
-                        &tx,
-                        &mut seq,
-                        "response.reasoning_summary_part.done",
-                        json!({
-                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                            "output_index": output_index,
-                            "summary_index": 0,
-                            "part": { "type": "summary_text", "text": summary },
-                        }),
-                    )
-                    .await?;
-                }
-                let _ = sig;
             }
             "function_call" | "custom_tool_call" => {
                 let is_custom = item.get("type").and_then(Value::as_str)
@@ -252,11 +203,10 @@ pub(crate) async fn emit_synthetic_responses_stream(
         )
         .await?;
     }
-    let mut completed_response =
-        ensure_response_object_user_field(sanitize_responses_completed_for_frame_limit(
-            &response_with_reasoning_durations(encoded, synthetic_reasoning_duration_secs),
-            sse_max_frame_length,
-        ));
+    let mut completed_response = sanitize_responses_completed_for_frame_limit(
+        &response_with_reasoning_durations(encoded, synthetic_reasoning_duration_secs),
+        sse_max_frame_length,
+    );
     let terminal_event = match completed_response.get("status").and_then(Value::as_str) {
         Some("incomplete") => "response.incomplete",
         Some("failed") => "response.failed",
@@ -271,6 +221,5 @@ pub(crate) async fn emit_synthetic_responses_stream(
         json!({ "response": completed_response }),
     )
     .await?;
-    send_plain_sse_data(&tx, "[DONE]").await?;
     Ok(())
 }

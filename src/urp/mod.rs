@@ -90,6 +90,12 @@ pub const RESPONSES_INSTRUCTION_NODE_EXTRA_KEY: &str = "_monoize_responses_instr
 pub const RESPONSES_RESPONSE_SOURCE_EXTRA_KEY: &str = "_monoize_responses_response_source";
 /// Shape marker for a native Responses start envelope; no semantic snapshot is retained.
 pub const RESPONSES_STREAM_START_SOURCE_EXTRA_KEY: &str = "_monoize_responses_stream_start_source";
+/// Echo of the downstream request controls for a synthesized Responses object (STR3t).
+pub const RESPONSES_REQUEST_ECHO_EXTRA_KEY: &str = "_monoize_responses_request_echo";
+/// Internal control carrying the object of a later upstream `response.in_progress`.
+pub const RESPONSES_IN_PROGRESS_CONTROL: &str = "_monoize.responses.in_progress";
+/// Internal control carrying the item-level fields of an upstream message `output_item.done`.
+pub const RESPONSES_MESSAGE_DONE_CONTROL: &str = "_monoize.responses.message_done";
 pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -984,6 +990,12 @@ pub struct ReasoningMetadata {
     pub summary_parts: Option<Vec<ReasoningTextPart>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_parts: Option<Vec<ReasoningTextPart>>,
+    /// Native `summary_index` of a streamed summary delta (STR3i.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_index: Option<u64>,
+    /// An identified upstream Responses item with no payload (PR2g.1).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_empty: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

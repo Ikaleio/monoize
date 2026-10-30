@@ -52,7 +52,11 @@ fn map_response_completed_with_accumulated(
                         item_obj.insert("id".to_string(), Value::String(streamed_id.to_string()));
                         borrowed_streamed_id = true;
                     }
-                    let mut nodes = nodes_from_item_value(&item);
+                    let mut nodes = crate::urp::decode::openai_responses::decode_response(
+                        &json!({"output": [&item]}),
+                    )
+                    .map(|response| response.output)
+                    .unwrap_or_default();
                     if terminal_id_missing && !borrowed_streamed_id {
                         for node in &mut nodes {
                             node.set_id(None);
@@ -91,6 +95,25 @@ fn map_response_completed_with_accumulated(
             .or(Some(FinishReason::Stop)),
         _ => decoded.as_ref().and_then(|resp| resp.finish_reason),
     };
+    let mut terminal_extra = split_known_fields(
+        response_value.clone(),
+        &[
+            "id",
+            "object",
+            "created",
+            "created_at",
+            "model",
+            "output",
+            "usage",
+            "status",
+            "error",
+            "incomplete_details",
+        ],
+    );
+    terminal_extra.insert(
+        crate::urp::RESPONSES_RESPONSE_SOURCE_EXTRA_KEY.to_string(),
+        Value::Object(Default::default()),
+    );
     events.push(UrpStreamEvent::ResponseDone {
         outcome: crate::urp::ResponseOutcome::from_responses(&response_obj),
         finish_reason,
@@ -98,21 +121,7 @@ fn map_response_completed_with_accumulated(
             .and_then(|resp| resp.usage)
             .or_else(|| parse_usage_from_responses_object(&response_value)),
         output: outputs,
-        extra_body: split_known_fields(
-            response_value,
-            &[
-                "id",
-                "object",
-                "created",
-                "created_at",
-                "model",
-                "output",
-                "usage",
-                "status",
-                "error",
-                "incomplete_details",
-            ],
-        ),
+        extra_body: terminal_extra,
     });
     events
 }
@@ -169,8 +178,17 @@ fn text_delta_extra_body(data_val: Value) -> HashMap<String, Value> {
             "item_id",
             "logprobs",
             "phase",
+            "obfuscation",
         ],
     )
+}
+
+/// Fields of a native delta event that the downstream delta event must repeat unchanged.
+fn wire_delta_extra_body(data_val: &Value) -> HashMap<String, Value> {
+    ["obfuscation", "phase"]
+        .into_iter()
+        .filter_map(|key| data_val.get(key).map(|value| (key.to_string(), value.clone())))
+        .collect()
 }
 
 fn role_from_item(item: &Value) -> Role {

@@ -20,7 +20,7 @@ fn map_responses_event_to_urp_events_with_state(
                     .to_string(),
             },
             usage: None,
-            extra_body: HashMap::new(),
+            extra_body: wire_delta_extra_body(&data_val),
         }],
         "response.output_text.annotation.added" => vec![UrpStreamEvent::NodeDelta {
             node_index: urp_node_index_from_delta(&data_val, index_state),
@@ -41,6 +41,7 @@ fn map_responses_event_to_urp_events_with_state(
             extra_body: HashMap::new(),
         }],
         "response.output_text.delta" => {
+            // Event-only wire fields stay off the node start, whose extras reach the item.
             let mut extra = text_delta_extra_body(data_val.clone());
             let mut events = Vec::new();
             let output_index = data_val
@@ -105,7 +106,10 @@ fn map_responses_event_to_urp_events_with_state(
                     content: output_text_delta_content(&data_val).to_string(),
                 },
                 usage: None,
-                extra_body: extra,
+                extra_body: {
+                    extra.extend(wire_delta_extra_body(&data_val));
+                    extra
+                },
             });
             events
         }
@@ -155,6 +159,9 @@ fn map_responses_event_to_urp_events_with_state(
                 node_delta_from_reasoning_event(event_name, &data_val, reasoning_source);
             if let NodeDelta::Reasoning { metadata, .. } = &mut delta {
                 metadata.item_id = reasoning_item_id;
+                metadata.summary_index = (event_name == "response.reasoning_summary_text.delta")
+                    .then(|| data_val.get("summary_index").and_then(Value::as_u64))
+                    .flatten();
             }
             vec![UrpStreamEvent::NodeDelta {
                 node_index: urp_node_index_from_delta(&data_val, index_state),
@@ -284,6 +291,7 @@ struct OutputItemStreamState {
     emitted_any_node: bool,
     control_emitted: bool,
     part_done_seen: bool,
+    content_done: BTreeSet<u64>,
     node_done_seen: bool,
     reasoning_text_delta_seen: bool,
     reasoning_summary_delta_seen: bool,

@@ -162,6 +162,22 @@ impl AccumulatedReasoningSlot {
         !self.content.is_empty() || self.summary_text().is_some() || self.encrypted.is_some()
     }
 
+    fn summary_part_shapes(&self) -> Option<Vec<crate::urp::ReasoningTextPart>> {
+        if self.summary_parts.len() < 2 || !self.summary.is_empty() {
+            return None;
+        }
+        Some(
+            self.summary_parts
+                .values()
+                .filter(|part| !part.is_empty())
+                .map(|part| crate::urp::ReasoningTextPart {
+                    byte_length: part.len(),
+                    extra_body: HashMap::from([("type".to_string(), json!("summary_text"))]),
+                })
+                .collect(),
+        )
+    }
+
     fn summary_text(&self) -> Option<String> {
         let mut parts = self
             .summary_parts
@@ -389,8 +405,10 @@ fn build_accumulated_output_entries(
                 entries.push(AccumulatedOutputEntry {
                     output_index,
                     nodes: vec![Node::Reasoning {
-                        metadata: Default::default(),
-
+                        metadata: crate::urp::ReasoningMetadata {
+                            summary_parts: slot.summary_part_shapes(),
+                            ..Default::default()
+                        },
                         id,
                         content: (!slot.content.is_empty()).then(|| slot.content.clone()),
                         summary: slot.summary_text(),
@@ -553,6 +571,7 @@ fn part_extra_body_from_value(part: &Value) -> HashMap<String, Value> {
             "summary",
             "refusal",
             "annotations",
+            "logprobs",
             "call_id",
             "name",
             "arguments",

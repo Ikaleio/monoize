@@ -423,6 +423,8 @@ async fn execute_nonstream<T>(
                         .await);
                     }
                 };
+            let responses_echo =
+                responses_request_echo_for_attempt(&req_attempt, &attempt, downstream);
             let provider = build_channel_provider_config(&attempt);
             let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
                 && urp::encode::openai_image::has_user_image_input(&req_attempt);
@@ -907,6 +909,10 @@ async fn execute_nonstream<T>(
                     if let Some(history) = &history {
                         history.decorate_response(&mut resp);
                     }
+                    if let Some(echo) = responses_echo {
+                        resp.extra_body
+                            .insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo);
+                    }
                     let accepted = match accept(&resp, &logical_model) {
                         Ok(accepted) => accepted,
                         Err(err) => {
@@ -1243,6 +1249,11 @@ pub(super) fn encode_request_for_provider(
         }
     }
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
+    if attempt.provider_type == ProviderType::Responses
+        && !matches!(downstream, DownstreamProtocol::Responses)
+    {
+        apply_cross_family_responses_controls(req);
+    }
     filter_tools_for_provider(req, attempt.provider_type, downstream);
     let stateful_same_responses = matches!(downstream, DownstreamProtocol::Responses)
         && attempt.provider_type == ProviderType::Responses
@@ -1446,6 +1457,17 @@ fn json_scalar_string(value: &Value) -> Option<String> {
         Value::Number(value) => Some(value.to_string()),
         _ => None,
     }
+}
+
+/// STR3t: request controls a synthesized Responses object must echo on this attempt.
+pub(super) fn responses_request_echo_for_attempt(
+    req: &urp::UrpRequest,
+    attempt: &MonoizeAttempt,
+    downstream: DownstreamProtocol,
+) -> Option<Value> {
+    (matches!(downstream, DownstreamProtocol::Responses)
+        && attempt.provider_type != ProviderType::Responses)
+        .then(|| urp::encode::openai_responses::response_request_echo(req))
 }
 
 pub(super) fn encode_response_for_downstream(
