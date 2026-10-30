@@ -7,6 +7,11 @@ description: Parse think-tag XML out of assistant text and restore it as reasoni
 
 This transform parses the configured XML tag, for example `<think>...</think>`, out of assistant text and restores the content as reasoning nodes. It is the inverse of `reasoning_to_think_xml`.
 
+- Streaming and non-streaming responses produce the same segments, regardless of chunk boundaries.
+- Text before and after a tag stays as text. Each segment becomes its own node.
+- An opening tag without a closing tag makes the rest of the text reasoning.
+- In a stream, Monoize holds a partial tag until more text arrives or the node ends.
+
 ## Reference
 
 | Property | Value |

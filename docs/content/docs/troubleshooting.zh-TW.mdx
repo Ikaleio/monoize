@@ -28,12 +28,30 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 
 ### `502 upstream_error`
 
-所有符合條件的路由都失敗，或沒有路由服務該模型。按以下順序檢查：
+沒有路由服務該模型，最後一次嘗試失敗且沒有上游錯誤碼，或上游拒絕了 Channel 憑證。按以下順序檢查：
 
-1. **路由不存在。** 確認至少有一個已啟用的 Provider 擁有一個已啟用、權重大於零、且映射了該模型的 Channel。
-2. **群組無交集。** 金鑰的群組必須與 Provider 至少共享一個群組。參見 [API 金鑰](/zh-TW/docs/dashboard/api-keys)。
-3. **所有 Channel 不健康。** 斷路器在冷卻期內跳過不健康的 Channel。檢視日誌行中的失敗嘗試，找到根本的上游錯誤。
-4. **倍率上限。** 設定了 `max_multiplier` 的金鑰會跳過價格高於上限的模型條目。
+1. **Channel 憑證被拒絕。** 回應主體中的 `upstream_status` 為 `401`、`403` 或 `407`。請修復 Channel 金鑰或權限。用戶端金鑰有效。
+2. **傳輸失敗。** 訊息為 `failed to request upstream`。檢查 Channel base URL 和代理。
+3. **路由不存在。** 確認至少有一個已啟用的 Provider 擁有一個已啟用、權重大於零、且映射了該模型的 Channel。
+4. **群組無交集。** 金鑰的群組必須與 Provider 至少共享一個群組。參見 [API 金鑰](/zh-TW/docs/dashboard/api-keys)。
+5. **所有 Channel 不健康。** 斷路器在冷卻期內跳過不健康的 Channel。檢視日誌行中的失敗嘗試，找到根本的上游錯誤。
+6. **倍率上限。** 設定了 `max_multiplier` 的金鑰會跳過價格高於上限的模型條目。
+
+### 其他上游狀態碼和錯誤碼
+
+用戶端收到最後一次上游的狀態碼和錯誤碼，例如 `429 rate_limit_exceeded`。`stream: true` 時同樣如此。檢視日誌行中的失敗嘗試可了解每一跳。如果某次嘗試收到 `2xx` 後才失敗，之後的錯誤會以 HTTP `200` 在串流中傳回。
+
+### `400 unsupported_tool`
+
+請求把 `openrouter:*` 工具或其他沒有 Chat 編碼的工具類型傳送給無法表示它的 Chat 方言。請移除該工具，或把模型路由到 `openrouter` 或 `generic` 方言的 Channel。參見 [API 端點](/zh-TW/docs/endpoints)。
+
+### 內建工具沒有生效
+
+跨協議族路由只保留已對應的內建工具。Monoize 捨棄其他內建工具且不報錯，強制選擇已捨棄工具時會變為 `auto`。參見 [API 端點](/zh-TW/docs/endpoints)。
+
+### 錯誤訊息顯示 `***`
+
+Monoize 會遮罩用戶端錯誤文字中的主機名稱、URL、IP 位址和 API 金鑰。管理員可在[請求日誌](/zh-TW/docs/request-logs)中檢視完整文字。
 
 ### 請求總是命中同一個 Channel
 
@@ -53,7 +71,23 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 
 ### 串流在回應中途停止
 
-第一個回應位元組之後，Monoize 絕不切換上游。中途斷掉的串流反映的是上游故障。檢視日誌行，並開啟擷取檢視上游原始幀。
+第一個協定事件之後，Monoize 絕不切換上游。中途斷掉的串流反映的是上游故障。HTTP 狀態碼已經是 `200`，因此用戶端在串流中收到 `error` 事件。檢視日誌行，並開啟擷取檢視上游原始幀。
+
+### 用戶端在等待 `[DONE]`
+
+只有 Chat Completions 串流傳送 `data: [DONE]`。Responses 和 Messages 串流在終態事件後結束。請更新用戶端，使其在終態事件處停止。
+
+### Chat 串流沒有用量區塊
+
+在請求中將 `stream_options.include_usage` 設為 `true`。計費不依賴此選項。
+
+### Responses WebSocket 關閉或拒絕事件
+
+- `websocket_connection_limit_reached` 表示連線達到了輪次、位元組或時長限制。請開啟新連線。預設時長限制為 60 分鐘。
+- `previous_response_not_found` 表示連線中沒有該快取回應。請重新傳送完整歷史。
+- `response.steer.failed` 的錯誤碼為 `steering_not_supported` 時，表示該輪次或 Channel 不支援 steer。請等回應結束，再在新輪次中傳送輸入。
+
+所有錯誤碼參見 [Responses WebSocket](/zh-TW/docs/endpoints)。
 
 ### 用戶端拒絕超長 SSE 幀
 
@@ -72,6 +106,10 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 ### 提供商私有欄位沒有到達上游
 
 跨協議族轉換會移除沒有安全目標表示的提供商私有巢狀欄位。使用 `field_set` 變換為某個 Provider 重新寫入欄位。
+
+### 回應中缺少提供商私有欄位
+
+跨協議族回應會遺失提供商私有欄位，例如 `metadata`、`container` 和 `stop_details`。此規則沒有開關。要保留這些欄位，請把模型路由到同協議族的 Channel。
 
 ### 用戶端拒絕工具呼叫中的 `4338.0` 這類數字
 

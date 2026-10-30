@@ -31,6 +31,8 @@ Messages 請求會一起轉換帶物件 `input_schema` 的 custom 工具、JSON 
 
 Responses 物件包含非 null 的 error 且缺少有效 status 時會傳回錯誤。空物件會被拒絕。沒有錯誤且包含 output 陣列的相容回應仍可省略 status。
 
+跨協議族回應指上游類型與端點協定不同的回應。`gemini` 上游一律屬於跨協議族。無論是否串流，Monoize 都會從這類回應中移除提供商私有欄位，例如 `metadata`、`status`、`phase`、`prompt_cache_key`、`container`、`diagnostics` 和 `stop_details`。此規則沒有開關。Monoize 也會把回應 id 改寫為目標前綴：`resp_`、`chatcmpl-` 或 `msg_`。計費、請求日誌和請求擷取讀取原始值。
+
 ## 列出模型
 
 ```bash
@@ -55,6 +57,31 @@ curl http://localhost:8080/v1/chat/completions \
 
 設定 `"stream": true` 使用伺服器推送事件。省略或設為 `false` 則返回單一 JSON 回應。
 
+Chat 串流以 `data: [DONE]` 結束。只有請求將 `stream_options.include_usage` 設為 `true` 時，Monoize 才傳送用量區塊。此選項不影響計費。
+
+### Chat 方言
+
+對每次 `chat_completion` 嘗試，Monoize 依 Channel base URL 的主機和上游模型選擇一種方言。依表格順序取第一筆相符項目。
+
+| 方言 | 比對條件 | assistant 歷程中的推理欄位 | 產生的輸出 Token 欄位 |
+| --- | --- | --- | --- |
+| `openai` | 主機為 `api.openai.com` 或 `*.openai.azure.com` | 無 | `max_completion_tokens` |
+| `openrouter` | 主機為 `openrouter.ai` 或 `*.openrouter.ai` | `reasoning_details` 和 `reasoning` | `max_tokens` |
+| `vercel` | 主機為 `ai-gateway.vercel.sh` | `reasoning_details` 和 `reasoning` | `max_tokens` |
+| `deepseek` | 主機為 `api.deepseek.com`，或模型 id 包含 `deepseek` | `reasoning_content` | `max_tokens` |
+| `generic` | 其他所有嘗試 | `reasoning_details` 和 `reasoning` | `max_completion_tokens` |
+
+- 主機規則優先。OpenRouter 上的 DeepSeek 模型使用 `openrouter` 方言。
+- 方言無法依 Channel 覆寫。重試到其他 Channel 時會重新選擇方言。
+- `generic` 採用 OpenRouter 相容行為。未列出主機上的嚴格中繼站可能拒絕其擴充欄位。
+- Chat 用戶端保留自己使用的輸出 Token 欄位名稱，`deepseek` 除外。表格適用於其他用戶端。
+- 推理力度使用 `reasoning_effort`，包括 `none`。請求同時帶兩個欄位時，`reasoning.effort` 優先於 `reasoning_effort`。
+- 原生 Chat `reasoning` 物件只傳送給 `openrouter`、`vercel` 和 `generic` 上游。`openai` 和 `deepseek` 上游不會收到。
+- 沒有推理力度時，預算或啟用模式在 `openrouter` 和 `vercel` 上轉為 `reasoning.max_tokens` 或 `reasoning.enabled`。其他方言省略這些值。
+- Monoize 不會同時傳送推理力度和 `reasoning.max_tokens`。
+- `openai` 方言省略原生 `thinking` 物件。只有 `vercel` 方言接收 `providerOptions`。
+- Chat 回應保留上游的推理欄位形式。上游的 `reasoning_content` 仍是 `reasoning_content`，不會額外產生 `reasoning_details`。
+
 ## Responses
 
 ```bash
@@ -74,27 +101,147 @@ curl http://localhost:8080/v1/responses \
 - HTTP 歷史預設使用 `store=true`，在目前程序中最多保留 30 分鐘。重新啟動或快取淘汰會移除記錄。
 - 設定 `store=false` 可關閉 HTTP 歷史保留。未知或過期的 id 會傳回 `400 previous_response_not_found`。收到此錯誤後，請重新傳送完整歷史。
 - 每次請求都應提供目前的 instructions 和控制參數。前一請求的頂層 `instructions` 不會自動繼承。
-- `GET /v1/responses` 支援 Codex WebSocket v1 和 v2。v1 傳送 `response.done`，v2 傳送 `response.completed`。`store=false` 不影響連線內接續。
-- `GET /v1/codex/responses` 與 `GET /v1/responses` 使用同一個 WebSocket 處理器。`POST /v1/codex/responses` 與 `POST /v1/responses` 使用同一個 HTTP 處理器。兩個新路徑也有 `/api` 別名。
-- Responses WebSocket 用戶端可以對 Responses Channel 開啟上游 WebSocket。`POST /v1/responses` 仍使用 HTTP。握手失敗時，同一 attempt 回退到 HTTP SSE。
-- 傳送 `response.interrupt` 可中斷正在生成的上游 WebSocket 回應。閒置時的中斷不執行操作。重複中斷在每次上游嘗試中最多傳送一次。
-- 用戶端斷線後，Monoize 會中斷上游 WebSocket 回應，繼續讀取終態用量以計費。HTTP 上游繼續依原有規則讀取回應。
+- `POST /v1/responses` 的串流在終態 JSON 事件後結束，沒有 `data: [DONE]` 幀。`sequence_number` 從 `0` 開始。
+- 長時間執行的 Agent 工作階段可使用 WebSocket。參見 [Responses WebSocket](#responses-websocket)。
 - `POST /v1/responses/compact` 壓縮一段會話。
+- compact 請求需要 `input` 或 `previous_response_id`。兩者都沒有時傳回 `400 invalid_request`。
 - Monoize 將原生 compact 請求體轉發到上游 `POST /v1/responses/compact`。
 - 選定 Channel 後，如果該 Channel 對應了 `{model}-openai-compact`，Monoize 把線路模型改成這個兄弟模型。否則送出會話模型。
 - 計費使用會話模型的價格。兄弟模型 ID 不需要單獨的價格記錄。
 
-向 Responses 上游轉送請求時，Monoize 保留明確傳入的 `include` 和 `reasoning.summary`。它不會自動加入 `reasoning.encrypted_content` 或預設摘要設定。
+`POST /v1/responses` 傳往 Responses 上游時，Monoize 保留明確傳入的 `include` 和 `reasoning.summary`。它不會自動加入 `reasoning.encrypted_content` 或預設摘要設定。
+
+Chat Completions 或 Messages 用戶端路由到 Responses 上游時，如果請求沒有對應值，Monoize 將 `include` 設為 `["reasoning.encrypted_content"]`，將 `store` 設為 `false`。無狀態用戶端因此能在工具輪次之間保留推理。Messages 的 `thinking` 對應為 `reasoning.effort` 和 `reasoning.summary`。
+
+## Responses WebSocket
+
+將 `GET /v1/responses` 或 `GET /v1/codex/responses` 升級為 WebSocket。兩個路徑都有 `/api` 別名，認證方式與 `POST /v1/responses` 相同。`POST /v1/codex/responses` 與 `POST /v1/responses` 使用同一個 HTTP 處理器。
+
+每則用戶端訊息是一個文字幀中的一個 JSON 物件。Monoize 將每個事件作為一個 JSON 文字幀傳送，不使用 SSE 分幀，也不傳送 `[DONE]`。每個輪次都有獨立的請求 ID、請求日誌列和計費。
+
+### 協定版本
+
+- `OpenAI-Beta: responses_websockets=2026-02-06` 選擇 v2。用戶端同時傳送兩個版本時，v2 優先。
+- `OpenAI-Beta: responses_websockets=2026-02-04` 選擇 v1。
+- 沒有版本標頭時，`response.append` 選擇 v1。`response.create` 選擇 v2，除非連線已使用 v1。
+- v2 保留上游的終態事件類型。
+- 對於後續 `response.append` 可以追加的已完成回應，v1 傳送 `response.done`。其他終態事件保留原類型。
+- `response.append` 是本地模擬。Monoize 依連線快取建構下一個請求，上游不會收到 `response.append`。
+
+### 上游傳輸
+
+- 路由到 Responses Channel 的輪次可以開啟上游 WebSocket。`POST /v1/responses` 一律使用 HTTP。
+- 握手失敗時，同一次嘗試改用 HTTP SSE。狀態 `101` 之後的失敗屬於一般上游失敗，不會回退到 HTTP。
+- 每個 lane 將一個上游工作階段固定到一個 Channel 和上游模型。在該工作階段上接續時只傳送新增輸入。
+- 如果上游傳回 `previous_response_not_found`，或重用的工作階段提前失敗，Monoize 會在新工作階段上重播完整歷史。用戶端看不到錯誤。
+- 路由或模型變更會關閉固定工作階段。關閉用戶端連線會關閉所有固定工作階段。
+- 對傳往 Responses Channel 的每個生成輪次，Monoize 都把 `reasoning.encrypted_content` 加入 `include`，除非用戶端已經列出。預熱輪次和其他 Channel 類型不會收到此值。
+- 對這些輪次，Monoize 從用戶端事件中移除 `encrypted_content`，並保留在連線快取中。自行列出此值的用戶端會收到 `encrypted_content`。
+- Monoize 把 `client_metadata` 轉送到上游 WebSocket 的 create 請求，並在同一 Channel 上重播 `x-codex-turn-state`。
+
+### Lane
+
+lane 是一條連線內的請求佇列。在 `response.create` 或 `response.append` 上設定 `stream_id` 可選擇具名 lane。省略時使用預設 lane。
+
+- `stream_id` 是 1 到 256 個字元的字串，字元取自 `[A-Za-z0-9_.-]`。
+- 一條連線最多接受 32 個具名 lane。預設 lane 不計入。
+- 同一 lane 內的輪次依到達順序執行。不同 lane 並行執行。
+- 一條連線最多同時生成 16 個輪次。其他輪次在各自 lane 中等待。
+- 具名 lane 的每個事件都帶 `stream_id`，包括錯誤和確認事件。預設 lane 的事件不帶此欄位。
+- Monoize 不會把 `stream_id` 傳送給上游。
+
+### 接續
+
+將傳回的 `resp_monoize_` id 作為 `previous_response_id` 傳送。Monoize 隨後用快取的輸入、快取的輸出和新輸入建構請求。`store=false` 時同樣可用。
+
+- 每個 lane 快取最後一個 `completed`、`incomplete` 或 `cancelled` 回應，包括被中斷和被引導的回應。
+- `previous_response_id` 可以指向其他 lane 的回應。用這種方式可以分叉對話。
+- v2 的 `response.create` 只使用自身的控制參數。只有 v1 的 `response.append` 繼承快取回應的控制參數。
+- 以 `response.failed` 或錯誤幀結束的輪次不建立快取項目，也會刪除同一 lane 接續所引用的快取項目。失敗的分叉保留父快取項目。
+- 未知 id 傳回 `previous_response_not_found`，連線保持開啟。收到此錯誤後，請重新傳送完整歷史。
+- `previous_response_id` 不是字串，或與 `conversation` 同時出現時，傳回 `400 invalid_request`。
+- Monoize 將 `item_reference` 輸入替換為相符快取項目的副本。未相符的參照原樣轉送。
+- 關閉 WebSocket 會刪除所有快取回應。
+
+### 預熱
+
+在 `response.create` 上將 `generate` 設為 `false` 可預熱工作階段。
+
+- 如果第一次嘗試可以使用上游 WebSocket，Monoize 把預熱傳送給上游。計費和日誌使用上游用量。
+- 否則 Monoize 在本地傳回 `response.created` 和 `response.completed`，不呼叫上游，不寫入日誌列，也不計費。
+
+### 中斷
+
+傳送 `{"type":"response.interrupt"}`。可選成員為 `response_id`、`stream_id` 和 `mode`。`mode` 只接受 `discard_partial_items`。
+
+- `response_id` 選擇對應的生成中輪次。否則 `stream_id` 選擇 lane，沒有 `stream_id` 時選擇預設 lane。
+- 所選 lane 閒置時，中斷不執行操作。對同一輪次的重複中斷只產生一次中斷。
+- 中斷不消耗輪次，也不建立日誌列。
+- 如果 `response_id` 不對應生成中輪次，而其他輪次正在生成，Monoize 傳送 `response.interrupt.failed`，錯誤碼為 `response_not_in_progress`。
+- 使用上游 WebSocket 時，Monoize 向上游傳送一次中斷。它用公開 id 轉送 `response.interrupt.accepted` 或 `response.interrupt.failed`，然後轉送終態事件。
+- 使用 HTTP SSE 或非 Responses 上游時，Monoize 在 `response.created` 之後停止轉送。它傳送 `response.interrupt.accepted`，然後傳送 `response.completed`，其中只含已完成的項目，`usage` 為 `null`。
+- 此時 Monoize 在背景讀完剩餘的上游回應。計費和日誌列只完成一次。
+- 用戶端斷線後，Monoize 捨棄排隊的輪次，並中斷上游 WebSocket 回應。它繼續讀取終態用量以計費。HTTP 上游繼續讀取回應。
+
+### 中途引導（steering）
+
+傳送 `{"type":"response.steer","previous_response_id":"<id>","input":"..."}` 可向生成中的回應追加輸入。`input` 是字串，或非空的 `user` 訊息陣列。steer 不進入佇列，也不消耗輪次。
+
+Monoize 透過上游 WebSocket 轉送 steer，並用公開 id 轉送 `response.steer.accepted`、`response.steer.pending` 和 `response.steer.failed`。
+
+steer 被接受後，上游可以啟動後繼回應。Monoize 將其作為新輪次執行，它有獨立的 id、日誌列和計費，`previous_response_id` 指向被引導的回應。如果 Channel 或上游模型不再相符，該輪次以 `502 steer_successor_unavailable` 失敗。
+
+`response.steer.failed` 使用以下錯誤碼：
+
+| 錯誤碼 | 含義 |
+| --- | --- |
+| `invalid_input` | 事件有多餘成員，或 `input` 無效 |
+| `response_not_active` | 快取的回應已不在生成中 |
+| `response_not_found` | id 不符合此連線上的任何回應 |
+| `steering_not_supported` | 輪次使用 HTTP SSE 或非 Responses 上游，或該 Channel 先前拒絕過 steer |
+
+Monoize 會記住拒絕 steer 的 Channel，直到程序重新啟動。此後對該 Channel 的 steer 在本地失敗。目前的回應繼續生成。
+
+### 錯誤幀與限制
+
+每個錯誤幀都使用以下結構，不帶 `sequence_number`。具名 lane 的錯誤還帶 `stream_id`。輪次錯誤只結束該輪次。
+
+```json
+{ "type": "error", "status": 400, "error": { "type": "invalid_request_error", "code": "previous_response_not_found", "message": "...", "param": "previous_response_id" } }
+```
+
+| 錯誤碼 | 狀態碼 | 含義 |
+| --- | --- | --- |
+| `invalid_websocket_event` | `400` | 訊息無效。第一則訊息無效時還會關閉連線 |
+| `invalid_stream_id` | `400` | `stream_id` 格式無效 |
+| `websocket_stream_limit_reached` | `400` | 事件指定了第 33 個 lane |
+| `invalid_interrupt` | `400` | `mode` 的值不受支援 |
+| `background_not_supported` | `400` | 事件設定了 `background=true` |
+| `websocket_history_limit_exceeded` | `400` | 組裝後的請求超過保留歷史限制 |
+| `websocket_connection_limit_reached` | `400` | 連線達到輪次、位元組或時長限制，Monoize 隨後關閉連線 |
+| `websocket_sse_limit_exceeded` | `502` | 內部 SSE 幀或緩衝區限制結束了該輪次 |
+
+連線在達到時長限制時關閉，預設為 60 分鐘。請開啟新連線繼續。所有限制參見[設定](/zh-TW/docs/configuration)。
 
 ## 關閉推理
 
 在 Chat Completions 請求中設定 `"reasoning_effort": "none"`。在 Responses 請求中設定 `"reasoning": { "effort": "none" }`。
 
-Monoize 會向 OpenAI 相容上游保留明確指定的 `none`。如果 Chat 請求保留了原生 `reasoning` 物件，Monoize 會在該物件中寫入 `effort: "none"`，不再傳送頂層簡寫欄位。
+Monoize 向 Responses 上游以及 `openai`、`openrouter`、`vercel`、`generic` Chat 方言保留明確指定的 `none`。在 `openrouter`、`vercel` 和 `generic` 上，如果 Chat 請求保留了原生 `reasoning` 物件，Monoize 會在該物件中寫入 `effort: "none"`，不再傳送頂層簡寫欄位。
 
-如果沒有明確指定 Messages 控制參數，Monoize 會向 Messages 上游傳送 `thinking: { "type": "disabled" }`。Gemini 上游收到 `generationConfig.thinkingConfig.thinkingBudget: 0`。
+如果沒有明確指定 Messages 控制參數，Messages 上游收到的內容取決於模型：
 
-DeepSeek Chat 請求會直接傳遞推理努力值，不重新映射數值，也不自動產生 `thinking` 控制參數。
+- 多數模型收到 `thinking: { "type": "disabled" }`。
+- Sonnet 5.5 收到 `thinking: { "type": "between_tools" }`。
+- 其他拒絕 `disabled` 的模型（例如 Fable、Mythos、Opus 5.5 及以上）不會收到 `thinking` 欄位。
+
+Gemini 上游收到對應模型系列的關閉值：
+
+- 預算系列收到 `thinkingBudget: 0`。Gemini 2.x Pro 無法關閉思考，因此收到 `128`。
+- 等級系列（例如 Gemini 3 和 4）收到支援的最低 `thinkingLevel`。
+- 不支援思考的系列不會收到思考設定。
+
+`deepseek` Chat 方言在 `none` 時收到 `thinking: { "type": "disabled" }`，不帶 `reasoning_effort`。其他力度值作為 `reasoning_effort` 傳遞。
 
 省略推理力度會允許上游使用預設值。請選擇支援關閉推理的模型。強制推理的模型無法滿足此請求。
 
@@ -112,20 +259,105 @@ curl http://localhost:8080/v1/messages \
   }'
 ```
 
+在 `messages` 上游上，Monoize 轉送用戶端的 `anthropic-version` 值，沒有時傳送 `2023-06-01`。它把用戶端的 `anthropic-beta` 權杖與產生的權杖和 Channel 權杖合併，每個權杖只出現一次。其他上游類型不會收到這些用戶端標頭。
+
+Monoize 轉送明確指定的 `thinking` 和 `output_config` 控制參數，不做本地驗證，由上游決定是否接受。Monoize 只驗證自己產生的控制參數，組合無效時傳回 `400 invalid_request`。
+
+每個 `/v1/messages` 和 `/v1/messages/count_tokens` 回應都帶 `request-id` 標頭。格式見錯誤回應一節。
+
+### 統計 Token
+
+`POST /v1/messages/count_tokens` 的認證、重新導向和模型限制與 `/v1/messages` 相同。
+
+- Monoize 依路由順序只嘗試 `messages` Channel，轉送請求體時只替換 `model`。
+- 沒有這類 Channel 時傳回 `404 not_found_error`。Claude Code 隨後改用本地估算。
+- 此端點不計費，不寫入請求日誌，也不改變 Channel 健康狀態。
+
 ## Gemini 上游
 
 將 Channel 的上游類型設為 `gemini`，即可透過現有端點使用 Gemini。此支援不新增公開的 Gemini HTTP 端點，也不包含 Live API。
 
 Monoize 雙向轉換 `generateContent` 請求、回應和對話歷程。串流回應使用 `streamGenerateContent` SSE。
 
-- 文字、推理、函式呼叫、函式結果和支援的媒體保留順序與識別資訊。思考簽章始終關聯原始 Part。
+- 文字、推理、函式呼叫、函式結果和支援的媒體保留順序與識別資訊。
+- 其他協定把文字和媒體上的思考簽章作為不透明推理值攜帶。原樣重播這些值，即可把每個簽章還原到對應 Part。
+- 在 Gemini 3 及以上版本中，目前輪次每個 model Content 的第一個無簽章函式呼叫會收到 `skip_thought_signature_validator`。
+- Channel base URL 可以以 `/v1`、`/v1beta` 或 `/v1alpha` 結尾，該路徑區段決定 API 版本。否則 Monoize 使用 `v1beta`。
+- 推理控制參數取決於模型系列。Gemini 2.x 使用限制在模型範圍內的 `thinkingBudget`。Gemini 3 及以上使用 `thinkingLevel`。Monoize 不會同時傳送兩者。
+- 自訂工具轉為只有一個 `input` 字串的函式宣告。Monoize 把傳回的呼叫還原為自訂工具呼叫。
 - 生成控制參數、結構化回應格式、工具和工具選擇轉換為目標協定支援的對應欄位。
+- 超過 5 個停止序列時，該次嘗試以請求錯誤失敗。
 - Token logprobs 始終關聯相符的文字。文字變更後會捨棄失效的分數。Gemini 最多允許請求 20 個 top logprobs。
 - 可表示的引用和 grounding 來源連結轉換為目標格式。引用範圍保留文字中的位置，包括非 ASCII 文字。
 - 文字和推理在完成前持續輸出。需要完整內容的媒體和帶簽章的 Part 可以等到完成後輸出。失敗或截斷的串流傳回錯誤。
 - Monoize 優先傳回 index 為 0 的候選回應，否則傳回第一個候選回應。獨立候選回應不會合併。
 
-Gemini 專屬工具、Provider 執行的程式碼和無法轉換的中繼資料僅在 Gemini 內保留。目標協定只接收其能夠表示的功能。
+其他協定依下列方式接收 Gemini 專屬輸出：
+
+- 程式碼執行 Part 顯示為帶圍欄的 assistant 文字。
+- `toolCall` 和 `toolResponse` Part 完整保存在不透明推理值中。用戶端重播該值時，Monoize 將其還原到原位置。捨棄推理值的用戶端會遺失它們。
+- 其他未知 Part 和無法轉換的中繼資料僅在 Gemini 內保留。
+
+### 續寫權杖
+
+`CONTINUATION` 結束原因產生原因為 `max_output_tokens` 的不完整回應。所有協定都以不透明推理值接收權杖。Responses 用戶端還能看到 `incomplete_details.continuation_token`。
+
+- 要繼續生成，請帶著該值重播不完整的 assistant 輪次。Monoize 會移除該輪次，並把最新權杖作為 `continuationToken` 傳送。
+- 用戶端也可以重複原始內容，並明確傳入頂層 `continuationToken`。
+- `maxOutputTokens` 在多次續寫之間累計。每次續寫都應調大或省略它。
+
+### 圖像尺寸
+
+生成圖像時，Monoize 把 `WxH` 尺寸轉換為 `imageConfig.aspectRatio` 和 `imageConfig.imageSize`。原生值優先。
+
+- 長寬比取模型系列支援的最接近比例。
+- 最長邊決定級距：不超過 792 為 `512`，不超過 1584 為 `1K`，不超過 3168 為 `2K`，更大為 `4K`。
+- Monoize 將級距提高到模型文件列出的最小可用級距；沒有時降到其最大級距。
+- 2.5 Flash Image 和 3.1 Flash Lite Image 不接收 `imageSize`。
+- 3.1 Flash Image 文件列出 `512`、`1K`、`2K`、`4K`。Nano Banana 和 3 Pro Image 文件列出 `1K`、`2K`、`4K`。
+
+## 跨協定的內建工具
+
+內建工具路由到其他上游協議族時不會產生請求錯誤。有目標對應時，Monoize 轉換定義。否則在該次嘗試中捨棄定義。
+
+| 來源工具 | 目標上游 | 結果 |
+| --- | --- | --- |
+| Responses `web_search`、`web_search_preview` | `messages` | `web_search_20250305`，複製 `allowed_domains` 和 `user_location` |
+| Messages `web_search_*` | `responses` | `web_search`，複製 `allowed_domains` 和 `user_location`，捨棄 `blocked_domains` 和 `max_uses` |
+| 兩個協議族的網頁搜尋 | `chat_completion`，`openrouter` 方言 | `openrouter:web_search` |
+| 兩個協議族的網頁搜尋 | `chat_completion`，其他方言 | 捨棄 |
+| `web_search*` | `gemini` | `googleSearch` |
+| `code_interpreter`、`code_execution*` | `gemini` | `codeExecution` |
+| `web_fetch*` | `gemini` | `urlContext` |
+| 其他所有內建工具 | 其他協議族 | 捨棄 |
+
+- 強制選擇已對應的工具時，選擇仍然是強制的。
+- 指向已捨棄工具的選擇變為 `auto`。沒有剩餘工具時，Monoize 移除 `tool_choice`，也不傳送 `tools: []`。
+- 搜尋結果項目不跨協議族。用戶端收到回答文字，但沒有搜尋區塊。
+- Chat 用戶端可以傳送 `openrouter:*` 工具。Monoize 在 `openrouter` 和 `generic` 方言上原樣重播。
+- 在 `openai`、`deepseek` 和 `vercel` 方言上，這些工具在傳送前以 `400 unsupported_tool` 失敗。其他沒有 Chat 編碼的工具類型同樣失敗。
+
+## 跨協定的快取斷點
+
+Monoize 在三種用戶端協定的請求區塊上都接受 `cache_control` 和 `prompt_cache_breakpoint`。同一區塊同時帶兩者時，`cache_control` 優先。轉換時，標記保留在文字、媒體、工具呼叫、工具結果和工具定義物件上。頂層 `cache_control` 仍是 Messages 請求控制參數。
+
+| 上游 | 傳送的標記 |
+| --- | --- |
+| `messages` | 對應區塊或工具上的 `cache_control` |
+| `responses` | 輸入文字、圖像、檔案和工具輸出部分上的 `prompt_cache_breakpoint` |
+| `chat_completion`，`openai` 方言 | 內容部分上的 `prompt_cache_breakpoint` |
+| `chat_completion`，`openrouter`、`vercel`、`generic` 方言 | 內容部分和工具定義上的 `cache_control` |
+| `chat_completion`，`deepseek` 方言 | 無。DeepSeek 自動快取 |
+| `gemini` | 無 |
+
+來自同一協議族的標記原樣重播。轉換後的標記遵循下列規則：
+
+- 捨棄未知成員。只有目標接受時才保留 `ttl`，Monoize 不會換算 TTL。
+- `cache_control` 接受 `5m` 和 `1h`。Responses 的 `prompt_cache_breakpoint` 接受 `30m` 和 `12h`。`openai` Chat 接受 `30m`。
+- 轉換到 Responses 或 `openai` Chat 需要 GPT-5.6 及以上的模型 id。使用其他名稱的部署別名不會收到標記。
+- Responses 和 `openai` Chat 不會在 assistant 文字、工具呼叫或工具定義上收到轉換後的標記。帶標記的 system 訊息轉為輸入訊息。
+- 工具結果上的轉換標記移到其最後一個可用部分。
+- 轉換到 `messages` 時，Monoize 捨棄空文字上的標記。它保留最後若干個標記，數量上限為 4 減去頂層 `cache_control` 和 Provider 項目中的原生標記。
 
 ## Embeddings
 
@@ -253,12 +485,67 @@ client = anthropic.Anthropic(
 
 ## 錯誤回應
 
+回應開始前的錯誤使用所呼叫端點的 HTTP 狀態碼和 JSON 回應主體。無論 `stream` 為 `true` 或 `false`，此規則都適用。Monoize 不會把這些錯誤包裝成 HTTP `200` 或 SSE。
+
+`POST /v1/responses` 和 `POST /v1/chat/completions` 傳回下列回應主體：
+
+```json
+{ "error": { "message": "...", "type": "invalid_request_error", "param": null, "code": "invalid_value" } }
+```
+
+`POST /v1/messages` 傳回下列回應主體，並在 `request-id` 標頭中傳回相同的 id：
+
+```json
+{ "type": "error", "error": { "type": "invalid_request_error", "message": "..." }, "request_id": "req_..." }
+```
+
+Embeddings、compact、決策和圖像端點遵循相同的狀態碼規則，並保留 `{"error": ...}` 回應主體。
+
+### 本地錯誤
+
 | HTTP 狀態碼 | 錯誤碼 | 含義 |
 | --- | --- | --- |
+| `400`、`413`、`415`、`422` | `invalid_json` | 請求主體不是有效 JSON、過大、內容類型不是 JSON，或結構錯誤 |
 | `401` | `unauthorized` | API 金鑰缺失、無效、被停用或已過期 |
 | `402` | `insufficient_balance` | 使用者或子帳戶餘額不足 |
 | `403` | `model_not_allowed` | 金鑰的模型限制拒絕了請求的模型 |
 | `403` | `ip_not_allowed` | 用戶端 IP 不在金鑰的 IP 白名單中 |
-| `502` | `upstream_error` | 沒有路由服務該模型，或所有符合條件的路由都失敗 |
+| `502` | `upstream_error` | 沒有路由服務該模型 |
 
-上游錯誤文字在到達用戶端之前會被遮罩。完整詳情請在[請求日誌](/zh-TW/docs/request-logs)中檢視。
+### 上游失敗
+
+所有路由都失敗時，用戶端收到最後一次失敗嘗試的狀態碼、`type`、`code`、`param` 和遮罩後的 `message`。
+
+- `400`、`404`、`409`、`413`、`422`、`429` 和 `5xx` 等狀態碼原樣傳遞。
+- 最後一次上游傳回 `401`、`403` 或 `407` 時，用戶端收到 `502`，錯誤碼為 `upstream_error`。這類失敗屬於 Channel 憑證，與用戶端無關。
+- 該回應主體還帶 `upstream_status`，上游回報錯誤碼時還帶 `upstream_code`。`type` 為 `server_error`，Messages 上為 `api_error`。
+- 沒有上游 HTTP 狀態碼的失敗傳回 `502`。傳輸失敗的訊息為 `failed to request upstream`。
+- 沒有上游錯誤碼的失敗使用 `upstream_error`。
+- 用戶端自身的 Monoize 金鑰導致的 `401` 仍為 `401`。
+
+在 `/v1/messages` 上，`error.type` 一律是 Messages 原生錯誤類型。`request_id` 的值是 `req_` 加請求 ID。已經以 `req_` 開頭的 id 保持不變。
+
+### 串流開始後的錯誤
+
+Monoize 在上游嘗試被接受後傳送 SSE 回應標頭。之後的失敗無法改變 HTTP 狀態碼 `200`，因此在串流中傳回：
+
+- `/v1/chat/completions` 傳送一個錯誤資料幀，然後傳送 `data: [DONE]`。
+- `/v1/responses` 傳送扁平的 `error` 事件，包含 `code`、`message` 和 `param`，沒有 `[DONE]`。
+- 上游的 `response.failed` 仍為 `response.failed`，保留部分輸出和用量。
+- `/v1/messages` 傳送帶 `request_id` 的 `error` 事件，沒有 `[DONE]`。
+
+### 限流標頭
+
+在同協議族路由上，Monoize 轉送 `retry-after`、`retry-after-ms`、`x-should-retry`、`anthropic-ratelimit-*` 和 `x-ratelimit-*`，錯誤和成功回應都適用。跨協議族路由和上游 WebSocket 嘗試不轉送這些標頭。
+
+### 遮罩的錯誤文字
+
+系統設定 `monoize_mask_sensitive_info` 預設開啟。開啟時，Monoize 會遮罩用戶端錯誤文字中的 URL、主機名稱、IPv4 位址和 `api_key:` 值。
+
+- 例如，`api.openai.com` 變為 `***.***.com`。
+- Monoize 一律遮罩 Channel `base_url`、Channel `proxy_url` 和節點代理的主機。
+- `response.create`、`reasoning.effort`、`messages.1.content.0.type` 等協定識別碼保持可讀。
+- 未設定的私有名稱如果最後一段未知，可能仍然可見。
+- 傳輸失敗只顯示 `failed to request upstream`。無法解析的上游回應主體只顯示狀態碼。
+
+完整詳情請在[請求日誌](/zh-TW/docs/request-logs)中檢視。

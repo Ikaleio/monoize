@@ -28,12 +28,30 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 
 ### `502 upstream_error`
 
-所有符合条件的路由都失败，或没有路由服务该模型。按以下顺序检查：
+没有路由服务该模型，最后一次尝试失败且没有上游错误码，或上游拒绝了 Channel 凭据。按以下顺序检查：
 
-1. **路由不存在。** 确认至少有一个已启用的 Provider 拥有一个已启用、权重大于零、且映射了该模型的 Channel。
-2. **分组无交集。** 密钥的分组必须与 Provider 至少共享一个分组。参见 [API 密钥](/zh/docs/dashboard/api-keys)。
-3. **所有 Channel 不健康。** 熔断器在冷却期内跳过不健康的 Channel。查看日志行中的失败尝试，找到根本的上游错误。
-4. **倍率上限。** 设置了 `max_multiplier` 的密钥会跳过价格高于上限的模型条目。
+1. **Channel 凭据被拒绝。** 响应体中的 `upstream_status` 为 `401`、`403` 或 `407`。请修复 Channel 密钥或权限。客户端密钥有效。
+2. **传输失败。** 消息为 `failed to request upstream`。检查 Channel base URL 和代理。
+3. **路由不存在。** 确认至少有一个已启用的 Provider 拥有一个已启用、权重大于零、且映射了该模型的 Channel。
+4. **分组无交集。** 密钥的分组必须与 Provider 至少共享一个分组。参见 [API 密钥](/zh/docs/dashboard/api-keys)。
+5. **所有 Channel 不健康。** 熔断器在冷却期内跳过不健康的 Channel。查看日志行中的失败尝试，找到根本的上游错误。
+6. **倍率上限。** 设置了 `max_multiplier` 的密钥会跳过价格高于上限的模型条目。
+
+### 其他上游状态码和错误码
+
+客户端收到最后一次上游的状态码和错误码，例如 `429 rate_limit_exceeded`。`stream: true` 时同样如此。查看日志行中的失败尝试可了解每一跳。如果某次尝试收到 `2xx` 后才失败，之后的错误会以 HTTP `200` 在流中返回。
+
+### `400 unsupported_tool`
+
+请求把 `openrouter:*` 工具或其他没有 Chat 编码的工具类型发送给无法表示它的 Chat 方言。请移除该工具，或把模型路由到 `openrouter` 或 `generic` 方言的 Channel。参见 [API 端点](/zh/docs/endpoints)。
+
+### 内置工具没有生效
+
+跨协议族路由只保留已映射的内置工具。Monoize 丢弃其他内置工具且不报错，强制选择已丢弃工具时会变为 `auto`。参见 [API 端点](/zh/docs/endpoints)。
+
+### 错误消息显示 `***`
+
+Monoize 会遮蔽客户端错误文本中的主机名、URL、IP 地址和 API 密钥。管理员可在[请求日志](/zh/docs/request-logs)中查看完整文本。
 
 ### 请求总是命中同一个 Channel
 
@@ -53,7 +71,23 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 
 ### 流在响应中途停止
 
-第一个响应字节之后，Monoize 绝不切换上游。中途断掉的流反映的是上游故障。查看日志行，并开启捕获查看上游原始帧。
+第一个协议事件之后，Monoize 绝不切换上游。中途断掉的流反映的是上游故障。HTTP 状态码已经是 `200`，因此客户端在流中收到 `error` 事件。查看日志行，并开启捕获查看上游原始帧。
+
+### 客户端在等待 `[DONE]`
+
+只有 Chat Completions 流发送 `data: [DONE]`。Responses 和 Messages 流在终态事件后结束。请更新客户端，使其在终态事件处停止。
+
+### Chat 流没有用量块
+
+在请求中将 `stream_options.include_usage` 设为 `true`。计费不依赖此选项。
+
+### Responses WebSocket 关闭或拒绝事件
+
+- `websocket_connection_limit_reached` 表示连接达到了轮次、字节或时长限制。请打开新连接。默认时长限制为 60 分钟。
+- `previous_response_not_found` 表示连接中没有该缓存响应。请重新发送完整历史。
+- `response.steer.failed` 的错误码为 `steering_not_supported` 时，表示该轮次或 Channel 不支持 steer。请等响应结束，再在新轮次中发送输入。
+
+所有错误码参见 [Responses WebSocket](/zh/docs/endpoints)。
 
 ### 客户端拒绝超长 SSE 帧
 
@@ -72,6 +106,10 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 ### 提供商私有字段没有到达上游
 
 跨协议族转换会移除没有安全目标表示的提供商私有嵌套字段。使用 `field_set` 变换为某个 Provider 重新写入字段。
+
+### 响应中缺少提供商私有字段
+
+跨协议族响应会丢失提供商私有字段，例如 `metadata`、`container` 和 `stop_details`。此规则没有开关。要保留这些字段，请把模型路由到同协议族的 Channel。
 
 ### 客户端拒绝工具调用中的 `4338.0` 这类数字
 

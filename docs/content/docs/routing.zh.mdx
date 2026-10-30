@@ -28,7 +28,8 @@ Monoize 按嵌套顺序尝试路由：先在一个 Provider 内遍历 Channel，
 - `channel_retry_interval_ms` 在 Channel 内重试之间插入等待。默认为 `0`。
 - `max_retries` 限制整个 Provider 的总尝试次数。
 - 一个 Provider 耗尽后，Monoize 继续尝试下一个符合条件的 Provider。
-- 所有 Provider 都耗尽后，客户端收到 HTTP `502`，错误码为 `upstream_error`。
+- 所有 Provider 都耗尽后，客户端收到最后一次失败尝试的状态码和错误。参见[错误响应](/zh/docs/endpoints)。
+- 最后一次上游返回 `401`、`403` 或 `407` 时，客户端收到 `502`，错误码为 `upstream_error`。没有任何尝试的请求同样返回 `502 upstream_error`。
 
 ### 哪些错误会重试同一 Channel
 
@@ -41,7 +42,11 @@ Monoize 按嵌套顺序尝试路由：先在一个 Provider 内遍历 Channel，
 
 ## 流式保证
 
-第一个响应字节到达客户端时，回退即结束。在此之前，Monoize 可以自由切换 Channel 和 Provider。在此之后，Monoize 绝不切换。因此可见的流始终来自同一次生成。
+Monoize 在第一个上游尝试被接受后发送 SSE 响应头。HTTP 尝试在收到 `2xx` 状态码时被接受。上游 WebSocket 尝试在收到第一个非 Provider 控制事件时被接受。此前的失败返回原生 JSON 错误，而不是 SSE。
+
+发送响应头后，回退继续有效，直到第一个协议数据或错误事件。Monoize 缓冲响应开始事件和 Provider 控制事件（例如 `codex.rate_limits`），直到第一个输出事件。缓冲区最多容纳 256 个事件。SSE 心跳在响应头之后开始，不会结束回退。
+
+如果响应头发送后所有路由都失败，错误会在流中返回，因为 HTTP 状态码已经是 `200`。第一个协议事件之后，Monoize 绝不切换。因此可见的流始终来自同一次生成。
 
 ## 熔断器
 

@@ -60,6 +60,23 @@ MONOIZE_DATABASE_DSN=postgres://user:password@host:5432/monoize
 
 在儀表板中開啟擷取。參見[請求日誌](/zh-TW/docs/request-logs)。
 
+## Responses WebSocket 限制
+
+下列限制適用於每條下游 Responses WebSocket 連線：
+
+| 變數 | 預設值 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES` | `52428800` | 單則 WebSocket 訊息或幀的最大位元組數 |
+| `MONOIZE_RESPONSES_WS_MAX_TURNS` | `4096` | 每條連線的輪次數。中斷、steer 和被拒絕的事件不計入 |
+| `MONOIZE_RESPONSES_WS_CONNECTION_MAX_BYTES` | `1073741824` | 每條連線的入站文字位元組數 |
+| `MONOIZE_RESPONSES_WS_HISTORY_MAX_ITEMS` | `16384` | 每個 lane 快取項目保留的項目數 |
+| `MONOIZE_RESPONSES_WS_HISTORY_MAX_BYTES` | `33554432` | 每個 lane 快取項目保留的 JSON 位元組數 |
+| `MONOIZE_RESPONSES_WS_SSE_FRAME_MAX_BYTES` | `52428800` | 內部 SSE 單幀位元組數 |
+| `MONOIZE_RESPONSES_WS_SSE_BUFFER_MAX_BYTES` | `52428800` | 內部 SSE 緩衝區位元組數 |
+| `MONOIZE_RESPONSES_WS_MAX_AGE_SECS` | `3600` | 連線的最長存活時間（秒） |
+
+每條連線 32 個具名 lane 和 16 個生成中輪次的限制是固定的。參見 [API 端點](/zh-TW/docs/endpoints)。
+
 ## 主從部署
 
 Monoize 支援一個可寫主節點加多個唯讀副本，共享同一個 PostgreSQL 資料庫。副本只處理 `/v1/**` 流量，並透過帶認證的內部 API 將請求日誌和計費增量上報給主節點。

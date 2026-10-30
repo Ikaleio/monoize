@@ -28,7 +28,8 @@ Monoize 按巢狀順序嘗試路由：先在一個 Provider 內遍歷 Channel，
 - `channel_retry_interval_ms` 在 Channel 內重試之間插入等待。預設為 `0`。
 - `max_retries` 限制整個 Provider 的總嘗試次數。
 - 一個 Provider 耗盡後，Monoize 繼續嘗試下一個符合條件的 Provider。
-- 所有 Provider 都耗盡後，用戶端收到 HTTP `502`，錯誤碼為 `upstream_error`。
+- 所有 Provider 都耗盡後，用戶端收到最後一次失敗嘗試的狀態碼和錯誤。參見[錯誤回應](/zh-TW/docs/endpoints)。
+- 最後一次上游傳回 `401`、`403` 或 `407` 時，用戶端收到 `502`，錯誤碼為 `upstream_error`。沒有任何嘗試的請求同樣傳回 `502 upstream_error`。
 
 ### 哪些錯誤會重試同一 Channel
 
@@ -41,7 +42,11 @@ Monoize 按巢狀順序嘗試路由：先在一個 Provider 內遍歷 Channel，
 
 ## 串流保證
 
-第一個回應位元組到達用戶端時，備援即結束。在此之前，Monoize 可以自由切換 Channel 和 Provider。在此之後，Monoize 絕不切換。因此可見的串流始終來自同一次生成。
+Monoize 在第一個上游嘗試被接受後傳送 SSE 回應標頭。HTTP 嘗試在收到 `2xx` 狀態碼時被接受。上游 WebSocket 嘗試在收到第一個非 Provider 控制事件時被接受。此前的失敗傳回原生 JSON 錯誤，而不是 SSE。
+
+傳送回應標頭後，備援繼續有效，直到第一個協定資料或錯誤事件。Monoize 緩衝回應開始事件和 Provider 控制事件（例如 `codex.rate_limits`），直到第一個輸出事件。緩衝區最多容納 256 個事件。SSE 心跳在回應標頭之後開始，不會結束備援。
+
+如果回應標頭傳送後所有路由都失敗，錯誤會在串流中傳回，因為 HTTP 狀態碼已經是 `200`。第一個協定事件之後，Monoize 絕不切換。因此可見的串流始終來自同一次生成。
 
 ## 斷路器
 

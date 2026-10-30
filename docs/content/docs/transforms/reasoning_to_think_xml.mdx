@@ -7,6 +7,13 @@ description: Wrap reasoning content in a think tag inside assistant text.
 
 This transform converts reasoning node content into assistant text wrapped in the configured tag, for example `<think>...</think>`. It is the inverse of `reasoning_from_think_xml`.
 
+- Plain text is the reasoning `content`, otherwise its `summary`. A reasoning node without plain text stays unchanged.
+- Each converted segment has one opening tag and one closing tag.
+- In a stream, Monoize closes the tag before any event of another node, and before the response ends.
+- Reasoning that resumes after its tag closed waits until no other node is open. It then appears as a separate tagged segment, possibly after later answer text.
+- A converted node loses its encrypted data.
+- The final output matches the streamed text.
+
 ## Reference
 
 | Property | Value |

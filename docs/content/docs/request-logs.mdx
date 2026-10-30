@@ -17,7 +17,11 @@ The list enables real-time updates by default. Disable **Real-time updates** to 
 
 When you scroll away from the top, new rows do not move the list. Scroll back to the top to show the new rows.
 
-A failed row without usage shows a chip with the HTTP status and error code.
+A failed row without usage shows a chip with the HTTP status and error code that the client received. A final upstream `401`, `403`, or `407` therefore shows `502` and `upstream_error`.
+
+Each Responses WebSocket turn has its own row and request id. The log keeps the unprefixed request id. The Messages `request-id` header and `request_id` body field add the `req_` prefix.
+
+A client that disconnects while Monoize waits for an accepted upstream attempt counts as `client_gone`.
 
 ## Filter logs
 
@@ -30,6 +34,8 @@ Monoize stores filters in the page URL. Copy the URL to share the filtered view.
 ## Failed attempts
 
 When a request needed more than one upstream attempt, the row lists each failed hop in order. Each hop shows the Provider, the Channel, the upstream status code, and the error text. Use this list to see which Channel failed and why the request moved forward.
+
+Each hop keeps the original upstream status and code, including a `401`, `403`, or `407` that the client received as `502`. Admins read the full stored error text. Other users read masked text, unless `monoize_mask_sensitive_info` is off. The client never receives this stored text.
 
 ## Request capture
 

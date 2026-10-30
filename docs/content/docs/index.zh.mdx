@@ -12,8 +12,8 @@ Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求
 ## 核心功能
 
 - **协议转换：** 支持使用任意受支持的下游端点调用任意配置的上游 Channel 类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。
-- **路由与可靠性：** 一个逻辑模型可以匹配多个有序 Provider。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在发出第一个响应字节后停止回落。参见[路由与可靠性](/zh/docs/routing)。
-- **Transform 变换：** 36 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
+- **路由与可靠性：** 一个逻辑模型可以匹配多个有序 Provider。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在第一个协议事件后停止回落。参见[路由与可靠性](/zh/docs/routing)。
+- **Transform 变换：** 37 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
 - **请求捕获：** 捕获功能默认关闭。开启后，Monoize 会记录每次上游尝试的报文。结构化查看器展示每一跳。参见[请求日志](/zh/docs/request-logs)。
 - **仪表盘：** 内嵌 Web 仪表盘管理 Provider、Channel、模型、API Key、用户、计费和日志。参见[仪表盘](/zh/docs/dashboard)。
 ## 支持的端点
@@ -26,6 +26,7 @@ Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求
 | `POST` | `/v1/responses/compact` | Responses 压缩 |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/messages/count_tokens` | Anthropic Token 统计，仅限 `messages` Channel |
 | `POST` | `/v1/embeddings` | Embeddings |
 | `POST` | `/v1/images/generations` | 图像生成 |
 | `POST` | `/v1/images/edits` | Multipart 图像编辑 |
@@ -52,8 +53,8 @@ Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求
 
 - Monoize 转发工具定义和工具调用，不在本地执行工具。
 - Monoize 不提供 OpenAI Files、向量存储或本地检索。
-- 发出第一个下游字节后回落即结束。Monoize 不会在活动流中途切换 Provider。
-- 跨协议族转换保留受支持的语义。没有目标表示的 Provider 专用嵌套字段会被移除。
+- 发出第一个下游协议事件后回落即结束。Monoize 不会在活动流中途切换 Provider。
+- 跨协议族转换保留受支持的语义。Monoize 从请求和响应中移除没有目标表示的 Provider 专用字段，并丢弃没有目标映射的内置工具。
 - 图像压缩默认关闭。除非配置 `image_resolve_urls` Transform，Monoize 不会抓取远程图像 URL。
 ## 下一步
 
