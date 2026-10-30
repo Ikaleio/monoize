@@ -21,7 +21,15 @@ SAN-D1. `MASK(text)` is a pure function on strings. It applies the following fou
    - `port?` is `:{port}` when the URL carries an explicit port, otherwise empty.
    - `path'`: when the URL path is empty or `/`, `path'` equals the path unchanged; otherwise every `/`-separated non-empty path segment is replaced by `***` and segments are re-joined with `/` after a leading `/`.
    - `query'`: when the URL has no query, `query'` is empty; otherwise every `key=value` pair is replaced by `key=***`, pairs re-joined with `&` after a leading `?`.
-2. **Bare domain masking.** Every remaining substring matching `\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b` is replaced by `N` copies of `***.` followed by the preserved tail as in `MASKHOST`, where `N = label_count - tail_label_count`, with a minimum of one `***.` prefix.
+2. **Bare domain masking.** Every remaining substring matching `\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b` is a candidate. A candidate that `IS_HOST` accepts is replaced by `N` copies of `***.` followed by the preserved tail as in `MASKHOST`, where `N = label_count - tail_label_count`, with a minimum of one `***.` prefix. Every other candidate is a dotted protocol identifier and stays unchanged.
+
+   `IS_HOST(candidate)` compares lowercase labels. Let `first` be the first label and `last` be the final label. It returns `false` when `last` is not in `TLDS`. It also returns `false` when `last` is in `FIELD_TLDS` and either `first` is in `FIELD_ROOTS` or a label other than `first` consists only of digits. Otherwise it returns `true`.
+
+   - `TLDS` is the IANA root-zone list snapshot `src/error_sanitize_tlds.txt` (version 2026103000, without `XN--` entries), plus the non-delegated names `cluster`, `corp`, `example`, `home`, `internal`, `intranet`, `invalid`, `lan`, `local`, `localhost`, `onion`, `svc`, and `test`.
+   - `FIELD_TLDS` is the set of `TLDS` members that are also protocol field names: `app`, `audio`, `auto`, `call`, `chat`, `data`, `date`, `delta`, `email`, `events`, `group`, `host`, `id`, `info`, `link`, `live`, `map`, `name`, `new`, `open`, `page`, `parts`, `read`, `run`, `save`, `search`, `select`, `site`, `store`, `stream`, `style`, `target`, `tools`, `total`, `video`, `web`, `zone`.
+   - `FIELD_ROOTS` is `body`, `call`, `choice`, `choices`, `content`, `contents`, `data`, `delta`, `error`, `function`, `functions`, `input`, `instructions`, `item`, `items`, `message`, `messages`, `metadata`, `model`, `output`, `params`, `parts`, `reasoning`, `request`, `response`, `responses`, `stream`, `system`, `text`, `thinking`, `tool`, `tools`, `usage`.
+
+   Examples that stay unchanged: `response.create`, `reasoning.effort`, `thinking.signature`, `messages.1.content.0.type`, `messages.0.name`, `tools.0.function.name`, `response.id`, `input[3].id`, `function_call.id`. Examples that are masked: `api.openai.com` → `***.***.com`, `xpa.ikale.io` → `***.***.io`, `generativelanguage.googleapis.com` → `***.***.com`, `foo.co.uk` → `***.co.uk`, `alice.name` → `***.name`, `api.163.com` → `***.***.com`. An unknown private suffix outside `TLDS` (for example `svc.mycompany`) stays unchanged.
 3. **IPv4 masking.** Every substring matching `\b(?:\d{1,3}\.){3}\d{1,3}\b` is replaced by `***.***.***.***`.
 4. **API-key masking.** Every substring matching `(['"]?)api_key:([^\s'"]+)(['"]?)` is replaced by `{quote}api_key:***{quote}`.
 
@@ -45,7 +53,8 @@ SAN-1. When a failed upstream attempt is converted to an `AppError` (`upstream_e
 
 - `source = transport`: the fixed string `failed to request upstream`.
 - `source = unparsed_body` or `empty_body`: `upstream status {STATUS}` (the Display form of the status, e.g. `upstream status 502 Bad Gateway`), with no body content.
-- `source = structured_body` or `internal`: `upstream status {STATUS}: ` followed by `MASK(raw message)`.
+- `source = structured_body`: `MASK(raw message)`, with no prefix.
+- `source = internal`: `upstream status {STATUS}: ` followed by `MASK(raw message)`.
 
 SAN-2. The same `AppError` MUST set `internal_message` to `upstream status {STATUS}: ` followed by `TRUNC(raw message)`. `MASK` MUST NOT be applied to `internal_message`; it is the admin-tier detail and its read-time disclosure is governed by section 8.
 
@@ -67,9 +76,9 @@ SAN-5. Each recorded failed attempt (`TriedProvider`) MUST carry two error strin
 SAN-6. The downstream `message` of the exhausted-routing error (`monoize-upstream-routing.spec.md` RTA-8) MUST be exactly:
 
 - zero recorded attempts: `No available upstream provider for model: {model}`.
-- one or more recorded attempts: `All upstream attempts failed for model: {model}. Last error: {client_error of the last recorded attempt}`.
+- one or more recorded attempts: the `client_error` of the last recorded attempt.
 
-The downstream message MUST NOT contain the attempt count, provider identifiers, channel identifiers, or upstream URLs.
+The downstream message MUST NOT contain the text `All upstream attempts failed`, the attempt count, provider identifiers, channel identifiers, or upstream URLs.
 
 SAN-7. The exhausted-routing error MUST set `internal_message` to:
 
@@ -90,7 +99,7 @@ SAN-11. When a downstream stream encoder renders a `UrpStreamEvent::Error` into 
 
 ## 7. Diagnostic fields
 
-SAN-12. The structured diagnostic fields `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` remain exposed downstream unchanged, as required by RTA-8. They carry enumerated upstream error metadata, not free-form infrastructure text.
+SAN-12. Downstream error bodies MUST NOT carry the diagnostic members `upstream_status`, `upstream_code`, `upstream_type`, or `upstream_param`. Their values reach the client through the native status, `code`, `type`, and `param` (RTA-8). The only exception is RTA-8b, where `upstream_status` and `upstream_code` are present and `upstream_type` and `upstream_param` remain absent. These fields stay available in persisted request-log attempts (RL17).
 
 ## 8. Read-time disclosure of persisted error detail
 

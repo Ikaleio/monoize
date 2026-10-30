@@ -320,24 +320,27 @@ async fn create_response_inner(
 
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::Responses;
-        let stream = deferred_forward_event_stream(
+        return commit_forward_event_stream(
             downstream,
-            forward_stream_typed(
-                state.clone(),
-                auth.clone(),
-                req,
-                max_multiplier,
-                downstream,
-                request_id.clone(),
-                request_ip.clone(),
-                extract_client_session_id(&headers),
-                capture.clone(),
-                websocket_interrupt,
-            ),
-        );
-        return Ok(Sse::new(stream)
-            .keep_alive(api_stream_keep_alive())
-            .into_response());
+            request_id.clone(),
+            api_stream_keep_alive(),
+            |commit| {
+                forward_stream_typed(
+                    state.clone(),
+                    auth.clone(),
+                    req,
+                    max_multiplier,
+                    downstream,
+                    request_id.clone(),
+                    request_ip.clone(),
+                    extract_client_session_id(&headers),
+                    capture.clone(),
+                    websocket_interrupt,
+                    commit,
+                )
+            },
+        )
+        .await;
     }
 
     let session_id = extract_client_session_id(&headers);
@@ -361,8 +364,10 @@ async fn create_response_inner(
             .await
         }
     });
-    let value = join_while_client_present(handle, watch).await?;
-    Ok(Json(value).into_response())
+    let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
+    let mut response = Json(value).into_response();
+    crate::error::append_forwarded_headers(&mut response, forwarded_headers);
+    Ok(response)
 }
 
 pub async fn create_chat_completions(
@@ -399,24 +404,27 @@ pub async fn create_chat_completions(
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::ChatCompletions;
-        let stream = deferred_forward_event_stream(
+        return commit_forward_event_stream(
             downstream,
-            forward_stream_typed(
-                state.clone(),
-                auth.clone(),
-                req,
-                max_multiplier,
-                downstream,
-                request_id.clone(),
-                request_ip.clone(),
-                extract_client_session_id(&headers),
-                capture.clone(),
-                None,
-            ),
-        );
-        return Ok(Sse::new(stream)
-            .keep_alive(api_stream_keep_alive())
-            .into_response());
+            request_id.clone(),
+            api_stream_keep_alive(),
+            |commit| {
+                forward_stream_typed(
+                    state.clone(),
+                    auth.clone(),
+                    req,
+                    max_multiplier,
+                    downstream,
+                    request_id.clone(),
+                    request_ip.clone(),
+                    extract_client_session_id(&headers),
+                    capture.clone(),
+                    None,
+                    commit,
+                )
+            },
+        )
+        .await;
     }
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
@@ -439,8 +447,10 @@ pub async fn create_chat_completions(
             .await
         }
     });
-    let value = join_while_client_present(handle, watch).await?;
-    Ok(Json(value).into_response())
+    let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
+    let mut response = Json(value).into_response();
+    crate::error::append_forwarded_headers(&mut response, forwarded_headers);
+    Ok(response)
 }
 
 pub async fn create_messages(
@@ -489,24 +499,27 @@ async fn create_messages_inner(
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::AnthropicMessages;
-        let stream = deferred_forward_event_stream(
+        return commit_forward_event_stream(
             downstream,
-            forward_stream_typed(
-                state.clone(),
-                auth.clone(),
-                req,
-                max_multiplier,
-                downstream,
-                request_id.clone(),
-                request_ip.clone(),
-                extract_client_session_id(&headers),
-                capture.clone(),
-                None,
-            ),
-        );
-        return Ok(Sse::new(stream)
-            .keep_alive(messages_stream_keep_alive())
-            .into_response());
+            request_id.clone(),
+            messages_stream_keep_alive(),
+            |commit| {
+                forward_stream_typed(
+                    state.clone(),
+                    auth.clone(),
+                    req,
+                    max_multiplier,
+                    downstream,
+                    request_id.clone(),
+                    request_ip.clone(),
+                    extract_client_session_id(&headers),
+                    capture.clone(),
+                    None,
+                    commit,
+                )
+            },
+        )
+        .await;
     }
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
@@ -529,46 +542,21 @@ async fn create_messages_inner(
             .await
         }
     });
-    let value = join_while_client_present(handle, watch).await?;
-    Ok(Json(value).into_response())
+    let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
+    let mut response = Json(value).into_response();
+    crate::error::append_forwarded_headers(&mut response, forwarded_headers);
+    Ok(response)
 }
 
 fn anthropic_error_response(err: AppError, request_id: Option<&str>) -> Response {
-    let error_type = err
-        .upstream_type
-        .as_deref()
-        .unwrap_or(&err.error_type)
-        .to_string();
-    let mut error = json!({
-        "type": error_type,
-        "message": err.message,
-    });
-    if let Some(obj) = error.as_object_mut() {
-        if let Some(status) = err.upstream_status {
-            obj.insert("upstream_status".to_string(), Value::from(status));
-        }
-        if let Some(code) = err.upstream_code {
-            obj.insert("upstream_code".to_string(), Value::String(code));
-        }
-        if let Some(error_type) = err.upstream_type {
-            obj.insert("upstream_type".to_string(), Value::String(error_type));
-        }
-        if let Some(param) = err.upstream_param {
-            obj.insert("upstream_param".to_string(), Value::String(param));
-        }
-    }
-    let mut body = json!({ "type": "error", "error": error });
-    if let Some(request_id) = request_id.filter(|value| !value.is_empty()) {
-        body.as_object_mut().expect("Anthropic error body").insert(
-            "request_id".to_string(),
-            Value::String(request_id.to_string()),
-        );
-    }
-
+    let request_id = request_id
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let body = anthropic_error_json(&err, &request_id);
     let mut response = (err.status, Json(body)).into_response();
-    if let Some(request_id) = request_id
-        && let Ok(value) = axum::http::HeaderValue::from_str(request_id)
-    {
+    crate::error::append_forwarded_headers(&mut response, err.forwarded_headers);
+    if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
         response
             .headers_mut()
             .insert(axum::http::HeaderName::from_static("request-id"), value);
@@ -845,6 +833,9 @@ struct TriedProvider {
     /// Never persisted.
     #[serde(skip)]
     client_error: String,
+    /// SE1d: `FWD` of this attempt's upstream response. Never persisted.
+    #[serde(skip)]
+    forwarded_headers: crate::error::ForwardedHeaders,
     upstream_status: Option<u16>,
     upstream_code: Option<String>,
     upstream_type: Option<String>,
@@ -880,6 +871,7 @@ impl TriedProvider {
                 &app_err.message,
                 mask_sensitive_info,
             ),
+            forwarded_headers: app_err.forwarded_headers.clone(),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(
                 app_err
@@ -983,6 +975,27 @@ impl DownstreamProtocol {
                 | (Self::AnthropicMessages, ProviderType::Messages)
         )
     }
+}
+
+/// XTRA-5a: the downstream wire family when an upstream response must have its
+/// foreign passthrough state removed. Image and media provider output carries
+/// only metadata that the Image API and media encoders consume.
+pub(super) fn foreign_response_target(
+    downstream: DownstreamProtocol,
+    provider_type: ProviderType,
+) -> Option<urp::ProviderProtocol> {
+    let wire_family = matches!(
+        provider_type,
+        ProviderType::Responses
+            | ProviderType::ChatCompletion
+            | ProviderType::Messages
+            | ProviderType::Gemini
+    );
+    (wire_family && !downstream.is_same_family(provider_type)).then_some(match downstream {
+        DownstreamProtocol::Responses => urp::ProviderProtocol::Responses,
+        DownstreamProtocol::ChatCompletions => urp::ProviderProtocol::ChatCompletion,
+        DownstreamProtocol::AnthropicMessages => urp::ProviderProtocol::Messages,
+    })
 }
 
 pub(crate) fn provider_type_protocol(provider_type: ProviderType) -> Option<urp::ProviderProtocol> {

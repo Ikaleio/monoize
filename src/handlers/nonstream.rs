@@ -184,7 +184,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
     response_validator: Option<fn(&urp::UrpResponse) -> AppResult<()>>,
     task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<(urp::UrpResponse, String)> {
-    let (resp, logical_model, ()) = execute_nonstream(
+    let (resp, logical_model, (), _) = execute_nonstream(
         state,
         auth,
         req,
@@ -198,6 +198,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             Some(validate) => validate(resp),
             None => encode_response_for_downstream(downstream, resp, logical_model).map(|_| ()),
         },
+        response_validator.is_none(),
         task_state,
     )
     .await?;
@@ -207,7 +208,9 @@ pub(super) async fn execute_nonstream_typed_with_validator(
 /// Runs routing, upstream attempts, response transforms, and billing for one
 /// non-stream request. `accept` runs on the final (history-decorated)
 /// response before billing; its error fails the request and its value is
-/// returned with the response (FP6k.1a).
+/// returned with the response (FP6k.1a). `strip_foreign_response` enables
+/// XTRA-5a; the Image API opts out because it reads response extras. The last
+/// tuple member is the SE1d header set of the serving attempt.
 #[allow(clippy::too_many_arguments)]
 async fn execute_nonstream<T>(
     state: &AppState,
@@ -220,8 +223,9 @@ async fn execute_nonstream<T>(
     client_session_id: Option<String>,
     capture: RequestCaptureContext,
     accept: impl Fn(&urp::UrpResponse, &str) -> AppResult<T>,
+    strip_foreign_response: bool,
     task_state: Option<&AdmittedRequestTaskState>,
-) -> AppResult<(urp::UrpResponse, String, T)> {
+) -> AppResult<(urp::UrpResponse, String, T, crate::error::ForwardedHeaders)> {
     let started_at = task_state
         .map(AdmittedRequestTaskState::started_at)
         .unwrap_or_else(std::time::Instant::now);
@@ -431,6 +435,7 @@ async fn execute_nonstream<T>(
             // branch below consumes `upstream_body` before awaiting upstream,
             // keeping it here only for a capture session (FP6j-2).
             let mut capture_upstream_request: Option<Value> = None;
+            let mut forwarded_headers = crate::error::ForwardedHeaders::new();
             let path = if openai_image_edit {
                 "/v1/images/edits".to_string()
             } else {
@@ -490,6 +495,8 @@ async fn execute_nonstream<T>(
                 };
                 match call {
                     Ok(upstream_resp) => {
+                        forwarded_headers =
+                            upstream::forwarded_response_headers(upstream_resp.headers());
                         let legacy = match typed_request_to_legacy(&req_attempt, max_multiplier) {
                             Ok(legacy) => legacy,
                             Err(err) => {
@@ -642,7 +649,7 @@ async fn execute_nonstream<T>(
                     resolve_session_affinity_value(&attempt, &upstream_body);
                 let body = upstream::JsonBody::new(&upstream_body);
                 capture_upstream_request = capture.session.is_some().then_some(upstream_body);
-                upstream::call_upstream_with_timeout_and_headers(
+                upstream::call_upstream_json_with_response_headers(
                     &http,
                     &provider,
                     &attempt.api_key,
@@ -652,7 +659,10 @@ async fn execute_nonstream<T>(
                     &extra_headers,
                 )
                 .await
-                .map(|value| (Some(value), None))
+                .map(|(value, headers)| {
+                    forwarded_headers = headers;
+                    (Some(value), None)
+                })
             };
             match call_value {
                 Ok((value, collected_resp)) => {
@@ -805,6 +815,9 @@ async fn execute_nonstream<T>(
                     }
                     mark_channel_success(state, &attempt).await;
                     refresh_channel_affinity(state, &attempt).await;
+                    let foreign_extras = foreign_response_target(downstream, attempt.provider_type)
+                        .filter(|_| strip_foreign_response)
+                        .map(|target| urp::strip_foreign_response(&mut resp, target));
                     // Wrap newly produced encrypted reasoning payloads in mz2
                     // envelopes BEFORE any response-phase transform observes
                     // the response. Per spec/urp-transform-system.spec.md
@@ -927,6 +940,9 @@ async fn execute_nonstream<T>(
                             .await);
                         }
                     };
+                    if let Some(foreign_extras) = foreign_extras {
+                        foreign_extras.restore(&mut resp);
+                    }
                     let charge = match maybe_charge_response(
                         state,
                         auth,
@@ -984,7 +1000,10 @@ async fn execute_nonstream<T>(
                     if let Some(history) = history {
                         history.retain_response(&resp).await;
                     }
-                    return Ok((resp, logical_model, accepted));
+                    if !downstream.is_same_family(attempt.provider_type) {
+                        forwarded_headers.clear();
+                    }
+                    return Ok((resp, logical_model, accepted, forwarded_headers));
                 }
                 Err(err) => {
                     if let (Some(session), Some(capture_upstream_request)) =
@@ -1048,7 +1067,12 @@ async fn execute_nonstream<T>(
             }
         }
     }
-    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
+    let final_err = build_exhausted_error_for_downstream(
+        &logical_model,
+        &tried_providers,
+        last_failed_attempt.as_ref(),
+        downstream,
+    );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
             state,
@@ -1201,8 +1225,8 @@ pub(super) async fn forward_nonstream_typed_with_task_state(
     client_session_id: Option<String>,
     capture: RequestCaptureContext,
     task_state: Option<&AdmittedRequestTaskState>,
-) -> AppResult<Value> {
-    let (_, _, body) = execute_nonstream(
+) -> AppResult<(Value, crate::error::ForwardedHeaders)> {
+    let (_, _, body, forwarded_headers) = execute_nonstream(
         state,
         auth,
         req,
@@ -1213,10 +1237,11 @@ pub(super) async fn forward_nonstream_typed_with_task_state(
         client_session_id,
         capture,
         |resp, logical_model| encode_response_for_downstream(downstream, resp, logical_model),
+        true,
         task_state,
     )
     .await?;
-    Ok(body)
+    Ok((body, forwarded_headers))
 }
 
 #[allow(clippy::result_large_err)]

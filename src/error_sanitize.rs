@@ -9,6 +9,7 @@
 //! admin visibility; the server tracing log keeps the unbounded raw detail.
 
 use regex::Regex;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 /// SAN-D2: maximum Unicode scalar values retained by [`truncate_error_detail`].
@@ -27,6 +28,90 @@ static API_KEY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(['"]?)api_key:([^\s'"]+)(['"]?)"#).expect("valid api_key regex")
 });
 
+/// SAN-D1 `TLDS`: IANA root-zone snapshot plus non-delegated infrastructure names.
+static TLDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    include_str!("error_sanitize_tlds.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .chain([
+            "cluster",
+            "corp",
+            "example",
+            "home",
+            "internal",
+            "intranet",
+            "invalid",
+            "lan",
+            "local",
+            "localhost",
+            "onion",
+            "svc",
+            "test",
+        ])
+        .collect()
+});
+const FIELD_TLDS: &[&str] = &[
+    "app", "audio", "auto", "call", "chat", "data", "date", "delta", "email", "events", "group",
+    "host", "id", "info", "link", "live", "map", "name", "new", "open", "page", "parts", "read",
+    "run", "save", "search", "select", "site", "store", "stream", "style", "target", "tools",
+    "total", "video", "web", "zone",
+];
+const FIELD_ROOTS: &[&str] = &[
+    "body",
+    "call",
+    "choice",
+    "choices",
+    "content",
+    "contents",
+    "data",
+    "delta",
+    "error",
+    "function",
+    "functions",
+    "input",
+    "instructions",
+    "item",
+    "items",
+    "message",
+    "messages",
+    "metadata",
+    "model",
+    "output",
+    "params",
+    "parts",
+    "reasoning",
+    "request",
+    "response",
+    "responses",
+    "stream",
+    "system",
+    "text",
+    "thinking",
+    "tool",
+    "tools",
+    "usage",
+];
+
+/// SAN-D1 `IS_HOST`: separates hostnames from dotted protocol identifiers such
+/// as `response.create` or `messages.1.content.0.type`.
+fn is_host(candidate: &str) -> bool {
+    let lowered = candidate.to_ascii_lowercase();
+    let labels: Vec<&str> = lowered.split('.').collect();
+    let (first, last) = (labels[0], labels[labels.len() - 1]);
+    if !TLDS.contains(last) {
+        return false;
+    }
+    if FIELD_TLDS.contains(&last)
+        && (FIELD_ROOTS.contains(&first)
+            || labels[1..]
+                .iter()
+                .any(|label| label.bytes().all(|byte| byte.is_ascii_digit())))
+    {
+        return false;
+    }
+    true
+}
+
 /// SAN-D1 `MASK`: mask URLs, bare domains, IPv4 addresses, and `api_key:`
 /// values in `text`. Idempotent: masked output contains no residual match for
 /// the domain/IP/api_key patterns, and re-masking an already-masked URL is a
@@ -36,7 +121,11 @@ pub fn mask_sensitive_text(text: &str) -> String {
         mask_url(&captures[0])
     });
     let masked = DOMAIN_PATTERN.replace_all(&masked, |captures: &regex::Captures<'_>| {
-        mask_host_for_plain_domain(&captures[0])
+        if is_host(&captures[0]) {
+            mask_host_for_plain_domain(&captures[0])
+        } else {
+            captures[0].to_string()
+        }
     });
     let masked = IP_PATTERN.replace_all(&masked, "***.***.***.***");
     API_KEY_PATTERN
