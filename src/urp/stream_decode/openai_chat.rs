@@ -19,7 +19,7 @@ use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
@@ -113,6 +113,7 @@ async fn decode_chat_stream(
     let mut protocol_terminal_seen = false;
     let mut terminal_extra_body = HashMap::new();
     let mut pending_delta_extra = Map::new();
+    let mut segments = StreamSegments::default();
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
@@ -359,6 +360,53 @@ async fn decode_chat_stream(
             .await?;
         }
 
+        // PC7h: nodes are sequential; a switch of output kind completes the previous node.
+        macro_rules! close_reasoning {
+            ($force:expr) => {
+                close_reasoning_nodes(
+                    &tx,
+                    &mut segments,
+                    &mut reasoning_node_index,
+                    &reasoning_text,
+                    &reasoning_summary,
+                    &reasoning_sig,
+                    &mut reasoning_source,
+                    &mut reasoning_surface,
+                    &reasoning_detail_nodes,
+                    $force,
+                )
+                .await?
+            };
+        }
+        macro_rules! close_text {
+            () => {
+                close_text_node(
+                    &tx,
+                    &mut segments,
+                    &mut text_node_index,
+                    &output_text,
+                    assistant_message_phase.as_deref(),
+                    &mut text_logprobs,
+                    &mut citations,
+                )
+                .await?
+            };
+        }
+        if delta
+            .get("content")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+            || delta
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .is_some_and(|calls| !calls.is_empty())
+            || delta
+                .get("function_call")
+                .is_some_and(|call| !call.is_null())
+        {
+            close_reasoning!(false);
+        }
+
         // PC8: an empty first `content` must not open a text node ahead of reasoning.
         if let Some(t) = delta
             .get("content")
@@ -511,6 +559,7 @@ async fn decode_chat_stream(
         if let Some(content_blocks) = delta.get("content").and_then(chat_content_blocks) {
             for (content_pos, block) in content_blocks.iter().enumerate() {
                 if let Some(text) = block.as_str() {
+                    close_reasoning!(false);
                     process_text_delta(
                         &tx,
                         &response_id,
@@ -533,6 +582,7 @@ async fn decode_chat_stream(
                 };
 
                 if let Some(reasoning_block) = extract_chat_reasoning_content_block(block) {
+                    close_text!();
                     process_reasoning_summary_delta(
                         &tx,
                         &response_id,
@@ -586,6 +636,7 @@ async fn decode_chat_stream(
                 if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
                     let item_type = block_obj.get("type").and_then(|v| v.as_str());
                     if matches!(item_type, Some("input_text" | "text" | "output_text")) {
+                        close_reasoning!(false);
                         process_text_delta(
                             &tx,
                             &response_id,
@@ -605,6 +656,10 @@ async fn decode_chat_stream(
                 }
 
                 let tool_like = chat_stream_block_is_tool_call_like(block_obj);
+                if tool_like {
+                    close_reasoning!(false);
+                    close_text!();
+                }
                 let mut tool_state = ChatToolCallStreamState {
                     call_order: &mut call_order,
                     calls: &mut calls,
@@ -650,6 +705,9 @@ async fn decode_chat_stream(
         let mut scalar_delta = Cow::Borrowed(delta);
         if let Some(reasoning_details) = reasoning_details {
             for detail in reasoning_details {
+                if !detail_continues_open_node(detail, &reasoning_detail_nodes, &segments) {
+                    close_text!();
+                }
                 process_reasoning_detail_delta(
                     &tx,
                     &response_id,
@@ -658,6 +716,7 @@ async fn decode_chat_stream(
                     &mut response_started,
                     &mut next_node_index,
                     &mut reasoning_detail_nodes,
+                    &segments,
                     &mut delta_extra,
                 )
                 .await?;
@@ -690,6 +749,9 @@ async fn decode_chat_stream(
         }
         let (reasoning_text_deltas, reasoning_sig_deltas) =
             extract_chat_reasoning_delta_chunks(&scalar_delta);
+        if !reasoning_text_deltas.is_empty() || !reasoning_sig_deltas.is_empty() {
+            close_text!();
+        }
         for text in reasoning_text_deltas {
             process_reasoning_text_delta(
                 &tx,
@@ -725,6 +787,18 @@ async fn decode_chat_stream(
                 &mut delta_extra,
             )
             .await?;
+        }
+
+        if delta
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(|calls| !calls.is_empty())
+            || delta
+                .get("function_call")
+                .is_some_and(|call| !call.is_null())
+        {
+            close_reasoning!(false);
+            close_text!();
         }
 
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -780,22 +854,50 @@ async fn decode_chat_stream(
             .and_then(|choice| choice.get("message"))
             .and_then(Value::as_object)
         {
-            process_terminal_message_snapshot(
+            if assistant_message_phase.is_none() {
+                assistant_message_phase = message
+                    .get("phase")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            if ["reasoning_details", "reasoning", "reasoning_content", "reasoning_opaque"]
+                .iter()
+                .any(|key| match message.get(*key) {
+                    Some(Value::String(value)) => !value.is_empty(),
+                    Some(Value::Array(value)) => !value.is_empty(),
+                    _ => false,
+                })
+            {
+                close_text!();
+            }
+            process_terminal_reasoning_snapshot(
                 &tx,
                 &response_id,
                 &urp.model,
                 message,
                 &mut response_started,
                 &mut next_node_index,
-                &mut assistant_message_phase,
-                &mut text_node_index,
-                &mut output_text,
                 &mut reasoning_node_index,
                 &mut reasoning_text,
                 &mut reasoning_sig,
                 &mut reasoning_source,
                 &mut reasoning_surface,
                 &mut reasoning_detail_nodes,
+                &segments,
+                &mut delta_extra,
+            )
+            .await?;
+            close_reasoning!(true);
+            process_terminal_output_snapshot(
+                &tx,
+                &response_id,
+                &urp.model,
+                message,
+                &mut response_started,
+                &mut next_node_index,
+                assistant_message_phase.as_deref(),
+                &mut text_node_index,
+                &mut output_text,
                 &mut call_order,
                 &mut calls,
                 &mut call_id_by_index,
@@ -858,11 +960,11 @@ async fn decode_chat_stream(
     let mut output_nodes = sorted_nodes(
         assistant_message_phase.as_deref(),
         text_node_index,
-        &output_text,
+        output_text.get(segments.text_start..).unwrap_or_default(),
         reasoning_node_index,
-        &reasoning_text,
-        &reasoning_summary,
-        &reasoning_sig,
+        reasoning_text.get(segments.reasoning_text_start..).unwrap_or_default(),
+        reasoning_summary.get(segments.reasoning_summary_start..).unwrap_or_default(),
+        reasoning_sig.get(segments.reasoning_sig_start..).unwrap_or_default(),
         reasoning_source.as_deref(),
         reasoning_surface,
         &reasoning_detail_nodes,
@@ -914,10 +1016,14 @@ async fn decode_chat_stream(
             break;
         }
     }
+    output_nodes.append(&mut segments.closed);
     output_nodes.sort_by_key(|(index, _)| *index);
     for (node_index, node) in &mut output_nodes {
         if let Node::Refusal { logprobs, .. } = node {
             *logprobs = refusal_logprobs.take();
+        }
+        if segments.done.contains(node_index) {
+            continue;
         }
         send_event(
             &tx,
@@ -1432,6 +1538,7 @@ async fn process_reasoning_detail_delta(
     response_started: &mut bool,
     next_node_index: &mut u32,
     reasoning_detail_nodes: &mut Vec<(u32, Node)>,
+    segments: &StreamSegments,
     delta_extra: &mut Map<String, Value>,
 ) -> AppResult<()> {
     let Some(detail) = detail.as_object() else {
@@ -1463,14 +1570,16 @@ async fn process_reasoning_detail_delta(
         .then(|| {
             reasoning_detail_nodes
                 .iter()
-                .position(|(_, existing)| {
-                    reasoning_detail_raw(existing).is_some_and(|existing| {
-                        reasoning_detail_identity_matches(&existing, detail)
-                    })
+                .position(|(node_index, existing)| {
+                    !segments.done.contains(node_index)
+                        && reasoning_detail_raw(existing).is_some_and(|existing| {
+                            reasoning_detail_identity_matches(&existing, detail)
+                        })
                 })
                 .or_else(|| {
                     let (node_index, existing) = reasoning_detail_nodes.last()?;
                     (Some(*node_index) == latest_node_index
+                        && !segments.done.contains(node_index)
                         && reasoning_detail_raw(existing).is_some_and(|existing| {
                             continues_unidentified_detail(&existing, detail)
                         }))
@@ -1931,6 +2040,7 @@ async fn process_terminal_reasoning_details(
     response_started: &mut bool,
     next_node_index: &mut u32,
     reasoning_detail_nodes: &mut Vec<(u32, Node)>,
+    segments: &StreamSegments,
     delta_extra: &mut Map<String, Value>,
 ) -> AppResult<()> {
     let existing_len = reasoning_detail_nodes.len();
@@ -1939,14 +2049,16 @@ async fn process_terminal_reasoning_details(
         let Some(detail_obj) = detail.as_object() else {
             continue;
         };
-        let matching_position = reasoning_detail_nodes[..existing_len]
+        // One logical detail can span several nodes after a PC7h switch.
+        let group: Vec<usize> = reasoning_detail_nodes[..existing_len]
             .iter()
             .enumerate()
-            .find_map(|(position, (_, node))| {
-                (!matched[position] && reasoning_detail_matches(node, detail_obj))
-                    .then_some(position)
-            });
-        let Some(position) = matching_position else {
+            .filter(|(position, (_, node))| {
+                !matched[*position] && reasoning_detail_matches(node, detail_obj)
+            })
+            .map(|(position, _)| position)
+            .collect();
+        let Some(&position) = group.last() else {
             process_reasoning_detail_delta(
                 tx,
                 response_id,
@@ -1955,22 +2067,67 @@ async fn process_terminal_reasoning_details(
                 response_started,
                 next_node_index,
                 reasoning_detail_nodes,
+                segments,
                 delta_extra,
             )
             .await?;
             continue;
         };
-        matched[position] = true;
+        for position in &group {
+            matched[*position] = true;
+        }
+        let Some(detail_obj) =
+            terminal_detail_for_last_segment(detail_obj, &group, reasoning_detail_nodes)
+        else {
+            continue;
+        };
         let (node_index, existing_node) = &mut reasoning_detail_nodes[position];
-        if let Some((merged_node, delta, mut event_extra)) =
-            reasoning_detail_completion(existing_node, detail_obj)
-        {
+        let node_index = *node_index;
+        let completion = reasoning_detail_completion(existing_node, &detail_obj);
+        if segments.done.contains(&node_index) {
+            // PC7h: a completed node takes no more deltas; the remainder is a new node.
+            if let Some((_, NodeDelta::Reasoning {
+                content,
+                encrypted,
+                summary,
+                ..
+            }, _)) = completion
+            {
+                let mut fragment = detail_obj;
+                let payload_key = fragment
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .and_then(reasoning_detail_payload_key)
+                    .unwrap_or("text");
+                fragment.insert(
+                    payload_key.to_string(),
+                    json!(content.or(summary).unwrap_or_default()),
+                );
+                if encrypted.is_none() {
+                    fragment.remove("signature");
+                }
+                process_reasoning_detail_delta(
+                    tx,
+                    response_id,
+                    model,
+                    &Value::Object(fragment),
+                    response_started,
+                    next_node_index,
+                    reasoning_detail_nodes,
+                    segments,
+                    delta_extra,
+                )
+                .await?;
+            }
+            continue;
+        }
+        if let Some((merged_node, delta, mut event_extra)) = completion {
             event_extra.extend(chat_delta_event_extra(std::mem::take(delta_extra)));
-            send_node_delta(tx, *node_index, delta, event_extra).await?;
+            send_node_delta(tx, node_index, delta, event_extra).await?;
             *existing_node = merged_node;
         } else {
             let mut merged_raw = reasoning_detail_raw(existing_node).unwrap_or_default();
-            for (key, value) in detail_obj {
+            for (key, value) in &detail_obj {
                 if !crate::urp::decode::is_internal_extra_key(key) {
                     merged_raw.insert(key.clone(), value.clone());
                 }
@@ -1981,6 +2138,38 @@ async fn process_terminal_reasoning_details(
         }
     }
     Ok(())
+}
+
+/// The terminal detail as seen by the last node of its group: earlier segments' text removed.
+/// `None` when the snapshot does not extend the earlier segments.
+fn terminal_detail_for_last_segment(
+    terminal: &Map<String, Value>,
+    group: &[usize],
+    nodes: &[(u32, Node)],
+) -> Option<Map<String, Value>> {
+    let mut terminal = terminal.clone();
+    let Some((_, earlier)) = group.split_last() else {
+        return Some(terminal);
+    };
+    if earlier.is_empty() {
+        return Some(terminal);
+    }
+    let payload_key = terminal
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(reasoning_detail_payload_key)?;
+    let prior: String = earlier
+        .iter()
+        .filter_map(|position| reasoning_detail_raw(&nodes[*position].1))
+        .filter_map(|raw| raw.get(payload_key).and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let rest = terminal
+        .get(payload_key)?
+        .as_str()?
+        .strip_prefix(prior.as_str())?
+        .to_string();
+    terminal.insert(payload_key.to_string(), Value::String(rest));
+    Some(terminal)
 }
 
 fn terminal_tool_call_id(
@@ -2101,37 +2290,22 @@ async fn process_terminal_tool_call_snapshot(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn process_terminal_message_snapshot(
+async fn process_terminal_reasoning_snapshot(
     tx: &mpsc::Sender<UrpStreamEvent>,
     response_id: &str,
     model: &str,
     message: &Map<String, Value>,
     response_started: &mut bool,
     next_node_index: &mut u32,
-    assistant_message_phase: &mut Option<String>,
-    text_node_index: &mut Option<u32>,
-    output_text: &mut String,
     reasoning_node_index: &mut Option<u32>,
     reasoning_text: &mut String,
     reasoning_sig: &mut String,
     reasoning_source: &mut Option<String>,
     reasoning_surface: &mut Option<&'static str>,
     reasoning_detail_nodes: &mut Vec<(u32, Node)>,
-    call_order: &mut Vec<String>,
-    calls: &mut HashMap<String, (ToolCallType, String, String, bool)>,
-    call_id_by_index: &mut HashMap<usize, String>,
-    tool_node_index_by_call_id: &mut HashMap<String, u32>,
-    provider_items: &mut Vec<(u32, Node)>,
+    segments: &StreamSegments,
     delta_extra: &mut Map<String, Value>,
-    pending_visible_output_bytes: &mut u64,
 ) -> AppResult<()> {
-    if assistant_message_phase.is_none() {
-        *assistant_message_phase = message
-            .get("phase")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-    }
-
     let message_extra = message
         .iter()
         .filter(|(key, _)| {
@@ -2169,6 +2343,7 @@ async fn process_terminal_message_snapshot(
             response_started,
             next_node_index,
             reasoning_detail_nodes,
+            segments,
             delta_extra,
         )
         .await?;
@@ -2229,6 +2404,28 @@ async fn process_terminal_message_snapshot(
         }
     }
 
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_terminal_output_snapshot(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    message: &Map<String, Value>,
+    response_started: &mut bool,
+    next_node_index: &mut u32,
+    assistant_message_phase: Option<&str>,
+    text_node_index: &mut Option<u32>,
+    output_text: &mut String,
+    call_order: &mut Vec<String>,
+    calls: &mut HashMap<String, (ToolCallType, String, String, bool)>,
+    call_id_by_index: &mut HashMap<usize, String>,
+    tool_node_index_by_call_id: &mut HashMap<String, u32>,
+    provider_items: &mut Vec<(u32, Node)>,
+    delta_extra: &mut Map<String, Value>,
+    pending_visible_output_bytes: &mut u64,
+) -> AppResult<()> {
     let mut snapshot_text = String::new();
     if let Some(content) = message.get("content") {
         if let Some(text) = content.as_str() {
@@ -2239,7 +2436,7 @@ async fn process_terminal_message_snapshot(
                     response_id,
                     model,
                     suffix,
-                    assistant_message_phase.as_deref(),
+                    assistant_message_phase,
                     response_started,
                     text_node_index,
                     next_node_index,
@@ -2259,7 +2456,7 @@ async fn process_terminal_message_snapshot(
                             response_id,
                             model,
                             suffix,
-                            assistant_message_phase.as_deref(),
+                            assistant_message_phase,
                             response_started,
                             text_node_index,
                             next_node_index,
@@ -2287,7 +2484,7 @@ async fn process_terminal_message_snapshot(
                             response_id,
                             model,
                             suffix,
-                            assistant_message_phase.as_deref(),
+                            assistant_message_phase,
                             response_started,
                             text_node_index,
                             next_node_index,
@@ -2665,6 +2862,187 @@ fn reasoning_detail_text_len(nodes: &[(u32, Node)]) -> usize {
         .sum()
 }
 
+/// PC7h bookkeeping. `reasoning_text`, `reasoning_summary`, `reasoning_sig`, and `output_text`
+/// stay cumulative for terminal snapshot comparison; the offsets mark the open node's start.
+#[derive(Default)]
+struct StreamSegments {
+    closed: Vec<(u32, Node)>,
+    done: HashSet<u32>,
+    reasoning_text_start: usize,
+    reasoning_summary_start: usize,
+    reasoning_sig_start: usize,
+    text_start: usize,
+}
+
+/// PC7h: an unsigned Anthropic thinking detail stays open, because its signature must reach
+/// the same node before a Messages downstream closes the block.
+fn detail_awaits_signature(node: &Node) -> bool {
+    let Node::Reasoning {
+        encrypted, source, ..
+    } = node
+    else {
+        return false;
+    };
+    encrypted.is_none()
+        && source
+            .as_deref()
+            .is_some_and(|source| source.starts_with("anthropic"))
+        && reasoning_detail_raw(node)
+            .is_some_and(|raw| raw.get("type").and_then(Value::as_str) == Some("reasoning.text"))
+}
+
+/// True when a detail fragment only extends an open node or carries no payload.
+fn detail_continues_open_node(
+    detail: &Value,
+    nodes: &[(u32, Node)],
+    segments: &StreamSegments,
+) -> bool {
+    let Some(detail) = detail.as_object() else {
+        return true;
+    };
+    nodes.iter().any(|(node_index, node)| {
+        !segments.done.contains(node_index) && reasoning_detail_matches(node, detail)
+    }) || !["text", "summary", "data", "signature"].iter().any(|key| {
+        match detail.get(*key) {
+            Some(Value::String(value)) => !value.is_empty(),
+            Some(Value::Null) | None => false,
+            Some(_) => true,
+        }
+    })
+}
+
+fn scalar_reasoning_node(
+    reasoning_text: &str,
+    reasoning_summary: &str,
+    reasoning_sig: &str,
+    reasoning_source: Option<&str>,
+    reasoning_surface: Option<&str>,
+) -> Node {
+    Node::Reasoning {
+        metadata: Default::default(),
+        id: Some(crate::urp::synthetic_reasoning_id()),
+        content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
+        encrypted: (!reasoning_sig.is_empty()).then(|| Value::String(reasoning_sig.to_string())),
+        summary: (!reasoning_summary.is_empty()).then(|| reasoning_summary.to_string()),
+        source: reasoning_source.map(|source| source.to_string()),
+        extra_body: reasoning_surface
+            .map(|surface| {
+                HashMap::from([(
+                    crate::urp::CHAT_REASONING_SURFACE_EXTRA_KEY.to_string(),
+                    Value::String(surface.to_string()),
+                )])
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn text_segment_node(content: &str, phase: Option<&str>) -> Node {
+    Node::Text {
+        logprobs: None,
+        signature: None,
+        citations: Vec::new(),
+        id: Some(crate::urp::synthetic_message_id()),
+        role: OrdinaryRole::Assistant,
+        content: content.to_string(),
+        phase: phase.map(str::to_string),
+        extra_body: HashMap::new(),
+        cache_breakpoint: None,
+    }
+}
+
+/// `force` also completes details awaiting a signature, at the terminal snapshot.
+#[allow(clippy::too_many_arguments)]
+async fn close_reasoning_nodes(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    segments: &mut StreamSegments,
+    reasoning_node_index: &mut Option<u32>,
+    reasoning_text: &str,
+    reasoning_summary: &str,
+    reasoning_sig: &str,
+    reasoning_source: &mut Option<String>,
+    reasoning_surface: &mut Option<&'static str>,
+    reasoning_detail_nodes: &[(u32, Node)],
+    force: bool,
+) -> AppResult<()> {
+    let mut completed = Vec::new();
+    if let Some(node_index) = reasoning_node_index.take() {
+        let node = scalar_reasoning_node(
+            reasoning_text.get(segments.reasoning_text_start..).unwrap_or_default(),
+            reasoning_summary.get(segments.reasoning_summary_start..).unwrap_or_default(),
+            reasoning_sig.get(segments.reasoning_sig_start..).unwrap_or_default(),
+            reasoning_source.as_deref(),
+            *reasoning_surface,
+        );
+        segments.reasoning_text_start = reasoning_text.len();
+        segments.reasoning_summary_start = reasoning_summary.len();
+        segments.reasoning_sig_start = reasoning_sig.len();
+        *reasoning_source = None;
+        *reasoning_surface = None;
+        segments.closed.push((node_index, node.clone()));
+        completed.push((node_index, node));
+    }
+    for (node_index, node) in reasoning_detail_nodes {
+        if !segments.done.contains(node_index) && (force || !detail_awaits_signature(node)) {
+            completed.push((*node_index, node.clone()));
+        }
+    }
+    completed.sort_by_key(|(node_index, _)| *node_index);
+    for (node_index, node) in completed {
+        segments.done.insert(node_index);
+        send_event(
+            tx,
+            UrpStreamEvent::NodeDone {
+                node_index,
+                node,
+                usage: None,
+                extra_body: HashMap::new(),
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn close_text_node(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    segments: &mut StreamSegments,
+    text_node_index: &mut Option<u32>,
+    output_text: &str,
+    phase: Option<&str>,
+    text_logprobs: &mut Option<Vec<crate::urp::TokenLogprob>>,
+    citations: &mut Vec<crate::urp::Citation>,
+) -> AppResult<()> {
+    let Some(node_index) = text_node_index.take() else {
+        return Ok(());
+    };
+    let mut node = text_segment_node(
+        output_text.get(segments.text_start..).unwrap_or_default(),
+        phase,
+    );
+    if let Node::Text {
+        logprobs,
+        citations: target,
+        ..
+    } = &mut node
+    {
+        *logprobs = text_logprobs.take();
+        *target = std::mem::take(citations);
+    }
+    segments.text_start = output_text.len();
+    segments.done.insert(node_index);
+    segments.closed.push((node_index, node.clone()));
+    send_event(
+        tx,
+        UrpStreamEvent::NodeDone {
+            node_index,
+            node,
+            usage: None,
+            extra_body: HashMap::new(),
+        },
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sorted_nodes(
     assistant_message_phase: Option<&str>,
@@ -2687,23 +3065,13 @@ fn sorted_nodes(
     if let Some(node_index) = reasoning_node_index {
         nodes.push((
             node_index,
-            Node::Reasoning {
-                metadata: Default::default(),
-                id: Some(crate::urp::synthetic_reasoning_id()),
-                content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
-                encrypted: (!reasoning_sig.is_empty())
-                    .then(|| Value::String(reasoning_sig.to_string())),
-                summary: (!reasoning_summary.is_empty()).then(|| reasoning_summary.to_string()),
-                source: reasoning_source.map(|source| source.to_string()),
-                extra_body: reasoning_surface
-                    .map(|surface| {
-                        HashMap::from([(
-                            crate::urp::CHAT_REASONING_SURFACE_EXTRA_KEY.to_string(),
-                            Value::String(surface.to_string()),
-                        )])
-                    })
-                    .unwrap_or_default(),
-            },
+            scalar_reasoning_node(
+                reasoning_text,
+                reasoning_summary,
+                reasoning_sig,
+                reasoning_source,
+                reasoning_surface,
+            ),
         ));
     }
 
@@ -2712,17 +3080,7 @@ fn sorted_nodes(
     if let Some(node_index) = text_node_index {
         nodes.push((
             node_index,
-            Node::Text {
-                logprobs: None,
-                signature: None,
-                citations: Vec::new(),
-                id: Some(crate::urp::synthetic_message_id()),
-                role: OrdinaryRole::Assistant,
-                content: output_text.to_string(),
-                phase: assistant_message_phase.map(str::to_string),
-                extra_body: HashMap::new(),
-                cache_breakpoint: None,
-            },
+            text_segment_node(output_text, assistant_message_phase),
         ));
     }
 
