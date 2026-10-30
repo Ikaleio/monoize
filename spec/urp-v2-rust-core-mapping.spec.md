@@ -107,6 +107,7 @@ ToolDefinition {
   description: Option<String>,
   function: Option<FunctionDefinition>,
   custom: Option<CustomToolDefinition>,
+  cache_breakpoint: Option<CacheBreakpoint>,
   extra_body: HashMap<String, JsonValue>
 }
 ```
@@ -159,6 +160,7 @@ Node =
       phase: Option<String>,
       signature: Option<JsonValue>,
       citations: Vec<Citation>,
+      cache_breakpoint: Option<CacheBreakpoint>,
       extra_body: HashMap<String, JsonValue>
     }
   | Image {
@@ -204,6 +206,7 @@ Node =
       arguments: String,
       namespace: Option<String>,
       signature: Option<JsonValue>,
+      cache_breakpoint: Option<CacheBreakpoint>,
       extra_body: HashMap<String, JsonValue>
     }
   | ProviderItem {
@@ -223,6 +226,7 @@ Node =
       name: Option<String>,
       is_error: bool,
       content: Vec<ToolResultContent>,
+      cache_breakpoint: Option<CacheBreakpoint>,
       extra_body: HashMap<String, JsonValue>
     }
   | NextDownstreamEnvelopeExtra {
@@ -248,8 +252,18 @@ MediaMetadata {
   signature: Option<JsonValue>,
   media_type: Option<String>,
   transcript: Option<String>,
-  expires_at: Option<i64>
+  expires_at: Option<i64>,
+  cache_breakpoint: Option<CacheBreakpoint>
 }
+
+CacheBreakpoint {
+  ttl: Option<String>,
+  origin: ProviderProtocol,
+  wire: CacheBreakpointWire,
+  extra_body: BTreeMap<String, JsonValue>
+}
+
+CacheBreakpointWire = CacheControl | PromptCacheBreakpoint
 
 MediaResource {
   protocol: ProviderProtocol,
@@ -297,6 +311,7 @@ RTYPE-8. The Rust core layer MUST define exactly one canonical nested tool-resul
 ToolResultContent =
   | Text {
       text: String,
+      cache_breakpoint: Option<CacheBreakpoint>,
       extra_body: HashMap<String, JsonValue>
     }
   | Image {
@@ -471,10 +486,10 @@ NH-26. The nested-passthrough stripping helper that replaces current grouped `st
 
 A member whose key starts with `_monoize_` and was created after wire parsing is internal semantic provenance under XTRA-10. The helper MUST retain that member until the target adapter consumes or discards it. A target encoder MUST NOT emit the retained member as a wire field.
 
-NH-27. The stripping helper in NH-26 MUST NOT remove or mutate top-level request or response `extra_body`.
+NH-27. The stripping helper in NH-26 MUST NOT remove or mutate top-level request or response `extra_body`. It MUST NOT remove a typed `cache_breakpoint` (`urp-v2-flat-structure.spec.md` section 4a).
 
 NH-28. `ToolDefinition.extra_body` owns only fields that belong to exactly one request tool-definition object and have no typed owner.
-Typed owners include `tool_type`, `name`, `description`, `namespace`, `function`, `custom`, `tools`, `origin_protocol`, and `config`.
+Typed owners include `tool_type`, `name`, `description`, `namespace`, `function`, `custom`, `tools`, `origin_protocol`, `config`, and `cache_breakpoint`.
 
 NH-29. `FunctionDefinition.extra_body` owns only fields that belong to exactly one function-definition payload and are not represented by `name`, `description`, `parameters`, or `strict`. An Anthropic `input_schema` field belongs to `parameters`, not to `FunctionDefinition.extra_body`.
 
@@ -651,6 +666,7 @@ RTYPE-NEW-9. ToolCall nodes, headers, and bridge parts MUST include optional `na
 ToolResult nodes and headers MUST include optional `namespace: String` and `name: String` fields.
 RTYPE-NEW-10. ToolDefinition MUST include optional namespace, ordered child tools, origin_protocol, and native config fields under URPV2-S8.
 RTYPE-NEW-11. Media nodes, headers, bridge parts, and ToolResultContent media MUST carry MediaMetadata under media-transport.spec.md. ToolResult nodes and headers MUST retain typed signatures.
+RTYPE-NEW-11a. `src/urp/cache_breakpoint.rs` MUST own the `CacheBreakpoint` type, its request-decode rule, and its per-target wire rule (`urp-v2-flat-structure.spec.md` CB-1 through CB-18). Stream headers and `Part` values do not carry the field, because CB-5 limits it to the request direction and CB-17 writes wire keys to the encoder clone before adapter parts exist.
 RTYPE-NEW-12. ProviderItem headers MUST include an optional initial body. Stream helpers MUST preserve that body as canonical initial state.
 
 

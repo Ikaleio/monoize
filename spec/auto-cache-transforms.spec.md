@@ -2,25 +2,25 @@
 
 ## 0. Status
 
-- Version: `1.6.0`
-- Scope: Six request-phase `cache_*` domain transforms that optimize provider prompt caching by injecting Anthropic `cache_control` markers or request fields, OpenAI prompt-cache request fields and content breakpoints, and user identity fields.
+- Version: `1.7.0`
+- Scope: Six request-phase `cache_*` domain transforms that optimize provider prompt caching by setting typed URP cache breakpoints (`urp-v2-flat-structure.spec.md` section 4a), Anthropic top-level `cache_control`, OpenAI prompt-cache request fields, and user identity fields.
 - Dependency: URP Transform System (see `urp-transform-system.spec.md`, TF-1 through TF-7b; historical IDs map to the canonical `cache_*` IDs through TF-17).
 
 ## 1. Shared Definitions
 
-DEF-1. An **Anthropic cache breakpoint** is any `Node` in `req.input` whose `extra_body` contains a key `"cache_control"`.
+DEF-1. An **Anthropic cache breakpoint** is a present typed `cache_breakpoint` on a node in `req.input`, on a nested `ToolResultContent`, or on an entry of `req.tools`, of any `origin`, or a native `cache_control` member in the `body` of a `ProviderItem` node or `ToolResultContent::ProviderItem`.
 
-DEF-2. The **Anthropic cache breakpoint count** of a request is the total number of Anthropic cache breakpoints across all nodes in `req.input`.
+DEF-2. The **Anthropic cache breakpoint count** of a request is the total number of Anthropic cache breakpoints defined by DEF-1.
 
 DEF-3. The **Anthropic cache slot count** is the Anthropic cache breakpoint count plus one when `req.extra_body` contains top-level `"cache_control"`. The maximum is `4`. No transform in this specification SHALL increase the slot count beyond `4`.
 
 DEF-4. The **Monoize username** is the string value of `req.extra_body["__monoize_username"]`, if present and non-null. The **Monoize API key ID** is the string value of `req.extra_body["__monoize_api_key_id"]`, if present and non-null. These fields are injected by the request handler before transforms run and stripped after transforms complete. Transforms MUST NOT assume their presence.
 
-DEF-5. The canonical Anthropic cache control value is `{"type": "ephemeral"}`.
+DEF-5. The canonical Anthropic cache breakpoint is a `CacheBreakpoint` with absent `ttl`, `origin = messages`, `wire = cache_control`, and empty `extra_body`. It encodes as `{"type": "ephemeral"}` for a Messages upstream.
 
 DEF-6. An **OpenAI upstream request** is a request attempt whose selected upstream provider type is `responses` or `chat_completion`.
 
-DEF-7. An **OpenAI explicit cache breakpoint** is an `extra_body` key named `"prompt_cache_breakpoint"` on either a node in `req.input` or a nested `ToolResultContent` value in a `Node::ToolResult`.
+DEF-7. An **OpenAI explicit cache breakpoint** is a present typed `cache_breakpoint`, of any `origin`, on either a node in `req.input` or a nested `ToolResultContent` value in a `Node::ToolResult`.
 
 DEF-8. The **OpenAI explicit cache breakpoint count** is the total number of OpenAI explicit cache breakpoints defined by DEF-7.
 
@@ -30,17 +30,19 @@ DEF-10. An **OpenAI explicit-breakpoint model** is a model whose identifier cont
 
 DEF-11. The **Anthropic cache TTL config** is an object with one optional field `ttl`. Allowed values are `"5m"` and `"1h"`. The default is `"5m"`. Any other value MUST fail config validation.
 
-DEF-12. The **configured Anthropic cache control value** is the canonical value of DEF-5 when `ttl = "5m"`. It is `{"type": "ephemeral", "ttl": "1h"}` when `ttl = "1h"`. The `"5m"` value omits `ttl` because Anthropic applies a 5-minute TTL when `ttl` is absent.
+DEF-12. The **configured Anthropic cache breakpoint** is the value of DEF-5 when `ttl = "5m"`. It is that value with `ttl = "1h"` when `ttl = "1h"`. The `"5m"` value omits `ttl` because Anthropic applies a 5-minute TTL when `ttl` is absent.
 
-DEF-13. An **Anthropic cache target** is one of `System` (the target node of ACS-7), `LastToolResult` (the target node of ACTU-6), or `Request` (top-level `req.extra_body`). `req.context.anthropic_cache_markers` is the set of Anthropic cache targets whose current `cache_control` value a Monoize rule inserted during the current attempt. Decoding MUST produce an empty set. Each attempt starts from a fresh clone of the decoded request, so the set never carries over between attempts.
+DEF-13. An **Anthropic cache target** is one of `System` (the target node of ACS-7), `LastToolResult` (the target node of ACTU-6), or `Request` (top-level `req.extra_body`). `req.context.anthropic_cache_markers` is the set of Anthropic cache targets whose current marker a Monoize rule inserted during the current attempt. The marker of `System` and `LastToolResult` is the typed `cache_breakpoint` of the target node. The marker of `Request` is top-level `req.extra_body["cache_control"]`. Decoding MUST produce an empty set. Each attempt starts from a fresh clone of the decoded request, so the set never carries over between attempts.
 
-DEF-14. An existing `cache_control` on an Anthropic cache target is **Monoize-owned** when that target is in `req.context.anthropic_cache_markers`. Every other existing `cache_control` is **client-owned**.
+DEF-14. An existing marker on an Anthropic cache target is **Monoize-owned** when that target is in `req.context.anthropic_cache_markers`. Every other existing marker is **client-owned**.
 
 DEF-15. **Applying the configured marker** to an Anthropic cache target means:
-1. If the target has a client-owned `cache_control`, the transform is a no-op.
-2. If the target has a Monoize-owned `cache_control`, the transform MUST replace that value with the configured Anthropic cache control value (DEF-12). The slot count does not change, so the slot limit does not apply.
-3. If the target has no `cache_control` and the slot limit of the transform is reached, the transform is a no-op.
-4. Otherwise, the transform MUST insert the configured Anthropic cache control value and add the target to `req.context.anthropic_cache_markers`.
+1. If the target has a client-owned marker, the transform is a no-op.
+2. If the target has a Monoize-owned marker, the transform MUST replace that value with the configured Anthropic cache breakpoint (DEF-12), or for target `Request` with its JSON form. The slot count does not change, so the slot limit does not apply.
+3. If the target has no marker and the slot limit of the transform is reached, the transform is a no-op.
+4. Otherwise, the transform MUST insert the configured marker and add the target to `req.context.anthropic_cache_markers`.
+
+DEF-16. A marker set by a transform on a target whose upstream is not `messages` follows the conversion rules of `urp-v2-flat-structure.spec.md` CB-12 through CB-15. The encoder never sends `cache_control` to an `openai` Chat upstream or a Responses upstream.
 
 ## 2. `cache_user_id`
 
@@ -56,7 +58,7 @@ ACUID-3. Config schema: empty object, no configuration parameters.
 
 ACUID-4. If `req.extra_body["__monoize_username"]` is absent or not a string, the transform is a no-op.
 
-ACUID-5. If no Anthropic cache breakpoint exists anywhere in `req.input` (i.e., Anthropic cache breakpoint count = 0), the transform is a no-op.
+ACUID-5. If the Anthropic cache breakpoint count is `0`, the transform is a no-op.
 
 ### 2.3 Behavior
 
@@ -78,13 +80,13 @@ ACS-3. Config schema: the Anthropic cache TTL config (DEF-11).
 
 ### 3.2 Preconditions
 
-ACS-4. If `req.input` contains no node with `role == System` or `role == Developer`, the transform is a no-op.
+ACS-4. If `req.input` contains no `Text`, `Image`, `Audio`, or `File` node with `role == System` or `role == Developer`, the transform is a no-op.
 
 ACS-5. Otherwise, the transform MUST apply the configured marker (DEF-15) to the target node of ACS-7 as Anthropic cache target `System`. Its slot limit is reached when the Anthropic cache slot count is `>= 4`.
 
 ### 3.3 Behavior
 
-ACS-7. The **target node** is the last node in `req.input` whose role is `System` or `Developer` (searched via reverse-position scan).
+ACS-7. The **target node** is the last `Text`, `Image`, `Audio`, or `File` node in `req.input` whose role is `System` or `Developer` (searched via reverse-position scan). A `ProviderItem` with such a role is not a marker carrier and is skipped.
 
 ACS-8. A new marker increases the Anthropic cache breakpoint count by exactly `1`. A replaced marker leaves the count unchanged.
 
@@ -120,7 +122,7 @@ ACAA-1. Transform type ID: `"cache_anthropic_auto"`. Phase: `Request` only. Supp
 
 ACAA-2. If the selected upstream provider type is not `messages`, the transform is a no-op.
 
-ACAA-3. Otherwise, the transform MUST apply the configured marker (DEF-15) to top-level `req.extra_body` as Anthropic cache target `Request`. Its slot limit is reached when the Anthropic cache breakpoint count is `>= 4`.
+ACAA-3. Otherwise, the transform MUST apply the configured marker (DEF-15) to top-level `req.extra_body["cache_control"]` as Anthropic cache target `Request`. Its slot limit is reached when the Anthropic cache breakpoint count is `>= 4`.
 
 ACAA-4. The Messages encoder MUST emit top-level `req.extra_body["cache_control"]` at the top level of the upstream request JSON.
 
@@ -128,7 +130,7 @@ ACAA-6. The transform MUST NOT modify `req.input`, `req.tools`, `req.model`, or 
 
 ACAA-7. A gateway that does not accept top-level `cache_control` may reject the upstream request. Operators MUST enable this transform only on Channels that support Anthropic automatic caching.
 
-ACAA-8. Anthropic rejects a request when the automatic breakpoint target already has an explicit `cache_control` with a different TTL. Anthropic also rejects a request when a 1-hour cache entry appears after a 5-minute cache entry. The Anthropic `cache_*` transforms do not reorder markers or rewrite client-owned markers to satisfy these constraints. Operators MUST select TTL values that satisfy them (see ORD-8).
+ACAA-8. Anthropic rejects a request when the automatic breakpoint target already has an explicit marker with a different TTL. Anthropic also rejects a request when a 1-hour cache entry appears after a 5-minute cache entry. The Anthropic `cache_*` transforms do not reorder markers or rewrite client-owned markers to satisfy these constraints. Operators MUST select TTL values that satisfy them (see ORD-8).
 
 ## 5. Context Injection Lifecycle
 
@@ -234,17 +236,17 @@ ACOTU-10. A **tool-result run** is a maximal contiguous sequence of one or more 
 
 `ToolResultContent::File` with `FileSource::Text` or `FileSource::Content` and every `ToolResultContent::ProviderItem` are not eligible. A run with no eligible content block produces no candidate. If no run produces a candidate, the transform is a no-op.
 
-ACOTU-11. Let `remaining` equal the limit defined by DEF-9 minus the current OpenAI explicit cache breakpoint count. Starting with the newest candidate and proceeding towards older candidates, select each candidate whose `extra_body` does not already contain `"prompt_cache_breakpoint"` until `remaining` candidates have been selected. A candidate that already contains the key is preserved and skipped.
+ACOTU-11. Let `remaining` equal the limit defined by DEF-9 minus the current OpenAI explicit cache breakpoint count. Starting with the newest candidate and proceeding towards older candidates, select each candidate that has no typed `cache_breakpoint` until `remaining` candidates have been selected. A candidate that already has one is preserved and skipped.
 
 ### 7.4 Behavior
 
-ACOTU-12. The transform MUST insert `"prompt_cache_breakpoint": {"mode": "explicit"}` into the `extra_body` of every selected candidate content block.
+ACOTU-12. The transform MUST set `cache_breakpoint` of every selected candidate content block to a `CacheBreakpoint` with absent `ttl`, `origin = responses`, `wire = prompt_cache_breakpoint`, and empty `extra_body`.
 
 ACOTU-13. After insertion, the OpenAI explicit cache breakpoint count increases by exactly the number of selected candidates and does not exceed the limit defined by DEF-9.
 
-ACOTU-14. The transform MUST NOT set `"prompt_cache_breakpoint"` on the outer `Node::ToolResult.extra_body`.
+ACOTU-14. The transform MUST NOT set `cache_breakpoint` on the outer `Node::ToolResult`.
 
-ACOTU-15. For a Responses request, the encoder MUST emit every selected candidate as an `input_text`, `input_image`, or `input_file` block inside the corresponding `function_call_output.output` or `custom_tool_call_output.output` array. Each emitted content block MUST contain the inserted `"prompt_cache_breakpoint"` value.
+ACOTU-15. For a Responses request, the encoder MUST emit every selected candidate as an `input_text`, `input_image`, or `input_file` block inside the corresponding `function_call_output.output` or `custom_tool_call_output.output` array. Each emitted content block MUST contain `"prompt_cache_breakpoint": {"mode": "explicit"}`.
 
 ACOTU-16. The transform MUST NOT create or modify `req.extra_body["prompt_cache_options"]`. An existing request-wide mode and TTL MUST remain unchanged.
 
@@ -258,7 +260,7 @@ ORD-1. `cache_anthropic_system` SHOULD be ordered before `cache_anthropic_tool_u
 
 ORD-2. `cache_user_id` has no ordering dependency relative to the other transforms; it does not consume cache breakpoints.
 
-ORD-3. The per-attempt cross-protocol strip of nested `extra_body` (see provider setting `strip_cross_protocol_nested_extra`) MUST run BEFORE any request-phase transform (provider, global, and API-key scopes) within the same attempt. This guarantees that `cache_control` markers produced by `cache_anthropic_system` / `cache_anthropic_tool_use` on part-level `extra_body` survive into the encoded upstream request, even when the downstream and upstream protocol families differ (e.g. downstream OpenAI Responses → upstream Anthropic Messages).
+ORD-3. The per-attempt cross-protocol strip of nested `extra_body` (see provider setting `strip_cross_protocol_nested_extra`) MUST run BEFORE any request-phase transform (provider, global, and API-key scopes) within the same attempt. Typed `cache_breakpoint` values are not subject to that strip (XTRA-5), so client and transform markers both survive into the encoded upstream request when the downstream and upstream protocol families differ (e.g. downstream OpenAI Responses → upstream Anthropic Messages).
 
 ORD-4. As a consequence of ORD-3, request-phase transforms may be invoked more than once per request across multiple attempts. Each invocation operates on an independent clone of the originally-decoded URP request, so `cache_*` idempotency (INV-4) is sufficient to keep behavior deterministic; non-idempotent transforms MUST likewise produce the same result when applied once to a fresh clone, which is the only pattern exercised here.
 
@@ -272,10 +274,10 @@ ORD-8. Request-phase rules run in scope order Provider, Global, then ApiKey. By 
 
 ## 9. Invariants
 
-INV-1. No transform in this specification shall produce a request whose Anthropic cache slot count exceeds `4`.
+INV-1. No transform in this specification shall increase the Anthropic cache slot count to more than `4`. Client markers alone can exceed `4`: same-family Messages requests pass through unchanged, and converted requests are limited at encode time by `urp-v2-flat-structure.spec.md` CB-11.
 
 INV-2. No transform in this specification shall produce a request whose OpenAI explicit cache breakpoint count exceeds the limit defined by DEF-9.
 
-INV-3. No transform in this specification shall overwrite an existing `prompt_cache_breakpoint`, `metadata.user_id`, `req.user`, `prompt_cache_key`, or `prompt_cache_retention` value. No transform in this specification shall overwrite a client-owned `cache_control` value (DEF-14). Only DEF-15 step 2 may overwrite a Monoize-owned `cache_control` value.
+INV-3. No transform in this specification shall overwrite an existing typed `cache_breakpoint` except as this invariant states, nor an existing `metadata.user_id`, `req.user`, `prompt_cache_key`, or `prompt_cache_retention` value. No transform in this specification shall overwrite a client-owned marker (DEF-14). Only DEF-15 step 2 may overwrite a Monoize-owned marker.
 
 INV-4. All six transforms are idempotent: applying the same transform twice to the same request produces the same result as applying it once.

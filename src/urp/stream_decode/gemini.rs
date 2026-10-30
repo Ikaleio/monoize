@@ -8,7 +8,8 @@ use crate::handlers::usage::{
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::gemini::{
     GEMINI_CANDIDATE_EXTRA_KEY, GEMINI_CONTENT_EXTRA_KEY, candidate_extra, content_parts,
-    decode_stream_part, is_signature_carrier, parse_finish_reason, parse_usage,
+    continuation_carrier, continuation_token, decode_stream_part, is_signature_carrier,
+    parse_finish_reason, parse_usage,
     project_response_node, prompt_block_reason, prompt_refusal, response_outcome,
     restore_custom_bridge_call, selected_candidate,
 };
@@ -367,6 +368,28 @@ pub(crate) async fn stream_gemini_to_urp_events(
         }
     }
     let outcome = response_outcome(Some(&candidate_metadata), finish_reason);
+    if let Some(token) = continuation_token(&candidate_metadata) {
+        let node = continuation_carrier(token);
+        let node_index = output.len() as u32;
+        let _ = tx
+            .send(UrpStreamEvent::NodeStart {
+                node_index,
+                header: node_header_from_node(&node),
+                extra_body: HashMap::new(),
+            })
+            .await;
+        if let Some(delta) = initial_delta(&node) {
+            let _ = tx
+                .send(UrpStreamEvent::NodeDelta {
+                    node_index,
+                    delta,
+                    usage: None,
+                    extra_body: HashMap::new(),
+                })
+                .await;
+        }
+        output.push(node);
+    }
     let terminal_event = if outcome
         .as_ref()
         .is_some_and(|outcome| outcome.status == crate::urp::ResponseStatus::Failed)

@@ -209,6 +209,7 @@ impl Transform for ImageEnableOpenAiGenerationToolTransform {
             function: None,
             custom: None,
             extra_body: HashMap::new(),
+            cache_breakpoint: None,
         });
         Ok(())
     }

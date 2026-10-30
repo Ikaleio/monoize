@@ -142,6 +142,7 @@ fn native_tool_definition(tool_type: String, obj: &Map<String, Value>) -> ToolDe
         function: None,
         custom: None,
         extra_body: split_extra(obj, &["type", "name", "description"]),
+        cache_breakpoint: None,
     }
 }
 
@@ -165,6 +166,7 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                 function: Some(parse_function_definition(function_obj)?),
                 custom: None,
                 extra_body: split_extra(obj, &["type", "function", "namespace"]),
+                cache_breakpoint: None,
             });
         }
 
@@ -193,6 +195,7 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                     "namespace",
                 ],
             ),
+            cache_breakpoint: None,
         });
     }
 
@@ -213,6 +216,7 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                     function: None,
                     custom: Some(custom),
                     extra_body: split_extra(obj, &["type", "custom", "namespace"]),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -233,6 +237,7 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                 function: None,
                 custom: Some(custom),
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             });
         }
     }
@@ -377,6 +382,7 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
                 "custom",
             ],
         ),
+        cache_breakpoint: None,
     })
 }
 

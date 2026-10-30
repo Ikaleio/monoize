@@ -688,6 +688,9 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .into_iter()
         .flat_map(project_response_node)
         .collect();
+    if let Some(token) = candidate.and_then(continuation_token) {
+        output_nodes.push(continuation_carrier(token));
+    }
     let mut finish_reason = candidate
         .and_then(|candidate| candidate.get("finishReason"))
         .and_then(Value::as_str)
@@ -818,6 +821,7 @@ fn decode_tools(tools: &[Value]) -> Vec<crate::urp::ToolDefinition> {
                         extra_body: extra,
                     }),
                     extra_body: HashMap::new(),
+                    cache_breakpoint: None,
                 });
             }
         }
@@ -836,6 +840,7 @@ fn decode_tools(tools: &[Value]) -> Vec<crate::urp::ToolDefinition> {
                 function: None,
                 custom: None,
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             });
         }
     }
@@ -943,29 +948,93 @@ pub(crate) const GEMINI_ENUM_FORMAT_KEY: &str = "_monoize_gemini_enum_response";
 pub(crate) const GEMINI_SYNTHETIC_CALL_PREFIX: &str = "call_gemini_";
 /// Id prefix of Reasoning nodes that carry a Gemini-produced signature (provenance marker).
 pub(crate) const GEMINI_SIGNATURE_ID_PREFIX: &str = "rs_gemini_";
-/// Id prefix of a signature carrier bound to the adjacent text or media Part.
+/// Id prefix of a signature carrier bound to an owning text or media Part.
 pub(crate) const GEMINI_PART_SIGNATURE_ID_PREFIX: &str = "rs_gemini_part_";
+/// Id prefix of a carrier holding a whole server-tool Part (`toolCall` / `toolResponse`).
+pub(crate) const GEMINI_ITEM_CARRIER_ID_PREFIX: &str = "rs_gemini_item_";
+/// Id prefix of a carrier holding a `CONTINUATION` token.
+pub(crate) const GEMINI_CONTINUATION_ID_PREFIX: &str = "rs_gemini_cont_";
 pub(crate) const GEMINI_CONTINUATION_TOKEN_KEY: &str = "continuation_token";
 
-fn signature_carrier_id(bound: bool) -> String {
-    let prefix = if bound {
-        GEMINI_PART_SIGNATURE_ID_PREFIX
-    } else {
-        GEMINI_SIGNATURE_ID_PREFIX
-    };
+fn carrier_id(prefix: &str) -> String {
     format!("{prefix}{}", uuid::Uuid::new_v4().simple())
 }
 
-fn signature_carrier(signature: Value, bound: bool, extra_body: HashMap<String, Value>) -> Node {
+/// Owner binding for a text signature: `rs_gemini_part_t<byte length>h<xxh3 hex>r<random>`.
+/// It lets the encoder find the owning text after a downstream merged or moved Parts.
+fn text_carrier_id(text: &str) -> String {
+    format!(
+        "{GEMINI_PART_SIGNATURE_ID_PREFIX}t{}h{:016x}r{}",
+        text.len(),
+        xxhash_rust::xxh3::xxh3_64(text.as_bytes()),
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
+}
+
+/// Parses the owner binding of a text signature carrier id.
+pub(crate) fn text_carrier_owner(id: &str) -> Option<(usize, u64)> {
+    let rest = id.strip_prefix(GEMINI_PART_SIGNATURE_ID_PREFIX)?.strip_prefix('t')?;
+    let (length, rest) = rest.split_once('h')?;
+    let (hash, _) = rest.split_once('r')?;
+    Some((length.parse().ok()?, u64::from_str_radix(hash, 16).ok()?))
+}
+
+fn reasoning_carrier(id: String, payload: Value, extra_body: HashMap<String, Value>) -> Node {
     Node::Reasoning {
-        metadata: Default::default(),
-        id: Some(signature_carrier_id(bound)),
+        // Stream deltas expose only the metadata, so envelopes keep the carrier id through it.
+        metadata: crate::urp::ReasoningMetadata {
+            item_id: Some(id.clone()),
+            ..Default::default()
+        },
+        id: Some(id),
         content: None,
-        encrypted: Some(signature),
+        encrypted: Some(payload),
         summary: None,
         source: None,
         extra_body,
     }
+}
+
+/// The resumable `continuationToken` of a candidate that stopped with `CONTINUATION`.
+pub(crate) fn continuation_token(candidate: &Map<String, Value>) -> Option<&str> {
+    if candidate.get("finishReason").and_then(Value::as_str) != Some("CONTINUATION") {
+        return None;
+    }
+    candidate
+        .get("continuationToken")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+}
+
+/// Carrier for a `CONTINUATION` token, appended after the partial output.
+pub(crate) fn continuation_carrier(token: &str) -> Node {
+    reasoning_carrier(
+        carrier_id(GEMINI_CONTINUATION_ID_PREFIX),
+        json!(token),
+        HashMap::new(),
+    )
+}
+
+/// Encodes a server-tool Part as an opaque carrier payload (unpadded base64url of its JSON).
+fn item_carrier(body: &Value) -> Node {
+    use base64::Engine as _;
+    let wire = crate::urp::encode::sanitize_provider_item_wire_body(body);
+    reasoning_carrier(
+        carrier_id(GEMINI_ITEM_CARRIER_ID_PREFIX),
+        json!(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(wire.to_string())),
+        HashMap::new(),
+    )
+}
+
+/// Decodes an item carrier payload back into the original Part.
+pub(crate) fn item_carrier_part(payload: &Value) -> Option<Value> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.as_str()?)
+        .ok()?;
+    serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .filter(Value::is_object)
 }
 
 /// Renders a Gemini code-execution Part as assistant text so non-Gemini clients can see it.
@@ -1024,17 +1093,29 @@ fn render_code_execution(node: Node) -> Node {
         logprobs: None,
         citations: Vec::new(),
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }
 }
 
 /// Canonical response form for one decoded Gemini Part node.
 /// Text and media Part signatures move into a following Reasoning carrier with id prefix
-/// `rs_gemini_part_`; a signed empty text Part becomes one standalone carrier with id prefix
-/// `rs_gemini_`; a signed thought receives an `rs_gemini_` id. Function-call signatures stay
-/// on the ToolCall.
+/// `rs_gemini_part_` (text carriers also record their owner binding); a signed empty text Part
+/// becomes one standalone carrier with id prefix `rs_gemini_`; a signed thought receives an
+/// `rs_gemini_` id; server-tool Parts become `rs_gemini_item_` carriers. Function-call
+/// signatures stay on the ToolCall.
 pub(crate) fn project_response_node(node: Node) -> Vec<Node> {
+    if let Node::ProviderItem {
+        origin_protocol: ProviderProtocol::Gemini,
+        item_type,
+        body,
+        ..
+    } = &node
+        && matches!(item_type.as_str(), "toolCall" | "toolResponse")
+    {
+        return vec![item_carrier(body)];
+    }
     let mut node = render_code_execution(node);
-    let signature = match &mut node {
+    let (signature, carrier) = match &mut node {
         Node::Text {
             content,
             signature,
@@ -1046,29 +1127,37 @@ pub(crate) fn project_response_node(node: Node) -> Vec<Node> {
             if signature.is_some() && content.is_empty() && citations.is_empty() && logprobs.is_none()
             {
                 let signature = signature.take().expect("checked signature");
-                return vec![signature_carrier(
+                return vec![reasoning_carrier(
+                    carrier_id(GEMINI_SIGNATURE_ID_PREFIX),
                     signature,
-                    false,
                     std::mem::take(extra_body),
                 )];
             }
-            signature.take()
+            let signature = signature.take();
+            let carrier = signature
+                .as_ref()
+                .map(|_| text_carrier_id(content))
+                .unwrap_or_default();
+            (signature, carrier)
         }
         Node::Image { metadata, .. } | Node::Audio { metadata, .. } | Node::File { metadata, .. } => {
-            metadata.signature.take()
+            (
+                metadata.signature.take(),
+                carrier_id(GEMINI_PART_SIGNATURE_ID_PREFIX),
+            )
         }
         Node::Reasoning {
             id: id @ None,
             encrypted: Some(_),
             ..
         } => {
-            *id = Some(signature_carrier_id(false));
-            None
+            *id = Some(carrier_id(GEMINI_SIGNATURE_ID_PREFIX));
+            (None, String::new())
         }
-        _ => None,
+        _ => (None, String::new()),
     };
     match signature {
-        Some(signature) => vec![node, signature_carrier(signature, true, HashMap::new())],
+        Some(signature) => vec![node, reasoning_carrier(carrier, signature, HashMap::new())],
         None => vec![node],
     }
 }
@@ -1393,6 +1482,7 @@ fn decode_function_response(
     let mut content = vec![ToolResultContent::Text {
         text: serde_json::to_string(&response_value).unwrap_or_default(),
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }];
     if let Some(parts) = fr.get("parts") {
         for part in content_parts(parts) {
@@ -1403,7 +1493,11 @@ fn decode_function_response(
                         extra_body,
                         ..
                     } => {
-                        content.push(ToolResultContent::Text { text, extra_body });
+                        content.push(ToolResultContent::Text {
+                            text,
+                            extra_body,
+                            cache_breakpoint: None,
+                        });
                     }
                     Node::Image {
                         source,
@@ -1487,6 +1581,7 @@ fn decode_function_response(
             );
             extra
         },
+        cache_breakpoint: None,
     })
 }
 
@@ -1741,16 +1836,10 @@ pub(crate) fn response_outcome(
     let native_reason = candidate
         .and_then(|candidate| candidate.get("finishReason"))
         .and_then(Value::as_str);
-    if native_reason == Some("CONTINUATION") {
-        if let Some(token) = candidate
-            .and_then(|candidate| candidate.get("continuationToken"))
-            .and_then(Value::as_str)
-            .filter(|token| !token.is_empty())
-        {
-            outcome
-                .incomplete_extra
-                .insert(GEMINI_CONTINUATION_TOKEN_KEY.into(), json!(token));
-        }
+    if let Some(token) = candidate.and_then(continuation_token) {
+        outcome
+            .incomplete_extra
+            .insert(GEMINI_CONTINUATION_TOKEN_KEY.into(), json!(token));
     }
     if finish == Some(FinishReason::Other) {
         outcome.error = Some(crate::urp::outcome::ResponseError {

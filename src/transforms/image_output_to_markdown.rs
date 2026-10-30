@@ -161,6 +161,7 @@ fn append_images_as_markdown_nodes(output: &mut Vec<crate::urp::Node>, config: &
                 content: pending_appended,
                 phase: None,
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             });
         }
     }

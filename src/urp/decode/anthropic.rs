@@ -337,6 +337,7 @@ fn text_node_with_phase(
         content: content.into(),
         phase: phase.map(str::to_string),
         extra_body,
+        cache_breakpoint: None,
     }
 }
 
@@ -368,6 +369,12 @@ fn decode_stop_sequences(value: Option<&Value>) -> Result<Option<StopControl>, S
 }
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
+    let mut request = decode_native_request(value)?;
+    crate::urp::cache_breakpoint::decode_request_markers(&mut request, ProviderProtocol::Messages);
+    Ok(request)
+}
+
+fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "messages request must be object".to_string())?;
@@ -638,6 +645,7 @@ pub(crate) fn decode_content_block(
             arguments: serde_json::to_string(obj.get("input").unwrap_or(&Value::Null))
                 .unwrap_or_else(|_| "{}".into()),
             extra_body: split_extra(obj, &["type", "id", "name", "input", "toolset_name"]),
+            cache_breakpoint: None,
         }),
         "tool_result" => Some(Node::ToolResult {
             signature: None,
@@ -662,6 +670,7 @@ pub(crate) fn decode_content_block(
                 obj,
                 &["type", "tool_use_id", "is_error", "content", "toolset_name"],
             ),
+            cache_breakpoint: None,
         }),
         _ => Some(provider_item_from_messages_block(obj, role)),
     };
@@ -759,6 +768,7 @@ fn decode_tool_result_content_block(
             content.push(ToolResultContent::Text {
                 text,
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             });
         }
         return Ok(());
@@ -769,6 +779,7 @@ fn decode_tool_result_content_block(
                 content.push(ToolResultContent::Text {
                     text: text.to_string(),
                     extra_body: split_extra(obj, &["type", "text"]),
+                    cache_breakpoint: None,
                 });
             }
         }

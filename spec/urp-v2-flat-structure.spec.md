@@ -168,6 +168,7 @@ Node =
       phase?: String,
       signature?: JsonValue,
       citations: Vec<Citation>,
+      cache_breakpoint?: CacheBreakpoint,
       ...extra_body
     }
   | Image {
@@ -219,6 +220,7 @@ Node =
       arguments: String,
       namespace?: String,
       signature?: JsonValue,
+      cache_breakpoint?: CacheBreakpoint,
       ...extra_body
     }
   | ProviderItem {
@@ -240,6 +242,7 @@ Node =
       name?: String,
       is_error: bool,
       content: Vec<ToolResultContent>,
+      cache_breakpoint?: CacheBreakpoint,
       ...extra_body
     }
   | NextDownstreamEnvelopeExtra {
@@ -258,7 +261,7 @@ URPV2-12. `ToolResultContent` MUST be the discriminated union below.
 
 ```text
 ToolResultContent =
-  | Text { type: "text", text: String, ...extra_body }
+  | Text { type: "text", text: String, cache_breakpoint?: CacheBreakpoint, ...extra_body }
   | Image { type: "image", source: ImageSource, ...extra_body }
   | File { type: "file", source: FileSource, ...extra_body }
   | ProviderItem {
@@ -300,7 +303,7 @@ URPV2-13b. File references MUST satisfy the protocol and resource-scope checks i
 
 URPV2-13c. File provenance MUST use typed MediaResource, not `_monoize_file_id_origin`. Cross-family stripping MUST preserve typed provenance. Native wire objects MUST NOT expose it.
 
-URPV2-13d. MediaMetadata MUST own optional filename, detail, document_title, document_context, document_citations, and resource fields. ToolResultContent media MUST carry this metadata.
+URPV2-13d. MediaMetadata MUST own optional filename, detail, document_title, document_context, document_citations, resource, and cache_breakpoint fields. ToolResultContent media MUST carry this metadata.
 URPV2-13e. ToolResult nodes and headers MUST carry an optional typed signature. File transport MUST satisfy media-transport.spec.md.
 
 ### 3.1 Ordinary node invariants
@@ -418,6 +421,8 @@ XTRA-5. Immediately before an encode step into a different protocol family, in t
 
 A decoder-created or transform-created member reserved by XTRA-10 is internal semantic provenance, not nested wire passthrough. The runtime MUST retain such a member through XTRA-5 until the target adapter consumes or discards it. The target adapter MUST NOT emit the reserved member on the wire. This retained provenance includes `_monoize_chat_reasoning_detail`, which is required to apply MSG-6 to adjacent Chat reasoning-detail nodes after a Chat-to-Messages family transition.
 
+XTRA-5 does not remove a typed `cache_breakpoint`. Section 4a governs the members of that value on a family transition.
+
 XTRA-5a. Response direction. An upstream response is cross-family when its provider type is `responses`, `chat_completion`, `messages`, or `gemini` and the downstream protocol is not that same family (`/v1/responses`↔`responses`, `/v1/chat/completions`↔`chat_completion`, `/v1/messages`↔`messages`). `gemini` has no downstream endpoint, so a `gemini` upstream is always cross-family. Image and media provider types (`openai_image`, `openrouter_image`, `replicate`) and the Image API do not take part in this rule. For a cross-family response, on stream and non-stream paths, after decoding and before any response-phase transform, the runtime MUST:
 
 1. apply XTRA-5 items 1 through 4 to every output node, and drop every `NodeStart` and `NodeDone` stream event whose payload is a `NextDownstreamEnvelopeExtra`;
@@ -438,7 +443,70 @@ XTRA-8. The same-family passthrough rules in XTRA-4 through XTRA-7 do not author
 
 XTRA-9. Before request-phase transforms run for one upstream attempt, the runtime MUST remove every downstream-origin `ProviderItem` whose `origin_protocol` differs from the selected upstream provider protocol. Later transforms MAY insert a `ProviderItem` only when they set `origin_protocol` to the intended target provider protocol.
 
+XTRA-9a. A wire key that section 4a assigns to the typed field is not unknown. XTRA-2 and XTRA-7 do not apply to it, except as CB-8 states for same-family replay.
+
 XTRA-10. A key whose name starts with `_monoize_` is internal metadata, not wire passthrough. A wire decoder MUST treat that prefix as reserved and MUST NOT copy an incoming `_monoize_` member into an `extra_body`; only decoder or transform logic MAY create internal metadata after parsing semantic wire fields. An envelope reconstruction helper or protocol encoder MUST NOT emit such a key as a provider request field. A same-family encoder MAY consume an internal key to reconstruct the native field represented by its value, then MUST discard the internal key. For Chat `reasoning_details`, `_monoize_chat_reasoning_detail` MUST contain only shape and unknown entry metadata. It MUST NOT contain text, summary, encrypted data, id, or format copies. The encoder MUST derive these values from the current typed node. An opaque same-protocol `ProviderItem.body` or `ProviderControl.data` MUST be cloned at its wire boundary. The clone MUST recursively remove object members whose keys start with `_monoize_`, including members below arrays, while preserving every other member. This sanitization MUST NOT mutate the canonical URP body or control data and MUST NOT apply to arbitrary typed or user payloads.
+
+## 4a. Canonical cache breakpoints
+
+Sources checked on 2026-10-31: Anthropic [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), OpenAI [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching) and the `openai-python` request types for Chat and Responses content parts, OpenRouter [prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching) and its [Chat create schema](https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion).
+
+CB-1. A **cache breakpoint** marks the end of a reusable prompt prefix. URP v2 MUST represent it as:
+
+```text
+CacheBreakpoint {
+  ttl?: String,
+  origin: ProviderProtocol,
+  wire: "cache_control" | "prompt_cache_breakpoint",
+  extra_body?: Map<String, JsonValue>
+}
+```
+
+`ttl` is the requested lifetime string, without interpretation. `origin` is the protocol family that authored the marker. `wire` is the native marker key. `extra_body` holds unknown members of the native marker object, in deterministic key order. `origin` and `wire` are provenance. They MUST NOT appear on any upstream wire object.
+
+CB-2. The only carriers of `cache_breakpoint` are `Text`, `ToolCall`, and `ToolResult` nodes, `ToolResultContent::Text`, `MediaMetadata` (which covers `Image`, `Audio`, and `File` nodes and `ToolResultContent` media), and `ToolDefinition`. `Reasoning` and `Refusal` nodes are not carriers: Anthropic documents that thinking blocks cannot take `cache_control` directly, and no protocol documents a marker on a refusal. A `ProviderItem` keeps a native marker inside its opaque `body` and has no typed marker. A `NextDownstreamEnvelopeExtra` is not a carrier.
+
+CB-3. Request decode. For `decode_request` of Messages, Chat, and Responses, the decoder MUST remove both keys `cache_control` and `prompt_cache_breakpoint` from the `extra_body` of every CB-2 carrier and MUST store the marker in `cache_breakpoint`. For a `ToolDefinition`, the decoder MUST also take the key from `CustomToolDefinition.extra_body` and from an object `config`, and MUST apply this rule to each child in `tools`. After decode, no carrier `extra_body` and no such `config` contains either key.
+
+CB-4. Decoded value. If both keys are present on one carrier, `cache_control` wins and the other value is discarded. A value that is not a JSON object carries no marker and MUST be discarded. For `cache_control`, a member `type` equal to `"ephemeral"` is implied and not stored. For `prompt_cache_breakpoint`, a member `mode` equal to `"explicit"` is implied and not stored. A string member `ttl` becomes `ttl`. Every other member, including a `type` or `mode` with another value, goes to `extra_body`. `origin` is the decoded protocol family and `wire` is the source key.
+
+CB-5. Direction. CB-3 applies to the request direction only. Provider APIs document no marker on response blocks, so a response decoder treats these keys as unknown fields under XTRA-2 and XTRA-5a.
+
+CB-6. The Gemini decoder and encoder have no inline marker and MUST NOT read or emit `cache_breakpoint`. The Image and Replicate encoders MUST ignore it.
+
+CB-7. Top-level automatic caching is a request control, not a carrier. A top-level `cache_control` remains in request `extra_body` under XTRA-4 and XF6a.
+
+CB-8. Same-family replay. A marker **replays** when `origin` equals the target family and `wire` is the key that the target rules below select for that origin. A replayed marker MUST be emitted on the owner wire object with its `ttl` and all of `extra_body` unchanged, with `"type": "ephemeral"` or `"mode": "explicit"` restored unless `extra_body` holds that member. A replayed marker on a Messages upstream is not validated, moved, or dropped; the upstream decides.
+
+CB-9. Conversion. A marker that does not replay is **converted**. A converted marker MUST NOT emit `extra_body`. It MUST emit `ttl` only if the target accepts that value, and otherwise MUST omit `ttl`, so the target default applies. TTLs are never translated between families. Accepted values: `cache_control` accepts `5m` and `1h`. `prompt_cache_breakpoint` on Responses accepts `30m` and `12h`. `prompt_cache_breakpoint` on an `openai` Chat upstream accepts `30m`, because OpenAI documents `12h` as a Responses option.
+
+CB-10. Messages target. Every CB-2 carrier maps to `cache_control` on the corresponding block or tool object. `wire = "cache_control"` with `origin = messages` replays. A converted `Text` marker with empty `content` MUST be dropped, because Anthropic rejects a marker on an empty text block.
+
+CB-11. Messages limit. If the request holds at least one marker whose `origin` is not `messages`, the encoder MUST keep at most `L` markers, where `L = 4 - a - p`, `a` is 1 when top-level `cache_control` is present and 0 otherwise, `p` is the number of `ProviderItem` bodies (node or `ToolResultContent`) holding a native `cache_control`, and `L` is at least 0. The encoder MUST keep the last `L` markers of the render order, where tools come first in array order, then input nodes in order, and the nested content of a `ToolResult` comes before its own marker. All earlier markers MUST be dropped. If every marker has `origin = messages`, the encoder MUST NOT enforce this limit.
+
+CB-12. Chat target. Let `D` be the PC0 dialect of the attempt.
+
+| `D` | Marker | Result |
+| --- | --- | --- |
+| `deepseek` | any | omit; DeepSeek caches automatically |
+| `openai` | `origin = chat_completion`, `wire = prompt_cache_breakpoint` | replay |
+| `openai` | other | `prompt_cache_breakpoint` when CB-14 passes, else omit |
+| `openrouter`, `vercel`, `generic` | `origin = chat_completion` | replay |
+| `openrouter`, `vercel`, `generic` | other | `cache_control` |
+
+A converted marker exists only on a content part: `Text`, media nodes, and `ToolResultContent::Text`. A converted marker on a `ToolCall` MUST be omitted, because a Chat `tool_calls` entry has no marker. A marker on a `ToolDefinition` maps to `cache_control` on the tool descriptor for `openrouter`, `vercel`, and `generic`, which OpenRouter documents, and MUST be omitted for `openai`.
+
+CB-13. Responses target. `origin = responses` with `wire = prompt_cache_breakpoint` replays. Any other marker is converted to `prompt_cache_breakpoint` when CB-14 passes and its carrier is a non-assistant `Text` node, a non-assistant media node, or a `ToolResultContent` text or media entry; these encode to `input_text`, `input_image`, and `input_file`. It MUST be omitted on an assistant node (`output_text` has no marker), on a `ToolCall`, and on a `ToolDefinition`. A `system` or `developer` `Text` node that carries an emitted marker MUST encode as an input message, because top-level `instructions` cannot hold a breakpoint.
+
+CB-14. Conversion toward OpenAI requires an OpenAI explicit-breakpoint model as defined by `auto-cache-transforms.spec.md` DEF-10, evaluated on the upstream model. OpenAI lists explicit breakpoints as unsupported before GPT-5.6. A model identifier that does not match DEF-10 yields no marker, even when the upstream is a deployment alias for a supported model.
+
+CB-15. `ToolResult` marker toward Chat or Responses. These protocols have no marker on the result envelope. A converted marker on a `ToolResult` MUST move to the last eligible `ToolResultContent` entry: a text entry for Chat, and a text, image, or file entry for Responses. If no such entry exists, or that entry already has a marker, the marker is dropped, because the prefix already ends there or nothing can carry it. Same-family replay stays on the envelope.
+
+CB-16. Document expansion. When `media-transport.spec.md` expands a `File` with a `Text` or `Content` source into several nodes or entries, the marker of that `File` MUST move to the last expanded node or entry. Native `cache_control` and `prompt_cache_breakpoint` members inside that document source MUST be discarded on expansion.
+
+CB-17. A CB-8 through CB-15 result is written only to the adapter-local clone that the encoder owns. Canonical URP values MUST NOT change, and URPV2-S16 applies to that clone.
+
+CB-18. No path may send `prompt_cache_breakpoint` on a block or tool object to a Messages upstream, and no path may send `cache_control` to an `openai` Chat upstream or a Responses upstream, when the key came from a CB-2 carrier.
 
 ## 5. Canonical flat streaming events
 

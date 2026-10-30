@@ -2608,6 +2608,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             name,
             arguments,
             extra_body,
+            cache_breakpoint: _,
         } => {
             let mut obj = Map::new();
             obj.insert(
@@ -2673,6 +2674,7 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             is_error,
             content,
             extra_body,
+            cache_breakpoint: _,
         } => {
             let mut obj = Map::new();
             merge_json_extra(&mut obj, extra_body);
