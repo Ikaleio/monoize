@@ -635,18 +635,26 @@ RC2. Monoize MUST accept reasoning effort hints from any of the following downst
 
 - Chat Completions style: top-level `reasoning_effort`.
 - Responses style: top-level `reasoning.effort`.
-- Messages style, legacy: top-level `thinking` object with `type="enabled"`. For a `responses` upstream its `budget_tokens` maps to effort under RC4g.
+- Messages style, legacy: top-level `thinking` object with `type="enabled"`. For a `responses` upstream its `budget_tokens` maps to effort under RC4h.
 - Messages style, adaptive: top-level `thinking` object with `type="adaptive"` combined with `output_config.effort`.
 
 RC3. If multiple sources in RC2 are present, Monoize MUST use this precedence:
 
-1. `reasoning_effort`
-2. `reasoning.effort`
+1. `reasoning.effort`
+2. `reasoning_effort`
 3. `thinking`
+
+The nested value wins because the only Chat dialect that documents both fields (Vercel AI Gateway) states "If both are present, the nested value takes precedence".
 
 RC4. Effort `none` requests disabled reasoning. An absent effort permits the upstream default. Monoize MUST NOT replace explicit `none` with an absent effort. When the selected upstream provider type is:
 
-- `chat_completion`: Monoize MUST send every present normalized effort, including `none`, as `reasoning_effort`, except for the native reasoning-object case below. If the typed request preserves an explicit native `reasoning` object, that object is the single reasoning-control container: Monoize MUST preserve its non-`effort` members, MUST replace a colliding `reasoning.effort` with the normalized typed effort, and MUST omit the top-level `reasoning_effort` shorthand. OpenRouter `reasoning.effort` and `reasoning.max_tokens` are mutually exclusive. Therefore, when normalized typed effort is inserted into a native `reasoning` object, Monoize MUST remove a colliding `max_tokens`; when typed effort is absent, Monoize MAY preserve native `reasoning.max_tokens`. Monoize MUST NOT emit both equivalent effort controls in one request.
+- `chat_completion`: the encoding depends on the Chat dialect `D` resolved under PC0. Let `E` be the normalized typed effort, where a typed disabled mode yields `E = none`. Let `B` be typed `budget_tokens`, `S` typed `summary`, and `M` typed `mode`.
+  - Native-object case: the typed request preserves an explicit native Chat `reasoning` object (Chat request origin) and `D` is `openrouter`, `vercel`, or `generic`. That object is the single reasoning-control container. Monoize MUST preserve its non-control members, MUST write `effort = E` when `E` is present, MUST write `max_tokens = B` only when `E` is absent and `B` is present, MUST write `summary = S` when `S` is present, MUST write `enabled = (M != "disabled")` when `M` is present, and MUST omit the top-level `reasoning_effort` shorthand.
+  - Otherwise, when `E` is present, Monoize MUST send `reasoning_effort = E`, including `none`, and MUST NOT send a `reasoning` object.
+  - Otherwise, when `D` is `openrouter` or `vercel` and `E` is absent: if `B` is present, Monoize MUST send `reasoning: { "max_tokens": B }`; else if `M` is present and not `disabled`, Monoize MUST send `reasoning: { "enabled": true }`.
+  - When `D` is `openai`, `deepseek`, or `generic` and no native object exists, `S`, `M`, and `B` have no Chat wire encoding and MUST be omitted. When `D` is `openai` or `deepseek`, a preserved native `reasoning` object MUST be omitted; `E` still uses `reasoning_effort`.
+  - When the typed request preserves an explicit native Chat `thinking` object, `M` and `B` encode into that object under DC5c and MUST NOT also encode into `reasoning`.
+  - Monoize MUST NOT emit `reasoning_effort` and `reasoning.effort` together, and MUST NOT emit an effort control together with `reasoning.max_tokens`, because OpenRouter and Vercel document them as mutually exclusive.
 - `responses`: Monoize MUST send every present normalized effort, including `none`, as `reasoning: { "effort": <level> }`. Monoize MUST preserve other reasoning members such as `summary`.
 - `messages`: Monoize MUST select the encoding based on the upstream model and any explicit downstream Messages controls:
   - If effort is `none` and no explicit Messages controls exist (RC4d), the generated thinking object depends on the RC4d.1 model class. For a model that rejects `thinking.type = "disabled"`, Monoize MUST generate `thinking: { "type": "between_tools" }` when the model is Sonnet 5.5, and MUST omit `thinking` for every other such model. For every other model, Monoize MUST generate `thinking: { "type": "disabled" }`. Monoize MUST NOT generate `budget_tokens`, `display`, or `output_config.effort` for effort `none`.
@@ -708,7 +716,7 @@ A present typed `max_output_tokens` MUST be sent unchanged.
 
 RC4a. For upstream provider type `responses` with a Responses downstream, Monoize MUST preserve an explicit typed downstream `reasoning.summary` value byte-for-byte. If the typed downstream request does not carry `reasoning.summary`, Monoize MUST omit that key. Monoize MUST NOT synthesize `reasoning.summary = "detailed"`, `reasoning.summary = "auto"`, or any other summary setting for that route, because Responses reasoning summaries require explicit opt-in.
 
-RC4g. For a Messages downstream and upstream provider type `responses`, Monoize MUST map the explicit `thinking` object before encoding. Let `mode = thinking.type`.
+RC4h. For a Messages downstream and upstream provider type `responses`, Monoize MUST map the explicit `thinking` object before encoding. Let `mode = thinking.type`.
 
 - If `mode` is `enabled` or `adaptive` and normalized effort is absent and `budget_tokens = B` is present, effort MUST be `low` when `B <= 1024`, `medium` when `1024 < B <= 4096`, `high` when `4096 < B <= 16384`, and `xhigh` when `B > 16384`.
 - A present `output_config.effort` MUST pass through as effort and takes precedence over `budget_tokens`.
@@ -716,7 +724,7 @@ RC4g. For a Messages downstream and upstream provider type `responses`, Monoize 
 - `mode = "disabled"` MUST encode `reasoning.effort = "none"` and no summary.
 - `budget_tokens`, `display`, and `thinking.type` MUST NOT appear on the upstream Responses request.
 
-RC4e. When replaying an assistant-history message to an upstream Chat Completions provider, a non-empty `reasoning_details` array is authoritative. Monoize MUST preserve its entries and order, and MUST NOT synthesize scalar `reasoning` or `reasoning_content` aliases from those entries. This rule does not prohibit a downstream Chat response from exposing the simple `reasoning` alias allowed by ENC8.
+RC4e. Assistant-history reasoning fields sent to an upstream Chat Completions provider follow PC8a for the resolved dialect. For the `openrouter`, `vercel`, and `generic` dialects, details decoded from a Chat `reasoning_details` array are authoritative: Monoize MUST preserve their entries and order. A scalar alias derived from such same-Chat details MUST NOT be added. This rule does not prohibit a downstream Chat response from exposing the simple `reasoning` alias allowed by ENC8.
 
 RC5. If Monoize generated provider-native reasoning-control fields under RC4, Monoize MUST NOT forward conflicting source fields from passthrough state to the same upstream request.
 
@@ -1049,6 +1057,24 @@ PR8a. Monoize MUST decode Responses `custom_tool_call` items into `ToolCall(tool
 
 PC1. Monoize MUST call the upstream path `POST /v1/chat/completions`.
 
+PC0. Chat dialect resolution. For every upstream attempt whose provider type is `chat_completion`, Monoize MUST resolve exactly one Chat dialect from the Channel `base_url` host `H` (lowercased, without port) and the upstream model identifier `m` (lowercased), applying the first matching row:
+
+1. `openai`: `H = "api.openai.com"` or `H` ends with `.openai.azure.com`.
+2. `openrouter`: `H = "openrouter.ai"` or `H` ends with `.openrouter.ai`.
+3. `vercel`: `H = "ai-gateway.vercel.sh"`.
+4. `deepseek`: `H = "api.deepseek.com"` or `m` contains `deepseek`.
+5. `generic`: every other attempt, including an unparseable `base_url`. `generic` is the OpenRouter-compatible union behavior.
+
+Host rows precede the model row, so a DeepSeek model served by OpenRouter or Vercel uses that gateway's dialect. The dialect is attempt-local: a retry on another Channel resolves again.
+
+PC0a. Maximum output-token field. When typed `max_output_tokens` is present, the Chat encoder MUST emit exactly one of `max_tokens` and `max_completion_tokens`:
+
+- `deepseek`: `max_tokens`.
+- Otherwise, when the request was decoded from a downstream Chat request, the field name the client used. If the client sent both, `max_completion_tokens` is the client field.
+- Otherwise `openai` and `generic` use `max_completion_tokens`; `openrouter` and `vercel` use `max_tokens`.
+
+PC0b. Vercel `providerOptions`. The default Chat whitelist (XF6a) contains `providerOptions`. The Chat encoder MUST emit a top-level `providerOptions` value only for the `vercel` dialect and MUST omit it for every other dialect.
+
 PC2. Monoize MUST convert `UrpRequestV2.input` nodes into chat `messages[]` as follows:
 
 - ordinary nodes become chat messages or message content in source order using encoder-owned grouping;
@@ -1123,6 +1149,10 @@ PC2.9. Deprecated Chat function-call lifecycle preservation:
 - A Chat stream decoder MUST normalize `delta.function_call` and terminal `message.function_call` through the same marked `ToolCall` lifecycle. A Chat stream encoder MUST emit marked call chunks under `delta.function_call`, preserve argument-fragment order, and use terminal `finish_reason = "function_call"`.
 - Legacy markers are internal metadata under `XTRA-10`. They MUST remain available until target encoding and MUST NOT appear on the wire.
 
+PC2.10. Chat tool-result content encode. For a `ToolResult` encoded as a Chat `role = "tool"` or `role = "function"` message, let `T` be the ordered text entries of its content. If `T` has at most one entry, `content` MUST be that entry's text, or `""` when `T` is empty. If `T` has two or more entries, `content` MUST be an array of `{ "type": "text", "text": <entry> }` objects in order; Monoize MUST NOT join the entries. If `ToolResult.is_error = true`, Monoize MUST prefix the first text entry with `"Error: "`, or use `"Error"` when `T` is empty, because Chat tool messages have no error flag.
+
+PC2.11. An assistant `Text` node with empty `content`, no citations, and no node-local wire extra carries no Chat wire content. The Chat request encoder MUST drop it before message grouping, so it neither emits an assistant message nor splits the surrounding assistant turn into two messages.
+
 PC3. Tool descriptor normalization:
 
 - For `type=chat_completion` upstreams, Monoize MUST ensure upstream `tools[]` contains only Chat-valid tool descriptors.
@@ -1131,6 +1161,10 @@ PC3. Tool descriptor normalization:
 - For Chat custom tools, unknown fields owned by the nested `custom` object MUST remain inside that nested `custom` object after re-encoding.
 - For Chat custom tools, unknown fields owned by the top-level tool descriptor MAY be emitted only at the top-level Chat tool descriptor layer.
 - A URP tool with `type` other than `"function"` or `"custom"` MUST NOT be emitted as a raw Chat tool descriptor unless a later rule explicitly defines a Chat-valid encoding for that tool type.
+- Same-Chat exception: a Chat request decoder MUST set `origin_protocol = chat_completion` on a tool whose `type` starts with `openrouter:` (OpenRouter server tools). The Chat encoder MUST replay such a tool unchanged: `type`, `name`, `description`, and every other descriptor member.
+- Web-search built-ins: a tool whose `type` is `web_search` or `web_search_preview` (Responses), or matches `web_search_YYYYMMDD` (Messages), reaches the Chat encoder (it passes the T1g filter for Chat targets). On the `openrouter` dialect, the encoder MUST emit `{ "type": "openrouter:web_search" }`. On every other dialect, the encoder MUST drop it. This is a documented degradation, not an error.
+- After dropping, the encoder MUST NOT emit `tools: []`. If no tool remains, it MUST omit `tools`, `tool_choice`, and `parallel_tool_calls`. If a specific `tool_choice` names a dropped tool, the encoder MUST emit `tool_choice = "auto"` instead.
+- Any other tool type that reaches the Chat encoder MUST fail the attempt with HTTP 400 code `unsupported_tool` before dispatch.
 
 PC4. Monoize MUST convert chat-completions non-stream output into `UrpResponseV2` output nodes.
 
@@ -1155,7 +1189,7 @@ PC7a. For downstream `POST /v1/chat/completions` translated from upstream `type=
 - If upstream already emitted at least one terminal chunk with non-null `choices[0].finish_reason`, Monoize MUST NOT append an additional synthetic terminal chat chunk with a different `finish_reason`.
 - Monoize MUST preserve upstream terminal finish semantics, for example `tool_calls`, so downstream clients can continue tool loops correctly.
 
-PC7b. If an upstream `type=chat_completion` stream emits any tool-call presence, either tool-call header chunks or argument deltas via `choices[0].delta.tool_calls[]`, in a turn, but emits terminal `choices[0].finish_reason = "stop"`, Monoize MUST normalize downstream terminal finish reason to `tool_calls` for `POST /v1/chat/completions`.
+PC7b. Both Chat response decoders (non-stream and stream) MUST normalize the finish reason: if the decoded assistant output contains at least one `ToolCall` node (including a legacy `function_call`) and the native `finish_reason` is `stop`, the decoded `UrpResponseV2.finish_reason` MUST be `tool_calls`. Every downstream protocol therefore observes tool-call termination (Chat `tool_calls`, Messages `stop_reason = "tool_use"`, Responses completed with function calls). Other native values MUST NOT be rewritten.
 
 PC7c. For downstream `POST /v1/chat/completions` translated from upstream `type=chat_completion` streaming, every non-terminal downstream chunk that carries assistant deltas, including `content`, `reasoning_details`, and `tool_calls`, MUST emit `choices[0].finish_reason = null`.
 
@@ -1180,16 +1214,27 @@ PC8. Reasoning, non-stream and stream:
 
 - Monoize MUST parse upstream Chat Completions reasoning from `choices[0].message.reasoning_details[]` and `choices[0].message.reasoning`.
 - For `reasoning_details[]`, Monoize MUST interpret entries as follows:
-  - `type="reasoning.text"`: `text` contributes to `Reasoning.content`.
+  - `type="reasoning.text"`: `text` contributes to `Reasoning.content`; a non-empty `signature` (the Anthropic thinking signature) MUST decode into typed `Reasoning.encrypted` of the same node and MUST NOT remain in node-local passthrough.
   - `type="reasoning.encrypted"`: `data` contributes to `Reasoning.encrypted`.
   - `type="reasoning.summary"`: `summary` contributes to `Reasoning.summary` and to the simple `reasoning` alias when no `reasoning.text` content is available.
   - `type="reasoning.server_tool_call"`: the complete native entry is preserved for same-Chat replay; it does not become a local tool call.
-- Every detail is one ordered URP `Reasoning` node. The decoder MUST preserve repeated detail types, `id`, `format`, `index`, `reasoning.text.signature`, server-tool fields, and unknown entry-local fields. It MUST NOT merge or deduplicate details.
-- For streaming, Monoize MUST apply the same mapping to `choices[0].delta.reasoning_details[]` deltas in arrival order.
+- Every detail is one ordered URP `Reasoning` node. The decoder MUST preserve repeated detail types, `id`, `format`, `index`, server-tool fields, and unknown entry-local fields. It MUST NOT merge or deduplicate details.
+- A Chat encoder MUST reconstruct a `reasoning.text` detail whose node carries `encrypted` as one `{ "type": "reasoning.text", "text": <content or "">, "signature": <encrypted> }` entry, not as a separate `reasoning.encrypted` entry.
+- When `reasoning_details` is a non-empty array, the scalar `reasoning` field is a view of those details and MUST be ignored (CHAT-4b). A scalar `reasoning_content` follows CHAT-4b.
+- For streaming, Monoize MUST apply the same mapping to `choices[0].delta.reasoning_details[]` deltas in arrival order. A stream reasoning node produced from scalar `delta.reasoning_content` MUST carry the internal DeepSeek surface marker `_monoize_chat_reasoning_surface = "reasoning_content"` on its `NodeStart`, every `NodeDelta`, `NodeDone.node`, and `ResponseDone.output` entry, exactly as the non-stream decoder marks a scalar `message.reasoning_content` node. A node produced from scalar `delta.reasoning` carries the marker value `reasoning`.
+- A stream `delta.content` equal to `""` MUST NOT start a `Text` node and MUST NOT emit a text delta. OpenAI and DeepSeek send `{"role":"assistant","content":""}` as the first chunk; a node started from it would precede reasoning and reorder Responses and Messages output.
 - A `reasoning.encrypted` detail is an opaque ordered entry. A terminal `choices[0].message.reasoning_details[]` snapshot MAY replace the matching canonical entry by `type`, `id`, `index`, `tool_call_id`, and `format`. Monoize MUST replace the complete `data` value atomically. It MUST NOT append a derived string suffix to an encrypted detail. Text and summary entries retain the terminal suffix behavior defined by PC7f.
 - Monoize MUST store parsed reasoning as URP v2 `Reasoning` nodes.
 - `_monoize_chat_reasoning_detail`, `_monoize_chat_reasoning_surface`, and every other `_monoize_` key are internal metadata. They MUST NOT appear as fields of an upstream `messages[]` object. A same-Chat encoder MUST consume `_monoize_chat_reasoning_detail` to reconstruct `reasoning_details[]` from current typed fields and unknown entry metadata, then omit the wrapper key.
-- Backward compatibility: if `reasoning` and `reasoning_details` are absent, Monoize MUST still accept legacy `reasoning_content` and `reasoning_opaque` from upstream chat outputs.
+- Backward compatibility: if `reasoning` and `reasoning_details` are absent, Monoize MUST still accept legacy `reasoning_content` and `reasoning_opaque` from upstream chat outputs. A node decoded from scalar `reasoning_opaque` (GitHub Copilot) MUST carry the surface marker value `reasoning_opaque`; a same-Chat encoder MUST replay its `encrypted` value as scalar `reasoning_opaque` instead of a `reasoning.encrypted` detail.
+
+PC8a. Assistant-history reasoning fields by dialect. For every assistant message of an upstream Chat request, let `R` be the ordered `Reasoning` nodes grouped into that message. A node's plain text is its non-empty `content`, otherwise its non-empty `summary`.
+
+- `openai`: the message MUST NOT carry `reasoning`, `reasoning_details`, `reasoning_content`, or `reasoning_opaque`. OpenAI Chat defines none of them on assistant messages.
+- `deepseek`: the message MUST NOT carry `reasoning`, `reasoning_details`, or `reasoning_opaque`. It MUST carry `reasoning_content` equal to the in-order concatenation of the plain text of all nodes in `R` when that concatenation is non-empty and either the message has at least one tool call or some node in `R` carries the `reasoning_content` surface marker. This applies to every node origin, including Messages thinking and Responses reasoning, because DeepSeek thinking-mode tool loops reject a tool-call turn whose `reasoning_content` is missing. A no-tool turn without the marker omits it, because legacy DeepSeek reasoner models reject `reasoning_content` in input.
+- `openrouter`, `vercel`, `generic`: a node carrying the `reasoning_content` surface marker contributes to `reasoning_content` and to no other field; a node carrying the `reasoning_opaque` marker contributes to `reasoning_opaque`; a node decoded from Chat `reasoning_details` reconstructs its native detail (PC8); every other node encodes as details under DC5 rules (a node whose summary carries `summary_as_thinking` is raw thinking and encodes as `reasoning.text`). The message also carries scalar `reasoning` equal to the concatenated plain text of the non-native nodes, when non-empty, as OpenRouter and Vercel return that alias with their details. A `chat_content` presentation option contributes to `reasoning_content` in addition.
+
+PC9a. One Chat usage parser. The non-stream response decoder and the stream decoder MUST parse a Chat `usage` object with the same function. It accepts `prompt_tokens` or `input_tokens`, `completion_tokens` or `output_tokens`, unsigned integers or decimal strings, the XF5d aliases, and `prompt_tokens_details` or `input_tokens_details`; cache creation is the maximum of `cache_write_tokens` and `cache_creation_tokens`. A stream chunk produces usage only when its `usage` member is an object. The parser MUST remove OpenRouter `cost`, `cost_details`, and `is_byok` from usage passthrough, because they disclose the gateway's wholesale upstream cost.
 
 PC9. For an upstream `type=chat_completion` request with `stream=true`, the Chat Completions encoder MUST set `stream_options.include_usage = true`. It MUST overwrite an explicit `false` value. If `stream_options` is not an object, the encoder MUST replace it with an object that contains `include_usage = true`. For `stream=false` or absent, the encoder MUST NOT synthesize `stream_options`; non-streaming responses already carry usage in the response object.
 
@@ -1625,7 +1670,7 @@ XF6. When constructing an upstream request body from a URP v2 request, Monoize M
 
 XF6a. Default whitelists per provider type:
 
-- `chat_completion`: `audio`, `frequency_penalty`, `function_call`, `functions`, `logit_bias`, `logprobs`, `top_logprobs`, `max_completion_tokens`, `max_tokens`, `metadata`, `moderation`, `n`, `presence_penalty`, `prompt_cache_options`, `safety_identifier`, `seed`, `service_tier`, `stop`, `stream_options`, `store`, `web_search_options`, `parallel_tool_calls`, `debug`, `image_config`, `modalities`, `cache_control`, `top_k`, `top_a`, `min_p`, `repetition_penalty`, `prediction`, `prompt_cache_key`, `prompt_cache_retention`, `route`, `structured_outputs`, `verbosity`, `provider`, `plugins`, `session_id`, `stop_server_tools_when`, `trace`, `thinking`, `include_reasoning`, `user_id`.
+- `chat_completion`: `audio`, `frequency_penalty`, `function_call`, `functions`, `logit_bias`, `logprobs`, `top_logprobs`, `max_completion_tokens`, `max_tokens`, `metadata`, `moderation`, `n`, `presence_penalty`, `prompt_cache_options`, `safety_identifier`, `seed`, `service_tier`, `stop`, `stream_options`, `store`, `web_search_options`, `parallel_tool_calls`, `debug`, `image_config`, `modalities`, `cache_control`, `top_k`, `top_a`, `min_p`, `repetition_penalty`, `prediction`, `prompt_cache_key`, `prompt_cache_retention`, `route`, `structured_outputs`, `verbosity`, `provider`, `plugins`, `session_id`, `stop_server_tools_when`, `trace`, `thinking`, `include_reasoning`, `user_id`, `providerOptions` (emitted only for the `vercel` dialect, PC0b).
 - `responses`: `access_programs`, `background`, `context_management`, `conversation`, `include`, `instructions`, `metadata`, `max_tool_calls`, `moderation`, `parallel_tool_calls`, `previous_response_id`, `prompt`, `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, `safety_identifier`, `service_tier`, `store`, `stream_options`, `text`, `top_logprobs`, `truncation`.
 - `messages`: `cache_control`, `container`, `context_management`, `diagnostics`, `inference_geo`, `max_tokens`, `mcp_servers`, `metadata`, `output_config`, `service_tier`, `speed`, `stop_sequences`, `top_k`. This list covers every top-level body member documented by the Anthropic Messages API reference and the beta context-management and MCP-connector pages (checked 2026-10-31) that URP does not type.
 - `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`, `continuationToken`, `serviceTier`, `service_tier` (the Gemini encoder maps `service_tier` under PG4j and never emits it).
@@ -1646,7 +1691,7 @@ XF6g. The default `messages` whitelist entries `context_management`, `diagnostic
 
 DC1. Monoize MUST parse the downstream request as a Chat Completions create request and convert it into `UrpRequestV2`.
 
-DC1a. URP v2 represents one assistant candidate. A downstream Chat Completions request MAY omit `n` or set `n = 1`. Monoize MUST reject `n = 0`, `n > 1`, a non-integer value, or a non-numeric value with HTTP 400. Monoize MUST NOT forward a request that can produce multiple choices and then silently retain only `choices[0]`.
+DC1a. URP v2 represents one assistant candidate. A downstream Chat Completions request MAY omit `n`, set `n = null`, or set `n = 1`; OpenAI defines `n` as an optional integer or null with default 1. Monoize MUST reject `n = 0`, `n > 1`, a non-integer value, or a non-numeric non-null value with HTTP 400. Monoize MUST NOT forward a request that can produce multiple choices and then silently retain only `choices[0]`.
 
 DC2. Monoize MUST forward using the pipeline in §5.
 
@@ -1664,6 +1709,8 @@ DC4a. Non-stream Chat reconstruction:
 
 - When rendering a non-streaming Chat Completions response, Monoize MUST reconstruct one `choices[0].message` object from the flat assistant node sequence when the downstream response shape requires one assistant message object.
 - That reconstructed object MUST preserve the full assistant text sequence, all tool calls, reasoning fields, and preserved unknown fields. Monoize MUST NOT silently discard later assistant segments.
+- Several assistant `Text` nodes MUST concatenate in source order with no separator, identically to the stream, which emits each node's text as consecutive `delta.content` fragments. Citation offsets and content logprobs MUST use that concatenation. Several `Refusal` nodes MUST concatenate the same way into `message.refusal`.
+- `message.phase` MUST be emitted only when every assistant `Text` node carries the same `phase` value. If the phases differ or some node lacks one, `phase` MUST be omitted.
 
 DC4b. A same-Chat non-streaming response MUST preserve the upstream integer `created` timestamp through `UrpResponseV2.created_at`. The Chat encoder MUST generate a new timestamp only when `created_at` is absent.
 
@@ -1677,15 +1724,17 @@ DC4c. Chat tool-result content decode:
 
 DC5. Reasoning:
 
-- If `UrpResponseV2.output` contains `Reasoning` nodes, Monoize MUST:
-  - render non-stream output to Chat Completions as:
-    - `choices[0].message.reasoning` from URP reasoning `content` when present, otherwise from URP reasoning `summary`; and
-    - `choices[0].message.reasoning_details[]` using OpenRouter reasoning item types `reasoning.summary`, `reasoning.text`, `reasoning.encrypted`, and `reasoning.server_tool_call`.
-  - preserve the distinction between summary text and full reasoning content. If one URP reasoning node carries both `summary` and `content`, Monoize MUST render summary text as `type="reasoning.summary"` detail entries and full reasoning content as `type="reasoning.text"` detail entries.
-  - preserve every distinct encrypted reasoning payload as its own `type="reasoning.encrypted"` entry in `choices[0].message.reasoning_details[]`. Monoize MUST NOT collapse those entries to only the first encrypted payload.
-  - preserve detail order and every entry's `id`, `format`, `index`, `signature`, server-tool fields, and unknown entry-local fields. Repeated detail types and byte-identical entries MUST remain repeated; Monoize MUST NOT deduplicate them.
-  - for streaming, emit `choices[0].delta.reasoning_details[]` chunks as reasoning deltas become available.
-  - preserve reasoning stream lifecycle. Each reasoning delta MUST be emitted as one chat chunk in arrival order, MAY interleave with text or tool-call chunks, and MUST terminate with the final finish chunk and `[DONE]`.
+- If `UrpResponseV2.output` contains `Reasoning` nodes, Monoize MUST render them with one surface policy shared by non-stream, live stream, and synthetic stream output:
+  - A node carrying the DeepSeek surface marker `_monoize_chat_reasoning_surface = "reasoning_content"` MUST render its `content` only as `reasoning_content` (non-stream `message.reasoning_content`, stream `delta.reasoning_content`), never as a `reasoning_details` entry or as `reasoning`. Typed `summary` or `encrypted` that a transform added to such a node render as details.
+  - A node carrying the marker `reasoning_opaque` MUST render its `encrypted` only as `reasoning_opaque`.
+  - Every other node MUST render as `reasoning_details` entries using OpenRouter types `reasoning.summary`, `reasoning.text`, `reasoning.encrypted`, and `reasoning.server_tool_call`, plus the plain-text alias `reasoning` (non-stream `message.reasoning`; stream `delta.reasoning` on the same chunk as each text or summary detail fragment, never on an encrypted-only chunk).
+  - Non-stream scalar aliases (`reasoning`, `reasoning_content`) MUST be the in-order concatenation of every contributing node's plain text, not only the first node's.
+- preserve the distinction between summary text and full reasoning content. If one URP reasoning node carries both `summary` and `content`, Monoize MUST render summary text as `type="reasoning.summary"` detail entries and full reasoning content as `type="reasoning.text"` detail entries. A summary whose node carries `summary_as_thinking` (Anthropic thinking) is raw thinking and MUST render as `reasoning.text`.
+- A node with plaintext and `encrypted` whose native detail type is `reasoning.text`, or whose summary carries `summary_as_thinking`, MUST render one `reasoning.text` entry with `signature = encrypted` (OpenRouter's Anthropic form). Every other distinct encrypted payload MUST render as its own `type="reasoning.encrypted"` entry. Monoize MUST NOT collapse those entries to only the first encrypted payload.
+- Every synthesized detail entry MUST carry `format` when the node has `source`, MUST carry `id` when the node has a non-synthetic id (one not starting with `rs_urp_`), and MUST carry an integer `index`. A node decoded from Chat details keeps its native `index`; synthesized entries take sequential indexes in emission order. In a stream, every fragment of one logical detail (same node, same detail type) MUST repeat the same `index`, `type`, `format`, and `id`, so a client can rebuild detail boundaries. Stream detail chunks MUST be emitted in the same entry order as non-stream: summary, text, encrypted.
+- preserve detail order and every native entry's `id`, `format`, `index`, `signature`, server-tool fields, and unknown entry-local fields. Repeated detail types and byte-identical entries MUST remain repeated; Monoize MUST NOT deduplicate them.
+- preserve reasoning stream lifecycle. Each reasoning delta MUST be emitted as one chat chunk in arrival order, MAY interleave with text or tool-call chunks, and MUST terminate with the final finish chunk and `[DONE]`.
+- A `chat_content` presentation option (RCD, RSRC) additionally renders `reasoning_content` from the node's plain text.
 - Backward compatibility for downstream Chat Completions requests: Monoize MUST parse assistant-message reasoning from both OpenRouter fields `reasoning` and `reasoning_details` and legacy fields `reasoning_content` and `reasoning_opaque`.
 
 DC5a. For DeepSeek V4 thinking-mode tool loops, an assistant message that contains tool calls and non-empty `reasoning_content` MUST replay that `reasoning_content` byte-for-byte on the next outbound DeepSeek V4 Chat request. A no-tool prior turn MAY omit it. Monoize MUST preserve provenance so this DeepSeek replay field is not confused with an OpenRouter scalar alias.
@@ -1702,11 +1751,17 @@ The decoder MUST reject incoming `_monoize_` members at chunk, choice, error, an
 Other unknown provider fields MUST remain at their original owner.
 DeepSeek `finish_reason="insufficient_system_resource"` MUST NOT normalize to `stop`.
 
-DC5c. DeepSeek Chat requests MUST preserve the normalized reasoning effort value without model-specific remapping or synthesized thinking controls. The normal Chat reasoning container rules in RC4 apply. An explicit native `thinking` object MUST be reconstructed from current typed controls and unknown native members. The maximum output-token field for a model identifier containing `deepseek` MUST be `max_tokens`.
+DC5c. DeepSeek Chat requests MUST preserve the normalized reasoning effort value without model-specific remapping or synthesized thinking controls. The normal Chat reasoning container rules in RC4 apply. An explicit native `thinking` object MUST be reconstructed from current typed controls and unknown native members. The maximum output-token field for the `deepseek` dialect MUST be `max_tokens` (PC0a).
 
-DC6. If the selected upstream provider type is `chat_completion` and the upstream response contains additional non-standard fields inside `choices[0]`, `choices[0].delta`, or `choices[0].message`, other than fields explicitly mapped by DC4 through DC5, Monoize MUST preserve those fields in the downstream response, streaming or non-streaming, for `POST /v1/chat/completions`. In streaming, a choice-level field such as DeepSeek `choices[0].logprobs` on a non-terminal token frame MUST be preserved on a non-terminal downstream choice frame; it MUST NOT be delayed until the terminal frame, moved below `delta`, or discarded.
+DC6. If the selected upstream provider type is `chat_completion` and the upstream response contains additional non-standard fields inside `choices[0]`, `choices[0].delta`, or `choices[0].message`, other than fields explicitly mapped by DC4 through DC5, Monoize MUST preserve those fields in the downstream response, streaming or non-streaming, for `POST /v1/chat/completions`. In streaming, a choice-level field such as DeepSeek `choices[0].logprobs` on a non-terminal token frame MUST be preserved on a non-terminal downstream choice frame; it MUST NOT be delayed until the terminal frame, moved below `delta`, or discarded. A choice-level field MUST ride on the downstream chunk that carries the same upstream frame's delta; Monoize MUST NOT emit an extra empty-delta chunk only to carry it.
 
-DC7. For downstream `POST /v1/chat/completions` streaming responses, when cumulative stream usage counters are available, Monoize MUST emit one separate usage chunk after the empty-delta finish chunk and before `[DONE]`. The usage chunk MUST set `choices` to `[]` and MUST contain the cumulative `usage` object. The empty-delta finish chunk MUST NOT contain a non-null `usage` object.
+DC6a. Top-level response fields. Unknown top-level fields of a Chat upstream response (for example `system_fingerprint`, `service_tier`, top-level `citations`) MUST be preserved for a Chat downstream in both modes. Non-stream preserves them on the response object. Stream preserves the top-level fields of the first upstream chunk that carries them and MUST repeat them on every downstream chunk envelope, as OpenAI repeats `system_fingerprint` per chunk. Monoize MUST remove OpenRouter top-level `provider` from upstream responses in both modes and MUST remove `cost`, `cost_details`, and `is_byok` from usage (PC9a). These fields expose the gateway's upstream provider and wholesale cost to its customers.
+
+DC7. For downstream `POST /v1/chat/completions` streaming responses, when cumulative stream usage counters are available and the downstream request set `stream_options.include_usage = true`, Monoize MUST emit one separate usage chunk after the empty-delta finish chunk and before `[DONE]`. Without `include_usage = true` the usage chunk MUST be omitted, as in OpenAI; internal usage accounting and billing are unaffected. The usage chunk MUST set `choices` to `[]` and MUST contain the cumulative `usage` object. The empty-delta finish chunk MUST NOT contain a non-null `usage` object.
+
+DC7a. Chat usage objects (non-stream `usage` and the stream usage chunk) MUST use one encoder. Native OpenAI fields keep zero values: `prompt_tokens`, `completion_tokens`, `total_tokens`, `prompt_tokens_details.cached_tokens`, `completion_tokens_details.reasoning_tokens`, `accepted_prediction_tokens`, and `rejected_prediction_tokens`. Non-native counters `prompt_tokens_details.cache_write_tokens`, `cache_creation_tokens`, and `tool_prompt_tokens` MUST be emitted only when non-zero.
+
+DC7b. Chunk identity and terminal values. The Chat `id` MUST equal `UrpResponseV2.id` (stream: `ResponseStart.id`) in non-stream, live stream, and synthetic stream; Monoize generates `chatcmpl-<uuid>` only when that id is empty. The first stream chunk MUST carry `delta = {"role":"assistant","content":"","refusal":null}` plus preserved delta fields. `FinishReason::Other` without a preserved native value MUST render as `stop`, because `error` is not an OpenAI `finish_reason` value; `ContextLimit`, `Paused`, and `Compaction` render as `length`.
 
 DC8. For downstream `POST /v1/chat/completions` streaming responses, Monoize MUST emit SSE as data-only frames. Every assistant chunk MUST be encoded as `data: {json}` with no named `event:` line, and successful stream termination MUST emit exactly one terminal `data: [DONE]` sentinel.
 
@@ -1714,7 +1769,7 @@ DC9. For downstream `POST /v1/chat/completions` streaming responses, Monoize MUS
 
 - exactly one plain `[DONE]` sentinel;
 - exactly one terminal empty-delta finish chunk;
-- when cumulative usage is available, exactly one separate `choices=[]` usage chunk after the finish chunk and immediately before `[DONE]`;
+- when cumulative usage is available and the downstream request set `stream_options.include_usage = true`, exactly one separate `choices=[]` usage chunk after the finish chunk and immediately before `[DONE]`;
 - no streamed chunk may co-pack `content` and `tool_calls` in the same assistant delta;
 - if tool-call deltas were emitted in the turn, terminal `finish_reason` MUST be `tool_calls`;
 - OpenRouter-compatible reasoning fields, including `reasoning_details`, MUST remain available downstream.

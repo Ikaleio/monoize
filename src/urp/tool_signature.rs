@@ -1253,6 +1253,7 @@ mod tests {
                         None,
                         false,
                         None,
+                        true,
                     ),
                 )
                 .await
@@ -1453,6 +1454,7 @@ mod tests {
                         None,
                         None,
                         wire_tx,
+                        true,
                     )
                     .await
                     .unwrap();
@@ -1548,6 +1550,7 @@ mod tests {
                         None,
                         false,
                         None,
+                        true,
                     )
                     .await
                     .unwrap();

@@ -28,7 +28,12 @@ fn decode_request(protocol: ProviderProtocol, native: &Value) -> UrpRequest {
 fn encode_request(protocol: ProviderProtocol, request: &UrpRequest) -> Result<Value, String> {
     match protocol {
         ProviderProtocol::ChatCompletion => {
-            encode::openai_chat::encode_request_checked(request, "media-test")
+            encode::openai_chat::encode_request_checked(
+                request,
+                "media-test",
+                encode::openai_chat::ChatDialect::Generic,
+            )
+            .map_err(|error| error.message)
         }
         ProviderProtocol::Responses => {
             encode::openai_responses::encode_request_checked(request, "media-test")

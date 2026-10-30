@@ -1397,6 +1397,8 @@ const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
     "thinking",
     "include_reasoning",
     "user_id",
+    // Vercel AI Gateway; the Chat encoder emits it only for the vercel dialect (PC0b).
+    "providerOptions",
 ];
 
 const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
@@ -2196,6 +2198,13 @@ fn provider_supports_tool_definition(
         return true;
     }
 
+    // PC3: the Chat encoder maps web-search built-ins per dialect or drops them.
+    if provider_type == ProviderType::ChatCompletion
+        && urp::encode::openai_chat::is_web_search_builtin(&tool.tool_type)
+    {
+        return true;
+    }
+
     if let Some(origin) = tool.origin_protocol {
         return matches!(
             (origin, provider_type),
@@ -2393,7 +2402,7 @@ pub(super) fn map_web_search_tools_for_provider(
     }
 }
 
-/// PR4c.2z and RC4g: controls for chat-shaped clients replaying statelessly through Responses.
+/// PR4c.2z and RC4h: controls for chat-shaped clients replaying statelessly through Responses.
 pub(super) fn apply_cross_family_responses_controls(req: &mut urp::UrpRequest) {
     req.extra_body
         .entry("include".to_string())

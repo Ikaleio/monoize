@@ -126,6 +126,7 @@ async fn synthetic_decode(
             "model-contract",
             canonical,
             Some(600),
+            true,
             tx,
         )
         .await
@@ -363,7 +364,7 @@ fn reasoning_field_deletions_survive_serialization_and_native_replay() {
             let replay: UrpRequest = serde_json::from_value(serialized).unwrap();
             let wire = match protocol {
                 ProviderProtocol::ChatCompletion => {
-                    encode::openai_chat::encode_request(&replay, "model-contract")
+                    encode::openai_chat::encode_request(&replay, "model-contract", encode::openai_chat::ChatDialect::Generic)
                 }
                 _ => encode::openai_responses::encode_request(&replay, "model-contract"),
             };
@@ -809,10 +810,10 @@ async fn chat_citation_offsets_follow_unicode_output_in_buffered_and_streamed_mo
     }
     let canonical = response(nodes);
     let wire = encode_response(ProviderProtocol::ChatCompletion, &canonical);
-    assert_eq!(wire["choices"][0]["message"]["content"], "汉🙂\n\nabc");
+    assert_eq!(wire["choices"][0]["message"]["content"], "汉🙂abc");
     assert_eq!(
         wire["choices"][0]["message"]["annotations"][1]["url_citation"]["start_index"],
-        4
+        2
     );
     let events = synthetic_decode(ProviderProtocol::ChatCompletion, &canonical).await;
     let output = events

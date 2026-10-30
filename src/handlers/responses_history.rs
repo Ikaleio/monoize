@@ -488,6 +488,7 @@ mod media_history_tests {
                 None,
                 false,
                 None,
+                true,
             )
             .await;
             if result.is_ok() {
@@ -517,6 +518,7 @@ mod media_history_tests {
                 None,
                 None,
                 tx,
+                true,
             )
             .await;
             if result.is_ok() {

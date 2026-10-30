@@ -755,6 +755,12 @@ pub(super) async fn forward_stream_typed(
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
     let transform_match_model = resolve_model_suffix(&state, &mut req).await?;
     let logical_model = req.model.clone();
+    let chat_include_usage = req
+        .extra_body
+        .get("stream_options")
+        .and_then(|options| options.get("include_usage"))
+        .and_then(Value::as_bool)
+        == Some(true);
     let reasoning_effort = req.reasoning.as_ref().and_then(|r| r.effort.clone());
     let pending_request_envelope_extra = find_pending_request_envelope_extra(&req.input);
     let routing_stub = build_routing_stub(&req, max_multiplier);
@@ -1261,6 +1267,7 @@ pub(super) async fn forward_stream_typed(
                                     synthetic_reasoning_duration_secs,
                                     sse_max_frame_length,
                                     tx,
+                                    chat_include_usage,
                                 )
                                 .await;
                             if let Err(err) = &stream_result {
@@ -1986,6 +1993,7 @@ pub(super) async fn forward_stream_typed(
                                         sse_max_frame_length,
                                         mask_sensitive_info,
                                         responses_echo,
+                                        chat_include_usage,
                                     )
                                     .await
                                 });

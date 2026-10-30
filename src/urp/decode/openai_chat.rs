@@ -7,9 +7,9 @@ use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY, CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY,
     CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY, CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY,
-    CHAT_MESSAGE_AUDIO_EXTRA_KEY, CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
-    CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING,
-    CHAT_REASONING_SURFACE_REASONING_CONTENT, CHAT_THINKING_CONFIG_EXTRA_KEY, FinishReason,
+    CHAT_MESSAGE_AUDIO_EXTRA_KEY, CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_SURFACE_EXTRA_KEY,
+    CHAT_REASONING_SURFACE_REASONING, CHAT_REASONING_SURFACE_REASONING_CONTENT,
+    CHAT_REASONING_SURFACE_REASONING_OPAQUE, CHAT_THINKING_CONFIG_EXTRA_KEY, FinishReason,
     InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol, ReasoningConfig,
     StopControl, ToolCallType, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest,
     UrpResponse, Usage,
@@ -114,21 +114,35 @@ impl From<OpenAiChatUsage> for Usage {
                 let cache_creation_tokens = details
                     .cache_creation_tokens
                     .max(details.cache_write_tokens);
+                let extra = details
+                    .extra
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Map<String, Value>>();
+                let modality_breakdown =
+                    crate::handlers::usage::parse_modality_breakdown_from_detail_object(Some(
+                        &extra,
+                    ));
+                let cache_read_modality_breakdown =
+                    crate::handlers::usage::parse_cache_read_modality_breakdown_from_detail_object(
+                        Some(&extra),
+                    );
                 if details.cached_tokens > 0
                     || cache_creation_tokens > 0
                     || details.tool_prompt_tokens > 0
-                    || crate::urp::usage::modality(&details.extra).is_some()
+                    || modality_breakdown.is_some()
+                    || cache_read_modality_breakdown.is_some()
                 {
                     Some(InputDetails {
                         tool_prompt_modality_breakdown: None,
                         standard_tokens: 0,
                         cache_read_tokens: details.cached_tokens,
-                        cache_read_modality_breakdown: None,
+                        cache_read_modality_breakdown,
                         cache_creation_tokens,
                         cache_creation_5m_tokens: 0,
                         cache_creation_1h_tokens: 0,
                         tool_prompt_tokens: details.tool_prompt_tokens,
-                        modality_breakdown: crate::urp::usage::modality(&details.extra),
+                        modality_breakdown,
                     })
                 } else {
                     None
@@ -139,17 +153,26 @@ impl From<OpenAiChatUsage> for Usage {
             .as_ref()
             .or(output_tokens_details.as_ref())
             .and_then(|details| {
+                let extra = details
+                    .extra
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Map<String, Value>>();
+                let modality_breakdown =
+                    crate::handlers::usage::parse_modality_breakdown_from_detail_object(Some(
+                        &extra,
+                    ));
                 if details.reasoning_tokens > 0
                     || details.accepted_prediction_tokens > 0
                     || details.rejected_prediction_tokens > 0
-                    || crate::urp::usage::modality(&details.extra).is_some()
+                    || modality_breakdown.is_some()
                 {
                     Some(OutputDetails {
                         standard_tokens: 0,
                         reasoning_tokens: details.reasoning_tokens,
                         accepted_prediction_tokens: details.accepted_prediction_tokens,
                         rejected_prediction_tokens: details.rejected_prediction_tokens,
-                        modality_breakdown: crate::urp::usage::modality(&details.extra),
+                        modality_breakdown,
                     })
                 } else {
                     None
@@ -484,10 +507,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .as_object()
         .ok_or_else(|| "chat request must be object".to_string())?;
 
-    if let Some(n) = obj.get("n")
+    if let Some(n) = obj.get("n").filter(|n| !n.is_null())
         && n.as_u64() != Some(1)
     {
-        return Err("Chat Completions n must be the integer 1".to_string());
+        return Err("Chat Completions n must be null or the integer 1".to_string());
     }
 
     let model = obj
@@ -695,7 +718,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .flatten()
                 .filter_map(|raw| {
                     let mut tool = parse_tool_definition(raw)?;
-                    if tool.function.is_some() {
+                    if tool.function.is_some() || tool.tool_type.starts_with("openrouter:") {
                         tool.origin_protocol = Some(ProviderProtocol::ChatCompletion);
                     }
                     Some(tool)
@@ -766,6 +789,15 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .as_object()
                 .map(|obj| Value::Object(split_extra(obj, &["name"]).into_iter().collect()))
                 .unwrap_or(Value::Null),
+        );
+    }
+    if let Some(field) = ["max_completion_tokens", "max_tokens"]
+        .into_iter()
+        .find(|field| obj.get(*field).and_then(Value::as_u64).is_some())
+    {
+        extra_body.insert(
+            crate::urp::CHAT_MAX_TOKENS_FIELD_EXTRA_KEY.to_string(),
+            Value::String(field.to_string()),
         );
     }
 
@@ -946,16 +978,19 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             }
         }
     }
-    let finish_reason = native_finish_reason.as_deref().map(parse_finish_reason);
+    let finish_reason = native_finish_reason
+        .as_deref()
+        .map(parse_finish_reason)
+        .map(|reason| normalize_tool_call_finish(reason, &output_nodes));
 
     let usage = obj
         .get("usage")
         .and_then(|v| v.as_object())
-        .map(parse_usage_from_chat);
+        .map(parse_chat_usage);
 
     let mut extra_body = split_extra(
         obj,
-        &["id", "object", "created", "model", "choices", "usage"],
+        &["id", "object", "created", "model", "choices", "usage", "provider"],
     );
     let choice_extra = choice
         .iter()
@@ -1027,14 +1062,10 @@ fn value_as_non_empty_string(value: &Value) -> Option<String> {
 fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
     let reasoning_obj = obj.get("reasoning").and_then(Value::as_object);
     let thinking_obj = obj.get("thinking").and_then(Value::as_object);
-    let effort = obj
-        .get("reasoning_effort")
+    let effort = reasoning_obj
+        .and_then(|reasoning| reasoning.get("effort"))
         .and_then(Value::as_str)
-        .or_else(|| {
-            reasoning_obj
-                .and_then(|reasoning| reasoning.get("effort"))
-                .and_then(Value::as_str)
-        })
+        .or_else(|| obj.get("reasoning_effort").and_then(Value::as_str))
         .map(normalize_reasoning_effort);
 
     if effort.is_none() && reasoning_obj.is_none() && thinking_obj.is_none() {
@@ -1096,46 +1127,27 @@ fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
 }
 
 fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Part>) {
+    let mut has_details = false;
     if let Some(details) = msg_obj.get("reasoning_details").and_then(|v| v.as_array()) {
         for detail in details {
             let Some(detail_obj) = detail.as_object() else {
                 continue;
             };
-            let detail_type = detail_obj.get("type").and_then(Value::as_str).unwrap_or("");
-            if !detail_type.starts_with("reasoning.") {
+            let Some(Node::Reasoning {
+                metadata,
+                id,
+                content,
+                encrypted,
+                summary,
+                source,
+                extra_body,
+            }) = crate::urp::reasoning::chat_reasoning_node_from_detail(detail_obj)
+            else {
                 continue;
-            }
-            let source = detail_obj
-                .get("format")
-                .and_then(Value::as_str)
-                .filter(|format| !format.is_empty())
-                .map(str::to_string);
-            let id = detail_obj
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .map(str::to_string);
-            let content = (detail_type == "reasoning.text")
-                .then(|| detail_obj.get("text").and_then(Value::as_str))
-                .flatten()
-                .map(str::to_string);
-            let summary = (detail_type == "reasoning.summary")
-                .then(|| detail_obj.get("summary").and_then(Value::as_str))
-                .flatten()
-                .map(str::to_string);
-            let encrypted = (detail_type == "reasoning.encrypted")
-                .then(|| detail_obj.get("data"))
-                .flatten()
-                .filter(|value| !value.is_null())
-                .cloned();
-            let raw_detail = crate::urp::reasoning::detail_metadata(detail_obj);
-            let mut extra_body = HashMap::new();
-            extra_body.insert(
-                CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
-                Value::Object(raw_detail),
-            );
+            };
+            has_details = true;
             parts.push(Part::Reasoning {
-                metadata: Default::default(),
+                metadata,
                 id,
                 content,
                 encrypted,
@@ -1146,21 +1158,24 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
         }
     }
 
-    for (key, surface, summary_is_alias) in [
-        ("reasoning", CHAT_REASONING_SURFACE_REASONING, true),
-        (
-            "reasoning_content",
-            CHAT_REASONING_SURFACE_REASONING_CONTENT,
-            false,
-        ),
-    ] {
+    // CHAT-4b: scalar `reasoning` is a view of non-empty `reasoning_details`.
+    let scalar_surfaces: &[(&str, &str)] = if has_details {
+        &[("reasoning_content", CHAT_REASONING_SURFACE_REASONING_CONTENT)]
+    } else {
+        &[
+            ("reasoning", CHAT_REASONING_SURFACE_REASONING),
+            ("reasoning_content", CHAT_REASONING_SURFACE_REASONING_CONTENT),
+        ]
+    };
+    for (key, surface) in scalar_surfaces {
         let Some(content) = msg_obj
-            .get(key)
+            .get(*key)
             .and_then(Value::as_str)
             .filter(|v| !v.is_empty())
         else {
             continue;
         };
+        let summary_is_alias = *key == "reasoning";
         if parts.iter().any(|part| matches!(part, Part::Reasoning { content: existing, summary, .. }
             if existing.as_deref() == Some(content) || (summary_is_alias && summary.as_deref() == Some(content)))) {
             continue;
@@ -1191,7 +1206,10 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
             encrypted: Some(Value::String(opaque.to_string())),
             summary: None,
             source: None,
-            extra_body: HashMap::new(),
+            extra_body: HashMap::from([(
+                CHAT_REASONING_SURFACE_EXTRA_KEY.to_string(),
+                Value::String(CHAT_REASONING_SURFACE_REASONING_OPAQUE.to_string()),
+            )]),
         });
     }
 }
@@ -1254,7 +1272,35 @@ fn parse_finish_reason(s: &str) -> FinishReason {
     }
 }
 
-fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
+/// PC7b: an upstream `stop` that terminates decoded tool calls is a tool-call turn.
+pub(crate) fn normalize_tool_call_finish(reason: FinishReason, output: &[Node]) -> FinishReason {
+    if reason == FinishReason::Stop
+        && output
+            .iter()
+            .any(|node| matches!(node, Node::ToolCall { .. }))
+    {
+        FinishReason::ToolCalls
+    } else {
+        reason
+    }
+}
+
+/// PC9a: the single Chat usage parser for non-stream responses and stream chunks.
+pub(crate) fn parse_chat_usage(obj: &Map<String, Value>) -> Usage {
+    let mut obj = obj.clone();
+    for key in ["cost", "cost_details", "is_byok"] {
+        obj.remove(key);
+    }
+    for (alias, canonical) in [
+        ("input_tokens", "prompt_tokens"),
+        ("output_tokens", "completion_tokens"),
+    ] {
+        if let Some(value) = obj.remove(alias)
+            && !obj.contains_key(canonical)
+        {
+            obj.insert(canonical.to_string(), value);
+        }
+    }
     serde_json::from_value::<OpenAiChatUsage>(Value::Object(obj.clone()))
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
@@ -1263,6 +1309,6 @@ fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
             output_tokens: 0,
             input_details: None,
             output_details: None,
-            extra_body: split_extra(obj, &[]),
+            extra_body: split_extra(&obj, &[]),
         })
 }

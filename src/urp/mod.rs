@@ -69,6 +69,12 @@ pub const CHAT_MESSAGE_ITEM_EXTRA_KEY: &str = "_monoize_chat_message_item";
 pub const CHAT_REASONING_SURFACE_EXTRA_KEY: &str = "_monoize_chat_reasoning_surface";
 pub const CHAT_REASONING_SURFACE_REASONING: &str = "reasoning";
 pub const CHAT_REASONING_SURFACE_REASONING_CONTENT: &str = "reasoning_content";
+pub const CHAT_REASONING_SURFACE_REASONING_OPAQUE: &str = "reasoning_opaque";
+/// Request field name (`max_tokens` or `max_completion_tokens`) a downstream Chat client used.
+pub const CHAT_MAX_TOKENS_FIELD_EXTRA_KEY: &str = "_monoize_chat_max_tokens_field";
+/// Unknown top-level fields of the first upstream Chat stream chunk, replayed on every
+/// downstream Chat chunk envelope.
+pub const CHAT_CHUNK_EXTRA_KEY: &str = "_monoize_chat_chunk_extra";
 /// Unknown provider-specific request controls and native configuration placement.
 pub const CHAT_REASONING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_reasoning_config";
 pub const CHAT_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_thinking_config";

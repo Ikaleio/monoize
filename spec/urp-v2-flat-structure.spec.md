@@ -695,9 +695,9 @@ MSG-8a. Consecutive `ToolResult` nodes MUST reconstruct as consecutive `tool_res
 
 CHAT-1. The Chat Completions encoder MUST preserve OpenRouter-compatible chat behavior. The flat redesign MUST NOT reduce the downstream contract to plain OpenAI Chat Completions.
 
-CHAT-2. In non-stream chat responses, `choices[0].message.content` MUST remain a JSON string. If several text nodes are merged into one downstream assistant message, the encoder MUST concatenate them in source order with `"\n\n"` between adjacent text segments.
+CHAT-2. In non-stream chat responses, `choices[0].message.content` MUST remain a JSON string. If several text nodes are merged into one downstream assistant message, the encoder MUST concatenate them in source order with no separator, so the non-stream body equals the concatenation of the stream's `delta.content` fragments for the same output.
 
-CHAT-3. Structured reasoning in chat responses MUST remain in `reasoning_details`. Plaintext assistant reasoning, when emitted as a simple scalar field, remains `message.reasoning` for non-stream and `delta.reasoning` only when the downstream protocol already defines that exact field for plain text.
+CHAT-3. Structured reasoning in chat responses MUST remain in `reasoning_details`. Plaintext assistant reasoning is also exposed as the scalar alias `message.reasoning` (non-stream) and `delta.reasoning` (stream), as OpenRouter and Vercel AI Gateway document both. A node carrying the DeepSeek `reasoning_content` surface renders only as `reasoning_content` in both modes (DC5).
 
 CHAT-4. Chat `reasoning_details[]` entries MUST preserve the OpenRouter-compatible discriminated union:
 
@@ -708,7 +708,7 @@ CHAT-4. Chat `reasoning_details[]` entries MUST preserve the OpenRouter-compatib
 
 CHAT-4a. Every `reasoning_details[]` entry MAY carry `id`, `format`, and `index`. It MAY also carry future entry-local fields. A decoder MUST preserve those fields on the owning reasoning node, and a same-Chat encoder MUST replay them on the same entry.
 
-CHAT-4b. Source detail order is canonical. A decoder MUST create one reasoning node per independent detail entry. Stream fragments follow CHAT-4d. An encoder MUST preserve repeated detail types and MUST NOT merge, reorder, or deduplicate entries. Scalar `reasoning` is a compatibility view and MUST NOT duplicate matching content or summary details.
+CHAT-4b. Source detail order is canonical. A decoder MUST create one reasoning node per independent detail entry. Stream fragments follow CHAT-4d. An encoder MUST preserve repeated detail types and MUST NOT merge, reorder, or deduplicate entries. Scalar `reasoning` is a compatibility view: when `reasoning_details` is a non-empty array, a decoder MUST ignore scalar `reasoning` entirely, including a value that equals the concatenation of several details.
 Scalar `reasoning_content` is raw content. It MUST deduplicate only matching content, never a matching summary.
 If summary and raw content contain identical bytes, both typed meanings MUST remain present.
 A simultaneous `reasoning` field MUST NOT suppress a distinct `reasoning_content` value.
@@ -716,7 +716,8 @@ A simultaneous `reasoning` field MUST NOT suppress a distinct `reasoning_content
 CHAT-4c. Without an explicit response transform, non-empty `Reasoning.content` MUST encode as `reasoning.text` and MUST NOT encode as `reasoning.summary`.
 
 CHAT-4d. In streams, text and summary deltas with the same non-empty `id` or integer `index` MUST accumulate in one node.
-The detail type and every supplied identity field MUST agree. Distinct identities and entries without stable identity MUST remain separate.
+The detail type and every supplied identity field MUST agree. Distinct identities MUST remain separate.
+A text or summary delta with neither `id` nor `index` MUST accumulate into the most recent open detail node when that node has the same `type` and `format` and also has neither `id` nor `index`, and no other node started after it; otherwise it starts a new node. OpenAI-compatible relays that omit both fields therefore produce one node per logical detail rather than one node per chunk.
 A terminal snapshot MUST update the matching accumulated node and emit only its unsent text or summary suffix.
 Equal text alone MUST NOT identify a detail.
 
@@ -724,13 +725,13 @@ CHAT-5. Opaque encrypted reasoning payloads MUST appear only in `reasoning_detai
 
 CHAT-6. Streaming chat output remains data-only SSE and terminates with exactly one `[DONE]` sentinel.
 
-CHAT-7. If streamed chat output emits tool-call deltas, terminal `finish_reason` semantics for that downstream stream remain `tool_calls`.
+CHAT-7. If streamed chat output emits tool-call deltas, terminal `finish_reason` semantics for that downstream stream remain `tool_calls`. A Chat upstream `finish_reason = "stop"` with decoded tool calls normalizes to `tool_calls` in the decoder (PC7b), in both modes.
 
 CHAT-7a. A Chat encoder MUST emit `ToolCall(tool_type = "function")` as `{type:"function",function:{name,arguments}}` and `ToolCall(tool_type = "custom")` as `{type:"custom",custom:{name,input}}`. A Chat decoder MUST accept both shapes in request history, non-stream output, and stream deltas. Chat tool-role results inherit the correlated call type so a later Responses encoder can choose `function_call_output` versus `custom_tool_call_output`.
 
 CHAT-7b. Chat tool and legacy function content MUST decode compatible text, image, file, and audio blocks under DC4c and MT41-MT46. Decoder capability MUST NOT depend on the selected target.
 
-CHAT-8. If cumulative usage is available when a successful Chat Completions stream terminates, the encoder MUST emit exactly one usage chunk after the empty-delta finish chunk and immediately before `[DONE]`. The usage chunk MUST use the same `id`, `object`, `created`, and `model` envelope values as the finish chunk, MUST set `choices` to an empty array, and MUST contain the cumulative `usage` object. The finish chunk MUST NOT contain a non-null `usage` object. If cumulative usage is unavailable, the encoder MUST omit the usage chunk.
+CHAT-8. If cumulative usage is available when a successful Chat Completions stream terminates and the downstream request set `stream_options.include_usage = true`, the encoder MUST emit exactly one usage chunk after the empty-delta finish chunk and immediately before `[DONE]`. The usage chunk MUST use the same `id`, `object`, `created`, and `model` envelope values as the finish chunk, MUST set `choices` to an empty array, and MUST contain the cumulative `usage` object. The finish chunk MUST NOT contain a non-null `usage` object. If cumulative usage is unavailable or `include_usage` is not `true`, the encoder MUST omit the usage chunk.
 
 CHAT-9. SSE comment lines and post-start chunk-shaped error payloads remain representable downstream. The flat URP redesign MUST NOT remove support for those externally visible chat stream forms.
 

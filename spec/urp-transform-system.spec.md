@@ -705,6 +705,24 @@ RCD-8. The transform MUST be independent of `reasoning_summary_to_raw_cot`. Both
 
 RCD-9. A downstream Chat encoder MUST emit a selected reasoning_content alias from current typed text without removing normal reasoning fields. Internal presentation controls MUST NOT appear on the wire.
 
+TXO-1. `reasoning_to_think_xml` is response-phase only. Config MUST contain a non-empty string `tag`. Let `O = "<" + tag + ">"` and `C = "</" + tag + ">"`.
+
+TXO-2. The plain text of a `Reasoning` node is its non-empty `content`, otherwise its non-empty `summary`. On a non-stream response, every `Reasoning` node with plain text `P` MUST become one assistant `Text` node with content `O + P + C` at the same position. A `Reasoning` node without plain text MUST remain unchanged.
+
+TXO-3. On streams, the transform MUST keep per-node state. It MUST withhold a reasoning `NodeStart` until that node's first `NodeDelta`. If the first delta carries plain text, the node is converted: the transform MUST emit `NodeStart(Text)` with the same `node_index`, then one text delta `O + text`. Each later delta MUST contribute only plain text of the same kind (content or summary) as the first delta, as a raw text delta without tags; other payloads of a converted node (encrypted data, the other text kind) MUST be dropped. At the node's `NodeDone`, the transform MUST emit text delta `C` and then `NodeDone` with the converted `Text` node `O + P + C`. If the first delta carries no plain text, the transform MUST release the withheld `NodeStart` and pass the node through unchanged.
+
+TXO-4. On `ResponseDone`, the output node at position `K` MUST be converted with TXO-2 when the stream converted node `K`, or when node `K` had no stream events and has plain text; a node the stream passed through MUST stay unchanged. Terminal output therefore equals the streamed text, and exactly one `O` and one `C` surround each converted node in both modes.
+
+TXI-1. `reasoning_from_think_xml` is response-phase only. Config MUST contain a non-empty string `tag`, with `O` and `C` as in TXO-1.
+
+TXI-2. On a non-stream response, each assistant `Text` node MUST be split, in order, into `Text` segments outside tags and `Reasoning{content}` segments between `O` and the next `C`. An `O` without a later `C` makes the rest of the text reasoning. Empty segments produce no node.
+
+TXI-3. On streams, the transform MUST produce the same segments as TXI-2 for the same total text, independent of how the text is chunked. It MUST keep per-node state with a mode (`text` or `reasoning`) and a pending buffer. A trailing suffix of the buffer that is a proper prefix of the tag the current mode waits for (`O` in text mode, `C` in reasoning mode) MUST be held until more text arrives or the node ends; every other byte MUST be emitted without waiting. Text before `O` and after `C` in the same delta MUST be emitted as text, never discarded.
+
+TXI-4. Every segment is its own node with its own `NodeStart`, deltas, and `NodeDone`. A `Text` node's `NodeStart` MUST be withheld until its first non-empty segment, so a stream that starts with `O` creates no empty text node. Text segments keep the original header `role` and `phase`.
+
+TXI-5. Node indexes MUST stay dense and in emission order: the transform MUST assign output indexes `0, 1, 2, …` in `NodeStart` order and remap every later event of a source node to its assigned index. `ResponseDone.output` MUST list the emitted nodes in output-index order, so position `K` holds the node whose events used index `K`, as PC7g requires. A terminal-only node without stream events MUST be appended after the streamed nodes, split with TXI-2.
+
 SER-1. `reasoning_strip_encrypted` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
 
 SER-2. Config MUST be an empty object.
