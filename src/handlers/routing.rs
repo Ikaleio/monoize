@@ -685,7 +685,13 @@ pub(super) async fn collect_provider_attempts(
             affinity_failback_mode,
             affinity_failback_delay_seconds,
             routing_config_revision,
-            proxy_url: channel.proxy_url.clone(),
+            proxy_url: {
+                crate::error_sanitize::register_configured_url(&channel.base_url);
+                if let Some(proxy_url) = channel.proxy_url.as_deref() {
+                    crate::error_sanitize::register_configured_url(proxy_url);
+                }
+                channel.proxy_url.clone()
+            },
             extra_headers: channel.extra_headers.clone(),
             session_affinity_auto: effective_session_affinity_auto(
                 &channel.base_url,
@@ -1265,7 +1271,7 @@ pub(super) fn build_exhausted_error_detail(model: &str, tried: &[TriedProvider])
 }
 
 /// RTA-8 `type` for a final attempt that reported no upstream type.
-fn openai_error_type_for_status(status: StatusCode) -> &'static str {
+pub(super) fn openai_error_type_for_status(status: StatusCode) -> &'static str {
     match status.as_u16() {
         401 => "authentication_error",
         403 => "permission_error",
@@ -1300,9 +1306,7 @@ pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider
         .with_type(openai_error_type_for_status(StatusCode::BAD_GATEWAY));
         err.credential_failure = Some(crate::error::CredentialFailure {
             upstream_status,
-            upstream_code: Some(code)
-                .filter(|code| *code != "upstream_error")
-                .map(str::to_string),
+            upstream_code: last.reported_upstream_code.clone(),
         });
         return err;
     }
@@ -1809,12 +1813,13 @@ pub(super) fn openai_error_json(err: &AppError) -> Value {
 
 /// SE1c: the native Messages `error.type` of an error.
 pub(super) fn anthropic_error_type(err: &AppError) -> String {
-    const NATIVE: [&str; 10] = [
+    const NATIVE: [&str; 11] = [
         "invalid_request_error",
         "authentication_error",
         "billing_error",
         "permission_error",
         "not_found_error",
+        "conflict_error",
         "request_too_large",
         "rate_limit_error",
         "api_error",
@@ -1837,6 +1842,7 @@ pub(super) fn anthropic_error_type(err: &AppError) -> String {
         402 => "billing_error",
         403 => "permission_error",
         404 => "not_found_error",
+        409 => "conflict_error",
         413 => "request_too_large",
         429 => "rate_limit_error",
         504 => "timeout_error",

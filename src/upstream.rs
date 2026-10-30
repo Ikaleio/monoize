@@ -172,7 +172,13 @@ pub async fn call_upstream_json_with_response_headers(
     with_deadline(timeout_ms, "upstream response not completed", async {
         let resp = exchange(req).await?;
         let forwarded = forwarded_response_headers(resp.headers());
-        Ok((read_json_body(resp).await?, forwarded))
+        match read_json_body(resp).await {
+            Ok(value) => Ok((value, forwarded)),
+            Err(mut err) => {
+                err.forwarded_headers = forwarded;
+                Err(err)
+            }
+        }
     })
     .await
 }

@@ -143,7 +143,7 @@ async fn exercise_media_failure(synthetic: bool) {
         assert!(err.downstream_stream_terminal_sent);
         let capture = crate::request_capture::SseFrameCapture::new();
         let capture_before = format!("{:?}", capture.snapshot().await);
-        emit_stream_error_if_needed(downstream, &err, None, &tx, Some(&capture)).await;
+        emit_stream_error_if_needed(downstream, &err, None, true, &tx, Some(&capture)).await;
         assert_eq!(format!("{:?}", capture.snapshot().await), capture_before);
         drop(tx);
         assert_single_terminal_error(&collect_wire(rx).await, downstream);
@@ -171,7 +171,7 @@ async fn unmarked_transport_failure_emits_one_target_error_sequence() {
         assert!(!err.downstream_stream_terminal_sent);
         let (tx, rx) = mpsc::channel(16);
         let capture = crate::request_capture::SseFrameCapture::new();
-        emit_stream_error_if_needed(downstream, &err, None, &tx, Some(&capture)).await;
+        emit_stream_error_if_needed(downstream, &err, None, true, &tx, Some(&capture)).await;
         drop(tx);
         let wire = collect_wire(rx).await;
         // SE2: gateway-generated errors append `[DONE]` only on Chat Completions.

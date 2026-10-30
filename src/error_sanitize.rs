@@ -9,18 +9,21 @@
 //! admin visibility; the server tracing log keeps the unbounded raw detail.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLock};
 
 /// SAN-D2: maximum Unicode scalar values retained by [`truncate_error_detail`].
 pub const ERROR_DETAIL_MAX_CHARS: usize = 2048;
 const TRUNCATION_SUFFIX: &str = "... (truncated)";
 
 static URL_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(http|https)://[^\s/$.?#].[^\s]*").expect("valid URL regex"));
+    LazyLock::new(|| Regex::new(r"(https?|wss?)://[^\s/$.?#].[^\s]*").expect("valid URL regex"));
 static DOMAIN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b")
-        .expect("valid domain regex")
+    Regex::new(
+        r"\b(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+(?:xn--[a-zA-Z0-9-]{1,59}|\p{L}{2,})\b",
+    )
+    .expect("valid domain regex")
 });
 static IP_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").expect("valid IPv4 regex"));
@@ -50,13 +53,12 @@ static TLDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         ])
         .collect()
 });
-const FIELD_TLDS: &[&str] = &[
-    "app", "audio", "auto", "call", "chat", "data", "date", "delta", "email", "events", "group",
-    "host", "id", "info", "link", "live", "map", "name", "new", "open", "page", "parts", "read",
-    "run", "save", "search", "select", "site", "store", "stream", "style", "target", "tools",
-    "total", "video", "web", "zone",
+const FIELD_LEAVES: &[&str] = &[
+    "audio", "call", "data", "delta", "events", "id", "name", "parts", "store", "stream", "tools",
+    "total",
 ];
 const FIELD_ROOTS: &[&str] = &[
+    "arguments",
     "body",
     "call",
     "choice",
@@ -77,12 +79,16 @@ const FIELD_ROOTS: &[&str] = &[
     "metadata",
     "model",
     "output",
+    "parameters",
     "params",
     "parts",
+    "properties",
     "reasoning",
     "request",
     "response",
     "responses",
+    "schema",
+    "source",
     "stream",
     "system",
     "text",
@@ -91,25 +97,115 @@ const FIELD_ROOTS: &[&str] = &[
     "tools",
     "usage",
 ];
+/// SAN-D1 step 2: upper bound on `CONFIGURED` hosts.
+const CONFIGURED_HOSTS_MAX: usize = 4096;
+
+#[derive(Default)]
+struct ConfiguredHosts {
+    seen_urls: HashSet<String>,
+    hosts: HashSet<String>,
+    dotted: Option<Regex>,
+    single_label: Option<Regex>,
+}
+
+static CONFIGURED: LazyLock<RwLock<ConfiguredHosts>> = LazyLock::new(RwLock::default);
+
+fn alternation_regex(hosts: &[&String], template: impl Fn(&str) -> String) -> Option<Regex> {
+    if hosts.is_empty() {
+        return None;
+    }
+    let alternation = hosts
+        .iter()
+        .map(|host| regex::escape(host))
+        .collect::<Vec<_>>()
+        .join("|");
+    match Regex::new(&template(&alternation)) {
+        Ok(pattern) => Some(pattern),
+        Err(err) => {
+            tracing::error!(error = %err, "configured host mask pattern failed to compile");
+            None
+        }
+    }
+}
+
+/// SAN-D1 step 2: adds the host of an upstream or proxy URL to `CONFIGURED`.
+/// Repeat calls with a known URL take only the read lock, because attempt
+/// construction calls this on every request.
+pub fn register_configured_url(url: &str) {
+    let seen = CONFIGURED
+        .read()
+        .expect("configured host lock is never poisoned")
+        .seen_urls
+        .contains(url);
+    if seen {
+        return;
+    }
+    let mut configured = CONFIGURED
+        .write()
+        .expect("configured host lock is never poisoned");
+    if configured.hosts.len() >= CONFIGURED_HOSTS_MAX {
+        return;
+    }
+    configured.seen_urls.insert(url.to_string());
+    let Some(host) = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.domain().map(str::to_ascii_lowercase))
+    else {
+        return;
+    };
+    if !configured.hosts.insert(host) {
+        return;
+    }
+    let (dotted, single_label): (Vec<&String>, Vec<&String>) =
+        configured.hosts.iter().partition(|host| host.contains('.'));
+    let dotted = alternation_regex(&dotted, |hosts| {
+        format!(r"(?i)(?:[\p{{L}}\p{{N}}-]+\.)*(?:{hosts})\b")
+    });
+    let single_label =
+        alternation_regex(&single_label, |hosts| format!(r"(?i)\b(?:{hosts})(:\d+)"));
+    configured.dotted = dotted;
+    configured.single_label = single_label;
+}
+
+fn field_root(label: &str) -> bool {
+    FIELD_ROOTS
+        .iter()
+        .any(|root| root.eq_ignore_ascii_case(label))
+}
+
+/// SAN-D1 `PROTOCOL_PATH`: a field path such as `messages.0.name`.
+fn is_protocol_path(candidate: &str) -> bool {
+    let mut labels = candidate.split('.');
+    let Some(last) = labels.next_back() else {
+        return false;
+    };
+    FIELD_LEAVES
+        .iter()
+        .any(|leaf| leaf.eq_ignore_ascii_case(last))
+        && labels.next().is_some_and(field_root)
+        && labels.all(|label| field_root(label) || label.bytes().all(|byte| byte.is_ascii_digit()))
+}
 
 /// SAN-D1 `IS_HOST`: separates hostnames from dotted protocol identifiers such
 /// as `response.create` or `messages.1.content.0.type`.
 fn is_host(candidate: &str) -> bool {
-    let lowered = candidate.to_ascii_lowercase();
-    let labels: Vec<&str> = lowered.split('.').collect();
-    let (first, last) = (labels[0], labels[labels.len() - 1]);
-    if !TLDS.contains(last) {
-        return false;
+    if candidate.split('.').any(|label| {
+        label
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("xn--"))
+    }) {
+        return true;
     }
-    if FIELD_TLDS.contains(&last)
-        && (FIELD_ROOTS.contains(&first)
-            || labels[1..]
-                .iter()
-                .any(|label| label.bytes().all(|byte| byte.is_ascii_digit())))
-    {
-        return false;
+    let last = candidate.rsplit('.').next().unwrap_or(candidate);
+    if !last.is_ascii() {
+        return true;
     }
-    true
+    let last: Cow<'_, str> = if last.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(last.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(last)
+    };
+    TLDS.contains(last.as_ref()) && !is_protocol_path(candidate)
 }
 
 /// SAN-D1 `MASK`: mask URLs, bare domains, IPv4 addresses, and `api_key:`
@@ -120,8 +216,9 @@ pub fn mask_sensitive_text(text: &str) -> String {
     let masked = URL_PATTERN.replace_all(text, |captures: &regex::Captures<'_>| {
         mask_url(&captures[0])
     });
+    let masked = mask_configured_hosts(masked);
     let masked = DOMAIN_PATTERN.replace_all(&masked, |captures: &regex::Captures<'_>| {
-        if is_host(&captures[0]) {
+        if is_host(&captures[0]) && !already_masked(&captures, &masked) {
             mask_host_for_plain_domain(&captures[0])
         } else {
             captures[0].to_string()
@@ -131,6 +228,40 @@ pub fn mask_sensitive_text(text: &str) -> String {
     API_KEY_PATTERN
         .replace_all(&masked, "${1}api_key:***${3}")
         .into_owned()
+}
+
+/// A tail kept by `MASKHOST` (`***.bar.io`) still matches the host patterns;
+/// re-masking it would break the idempotence SAN-15 relies on.
+fn already_masked(captures: &regex::Captures<'_>, text: &str) -> bool {
+    let start = captures.get(0).map_or(0, |matched| matched.start());
+    text[..start].ends_with("***.")
+}
+
+/// SAN-D1 step 2. Runs before the bare-domain step, whose exemptions do not
+/// apply to a host Monoize itself connects to.
+fn mask_configured_hosts(text: Cow<'_, str>) -> Cow<'_, str> {
+    let configured = CONFIGURED
+        .read()
+        .expect("configured host lock is never poisoned");
+    let mut text = text;
+    if let Some(pattern) = &configured.dotted {
+        let replaced = pattern.replace_all(&text, |captures: &regex::Captures<'_>| {
+            if already_masked(captures, &text) {
+                captures[0].to_string()
+            } else {
+                mask_host_for_plain_domain(&captures[0])
+            }
+        });
+        if let Cow::Owned(replaced) = replaced {
+            text = Cow::Owned(replaced);
+        }
+    }
+    if let Some(pattern) = &configured.single_label {
+        if let Cow::Owned(replaced) = pattern.replace_all(&text, "***${1}") {
+            text = Cow::Owned(replaced);
+        }
+    }
+    text
 }
 
 /// SAN-CFG5: apply [`mask_sensitive_text`] only when the runtime setting
