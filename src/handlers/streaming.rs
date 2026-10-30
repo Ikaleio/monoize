@@ -875,6 +875,16 @@ pub(super) async fn forward_stream_typed(
             {
                 urp::strip_nested_extra_body(&mut req_attempt.input);
             }
+            // WS5a: the appended include is only for Responses attempts.
+            if attempt.provider_type != ProviderType::Responses
+                && ws_turn.as_ref().is_some_and(|turn| turn.encrypted_include_added)
+                && let Some(Value::Array(include)) = req_attempt.extra_body.get_mut("include")
+            {
+                include.retain(|value| value.as_str() != Some("reasoning.encrypted_content"));
+                if include.is_empty() {
+                    req_attempt.extra_body.remove("include");
+                }
+            }
             inject_monoize_context(&auth, &mut req_attempt);
             req_attempt.model = attempt.upstream_model.clone();
             // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
