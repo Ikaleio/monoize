@@ -157,6 +157,8 @@ PP2. The preset `google_gemini` MUST use native Gemini base URL:
 
 - `https://generativelanguage.googleapis.com/v1beta`
 
+PP2a. Upstream URL joining MUST treat a trailing base-URL path segment in {`v1`, `v1beta`, `v1alpha`} as the configured API version. When the base URL ends with such a segment and the request path begins with a segment from the same set, Monoize MUST drop the path's version segment, so the base version wins and no version appears twice (`…/v1beta` + `/v1beta/models/m:generateContent` → `…/v1beta/models/m:generateContent`). Otherwise the path is appended unchanged.
+
 PP3. The preset `xai_grok` MUST use xAI base URL:
 
 - `https://api.x.ai`
@@ -422,6 +424,7 @@ T1f.2. URP v2 MUST use the Chat-compatible `allowed_tools` wrapper `{ "type": "a
 T1f.3. For every target-specific tool-choice conversion, the semantic `type`, semantic nested `name`, canonical `allowed_tools.mode`, canonical `allowed_tools.tools`, and typed request-level `tool_choice` MUST win collisions with unknown selector fields and top-level request `extra_body`. A decoder MUST recursively remove every client-supplied selector member whose key starts with `_monoize_`, including members of the `allowed_tools` wrapper and its inner selectors. A target encoder MUST also recursively remove such members before wire emission. An OpenAI encoder MUST NOT emit Anthropic-only `disable_parallel_tool_use` inside `tool_choice`.
 
 T1g. Provider-native tool descriptors MUST be gated by provider family. When the source family and target family are the same, Monoize MUST preserve provider-native tool descriptors that the target provider type supports, including Responses native tool types carried under T1a and Anthropic native tool types carried through a Messages request. When the source family and target family differ, Monoize MAY emit a provider-native tool descriptor only when this specification or provider-adapter code explicitly supports that target shape. Otherwise Monoize MUST filter that provider-native tool descriptor from the outbound payload for that upstream attempt while keeping the IR value intact for later attempts or downstream response rendering. If a specific `tool_choice` names only a descriptor filtered by this rule, Monoize MUST omit that `tool_choice` from the same outbound attempt.
+Gemini targets explicitly support the cross-family built-in shapes listed in PG4h; those descriptors pass this filter.
 
 T1h. Tool-definition compatibility rules describe request forwarding only. They MUST NOT authorize local tool execution. Monoize MUST NOT execute tools locally, as required by TCI2.
 
@@ -507,6 +510,8 @@ TCI7d.2. Monoize MUST emit a Responses `response.custom_tool_call_input.delta` o
 TCI7d.3. The concatenation of all emitted custom-tool input deltas MUST equal the `input` value in `response.custom_tool_call_input.done`, `response.output_item.done`, and `response.completed`. If the streamed wrapper is invalid, has a different field, has a non-string `input`, or ends before the wrapper is complete, Monoize MUST emit a terminal upstream-protocol error. It MUST NOT convert the malformed wrapper into a function tool call. A complete non-placeholder wrapper in `content_block_start.input` MUST emit its decoded text as an initial input delta. A terminal event with an unclosed bridged custom-tool content block MUST produce a terminal upstream-protocol error.
 
 TCI7e. Internal bridge markers MUST NOT be accepted from the downstream request and MUST NOT appear in the upstream or downstream wire body. Monoize MUST NOT execute a promoted or bridged tool.
+
+TCI7f. A Gemini attempt MUST apply the TCI7c/TCI7d bridge to every explicit and promoted Responses custom tool, because Gemini has no custom tool type: the custom tool encodes as a Gemini function declaration with the TCI7c input schema, a replayed custom call encodes as a `functionCall` with `args = {"input": <string>}`, its correlated result encodes as a `functionResponse`, and a returned `functionCall` for a bridged name (non-stream and stream) becomes a custom tool call whose input is the unwrapped string. A custom call or result that reaches the Gemini encoder without this bridge MUST fail the attempt with an explicit request error.
 
 TCI8. For same-Messages programmatic tool calling, Monoize MUST preserve the native versioned `code_execution_*` descriptor, function-tool `allowed_callers`, top-level `container`, `caller` on client `tool_use`, and opaque `server_tool_use` and `code_execution_tool_result` blocks. Monoize MUST NOT execute the code or the client-owned tool call.
 
@@ -865,7 +870,7 @@ It MUST NOT retain another copy in internal extras or change the top-level `Reas
 The adapter MUST consume this provenance without emitting a separate metadata field on the wire.
 PG5a1 defines request normalization for bound function-call signatures, including legacy internal provenance.
 
-PR4c.7. If `reasoning_envelope_enabled = false`, Monoize MUST NOT wrap newly produced downstream encrypted reasoning payloads. If a downstream request nevertheless replays an `mz2.` envelope, Monoize MAY unwrap it before upstream encoding, but MUST NOT enforce the provider/model mismatch drop defined by PR4c.6.
+PR4c.7. If `reasoning_envelope_enabled = false`, Monoize MUST NOT wrap newly produced downstream encrypted reasoning payloads. If a downstream request nevertheless replays an `mz2.` envelope, Monoize MAY unwrap it before upstream encoding, but MUST NOT enforce the provider/model mismatch drop defined by PR4c.6. PG5a3 defines the provider-type provenance check that Gemini targets apply regardless of this setting.
 
 PR4c.8. Monoize MUST accept legacy `mz1.<item_id>.<payload>` reasoning signatures as replay input. When forwarding such a value to a Responses upstream, Monoize MUST set the reasoning item id to `<item_id>` and forward only `<payload>` as `encrypted_content`.
 
@@ -1322,7 +1327,7 @@ PM12a. A Messages encoder MUST render both `message_start.message.usage` and ter
 
 PG0. `gemini-codec.spec.md` defines the current detailed GenerateContent mapping contract and supersedes older codec restrictions in this section.
 
-PG1. Monoize MUST call Gemini native endpoints under base URL `https://generativelanguage.googleapis.com` using the API version path selected by provider configuration, default `v1beta`.
+PG1. Monoize MUST call Gemini native endpoints under the provider base URL. The API version is the trailing version segment of the base URL when present (PP2a); otherwise it is `v1beta`. The active probe MUST build its URL with the same joining rule.
 
 PG2. For non-streaming requests, Monoize MUST call:
 
@@ -1332,20 +1337,51 @@ PG3. For streaming requests, Monoize MUST call:
 
 - `POST /<version>/models/{upstream_model}:streamGenerateContent?alt=sse`
 
+With the preset base URL `https://generativelanguage.googleapis.com/v1beta`, the request URL is `https://generativelanguage.googleapis.com/v1beta/models/{upstream_model}:generateContent` (one `v1beta` segment).
+
 PG4. Monoize MUST encode URP v2 requests to Gemini native request fields:
 
 - `contents[]` for conversation turns;
-- `systemInstruction` for leading system or developer instruction;
+- `systemInstruction` for every system or developer instruction node, in input order;
 - `generationConfig` for temperature, top_p, and max_output_tokens;
 - `tools[]` and `toolConfig.functionCallingConfig` for tool definitions and tool choice.
 
-PG4a. When encoding a URP `ToolResult` node into Gemini `functionResponse`, Monoize MUST use its typed `name` or the correlated ToolCall name. It MUST NOT use the URP `call_id` as the function name.
+PG4a. When encoding a URP `ToolResult` node into Gemini `functionResponse`, Monoize MUST use its typed `name` or the correlated ToolCall name. It MUST NOT use the URP `call_id` as the function name. A result that did not originate from a Gemini-native `functionResponse` encodes as `response = {"output": <text>}`, or `{"error": <text>}` when `is_error = true`. FunctionResponse holds media only in `parts[]`, so result text and media order cannot be interleaved on the wire.
 
-PG4b. If normalized reasoning effort is `none`, Monoize MUST encode `generationConfig.thinkingConfig.thinkingBudget = 0`. Monoize MUST NOT replace this value with a positive budget. The upstream model determines whether disabled thinking is supported.
+PG4b. Typed reasoning maps to `generationConfig.thinkingConfig` by model family. The model id is the upstream model with any `models/` prefix removed, compared case-insensitively.
+
+| Family (first match) | Encoding | Supported values |
+|---|---|---|
+| contains `robotics-er-1` | `thinkingBudget` | 0..24576, disable = 0 |
+| `gemma*`, `learnlm*`, `gemini-<v>` with v < 2.5 | none | typed reasoning is not encoded |
+| `gemini-2.*` containing `pro` | `thinkingBudget` | 128..32768, cannot disable (off = 128) |
+| `gemini-2.*` containing `flash-lite` | `thinkingBudget` | 512..24576, disable = 0 |
+| other `gemini-2.*` | `thinkingBudget` | 0..24576, disable = 0 |
+| `gemini-3.*` containing `flash-lite-image` | `thinkingLevel` | MINIMAL, HIGH |
+| `gemini-3.*` containing `pro`, or `gemini-3.8-*` | `thinkingLevel` | LOW, MEDIUM, HIGH |
+| other `gemini-3.*`, or containing `robotics-er-2` | `thinkingLevel` | MINIMAL, LOW, MEDIUM, HIGH |
+| anything else (Gemini 4, `-latest` aliases, unknown ids) | `thinkingLevel` | LOW, MEDIUM, HIGH |
+
+Budget families: disabled reasoning (`effort = none` or `mode = disabled`) or `budget_tokens = 0` encodes the off value; positive `budget_tokens` clamps to the range (lower bound at least 1); effort maps `minimal = 512`, `low = 1024`, `medium = 8192`, `high = 24576`, `xhigh`/`max` = range maximum, then clamps; `mode` `adaptive` or `enabled` without budget or effort encodes `-1`.
+Level families: disabled reasoning or budget 0 selects the lowest supported level; positive budget ≤ 1024 targets LOW, ≤ 8192 MEDIUM, otherwise HIGH; effort `minimal`/`low`/`medium`/`high` targets that level; `xhigh`/`max` select the highest supported level; the selected level is the supported level nearest to the target, ties resolving upward. Adaptive or unknown effort sends no level. Monoize MUST NOT send `thinkingLevel` and `thinkingBudget` together and MUST NOT send `XHIGH` or `MAX`.
+
+PG4b1. `includeThoughts` is `summary != "none"` when typed `summary` is present; otherwise absent for disabled reasoning; otherwise `display != "omitted"` when `mode` is `adaptive` or `enabled`; otherwise `true` when effort or budget is present; otherwise absent. Families without thinking encode no `thinkingConfig` member from typed reasoning.
 
 PG4c. The Gemini encoder MUST initialize `generationConfig` from native passthrough configuration and overlay explicitly present typed fields. It MUST preserve unrelated native fields. Typed `stop` maps to `stopSequences`. Typed JSON object output maps to `responseMimeType = "application/json"`. Typed JSON schema output additionally maps to `responseJsonSchema`. Typed text output clears native response schemas and sets `responseMimeType = "text/plain"`. Typed reasoning controls replace recognized thinkingConfig fields under CTRL-1 through CTRL-7 in `urp-v2-flat-structure.spec.md`. Native decoding MUST retain only unknown thinkingConfig members. It MUST NOT approximate a native thinking budget with effort.
 
 PG4d. A Gemini `functionCall.id`, when supplied, MUST remain the canonical `ToolCall.call_id`. A call without an id MUST receive a unique synthetic canonical call id. The encoder MUST omit synthetic ids from native calls and their matching native results. A `functionResponse` MUST preserve the matching supplied call id and the function name. Consecutive tool results MUST share one user Content. Native function-response objects MUST remain JSON objects during same-Gemini replay.
+
+PG4e. A Gemini `Content` MUST contain only `role`, `parts`, and native Content members retained from a Gemini-native decode. `NextDownstreamEnvelopeExtra` nodes and node-level extras of other protocols MUST NOT add Content or `systemInstruction` members and MUST NOT split Content.
+
+PG4f. Gemini 3+ validates current-turn function-call signatures. For every model whose PG4b family uses `thinkingLevel`, after building `contents`, the encoder MUST locate the current turn: the Contents after the last `role = "user"` Content that holds at least one Part other than `functionResponse` (all Contents when none exists). In each `role = "model"` Content of the current turn, the first `functionCall` Part whose `thoughtSignature` is absent, null, or empty MUST receive the documented dummy `thoughtSignature = "skip_thought_signature_validator"`. Signed calls, later parallel calls, earlier turns, and budget or thinking-less families MUST stay unchanged.
+
+PG4g. `toolConfig.functionCallingConfig` reads the flat Responses `allowed_tools` selector and the Chat nested `{type:"allowed_tools", allowed_tools:{mode, tools}}` selector. Mode `required`/`any` → `ANY`, `validated` → `VALIDATED`, `none` → `NONE`; `auto` or absent → `VALIDATED` when at least one function name remains, else `AUTO`. `allowedFunctionNames` is emitted only with `ANY` or `VALIDATED` and a non-empty name list. When the request has no function declaration, the encoder MUST omit the typed mode.
+
+PG4h. Cross-family built-in tool definitions map to Gemini Tool members: `web_search` and every `web_search_*` type → `googleSearch: {}`; `code_interpreter` and every `code_execution*` type → `codeExecution: {}`; every `web_fetch*` type → `urlContext: {}`; each member is emitted at most once and descriptor options are not mapped. `image_generation` maps under PG4i. Provider filtering MUST keep these descriptors for Gemini attempts; other cross-family built-in descriptors follow T1g and are dropped. A non-function tool that reaches the encoder without one of these mappings and without Gemini origin MUST fail the attempt with an explicit request error.
+
+PG4i. Image output: when typed `image_generation` options are present (Images API), or an `image_generation` tool is declared and the model id contains `image`, `generationConfig.responseModalities` defaults to `["TEXT","IMAGE"]`. A `WxH` size maps to `imageConfig.aspectRatio` = the documented ratio (1:1, 1:4, 4:1, 1:8, 8:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9) nearest in log-ratio, and `imageConfig.imageSize` = `512` / `1K` / `2K` / `4K` for longest edge ≤ 512 / ≤ 1024 / ≤ 2048 / larger. Native `responseModalities` and `imageConfig` members win. For other models an `image_generation` tool is a dropped definition.
+
+PG4j. Request controls: more than 5 stop sequences MUST fail the attempt with an explicit request error. `service_tier` maps to top-level `serviceTier` (`default`, `standard`, `standard_only` → `standard`; `flex`; `priority`; others omitted) and is never forwarded under its own name. For `thinkingLevel` families, image `detail` maps to Part `mediaResolution.level` (`low` → `MEDIA_RESOLUTION_LOW`, `high` → `MEDIA_RESOLUTION_HIGH`, `original` → `MEDIA_RESOLUTION_ULTRA_HIGH`) unless the native Part already carries one. Each function declaration carries `description` (empty string when absent). `parallel_tool_calls`, `n`, JSON-schema `name`/`description`, file `filename`, and `user`/`safety_identifier` have no Gemini equivalent and are not encoded.
 
 PG5. Monoize MUST decode Gemini responses from `candidates[].content.parts[]` and convert them to URP v2 nodes, including:
 
@@ -1353,7 +1389,10 @@ PG5. Monoize MUST decode Gemini responses from `candidates[].content.parts[]` an
 - tool or function call nodes;
 - reasoning or thought nodes and signatures when provided.
 
-PG5a. A thought text Part MUST map to one Reasoning node with its signature in `encrypted`. Text signatures use typed `signature`. Media signatures use typed `MediaMetadata.signature`. Gemini encoding MUST attach each signature to its owning Part. A signature-only Part MUST retain its native shape.
+PG5a. A thought text Part MUST map to one Reasoning node whose `summary` holds the text (Gemini documents thought parts as thought summaries) and whose `encrypted` holds its signature; a signed thought receives a Reasoning id with prefix `rs_gemini_`. In response decoding (non-stream and stream), a non-empty text Part or media Part signature MUST map to one signature-only Reasoning carrier placed immediately after its owning node, with id `rs_gemini_part_` + 32 lowercase hex digits and `encrypted` = the signature; the owning Text or media node keeps no typed signature. A signed Part with empty text and no other data MUST map to one standalone signature-only Reasoning carrier with id prefix `rs_gemini_` (not `rs_gemini_part_`). Gemini-native request decoding keeps typed `Text.signature` and `MediaMetadata.signature`.
+The Gemini encoder MUST attach each typed signature to its owning Part. A signature-only Reasoning node whose id or `metadata.item_id` starts with `rs_gemini_part_` MUST attach to the adjacent unsigned non-thought text, `inlineData`, or `fileData` Part of the same Content, preferring the preceding Part, then the following Part; otherwise, and for every other signature-only Reasoning node, the encoder MUST emit `{"text": "", "thoughtSignature": <signature>}`. The encoder MUST NOT emit a Part whose only member is `thoughtSignature`.
+
+PG5a3. Gemini accepts only signatures produced by Gemini. When the target provider type is `gemini`, before envelope unwrapping (and independent of `reasoning_envelope_enabled`), Monoize MUST establish provenance for every `ToolCall.signature` and `Reasoning.encrypted`: an `mz2.` envelope is Gemini iff its `provider_type = "gemini"`; an `mz1.` sigil is Gemini iff its item id starts with `rs_gemini_`; a raw call signature is Gemini (only the Gemini call transport produces typed call signatures); a raw reasoning value is Gemini iff the Reasoning id or `metadata.item_id` starts with `rs_gemini_`. A non-Gemini call signature MUST be cleared. A non-Gemini reasoning value MUST be cleared, and the Reasoning node MUST be removed when it has no non-empty `content` or `summary`. PR4c.6 model matching then applies to the remaining envelopes.
 
 PG5a1. A Gemini function-call Part signature MUST map only to canonical `ToolCall.signature`.
 The decoder MUST NOT create a second canonical Reasoning node for that signature.
@@ -1369,7 +1408,7 @@ Before request transforms, decode normalization MUST move a recognized bound tra
 An existing typed call signature wins a collision. A transport MUST NOT attach its signature to a different call.
 Normalization MUST accept legacy bindings from the Reasoning id or `_monoize_reasoning_envelope_item_id` provenance.
 The Gemini encoder MUST attach the current typed signature to the corresponding functionCall Part.
-A transform deletion MUST remain absent. A provider or model mismatch MUST clear only the signature and preserve the tool call.
+A transform deletion MUST remain absent. A provider or model mismatch MUST clear only the signature and preserve the tool call; PG4f then supplies the documented dummy signature where Gemini requires one.
 Synthetic call ids MUST use `call_gemini_` and MUST NOT become native function ids.
 A Gemini thought-text encoder MUST select `content` when present and otherwise select `summary`.
 
@@ -1380,11 +1419,27 @@ Projection MUST preserve the original target of each envelope control. A transpo
 Terminal-only signatures MUST project immediately before their owning call and its envelope controls.
 Typed terminal deletion MUST suppress the corresponding transport.
 
-PG5b. Gemini stream text values are deltas. The decoder MUST append each fragment exactly once. It MAY combine adjacent unsigned text or thought fragments of the same kind. It MUST preserve signed Part boundaries and Part order. Every function-call, image, file, or unknown Part MUST receive a new monotonically increasing node index; positions within an SSE frame MUST NOT identify nodes across frames. Native function-call arguments are complete JSON objects, not string deltas.
+PG5b. Gemini stream text values are deltas. The decoder MUST append each fragment exactly once. It MAY combine adjacent unsigned text or thought fragments of the same kind. It MUST preserve signed Part boundaries and Part order: a signed Part never merges with an earlier or later Part, and a signed empty-text Part is its own node under PG5a (it never binds to the preceding node). Every function-call, image, file, or unknown Part MUST receive a new monotonically increasing node index; positions within an SSE frame MUST NOT identify nodes across frames. Native function-call arguments are complete JSON objects, not string deltas.
+
+PG5b1. When a new non-merged node starts, the stream decoder MUST complete (NodeDone) every earlier open node, except that an open Text node stays open while the new node is a signature-only Reasoning carrier. A completed node receives no later deltas; late citations or token scores for it appear only in `ResponseDone.output`. If the idle timeout expires after a finish reason or prompt block was received, the decoder MUST treat the stream as ended and emit the terminal response; before that point the timeout fails with `upstream_idle_timeout`.
+
+PG5b2. Streamed grounding supports are resolved against decoded output. When `segment.text` is non-empty, the decoder MUST accept the first reading whose byte range in the target Text node reproduces the text: the frame-relative reading (offset rebased by the merged-text prefix of that frame Part), then the raw offsets in the same node, then the first occurrence of the text in the frame's node, then in the other Text nodes from last to first; an unresolvable support is dropped. Without `segment.text`, frame-relative rebasing applies to frames that carry Parts, and supports from Part-less frames keep their native offsets.
 
 PG5c. Streaming and non-streaming Gemini Parts MUST use the same semantic decoding for text, thoughts, function calls, inline media, file media, and unknown Parts. An `inlineData` Part with an image MIME type MUST produce an Image node with its original MIME type and base64 payload.
 
-PG5d. The decoder MUST process `finishReason` even when candidate content or Parts are absent. A non-default `promptFeedback.blockReason` MUST produce a Refusal node and `ContentFilter` termination even when candidates are absent. Native feedback MUST remain in response passthrough. Safety, recitation, blocklist, prohibited-content, sensitive-information, and image-safety termination reasons MUST map to `ContentFilter`. `STOP` with tool calls MUST map to `ToolCalls`. A stream without a non-default finish reason or prompt block MUST fail with `upstream_stream_missing_terminal`; EOF and `[DONE]` alone MUST NOT establish success. Malformed JSON and upstream error objects MUST fail decoding.
+PG5d. The decoder MUST process `finishReason` even when candidate content or Parts are absent. A non-default `promptFeedback.blockReason` MUST produce a Refusal node and `ContentFilter` termination even when candidates are absent. Native feedback MUST remain in response passthrough. `STOP` with tool calls MUST map to `ToolCalls`. A stream without a non-default finish reason or prompt block MUST fail with `upstream_stream_missing_terminal`; EOF and `[DONE]` alone MUST NOT establish success. Malformed JSON and upstream error objects MUST fail decoding. Finish reasons map as follows:
+
+| Native `finishReason` | URP finish reason | Outcome |
+|---|---|---|
+| `STOP` | `Stop` (`ToolCalls` with calls) | completed |
+| `MAX_TOKENS` | `Length` | incomplete, `max_output_tokens` |
+| `CONTINUATION` | `Length` | incomplete, `max_output_tokens`; `incomplete_extra.continuation_token` = candidate `continuationToken` when non-empty |
+| `SAFETY`, `RECITATION`, `LANGUAGE`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`, `IMAGE_PROHIBITED_CONTENT`, `IMAGE_RECITATION`, `ESCALATION`, `PUP_LIMITED_DISABLED` | `ContentFilter` | incomplete, `content_filter` |
+| `OTHER`, `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`, `TOO_MANY_TOOL_CALLS`, `MISSING_THOUGHT_SIGNATURE`, `MALFORMED_RESPONSE`, `IMAGE_OTHER`, `NO_IMAGE`, unknown | `Other` | failed; error code = native reason, message = `finishMessage` |
+
+A client resumes a `CONTINUATION` stop by repeating the conversation with top-level `continuationToken` (whitelisted under XF6a).
+
+PG5d1. Response decoding renders `executableCode` Parts as assistant Text `"\n```<language lowercase>\n<code>\n```\n"` and `codeExecutionResult` Parts as `"\n```output\n[<outcome>]\n<output>\n```\n"`, where the bracketed outcome line appears only for outcomes other than `OUTCOME_OK` and trailing newlines of code and output are removed, so non-Gemini clients see code execution. A missing `responseId` becomes `resp_` + UUID; `created_at` is the decode time. Usage extras keep numeric counters only.
 
 PG5e. The Gemini stream encoder MUST emit available text and reasoning deltas in canonical order and emit terminal metadata once.
 It MAY buffer atomic tool calls, media, and signed Parts until their complete native payload is available.
@@ -1408,11 +1463,13 @@ PG6. Monoize MUST map Gemini usage metadata to URP usage fields using:
 - `acceptedPredictionOutputTokenCount -> output_details.accepted_prediction_tokens` when present
 - `rejectedPredictionOutputTokenCount -> output_details.rejected_prediction_tokens` when present
 
+`cacheCreationTokenCount` and the prediction counters are not UsageMetadata fields (D1); they are accepted as input aliases, and a Gemini-shaped encoder emits them only when non-zero. Streaming metering MUST use the same parser as response decoding, so a usage snapshot without `candidatesTokenCount` still meters its prompt and thought tokens.
+
 PG6a. `promptTokenCount` and `candidatesTokenCount` exclude the disjoint Gemini tool-result prompt and thought counters named in PG6. A checked-add overflow while constructing either inclusive URP total MUST fail usage decoding; Monoize MUST NOT wrap or saturate the total.
 
 PG7. Monoize MUST preserve unknown Gemini request and response fields in URP v2 passthrough state according to §3 and §7.6.
 
-PG8. Unknown Gemini `parts[]` entries MUST decode as `ProviderItem(origin_protocol = "gemini")`. A Gemini encoder MUST replay such parts only when the target provider protocol is `gemini`.
+PG8. Unknown Gemini `parts[]` entries MUST decode as `ProviderItem(origin_protocol = "gemini")`. A Gemini encoder MUST replay such parts only when the target provider protocol is `gemini`. Code-execution Parts in responses follow PG5d1 instead.
 
 ### 7.6 Extra field forwarding
 
@@ -1493,7 +1550,7 @@ XF6a. Default whitelists per provider type:
 - `chat_completion`: `audio`, `frequency_penalty`, `function_call`, `functions`, `logit_bias`, `logprobs`, `top_logprobs`, `max_completion_tokens`, `max_tokens`, `metadata`, `moderation`, `n`, `presence_penalty`, `prompt_cache_options`, `safety_identifier`, `seed`, `service_tier`, `stop`, `stream_options`, `store`, `web_search_options`, `parallel_tool_calls`, `debug`, `image_config`, `modalities`, `cache_control`, `top_k`, `top_a`, `min_p`, `repetition_penalty`, `prediction`, `prompt_cache_key`, `prompt_cache_retention`, `route`, `structured_outputs`, `verbosity`, `provider`, `plugins`, `session_id`, `stop_server_tools_when`, `trace`, `thinking`, `include_reasoning`, `user_id`.
 - `responses`: `background`, `context_management`, `conversation`, `include`, `instructions`, `metadata`, `max_tool_calls`, `moderation`, `parallel_tool_calls`, `previous_response_id`, `prompt`, `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, `safety_identifier`, `service_tier`, `store`, `stream_options`, `text`, `top_logprobs`, `truncation`.
 - `messages`: `cache_control`, `container`, `max_tokens`, `metadata`, `output_config`, `service_tier`, `stop_sequences`, `top_k`, `inference_geo`.
-- `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`.
+- `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`, `continuationToken`, `serviceTier`, `service_tier` (the Gemini encoder maps `service_tier` under PG4j and never emits it).
 
 XF6b. Each dashboard-managed provider MAY carry an optional `extra_fields_whitelist` override, JSON array of strings stored in the `monoize_providers` table. When present, the effective whitelist is the union of the default whitelist and the override list. When absent, only the default whitelist applies.
 
