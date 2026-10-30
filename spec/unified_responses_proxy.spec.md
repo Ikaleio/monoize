@@ -511,7 +511,7 @@ TCI7d.3. The concatenation of all emitted custom-tool input deltas MUST equal th
 
 TCI7e. Internal bridge markers MUST NOT be accepted from the downstream request and MUST NOT appear in the upstream or downstream wire body. Monoize MUST NOT execute a promoted or bridged tool.
 
-TCI7f. A Gemini attempt MUST apply the TCI7c/TCI7d bridge to every explicit and promoted Responses custom tool, because Gemini has no custom tool type: the custom tool encodes as a Gemini function declaration with the TCI7c input schema, a replayed custom call encodes as a `functionCall` with `args = {"input": <string>}`, its correlated result encodes as a `functionResponse`, and a returned `functionCall` for a bridged name (non-stream and stream) becomes a custom tool call whose input is the unwrapped string. A custom call or result that reaches the Gemini encoder without this bridge MUST fail the attempt with an explicit request error.
+TCI7f. A Gemini attempt MUST apply the TCI7c/TCI7d bridge to every explicit and promoted Responses custom tool, because Gemini has no custom tool type: the custom tool encodes as a Gemini function declaration with the TCI7c input schema, a replayed custom call encodes as a `functionCall` with `args = {"input": <string>}`, its correlated result encodes as a `functionResponse`, and a returned `functionCall` for a bridged name (non-stream and stream) becomes a custom tool call whose input is the unwrapped string. Custom calls and results in Responses history whose tool is not declared MUST use the same `{input}` function shape. A custom call or result that still reaches the Gemini encoder MUST fail the attempt with an explicit request error.
 
 TCI8. For same-Messages programmatic tool calling, Monoize MUST preserve the native versioned `code_execution_*` descriptor, function-tool `allowed_callers`, top-level `container`, `caller` on client `tool_use`, and opaque `server_tool_use` and `code_execution_tool_result` blocks. Monoize MUST NOT execute the code or the client-owned tool call.
 
@@ -1354,10 +1354,12 @@ PG4b. Typed reasoning maps to `generationConfig.thinkingConfig` by model family.
 |---|---|---|
 | contains `robotics-er-1` | `thinkingBudget` | 0..24576, disable = 0 |
 | `gemma*`, `learnlm*`, `gemini-<v>` with v < 2.5 | none | typed reasoning is not encoded |
+| contains `nano-banana` | `thinkingLevel` | MINIMAL, MEDIUM, HIGH |
+| `gemini-2.*` containing `image` | none | thinking not supported |
 | `gemini-2.*` containing `pro` | `thinkingBudget` | 128..32768, cannot disable (off = 128) |
 | `gemini-2.*` containing `flash-lite` | `thinkingBudget` | 512..24576, disable = 0 |
 | other `gemini-2.*` | `thinkingBudget` | 0..24576, disable = 0 |
-| `gemini-3.*` containing `flash-lite-image` | `thinkingLevel` | MINIMAL, HIGH |
+| `gemini-3.*` containing `flash-lite-image` or `flash-image` | `thinkingLevel` | MINIMAL, HIGH |
 | `gemini-3.*` containing `pro`, or `gemini-3.8-*` | `thinkingLevel` | LOW, MEDIUM, HIGH |
 | other `gemini-3.*`, or containing `robotics-er-2` | `thinkingLevel` | MINIMAL, LOW, MEDIUM, HIGH |
 | anything else (Gemini 4, `-latest` aliases, unknown ids) | `thinkingLevel` | LOW, MEDIUM, HIGH |
@@ -1379,7 +1381,7 @@ PG4g. `toolConfig.functionCallingConfig` reads the flat Responses `allowed_tools
 
 PG4h. Cross-family built-in tool definitions map to Gemini Tool members: `web_search` and every `web_search_*` type → `googleSearch: {}`; `code_interpreter` and every `code_execution*` type → `codeExecution: {}`; every `web_fetch*` type → `urlContext: {}`; each member is emitted at most once and descriptor options are not mapped. `image_generation` maps under PG4i. Provider filtering MUST keep these descriptors for Gemini attempts; other cross-family built-in descriptors follow T1g and are dropped. A non-function tool that reaches the encoder without one of these mappings and without Gemini origin MUST fail the attempt with an explicit request error.
 
-PG4i. Image output: when typed `image_generation` options are present (Images API), or an `image_generation` tool is declared and the model id contains `image`, `generationConfig.responseModalities` defaults to `["TEXT","IMAGE"]`. A `WxH` size maps to `imageConfig.aspectRatio` = the documented ratio (1:1, 1:4, 4:1, 1:8, 8:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9) nearest in log-ratio, and `imageConfig.imageSize` = `512` / `1K` / `2K` / `4K` for longest edge ≤ 512 / ≤ 1024 / ≤ 2048 / larger. Native `responseModalities` and `imageConfig` members win. For other models an `image_generation` tool is a dropped definition.
+PG4i. Image output: when typed `image_generation` options are present (Images API), or an `image_generation` tool is declared and the model id contains `image` or `nano-banana`, `generationConfig.responseModalities` defaults to `["TEXT","IMAGE"]`. A `WxH` size maps to `imageConfig.aspectRatio` = the ratio nearest in log-ratio among those every Gemini image model documents (1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9). `imageConfig.imageSize` is not derived because supported sizes differ per model. Native `responseModalities` and `imageConfig` members win. For other models an `image_generation` tool is a dropped definition.
 
 PG4j. Request controls: more than 5 stop sequences MUST fail the attempt with an explicit request error. `service_tier` maps to top-level `serviceTier` (`default`, `standard`, `standard_only` → `standard`; `flex`; `priority`; others omitted) and is never forwarded under its own name. For `thinkingLevel` families, image `detail` maps to Part `mediaResolution.level` (`low` → `MEDIA_RESOLUTION_LOW`, `high` → `MEDIA_RESOLUTION_HIGH`, `original` → `MEDIA_RESOLUTION_ULTRA_HIGH`) unless the native Part already carries one. Each function declaration carries `description` (empty string when absent). `parallel_tool_calls`, `n`, JSON-schema `name`/`description`, file `filename`, and `user`/`safety_identifier` have no Gemini equivalent and are not encoded.
 

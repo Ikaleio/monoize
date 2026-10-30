@@ -2001,6 +2001,28 @@ pub(super) fn promote_responses_additional_tools(
     if matches!(provider_type, ProviderType::Messages | ProviderType::Gemini) {
         bridge_messages_custom_history(req);
     }
+    if provider_type == ProviderType::Gemini {
+        // Gemini has no custom call type: undeclared custom history uses the same `{input}`
+        // function shape so the conversation stays encodable.
+        for node in &mut req.input {
+            match node {
+                urp::Node::ToolCall {
+                    tool_type,
+                    arguments,
+                    ..
+                } if *tool_type == urp::ToolCallType::Custom => {
+                    *tool_type = urp::ToolCallType::Function;
+                    *arguments = json!({ "input": arguments.clone() }).to_string();
+                }
+                urp::Node::ToolResult { tool_type, .. }
+                    if *tool_type == urp::ToolCallType::Custom =>
+                {
+                    *tool_type = urp::ToolCallType::Function;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 pub(super) fn tool_namespace_aliases(req: &urp::UrpRequest) -> HashMap<String, urp::ToolIdentity> {

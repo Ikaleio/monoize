@@ -1531,6 +1531,11 @@ const ALL_LEVELS: &[ThinkingLevel] = &[
 const LEVELS_WITHOUT_MINIMAL: &[ThinkingLevel] =
     &[ThinkingLevel::Low, ThinkingLevel::Medium, ThinkingLevel::High];
 const MINIMAL_OR_HIGH: &[ThinkingLevel] = &[ThinkingLevel::Minimal, ThinkingLevel::High];
+const MINIMAL_MEDIUM_HIGH: &[ThinkingLevel] = &[
+    ThinkingLevel::Minimal,
+    ThinkingLevel::Medium,
+    ThinkingLevel::High,
+];
 
 enum ThinkingTarget {
     Lowest,
@@ -1578,6 +1583,7 @@ impl GeminiModel {
             };
             Some((major, minor))
         });
+        let image_output = name.contains("image") || name.contains("nano-banana");
         let thinking = if name.contains("robotics-er-1") {
             ThinkingProfile::Budget {
                 min: 0,
@@ -1586,9 +1592,13 @@ impl GeminiModel {
             }
         } else if name.starts_with("gemma") || name.starts_with("learnlm") {
             ThinkingProfile::Unsupported
+        } else if name.contains("nano-banana") {
+            ThinkingProfile::Levels(MINIMAL_MEDIUM_HIGH)
         } else {
             match version {
                 Some(version) if version < (2, 5) => ThinkingProfile::Unsupported,
+                // Gemini 2.5 image models document thinking as not supported.
+                Some((2, _)) if image_output => ThinkingProfile::Unsupported,
                 Some((2, _)) if name.contains("pro") => ThinkingProfile::Budget {
                     min: 128,
                     max: 32768,
@@ -1604,7 +1614,9 @@ impl GeminiModel {
                     max: 24576,
                     can_disable: true,
                 },
-                Some((3, _)) if name.contains("flash-lite-image") => {
+                Some((3, _))
+                    if name.contains("flash-lite-image") || name.contains("flash-image") =>
+                {
                     ThinkingProfile::Levels(MINIMAL_OR_HIGH)
                 }
                 Some((3, minor)) if name.contains("pro") || minor == 8 => {
@@ -1622,7 +1634,7 @@ impl GeminiModel {
             thinking,
             requires_call_signatures: current,
             media_resolution: current,
-            image_output: name.contains("image"),
+            image_output,
         }
     }
 
@@ -1756,14 +1768,11 @@ fn gemini_service_tier(tier: &str) -> Option<&'static str> {
     }
 }
 
-/// Maps an OpenAI-style `WxH` size to the nearest documented Gemini aspect ratio and size.
+/// Maps an OpenAI-style `WxH` size to the nearest aspect ratio that every Gemini image model
+/// documents. `imageSize` support differs per model, so the size tier is not derived.
 fn image_config_from_size(size: &str) -> Option<Map<String, Value>> {
-    const RATIOS: [(u32, u32); 14] = [
+    const RATIOS: [(u32, u32); 10] = [
         (1, 1),
-        (1, 4),
-        (4, 1),
-        (1, 8),
-        (8, 1),
         (2, 3),
         (3, 2),
         (3, 4),
@@ -1782,20 +1791,10 @@ fn image_config_from_size(size: &str) -> Option<Map<String, Value>> {
     let (ratio_width, ratio_height) = RATIOS
         .into_iter()
         .min_by(|left, right| distance(*left).total_cmp(&distance(*right)))?;
-    let longest = width.max(height);
-    let image_size = match longest {
-        0..=512 => "512",
-        513..=1024 => "1K",
-        1025..=2048 => "2K",
-        _ => "4K",
-    };
-    Some(Map::from_iter([
-        (
-            "aspectRatio".to_string(),
-            json!(format!("{ratio_width}:{ratio_height}")),
-        ),
-        ("imageSize".to_string(), json!(image_size)),
-    ]))
+    Some(Map::from_iter([(
+        "aspectRatio".to_string(),
+        json!(format!("{ratio_width}:{ratio_height}")),
+    )]))
 }
 
 /// Maps a typed image `detail` to the Gemini 3+ per-Part media resolution.
