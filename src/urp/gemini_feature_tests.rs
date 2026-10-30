@@ -2009,8 +2009,8 @@ fn mutate_provider_identity(response: &mut UrpResponse, delete: bool) {
 fn opaque_parts() -> Vec<Value> {
     vec![
         json!({"id":"old","type":"vendor","payload":{"value":7}}),
-        json!({"toolResponse":{"id":"nested","toolType":"GOOGLE_SEARCH","response":{"ok":true}}}),
-        json!({"toolCall":{"id":"nested","toolType":"GOOGLE_SEARCH","args":{"q":"test"}}}),
+        json!({"futurePart":{"id":"nested","payload":{"ok":true}}}),
+        json!({"anotherFuturePart":{"q":"test"}}),
     ]
 }
 

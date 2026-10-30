@@ -859,7 +859,9 @@ pub(super) async fn forward_stream_typed(
                 &mut original_req,
                 attempt_index + 1 == attempt_count && channel_attempt + 1 == max_channel_attempts,
             );
-            if matches!(downstream, DownstreamProtocol::Responses) {
+            if matches!(downstream, DownstreamProtocol::Responses)
+                || attempt.provider_type == ProviderType::Gemini
+            {
                 promote_responses_additional_tools(&mut req_attempt, attempt.provider_type);
             }
             if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {

@@ -1,8 +1,9 @@
 use crate::urp::decode::gemini::{
     GEMINI_CANDIDATE_EXTRA_KEY, GEMINI_CONTENT_EXTRA_KEY, GEMINI_ENUM_FORMAT_KEY,
-    GEMINI_PART_EXTRA_KEY, GEMINI_PART_SIGNATURE_ID_PREFIX, GEMINI_SIGNATURE_ID_PREFIX,
-    GEMINI_SYNTHETIC_CALL_PREFIX, GEMINI_SYSTEM_EXTRA_KEY, GEMINI_TEXT_FORMAT_KEY,
-    native_schema_types, strip_text_response_format,
+    GEMINI_CONTINUATION_ID_PREFIX, GEMINI_ITEM_CARRIER_ID_PREFIX, GEMINI_PART_EXTRA_KEY,
+    GEMINI_PART_SIGNATURE_ID_PREFIX, GEMINI_SIGNATURE_ID_PREFIX, GEMINI_SYNTHETIC_CALL_PREFIX,
+    GEMINI_SYSTEM_EXTRA_KEY, GEMINI_TEXT_FORMAT_KEY, item_carrier_part, native_schema_types,
+    strip_text_response_format, text_carrier_owner,
 };
 use crate::urp::encode::{
     merge_extra, sanitize_provider_item_wire_body, usage_input_details, usage_output_details,
@@ -60,7 +61,7 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut contents = Vec::new();
     let mut system_parts = Vec::new();
     let mut tool_names_by_call_id: Map<String, Value> = Map::new();
-    let request_nodes = &req.input;
+    let (request_nodes, continuation) = split_continuation(&req.input);
 
     for node in request_nodes {
         if let Node::ToolCall { call_id, name, .. } = node {
@@ -311,7 +312,10 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
         generation_config
             .entry("responseModalities")
             .or_insert_with(|| json!(["TEXT", "IMAGE"]));
-        if let Some(config) = size.as_deref().and_then(image_config_from_size) {
+        if let Some(config) = size
+            .as_deref()
+            .and_then(|size| image_config_from_size(&model, size))
+        {
             let native = generation_config
                 .entry("imageConfig")
                 .or_insert_with(|| json!({}));
@@ -396,6 +400,26 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
     {
         obj.insert("serviceTier".into(), json!(tier));
     }
+    if let Some(token) = continuation {
+        obj.insert("continuationToken".into(), token.clone());
+    }
+    if let Some(identifier) = req
+        .extra_body
+        .get("safety_identifier")
+        .and_then(Value::as_str)
+        .filter(|identifier| valid_label_value(identifier))
+    {
+        let mut labels = req
+            .extra_body
+            .get("labels")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        labels
+            .entry("safety_identifier")
+            .or_insert_with(|| json!(identifier));
+        obj.insert("labels".into(), Value::Object(labels));
+    }
     let extra = req
         .extra_body
         .iter()
@@ -408,6 +432,7 @@ fn encode_prepared_request(req: &UrpRequest, upstream_model: &str) -> Value {
                     | "contents"
                     | "systemInstruction"
                     | "service_tier"
+                    | "safety_identifier"
             )
         })
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -467,7 +492,7 @@ pub(crate) fn encode_response_node_parts(node: &Node) -> Result<Vec<Value>, Stri
         }
     }
     // A single streamed node has no adjacent Part to bind; carriers stay standalone.
-    resolve_bound_signatures(&mut parts);
+    resolve_bound_signatures(&mut parts, false);
     Ok(parts)
 }
 
@@ -482,7 +507,7 @@ fn encode_prepared_response(resp: &UrpResponse, logical_model: &str) -> Value {
             }
         }
     }
-    for removed in resolve_bound_signatures(&mut parts) {
+    for removed in resolve_bound_signatures(&mut parts, false) {
         emitted_nodes.remove(removed);
     }
     let mut usage_metadata = json!({
@@ -892,7 +917,7 @@ fn flush_pending_gemini_message(pending: &mut Option<GeminiMessageEnvelope>, out
     let mut obj = Map::new();
     obj.insert("role".to_string(), Value::String(role.to_string()));
     let mut parts = message.parts;
-    resolve_bound_signatures(&mut parts);
+    resolve_bound_signatures(&mut parts, true);
     obj.insert("parts".to_string(), Value::Array(parts));
     merge_extra(&mut obj, &message.extra_body);
     out.push(Value::Object(obj));
@@ -1004,6 +1029,8 @@ pub(crate) fn encode_request_node_part(
             ..
         } if content.is_some() || summary.is_some() || encrypted.is_some() => {
             let text = content.as_deref().or(summary.as_deref());
+            let carrier_id = id.as_deref().or(metadata.item_id.as_deref());
+            let carrier = |prefix: &str| carrier_id.is_some_and(|id| id.starts_with(prefix));
             let part = match (text, encrypted) {
                 (Some(text), signature) => {
                     let mut part = json!({"text": text, "thought": true});
@@ -1012,13 +1039,25 @@ pub(crate) fn encode_request_node_part(
                     }
                     part
                 }
-                (None, Some(signature))
-                    if id
-                        .as_deref()
-                        .or(metadata.item_id.as_deref())
-                        .is_some_and(|id| id.starts_with(GEMINI_PART_SIGNATURE_ID_PREFIX)) =>
+                // Continuation tokens are request controls (PG5d2), never Parts.
+                (None, Some(_))
+                    if carrier(GEMINI_CONTINUATION_ID_PREFIX) =>
                 {
-                    json!({ BOUND_SIGNATURE_KEY: signature })
+                    return None;
+                }
+                (None, Some(payload))
+                    if carrier(GEMINI_ITEM_CARRIER_ID_PREFIX) =>
+                {
+                    item_carrier_part(payload)?
+                }
+                (None, Some(signature))
+                    if carrier(GEMINI_PART_SIGNATURE_ID_PREFIX) =>
+                {
+                    let mut part = json!({ BOUND_SIGNATURE_KEY: signature });
+                    if let Some((length, hash)) = carrier_id.and_then(text_carrier_owner) {
+                        part[BOUND_OWNER_KEY] = json!([length, hash]);
+                    }
+                    part
                 }
                 // A Part needs a data member; Gemini streams standalone signatures this way.
                 (None, Some(signature)) => json!({"text": "", "thoughtSignature": signature}),
@@ -1500,6 +1539,8 @@ fn encode_tool_result(node: &Node, tool_names_by_call_id: &Map<String, Value>) -
 /// Encoder-local placeholder for a signature bound to an adjacent Part; resolved before any
 /// Part reaches the wire.
 const BOUND_SIGNATURE_KEY: &str = "_monoize_gemini_bound_signature";
+/// Encoder-local `[byte length, xxh3]` owner binding of a bound text signature placeholder.
+const BOUND_OWNER_KEY: &str = "_monoize_gemini_bound_owner";
 /// Documented validator-skip value for a current-turn function call without a Gemini signature.
 const DUMMY_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
@@ -1531,6 +1572,11 @@ const ALL_LEVELS: &[ThinkingLevel] = &[
 const LEVELS_WITHOUT_MINIMAL: &[ThinkingLevel] =
     &[ThinkingLevel::Low, ThinkingLevel::Medium, ThinkingLevel::High];
 const MINIMAL_OR_HIGH: &[ThinkingLevel] = &[ThinkingLevel::Minimal, ThinkingLevel::High];
+const MINIMAL_MEDIUM_HIGH: &[ThinkingLevel] = &[
+    ThinkingLevel::Minimal,
+    ThinkingLevel::Medium,
+    ThinkingLevel::High,
+];
 
 enum ThinkingTarget {
     Lowest,
@@ -1559,6 +1605,10 @@ struct GeminiModel {
     /// Per-Part `mediaResolution` exists for Gemini 3+.
     media_resolution: bool,
     image_output: bool,
+    /// Documented `imageConfig.imageSize` tiers in ascending order; empty means 1K only.
+    image_sizes: &'static [&'static str],
+    /// The model documents the 1:4, 4:1, 1:8 and 8:1 aspect ratios.
+    extended_ratios: bool,
 }
 
 impl GeminiModel {
@@ -1578,6 +1628,7 @@ impl GeminiModel {
             };
             Some((major, minor))
         });
+        let image_output = name.contains("image") || name.contains("nano-banana");
         let thinking = if name.contains("robotics-er-1") {
             ThinkingProfile::Budget {
                 min: 0,
@@ -1586,9 +1637,13 @@ impl GeminiModel {
             }
         } else if name.starts_with("gemma") || name.starts_with("learnlm") {
             ThinkingProfile::Unsupported
+        } else if name.contains("nano-banana") {
+            ThinkingProfile::Levels(MINIMAL_MEDIUM_HIGH)
         } else {
             match version {
                 Some(version) if version < (2, 5) => ThinkingProfile::Unsupported,
+                // Gemini 2.5 image models document thinking as not supported.
+                Some((2, _)) if image_output => ThinkingProfile::Unsupported,
                 Some((2, _)) if name.contains("pro") => ThinkingProfile::Budget {
                     min: 128,
                     max: 32768,
@@ -1604,7 +1659,9 @@ impl GeminiModel {
                     max: 24576,
                     can_disable: true,
                 },
-                Some((3, _)) if name.contains("flash-lite-image") => {
+                Some((3, _))
+                    if name.contains("flash-lite-image") || name.contains("flash-image") =>
+                {
                     ThinkingProfile::Levels(MINIMAL_OR_HIGH)
                 }
                 Some((3, minor)) if name.contains("pro") || minor == 8 => {
@@ -1618,11 +1675,26 @@ impl GeminiModel {
             }
         };
         let current = matches!(thinking, ThinkingProfile::Levels(_));
+        // Image generation guide: 2.5 Flash Image and 3.1 Flash Lite Image output 1K only;
+        // 3.1 Flash Image adds 512; Nano Banana 2.1 and 3 Pro Image offer 1K/2K/4K.
+        let flash_image = name.contains("flash-image") && !name.contains("flash-lite-image");
+        let image_sizes: &'static [&'static str] = if !image_output
+            || name.contains("flash-lite-image")
+            || matches!(version, Some((2, _)))
+        {
+            &[]
+        } else if flash_image {
+            &["512", "1K", "2K", "4K"]
+        } else {
+            &["1K", "2K", "4K"]
+        };
         Self {
             thinking,
             requires_call_signatures: current,
             media_resolution: current,
-            image_output: name.contains("image"),
+            image_output,
+            image_sizes,
+            extended_ratios: flash_image || name.contains("nano-banana"),
         }
     }
 
@@ -1747,6 +1819,15 @@ pub(crate) fn is_gemini_mappable_tool(tool_type: &str) -> bool {
     gemini_builtin_tool_key(tool_type).is_some() || tool_type == "image_generation"
 }
 
+/// Cloud label value rule from the GenerateContent `labels` reference.
+fn valid_label_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= 63
+        && value
+            .chars()
+            .all(|c| c.is_lowercase() || c.is_numeric() || c == '_' || c == '-')
+}
+
 fn gemini_service_tier(tier: &str) -> Option<&'static str> {
     match tier {
         "default" | "standard" | "standard_only" => Some("standard"),
@@ -1756,14 +1837,11 @@ fn gemini_service_tier(tier: &str) -> Option<&'static str> {
     }
 }
 
-/// Maps an OpenAI-style `WxH` size to the nearest documented Gemini aspect ratio and size.
-fn image_config_from_size(size: &str) -> Option<Map<String, Value>> {
+/// Maps an OpenAI-style `WxH` size to the nearest aspect ratio and the smallest size tier the
+/// model documents for that request (image generation guide tables).
+fn image_config_from_size(model: &GeminiModel, size: &str) -> Option<Map<String, Value>> {
     const RATIOS: [(u32, u32); 14] = [
         (1, 1),
-        (1, 4),
-        (4, 1),
-        (1, 8),
-        (8, 1),
         (2, 3),
         (3, 2),
         (3, 4),
@@ -1773,29 +1851,46 @@ fn image_config_from_size(size: &str) -> Option<Map<String, Value>> {
         (9, 16),
         (16, 9),
         (21, 9),
+        (1, 4),
+        (4, 1),
+        (1, 8),
+        (8, 1),
     ];
+    let ratios = if model.extended_ratios {
+        &RATIOS[..]
+    } else {
+        &RATIOS[..10]
+    };
     let (width, height) = size.split_once('x')?;
     let width = width.trim().parse::<u32>().ok().filter(|value| *value > 0)?;
     let height = height.trim().parse::<u32>().ok().filter(|value| *value > 0)?;
     let target = (f64::from(width) / f64::from(height)).ln();
-    let distance = |(w, h): (u32, u32)| ((f64::from(w) / f64::from(h)).ln() - target).abs();
-    let (ratio_width, ratio_height) = RATIOS
-        .into_iter()
-        .min_by(|left, right| distance(*left).total_cmp(&distance(*right)))?;
-    let longest = width.max(height);
-    let image_size = match longest {
-        0..=512 => "512",
-        513..=1024 => "1K",
-        1025..=2048 => "2K",
+    let distance = |(w, h): &(u32, u32)| ((f64::from(*w) / f64::from(*h)).ln() - target).abs();
+    let (ratio_width, ratio_height) = ratios
+        .iter()
+        .min_by(|left, right| distance(left).total_cmp(&distance(right)))?;
+    let mut config = Map::from_iter([(
+        "aspectRatio".to_string(),
+        json!(format!("{ratio_width}:{ratio_height}")),
+    )]);
+    // Longest documented edge per tier across ratios: 512 → 792, 1K → 1584, 2K → 3168.
+    let wanted = match width.max(height) {
+        0..=792 => "512",
+        793..=1584 => "1K",
+        1585..=3168 => "2K",
         _ => "4K",
     };
-    Some(Map::from_iter([
-        (
-            "aspectRatio".to_string(),
-            json!(format!("{ratio_width}:{ratio_height}")),
-        ),
-        ("imageSize".to_string(), json!(image_size)),
-    ]))
+    let tiers = ["512", "1K", "2K", "4K"];
+    let rank = |tier: &str| tiers.iter().position(|candidate| *candidate == tier);
+    if let Some(tier) = model
+        .image_sizes
+        .iter()
+        .find(|tier| rank(tier) >= rank(wanted))
+        .or(model.image_sizes.last())
+    {
+        config.insert("imageSize".to_string(), json!(tier));
+    }
+    Some(config)
 }
 
 /// Maps a typed image `detail` to the Gemini 3+ per-Part media resolution.
@@ -1819,6 +1914,41 @@ fn add_media_resolution(node: &Node, part: &mut Value) {
     if let Some(part) = part.as_object_mut() {
         part.entry("mediaResolution")
             .or_insert_with(|| json!({ "level": level }));
+    }
+}
+
+/// Resuming a `CONTINUATION` stop requires the original contents unchanged plus the token. When
+/// the trailing assistant turn (after the last user or tool-result node) carries a continuation
+/// carrier, that turn is the partial output being resumed: it is cut and its token returned.
+/// A continuation carrier anywhere else is stale and encodes as nothing.
+fn split_continuation(nodes: &[Node]) -> (&[Node], Option<&Value>) {
+    let turn_start = nodes
+        .iter()
+        .rposition(|node| {
+            matches!(node, Node::ToolResult { .. })
+                || node
+                    .role()
+                    .is_some_and(|role| role != OrdinaryRole::Assistant)
+        })
+        .map_or(0, |index| index + 1);
+    let token = nodes[turn_start..].iter().find_map(|node| match node {
+        Node::Reasoning {
+            id,
+            metadata,
+            encrypted: Some(token),
+            ..
+        } if id
+            .as_deref()
+            .or(metadata.item_id.as_deref())
+            .is_some_and(|id| id.starts_with(GEMINI_CONTINUATION_ID_PREFIX)) =>
+        {
+            Some(token)
+        }
+        _ => None,
+    });
+    match token {
+        Some(token) => (&nodes[..turn_start], Some(token)),
+        None => (nodes, None),
     }
 }
 
@@ -1860,41 +1990,166 @@ fn sign_current_turn_calls(contents: &mut [Value]) {
     }
 }
 
-/// Attaches each bound signature placeholder to the adjacent unsigned text or media Part
-/// (preceding first, then following); otherwise it becomes a standalone empty-text Part.
-/// Returns the removed placeholder positions in removal order.
-fn resolve_bound_signatures(parts: &mut Vec<Value>) -> Vec<usize> {
+/// Attaches each bound signature placeholder to its owning Part and removes the placeholder.
+/// A text-owner binding (byte length, xxh3) first selects an unsigned text Part with exactly
+/// that text; when `split` is set it then finds the owned text inside a merged text Part and
+/// splits it there, dropping whitespace-only gaps between two owned segments (downstream join
+/// separators). Remaining placeholders attach to the adjacent unsigned text or media Part
+/// (preceding first, then following) or become a standalone empty-text Part.
+/// Returns removed placeholder positions in removal order (each relative to the vector after
+/// earlier removals); `split` callers must not rely on positions of split Parts.
+fn resolve_bound_signatures(parts: &mut Vec<Value>, split: bool) -> Vec<usize> {
     fn accepts(part: &Value) -> bool {
         part.get(BOUND_SIGNATURE_KEY).is_none()
             && part.get("thoughtSignature").is_none()
             && (part.get("inlineData").is_some()
                 || part.get("fileData").is_some()
-                || (part.get("text").is_some()
-                    && part.get("thought").and_then(Value::as_bool) != Some(true)))
+                || plain_text(part).is_some())
     }
-    let mut removed = Vec::new();
-    let mut index = 0;
-    while index < parts.len() {
-        let Some(signature) = parts[index].get(BOUND_SIGNATURE_KEY).cloned() else {
-            index += 1;
-            continue;
-        };
-        let target = [index.checked_sub(1), Some(index + 1)]
-            .into_iter()
-            .flatten()
-            .find(|target| parts.get(*target).is_some_and(accepts));
-        match target {
-            Some(target) => {
-                parts[target]["thoughtSignature"] = signature;
-                parts.remove(index);
-                removed.push(index);
-            }
-            None => {
-                parts[index] = json!({"text": "", "thoughtSignature": signature});
-                index += 1;
+    fn plain_text(part: &Value) -> Option<&str> {
+        (part.get(BOUND_SIGNATURE_KEY).is_none()
+            && part.get("thought").and_then(Value::as_bool) != Some(true))
+        .then(|| part.get("text").and_then(Value::as_str))
+        .flatten()
+    }
+    fn owner_matches(text: &str, (length, hash): (usize, u64)) -> bool {
+        text.len() == length && xxhash_rust::xxh3::xxh3_64(text.as_bytes()) == hash
+    }
+    // Downstream join separators are short; a longer gap is searched only in bounded text.
+    const MAX_JOIN_GAP: usize = 4;
+    const FULL_SCAN_LIMIT: usize = 64 * 1024;
+
+    let placeholders: Vec<(usize, Value, Option<(usize, u64)>)> = parts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, part)| {
+            let signature = part.get(BOUND_SIGNATURE_KEY)?.clone();
+            let owner = part.get(BOUND_OWNER_KEY).and_then(|owner| {
+                Some((
+                    usize::try_from(owner.get(0)?.as_u64()?).ok()?,
+                    owner.get(1)?.as_u64()?,
+                ))
+            });
+            Some((index, signature, owner))
+        })
+        .collect();
+    if placeholders.is_empty() {
+        return Vec::new();
+    }
+    let mut signed: HashMap<usize, Value> = HashMap::new();
+    let mut splits: HashMap<usize, Vec<(usize, usize, Value)>> = HashMap::new();
+    let mut resolved = vec![false; placeholders.len()];
+    let free = |index: usize, signed: &HashMap<usize, Value>, splits: &HashMap<_, Vec<_>>| {
+        !signed.contains_key(&index) && !splits.contains_key(&index)
+    };
+    // Exact owner text.
+    for (slot, (_, signature, owner)) in placeholders.iter().enumerate() {
+        let Some(owner) = owner else { continue };
+        if let Some(target) = (0..parts.len()).find(|index| {
+            free(*index, &signed, &splits)
+                && accepts(&parts[*index])
+                && plain_text(&parts[*index]).is_some_and(|text| owner_matches(text, *owner))
+        }) {
+            signed.insert(target, signature.clone());
+            resolved[slot] = true;
+        }
+    }
+    // Owned text inside a merged text Part.
+    if split {
+        let mut cursors: HashMap<usize, usize> = HashMap::new();
+        for (slot, (_, signature, owner)) in placeholders.iter().enumerate() {
+            let (Some((length, hash)), false) = (owner, resolved[slot]) else {
+                continue;
+            };
+            let found = (0..parts.len()).find_map(|index| {
+                if signed.contains_key(&index) || !accepts(&parts[index]) {
+                    return None;
+                }
+                let text = plain_text(&parts[index])?;
+                let cursor = cursors.get(&index).copied().unwrap_or(0);
+                let near = (cursor..=cursor + MAX_JOIN_GAP).collect::<Vec<_>>();
+                let starts: Box<dyn Iterator<Item = usize>> = if text.len() <= FULL_SCAN_LIMIT {
+                    Box::new(near.into_iter().chain(cursor..text.len()))
+                } else {
+                    Box::new(near.into_iter())
+                };
+                starts
+                    .filter(|start| {
+                        text.is_char_boundary(*start)
+                            && text.is_char_boundary(start + length)
+                            && start + length <= text.len()
+                    })
+                    .find(|start| {
+                        owner_matches(&text[*start..start + length], (*length, *hash))
+                    })
+                    .map(|start| (index, start))
+            });
+            if let Some((index, start)) = found {
+                cursors.insert(index, start + length);
+                splits
+                    .entry(index)
+                    .or_default()
+                    .push((start, *length, signature.clone()));
+                resolved[slot] = true;
             }
         }
     }
+    // Adjacency.
+    for (slot, (index, signature, _)) in placeholders.iter().enumerate() {
+        if resolved[slot] {
+            continue;
+        }
+        let target = [index.checked_sub(1), Some(index + 1)]
+            .into_iter()
+            .flatten()
+            .find(|target| {
+                parts.get(*target).is_some_and(accepts) && free(*target, &signed, &splits)
+            });
+        if let Some(target) = target {
+            signed.insert(target, signature.clone());
+            resolved[slot] = true;
+        }
+    }
+
+    let mut removed = Vec::new();
+    let mut slots = placeholders.iter().zip(&resolved).peekable();
+    let mut rebuilt = Vec::with_capacity(parts.len());
+    for (index, mut part) in std::mem::take(parts).into_iter().enumerate() {
+        if let Some(((placeholder, signature, _), resolved)) =
+            slots.next_if(|((placeholder, ..), _)| *placeholder == index)
+        {
+            if *resolved {
+                removed.push(placeholder - removed.len());
+            } else {
+                rebuilt.push(json!({"text": "", "thoughtSignature": signature}));
+            }
+            continue;
+        }
+        if let Some(mut segments) = splits.remove(&index) {
+            segments.sort_by_key(|(start, ..)| *start);
+            let text = plain_text(&part).unwrap_or_default().to_string();
+            let mut position = 0;
+            for (number, (start, length, signature)) in segments.into_iter().enumerate() {
+                let gap = &text[position..start];
+                if !gap.is_empty() && !(number > 0 && gap.trim().is_empty()) {
+                    rebuilt.push(json!({ "text": gap }));
+                }
+                rebuilt.push(
+                    json!({"text": &text[start..start + length], "thoughtSignature": signature}),
+                );
+                position = start + length;
+            }
+            if position < text.len() {
+                rebuilt.push(json!({ "text": &text[position..] }));
+            }
+            continue;
+        }
+        if let Some(signature) = signed.remove(&index) {
+            part["thoughtSignature"] = signature;
+        }
+        rebuilt.push(part);
+    }
+    *parts = rebuilt;
     removed
 }
 
