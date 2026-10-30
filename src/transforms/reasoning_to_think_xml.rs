@@ -116,14 +116,20 @@ enum PlainKind {
 enum NodeMode {
     /// `NodeStart` withheld until the first delta decides the mode (TXO-3).
     Pending(UrpStreamEvent),
-    Converted { kind: PlainKind, text: String },
+    Converted {
+        kind: PlainKind,
+        text: String,
+        id: Option<String>,
+    },
     PassThrough,
+    /// `C` already emitted; the node's later events are dropped (TXO-3).
+    Closed,
 }
 
 #[derive(Default)]
 struct StreamState {
     nodes: HashMap<u32, NodeMode>,
-    converted: HashSet<u32>,
+    closed: HashMap<u32, Node>,
     passed_through: HashSet<u32>,
     replacement: Option<Vec<UrpStreamEvent>>,
 }
@@ -202,7 +208,68 @@ fn convert_node(node: &Node, tag: &str) -> Option<Node> {
 }
 
 impl StreamState {
+    /// TXO-3: closes every open converted node except `keep`, in node order.
+    fn close_open_nodes(&mut self, keep: Option<u32>, tag: &str) -> Vec<UrpStreamEvent> {
+        let mut open: Vec<u32> = self
+            .nodes
+            .iter()
+            .filter(|(index, mode)| {
+                Some(**index) != keep && matches!(mode, NodeMode::Converted { .. })
+            })
+            .map(|(index, _)| *index)
+            .collect();
+        open.sort_unstable();
+        let mut out = Vec::with_capacity(open.len() * 2);
+        for node_index in open {
+            out.extend(self.close_node(node_index, tag));
+        }
+        out
+    }
+
+    fn close_node(&mut self, node_index: u32, tag: &str) -> Vec<UrpStreamEvent> {
+        let Some(NodeMode::Converted { text, id, .. }) =
+            self.nodes.insert(node_index, NodeMode::Closed)
+        else {
+            return Vec::new();
+        };
+        let node = text_node(id, format!("<{tag}>{text}</{tag}>"));
+        self.closed.insert(node_index, node.clone());
+        vec![
+            text_delta(node_index, format!("</{tag}>")),
+            UrpStreamEvent::NodeDone {
+                node_index,
+                node,
+                usage: None,
+                extra_body: HashMap::new(),
+            },
+        ]
+    }
+
     fn apply(&mut self, event: &mut UrpStreamEvent, tag: &str) {
+        let closing = match event {
+            UrpStreamEvent::NodeStart {
+                header: NodeHeader::NextDownstreamEnvelopeExtra,
+                ..
+            } => Vec::new(),
+            UrpStreamEvent::NodeStart { node_index, .. }
+            | UrpStreamEvent::NodeDelta { node_index, .. }
+            | UrpStreamEvent::NodeDone { node_index, .. } => {
+                self.close_open_nodes(Some(*node_index), tag)
+            }
+            UrpStreamEvent::ResponseDone { .. } => self.close_open_nodes(None, tag),
+            _ => Vec::new(),
+        };
+        self.convert_event(event, tag);
+        if !closing.is_empty() {
+            let rest = self
+                .replacement
+                .take()
+                .unwrap_or_else(|| vec![event.clone()]);
+            self.replacement = Some(closing.into_iter().chain(rest).collect());
+        }
+    }
+
+    fn convert_event(&mut self, event: &mut UrpStreamEvent, tag: &str) {
         match event {
             UrpStreamEvent::NodeStart {
                 node_index,
@@ -236,24 +303,29 @@ impl StreamState {
                                 } => id.clone(),
                                 _ => None,
                             };
-                            self.converted.insert(node_index);
                             self.replacement = Some(vec![
                                 UrpStreamEvent::NodeStart {
                                     node_index,
-                                    header: text_header(id),
+                                    header: text_header(id.clone()),
                                     extra_body: HashMap::new(),
                                 },
                                 text_delta(node_index, format!("<{tag}>{plain}")),
                             ]);
-                            self.nodes
-                                .insert(node_index, NodeMode::Converted { kind, text: plain });
+                            self.nodes.insert(
+                                node_index,
+                                NodeMode::Converted {
+                                    kind,
+                                    text: plain,
+                                    id,
+                                },
+                            );
                         } else {
                             self.passed_through.insert(node_index);
                             self.replacement = Some(vec![start, event.clone()]);
                             self.nodes.insert(node_index, NodeMode::PassThrough);
                         }
                     }
-                    Some(NodeMode::Converted { kind, mut text }) => {
+                    Some(NodeMode::Converted { kind, mut text, id }) => {
                         let fragment = match kind {
                             PlainKind::Content => content,
                             PlainKind::Summary => summary,
@@ -267,7 +339,11 @@ impl StreamState {
                             None => Vec::new(),
                         });
                         self.nodes
-                            .insert(node_index, NodeMode::Converted { kind, text });
+                            .insert(node_index, NodeMode::Converted { kind, text, id });
+                    }
+                    Some(NodeMode::Closed) => {
+                        self.nodes.insert(node_index, NodeMode::Closed);
+                        self.replacement = Some(Vec::new());
                     }
                     Some(mode) => {
                         self.nodes.insert(node_index, mode);
@@ -280,22 +356,21 @@ impl StreamState {
             } => {
                 let node_index = *node_index;
                 match self.nodes.remove(&node_index) {
-                    Some(NodeMode::Converted { text, .. }) => {
-                        let done = UrpStreamEvent::NodeDone {
-                            node_index,
-                            node: text_node(node.id().cloned(), format!("<{tag}>{text}</{tag}>")),
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        };
-                        self.replacement =
-                            Some(vec![text_delta(node_index, format!("</{tag}>")), done]);
+                    Some(NodeMode::Converted { text, id, kind }) => {
+                        let id = id.or_else(|| node.id().cloned());
+                        self.nodes
+                            .insert(node_index, NodeMode::Converted { kind, text, id });
+                        self.replacement = Some(self.close_node(node_index, tag));
+                    }
+                    Some(NodeMode::Closed) => {
+                        self.nodes.insert(node_index, NodeMode::Closed);
+                        self.replacement = Some(Vec::new());
                     }
                     Some(NodeMode::Pending(start)) => match convert_node(node, tag) {
                         Some(converted) => {
                             let Node::Text { content, id, .. } = &converted else {
                                 unreachable!("converted reasoning is text");
                             };
-                            self.converted.insert(node_index);
                             self.replacement = Some(vec![
                                 UrpStreamEvent::NodeStart {
                                     node_index,
@@ -323,6 +398,10 @@ impl StreamState {
                 for (position, node) in output.iter_mut().enumerate() {
                     let position = position as u32;
                     if self.passed_through.contains(&position) {
+                        continue;
+                    }
+                    if let Some(closed) = self.closed.remove(&position) {
+                        *node = closed;
                         continue;
                     }
                     if let Some(converted) = convert_node(node, tag) {
