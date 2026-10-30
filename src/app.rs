@@ -1529,6 +1529,10 @@ pub fn build_app(state: AppState) -> Router {
             crate::client_ip::canonical_client_ip_middleware,
         ))
         .layer(DefaultBodyLimit::disable())
+        .layer(RequestBodyLimitLayer::new(http_body_max_bytes))
+        .layer(axum::middleware::from_fn(
+            crate::handlers::native_body_limit_middleware,
+        ))
         .layer(PropagateRequestIdLayer::new(
             axum::http::header::HeaderName::from_static("x-request-id"),
         ))
@@ -1538,7 +1542,6 @@ pub fn build_app(state: AppState) -> Router {
             MakeRequestUuid,
         ))
         .layer(TraceLayer::new_for_http())
-        .layer(RequestBodyLimitLayer::new(http_body_max_bytes))
         // Security headers
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::HeaderName::from_static("x-content-type-options"),
