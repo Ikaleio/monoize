@@ -138,10 +138,15 @@ UI2. Metadata fields (`mode`, `max_tokens`, `max_input_tokens`, `max_output_toke
 Metadata edits persist through §3.3; price edits persist through
 `model-pricing.spec.md` MP-A2.
 
-UI3. When `raw_json.providers` contains multiple variants, the pricing editor MUST show
-a provider-variant selector. Selecting a variant auto-fills price fields (exact
-decimal strings from `raw_json`) and limit fields from that variant. The user MAY edit
-the auto-filled values before saving.
+UI3. When `raw_json.providers` contains variants, the pricing editor MUST show a
+provider-variant selector in `per_token` and `tiered_expr` modes and MUST hide it in
+`per_request` mode. Selecting a variant fills only visible fields: in `per_token` mode the
+per-token price fields; in `tiered_expr` mode the prices of tier 1 (its threshold is
+kept). Prices are exact decimal strings from `raw_json`. Selecting a variant also fills
+the metadata `max_tokens` from `limit.context` and `max_output_tokens` from
+`limit.output` when the variant provides them, and shows the muted text
+"已从 {provider} 填入…" under the selector. The user MAY edit the auto-filled values before
+saving.
 
 UI4. All variant price handling in the UI keeps decimal strings end to end; values
 MUST NOT pass through JavaScript `Number`, `parseFloat`, `toFixed`, or binary

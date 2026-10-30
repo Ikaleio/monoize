@@ -8,6 +8,12 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { LayoutGroup, motion, springs } from "@/components/ui/motion";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   useApiKeys,
   useCurrentUser,
   useDashboardGroups,
@@ -19,6 +25,8 @@ import {
 } from "@/components/playground/chat-transport";
 import { Composer, type ComposerMode } from "@/components/playground/composer";
 import { MessageList } from "@/components/playground/message-list";
+import { RequestFailureMessage } from "@/components/playground/request-failure-message";
+import { cleanErrorMessage } from "@/components/playground/request-failure";
 import { loadPlaygroundImage } from "@/components/playground/image-source";
 import {
   filePartsForEditedUserMessage,
@@ -67,6 +75,7 @@ export function PlaygroundPage() {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const dragDepthRef = useRef(0);
+  const undoToastRef = useRef<string | number | null>(null);
 
   useEffect(() => purgeLegacyPlaygroundKeys(), []);
 
@@ -252,16 +261,27 @@ export function PlaygroundPage() {
   const conversationEmpty = messages.length === 0 && !images.job;
 
   const trimmedText = text.trim();
-  const canSend =
+  const modelMissing = modelForMode.trim().length === 0;
+  const canDispatch =
     (resolution.reason === "internal" || resolution.reason === "ok") &&
-    modelForMode.trim().length > 0 &&
+    !modelMissing &&
     (status === "ready" || status === "error") &&
-    !imageBusy &&
+    !imageBusy;
+  const canSend =
+    canDispatch &&
     (trimmedText.length > 0 || (mode === "chat" && attachments.length > 0));
-  const blockedHint =
-    resolution.reason === "key-unavailable" && !apiKeys
+  const blockedHint = modelMissing
+    ? t("playground.errorNoModel")
+    : resolution.reason === "key-unavailable" && !apiKeys
       ? null
       : resolutionError(resolution, modelForMode);
+  const chatFailure = error
+    ? (transport.lastFailure ?? {
+        message: cleanErrorMessage(error.message),
+        status: null,
+        requestId: null,
+      })
+    : null;
   const imageBlockedHint = resolutionError(imageResolution, prefs.imageModel);
 
   const handleAddFiles = useCallback(
@@ -569,14 +589,59 @@ export function PlaygroundPage() {
   );
 
   const handleNewChat = useCallback(() => {
+    const snapshot = {
+      messages,
+      attachments,
+      mode,
+      images: images.snapshot(),
+    };
     void stop();
     images.reset();
     setMessages([]);
     setAttachments([]);
     clearError();
-  }, [stop, images, setMessages, clearError]);
+    undoToastRef.current = toast(t("playground.newChatStarted"), {
+      duration: 5000,
+      action: {
+        label: t("playground.undo"),
+        onClick: () => {
+          undoToastRef.current = null;
+          setMessages(snapshot.messages);
+          setAttachments(snapshot.attachments);
+          setMode(snapshot.mode);
+          images.restore(snapshot.images);
+        },
+      },
+    });
+  }, [messages, attachments, mode, stop, images, setMessages, clearError, t]);
+
+  // Undo replaces the conversation, so it must not outlive the empty one (PG-CMP5a).
+  useEffect(() => {
+    if (conversationEmpty || undoToastRef.current === null) return;
+    toast.dismiss(undoToastRef.current);
+    undoToastRef.current = null;
+  }, [conversationEmpty]);
+
+  useEffect(
+    () => () => {
+      if (undoToastRef.current !== null) toast.dismiss(undoToastRef.current);
+    },
+    [],
+  );
 
   const layoutTransition = shouldReduceMotion ? { duration: 0 } : springs.smooth;
+  const retryButton = (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => handleRegenerate()}
+      disabled={!canDispatch}
+      className="h-7 shrink-0 gap-1.5"
+    >
+      <RefreshCcw aria-hidden="true" />
+      {t("playground.retry")}
+    </Button>
+  );
 
   return (
     <div
@@ -587,6 +652,7 @@ export function PlaygroundPage() {
       onDrop={handleDrop}
       onPasteCapture={handlePaste}
     >
+      <h1 className="sr-only">{t("nav.playground")}</h1>
       <LayoutGroup>
         {conversationEmpty ? (
           <>
@@ -596,9 +662,9 @@ export function PlaygroundPage() {
               transition={layoutTransition}
               className="mx-auto w-full max-w-3xl px-1 pb-8 text-center"
             >
-              <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+              <h2 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
                 {t("playground.greeting")}
-              </h1>
+              </h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 {t("playground.greetingHint")}
               </p>
@@ -634,7 +700,7 @@ export function PlaygroundPage() {
         )}
 
         <AnimatePresence initial={false}>
-          {error && (
+          {chatFailure && (
             <motion.div
               key="chat-error"
               initial={
@@ -645,19 +711,22 @@ export function PlaygroundPage() {
               transition={layoutTransition}
               className="mx-auto mb-2 flex w-full max-w-3xl shrink-0 items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-2"
             >
-              <span className="min-w-0 flex-1 break-words text-sm text-error-foreground">
-                {error.message}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleRegenerate()}
-                disabled={busy}
-                className="h-7 shrink-0 gap-1.5"
-              >
-                <RefreshCcw aria-hidden="true" />
-                {t("playground.retry")}
-              </Button>
+              <RequestFailureMessage failure={chatFailure} className="flex-1" />
+              {canDispatch || !blockedHint ? (
+                retryButton
+              ) : (
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {/* A disabled button emits no pointer or focus events. */}
+                      <span tabIndex={0} className="inline-flex shrink-0">
+                        {retryButton}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{blockedHint}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -689,6 +758,7 @@ export function PlaygroundPage() {
             canSend={canSend}
             isBusy={busy}
             blockedHint={blockedHint}
+            modelMissing={modelMissing}
             prefs={prefs}
             setPref={setPref}
             groups={selectableGroups}

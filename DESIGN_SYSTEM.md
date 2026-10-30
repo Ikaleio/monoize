@@ -92,11 +92,15 @@ Rules:
 
 - Destructive confirmation uses shadcn `AlertDialog`. Never use browser `confirm()`.
 - Long dialogs bound their height to the viewport, scroll the body internally, and keep header and footer visible.
+- An editor dialog with unsaved edits passes `dirty` to `DialogContent`: outside click, Escape, and the close button then ask "Discard unsaved changes?" instead of closing. Page-level drafts use `useUnsavedChangesGuard`.
+- Closing a dialog returns focus to the element that opened it.
+- Entity editors wrap their fields in `<form onSubmit>` with a `type="submit"` primary button, so Enter submits.
+- Toasts render at the top center so they never cover dialog footers or save bars. Error toasts use `toastApiError` and never show the raw server message.
 
 ## Motion
 
 - All shared motion helpers respect the reduced-motion preference. With reduced motion, animate opacity only or not at all.
-- Buttons get hover/press scale only through the shared `AnimatedButton` wrapper: hover `1.02`, tap `0.98`.
+- Buttons get hover/press scale only through the shared `AnimatedButton` wrapper: hover `1.02`, tap `0.98`. The wrapper is never a Tab stop.
 - Non-interactive rows and decorative elements never get hover transforms. Hover feedback on such rows is a color change only.
 
 ## Icons

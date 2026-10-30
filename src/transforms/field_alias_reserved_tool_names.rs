@@ -228,7 +228,13 @@ impl Transform for FieldAliasReservedToolNamesTransform {
                 "aliases": {
                     "type": "object",
                     "additionalProperties": { "type": "string", "minLength": 1 },
-                    "description": "Map of original function names to upstream-safe aliases. Omit to use the default view_image -> client_view_image mapping. An empty object disables renaming."
+                    "description": "Map of original function names to upstream-safe aliases. Omit to use the default view_image -> client_view_image mapping. An empty object disables renaming.",
+                    "x-localized-description": {
+                        "en": "Map of original function names to upstream-safe aliases. Omit to use the default view_image -> client_view_image mapping. An empty object disables renaming.",
+                        "zh": "原函数名到上游安全别名的映射。不设置则使用默认映射 view_image -> client_view_image。设为空对象则不重命名。",
+                        "zh-TW": "原函式名稱到上游安全別名的對應。不設定則使用預設對應 view_image -> client_view_image。設為空物件則不重新命名。",
+                        "ja": "元の関数名から上流で安全な別名へのマップ。省略すると既定のマッピング view_image -> client_view_image を使います。空のオブジェクトにすると名前を変更しません。"
+                    }
                 }
             },
             "additionalProperties": false

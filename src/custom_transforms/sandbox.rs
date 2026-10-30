@@ -7,6 +7,7 @@
 //! or module-loading API.
 
 use crate::transforms::Phase;
+use rquickjs::context::EvalOptions;
 use rquickjs::{Context, Ctx, Exception, Function, Runtime};
 use serde_json::{Value, json};
 use std::cell::Cell;
@@ -390,8 +391,14 @@ fn build_sandbox(limits: &SandboxLimits, deadline: Instant) -> Result<(Runtime, 
     Ok((runtime, context))
 }
 
+/// Script name of the user source in QuickJS stack frames (CJS-VAL-7).
+const USER_SOURCE_NAME: &str = "transform.js";
+
 fn eval_source(ctx: &Ctx<'_>, source: &str) -> Result<(), String> {
-    ctx.eval::<(), _>(source)
+    // EvalOptions is non-exhaustive, so start from the defaults `Ctx::eval` uses.
+    let mut options = EvalOptions::default();
+    options.filename = Some(USER_SOURCE_NAME.to_string());
+    ctx.eval_with_options::<(), _>(source, options)
         .map_err(|error| describe_js_error(ctx, error, "script evaluation"))
 }
 
@@ -563,7 +570,9 @@ fn host_fetch(
 fn describe_js_error(ctx: &Ctx<'_>, error: rquickjs::Error, stage: &str) -> String {
     if matches!(error, rquickjs::Error::Exception) {
         let caught = ctx.catch();
+        let mut user_line = None;
         let message = if let Some(exception) = caught.as_exception() {
+            user_line = exception.stack().as_deref().and_then(innermost_user_line);
             let text = exception.message().unwrap_or_default();
             if text.is_empty() {
                 "unknown exception".to_string()
@@ -573,9 +582,23 @@ fn describe_js_error(ctx: &Ctx<'_>, error: rquickjs::Error, stage: &str) -> Stri
         } else {
             stringify_js_value(ctx, &caught)
         };
-        return format!("{stage} threw: {message}");
+        let description = format!("{stage} threw: {message}");
+        return match user_line {
+            Some(line) => super::frontmatter::at_line(line, description),
+            None => description,
+        };
     }
     format!("{stage} failed: {error}")
+}
+
+/// Line of the first (innermost) stack frame in the user source. QuickJS
+/// frames read `at transform.js:L:C` (syntax errors) or `at fn (transform.js:L:C)`.
+fn innermost_user_line(stack: &str) -> Option<usize> {
+    let marker = format!("{USER_SOURCE_NAME}:");
+    stack.lines().find_map(|frame| {
+        let rest = &frame[frame.find(&marker)? + marker.len()..];
+        rest.split(':').next()?.parse().ok()
+    })
 }
 
 fn stringify_js_value<'js>(ctx: &Ctx<'js>, value: &rquickjs::Value<'js>) -> String {

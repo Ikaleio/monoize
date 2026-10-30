@@ -251,6 +251,10 @@ fn parse_price(input: &BillingPlanPriceInput) -> Result<(i128, i64), String> {
     if input.duration_seconds <= 0 {
         return Err("invalid_plan_prices".to_string());
     }
+    // BP-D4a: the plan editor sells whole days only.
+    if input.duration_seconds % TWENTY_FOUR_HOURS_SECONDS != 0 {
+        return Err("invalid_plan_price_duration".to_string());
+    }
     let amount = if let Some(raw) = input.price_nano_usd.as_deref() {
         let value = parse_nano_usd(raw).map_err(|_| "invalid_plan_prices".to_string())?;
         if raw.trim() != value.to_string() {
@@ -897,6 +901,34 @@ impl UserStore {
             return Err(sql_err("active subscription has no routing groups"));
         }
         Ok(Some(subscription.group_ids))
+    }
+
+    /// Active subscription `(plan_name, expires_at)` per user for the admin users list.
+    /// One set query; when a user has overlapping rows the latest-expiring one wins,
+    /// matching `active_subscription_on`.
+    pub async fn list_active_plan_summaries(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (String, DateTime<Utc>)>, String> {
+        let now = Utc::now();
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT user_id, plan_name, expires_at FROM billing_plan_subscriptions WHERE starts_at <= $1 AND expires_at > $1 AND revoked_at IS NULL ORDER BY user_id ASC, expires_at DESC, id ASC",
+                vec![now.to_rfc3339().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut summaries = std::collections::HashMap::new();
+        for row in rows {
+            let user_id: String = row.try_get("", "user_id").map_err(sql_err)?;
+            if summaries.contains_key(&user_id) {
+                continue;
+            }
+            let plan_name: String = row.try_get("", "plan_name").map_err(sql_err)?;
+            summaries.insert(user_id, (plan_name, parse_time(&row, "expires_at")?));
+        }
+        Ok(summaries)
     }
 
     pub async fn get_active_billing_plan_subscription(

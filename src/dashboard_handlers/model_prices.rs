@@ -108,7 +108,30 @@ pub async fn list_unpriced_models(
         })
         .collect();
     models.sort();
-    Ok(Json(json!({ "models": models })))
+    // MP-A4a: the enabled Provider/Channel pairs that make each model routable.
+    let mut sources = serde_json::Map::new();
+    for model in &models {
+        let providers = state
+            .monoize_store
+            .list_providers_for_model(model)
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        let pairs: Vec<serde_json::Value> = providers
+            .iter()
+            .flat_map(|provider| {
+                provider.channels.iter().map(move |channel| {
+                    json!({
+                        "provider_id": provider.id,
+                        "provider_name": provider.name,
+                        "channel_id": channel.id,
+                        "channel_name": channel.name,
+                    })
+                })
+            })
+            .collect();
+        sources.insert(model.clone(), json!(pairs));
+    }
+    Ok(Json(json!({ "models": models, "sources": sources })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,8 +162,8 @@ async fn new_api_config(state: &AppState) -> AppResult<(String, String)> {
 }
 
 fn map_sync_error(error: String) -> AppError {
-    if let Some(message) = error.strip_prefix("source_disabled: ") {
-        AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+    if error.starts_with("source_disabled: ") {
+        new_api_not_configured()
     } else if error.starts_with("fetch_failed") || error.starts_with("parse_failed") {
         // MP-Y3: fetch and parse failures map to 502 upstream_fetch_failed.
         AppError::new(StatusCode::BAD_GATEWAY, "upstream_fetch_failed", error)
@@ -149,7 +172,17 @@ fn map_sync_error(error: String) -> AppError {
     }
 }
 
-/// MP-A6: fetch the source and return the computed diff without writes.
+/// MP-Y2: the `new_api` source is disabled while its base URL is empty.
+fn new_api_not_configured() -> AppError {
+    AppError::new(
+        StatusCode::BAD_REQUEST,
+        "price_sync_new_api_not_configured",
+        "the new-api base URL is not set",
+    )
+}
+
+/// MP-A6: fetch the source, store the snapshot for MP-A7, and return the
+/// computed diff without writing `model_prices` rows.
 pub async fn preview_price_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -167,38 +200,50 @@ pub async fn preview_price_sync(
         .list()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    let plan = crate::price_sync::compute_sync_plan(source, &existing, snapshot.candidates);
-    Ok(Json(crate::price_sync::preview_response(source, &plan)))
+    Ok(Json(crate::price_sync::store_preview(
+        source, &existing, snapshot,
+    )))
 }
 
-/// MP-A7: perform the apply run and return the finalized run row.
+#[derive(Debug, Deserialize)]
+struct ApplyPriceSyncInput {
+    preview_id: String,
+}
+
+/// MP-A7: apply exactly the snapshot shown by an MP-A6 preview and return the
+/// finalized run row.
 pub async fn apply_price_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(source): Path<String>,
+    body: axum::body::Bytes,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
     let source = parse_sync_source(&source)?;
-    let (base_url, token) = new_api_config(&state).await?;
-    // MP-Y2: reject a disabled new_api source before creating a run row.
-    if source == crate::price_sync::SyncSource::NewApi && base_url.trim().is_empty() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "price_sync_new_api_base_url is not set",
-        ));
-    }
-    match crate::price_sync::apply_sync_run(
-        &state.http,
+    let preview = serde_json::from_slice::<ApplyPriceSyncInput>(&body)
+        .ok()
+        .and_then(|input| crate::price_sync::take_preview(input.preview_id.trim(), source))
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::CONFLICT,
+                "price_sync_preview_expired",
+                "the preview is missing or expired; preview again",
+            )
+        })?;
+    match crate::price_sync::apply_previewed_sync_run(
         &state.model_price_store,
         &state.model_registry_store,
-        source,
-        (&base_url, &token),
+        preview,
     )
     .await
     {
         Ok(run) => Ok(Json(run)),
-        Err((_, error)) => Err(map_sync_error(error)),
+        Err(error) if error == crate::price_sync::PREVIEW_STALE_ERROR => Err(AppError::new(
+            StatusCode::CONFLICT,
+            "price_sync_preview_stale",
+            "stored prices changed since the preview; preview again",
+        )),
+        Err(error) => Err(map_sync_error(error)),
     }
 }
 

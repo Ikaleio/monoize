@@ -140,6 +140,7 @@ fn map_plan_error(error: String) -> AppError {
         | "invalid_plan_groups"
         | "invalid_plan_multiplier"
         | "invalid_plan_prices"
+        | "invalid_plan_price_duration"
         | "invalid_plan_duration" => AppError::new(StatusCode::BAD_REQUEST, error.clone(), error),
         "not_found" => AppError::new(StatusCode::NOT_FOUND, "not_found", "plan not found"),
         "plan_not_available" => AppError::new(

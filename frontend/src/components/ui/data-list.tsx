@@ -16,14 +16,22 @@ type DataListAlign = "start" | "end";
 interface DataListProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Wide-mode `grid-template-columns` value shared by the header and every row. */
   columns: string;
+  /** Wide-mode rows use `py-1.5`; only for lists whose wide-mode cells are one line each (DS22g). */
+  dense?: boolean;
 }
 
 const DataList = React.forwardRef<HTMLDivElement, DataListProps>(
-  ({ className, columns, style, ...props }, ref) => (
+  ({ className, columns, dense = false, style, ...props }, ref) => (
     <div
       ref={ref}
       className={cn("min-w-0 [container-type:inline-size]", className)}
-      style={{ ...style, "--data-list-columns": columns } as React.CSSProperties}
+      style={
+        {
+          ...style,
+          "--data-list-columns": columns,
+          ...(dense ? { "--data-list-row-py": "0.375rem" } : null),
+        } as React.CSSProperties
+      }
       {...props}
     />
   ),
@@ -81,7 +89,7 @@ const DataListRow = React.forwardRef<HTMLLIElement, DataListRowProps>(
         className={cn(
           "grid items-center gap-x-6 gap-y-2 px-4 py-3 text-sm transition-colors hover:bg-muted/50",
           "[@container(min-width:36rem)_and_(max-width:55.99rem)]:grid-cols-2",
-          "[@container(min-width:56rem)]:grid-cols-[var(--data-list-columns)] [@container(min-width:56rem)]:gap-x-4",
+          "[@container(min-width:56rem)]:grid-cols-[var(--data-list-columns)] [@container(min-width:56rem)]:gap-x-4 [@container(min-width:56rem)]:py-[var(--data-list-row-py,0.75rem)]",
           className,
         )}
         {...props}

@@ -25,7 +25,8 @@ import type { PricingEditorTarget } from "./shared";
 export function UnpricedModelsTab() {
   const { t } = useTranslation();
   const { data, error, isLoading, isValidating, mutate } = useUnpricedModels();
-  const models = useMemo(() => data ?? [], [data]);
+  const models = useMemo(() => data?.models ?? [], [data]);
+  const sources = data?.sources;
   const { data: priceRecords = [] } = useModelPrices();
   const scrollParent = useContext(DashboardScrollParentContext);
   const [search, setSearch] = useState("");
@@ -48,6 +49,7 @@ export function UnpricedModelsTab() {
         onOpenChange={(open) => {
           if (!open) setEditorTarget(null);
         }}
+        onTargetChange={setEditorTarget}
         records={priceRecords}
       />
 
@@ -105,25 +107,48 @@ export function UnpricedModelsTab() {
                     context={{ label: t("modelPricing.tabs.unpricedModels", "Unpriced Models") }}
                     computeItemKey={(_index, model) => model}
                     components={virtualDataListComponents}
-                    itemContent={(_index, model) => (
-                      <>
-                        <DataListCell primary>
-                          <ModelBadge model={model} showDetails={false} />
-                        </DataListCell>
-                        <DataListActions>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-11 touch-manipulation sm:size-9"
-                            title={t("modelPricing.setPrice", "Set price")}
-                            aria-label={`${t("modelPricing.setPrice", "Set price")}: ${model}`}
-                            onClick={() => setEditorTarget({ mode: "create", modelId: model, record: null })}
-                          >
-                            <CircleDollarSign />
-                          </Button>
-                        </DataListActions>
-                      </>
-                    )}
+                    itemContent={(_index, model) => {
+                      // An incomplete or disabled row also counts as unpriced (MP-R4); edit it instead of creating.
+                      const existing = priceRecords.find((record) => record.model_id === model);
+                      const modelSources = sources?.[model] ?? [];
+                      return (
+                        <>
+                          <DataListCell primary>
+                            <ModelBadge model={model} showDetails={false} />
+                            {modelSources.length > 0 ? (
+                              <p
+                                className="mt-0.5 truncate text-muted-foreground"
+                                title={modelSources
+                                  .map((source) => `${source.provider_name} / ${source.channel_name}`)
+                                  .join("\n")}
+                              >
+                                {modelSources
+                                  .map((source) => `${source.provider_name} / ${source.channel_name}`)
+                                  .join(" · ")}
+                              </p>
+                            ) : null}
+                          </DataListCell>
+                          <DataListActions>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-11 touch-manipulation sm:size-9"
+                              title={t("modelPricing.setPrice")}
+                              aria-label={`${t("modelPricing.setPrice")}: ${model}`}
+                              onClick={() =>
+                                setEditorTarget(
+                                  existing
+                                    ? { mode: "edit", modelId: model, record: existing }
+                                    : { mode: "create", modelId: model, record: null },
+                                )
+                              }
+                            >
+                              <CircleDollarSign />
+                            </Button>
+                          </DataListActions>
+                        </>
+                      );
+                    }}
                   />
                 )}
               </DataList>

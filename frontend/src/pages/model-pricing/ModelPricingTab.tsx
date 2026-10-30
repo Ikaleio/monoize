@@ -2,7 +2,7 @@ import { useContext, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Lock, Pencil, Plus, SearchX, Trash2 } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
-import { toast } from "sonner";
+import { toastApiError } from "@/lib/api-error";
 import { ModelBadge } from "@/components/ModelBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,8 @@ import { DashboardScrollParentContext } from "@/lib/dashboard-scroll";
 import { formatDateTime } from "@/lib/format-time";
 import { deleteModelPriceOptimistic, useModelPrices } from "@/lib/swr";
 import { PricingEditorDialog } from "./PricingEditorDialog";
-import { formatUsdPerM, type PricingEditorTarget } from "./shared";
+import { PriceCell } from "./PriceCell";
+import { isPriceRecordComplete, type PricingEditorTarget } from "./shared";
 
 function modeLabel(record: ModelPriceRecord): string {
   if (record.billing_mode === "per_request") return "per_request";
@@ -54,9 +55,7 @@ export function ModelPricingTab() {
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     await deleteModelPriceOptimistic(deleteTarget.model_id, records, (deleteError) =>
-      toast.error(t("modelPricing.deleteFailed", "Failed to delete model price"), {
-        description: deleteError.message,
-      }),
+      toastApiError(deleteError, t, t("modelPricing.deleteFailed")),
     ).catch(() => undefined);
   };
 
@@ -71,6 +70,7 @@ export function ModelPricingTab() {
         onOpenChange={(open) => {
           if (!open) setEditorTarget(null);
         }}
+        onTargetChange={setEditorTarget}
         records={records}
       />
       <ConfirmDeleteDialog
@@ -166,28 +166,24 @@ export function ModelPricingTab() {
                           </span>
                         </DataListCell>
                         <DataListCell label={t("modelPricing.inputPrice", "Input $/1M")} align="end">
-                          <span className="tabular-nums">
-                            {record.billing_mode === "per_request"
-                              ? formatUsdPerM(record.per_request_usd)
-                              : formatUsdPerM(record.input_usd_per_1m)}
-                          </span>
+                          <PriceCell record={record} side="input" />
                         </DataListCell>
                         <DataListCell label={t("modelPricing.outputPrice", "Output $/1M")} align="end">
-                          <span className="tabular-nums">
-                            {record.billing_mode === "per_request"
-                              ? "—"
-                              : formatUsdPerM(record.output_usd_per_1m)}
-                          </span>
+                          <PriceCell record={record} side="output" />
                         </DataListCell>
                         <DataListCell label={t("modelPricing.source", "Source")}>
                           <span className="font-mono text-muted-foreground">{record.source}</span>
                         </DataListCell>
                         <DataListCell label={t("modelPricing.status", "Status")}>
                           <span className="inline-flex items-center gap-1.5">
-                            {record.enabled ? (
+                            {!record.enabled ? (
+                              <Badge variant="secondary">{t("common.disabled")}</Badge>
+                            ) : isPriceRecordComplete(record) ? (
                               <StatusBadge variant="success">{t("common.enabled")}</StatusBadge>
                             ) : (
-                              <Badge variant="secondary">{t("common.disabled")}</Badge>
+                              <StatusBadge variant="warning" title={t("modelPricing.incompleteHint")}>
+                                {t("modelPricing.incomplete")}
+                              </StatusBadge>
                             )}
                             {record.locked_fields.length > 0 ? (
                               <Badge

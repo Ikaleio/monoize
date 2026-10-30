@@ -27,6 +27,10 @@ function getInitialLanguage(): SupportedLanguage {
   return "en";
 }
 
+const initialLanguage = getInitialLanguage();
+// Set before the first render so assistive technology and font selection see the right language.
+document.documentElement.lang = initialLanguage;
+
 i18n.use(initReactI18next).init({
   resources: {
     en: { translation: en },
@@ -34,7 +38,7 @@ i18n.use(initReactI18next).init({
     ja: { translation: ja },
     "zh-TW": { translation: zhTW },
   },
-  lng: getInitialLanguage(),
+  lng: initialLanguage,
   fallbackLng: "en",
   interpolation: {
     escapeValue: false,
@@ -43,6 +47,7 @@ i18n.use(initReactI18next).init({
 
 i18n.on("languageChanged", (lng) => {
   localStorage.setItem(LANGUAGE_KEY, lng);
+  document.documentElement.lang = lng;
 });
 
 export default i18n;
@@ -53,11 +58,4 @@ export function setLanguage(lang: SupportedLanguage) {
 
 export function getCurrentLanguage(): SupportedLanguage {
   return i18n.language as SupportedLanguage;
-}
-
-export function toggleLanguage() {
-  const current = getCurrentLanguage();
-  const idx = SUPPORTED_LANGUAGES.indexOf(current);
-  const next = SUPPORTED_LANGUAGES[(idx + 1) % SUPPORTED_LANGUAGES.length];
-  setLanguage(next);
 }

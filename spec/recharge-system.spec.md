@@ -619,7 +619,7 @@ The recharge action selects the recharge tab and moves focus to its tab trigger.
 The balance summary remains visible on every tab without duplication.
 Prepaid balance and plan capacity MUST NOT be added together or presented as one balance.
 
-RC-W2a. The plan-capacity region MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price and allow purchase. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
+RC-W2a. The plan-capacity region MUST load `GET /api/dashboard/billing-plan-subscription` and `GET /api/dashboard/billing-plans/marketplace` through SWR. It MUST render skeleton content while either request loads. When a subscription is active, it MUST show its name, description, expiry, eligible groups, and every configured sliding-window remaining value. When no subscription is active, it MUST show every listed plan price (`$price_usd / {duration}`, BP-UI4) and allow purchase through the BP-UI4 confirmation dialog. A successful purchase MUST revalidate the subscription, session user, and ledger caches without a page close or reload.
 If either load fails, the card MUST render a localized compact error state with
 a retry action. The error state MUST NOT expose the raw error message. A failed
 revalidation that retains cached data MUST keep rendering the cached data.
@@ -635,12 +635,25 @@ RC-W3. The recharge card:
   cached channel data MUST keep rendering the cached data;
 - when zero enabled channels exist, renders a localized empty state and no
   amount controls;
-- renders preset amount buttons for `5`, `10`, `25`, `50`, and `100` USD,
-  one labeled custom-amount input, and a channel selector, in that order.
+- renders, in this order, a channel selector, preset amount buttons for `5`,
+  `10`, `25`, `50`, and `100` USD, and one labeled custom-amount input.
+  The channel selector is a single-select group of buttons, one per channel,
+  each labeled `{name} · {currency} · ${min_credit_usd}–${max_credit_usd}`.
   A preset outside the selected channel's bounds MUST be disabled;
+- when the user switches channel while the entered amount is a valid USD
+  decimal outside the new channel's bounds, the amount MUST be replaced by the
+  nearest bound (`min_credit_usd` or `max_credit_usd`, verbatim) and a one-line
+  localized note naming the new amount and channel MUST appear under the
+  selector. The note disappears on the next amount edit, preset selection, or
+  a channel switch that needs no clamping. An invalid or empty amount is left
+  unchanged;
 - shows a payment summary beside the form at or above `lg`, and below it otherwise.
-  The summary shows credit in USD, the selected channel rate and currency, the
+  At or above `lg` the summary shows credit in USD, the selected channel rate and currency, the
   exact payment preview, a submit button, and a payment-success explanation.
+  Below `lg` the summary collapses to one line directly above the submit
+  button: the localized "pay {pay_amount} {pay_currency}" text and the rate
+  `1 USD = {usd_rate} {currency}`, followed by the submit button and the
+  payment-success explanation.
   Credit preserves every non-zero input decimal place, up to nine places.
   Invalid amounts show unavailable credit and payment previews and disable submission.
   A non-empty invalid input also shows an associated localized validation message;
@@ -653,27 +666,40 @@ RC-W3. The recharge card:
 - on submit, POSTs RC-O2, optimistically inserts the returned `pending` order
   at the top of the orders SWR cache, and navigates the browser to
   `payment.url` (top-level navigation, not an iframe);
-- surfaces every RC-O3/RC-O8 error code as a localized toast and keeps the
+- surfaces every RC-O3/RC-O8 error code as a localized toast (the shared
+  `apiErrors.<code>` text, never the raw server message) and keeps the
   entered state intact.
 
 RC-W4. The recharge-orders section lists the caller's RC-A2 orders (newest
 first) in the activity card's `orders` tab. Each order item shows created time
-(FL2 format), channel name, credit (`credit_usd`), payment (`pay_amount` +
+(FL2 format), channel name, credit, payment (`pay_amount` +
 `pay_currency`), status badge, and order id (first 8 chars, full id in a
-tooltip). While any loaded own order has `status = pending`, the SWR hook MUST
+tooltip, followed by a `CopyButton` that copies the full id). The selected
+activity tab is stored in the `activity` query parameter (`orders` or
+`ledger`; default `orders`, omitted from the URL when default; invalid values
+select `orders`) and survives reload. While any loaded own order has `status = pending`, the SWR hook MUST
 poll with `refreshInterval = 5000`; when none is pending, polling MUST stop. A
 `?order_id=` query parameter (RC-G2 return URL) highlights the matching item;
 state correctness MUST rely on polling, never on return-URL parameters.
 When the order load fails, the section MUST render a localized compact error
 state with a retry action and no raw error message. A failed revalidation that
 retains cached order data MUST keep rendering the cached data.
-Each order row MUST render the credit as `$` followed by `credit_usd` in
+Each order row MUST render the credit as `$` followed by `credit_usd` rounded
+half-up to exactly two decimal places (`formatUsdDecimal(credit_usd, 2)`) in
 `text-foreground`, without a plus or minus sign, for every status.
 
 RC-W5. The activity card's `ledger` tab lists the caller's RC-A5 entries. Each
 ledger item shows created time, kind (localized label), delta (`delta_usd`,
 signed, semantic success color for positive and semantic destructive color for
-negative), and balance after. The default `kinds` filter sent by the page is exactly
+negative), and balance after. Delta and balance after use four decimal places.
+The primary cell shows the kind on line one and, when available, one line of
+muted secondary text: `meta_json.note` (a non-empty string, e.g. the
+user-visible note of an admin adjustment) if present; otherwise, when
+`meta_json.api_key_id` is set, the localized "API key: {name}" with the name
+of the caller's own key from the API-key list, or the first 8 characters of
+the id when the key is not in that list; otherwise, when `meta_json.order_id`
+is set, the localized "Order {first 8 characters of order_id}". Otherwise no
+second line renders. The default `kinds` filter sent by the page is exactly
 `recharge,recharge_refund,admin_adjustment,plan_purchase,sub_account_transfer_out,sub_account_transfer_in,sub_account_refund,sub_account_debt_transfer,sub_account_delete_settlement,admin_sub_account_adjustment`
 (every non-per-request kind); a kind filter control MAY narrow it. Per-request
 charges (`request_charge`, `api_key_charge`) are intentionally excluded here —
@@ -708,8 +734,8 @@ Administrators can navigate from that state to `/dashboard/plans`.
 With no payment channels, administrators can navigate to `/dashboard/payments`.
 Ordinary users MUST NOT see these administrator actions.
 At or above `lg`, the recharge form and summary use a 3:2 column ratio.
-At or above `sm`, custom amount and payment method share a row.
-Below `sm`, these fields stack in source order.
+The channel selector uses two columns at or above `sm` and one below `sm`; the
+presets and custom amount follow at full form width.
 Order and ledger rows MUST use the `DataList` primitives (`frontend-design-system.spec.md` §6.1).
 At 390 CSS pixels, the page, tabs, and controls MUST fit without horizontal page scrolling.
 Tab triggers, recharge controls, purchase actions, and pagination buttons have a minimum height of 44 CSS pixels.
@@ -737,6 +763,19 @@ MUST show the create-channel action while Channels is active, and the status and
 username filters while Orders is active. Both panels MUST render their rows with
 the `DataList` primitives (`frontend-design-system.spec.md` §6.1). At 390 CSS
 pixels, every switch and row action MUST be visible without horizontal scrolling.
+The active tab and the order filters live in the URL:
+`/dashboard/payments?tab=<channels|orders>&status=<order status>&username=<text>`.
+Each parameter is omitted when it equals its default (`channels`, all
+statuses, empty username), is written with history `replace`, and invalid
+`tab`/`status` values fall back to the default. Reloading the page restores
+the tab and filters. The Channels tab label is the localized "payment
+channels" term (zh "支付渠道").
+
+RC-M1a. While the RC-G1 `recharge_public_origin` setting (read from the admin
+settings API) is empty, the Channels tab MUST show a destructive `Alert` above
+the list stating that the recharge public origin is unset and users cannot
+place orders, with a link to
+`/dashboard/admin-settings?setting=recharge_public_origin`.
 
 RC-M2. The Channels tab lists every §9.2 row (name, `type_id`, currency,
 `usd_rate`, credit bounds, enabled switch) and offers create, edit, and delete
@@ -745,21 +784,52 @@ bounds MUST render as `${min_credit_usd} – ${max_credit_usd}` in `text-foregro
 `type_id` MUST render in the row font size. A disabled channel MUST render its name
 in `text-muted-foreground`.
 The enabled switch applies an SWR optimistic update and rolls back
-with a toast on error. Secret config inputs render empty with a localized
+with a localized toast on error. Secret config inputs render empty with a localized
 "stored, enter to replace" placeholder (RC-P6). The create/edit dialog derives
 its config fields from the RC-P5 schema of the selected `type_id`. Delete
 opens a confirmation dialog naming the channel.
 
+RC-M2a. The create/edit dialog is a semantic form: Enter in a single-line
+input submits, the footer holds an outline cancel button followed by the
+`type="submit"` save button, and the dialog uses the shared dirty guard
+(`DialogContent dirty`). Validation runs on submit and shows inline field
+errors (`FieldError`, `aria-invalid` on the control) and focuses the first
+invalid field instead of a toast:
+- name: required;
+- rate: an RC-U5 decimal greater than zero (at most 12 integer and 9
+  fractional digits); its placeholder is the localized "e.g. 7.30";
+- min and max credit: positive USD decimals with at most 9 fractional digits;
+  max below min shows the error on max;
+- required config fields (non-optional; secrets only on create) must be non-empty.
+Editing a field clears its error. A server `channel_name_exists` error is
+shown inline on the name field as the localized "a payment channel with this
+name already exists", and `invalid_channel_config` toasts a payment-channel
+configuration message (these codes are shared with Provider Channels, so the
+shared `apiErrors` text is not used for them); other server errors use the localized
+`apiErrors.<code>` toast and never the raw server message.
+When editing a saved `stripe` channel the dialog shows a read-only "callback
+URL" field containing the RC-G2 `notify_url`
+(`{recharge_public_origin}/api/pay/notify/{payment_channel_id}`) with a
+`CopyButton` and a hint to register it as the Stripe webhook endpoint. When
+`recharge_public_origin` is empty, the field is replaced by a hint that the
+URL appears after the origin is set.
+
 RC-M3. The Orders tab renders the admin view of RC-A2 (all users) with
 `status` and `username` filters and these columns: created time (FL2 format),
-username, channel name, credit (`credit_usd`), payment (`pay_amount` +
-`pay_currency`), status badge, and order id (first 8 chars; the tooltip shows
-the full id and, when set, `error_code`). Each row has a refund action enabled
-only when `status = succeeded`. The refund action opens a confirmation dialog;
-for a `supports_refund = false` channel the dialog contains the RC-R4 manual
-acknowledgment checkbox and blocks confirm until checked. Mutations
-optimistically update the orders cache and roll back on error with the server
-message.
+username, channel name, credit (`$` + `formatUsdDecimal(credit_usd, 2)`), payment (`pay_amount` +
+`pay_currency`), status badge, order id (first 8 chars followed by a
+`CopyButton` that copies the full id; the tooltip shows the full id and, when
+set, `error_code`), and a column headed "Refund" (zh "退款"). Only rows with
+`status = succeeded` render the refund button in that column; every other row
+renders "—". The refund action opens a confirmation dialog that contains a
+key-value block with the full order id and a `CopyButton`, the payment channel
+name, the paid amount `pay_amount pay_currency`, and the credit
+`$` + `formatUsdDecimal(credit_usd, 2)`. For a `supports_refund = false`
+channel the dialog also contains the RC-R4 manual acknowledgment checkbox,
+labeled "I have refunded {pay_amount} {pay_currency} on the payment platform",
+and blocks confirm until checked. Mutations
+optimistically update the orders cache and roll back on error with a localized
+`apiErrors.<code>` toast, never the raw server message.
 
 ## 12. Placement relative to request logs
 

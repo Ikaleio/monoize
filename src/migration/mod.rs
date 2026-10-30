@@ -64,6 +64,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260924_000055_request_log_upstream_response_model::Migration),
             Box::new(m20260930_000056_billing_plan_usage_cumulative::Migration),
             Box::new(m20261009_000057_system_one_channel_type::Migration),
+            Box::new(m20261030_000058_drop_dead_settings::Migration),
         ]
     }
 }
@@ -257,3 +258,4 @@ mod m20260914_000054_channel_websocket_supported;
 mod m20260924_000055_request_log_upstream_response_model;
 mod m20260930_000056_billing_plan_usage_cumulative;
 mod m20261009_000057_system_one_channel_type;
+mod m20261030_000058_drop_dead_settings;

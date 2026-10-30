@@ -274,7 +274,8 @@ RL21. API-key Image API generation and edit requests MUST record `image_generati
   - `offset: integer` (default 0, clamped to >= 0)
   - `model: string?` (filter by model name; supports comma-separated list for multi-model OR matching, e.g. `"gpt-4o, gpt-5"`. Each entry is trimmed and matched as a case-insensitive literal substring. `%`, `_`, and `\` in an entry are ordinary characters, not LIKE syntax.)
   - `status: string?` (filter by status, exact match: `"pending"`, `"success"`, `"error"`, or `"client_gone"`)
-  - `api_key_id: string?` (filter by specific API key ID)
+  - `api_key_id: string?` (filter by specific API key ID; admin callers may filter by any user's key)
+  - `channel_id: string?` (exact match on `channel_id`, the Channel that served the request; applied whenever the caller has admin role, including with `scope=self`; non-admin callers ignore this parameter)
   - `username: string?` (filter by username, exact match via JOIN on `users.username`; only effective when the caller has admin role — non-admin callers ignore this parameter)
   - `search: string?` (case-insensitive literal-substring search across model, upstream_model, request_id, request_ip; `%`, `_`, and `\` are ordinary characters)
   - `time_from: string?` (ISO 8601 / RFC 3339 timestamp; inclusive lower bound on `created_at`)
@@ -434,6 +435,7 @@ FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a 
 - The row MUST render the TTFB badge when `ttfb_ms` is present.
 - The row MUST render exactly one stream-mode badge (`流` or `非流`).
 - When `tried_providers` is non-empty, the row MUST also render a hop-count badge whose text is the localized retry-hop count for `tried_providers.length`. This hop-count badge is not a timing-value overflow control.
+- The stream-mode badge describes a property, not an outcome: both values MUST use the same neutral muted style (`bg-muted text-muted-foreground`) and MUST differ only by text. The hop-count badge MUST use the warning style. No other timing-cell badge may use the warning style.
 - The row MUST NOT render a `+N` overflow badge for timing values.
 - Timing badges MUST NOT wrap.
 - The timing cell MAY use horizontal overflow when viewport space is insufficient; it MUST NOT hide badges behind a collapsed popover.
@@ -459,20 +461,27 @@ FL4e. Every text badge rendered by the logs page MUST use the shared rounded-rec
 shape (`rounded-md`). A logs-page text badge MUST NOT override that shape with
 `rounded-full`. Circular status indicators are not text badges and MUST remain circular.
 
-FL5. The `api_key_name` column header MUST be "Token" (referring to the API key name, not the literal token value).
+FL5. The `api_key_name` column header MUST be the localized "API Key" term (`API 密钥` in zh, `API 金鑰` in zh-TW, `API キー` in ja), referring to the API key name, not the literal token value. The token filter label and its "all" option MUST use the same term.
 
 FL6. The multiplier column from the old layout MUST be removed (multiplier is already shown inside ModelBadge on the Provider page).
 
 FL7. The top of the page MUST include a search bar and filter controls:
   - **Model filter**: text input accepting comma-separated model names (e.g. `gpt-4o, gpt-5`); applied on Enter or blur.
   - **Status filter**: dropdown with options `All`, `Pending`, `Success`, `Error`.
-  - **Token filter**: dropdown listing all of the user's API keys by name; selecting one filters by `api_key_id`.
+  - **Token filter**: dropdown listing API keys by name; selecting one filters by `api_key_id`. For a non-admin viewer it lists all of the viewer's own API keys. For an admin viewer it MUST be disabled while the username filter is empty and MUST then show the localized hint "Filter by user first" (`先按用户筛选`). Once a username is applied, it MUST list that user's API keys from `GET /api/dashboard/users/{user_id}/api-keys`, where `user_id` is resolved from the admin user list by exact username. Applying a different username MUST clear `api_key_id`. When the applied `api_key_id` is not among the listed keys, the dropdown MUST still show it as selected, labelled with the `api_key_name` of a visible row with that id or a localized "Selected API key" fallback.
   - **Username filter** (admin only): text input. The default value is empty, which MUST omit `username` from `GET /api/dashboard/request-logs` and therefore list every user's logs. Applied on Enter or blur. Non-admin users do not see this control.
   - **Time range filter**: dropdown with preset options `All Time`, `Last 1 Hour`, `Last 24 Hours`, `Last 7 Days`, `Last 30 Days`, `Today`, `Yesterday`, `This Month`, `Last Month`. Selecting a preset computes `time_from` / `time_to` as ISO 8601 strings in the browser's local timezone and sends them as query parameters to the API.
+  - **Channel filter** (admin only, URL-driven): when `channel_id` is applied, the filter row MUST show a removable chip `Channel: <provider_name>/<channel_name>` resolved from the admin Provider list (falling back to names on a visible row, then a localized "Unknown Channel"). The chip's remove button MUST clear `channel_id`. The raw `channel_id` MUST NOT be rendered.
+
+FL7e. The filter-expansion toggle MUST render the localized text "Filters" (`筛选`). When N > 0 filters inside the expandable row are applied (model, status, API key, username, Channel, time range; the free-text search is excluded because it is always visible), the text MUST read `筛选 · N` and the toggle MUST render the shared `ModifiedDot`, whether the row is expanded or collapsed. The toggle MUST expose `aria-expanded`.
+
+FL7f. When any filter including the free-text search is applied, the summary area MUST render a "Clear filters" (`清除筛选`) text button left of the total charge. Activating it MUST clear the search input, every filter in FL7b, and their URL parameters in one history replacement.
+
+FL7g. When the request-log list request fails and no row is visible, the table area MUST render the shared data-load failure notice (`QueryError`: alert plus localized retry button, disabled while retrying) instead of the empty state. When a refresh fails while rows are visible, the page MUST keep the rows and render the stale variant of that notice ("refresh failed, showing previous data") between the filter area and the table. When no row matches and no filter is applied the empty state reads "No request logs yet"; when any filter is applied it MUST read "No request logs match the filters".
 
 FL7a. The filter-control area MUST display the total charge sum for the current filter conditions. The displayed value MUST come from the most recent REST response field `total_charge_nano_usd` for the active filters. It MUST include every matching persisted row and MUST be independent of request `limit`, request `offset`, and the number of rows currently loaded by infinite scrolling. The frontend MUST NOT compute this value by summing `loadedLogs` or the current response page. The value MUST be formatted as regular USD currency with 6 fractional digits (e.g. `$1.234567`). The label MUST use the i18n key `requestLogs.totalCost`. The element MUST be displayed in the summary area (top-right) alongside the existing "Showing X-Y of Z" text.
 
-FL7b. `/dashboard/logs` MUST read the optional `username` query parameter. For an admin viewer, a non-empty `username` value MUST initialize the username filter to that exact string. An absent or empty `username` query parameter MUST initialize the filter to empty (all users). Non-admin viewers MUST ignore the query parameter.
+FL7b. Every applied filter MUST live in the `/dashboard/logs` URL and MUST be read from it on load: `q` (free-text search), `model`, `status` (one of `pending`, `success`, `client_gone`, `error`), `api_key_id`, `username` (admin only), `channel_id` (admin only), and the time range. A relative time preset MUST be stored as `range` ∈ `1h`, `24h`, `7d`, `30d`, and `time_from` MUST be recomputed from the current time on load and whenever that preset is selected (re-selecting the same preset recomputes it); `from`/`to` MUST then be absent. Any other time range MUST be stored as ISO 8601 `from` and/or `to`. Applying or clearing a filter MUST update the URL with history replacement and MUST remove the parameter when the filter is empty. Unknown `status`/`range` values and unparsable `from`/`to` values MUST be ignored. Non-admin viewers MUST ignore `username` and `channel_id`. When the URL changes from outside the page (for example a deep link), the text inputs MUST show the new values; local typing MUST NOT be overwritten by its own debounced URL write.
 
 FL7c. The free-text search input MUST debounce fetches. A keystroke MUST NOT issue a request-log fetch directly; the client applies the current search text to the active filter set only after 300 ms have elapsed without a further keystroke. Clearing the input follows the same 300 ms rule. Local (client-side) filtering of SSE-delivered rows per FL53 MAY use the debounced value.
 
@@ -482,7 +491,11 @@ FL8. Column order (left to right): merged `created_at/request_id`, merged `model
 
 FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping visible lines in one column. The first line MUST render `created_at` per FL2. The second line MUST render the first 8 characters of `request_id` followed immediately by the FL36 status indicator. If `request_id` is absent, the second line MUST render `-`. When `has_capture == true`, the second line MUST also render the right-aligned capture-viewer button defined by `request-capture-viewer.spec.md` RCV-F2. The request tooltip behavior defined by FL28 and FL29 MUST remain attached to the second line.
 
-FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells, the admin-visible merged User/Token cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
+FL8c. Every request-log detail tooltip trigger (request-id, model, Channel, API key, timing, input, output, cost) MUST be a native `<button type="button">`, so keyboard focus opens the tooltip and the trigger appears in the tab order. The FL36 status indicator MUST have `role="img"` and an `aria-label` equal to the localized status (success / error / pending / client gone).
+
+FL8b. Every request-log body row MUST have a fixed height of 44 pixels; cell content plus vertical padding MUST fit inside it (two-line cells use 16 px + 20 px lines with 2 px vertical padding). The merged leading cells, the admin-visible merged User/API key cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
+
+FL8d. The table MUST use one base font size of 12 px (`text-xs`) for every primary value, badge, ModelBadge label, placeholder, and IP text. The secondary (second) line of a two-line cell (Channel line, admin API key line, cached-input line) MUST use 11 px muted text. No other font size MAY appear in table body cells.
 
 FL9. The merged `model/[channel]` cell MUST use a non-wrapping column layout inside the fixed-height row:
 
@@ -492,6 +505,7 @@ FL9. The merged `model/[channel]` cell MUST use a non-wrapping column layout ins
 - When `affinity_hit` is true for an admin viewer, the second line MUST include a localized sticky-session badge immediately after the Channel display value. The badge MUST NOT appear when `affinity_hit` is false or null.
 - Retry-chain hops MUST NOT create a third visible line. Their full path remains available through FL9b and their count remains visible through FL4.
 - On hover, focus, or activate, the tooltip MUST show the content defined by FL9b. Activation MUST work on touch devices; activating outside the tooltip or pressing Escape MUST close it.
+- The ModelBadge tooltip MAY show the Provider only to an admin viewer, and then MUST show `provider_name` (falling back to `provider_id` only when the name is absent). A non-admin viewer's model tooltip MUST NOT show any Provider value.
 
 FL9c. Actual upstream response model, admin only:
 
@@ -534,8 +548,8 @@ FL14. The filter-control area first row MUST include an IP visibility toggle but
 
 - The button MUST be a square icon button using an eye/eye-off glyph.
 - Initial state MUST be "hidden".
-- When hidden, request IP cell text MUST remain present but rendered with a Gaussian blur effect.
-- When shown, the blur MUST be removed immediately.
+- When hidden, request IP cell text MUST remain present but rendered with a Gaussian blur effect, and the cell MUST NOT expose the IP through a `title` attribute or any other unblurred text.
+- When shown, the blur MUST be removed immediately; a `title` with the IP MAY then be present.
 
 FL15. The table MUST use compact column spacing:
 
@@ -574,7 +588,7 @@ FL26c. If the cost breakdown tooltip would contain no visible line items (all pe
 
 FL26d. Legacy snapshot exception to FL26c: if an existing historical `billing_breakdown_json.exemption_reason = "admin_unpriced_model"`, the Cost cell MUST still render a tooltip. That tooltip MUST include a localized note stating that an admin-used unpriced model was exempted from billing, so a visible `$0.000000` charge is not mistaken for missing data. New metered-billing requests MUST NOT create this exemption.
 
-FL26e. The cost breakdown tooltip width MUST NOT exceed the mobile viewport width minus 24 pixels. On viewports narrower than the `sm` breakpoint, each line-item price expression MUST render below its localized label. On wider viewports, the label and expression MAY render in two columns.
+FL26e. The cost breakdown tooltip width MUST NOT exceed the mobile viewport width minus 24 pixels. On viewports narrower than the `sm` breakpoint, each line-item price expression MUST render below its localized label. On wider viewports, the label and expression MAY render in two columns. The same width bound (`max-width: calc(100vw - 24px)`) applies to every tooltip listed in FL32, and long error text and retry-chain rows in them MUST wrap (`break-words`) instead of overflowing the viewport.
 
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 
@@ -594,7 +608,7 @@ FL30. For rows where `request_kind = "active_probe_connectivity"` and `api_key_n
 
 FL31. The rightmost `request_ip` column MUST keep a trailing right inset equal to the leading left inset of the merged `created_at/request_id` column, so IP text does not visually touch the table's right boundary.
 
-FL32. Tooltip overlays for request-log table detail cells (request-id, model, token, channel, duration, input/output, cost) MUST render in a portal layer attached to `document.body` so overlay width/position is not constrained by table/cell/container layout width or overflow clipping.
+FL32. Tooltip overlays for request-log table detail cells (request-id, model, token, channel, duration, input/output, cost) MUST render in a portal layer attached to `document.body` so overlay width/position is not constrained by table/cell/container layout width or overflow clipping. Their width MUST follow the viewport bound in FL26e.
 
 FL33. On coarse-pointer devices (touch-first), those tooltip overlays MUST open on tap and close on outside tap, while preserving hover behavior on fine-pointer devices.
 
@@ -610,6 +624,12 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 - `error`: red lamp.
 
 Hovering a `client_gone` row MUST show `error_code`, `error_message`, and `error_http_status` the same way FL28 shows those fields for `error` rows. The status filter MUST include a `client_gone` option.
+
+FL36a. An `error` or `client_gone` row whose Input and Output usage are both unavailable (FL27b) MUST replace those two cells with one cell (`colspan=2`) showing an inline error chip whose text is `<error_http_status> · <error_code>` (only the present parts; the localized status when neither is present). The chip MUST use the `error-soft` style for `error` and the `warning-soft` style for `client_gone`. The Cost cell keeps its normal rendering. Rows with usage keep the normal Input/Output cells.
+
+FL37e. While the table viewport is scrolled away from its top (more than 8 px), live updates that would insert rows above the visible ones (SSE `log_batch` rows, newest-page refreshes, and first-page refetches) MUST be buffered and MUST NOT move the currently visible rows. While anything is buffered for this reason and at least one buffered row is not yet shown, the table MUST show a floating pill near its top reading `N 条新日志 · 回到顶部` (localized), where N counts distinct buffered rows (by `request_id`, else `id`) that match the active filters and are not already visible. Activating the pill MUST apply the buffer and scroll the table to the first row. Scrolling back to the top MUST also apply the buffer. Appended pages from infinite loading (offset > 0) are not buffered for this reason. Changing the filter set MUST reset the viewport state to "at top" and discard buffered page responses of the previous filter set. At the top, rows keep being inserted live per FL37/FL49.
+
+FL37f. Applying an SSE row MUST NOT replace a row with the same `request_id` that is already in a terminal state (`success`, `error`, `client_gone`) by a `pending` row. This holds in particular when buffered SSE rows are flushed after a newer server snapshot (FL37e, FL56).
 
 FL37. Automatic updates MUST be enabled when the logs page mounts. While automatic updates are enabled, the logs page MUST auto-refresh the newest page so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
 
@@ -628,13 +648,21 @@ FL38. While any tooltip-detail overlay in the request-logs table is open (reques
 - When all tooltip overlays close, buffered data MUST be flushed and applied to the visible table immediately, and periodic polling MUST resume at the normal interval.
 - This guarantee MUST hold on both fine-pointer (desktop hover) and coarse-pointer (mobile tap) devices.
 
+FL38a. The FL38 pause applies only to periodic polling and focus/reconnect revalidation. The first fetch for a new request key — a changed filter set (including a debounced search change) or a new infinite-loading offset — MUST start immediately even while a tooltip is open. When a filter change replaces the row list, the response MUST be rendered as soon as no tooltip remains open; a filter change MUST never leave the table showing an empty state for a query that was never sent.
+
 FL39. The time-range filter popover MUST contain three vertical sections in this order: preset row, manual datetime inputs, single-month calendar.
 
 FL40. The preset row MUST be horizontally scrollable when content overflows and MUST reserve scrollbar gutter space to avoid layout jump while scrolling.
 
 FL41. The popover content width MUST equal the rendered calendar width for the currently displayed month. The datetime input rows MUST NOT expand popover width beyond calendar width.
 
-FL42. The manual datetime inputs MUST be stacked in two rows (`from` then `to`) and accept second-precision format `yyyy-MM-dd HH:mm:ss`.
+FL42. The manual datetime inputs MUST be stacked in two rows (`from` then `to`), each with an accessible label, followed by a localized "Apply" (`应用`) button. They MUST accept `yyyy-MM-dd HH:mm:ss`, `yyyy-MM-dd HH:mm`, and `yyyy-MM-dd` in local time (a date-only `to` means the end of that day). The inputs are controlled text fields reset from the active range each time the popover opens, so new text replaces rather than concatenates old text.
+
+FL42a. Manual input MUST be committed only by pressing Enter in either input or activating "Apply"; blur MUST NOT commit and MUST NOT issue a request. If either non-empty input does not parse to a real calendar instant, or `from` is not earlier than `to`, the commit MUST keep the previously applied range, set `aria-invalid` on the offending input(s), and render an inline error below the inputs: "Use the format yyyy-MM-dd HH:mm:ss" (`格式应为 yyyy-MM-dd HH:mm:ss`) or "Start time must be earlier than end time". Editing either input clears the error. Clearing both inputs and committing selects All Time.
+
+FL42b. The calendar MUST use the date-fns locale of the active i18n language (`zhCN` for zh, `zhTW` for zh-TW, `ja` for ja, `enUS` otherwise) for month names and weekday labels.
+
+FL42c. The trigger label MUST be the active preset's localized name when a preset is active. Otherwise, for a custom range, it MUST include times: `MM/dd HH:mm–HH:mm` when both ends are on the same local day, `MM/dd HH:mm – MM/dd HH:mm` across days, `MM/dd HH:mm –` with only `from`, and `– MM/dd HH:mm` with only `to`. Preset buttons expose `aria-pressed`.
 
 FL43. Time-range selection MUST be bidirectionally synchronized:
 
@@ -721,7 +749,7 @@ FL52b. Monoize MUST NOT maintain full-table user, API-key, Provider, or Channel 
 
 ### 6.9 No server-side filtering on SSE
 
-FL53. The SSE endpoint `GET /api/dashboard/request-logs/stream` MUST NOT accept any filter query parameters (`model`, `status`, `api_key_id`, `username`, `search`, `time_from`, `time_to`, `scope`). The server pushes all user-visible logs (per FL47 permission rules). The client MUST apply active UI filters locally to determine which SSE-delivered rows to display.
+FL53. The SSE endpoint `GET /api/dashboard/request-logs/stream` MUST NOT accept any filter query parameters (`model`, `status`, `api_key_id`, `channel_id`, `username`, `search`, `time_from`, `time_to`, `scope`). The server pushes all user-visible logs (per FL47 permission rules). The client MUST apply active UI filters locally to determine which SSE-delivered rows to display.
 
 ### 6.10 Keep-alive
 
@@ -735,6 +763,6 @@ FL55. The endpoint `GET /api/dashboard/request-logs/stream` MUST enforce a per-u
 
 ### 6.12 Tooltip-pause interaction with SSE
 
-FL56. While any tooltip-detail overlay in the request-logs table is open (as defined in FL38), SSE-delivered `log_batch` data MUST be buffered in memory and MUST NOT cause the table row list to re-render. When all tooltip overlays close, all buffered SSE data MUST be flushed: buffered rows MUST be prepended to the table data array and the table MUST re-render with the combined dataset. This behavior is analogous to the polling-pause guarantee in FL38 and MUST hold on both fine-pointer and coarse-pointer devices.
+FL56. While any tooltip-detail overlay in the request-logs table is open (as defined in FL38), SSE-delivered `log_batch` data MUST be buffered in memory and MUST NOT cause the table row list to re-render. When all tooltip overlays close, all buffered SSE data MUST be flushed: buffered rows MUST be prepended to the table data array and the table MUST re-render with the combined dataset. This behavior is analogous to the polling-pause guarantee in FL38 and MUST hold on both fine-pointer and coarse-pointer devices. SSE rows are additionally buffered while the table is scrolled away from the top (FL37e); in that case they are flushed only when the table returns to the top or the "new logs" pill is activated.
 
-FL57. The frontend tooltip-pause bookkeeping used by FL38 and FL56 MUST be resilient to virtualization-driven row unmounts and tooltip component remounts. If a tooltip-owning row leaves the DOM before a matching close callback fires, the page MUST still eventually resume live updates without requiring a manual refresh or page reload. Implementations MUST therefore track tooltip-open state by stable tooltip identity (or an equivalent leak-free ownership model), rather than relying on a process-wide integer counter that can remain permanently positive after an unbalanced open/close sequence.
+FL57. The frontend tooltip-pause bookkeeping used by FL38 and FL56 MUST be resilient to virtualization-driven row unmounts and tooltip component remounts. If a tooltip-owning row leaves the DOM before a matching close callback fires, the page MUST still eventually resume live updates without requiring a manual refresh or page reload. Implementations MUST therefore track tooltip-open state by stable tooltip identity (or an equivalent leak-free ownership model), rather than relying on a process-wide integer counter that can remain permanently positive after an unbalanced open/close sequence. The pause predicate MUST be bypassed for the first fetch of each new request key (FL38a); a tooltip-close flush alone never issues a fetch, so it cannot be the only path that starts one.

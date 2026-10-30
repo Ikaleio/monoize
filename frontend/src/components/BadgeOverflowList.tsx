@@ -8,6 +8,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 const DEFAULT_PAGE_SIZE = 8
 
@@ -49,6 +50,7 @@ export function BadgeOverflowList({
 	side = 'bottom',
 	onOpenChange
 }: BadgeOverflowListProps) {
+	const { t } = useTranslation()
 	const [open, setOpen] = React.useState(false)
 	const [page, setPage] = React.useState(0)
 	const pinnedOpenRef = React.useRef(false)
@@ -56,6 +58,8 @@ export function BadgeOverflowList({
 	const onOpenChangeRef = React.useRef(onOpenChange)
 	const lastPointerTypeRef = React.useRef<string | null>(null)
 	const suppressPointerFocusOpenRef = React.useRef(false)
+	const keyboardOpenRef = React.useRef(false)
+	const triggerRef = React.useRef<HTMLSpanElement>(null)
 	const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 	const safeVisibleCount = Math.max(1, visibleCount)
 	const safePageSize = Math.max(1, pageSize)
@@ -124,6 +128,7 @@ export function BadgeOverflowList({
 	const handlePointerEnter = React.useCallback(
 		(event: React.PointerEvent) => {
 			if (event.pointerType === 'touch') return
+			keyboardOpenRef.current = false
 			openPopover()
 		},
 		[openPopover]
@@ -217,6 +222,7 @@ export function BadgeOverflowList({
 		>
 			<PopoverTrigger asChild>
 				<span
+					ref={triggerRef}
 					role='button'
 					tabIndex={0}
 					aria-label={ariaLabel}
@@ -239,6 +245,7 @@ export function BadgeOverflowList({
 					}}
 					onFocus={() => {
 						if (suppressPointerFocusOpenRef.current) return
+						keyboardOpenRef.current = true
 						openPopover()
 					}}
 					onBlur={() => {
@@ -249,6 +256,7 @@ export function BadgeOverflowList({
 						if (event.key === 'Enter' || event.key === ' ') {
 							event.preventDefault()
 							event.stopPropagation()
+							keyboardOpenRef.current = true
 							openPopover()
 						}
 						if (event.key === 'Escape') {
@@ -267,9 +275,25 @@ export function BadgeOverflowList({
 					contentClassName
 				)}
 				onOpenAutoFocus={event => event.preventDefault()}
+				onCloseAutoFocus={event => {
+					// Radix would refocus the trigger, whose onFocus reopens the popover after a
+					// pointer-leave close. Only a keyboard-opened popover gets focus back, and
+					// that refocus must not reopen it.
+					event.preventDefault()
+					if (!keyboardOpenRef.current) return
+					const active = document.activeElement
+					if (active && active !== document.body) return
+					suppressPointerFocusOpenRef.current = true
+					triggerRef.current?.focus({ preventScroll: true })
+				}}
 				onPointerEnter={handlePointerEnter}
 				onPointerLeave={scheduleClose}
-				onClick={() => setPinnedOpen(false)}
+				onClick={event => {
+					// The content is portalled, but React still bubbles its clicks to the
+					// trigger's ancestors (for example an expandable card header).
+					event.stopPropagation()
+					setPinnedOpen(false)
+				}}
 			>
 				<div
 					className={cn(
@@ -298,7 +322,7 @@ export function BadgeOverflowList({
 							variant='ghost'
 							size='icon'
 							className='h-7 w-7 rounded-md'
-							aria-label='Previous page'
+							aria-label={t('common.previousPage')}
 							disabled={activePage === 0}
 							onClick={() => setPage(current => Math.max(0, current - 1))}
 						>
@@ -312,7 +336,7 @@ export function BadgeOverflowList({
 							variant='ghost'
 							size='icon'
 							className='h-7 w-7 rounded-md'
-							aria-label='Next page'
+							aria-label={t('common.nextPage')}
 							disabled={activePage >= pageCount - 1}
 							onClick={() => setPage(current => Math.min(pageCount - 1, current + 1))}
 						>

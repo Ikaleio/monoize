@@ -102,6 +102,18 @@ A4. Balance mutation by admin MUST write one ledger entry with type `admin_adjus
 
 A5. `PUT /api/dashboard/users/{user_id}` MUST apply ordinary user fields, `balance_nano_usd`, `balance_unlimited`, and the A4 ledger row in one database transaction through one `UserStore` operation. Password hashing, balance parsing, group serialization, and other deterministic validation MUST finish before the transaction begins. A database or ledger failure MUST roll back every field change. Cache invalidation MUST occur only after commit; API-key cache entries for the user MUST be invalidated for any persisted field change, and the balance cache entry MUST additionally be invalidated when either balance field changes.
 
+A6. `PUT /api/dashboard/users/{user_id}` MUST also accept optional `balance_delta_nano_usd: string` (signed nano-USD integer). The server MUST add it to the balance read under the A5 row lock with checked arithmetic and write the sum; it MUST NOT use a balance read before the transaction. Combining it with `balance_nano_usd` or `balance_usd` MUST be rejected with HTTP `400` and code `invalid_request`. Overflow MUST be rejected with HTTP `400` and code `invalid_balance`.
+
+A7. `PUT /api/dashboard/users/{user_id}` MUST accept optional `expected_balance_nano_usd: string` together with an absolute balance (`balance_nano_usd` or `balance_usd`). If the locked balance differs from it, the server MUST write nothing and return HTTP `409` with code `balance_changed` and `param = "balance"`. The field without an absolute balance MUST be rejected with HTTP `400` and code `invalid_request`.
+
+A8. `PUT /api/dashboard/users/{user_id}` MUST accept optional `balance_note: string`. The server MUST trim it; an empty result is ignored, and more than 200 characters MUST be rejected with HTTP `400`, code `invalid_request`, and `param = "balance_note"`. When the request writes an A4 ledger row, the trimmed note MUST be stored as `meta_json.note`. The note is visible to the target user in their wallet ledger.
+
+A9. A request with `enabled = false` whose target is the authenticated admin MUST be rejected with HTTP `400` and code `cannot_disable_self` before any write.
+
+A10. Validation errors for `username` (`invalid_username`, `reserved_username`, `username_exists`) and `password` (`invalid_password`) on `POST` and `PUT /api/dashboard/users*` MUST set `param` to `"username"` or `"password"`; `invalid_balance` MUST set `param = "balance"`.
+
+A11. Each item of `GET /api/dashboard/users` MUST include `active_plan_name: string` and `active_plan_expires_at: RFC3339 string` when the user has an active subscription (same selection as `billing-plan-subscriptions.spec.md`: started, not expired, not revoked, latest expiry wins), and MUST omit both otherwise. The server MUST load them for all users with one set query, not one query per user.
+
 ## 4. Billing eligibility
 
 BE1. Billing applies only when the request is authenticated by database API key (resolved `user_id` exists).

@@ -64,7 +64,17 @@ impl Transform for PromptAppendEmptyUserTransform {
         json!({
             "type": "object",
             "properties": {
-                "content": { "type": "string", "format": "multiline", "description": "Text content for the padding user message. Defaults to a single space." }
+                "content": {
+                    "type": "string",
+                    "format": "multiline",
+                    "description": "Text content for the padding user message. Defaults to a single space.",
+                    "x-localized-description": {
+                        "en": "Text content for the padding user message. Defaults to a single space.",
+                        "zh": "填充用 user 消息的文本内容。默认为一个空格。",
+                        "zh-TW": "填充用 user 訊息的文字內容。預設為一個空格。",
+                        "ja": "埋め合わせ用 user メッセージのテキスト。既定値は半角スペース 1 つです。"
+                    }
+                }
             },
             "additionalProperties": false
         })

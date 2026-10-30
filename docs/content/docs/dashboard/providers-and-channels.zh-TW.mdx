@@ -5,8 +5,8 @@ description: 用有序的 Provider 和帶權重的 Channel 定義上游路由。
 
 ## 概念
 
-- **Provider（服務供應商）** 是一個路由群組。它定義路由順序、重試預算、健康策略和有序的變換鏈。
-- **Channel（通道）** 是 Provider 內的一個上游端點。它保存上游類型、基底 URL、憑證、模型對應、權重和逾時。
+- **Provider** 是一個路由群組。它定義路由順序、重試預算、健康策略和有序的變換鏈。
+- **Channel** 是 Provider 內的一個上游端點。它保存上游類型、基底 URL、憑證、模型對應、權重和逾時。
 
 請求先選擇 Provider，再在其中選擇 Channel。選擇規則參見[路由與可靠性](/zh-TW/docs/routing)。
 
@@ -17,14 +17,14 @@ description: 用有序的 Provider 和帶權重的 Channel 定義上游路由。
 每個 Provider 列顯示最近 60 秒的 RPM 和 TPM。頁面可見時每 10 秒更新一次。
 RPM 統計所有使用者、所有終止狀態的已儲存請求。TPM 加總輸入與輸出 token，不重複計入快取或推理 token。
 進行中的請求和重試鏈項目不計入統計。空時間窗顯示 `0`；指標無法取得時顯示 `—`。
-截圖使用本機範例流量。
+每個 Provider 列顯示其位次和重試策略。每個 Channel 列顯示一個狀態、模型數量和權重占比。
 
 ## 建立 Provider
 
-1. 在側邊欄開啟**服務供應商**。
-2. 點擊建立按鈕並輸入名稱。
-3. 預設值不合適時調整重試選項：
-   - `max_retries`：整個 Provider 的重試總預算。`-1` 表示該路由內不限制。
+1. 在側邊欄開啟 **Provider**。
+2. 點擊**新增 Provider** 並輸入名稱。
+3. 預設值不合適時在**路由**分區調整重試選項：
+   - **Provider 嘗試次數**：**嘗試全部可用 Channel**（預設，儲存為 `max_retries = -1`）或**指定次數** N（儲存為 `max_retries = N - 1`）。
    - `channel_max_retries`：切換前在單個 Channel 內的重試次數。預設 `0`。
    - `channel_retry_interval_ms`：Channel 內重試的間隔時間。預設 `0`。
 4. 除非有明確理由，保持 `circuit_breaker_enabled` 開啟。
@@ -38,6 +38,8 @@ RPM 統計所有使用者、所有終止狀態的已儲存請求。TPM 加總輸
 5. 可選：為單個 Channel 設定 `proxy_url`，覆寫程序層級上游代理。
 
 之後編輯 Channel 時，API 金鑰留空則保持原有金鑰不變。
+
+儲存無效的表單時，編輯器會開啟出錯的分區和 Channel，聚焦出錯欄位，並在欄位旁顯示錯誤。必填欄位標有**必填**。
 
 ## 決策模型
 
@@ -102,13 +104,17 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 
 ## 測試 Channel
 
-開啟 Channel，執行順序測試或並行測試。
+展開 Provider，在 Channel 列點擊**選擇模型測試**；或儲存後在 Channel 編輯器點擊**測試**。然後執行順序測試或並行測試。並行測試同時最多送出 5 個請求。關閉對話框後結果仍保留，進行中的測試會在背景繼續，點擊**停止**可取消。**重測失敗項目**只重跑失敗的模型。
+
+展開 Provider 後，Channel 列的開關會立即啟用或停用該 Channel，無需開啟編輯器。
 
 測試會送出一次短串流補全，輸出上限為 16 個 token。僅 HTTP 2xx 不夠。串流必須到達協定終結事件。
 
 對 Responses Channel，`response.completed` 算通過。沒有 error 物件的 `response.incomplete` 也算通過。推理模型可能打滿 16 token 上限並回傳 `incomplete`。該結果仍表示 Channel 可達。
 
 ## 對應模型
+
+要批次修改模型，在**支援的模型**中點擊**選取**，然後篩選清單、選取模型，再刪除或統一設定倍率。模型選擇器可以全選或清除目前結果。**手動新增**可一次輸入多個模型 ID。
 
 每個 Channel 列出它服務的邏輯模型。模型條目包含：
 
@@ -134,7 +140,7 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 
 ## Provider 變換
 
-Provider 可以持有一組有序的變換規則。它們在 Provider 選定之後、上游編碼之前，作用於該 Provider 服務的每個請求。參見[變換](/zh-TW/docs/transforms)。
+Provider 可以持有一組有序的變換規則。它們在 Provider 選定之後、上游編碼之前，作用於該 Provider 服務的每個請求。執行順序為 Provider → 全域 → API 金鑰，編輯器中也顯示此順序。參見[變換](/zh-TW/docs/transforms)。
 
 ## 群組
 

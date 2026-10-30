@@ -154,56 +154,7 @@ impl Transform for ImageCompressInputTransform {
     }
 
     fn config_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "max_edge_px": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional maximum width or height of compressed request images. Omit to preserve the original dimensions."
-                },
-                "jpeg_quality": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "default": 80,
-                    "description": "JPEG quality used for JPEG output."
-                },
-                "jpegxl_quality": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 99,
-                    "default": 90,
-                    "description": "Quality used for lossy JPEG XL output. Quality 100 is reserved for the separate lossless mode."
-                },
-                "jpegxl_effort": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 10,
-                    "default": 7,
-                    "description": "JPEG XL encoding effort for both modes. Higher values compress more slowly."
-                },
-                "webp_quality": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "default": 80,
-                    "description": "Quality used for lossy WebP output."
-                },
-                "skip_if_smaller": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Keep the original image when compression does not reduce payload size."
-                },
-                "output_format": {
-                    "type": "string",
-                    "enum": ["original", "jpg", "jpegxl_lossless", "jpegxl", "webp_lossless", "webp", "png"],
-                    "default": "original",
-                    "description": "Output image format. Original preserves the source format."
-                }
-            },
-            "additionalProperties": false
-        })
+        image_compression_config_schema(&REQUEST_IMAGES)
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
@@ -299,7 +250,7 @@ impl Transform for ImageCompressOutputTransform {
     }
 
     fn config_schema(&self) -> Value {
-        image_compression_config_schema("assistant-output")
+        image_compression_config_schema(&ASSISTANT_OUTPUT_IMAGES)
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
@@ -343,53 +294,121 @@ impl Transform for ImageCompressOutputTransform {
     }
 }
 
-fn image_compression_config_schema(subject: &str) -> Value {
+/// Image-subject wording of the `max_edge_px` description, per TF-8d language.
+struct CompressionSubject {
+    en: &'static str,
+    zh: &'static str,
+    zh_tw: &'static str,
+    ja: &'static str,
+}
+
+const REQUEST_IMAGES: CompressionSubject = CompressionSubject {
+    en: "request",
+    zh: "请求",
+    zh_tw: "請求",
+    ja: "リクエスト",
+};
+
+const ASSISTANT_OUTPUT_IMAGES: CompressionSubject = CompressionSubject {
+    en: "assistant-output",
+    zh: "助手输出",
+    zh_tw: "助理輸出",
+    ja: "アシスタント出力",
+};
+
+fn image_compression_config_schema(subject: &CompressionSubject) -> Value {
+    let max_edge_en = format!(
+        "Optional maximum width or height of compressed {} images. Omit to preserve the original dimensions.",
+        subject.en
+    );
     json!({
         "type": "object",
         "properties": {
             "max_edge_px": {
                 "type": "integer",
                 "minimum": 1,
-                "description": format!("Optional maximum width or height of compressed {subject} images. Omit to preserve the original dimensions.")
+                "description": max_edge_en,
+                "x-localized-description": {
+                    "en": max_edge_en,
+                    "zh": format!("压缩后{}图像的最大宽度或高度（可选）。不填则保留原始尺寸。", subject.zh),
+                    "zh-TW": format!("壓縮後{}影像的最大寬度或高度（選填）。不填則保留原始尺寸。", subject.zh_tw),
+                    "ja": format!("圧縮後の{}画像の最大幅または最大高さ（任意）。省略すると元のサイズを保持します。", subject.ja)
+                }
             },
             "jpeg_quality": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 100,
                 "default": 80,
-                "description": "JPEG quality used for JPEG output."
+                "description": "JPEG quality used for JPEG output.",
+                "x-localized-description": {
+                    "en": "JPEG quality used for JPEG output.",
+                    "zh": "输出 JPEG 时使用的 JPEG 质量。",
+                    "zh-TW": "輸出 JPEG 時使用的 JPEG 品質。",
+                    "ja": "JPEG で出力するときの JPEG 品質。"
+                }
             },
             "jpegxl_quality": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 99,
                 "default": 90,
-                "description": "Quality used for lossy JPEG XL output. Quality 100 is reserved for the separate lossless mode."
+                "description": "Quality used for lossy JPEG XL output. Quality 100 is reserved for the separate lossless mode.",
+                "x-localized-description": {
+                    "en": "Quality used for lossy JPEG XL output. Quality 100 is reserved for the separate lossless mode.",
+                    "zh": "有损 JPEG XL 输出使用的质量。质量 100 保留给单独的无损模式。",
+                    "zh-TW": "有損 JPEG XL 輸出使用的品質。品質 100 保留給獨立的無損模式。",
+                    "ja": "非可逆 JPEG XL 出力の品質。品質 100 は別の可逆モード用に予約されています。"
+                }
             },
             "jpegxl_effort": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 10,
                 "default": 7,
-                "description": "JPEG XL encoding effort for both modes. Higher values compress more slowly."
+                "description": "JPEG XL encoding effort for both modes. Higher values compress more slowly.",
+                "x-localized-description": {
+                    "en": "JPEG XL encoding effort for both modes. Higher values compress more slowly.",
+                    "zh": "JPEG XL 编码强度，两种模式通用。数值越高，压缩越慢。",
+                    "zh-TW": "JPEG XL 編碼強度，兩種模式通用。數值越高，壓縮越慢。",
+                    "ja": "両モード共通の JPEG XL エンコード強度。値が大きいほど圧縮に時間がかかります。"
+                }
             },
             "webp_quality": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 100,
                 "default": 80,
-                "description": "Quality used for lossy WebP output."
+                "description": "Quality used for lossy WebP output.",
+                "x-localized-description": {
+                    "en": "Quality used for lossy WebP output.",
+                    "zh": "有损 WebP 输出使用的质量。",
+                    "zh-TW": "有損 WebP 輸出使用的品質。",
+                    "ja": "非可逆 WebP 出力の品質。"
+                }
             },
             "skip_if_smaller": {
                 "type": "boolean",
                 "default": true,
-                "description": "Keep the original image when compression does not reduce payload size."
+                "description": "Keep the original image when compression does not reduce payload size.",
+                "x-localized-description": {
+                    "en": "Keep the original image when compression does not reduce payload size.",
+                    "zh": "压缩未能减小数据大小时，保留原图。",
+                    "zh-TW": "壓縮未能減少資料大小時，保留原圖。",
+                    "ja": "圧縮してもデータサイズが小さくならない場合は元の画像を保持します。"
+                }
             },
             "output_format": {
                 "type": "string",
                 "enum": ["original", "jpg", "jpegxl_lossless", "jpegxl", "webp_lossless", "webp", "png"],
                 "default": "original",
-                "description": "Output image format. Original preserves the source format."
+                "description": "Output image format. Original preserves the source format.",
+                "x-localized-description": {
+                    "en": "Output image format. Original preserves the source format.",
+                    "zh": "输出图像格式。original 保留源格式。",
+                    "zh-TW": "輸出影像格式。original 保留來源格式。",
+                    "ja": "出力画像形式。original は元の形式を保持します。"
+                }
             }
         },
         "additionalProperties": false

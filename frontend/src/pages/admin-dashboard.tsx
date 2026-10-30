@@ -1,13 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
-import { useAuth } from "@/hooks/use-auth";
+import { useSearchParamState } from "@/hooks/use-search-param-state";
 import { useAdminOverview } from "@/lib/swr";
-import { DEFAULT_SPEND_WINDOW, type SpendWindow } from "@/lib/spend-window";
+import { DEFAULT_SPEND_WINDOW, SPEND_WINDOWS, type SpendWindow } from "@/lib/spend-window";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageWrapper } from "@/components/ui/motion";
 import { PageHeaderSkeleton } from "@/components/ui/page-skeleton";
@@ -38,25 +37,13 @@ function SectionSkeleton({ rows, className }: { rows: number; className?: string
 
 export function AdminDashboardPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
-  const isAdmin = user?.role === "super_admin" || user?.role === "admin";
-  const [spendWindow, setSpendWindow] = useState<SpendWindow>(DEFAULT_SPEND_WINDOW);
+  const [spendWindow, setSpendWindow] = useSearchParamState<SpendWindow>(
+    "window",
+    DEFAULT_SPEND_WINDOW,
+    SPEND_WINDOWS
+  );
   const [refreshing, setRefreshing] = useState(false);
-  const { data, error, isLoading, isValidating, mutate } = useAdminOverview(spendWindow, {
-    isPaused: () => !isAdmin,
-  });
-
-  if (!isAdmin) {
-    return (
-      <PageWrapper className="space-y-6">
-        <PageHeader title={t("adminDashboard.title")} />
-        <EmptyState
-          title={t("adminDashboard.unauthorized")}
-          description={t("adminDashboard.unauthorizedDescription")}
-        />
-      </PageWrapper>
-    );
-  }
+  const { data, error, isLoading, isValidating, mutate } = useAdminOverview(spendWindow);
 
   if (isLoading && !data) {
     return (
@@ -83,6 +70,8 @@ export function AdminDashboardPage() {
     }
   };
 
+  const pending = data?.spend?.window !== spendWindow;
+
   return (
     <PageWrapper className="space-y-6">
       <PageHeader
@@ -107,10 +96,10 @@ export function AdminDashboardPage() {
             data={data}
             spendWindow={spendWindow}
             onSpendWindowChange={setSpendWindow}
-            pending={data.spend?.window !== spendWindow}
+            pending={pending}
           />
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
-            <UsageRankingCard data={data} className="lg:col-span-7" />
+            <UsageRankingCard data={data} pending={pending} className="lg:col-span-7" />
             <div className="flex flex-col gap-6 lg:col-span-5">
               <SystemStatusCard data={data} />
               <ReplicaStatusCard data={data} />

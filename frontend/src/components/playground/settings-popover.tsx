@@ -3,6 +3,7 @@ import { Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ModifiedDot } from "@/components/ui/modified-dot";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Popover,
@@ -25,6 +26,12 @@ export function SettingsPopover({
   setPref,
 }: SettingsPopoverProps) {
   const { t } = useTranslation();
+  // System prompt, temperature and max tokens never reach image requests.
+  const customized =
+    mode === "chat" &&
+    [prefs.systemPrompt, prefs.temperature, prefs.maxTokens].some(
+      (value) => value.trim().length > 0,
+    );
 
   return (
     <Popover>
@@ -32,10 +39,11 @@ export function SettingsPopover({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={t("playground.settings")}
-          className="size-11 shrink-0 touch-manipulation text-muted-foreground hover:text-foreground sm:size-8"
+          aria-label={t(customized ? "playground.settingsCustomized" : "playground.settings")}
+          className="relative size-11 shrink-0 touch-manipulation text-muted-foreground hover:text-foreground sm:size-8"
         >
           <Settings2 aria-hidden="true" />
+          {customized && <ModifiedDot className="absolute right-1 top-1" />}
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -99,6 +107,20 @@ export function SettingsPopover({
                 />
               </div>
             </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!customized}
+              onClick={() => {
+                setPref("systemPrompt", "");
+                setPref("temperature", "");
+                setPref("maxTokens", "");
+              }}
+              className="self-end"
+            >
+              {t("playground.resetAll")}
+            </Button>
           </div>
         )}
       </PopoverContent>

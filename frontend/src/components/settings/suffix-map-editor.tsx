@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -11,115 +11,80 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { createSuffixRow, duplicateSuffixRowIds, type SuffixRow } from "./suffix-rows";
 
 const EFFORT_VALUES = ["none", "minimum", "low", "medium", "high", "xhigh", "max"] as const;
 
-interface SuffixRow {
-  id: number;
-  suffix: string;
-  effort: string;
-}
-
-let suffixRowId = 0;
-
-function mapToRows(map: Record<string, string> | undefined): SuffixRow[] {
-  return Object.entries(map ?? {}).map(([suffix, effort]) => ({
-    id: ++suffixRowId,
-    suffix,
-    effort,
-  }));
-}
-
-function rowsToMap(rows: SuffixRow[]): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const row of rows) {
-    if (row.suffix) map[row.suffix] = row.effort;
-  }
-  return map;
-}
-
 interface SuffixMapEditorProps {
-  value: Record<string, string> | undefined;
-  onChange: (map: Record<string, string>) => void;
+  rows: SuffixRow[];
+  onRowsChange: (rows: SuffixRow[]) => void;
 }
 
 /**
- * Row-based editor for the reasoning suffix -> effort map. Suffix edits commit
- * on blur; effort and row removal commit immediately.
+ * Row-based editor for the reasoning suffix -> effort map. The page owns the rows so
+ * blank and duplicate rows survive category changes (SSU-20c).
  */
-export function SuffixMapEditor({ value, onChange }: SuffixMapEditorProps) {
+export function SuffixMapEditor({ rows, onRowsChange }: SuffixMapEditorProps) {
   const { t } = useTranslation();
-  const [rows, setRows] = useState<SuffixRow[]>(() => mapToRows(value));
-  const prevValueRef = useRef(value);
+  const duplicates = duplicateSuffixRowIds(rows);
 
-  useEffect(() => {
-    if (prevValueRef.current !== value) {
-      prevValueRef.current = value;
-      setRows(mapToRows(value));
-    }
-  }, [value]);
-
-  const commit = useCallback(
-    (updated: SuffixRow[]) => {
-      setRows(updated);
-      onChange(rowsToMap(updated));
-    },
-    [onChange]
-  );
+  const updateRow = (id: number, updates: Partial<SuffixRow>) => {
+    onRowsChange(rows.map((row) => (row.id === id ? { ...row, ...updates } : row)));
+  };
 
   return (
     <div className="flex flex-col gap-4">
-      {rows.map((row, idx) => (
-        <div key={row.id} className="flex items-center gap-2">
-          <Input
-            defaultValue={row.suffix}
-            placeholder={t("settings.suffix")}
-            className="flex-1 transition-all"
-            onBlur={(e) => {
-              const updated = rows.map((r, i) =>
-                i === idx ? { ...r, suffix: e.target.value } : r
-              );
-              commit(updated);
-            }}
-          />
-          <Select
-            value={row.effort}
-            onValueChange={(val) => {
-              const updated = rows.map((r, i) =>
-                i === idx ? { ...r, effort: val } : r
-              );
-              commit(updated);
-            }}
-          >
-            <SelectTrigger className="w-[140px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {EFFORT_VALUES.map((v) => (
-                <SelectItem key={v} value={v}>
-                  {v}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 touch-manipulation sm:size-9"
-            aria-label={t("common.delete")}
-            onClick={() => commit(rows.filter((_, i) => i !== idx))}
-          >
-            <X aria-hidden="true" />
-          </Button>
-        </div>
-      ))}
+      {rows.map((row, index) => {
+        const duplicate = duplicates.has(row.id);
+        return (
+          <div key={row.id} className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <Input
+                value={row.suffix}
+                placeholder={t("settings.suffix")}
+                aria-label={t("settings.suffixRowLabel", { index: index + 1 })}
+                aria-invalid={duplicate || undefined}
+                className="flex-1 transition-all"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => updateRow(row.id, { suffix: e.target.value })}
+              />
+              <Select value={row.effort} onValueChange={(effort) => updateRow(row.id, { effort })}>
+                <SelectTrigger
+                  className="w-[140px]"
+                  aria-label={t("settings.suffixEffortRowLabel", { index: index + 1 })}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EFFORT_VALUES.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-11 touch-manipulation sm:size-9"
+                aria-label={t("settings.removeSuffixRow", { index: index + 1 })}
+                onClick={() => onRowsChange(rows.filter((item) => item.id !== row.id))}
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </div>
+            {duplicate ? <FieldError>{t("settings.suffixDuplicate")}</FieldError> : null}
+          </div>
+        );
+      })}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button
+          type="button"
           variant="outline"
           size="sm"
-          onClick={() => {
-            setRows([...rows, { id: ++suffixRowId, suffix: "", effort: "high" }]);
-          }}
+          onClick={() => onRowsChange([...rows, createSuffixRow()])}
         >
           <Plus data-icon="inline-start" aria-hidden="true" />
           {t("settings.addSuffix")}

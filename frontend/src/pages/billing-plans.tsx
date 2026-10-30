@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CalendarClock, Pencil, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { FieldError } from "@/components/ui/field";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import {
   DataList,
@@ -28,7 +29,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { createBillingPlanOptimistic, deleteBillingPlanOptimistic, updateBillingPlanOptimistic, useBillingPlans, useDashboardGroups } from "@/lib/swr";
-import type { BillingPlan, BillingPlanInput } from "@/lib/api";
+import { DashboardApiError, type BillingPlan, type BillingPlanInput } from "@/lib/api";
+import { toastApiError } from "@/lib/api-error";
 
 const NANO_PER_USD = 1_000_000_000n;
 const SECONDS_PER_DAY = 86_400;
@@ -92,56 +94,119 @@ function formFromPlan(plan: BillingPlan): FormState {
   };
 }
 
+/** Field errors keyed by form area; price rows use `price-<index>` / `days-<index>`. */
+type FormErrors = Partial<Record<string, string>>;
+
+// Server codes (billing-plan-subscriptions.spec.md BP-A3) mapped to the form area they concern.
+const SERVER_ERROR_FIELDS: Record<string, string> = {
+  plan_name_exists: "name",
+  invalid_plan_name: "name",
+  invalid_plan_description: "description",
+  invalid_plan_limits: "limits",
+  invalid_plan_groups: "groups",
+  invalid_plan_multiplier: "multiplier",
+  invalid_plan_prices: "prices",
+  invalid_plan_price_duration: "prices",
+};
+
+function RequiredMark() {
+  return (
+    <span aria-hidden="true" className="text-error-foreground">
+      *
+    </span>
+  );
+}
+
 export function BillingPlansPage() {
   const { t } = useTranslation();
+  const formId = useId();
   const { data, error, isLoading, isValidating, mutate } = useBillingPlans();
   const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const plans = useMemo(() => data ?? [], [data]);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [initialForm, setInitialForm] = useState<FormState>(emptyForm);
+  const [errors, setErrors] = useState<FormErrors>({});
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<BillingPlan | null>(null);
   const [deleting, setDeleting] = useState<BillingPlan | null>(null);
   const [saving, setSaving] = useState(false);
+  const dirty = open && JSON.stringify(form) !== JSON.stringify(initialForm);
+  const fieldId = (key: string) => `${formId}-${key}`;
 
-  const startCreate = () => {
-    setEditing(null);
-    setForm(emptyForm());
+  const openForm = (plan: BillingPlan | null) => {
+    const next = plan ? formFromPlan(plan) : emptyForm();
+    setEditing(plan);
+    setForm(next);
+    setInitialForm(next);
+    setErrors({});
     setOpen(true);
   };
 
-  const startEdit = (plan: BillingPlan) => {
-    setEditing(plan);
-    setForm(formFromPlan(plan));
-    setOpen(true);
+  const patchForm = (patch: Partial<FormState>, clear: string[]) => {
+    setForm((previous) => ({ ...previous, ...patch }));
+    setErrors((previous) => {
+      const next = { ...previous };
+      for (const key of clear) delete next[key];
+      return next;
+    });
+  };
+
+  const focusFirstError = (next: FormErrors) => {
+    const order = [
+      "name",
+      "description",
+      "limits",
+      "groups",
+      "multiplier",
+      ...form.prices.flatMap((_, index) => [`price-${index}`, `days-${index}`]),
+      "prices",
+    ];
+    const first = order.find((key) => next[key]);
+    if (!first) return;
+    const target =
+      first === "limits"
+        ? fieldId(WINDOWS[0][0])
+        : first === "groups"
+          ? `${fieldId("groups")}-label`
+          : first === "prices"
+            ? fieldId("add-price")
+            : fieldId(first);
+    const element = document.getElementById(target);
+    element?.scrollIntoView({ block: "center" });
+    element?.focus();
   };
 
   const buildInput = (): BillingPlanInput | null => {
+    const next: FormErrors = {};
+    if (!form.name.trim()) next.name = t("billingPlans.nameRequired");
     const limits = {} as Record<WindowKey, string | null>;
-    let invalidLimit = false;
     for (const [key] of WINDOWS) {
-      limits[key] = form.limits[key] ? usdToNano(form.limits[key]) : null;
-      if (form.limits[key] && limits[key] === null) invalidLimit = true;
+      const raw = form.limits[key].trim();
+      limits[key] = raw ? usdToNano(raw) : null;
+      if (raw && (limits[key] === null || limits[key] === "0")) next.limits = t("billingPlans.errorLimitInvalid");
     }
-    if (
-      !form.name.trim()
-      || invalidLimit
-      || !Object.values(limits).some(Boolean)
-      || form.groupIds.length === 0
-      || !/^\d+(?:\.\d+)?$/.test(form.multiplier)
-      || Number(form.multiplier) <= 0
-    ) {
-      toast.error(t("billingPlans.invalidForm"));
-      return null;
+    if (!next.limits && !Object.values(limits).some(Boolean)) next.limits = t("billingPlans.errorLimitRequired");
+    if (form.groupIds.length === 0) next.groups = t("billingPlans.errorGroupsRequired");
+    if (!/^\d+(?:\.\d{1,9})?$/.test(form.multiplier.trim()) || !/[1-9]/.test(form.multiplier)) {
+      next.multiplier = t("billingPlans.errorMultiplier");
     }
-    const prices = form.prices.map((price) => ({
-      price_usd: price.priceUsd.trim(),
-      duration_seconds: Number(price.durationDays) * SECONDS_PER_DAY,
-    }));
-    if (
-      prices.some((price) => usdToNano(price.price_usd) === null || !Number.isSafeInteger(price.duration_seconds) || price.duration_seconds <= 0)
-      || (form.listed && prices.length === 0)
-    ) {
-      toast.error(t("billingPlans.invalidPrices"));
+    const seenDays = new Set<string>();
+    form.prices.forEach((price, index) => {
+      const nano = usdToNano(price.priceUsd);
+      if (nano === null || nano === "0") next[`price-${index}`] = t("billingPlans.errorPrice");
+      // BP-D4a: whole days only.
+      const days = price.durationDays.trim();
+      if (!/^[1-9]\d*$/.test(days) || !Number.isSafeInteger(Number(days) * SECONDS_PER_DAY)) {
+        next[`days-${index}`] = t("billingPlans.errorDurationDays");
+      } else if (seenDays.has(days)) {
+        next[`days-${index}`] = t("billingPlans.errorDurationDuplicate");
+      }
+      seenDays.add(days);
+    });
+    if (form.listed && form.prices.length === 0) next.prices = t("billingPlans.errorListedNeedsPrice");
+    setErrors(next);
+    if (Object.keys(next).length > 0) {
+      focusFirstError(next);
       return null;
     }
     return {
@@ -149,23 +214,38 @@ export function BillingPlansPage() {
       description: form.description.trim(),
       ...limits,
       group_ids: form.groupIds,
-      multiplier: form.multiplier,
+      multiplier: form.multiplier.trim(),
       listed: form.listed,
-      prices,
+      prices: form.prices.map((price) => ({
+        price_usd: price.priceUsd.trim(),
+        duration_seconds: Number(price.durationDays.trim()) * SECONDS_PER_DAY,
+      })),
     };
   };
 
+  const handleServerError = (saveError: Error) => {
+    const field = saveError instanceof DashboardApiError ? SERVER_ERROR_FIELDS[saveError.code] : undefined;
+    if (field && saveError instanceof DashboardApiError) {
+      const next = { [field]: t(`apiErrors.${saveError.code}`) };
+      setErrors(next);
+      focusFirstError(next);
+      return;
+    }
+    toastApiError(saveError, t, t(editing ? "billingPlans.updateFailed" : "billingPlans.createFailed"));
+  };
+
   const save = async () => {
+    if (saving) return;
     const input = buildInput();
     if (!input) return;
     setSaving(true);
     try {
-      if (editing) await updateBillingPlanOptimistic(editing.id, input, plans, (error) => toast.error(error.message));
-      else await createBillingPlanOptimistic(input, plans, (error) => toast.error(error.message));
+      if (editing) await updateBillingPlanOptimistic(editing.id, input, plans, handleServerError);
+      else await createBillingPlanOptimistic(input, plans, handleServerError);
       toast.success(t(editing ? "billingPlans.updated" : "billingPlans.created"));
       setOpen(false);
     } catch {
-      // optimistic helper already rolled back and toasted; keep the form open
+      // optimistic helper already rolled back; the error is shown on its field or as a toast
     } finally {
       setSaving(false);
     }
@@ -174,12 +254,23 @@ export function BillingPlansPage() {
   const confirmDelete = async () => {
     if (!deleting) return;
     await deleteBillingPlanOptimistic(deleting.id, plans, (deleteError) =>
-      toast.error(deleteError.message)
+      toastApiError(deleteError, t, t("billingPlans.deleteFailed"))
     ).catch(() => undefined);
   };
 
+  const errorText = (key: string) =>
+    errors[key] ? (
+      <FieldError id={`${fieldId(key)}-error`}>{errors[key]}</FieldError>
+    ) : null;
+
+  const invalidProps = (key: string, helpId?: string) => ({
+    "aria-invalid": errors[key] ? true : undefined,
+    "aria-describedby":
+      [errors[key] ? `${fieldId(key)}-error` : null, helpId].filter(Boolean).join(" ") || undefined,
+  });
+
   const createButton = (
-    <Button onClick={startCreate}>
+    <Button onClick={() => openForm(null)}>
       <Plus data-icon="inline-start" aria-hidden="true" />
       {t("billingPlans.create")}
     </Button>
@@ -284,7 +375,7 @@ export function BillingPlansPage() {
                     size="icon"
                     className="size-11 touch-manipulation sm:size-9"
                     aria-label={t("common.editItem", { name: plan.name })}
-                    onClick={() => startEdit(plan)}
+                    onClick={() => openForm(plan)}
                   >
                     <Pencil />
                   </Button>
@@ -305,122 +396,211 @@ export function BillingPlansPage() {
       </DataTableShell>
       ) : null}
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
-          <div className="flex min-h-0 flex-col p-6">
+      <Dialog open={open} onOpenChange={(next) => !saving && setOpen(next)}>
+        <DialogContent
+          dirty={dirty}
+          className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]"
+        >
+          <form
+            noValidate
+            className="flex max-h-[inherit] min-h-0 flex-col p-6"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void save();
+            }}
+          >
             <DialogHeader className="shrink-0">
               <DialogTitle>{t(editing ? "billingPlans.edit" : "billingPlans.create")}</DialogTitle>
               <DialogDescription>{t("billingPlans.formDescription")}</DialogDescription>
             </DialogHeader>
             <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto py-2 pr-1">
               <div className="grid gap-2">
-                <Label htmlFor="plan-name">{t("billingPlans.name")}</Label>
-                <Input id="plan-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+                <Label htmlFor={fieldId("name")}>
+                  {t("billingPlans.name")}
+                  <RequiredMark />
+                </Label>
+                <Input
+                  id={fieldId("name")}
+                  value={form.name}
+                  aria-required
+                  {...invalidProps("name")}
+                  onChange={(event) => patchForm({ name: event.target.value }, ["name"])}
+                />
+                {errorText("name")}
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="plan-description">{t("billingPlans.planDescription")}</Label>
+                <Label htmlFor={fieldId("description")}>{t("billingPlans.planDescription")}</Label>
                 <Textarea
-                  id="plan-description"
+                  id={fieldId("description")}
                   value={form.description}
-                  onChange={(event) => setForm({ ...form, description: event.target.value })}
+                  {...invalidProps("description")}
+                  onChange={(event) => patchForm({ description: event.target.value }, ["description"])}
                 />
+                {errorText("description")}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                {WINDOWS.map(([key, label]) => (
-                  <div className="grid gap-2" key={key}>
-                    <Label htmlFor={`plan-${key}`}>{label} {t("billingPlans.limitUsd")}</Label>
-                    <Input
-                      id={`plan-${key}`}
-                      inputMode="decimal"
-                      value={form.limits[key]}
-                      onChange={(event) => setForm({ ...form, limits: { ...form.limits, [key]: event.target.value } })}
-                      placeholder={t("billingPlans.optional")}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div role="group" aria-labelledby="plan-groups-label" className="grid gap-2">
-                <Label id="plan-groups-label">{t("billingPlans.groups")}</Label>
+              <fieldset className="grid gap-2" aria-describedby={errors.limits ? `${fieldId("limits")}-error` : undefined}>
+                <legend className="mb-2 text-sm font-medium">
+                  {t("billingPlans.limitsLegend")}
+                  <RequiredMark />
+                </legend>
+                <div className="grid grid-cols-2 gap-3">
+                  {WINDOWS.map(([key, label]) => (
+                    <div className="grid gap-2" key={key}>
+                      <Label htmlFor={fieldId(key)}>{t("billingPlans.limitWindow", { window: label })}</Label>
+                      <Input
+                        id={fieldId(key)}
+                        inputMode="decimal"
+                        value={form.limits[key]}
+                        aria-invalid={errors.limits ? true : undefined}
+                        onChange={(event) =>
+                          patchForm({ limits: { ...form.limits, [key]: event.target.value } }, ["limits"])
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+                {errorText("limits")}
+              </fieldset>
+              <div
+                role="group"
+                aria-labelledby={`${fieldId("groups")}-label`}
+                aria-describedby={errors.groups ? `${fieldId("groups")}-error` : undefined}
+                className="grid gap-2"
+              >
+                <Label id={`${fieldId("groups")}-label`} tabIndex={-1}>
+                  {t("billingPlans.groups")}
+                  <RequiredMark />
+                </Label>
                 <GroupMultiSelect
                   value={form.groupIds}
                   groups={groups}
                   loading={groupsLoading}
-                  onChange={(groupIds) => setForm({ ...form, groupIds })}
+                  onChange={(groupIds) => patchForm({ groupIds }, ["groups"])}
                 />
+                {errorText("groups")}
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="plan-multiplier">{t("billingPlans.multiplier")}</Label>
+                <Label htmlFor={fieldId("multiplier")}>
+                  {t("billingPlans.multiplier")}
+                  <RequiredMark />
+                </Label>
                 <Input
-                  id="plan-multiplier"
+                  id={fieldId("multiplier")}
                   inputMode="decimal"
                   value={form.multiplier}
-                  onChange={(event) => setForm({ ...form, multiplier: event.target.value })}
+                  aria-required
+                  {...invalidProps("multiplier", `${fieldId("multiplier")}-help`)}
+                  onChange={(event) => patchForm({ multiplier: event.target.value }, ["multiplier"])}
                 />
+                <p id={`${fieldId("multiplier")}-help`} className="text-xs text-muted-foreground">
+                  {t("billingPlans.multiplierHelp")}
+                </p>
+                {errorText("multiplier")}
               </div>
               <div className="flex items-center justify-between gap-4 rounded-md border p-3">
                 <div className="min-w-0">
-                  <Label htmlFor="plan-listed">{t("billingPlans.listed")}</Label>
+                  <Label htmlFor={fieldId("listed")}>{t("billingPlans.listed")}</Label>
                   <p className="text-sm text-muted-foreground">{t("billingPlans.listedHelp")}</p>
                 </div>
-                <Switch id="plan-listed" checked={form.listed} onCheckedChange={(listed) => setForm({ ...form, listed })} />
+                <Switch
+                  id={fieldId("listed")}
+                  checked={form.listed}
+                  onCheckedChange={(listed) => patchForm({ listed }, ["prices"])}
+                />
               </div>
-              <div role="group" aria-labelledby="plan-prices-label" className="grid gap-2">
+              <div role="group" aria-labelledby={`${fieldId("prices")}-label`} className="grid gap-2">
                 <div className="flex items-center justify-between">
-                  <Label id="plan-prices-label">{t("billingPlans.prices")}</Label>
+                  <Label id={`${fieldId("prices")}-label`}>{t("billingPlans.prices")}</Label>
                   <Button
+                    id={fieldId("add-price")}
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => setForm({ ...form, prices: [...form.prices, { priceUsd: "", durationDays: "30" }] })}
+                    onClick={() =>
+                      patchForm({ prices: [...form.prices, { priceUsd: "", durationDays: "30" }] }, ["prices"])
+                    }
                   >
                     <Plus aria-hidden="true" />
                     {t("billingPlans.addPrice")}
                   </Button>
                 </div>
+                {form.prices.length > 0 ? (
+                  <div aria-hidden="true" className="grid grid-cols-[1fr_1fr_2.25rem] gap-2 text-xs font-medium text-muted-foreground">
+                    <span>{t("billingPlans.priceUsd")}</span>
+                    <span>{t("billingPlans.durationDays")}</span>
+                  </div>
+                ) : null}
                 {form.prices.map((price, index) => (
-                  <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                    <Input
-                      inputMode="decimal"
-                      aria-label={`${t("billingPlans.priceUsd")} ${index + 1}`}
-                      placeholder={t("billingPlans.priceUsd")}
-                      value={price.priceUsd}
-                      onChange={(event) =>
-                        setForm({
-                          ...form,
-                          prices: form.prices.map((entry, i) => (i === index ? { ...entry, priceUsd: event.target.value } : entry)),
-                        })
-                      }
-                    />
-                    <Input
-                      inputMode="numeric"
-                      aria-label={`${t("billingPlans.durationDays")} ${index + 1}`}
-                      placeholder={t("billingPlans.durationDays")}
-                      value={price.durationDays}
-                      onChange={(event) =>
-                        setForm({
-                          ...form,
-                          prices: form.prices.map((entry, i) => (i === index ? { ...entry, durationDays: event.target.value } : entry)),
-                        })
-                      }
-                    />
+                  <div key={index} className="grid grid-cols-[1fr_1fr_2.25rem] items-start gap-2">
+                    <div className="grid gap-1">
+                      <Input
+                        id={fieldId(`price-${index}`)}
+                        inputMode="decimal"
+                        aria-label={t("billingPlans.priceUsdRow", { index: index + 1 })}
+                        value={price.priceUsd}
+                        {...invalidProps(`price-${index}`)}
+                        onChange={(event) =>
+                          patchForm(
+                            {
+                              prices: form.prices.map((entry, i) =>
+                                i === index ? { ...entry, priceUsd: event.target.value } : entry
+                              ),
+                            },
+                            [`price-${index}`]
+                          )
+                        }
+                      />
+                      {errorText(`price-${index}`)}
+                    </div>
+                    <div className="grid gap-1">
+                      <Input
+                        id={fieldId(`days-${index}`)}
+                        inputMode="numeric"
+                        aria-label={t("billingPlans.durationDaysRow", { index: index + 1 })}
+                        value={price.durationDays}
+                        {...invalidProps(`days-${index}`)}
+                        onChange={(event) =>
+                          patchForm(
+                            {
+                              prices: form.prices.map((entry, i) =>
+                                i === index ? { ...entry, durationDays: event.target.value } : entry
+                              ),
+                            },
+                            [`days-${index}`]
+                          )
+                        }
+                      />
+                      {errorText(`days-${index}`)}
+                    </div>
                     <Button
                       type="button"
                       size="icon"
                       variant="ghost"
                       aria-label={t("billingPlans.removePrice", { index: index + 1 })}
-                      onClick={() => setForm({ ...form, prices: form.prices.filter((_, i) => i !== index) })}
+                      onClick={() => {
+                        setForm((previous) => ({
+                          ...previous,
+                          prices: previous.prices.filter((_, i) => i !== index),
+                        }));
+                        setErrors({});
+                      }}
                     >
                       <X />
                     </Button>
                   </div>
                 ))}
+                {errorText("prices")}
               </div>
             </div>
             <DialogFooter className="shrink-0 pt-4">
-              <Button variant="outline" onClick={() => setOpen(false)}>{t("common.cancel")}</Button>
-              <Button disabled={saving} onClick={() => void save()}>{saving ? t("common.loading") : t("common.save")}</Button>
+              <Button type="button" variant="outline" disabled={saving} onClick={() => setOpen(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? t("common.saving") : t("common.save")}
+              </Button>
             </DialogFooter>
-          </div>
+          </form>
         </DialogContent>
       </Dialog>
 

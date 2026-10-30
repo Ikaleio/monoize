@@ -1,9 +1,9 @@
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Activity, Cog, Gauge, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
-import { motion } from "framer-motion";
+import { Activity, Cog, Gauge, Languages, LogOut, RefreshCw } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { useTheme } from "@/hooks/use-theme";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { getCurrentLanguage } from "@/i18n";
 import { useBillingPlanSubscription, useLiveUsage } from "@/lib/swr";
 import { formatNanoUsd, isSignedIntegerString } from "@/lib/exact-decimal";
 import { formatCacheHitRate } from "@/lib/live-usage";
@@ -17,59 +17,20 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuPortal,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  LanguageRadioGroup,
+  ThemeRadioGroup,
+} from "@/components/preference-menus";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { springs } from "@/components/ui/motion";
-
-function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
-  const { t } = useTranslation();
-
-  const themes = [
-    { value: "light", icon: Sun, label: t("theme.light") },
-    { value: "dark", icon: Moon, label: t("theme.dark") },
-    { value: "system", icon: Monitor, label: t("theme.system") },
-  ] as const;
-
-  return (
-    <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-      <span className="text-sm text-muted-foreground">{t("theme.toggle")}</span>
-      <div className="relative flex h-8 items-center rounded-full bg-muted p-1">
-        {themes.map((item) => {
-          const Icon = item.icon;
-          const isActive = theme === item.value;
-          return (
-            <button
-              key={item.value}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setTheme(item.value);
-              }}
-              className={`relative z-10 flex h-6 w-8 items-center justify-center rounded-full transition-colors ${
-                isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-              title={item.label}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="theme-toggle-indicator"
-                  className="absolute inset-0 rounded-full bg-background shadow-sm"
-                  transition={springs.snappy}
-                />
-              )}
-              <Icon className="relative z-10 h-3.5 w-3.5" />
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 function QuotaRow({
   label,
@@ -329,6 +290,8 @@ export function UserCenterMenu({
   const { user, logout } = useAuth();
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
+  const onSettingsPage = useLocation().pathname === "/settings";
 
   const roleLabel = t(`roles.${user?.role || "user"}`);
   const balanceLabel = user?.balance_unlimited
@@ -343,9 +306,11 @@ export function UserCenterMenu({
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
+              aria-current={onSettingsPage ? "page" : undefined}
               className={cn(
                 "group w-full",
-                collapsed ? "justify-center px-2" : "justify-start gap-3 px-2.5"
+                collapsed ? "justify-center px-2" : "justify-start gap-3 px-2.5",
+                onSettingsPage && "bg-sidebar-accent text-sidebar-accent-foreground"
               )}
               size="sm"
             >
@@ -440,9 +405,37 @@ export function UserCenterMenu({
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="p-0 font-normal">
-          <ThemeToggle />
-        </DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+            {t("theme.toggle")}
+          </DropdownMenuLabel>
+          <ThemeRadioGroup keepOpen />
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        {isMobile ? (
+          // The menu fills a phone's width, so a side submenu would overflow the viewport.
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+              {t("userSettings.language")}
+            </DropdownMenuLabel>
+            <LanguageRadioGroup />
+          </DropdownMenuGroup>
+        ) : (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Languages data-icon="inline-start" aria-hidden="true" />
+              <span className="flex-1">{t("userSettings.language")}</span>
+              <span className="text-xs text-muted-foreground">
+                {t(`language.${getCurrentLanguage()}`)}
+              </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuSubContent>
+                <LanguageRadioGroup />
+              </DropdownMenuSubContent>
+            </DropdownMenuPortal>
+          </DropdownMenuSub>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
           <DropdownMenuItem

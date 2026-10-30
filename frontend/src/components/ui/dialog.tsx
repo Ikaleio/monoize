@@ -6,12 +6,25 @@ import { AnimatePresence } from "framer-motion"
 import { X } from "lucide-react"
 
 import { easings, motion } from "@/components/ui/motion"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { buttonVariants } from "@/components/ui/button"
+import { useReturnFocus } from "@/components/ui/use-return-focus"
 import { cn } from "@/lib/utils"
 
 type DialogProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>
 
 type DialogStateContextValue = {
   open: boolean
+  onOpenChange: (open: boolean) => void
 }
 
 const DialogStateContext = React.createContext<DialogStateContextValue | null>(
@@ -53,7 +66,7 @@ const Dialog = ({
   )
 
   return (
-    <DialogStateContext.Provider value={{ open }}>
+    <DialogStateContext.Provider value={{ open, onOpenChange: handleOpenChange }}>
       <DialogPrimitive.Root
         open={open}
         defaultOpen={defaultOpen}
@@ -84,15 +97,50 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+type DialogContentProps = React.ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Content
+> & {
+  /**
+   * While true, outside click, Escape and the close button ask before discarding
+   * unsaved edits instead of closing the dialog.
+   */
+  dirty?: boolean
+}
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => {
-  const { open } = useDialogState()
+  DialogContentProps
+>(
+  (
+    {
+      className,
+      children,
+      dirty = false,
+      onOpenAutoFocus,
+      onCloseAutoFocus,
+      onEscapeKeyDown,
+      onInteractOutside,
+      ...props
+    },
+    ref,
+  ) => {
+  const { open, onOpenChange } = useDialogState()
   const reduced = useReducedMotionPreference()
   const { t } = useTranslation()
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = React.useState(false)
+  const returnFocus = useReturnFocus(onOpenAutoFocus, onCloseAutoFocus)
+
+  React.useEffect(() => {
+    if (!open) setConfirmDiscardOpen(false)
+  }, [open])
   const touchScrollStyle: React.CSSProperties = {
     WebkitOverflowScrolling: "touch",
+  }
+
+  const interceptDismiss = (event: Event) => {
+    if (!dirty || event.defaultPrevented) return
+    event.preventDefault()
+    setConfirmDiscardOpen(true)
   }
 
   return (
@@ -121,7 +169,22 @@ const DialogContent = React.forwardRef<
         {open ? (
           <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain p-4 sm:p-6">
             <div className="flex min-h-full items-start justify-center sm:items-center">
-              <DialogPrimitive.Content forceMount asChild {...props}>
+              <DialogPrimitive.Content
+                forceMount
+                asChild
+                {...props}
+                onOpenAutoFocus={returnFocus.onOpenAutoFocus}
+                onCloseAutoFocus={returnFocus.onCloseAutoFocus}
+                onEscapeKeyDown={(event) => {
+                  onEscapeKeyDown?.(event)
+                  interceptDismiss(event)
+                }}
+                onInteractOutside={(event) => {
+                  // Runs after onPointerDownOutside; modal dialogs already prevent focus-outside.
+                  onInteractOutside?.(event)
+                  interceptDismiss(event)
+                }}
+              >
                 <motion.div
                   key="dialog-content"
                   ref={ref}
@@ -174,7 +237,14 @@ const DialogContent = React.forwardRef<
                   >
                     {children}
                   </motion.div>
-                  <DialogPrimitive.Close className="absolute right-2 top-2 inline-flex size-11 items-center justify-center rounded-sm sm:size-9 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+                  <DialogPrimitive.Close
+                    onClick={(event) => {
+                      if (!dirty) return
+                      event.preventDefault()
+                      setConfirmDiscardOpen(true)
+                    }}
+                    className="absolute right-2 top-2 inline-flex size-11 items-center justify-center rounded-sm sm:size-9 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground"
+                  >
                     <X className="h-4 w-4" />
                     <span className="sr-only">{t("common.close")}</span>
                   </DialogPrimitive.Close>
@@ -184,6 +254,28 @@ const DialogContent = React.forwardRef<
           </div>
         ) : null}
       </AnimatePresence>
+      <AlertDialog
+        open={open && confirmDiscardOpen}
+        onOpenChange={setConfirmDiscardOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("guards.discardTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("guards.discardDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("guards.keepEditing")}</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => onOpenChange(false)}
+            >
+              {t("guards.discard")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DialogPortal>
   )
 })

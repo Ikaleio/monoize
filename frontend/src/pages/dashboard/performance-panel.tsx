@@ -1,5 +1,8 @@
 import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/use-auth";
 import { useReducedMotion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,6 +37,13 @@ interface PerformancePanelProps extends QueryErrorProps {
 }
 
 const MotionTableRow = motion.create(TableRow);
+
+const BRICK_STATUSES: DashboardPerformanceBrickStatus[] = [
+  "up",
+  "degraded",
+  "down",
+  "empty",
+];
 
 function brickClass(status: DashboardPerformanceBrickStatus): string {
   switch (status) {
@@ -187,12 +197,17 @@ export function PerformancePanel({
   retrying,
 }: PerformancePanelProps) {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const groups = data?.groups ?? [];
   const models = data?.models ?? [];
   const brickCount = data?.brick_count ?? 0;
   const timeFrom = data?.time_from ?? "";
   const timeTo = data?.time_to ?? "";
-  const empty = !loading && groups.length === 0 && models.length === 0;
+  const empty = groups.length === 0 && models.length === 0;
+
+  // DH-9d: unconfigured targets are an admin concern only.
+  if (data !== undefined && empty && !isAdmin) return null;
 
   return (
     <motion.div
@@ -208,9 +223,25 @@ export function PerformancePanel({
           <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
             {t(
               "dashboard.performance.subtitle",
-              "Last 24 hours · uptime bricks, avgTTFT, and avgTPS",
+              "Availability, time to first token, and output speed over the last 24 hours",
             )}
           </p>
+          {!empty ? (
+            <ul className="flex flex-wrap gap-x-3 gap-y-1 pt-1">
+              {BRICK_STATUSES.map((status) => (
+                <li
+                  key={status}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <span
+                    className={cn("size-2.5 rounded-sm", brickClass(status))}
+                    aria-hidden="true"
+                  />
+                  {t(`dashboard.performance.status.${status}`, status)}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </CardHeader>
         <CardContent className="flex flex-col gap-2 p-4 pt-2">
           {failed && (
@@ -235,8 +266,16 @@ export function PerformancePanel({
               )}
               description={t(
                 "dashboard.performance.emptyDescription",
-                "An administrator can select groups and models in system settings.",
+                "Select the groups and models to monitor in system settings.",
               )}
+              variant="inline"
+              action={
+                <Button asChild variant="outline">
+                  <Link to="/dashboard/admin-settings?setting=dashboard_performance_targets">
+                    {t("dashboard.performance.configure", "Configure performance targets")}
+                  </Link>
+                </Button>
+              }
               className="py-8"
             />
           ) : (
@@ -254,10 +293,10 @@ export function PerformancePanel({
                       )}
                     </TableHead>
                     <TableHead className="w-32 text-right">
-                      {t("dashboard.performance.avgTtft", "avgTTFT")}
+                      {t("dashboard.performance.avgTtft", "First token")}
                     </TableHead>
                     <TableHead className="w-32 text-right">
-                      {t("dashboard.performance.avgTps", "avgTPS")}
+                      {t("dashboard.performance.avgTps", "Output speed")}
                     </TableHead>
                   </TableRow>
                 </TableHeader>

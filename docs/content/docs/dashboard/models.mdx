@@ -20,16 +20,20 @@ The admin log shows the upstream response model only when it differs from the re
 
 ## Model pricing
 
-The **Models** page is the pricing console. It has five tabs:
+The **Model Pricing** page is the pricing console. It has four tabs:
 
 - **Model Pricing**: one price row per model. Each row sets a billing mode: `per_token`, `per_request`, or `tiered_expr`.
   `tiered_expr` can store context-window price steps and a Fast / Priority table.
   Monoize applies Fast prices when the upstream response `service_tier` is `fast` or `priority`.
   It also applies Fast prices when Anthropic `usage.speed` is `fast`.
-- **Unpriced Models**: mapped models that have no enabled price row.
+  A row without its required price shows **Incomplete** and is billed like a missing row.
+- **Unpriced Models**: mapped models that have no enabled price row. The tab label shows the count, and each row names the Provider and Channel that serve the model.
 - **Tool Prices**: prices for server-side tool classes. Units are `1k_calls`, `minute`, and `session`.
 - **Upstream Sync**: price import from Models.dev, OpenRouter, or a new-api instance.
-- **Group Pricing**: one billing ratio per group.
+
+Set each group's billing multiplier on the **Groups** page.
+
+The **Model Marketplace** page lists only models that your group can reach. Each price includes your group's billing multiplier. Admins see all models at base prices.
 
 Monoize computes each charge in this order:
 
@@ -50,10 +54,12 @@ By default, Monoize rejects an unpriced model or a response without required Usa
 
 ## Price sync
 
-1. Open **Models → Upstream Sync**.
+1. Open **Model Pricing → Upstream Sync**.
 2. Select a source: Models.dev, OpenRouter, or a new-api instance.
-3. Click **Preview**. The table shows new rows and changed fields.
-4. Click **Apply**. Monoize writes the changes and records an audit row.
+3. Click **Preview**. The dialog lists added and updated rows as `field: old → new`. Use the filter to show deleted or skipped rows.
+4. Click **Apply N changes** in the preview dialog. Monoize applies exactly the previewed changes and records an audit row. When the preview deletes rows, confirm the delete count first.
+
+A preview stays valid for 10 minutes. If it expired, or if prices changed after it, preview again.
 
 Models.dev sync writes context-window price steps and Fast mode prices into `billing_expr`.
 

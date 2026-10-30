@@ -1,5 +1,7 @@
 import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SlideUp } from "@/components/ui/motion";
@@ -13,14 +15,17 @@ interface AccountStripProps extends QueryErrorProps {
   user: User | null | undefined;
   analytics: DashboardAnalytics | undefined;
   loading?: boolean;
+  /** DH-5a: the top-up link needs a limited balance and a payment channel. */
+  canTopUp?: boolean;
 }
 
 interface MetricCellProps {
   label: string;
   value: string;
   note: string;
+  action?: ReactNode;
   primary?: boolean;
-  mobileDivider?: boolean;
+  divider?: boolean;
 }
 
 interface AccountAnalyticsSummary {
@@ -57,17 +62,18 @@ function MetricCell({
   label,
   value,
   note,
+  action,
   primary,
-  mobileDivider,
+  divider,
 }: MetricCellProps) {
   return (
     <div
       className={cn(
-        "flex min-h-28 min-w-0 flex-col justify-center gap-1 p-4",
+        "flex min-w-0 flex-col justify-center gap-1 p-3 sm:min-h-28 sm:p-4",
         primary
-          ? "sm:col-span-2 lg:col-span-1"
-          : "border-t lg:border-l lg:border-t-0",
-        mobileDivider && "sm:border-l",
+          ? "col-span-2 xl:col-span-1"
+          : "border-t xl:border-l xl:border-t-0",
+        divider && "border-l",
       )}
     >
       <p className="truncate text-sm font-medium text-muted-foreground">
@@ -82,9 +88,12 @@ function MetricCell({
       >
         {value}
       </p>
-      <p className="truncate text-sm text-muted-foreground" title={note}>
-        {note}
-      </p>
+      <div className="flex min-w-0 items-baseline justify-between gap-2">
+        <p className="min-w-0 text-pretty text-sm text-muted-foreground">
+          {note}
+        </p>
+        {action}
+      </div>
     </div>
   );
 }
@@ -95,16 +104,16 @@ function AccountOverviewSkeleton({ title }: { title: string }) {
       <CardHeader className="sr-only">
         <CardTitle>{title}</CardTitle>
       </CardHeader>
-      <CardContent className="grid p-0 sm:grid-cols-2 lg:grid-cols-[1.35fr_repeat(4,minmax(0,1fr))]">
+      <CardContent className="grid grid-cols-2 p-0 xl:grid-cols-[1.35fr_repeat(4,minmax(0,1fr))]">
         {Array.from({ length: 5 }).map((_, index) => (
           <div
             key={index}
             className={cn(
-              "flex min-h-28 flex-col justify-center gap-2 p-4",
+              "flex flex-col justify-center gap-2 p-3 sm:min-h-28 sm:p-4",
               index === 0
-                ? "sm:col-span-2 lg:col-span-1"
-                : "border-t lg:border-l lg:border-t-0",
-              (index === 2 || index === 4) && "sm:border-l",
+                ? "col-span-2 xl:col-span-1"
+                : "border-t xl:border-l xl:border-t-0",
+              (index === 2 || index === 4) && "border-l",
             )}
           >
             <Skeleton className="h-4 w-20" />
@@ -121,6 +130,7 @@ export function AccountStrip({
   user,
   analytics,
   loading,
+  canTopUp,
   failed,
   onRetry,
   retrying,
@@ -163,12 +173,22 @@ export function AccountStrip({
               />
             </div>
           )}
-          <CardContent className="grid p-0 sm:grid-cols-2 lg:grid-cols-[1.35fr_repeat(4,minmax(0,1fr))]">
+          <CardContent className="grid grid-cols-2 p-0 xl:grid-cols-[1.35fr_repeat(4,minmax(0,1fr))]">
             <MetricCell
               primary
               label={t("dashboard.account.currentBalance", "Current Balance")}
               value={balanceValue}
               note={balanceNote}
+              action={
+                canTopUp ? (
+                  <Link
+                    to="/dashboard/wallet?tab=recharge"
+                    className="shrink-0 text-sm text-primary underline-offset-4 hover:underline"
+                  >
+                    {t("dashboard.account.topUp", "Top up")}
+                  </Link>
+                ) : undefined
+              }
             />
             <MetricCell
               label={t("dashboard.account.todaySpend", "Today's Spend")}
@@ -177,10 +197,10 @@ export function AccountStrip({
                   ? formatNanoUsd(analytics.today_cost_nano_usd, 4)
                   : "—"
               }
-              note={t("dashboard.account.todaySpendNote", "USD · so far today")}
+              note={t("dashboard.account.todaySpendNote", "USD · local time zone")}
             />
             <MetricCell
-              mobileDivider
+              divider
               label={t("dashboard.account.todayRequests", "Today's Requests")}
               value={analytics ? analytics.today_calls.toLocaleString() : "—"}
               note={t("dashboard.account.callsUnit", "calls")}
@@ -194,7 +214,7 @@ export function AccountStrip({
               )}
             />
             <MetricCell
-              mobileDivider
+              divider
               label={t("dashboard.account.activeModels", "Active Models")}
               value={analytics ? summary.activeModels.toLocaleString() : "—"}
               note={t("dashboard.account.activeModelsNote", "Past 24 hours")}

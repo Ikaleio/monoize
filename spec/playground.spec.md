@@ -215,6 +215,10 @@ PG-CHAT1. Chat state MUST be managed by `useChat` from `@ai-sdk/react` with a cu
 `ChatTransport` implementation (`MonoizeChatTransport`). The transport MUST NOT be the
 default HTTP transport.
 
+PG-CHAT1a. The transport MUST pass `maxRetries: 0` to `streamText`. One send, retry, or
+regenerate action MUST produce exactly one `POST /api/v1/responses` request. Channel
+failover is the gateway's responsibility.
+
 PG-CHAT2. `MonoizeChatTransport.sendMessages` MUST:
 
 1. Read the current chat model id, selected credential, selected group id, system prompt,
@@ -242,7 +246,29 @@ PG-CHAT2. `MonoizeChatTransport.sendMessages` MUST:
    that maps the failure to human-readable text (upstream error text must reach the
    UI): an `Error` maps to its `message`; a non-Error object maps to its string
    `message` field, else its nested `error.message` string field, else its JSON
-   serialization; any other value maps to `String(value)`.
+   serialization; any other value maps to `String(value)`. The mapped text MUST then
+   have a leading `Failed after <N> attempts. Last error:` wrapper and a leading SDK
+   error-class prefix matching `AI_<Name>:` removed.
+
+PG-CHAT2b. Request failure display. A chat or image request failure has three fields:
+`message` (PG-CHAT2 step 6 for chat; `error.message`, else `error.code`, for image
+requests), `status`, and `request_id`.
+
+1. `status` is the HTTP status of a non-2xx response. It is null when the failure happened
+   before a response arrived or after a 2xx response (mid-stream error).
+2. `request_id` is the `x-request-id` response header value that Monoize sets on every
+   response (`request-logs.spec.md` RL8). It is null when no response arrived or the header
+   is absent.
+3. With a status, the UI MUST render the translated text `playground.requestFailedStatus`
+   (zh: `请求失败（HTTP {{status}}）：{{message}}`). Without a status, it MUST render
+   `playground.requestFailed` (zh: `请求失败：{{message}}`).
+4. An empty `message` MUST render as the translated `playground.errorNoDetail`. An image
+   response that is not an event stream, cannot be parsed, ends before `[DONE]`, or holds
+   no image data has an empty `message`.
+5. When `request_id` is non-null, the failure MUST render a translated
+   `playground.viewInLogs` link to `/dashboard/logs?q=<url-encoded request_id>`. When it
+   is null, the link MUST NOT render.
+6. SDK error-class names MUST NOT appear in the rendered text.
 
 PG-CHAT2a. Request-field mapping (performed by the AI SDK Responses model; listed here
 as the observable request contract):
@@ -317,10 +343,14 @@ composer action MUST be a stop control invoking `stop()`. Stopping keeps all par
 assistant output as a normal message and MUST NOT surface an error.
 
 PG-CHAT5. When `useChat` reports an `error`, an inline dismissible banner MUST appear
-between the message list and the composer showing the error message, with a retry action
-that follows PG-MSG6 and a dismiss action that calls `clearError()`. The retry action
-MUST be disabled while a chat or image request is pending. No toast is shown for chat
-request errors.
+between the message list and the composer showing the failure per PG-CHAT2b, with a retry
+action that follows PG-MSG6 and a dismiss action that calls `clearError()`. The retry
+action MUST be enabled iff every PG-CMP3 send condition other than the text condition
+holds: a model for the active mode is selected, the selected credential satisfies
+PG-AUTH2 and PG-AUTH7, and no chat or image request is pending. While the retry action is
+disabled because of the model or credential, hovering or focusing it MUST show a tooltip
+with the same text as the PG-CMP3a inline reason. No toast is shown for chat request
+errors.
 
 PG-CHAT6. User attachments: chat mode accepts images and ordinary files. Send MUST call
 `sendMessage({ text, files })` so attachments become user-message `file` parts with their
@@ -438,9 +468,9 @@ An `error` event MUST enter PG-IMG6, including when HTTP status is 200.
 Success requires at least one completed image and the `[DONE]` sentinel.
 EOF before `[DONE]`, malformed data, or a completed event without image data MUST enter PG-IMG6.
 
-PG-IMG6. On failure, the placeholder MUST be replaced by an inline error state with a
-retry action that re-issues the same request. The user message remains in the
-conversation.
+PG-IMG6. On failure, the placeholder MUST be replaced by an inline error state showing
+the failure per PG-CHAT2b, with a retry action that re-issues the same request. The user
+message remains in the conversation.
 
 PG-IMG6a. Regenerate on an assistant message created by PG-IMG5 MUST remove that
 assistant message and all later messages. It MUST then re-issue the retained image request
@@ -489,6 +519,16 @@ credential satisfies PG-AUTH2 and PG-AUTH7, `status` is `ready`/`error`, no imag
 is pending, and the trimmed text is non-empty (chat mode also allows empty text with ≥ 1
 attachment).
 
+PG-CMP3a. One inline reason line below the composer MUST explain a send block that the
+user can act on. When no model for the active mode is selected, it MUST show the translated
+`playground.errorNoModel` (zh: `请先选择模型`) and the model selector trigger MUST show a
+`ring` highlight. Otherwise it MUST show the PG-AUTH7 reason when one applies, and it MUST
+be absent when none applies.
+
+PG-CMP3b. With no model for the active mode selected, loaded selector data, no pending
+request, and PG-CMP3 text satisfied, the PG-CMP2 submitting Enter key MUST open the model
+selector popover instead of sending.
+
 PG-CMP4. The composer MUST contain one settings trigger shared by both modes.
 In chat mode, the popover MUST contain only these fields:
 
@@ -504,9 +544,26 @@ popover MUST align its end edge to the trigger, prefer opening above the trigger
 least 16 CSS pixels from every viewport edge, and use internal vertical scrolling when its
 content exceeds the collision-computed available height.
 
+PG-CMP4a. In chat mode, the chat settings are *customized* iff the trimmed system prompt,
+temperature, or max-tokens value is non-empty. While customized, the settings trigger MUST
+show the shared `ModifiedDot` at its top-right corner and its `aria-label` MUST be the
+translated `playground.settingsCustomized` (zh: `设置（已自定义）`). Otherwise it MUST NOT
+show the dot and its `aria-label` MUST be `playground.settings`. The chat-mode popover MUST
+contain a translated `playground.resetAll` button, disabled unless customized. Activating
+it MUST clear those three preferences per PG-STATE2 and keep the popover open. These prefs
+do not affect image requests, so image mode MUST NOT show the dot or the button.
+
 PG-CMP5. A "new chat" action MUST be visible whenever the conversation is non-empty; it
 clears the chat state, any pending image job, and composer attachments. It MUST NOT
-clear persisted preferences.
+clear persisted preferences or the composer text.
+
+PG-CMP5a. The new-chat action MUST show a toast with the translated
+`playground.newChatStarted` (zh: `已开始新对话`), a duration of 5 seconds, and a translated
+`playground.undo` (zh: `撤销`) action. Undo MUST restore the snapshot taken at the click:
+messages, composer attachments, composer mode, retained image requests (PG-IMG5), and a
+failed image job. It MUST NOT restart an aborted request or restore a chat error banner.
+The toast MUST be dismissed once the conversation becomes non-empty again or the page
+unmounts, so undo can never overwrite newer messages.
 
 PG-CMP6. The Playground root MUST accept attachment files from all three input paths:
 the file-picker action, a file drag-and-drop anywhere inside the page, and a clipboard
@@ -524,7 +581,10 @@ retained). The playground content root MUST be a full-height flex column sized s
 page itself never scrolls: height `calc(100dvh - 5.5rem)` below `lg` and
 `calc(100dvh - 3rem)` at `lg` and above (the dashboard main pane paddings).
 
-PG-L2. Empty conversation renders a hero: centered greeting text (display font) with a
+PG-L1a. The page MUST always contain exactly one `h1`: a screen-reader-only heading with
+the page name `Playground`, in both the empty and non-empty conversation states.
+
+PG-L2. Empty conversation renders a hero: centered greeting text (display font, `h2`) with a
 one-line muted hint stating that the chat is ephemeral, and the composer centered
 beneath it, with no card wrapper. Non-empty conversation renders the scrollable message
 list (the only scroll container) with the composer docked at the bottom and a "new

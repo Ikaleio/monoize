@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
 	Activity,
@@ -6,6 +6,8 @@ import {
 	Layers3,
 	ListRestart,
 	Loader2,
+	RotateCcw,
+	Square,
 	X,
 	Zap
 } from 'lucide-react'
@@ -31,22 +33,18 @@ import {
 } from '@/components/ui/field'
 import { StatusBadge } from '@/components/ui/status'
 import { api } from '@/lib/api'
+import { apiErrorMessage } from '@/lib/api-error'
 import { SWR_KEYS } from '@/lib/swr'
-import type { ChannelTestResult, ProviderType } from '@/lib/api'
-
-type ChannelTestState = Record<
-	string,
-	{
-		status: 'idle' | 'testing' | 'passed' | 'failed'
-		latency_ms?: number
-		http_status?: number | null
-		error_code?: string | null
-		error_type?: string | null
-		error?: string
-	}
->
-
-type TestMode = 'sequential' | 'concurrent' | null
+import type { ProviderType } from '@/lib/api'
+import {
+	CHANNEL_TEST_CONCURRENCY,
+	ChannelTestContext,
+	useChannelTests,
+	type ChannelTestContextValue,
+	type ChannelTestRun,
+	type ChannelTestTarget,
+	type ModelTestResult
+} from './channel-test-context'
 
 const STREAM_TEST_SUPPORTED: Record<ProviderType, boolean> = {
 	responses: true,
@@ -60,126 +58,167 @@ const STREAM_TEST_SUPPORTED: Record<ProviderType, boolean> = {
 	openai_decisions: false
 }
 
-type ChannelTestDialogProps = {
-	open: boolean
-	onOpenChange: (open: boolean) => void
-	providerId: string
-	channelId: string
-	channelName: string
-	providerName: string
-	providerType: ProviderType
-	models: string[]
-}
-
-export function ChannelTestDialog({
-	open,
-	onOpenChange,
-	providerId,
-	channelId,
-	channelName,
-	providerName,
-	providerType,
-	models
-}: ChannelTestDialogProps) {
+/**
+ * CP-FE-9a: page-level owner of Channel test runs. Results survive closing the
+ * dialog, and a run keeps going in the background until it finishes or is stopped.
+ */
+export function ChannelTestProvider({ children }: { children: React.ReactNode }) {
 	const { t } = useTranslation()
-	const streamCapable = STREAM_TEST_SUPPORTED[providerType]
-	const [stream, setStream] = useState(streamCapable)
-	const [testState, setTestState] = useState<ChannelTestState>({})
-	const [testMode, setTestMode] = useState<TestMode>(null)
-	const testingAll = testMode !== null
+	const [runs, setRuns] = useState<Record<string, ChannelTestRun>>({})
+	const [target, setTarget] = useState<ChannelTestTarget | null>(null)
+	const [open, setOpen] = useState(false)
+	const [openSeq, setOpenSeq] = useState(0)
+	const controllers = useRef(new Map<string, AbortController>())
 
 	useEffect(() => {
-		if (!open) return
-		setTestState({})
-		setTestMode(null)
-		setStream(streamCapable)
-	}, [open, streamCapable])
+		const active = controllers.current
+		return () => {
+			for (const controller of active.values()) controller.abort()
+		}
+	}, [])
 
-	const runSingleTest = async (
-		model: string,
-		streamMode = stream,
-		revalidateProvider = true
-	) => {
-		setTestState(previous => ({
-			...previous,
-			[model]: { status: 'testing' }
-		}))
-		try {
-			const result: ChannelTestResult = await api.testChannel(
-				providerId,
-				channelId,
-				model,
-				streamMode
-			)
-			setTestState(previous => ({
+	const setResult = useCallback((channelId: string, model: string, result: ModelTestResult | undefined) => {
+		setRuns(previous => {
+			const run = previous[channelId]
+			if (!run) return previous
+			const results = { ...run.results }
+			if (result) results[model] = result
+			else delete results[model]
+			return { ...previous, [channelId]: { ...run, results } }
+		})
+	}, [])
+
+	const start = useCallback<ChannelTestContextValue['start']>((runTarget, models, mode, stream) => {
+		const { channelId } = runTarget
+		if (controllers.current.has(channelId) || models.length === 0) return
+		const controller = new AbortController()
+		controllers.current.set(channelId, controller)
+		setRuns(previous => {
+			const run = previous[channelId]
+			const results = { ...run?.results }
+			for (const model of models) delete results[model]
+			return {
 				...previous,
-				[model]: {
+				[channelId]: {
+					results,
+					running: mode,
+					lastMode: mode === 'single' ? run?.lastMode ?? 'sequential' : mode
+				}
+			}
+		})
+
+		const testOne = async (model: string) => {
+			if (controller.signal.aborted) return
+			setResult(channelId, model, { status: 'testing' })
+			try {
+				const result = await api.testChannel(runTarget.providerId, channelId, model, stream, controller.signal)
+				setResult(channelId, model, {
 					status: result.success ? 'passed' : 'failed',
 					latency_ms: result.latency_ms,
 					http_status: result.http_status,
 					error_code: result.error_code,
 					error_type: result.error_type,
 					error: result.error ?? undefined
-				}
-			}))
-		} catch (error) {
-			setTestState(previous => ({
-				...previous,
-				[model]: {
-					status: 'failed',
-					error: error instanceof Error ? error.message : t('common.error')
-				}
-			}))
-		} finally {
-			if (revalidateProvider) mutate(SWR_KEYS.PROVIDERS)
-		}
-	}
-
-	const runSequentialTests = async () => {
-		setTestMode('sequential')
-		const streamMode = stream
-		try {
-			for (const model of models) {
-				await runSingleTest(model, streamMode, false)
+				})
+			} catch (error) {
+				setResult(
+					channelId,
+					model,
+					controller.signal.aborted ? undefined : { status: 'failed', error: apiErrorMessage(error, t) }
+				)
 			}
-		} finally {
-			setTestMode(null)
-			mutate(SWR_KEYS.PROVIDERS)
 		}
-	}
 
-	const runConcurrentTests = async () => {
-		setTestMode('concurrent')
-		const streamMode = stream
-		try {
-			await Promise.all(
-				models.map(model => runSingleTest(model, streamMode, false))
-			)
-		} finally {
-			setTestMode(null)
-			mutate(SWR_KEYS.PROVIDERS)
-		}
-	}
+		void (async () => {
+			try {
+				if (mode === 'concurrent') {
+					const queue = [...models]
+					await Promise.all(
+						Array.from({ length: Math.min(CHANNEL_TEST_CONCURRENCY, queue.length) }, async () => {
+							for (let model = queue.shift(); model !== undefined; model = queue.shift()) {
+								await testOne(model)
+							}
+						})
+					)
+				} else {
+					for (const model of models) await testOne(model)
+				}
+			} finally {
+				controllers.current.delete(channelId)
+				setRuns(previous => previous[channelId]
+					? { ...previous, [channelId]: { ...previous[channelId], running: null } }
+					: previous)
+				mutate(SWR_KEYS.PROVIDERS)
+			}
+		})()
+	}, [setResult, t])
 
-	const testedCount = Object.values(testState).filter(
-		state => state.status === 'passed' || state.status === 'failed'
-	).length
-	const passedCount = Object.values(testState).filter(
-		state => state.status === 'passed'
-	).length
+	const stop = useCallback((channelId: string) => {
+		controllers.current.get(channelId)?.abort()
+	}, [])
+
+	const openTest = useCallback((next: ChannelTestTarget) => {
+		setTarget(next)
+		setOpenSeq(previous => previous + 1)
+		setOpen(true)
+	}, [])
+
+	const value = useMemo(() => ({ runs, openTest, start, stop }), [runs, openTest, start, stop])
+
+	return (
+		<ChannelTestContext.Provider value={value}>
+			{children}
+			{/* Keyed per open so dialog-local state (stream checkbox) starts fresh (CP-FE-8). */}
+			{target ? <ChannelTestDialog key={openSeq} open={open} onOpenChange={setOpen} target={target} /> : null}
+		</ChannelTestContext.Provider>
+	)
+}
+
+const STATUS_ORDER: Record<string, number> = { failed: 0, idle: 1, testing: 1, passed: 2 }
+const EMPTY_RESULTS: ChannelTestRun['results'] = {}
+
+function ChannelTestDialog({
+	open,
+	onOpenChange,
+	target
+}: {
+	open: boolean
+	onOpenChange: (open: boolean) => void
+	target: ChannelTestTarget
+}) {
+	const { t } = useTranslation()
+	const { runs, start, stop } = useChannelTests()
+	const streamCapable = STREAM_TEST_SUPPORTED[target.providerType]
+	const [stream, setStream] = useState(streamCapable)
+	const run = runs[target.channelId]
+	const results = run?.results ?? EMPTY_RESULTS
+	const running = run?.running ?? null
+
+	const sortedModels = useMemo(
+		() => [...target.models].sort((left, right) =>
+			STATUS_ORDER[results[left]?.status ?? 'idle'] - STATUS_ORDER[results[right]?.status ?? 'idle']
+			|| left.localeCompare(right)),
+		[target.models, results]
+	)
+	const failedModels = target.models.filter(model => results[model]?.status === 'failed')
+	const passedCount = target.models.filter(model => results[model]?.status === 'passed').length
+	const untestedCount = target.models.length - passedCount - failedModels.length
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className='flex max-h-[85vh] max-w-2xl flex-col overflow-hidden'>
+			<DialogContent
+				className='flex max-h-[85dvh] max-w-2xl flex-col overflow-hidden'
+				onInteractOutside={event => { if (running) event.preventDefault() }}
+			>
 				<DialogHeader>
 					<DialogTitle className='flex items-center gap-2'>
-						<Activity className='size-5 text-muted-foreground' />
+						<Activity className='size-5 text-muted-foreground' aria-hidden='true' />
 						{t('providers.testChannelTitle')}
 					</DialogTitle>
 					<DialogDescription>
 						{t('providers.testChannelDesc', {
-							channel: channelName,
-							provider: providerName
+							channel: target.channelName,
+							provider: target.providerName
 						})}
 					</DialogDescription>
 				</DialogHeader>
@@ -189,7 +228,7 @@ export function ChannelTestDialog({
 						<Checkbox
 							id='channel-test-stream'
 							checked={stream}
-							disabled={!streamCapable || testingAll}
+							disabled={!streamCapable || running !== null}
 							onCheckedChange={checked => setStream(checked === true)}
 						/>
 						<FieldContent>
@@ -203,54 +242,70 @@ export function ChannelTestDialog({
 							</FieldDescription>
 						</FieldContent>
 					</Field>
-					<ButtonGroup aria-label={t('providers.testModes')}>
-						<Button
-							size='sm'
-							variant='outline'
-							disabled={testingAll || models.length === 0}
-							onClick={runSequentialTests}
-						>
-							{testMode === 'sequential' ?
-								<Loader2 data-icon='inline-start' className='animate-spin' />
-							: 	<ListRestart data-icon='inline-start' />}
-							{t('providers.testSequential')}
-						</Button>
-						<Button
-							size='sm'
-							variant='outline'
-							disabled={testingAll || models.length === 0}
-							onClick={runConcurrentTests}
-						>
-							{testMode === 'concurrent' ?
-								<Loader2 data-icon='inline-start' className='animate-spin' />
-							: 	<Layers3 data-icon='inline-start' />}
-							{t('providers.testConcurrent')}
-						</Button>
-					</ButtonGroup>
+					<div className='flex flex-wrap items-center gap-2'>
+						{running ?
+							<Button size='sm' variant='outline' onClick={() => stop(target.channelId)}>
+								<Square data-icon='inline-start' />
+								{t('providers.testStop')}
+							</Button>
+						: 	<>
+								<ButtonGroup aria-label={t('providers.testModes')}>
+									<Button
+										size='sm'
+										variant='outline'
+										disabled={target.models.length === 0}
+										onClick={() => start(target, target.models, 'sequential', stream)}
+									>
+										<ListRestart data-icon='inline-start' />
+										{t('providers.testSequential')}
+									</Button>
+									<Button
+										size='sm'
+										variant='outline'
+										disabled={target.models.length === 0}
+										onClick={() => start(target, target.models, 'concurrent', stream)}
+									>
+										<Layers3 data-icon='inline-start' />
+										{t('providers.testConcurrent')}
+									</Button>
+								</ButtonGroup>
+								<span className='text-xs text-muted-foreground'>
+									{t('providers.testConcurrencyLimit', { count: CHANNEL_TEST_CONCURRENCY })}
+								</span>
+								<Button
+									size='sm'
+									variant='ghost'
+									disabled={failedModels.length === 0}
+									onClick={() => start(target, failedModels, run?.lastMode ?? 'sequential', stream)}
+								>
+									<RotateCcw data-icon='inline-start' />
+									{t('providers.testRetryFailed')}
+								</Button>
+							</>
+						}
+					</div>
 				</div>
 
-				<div className='min-h-5 text-sm text-muted-foreground'>
-					{testedCount > 0 && (
-						<span>
-							{t('providers.testProgress', {
-								passed: passedCount,
-								tested: testedCount
-							})}
-						</span>
-					)}
+				<div className='flex min-h-5 items-center gap-2 text-sm text-muted-foreground' aria-live='polite'>
+					{running ? <Loader2 className='size-3.5 animate-spin' aria-hidden='true' /> : null}
+					{t('providers.testSummary', {
+						passed: passedCount,
+						failed: failedModels.length,
+						untested: untestedCount
+					})}
 				</div>
 
-				<div className='overflow-hidden rounded-lg border'>
-					{models.length === 0 ?
+				<div className='min-h-0 overflow-hidden rounded-lg border'>
+					{target.models.length === 0 ?
 						<div className='py-8 text-center text-sm text-muted-foreground'>
 							{t('providers.validationAtLeastOneModel')}
 						</div>
 					: 	<Virtuoso
-							style={{ height: Math.min(Math.max(models.length * 44, 88), 352) }}
-							data={models}
+							style={{ height: Math.min(Math.max(target.models.length * 44, 88), 352) }}
+							data={sortedModels}
 							computeItemKey={(_index, model) => model}
 							itemContent={(_index, model) => {
-								const state = testState[model]
+								const state = results[model]
 								const status = state?.status ?? 'idle'
 								return (
 									<div className='flex flex-col border-b last:border-b-0'>
@@ -261,23 +316,21 @@ export function ChannelTestDialog({
 											<span className='flex shrink-0 items-center gap-2'>
 												{status === 'passed' && (
 													<StatusBadge variant='success' className='gap-1'>
-														<Check className='size-3' />
-														{t('providers.testLatency', {
-															ms: state?.latency_ms ?? 0
-														})}
+														<Check className='size-3' aria-hidden='true' />
+														{t('providers.testPassedLatency', { ms: state?.latency_ms ?? 0 })}
 													</StatusBadge>
 												)}
 												{status === 'failed' && (
 													<StatusBadge variant='destructive' className='gap-1'>
-														<X className='size-3' />
+														<X className='size-3' aria-hidden='true' />
 														{state?.latency_ms != null ?
-															t('providers.testLatency', { ms: state.latency_ms })
+															t('providers.testFailedLatency', { ms: state.latency_ms })
 														: 	t('providers.testFailed')}
 													</StatusBadge>
 												)}
 												{status === 'testing' && (
 													<Badge variant='secondary' className='gap-1 border-0'>
-														<Loader2 className='size-3 animate-spin' />
+														<Loader2 className='size-3 animate-spin' aria-hidden='true' />
 														{t('providers.testing')}
 													</Badge>
 												)}
@@ -289,15 +342,13 @@ export function ChannelTestDialog({
 											</span>
 											<Button
 												variant='ghost'
-												size='sm'
-												className='h-7 shrink-0 px-2'
+												size='icon'
+												className='size-11 shrink-0 touch-manipulation sm:size-8'
 												aria-label={t('providers.testModelAria', { model })}
-												disabled={status === 'testing' || testingAll}
-												onClick={() => runSingleTest(model)}
+												disabled={running !== null}
+												onClick={() => start(target, [model], 'single', stream)}
 											>
-												{status === 'testing' ?
-													<Loader2 className='animate-spin' />
-												: 	<Zap />}
+												<Zap aria-hidden='true' />
 											</Button>
 										</div>
 										{status === 'failed' && state?.error && (

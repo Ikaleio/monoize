@@ -54,6 +54,10 @@ interface ModelComboboxProps {
   kind: "chat" | "image";
   isLoading: boolean;
   disabled?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Draws attention to the trigger while no model is selected (PG-CMP3a). */
+  highlighted: boolean;
 }
 
 function ModelRow({
@@ -89,9 +93,11 @@ export function ModelCombobox({
   kind,
   isLoading,
   disabled,
+  open,
+  onOpenChange,
+  highlighted,
 }: ModelComboboxProps) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
   const { imageRecords, otherRecords } = useMemo(() => {
@@ -122,18 +128,21 @@ export function ModelCombobox({
   const select = (id: string) => {
     onChange(id);
     setSearch("");
-    setOpen(false);
+    onOpenChange(false);
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
           disabled={disabled}
           aria-label={t(kind === "image" ? "playground.imageModel" : "playground.chatModel")}
-          className="h-8 max-w-[11rem] gap-1.5 border border-transparent px-2 text-xs font-medium text-muted-foreground hover:border-border hover:text-foreground sm:max-w-[14rem]"
+          className={cn(
+            "h-8 max-w-[11rem] gap-1.5 border border-transparent px-2 text-xs font-medium text-muted-foreground hover:border-border hover:text-foreground sm:max-w-[14rem]",
+            highlighted && "ring-2 ring-ring",
+          )}
         >
           {kind === "image" && !value ? (
             <ImageIcon aria-hidden="true" />

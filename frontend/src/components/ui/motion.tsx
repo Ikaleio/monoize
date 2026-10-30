@@ -284,6 +284,9 @@ export const AnimatedButton = forwardRef<HTMLDivElement, AnimatedButtonProps>(
     return (
       <motion.div
         ref={ref}
+        // framer-motion's tap gesture adds tabindex="0" when none is set, which
+        // turns the wrapper into a second Tab stop in front of the button (DS34c).
+        tabIndex={-1}
         whileHover={shouldReduceMotion ? undefined : { scale: 1.02 }}
         whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
         transition={shouldReduceMotion ? reducedTransition : springs.snappy}

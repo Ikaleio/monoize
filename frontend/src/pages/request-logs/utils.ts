@@ -253,8 +253,28 @@ export function readableAffinityTarget(
 	knownTargets: ReadonlyMap<string, string>
 ): string | null {
 	const target = nonempty(log.affinity?.target)
-	if (!target) return null
+	return target ? resolveRouteName(log, knownTargets, target) : null
+}
 
+/**
+ * FL9b name resolution for one `provider_id/channel_id` identity: current admin
+ * Provider list, then the row's terminal names, then `tried_providers` snapshots.
+ */
+export function readableRoute(
+	log: RequestLog,
+	knownTargets: ReadonlyMap<string, string>,
+	providerId: string | null | undefined,
+	channelId: string | null | undefined
+): string | null {
+	const target = affinityTargetKey(providerId, channelId)
+	return target ? resolveRouteName(log, knownTargets, target) : null
+}
+
+function resolveRouteName(
+	log: RequestLog,
+	knownTargets: ReadonlyMap<string, string>,
+	target: string
+): string | null {
 	const knownName = nonempty(knownTargets.get(target))
 	if (knownName) return knownName
 

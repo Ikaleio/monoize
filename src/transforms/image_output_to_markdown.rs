@@ -66,7 +66,13 @@ impl Transform for ImageOutputToMarkdownTransform {
                     "type": "string",
                     "format": "multiline",
                     "minLength": 1,
-                    "description": "Template appended for each image. Supports raw placeholders {{src}}, {{url}}, {{media_type}}, {{data}} and URL-safe placeholders {{src_urlencoded}}, {{url_urlencoded}}, {{media_type_urlencoded}}, {{data_urlencoded}}."
+                    "description": "Template appended for each image. Supports raw placeholders {{src}}, {{url}}, {{media_type}}, {{data}} and URL-safe placeholders {{src_urlencoded}}, {{url_urlencoded}}, {{media_type_urlencoded}}, {{data_urlencoded}}.",
+                    "x-localized-description": {
+                        "en": "Template appended for each image. Supports raw placeholders {{src}}, {{url}}, {{media_type}}, {{data}} and URL-safe placeholders {{src_urlencoded}}, {{url_urlencoded}}, {{media_type_urlencoded}}, {{data_urlencoded}}.",
+                        "zh": "每张图像追加的模板。支持原始占位符 {{src}}、{{url}}、{{media_type}}、{{data}}，以及 URL 编码占位符 {{src_urlencoded}}、{{url_urlencoded}}、{{media_type_urlencoded}}、{{data_urlencoded}}。",
+                        "zh-TW": "每張影像附加的範本。支援原始預留位置 {{src}}、{{url}}、{{media_type}}、{{data}}，以及 URL 編碼預留位置 {{src_urlencoded}}、{{url_urlencoded}}、{{media_type_urlencoded}}、{{data_urlencoded}}。",
+                        "ja": "画像ごとに追加するテンプレート。生のプレースホルダー {{src}}、{{url}}、{{media_type}}、{{data}} と、URL エンコード済みプレースホルダー {{src_urlencoded}}、{{url_urlencoded}}、{{media_type_urlencoded}}、{{data_urlencoded}} を使えます。"
+                    }
                 }
             },
             "additionalProperties": false

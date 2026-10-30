@@ -22,6 +22,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { OrderStatusBadge } from "@/components/recharge/order-status-badge";
+import { CopyButton } from "@/components/ui/copy-button";
+import { formatUsdDecimal } from "@/lib/exact-decimal";
 import { formatDateTime } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
 import { revalidateRechargeCaches, useRechargeOrders } from "@/lib/swr";
@@ -107,7 +109,7 @@ export function ActivityOrders({
         />
       ) : (
         <>
-          <DataList columns="minmax(0,1.35fr) 7rem 6.5rem 10rem 5.5rem">
+          <DataList columns="minmax(0,1.35fr) 7rem 6.5rem 10rem 7.5rem">
             <DataListHeader>
               <DataListHead>{t("wallet.payment")}</DataListHead>
               <DataListHead align="end">{t("wallet.credit")}</DataListHead>
@@ -142,7 +144,9 @@ export function ActivityOrders({
                         </span>
                       </DataListCell>
                       <DataListCell label={t("wallet.credit")} align="end">
-                        <span className="font-medium tabular-nums">${order.credit_usd}</span>
+                        <span className="font-medium tabular-nums">
+                          {formatUsdDecimal(order.credit_usd, 2)}
+                        </span>
                       </DataListCell>
                       <DataListCell label={t("wallet.statusCol")}>
                         <OrderStatusBadge status={order.status} />
@@ -153,19 +157,22 @@ export function ActivityOrders({
                         </span>
                       </DataListCell>
                       <DataListCell label={t("wallet.orderId")}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              className="inline-flex min-h-11 items-center rounded-sm font-mono text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-0"
-                            >
-                              {order.id.slice(0, 8)}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <span className="font-mono">{order.id}</span>
-                          </TooltipContent>
-                        </Tooltip>
+                        <span className="inline-flex items-center gap-0.5">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className="inline-flex min-h-11 items-center rounded-sm font-mono text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-0"
+                              >
+                                {order.id.slice(0, 8)}
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <span className="font-mono">{order.id}</span>
+                            </TooltipContent>
+                          </Tooltip>
+                          <CopyButton value={order.id} label={t("wallet.copyOrderId")} />
+                        </span>
                       </DataListCell>
                     </motion.li>
                   </DataListRow>

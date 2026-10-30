@@ -5,8 +5,8 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 
 ## 概念
 
-- **Provider（服务提供者）** 是一个路由分组。它定义路由顺序、重试预算、健康策略和有序的变换链。
-- **Channel（通道）** 是 Provider 内的一个上游端点。它保存上游类型、Base URL、凭据、模型映射、权重和超时。
+- **Provider** 是一个路由分组。它定义路由顺序、重试预算、健康策略和有序的变换链。
+- **Channel** 是 Provider 内的一个上游端点。它保存上游类型、Base URL、凭据、模型映射、权重和超时。
 
 请求先选择 Provider，再在其中选择 Channel。选择规则参见[路由与可靠性](/zh/docs/routing)。
 
@@ -17,27 +17,29 @@ description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
 每个 Provider 行显示最近 60 秒的 RPM 和 TPM。页面可见时每 10 秒刷新一次。
 RPM 统计所有用户、所有终态的已落库请求。TPM 累加输入和输出 token，不重复累加缓存或推理 token。
 进行中的请求和重试链条目不计入统计。空窗口显示 `0`；指标不可用时显示 `—`。
-截图使用本地示例流量。
+每个 Provider 行显示其位次和重试策略。每个 Channel 行显示一个状态、模型数量和权重占比。
 
 ## 创建 Provider
 
-1. 在侧边栏打开**服务提供者**。
-2. 点击创建按钮并输入名称。
-3. 默认值不合适时调整重试选项：
-   - `max_retries`：整个 Provider 的重试总预算。`-1` 表示该路由内不限制。
+1. 在侧边栏打开 **Provider**。
+2. 点击**添加 Provider** 并输入名称。
+3. 默认值不合适时在**路由**分区调整重试选项：
+   - **Provider 尝试次数**：**尝试全部可用 Channel**（默认，保存为 `max_retries = -1`）或**指定次数** N（保存为 `max_retries = N - 1`）。
    - `channel_max_retries`：切换前在单个 Channel 内的重试次数。默认 `0`。
    - `channel_retry_interval_ms`：Channel 内重试的间隔时间。默认 `0`。
 4. 除非有明确理由，保持 `circuit_breaker_enabled` 开启。
 
 ## 添加 Channel
 
-1. 打开 Provider 并点击**添加通道**。
+1. 打开 Provider 并点击**添加 Channel**。
 2. 选择上游类型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image`、`replicate`、`system_one` 或 `openai_decisions`。
 3. 填写上游 Base URL 和 API 密钥。
 4. 设置权重。流量按权重比例在符合条件的 Channel 之间分配。默认 `1`。
 5. 可选：为单个 Channel 设置 `proxy_url`，覆盖进程级上游代理。
 
 之后编辑 Channel 时，API 密钥留空则保持原有密钥不变。
+
+保存无效的表单时，编辑器会打开出错的分区和 Channel，聚焦出错字段，并在字段旁显示错误。必填字段标有**必填**。
 
 ## 决策模型
 
@@ -102,13 +104,17 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 ## 测试 Channel
 
-打开 Channel，运行顺序测试或并发测试。
+展开 Provider，在 Channel 行点击**选择模型测试**；或保存后在 Channel 编辑器点击**测试**。然后运行顺序测试或并发测试。并发测试同时最多发出 5 个请求。关闭对话框后结果仍保留，进行中的测试会在后台继续，点击**停止**可取消。**重测失败项**只重跑失败的模型。
+
+展开 Provider 后，Channel 行的开关会立即启用或禁用该 Channel，无需打开编辑器。
 
 测试会发送一次短流式补全，输出上限为 16 个 token。仅 HTTP 2xx 不够。流必须到达协议终结事件。
 
 对 Responses Channel，`response.completed` 算通过。没有 error 对象的 `response.incomplete` 也算通过。推理模型可能打满 16 token 上限并返回 `incomplete`。该结果仍表示 Channel 可达。
 
 ## 映射模型
+
+要批量修改模型，在**支持的模型**中点击**选择**，然后筛选列表、选中模型，再删除或统一设置倍率。模型选择器可以全选或清除当前结果。**手动添加**可一次输入多个模型 ID。
 
 每个 Channel 列出它服务的逻辑模型。模型条目包含：
 
@@ -134,7 +140,7 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 ## Provider 变换
 
-Provider 可以持有一组有序的变换规则。它们在 Provider 选定之后、上游编码之前，作用于该 Provider 服务的每个请求。参见[变换](/zh/docs/transforms)。
+Provider 可以持有一组有序的变换规则。它们在 Provider 选定之后、上游编码之前，作用于该 Provider 服务的每个请求。执行顺序为 Provider → 全局 → API 密钥，编辑器中也显示此顺序。参见[变换](/zh/docs/transforms)。
 
 ## 分组
 

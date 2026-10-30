@@ -287,6 +287,8 @@ All endpoints require an authenticated dashboard admin session.
 - Response: `Provider`
 - Errors: `404 not_found`
 
+CM-READ-1. Every Channel `models` object in any Provider response (list, get, create, update, CM-CH-EN-1) MUST serialize its keys in ascending byte order, so two reads of unchanged data return identical key order.
+
 ### 3.3 Create provider
 
 - Method/Path: `POST /api/dashboard/providers`
@@ -345,6 +347,15 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
 - Errors:
   - `400 invalid_request` if array is empty
   - `400 invalid_request` if ids are duplicated or missing existing providers
+
+### 3.6a Set Channel enabled
+
+- Method/Path: `PUT /api/dashboard/providers/{provider_id}/channels/{channel_id}/enabled`
+- Body: `{ "enabled": boolean }` (unknown fields rejected with `400 invalid_request`)
+- Response: the updated `Provider` (same shape as 3.2)
+- Errors: `404 not_found` when the Channel does not exist or does not belong to `provider_id`
+
+CM-CH-EN-1. This endpoint MUST change only the Channel `enabled` flag and `updated_at`. It MUST NOT change any other Channel or Provider field, MUST NOT require the Channel API key, and MUST NOT clear runtime health or affinity entries. It MUST advance the routing configuration revision so routing observes the change on the next request.
 
 ### 3.7 Fetch channel models
 
@@ -439,13 +450,13 @@ CP-FE-1. Provider card move, edit, and delete actions MUST be invokable with a s
 
 CP-FE-2. Provider card move, edit, and delete icon buttons MUST have a hit target of at least `44px` by `44px` below the `sm` breakpoint. They MAY use a smaller hit target at `sm` and wider breakpoints.
 
-CP-FE-3. Native HTML drag-and-drop reordering of provider cards MUST be enabled only when the browser matches `(pointer: fine)`. On coarse-pointer devices, provider reordering MUST remain available through the move up and move down buttons.
+CP-FE-3. Native HTML drag-and-drop reordering of provider cards MUST be enabled only when the browser matches `(pointer: fine)` and MUST start only from the card's grip handle. On coarse-pointer devices, provider reordering MUST remain available through the move up and move down buttons.
 
 CP-FE-4. While a provider child popup is open or is closing from a user action, the parent provider dialog MUST NOT treat that child popup interaction as an outside-click dismissal.
 
 CP-FE-5. Saving a provider child editor popup MUST update the parent provider draft and close only that child popup. It MUST NOT open the parent provider unsaved-changes confirmation.
 
-CP-FE-6. Saving from the provider unsaved-changes confirmation MUST invoke the provider create or update operation at most once for the same tap or click sequence. That same sequence MUST NOT reopen the unsaved-changes confirmation.
+CP-FE-6. The "保存并关闭" action of the provider unsaved-changes confirmation (`dashboard-ui-layout.spec.md` PL22) MUST invoke the provider create or update operation at most once for the same tap or click sequence. That same sequence MUST NOT reopen the unsaved-changes confirmation.
 
 CP-FE-7. The null choice for `session_affinity_auto` MUST use a label that identifies URL-based automatic selection. It MUST NOT use the global-inheritance label used by unrelated nullable settings.
 
@@ -453,9 +464,15 @@ CP-FE-7a. The Channel editor MUST expose `websocket_supported` as a three-state 
 
 CP-FE-8. The Channel liveness-test dialog MUST contain a `Stream response` checkbox. The checkbox MUST be checked whenever a stream-capable Channel test dialog opens. It MUST be disabled and unchecked for a Channel type whose liveness test does not define streaming.
 
-CP-FE-9. The Channel liveness-test dialog MUST expose adjacent `Sequential test` and `Concurrent test` buttons. Sequential test MUST await each model before starting the next model. Concurrent test MUST start one request for every Channel model without a client-side concurrency limit. Both actions MUST update each model row as its request completes.
+CP-FE-9. The Channel liveness-test dialog MUST expose adjacent `Sequential test` and `Concurrent test` buttons. Sequential test MUST await each model before starting the next model. Concurrent test MUST run at most 5 requests at a time, and the concurrency limit MUST be shown next to the button ("并发 5"). Both actions MUST update each model row as its request completes.
 
-CP-FE-10. A failed model row MUST render the concrete `error` value inline. The row MUST NOT require hover to read the error. The UI MAY truncate the initial display only when it supplies an expand action and a copy action for the complete value.
+CP-FE-9a. Test results MUST be stored per Channel id at page level, so closing and reopening the dialog (from the list or from the editor) shows the previous results and any run still in progress. While a run is in progress, outside clicks MUST NOT close the dialog; Esc or the close button closes the dialog and the run continues in the background. A "停止" button MUST abort every in-flight request of the run (`AbortController`) and leave unfinished models in the untested state.
+
+CP-FE-9b. The dialog MUST offer "重测失败项", enabled when at least one model failed, which re-runs only the failed models with the last used mode. Failed models MUST be listed first, then untested, then passed, each group in ascending model ID order. The summary MUST read "N 通过 · N 失败 · N 未测试".
+
+CP-FE-9c. The Provider editor Channel detail MUST include a "测试" button that opens this dialog for the saved Channel. It is disabled while the editor has unsaved changes or the Channel has no id, with a tooltip explaining "请先保存更改".
+
+CP-FE-10. A failed model row MUST render the concrete `error` value inline. The row MUST NOT require hover to read the error. The UI MAY truncate the initial display only when it supplies an expand action and a copy action for the complete value. The failed status badge MUST read "失败 · N ms" when a latency is known and "失败" otherwise.
 
 CP-FE-11. A Provider overview model badge MUST use the following severity order: red for `availability_status = unavailable`; yellow for `availability_status = degraded` or `pricing_status != complete`; default styling otherwise. Color MUST NOT be the only state signal. The badge detail overlay MUST separate breaker details from pricing details.
 

@@ -18,8 +18,8 @@ import { PageWrapper } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { QueryError } from "@/components/ui/query-error";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
-import { useMarketplaceModels } from "@/lib/swr";
+import { useCurrentUser, useDashboardGroups, useMarketplaceModels } from "@/lib/swr";
+import { PriceCell } from "./model-pricing/PriceCell";
 
 function formatTokens(tokens?: number | null): string {
   if (tokens == null) return "—";
@@ -33,7 +33,12 @@ export function ModelMarketplacePage() {
   const { t } = useTranslation();
   const { data, error, isLoading, isValidating, mutate } = useMarketplaceModels();
   const records = useMemo(() => data ?? [], [data]);
+  const { data: user } = useCurrentUser();
+  const { data: groups = [] } = useDashboardGroups();
   const [search, setSearch] = useState("");
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const ownGroup =
+    groups.find((group) => group.id === user?.group_id) ?? groups.find((group) => group.is_default);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -72,6 +77,11 @@ export function ModelMarketplacePage() {
                 <p className="text-sm tabular-nums text-muted-foreground">
                   {t("modelMarketplace.resultCount", { filtered: filtered.length, total: records.length })}
                 </p>
+                {!isAdmin && records.some((record) => record.price_ratio !== "1") ? (
+                  <p className="basis-full text-sm text-muted-foreground">
+                    {t("modelMarketplace.ratioNote")}
+                  </p>
+                ) : null}
               </>
             ) : undefined
           }
@@ -122,18 +132,39 @@ export function ModelMarketplacePage() {
                           label={t("modelMarketplace.copyModelId", { model: record.model_id })}
                         />
                       </div>
-                      <p className="truncate pl-6 text-muted-foreground">{record.models_dev_provider || "—"}</p>
+                      <p className="truncate pl-6 text-muted-foreground">
+                        {[
+                          record.models_dev_provider,
+                          record.groups.length > 0
+                            ? t("modelMarketplace.groupsLine", { groups: record.groups.join(", ") })
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "—"}
+                      </p>
+                      {!isAdmin && ownGroup && record.groups.length > 0 && !record.groups.includes(ownGroup.name) ? (
+                        <p className="truncate pl-6 text-muted-foreground">
+                          {t("modelMarketplace.requiresKeyGroup", { group: record.groups[0] })}
+                        </p>
+                      ) : null}
+                      {!isAdmin && record.price_ratio !== "1" ? (
+                        <p className="truncate pl-6 text-muted-foreground">
+                          {t("modelMarketplace.rowRatio", {
+                            group:
+                              ownGroup && record.groups.includes(ownGroup.name)
+                                ? ownGroup.name
+                                : record.groups[0],
+                            ratio: record.price_ratio,
+                          })}
+                        </p>
+                      ) : null}
                     </DataListCell>
                     <DataListCell label={t("modelMarketplace.mode")}>{record.mode || "—"}</DataListCell>
                     <DataListCell label={t("modelMarketplace.inputPerMillion")} align="end">
-                      <span className="tabular-nums">
-                        {record.input_usd_per_1m == null ? "—" : formatUsdDecimal(record.input_usd_per_1m, 3)}
-                      </span>
+                      <PriceCell record={record} side="input" />
                     </DataListCell>
                     <DataListCell label={t("modelMarketplace.outputPerMillion")} align="end">
-                      <span className="tabular-nums">
-                        {record.output_usd_per_1m == null ? "—" : formatUsdDecimal(record.output_usd_per_1m, 3)}
-                      </span>
+                      <PriceCell record={record} side="output" />
                     </DataListCell>
                     <DataListCell label={t("modelMarketplace.context")} align="end">
                       <span className="tabular-nums">{formatTokens(record.max_tokens)}</span>

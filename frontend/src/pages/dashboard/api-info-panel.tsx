@@ -8,9 +8,9 @@ import { QueryError, type QueryErrorProps } from "@/components/ui/query-error";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/ui/empty-state";
 import { motion, transitions } from "@/components/ui/motion";
 import type { PublicSystemSettings } from "@/lib/api";
+import { resolveApiBase } from "./utils";
 
 const ENDPOINTS = [
   {
@@ -68,22 +68,29 @@ export function ApiInfoPanel({
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
-  const baseUrl = settings?.api_base_url?.trim() ?? "";
+  const { url: baseUrl, isFallback } = resolveApiBase(settings);
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.22, ...transitions.normal }}
-      className="h-full min-h-0"
+      transition={{ delay: 0.1, ...transitions.normal }}
+      className="min-w-0"
     >
-      <Card className="flex h-full max-h-[28rem] min-h-0 flex-col">
-        <CardHeader className="p-4 pb-2">
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 p-4 pb-2">
           <CardTitle className="text-balance text-base font-semibold leading-none tracking-tight">
             {t("dashboard.apiInformation", "API Information")}
           </CardTitle>
+          {isFallback && isAdmin && settings !== undefined ? (
+            <Button asChild variant="outline" size="sm">
+              <Link to="/dashboard/admin-settings?setting=api_base_url">
+                {t("dashboard.configureApi")}
+              </Link>
+            </Button>
+          ) : null}
         </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-4 pt-2">
+        <CardContent className="flex min-w-0 flex-col gap-2 p-4 pt-2">
           {failed && (
             <QueryError
               onRetry={onRetry}
@@ -93,65 +100,55 @@ export function ApiInfoPanel({
           )}
           {failed && settings === undefined ? null : loading &&
             settings === undefined ? (
-            <div className="flex flex-col gap-2">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-14 w-full" />
-              ))}
-            </div>
-          ) : !baseUrl ? (
-            <EmptyState
-              title={t("dashboard.noApiInfo", "No API Information")}
-              description={t(
-                isAdmin
-                  ? "dashboard.noApiInfoDescription"
-                  : "dashboard.apiNotConfigured",
-              )}
-              variant="inline"
-              action={
-                isAdmin ? (
-                  <Button asChild variant="outline">
-                    <Link to="/dashboard/admin-settings">
-                      {t("dashboard.configureApi")}
-                    </Link>
-                  </Button>
-                ) : undefined
-              }
-              className="py-6"
-            />
+            <>
+              <Skeleton className="h-14 w-full" />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-14 w-full" />
+                ))}
+              </div>
+            </>
           ) : (
-            <div className="flex min-h-0 flex-col gap-2 overflow-auto">
+            <>
               <CopyRow value={baseUrl}>
                 <span className="block text-sm text-muted-foreground">
-                  {t("dashboard.apiBaseUrl", "API Base URL")}
+                  {t(
+                    isFallback
+                      ? "dashboard.apiBaseUrlFallback"
+                      : "dashboard.apiBaseUrl",
+                  )}
                 </span>
                 <span className="mt-0.5 block truncate font-mono text-sm font-semibold">
                   {baseUrl}
                 </span>
               </CopyRow>
-              {ENDPOINTS.map((endpoint, index) => {
-                const fullUrl = `${baseUrl.replace(/\/+$/, "")}${endpoint.path}`;
-                return (
-                  <motion.div
-                    key={endpoint.path}
-                    initial={{ opacity: 0, x: 10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{
-                      delay: 0.04 * (index + 1),
-                      ...transitions.normal,
-                    }}
-                  >
-                    <CopyRow value={fullUrl}>
-                      <span className="block text-sm text-muted-foreground">
-                        {t(endpoint.labelKey, endpoint.fallback)}
-                      </span>
-                      <span className="mt-0.5 block font-mono text-sm text-muted-foreground">
-                        {endpoint.path}
-                      </span>
-                    </CopyRow>
-                  </motion.div>
-                );
-              })}
-            </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {ENDPOINTS.map((endpoint, index) => {
+                  const fullUrl = `${baseUrl.replace(/\/+$/, "")}${endpoint.path}`;
+                  return (
+                    <motion.div
+                      key={endpoint.path}
+                      className="min-w-0"
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{
+                        delay: 0.04 * (index + 1),
+                        ...transitions.normal,
+                      }}
+                    >
+                      <CopyRow value={fullUrl}>
+                        <span className="block truncate text-sm text-muted-foreground">
+                          {t(endpoint.labelKey, endpoint.fallback)}
+                        </span>
+                        <span className="mt-0.5 block truncate font-mono text-sm text-muted-foreground">
+                          {endpoint.path}
+                        </span>
+                      </CopyRow>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

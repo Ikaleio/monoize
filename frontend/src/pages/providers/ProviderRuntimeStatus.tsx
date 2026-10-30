@@ -9,7 +9,7 @@ import type {
 	ProviderModelRuntimeStatus
 } from '@/lib/api'
 import { formatDateTime } from '@/lib/format-time'
-import { statusBadge } from './shared'
+import { effectiveChannelStatus, effectiveStatusBadge, healthBadge } from './shared'
 
 export function ProviderModelRuntimeBadge({
 	model,
@@ -122,19 +122,19 @@ export function ChannelRuntimeStatus({
 	perModelCircuitBreak: boolean
 }) {
 	const { t } = useTranslation()
-	const status = channel._health_status ?? 'healthy'
+	const effective = effectiveChannelStatus(channel.enabled, channel.weight, channel._health_status ?? 'healthy')
+	if (effective !== 'unhealthy' && effective !== 'probing') return effectiveStatusBadge(effective, t)
+	const status = effective
 	const models =
 		status === 'unhealthy' ? channel._unhealthy_models ?? []
-		: status === 'probing' ? channel._probing_models ?? []
-		: []
-	if (status === 'healthy') return statusBadge(status, t)
+		: channel._probing_models ?? []
 
 	return (
 		<BadgeOverflowList
 			items={[
 				{
 					key: status,
-					collapsed: statusBadge(status, t),
+					collapsed: healthBadge(status, t),
 					full: (
 						<div className='flex min-w-56 max-w-sm flex-col gap-2 p-2 text-sm'>
 							<div className='flex items-center gap-2 font-medium'>

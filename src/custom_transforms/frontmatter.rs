@@ -42,6 +42,8 @@ pub struct CustomTransformMeta {
     pub phases: Vec<Phase>,
     pub scopes: Vec<TransformScope>,
     pub visibility: CustomTransformVisibility,
+    /// 1-based source line of the `id` key (CJS-VAL-7).
+    pub id_line: usize,
 }
 
 /// CJS-ID-2: `^js:[a-z0-9]+(-[a-z0-9]+)*$`, at most 64 chars including prefix.
@@ -74,27 +76,37 @@ const FRONTMATTER_KEYS: &[&str] = &[
 ];
 
 /// Parses the frontmatter block per CJS-FM-1 through CJS-FM-6.
-/// Returns a human-readable rejection reason on any violation.
+/// Returns a human-readable rejection reason on any violation, prefixed with
+/// `line <N>: ` when the violation belongs to one source line (CJS-VAL-7).
 pub fn parse_frontmatter(source: &str) -> Result<CustomTransformMeta, String> {
     let trimmed = source.trim_start();
+    let start_line = source[..source.len() - trimmed.len()].matches('\n').count() + 1;
     let after_opener = trimmed
         .strip_prefix("/**")
         .or_else(|| trimmed.strip_prefix("/*"))
         .ok_or_else(|| {
-            "source must begin with a /* ... */ frontmatter block comment".to_string()
+            at_line(
+                start_line,
+                "source must begin with a /* ... */ frontmatter block comment",
+            )
         })?;
     let body = after_opener
         .split_once("*/")
         .map(|(body, _)| body)
         .ok_or_else(|| "frontmatter block comment is not terminated with */".to_string())?;
 
-    let mut lines = body.lines().filter_map(normalize_frontmatter_line);
+    // The comment body starts on the opener line, so body line `i` is source
+    // line `start_line + i`.
+    let mut lines = body.lines().enumerate().filter_map(|(index, line)| {
+        normalize_frontmatter_line(line).map(|line| (start_line + index, line))
+    });
     match lines.next() {
-        Some(first) if first == "@monoize-transform" => {}
-        _ => {
-            return Err(
-                "the first frontmatter line must be exactly '@monoize-transform'".to_string(),
-            );
+        Some((_, "@monoize-transform")) => {}
+        other => {
+            return Err(at_line(
+                other.map_or(start_line, |(line_no, _)| line_no),
+                "the first frontmatter line must be exactly '@monoize-transform'",
+            ));
         }
     }
 
@@ -106,13 +118,18 @@ pub fn parse_frontmatter(source: &str) -> Result<CustomTransformMeta, String> {
     let mut scopes_raw = None;
     let mut visibility_raw = None;
 
-    for line in lines {
+    for (line_no, line) in lines {
         let (key, value) = line
             .split_once(':')
             .map(|(key, value)| (key.trim(), value.trim()))
-            .ok_or_else(|| format!("frontmatter line '{line}' is not in 'key: value' form"))?;
+            .ok_or_else(|| {
+                at_line(
+                    line_no,
+                    format!("frontmatter line '{line}' is not in 'key: value' form"),
+                )
+            })?;
         if !FRONTMATTER_KEYS.contains(&key) {
-            return Err(format!("unknown frontmatter key '{key}'"));
+            return Err(at_line(line_no, format!("unknown frontmatter key '{key}'")));
         }
         let slot = match key {
             "id" => &mut id,
@@ -124,46 +141,54 @@ pub fn parse_frontmatter(source: &str) -> Result<CustomTransformMeta, String> {
             _ => &mut visibility_raw,
         };
         if slot.is_some() {
-            return Err(format!("duplicated frontmatter key '{key}'"));
+            return Err(at_line(line_no, format!("duplicated frontmatter key '{key}'")));
         }
-        *slot = Some(value.to_string());
+        *slot = Some((value.to_string(), line_no));
     }
 
-    let id = require_value("id", id)?;
+    let (id, id_line) = require_value("id", id)?;
     if !is_valid_custom_transform_id(&id) {
-        return Err(format!(
-            "id '{id}' must match ^js:[a-z0-9]+(-[a-z0-9]+)*$ and be at most \
-             {CUSTOM_TRANSFORM_ID_MAX_LEN} characters"
+        return Err(at_line(
+            id_line,
+            format!(
+                "id '{id}' must match ^js:[a-z0-9]+(-[a-z0-9]+)*$ and be at most \
+                 {CUSTOM_TRANSFORM_ID_MAX_LEN} characters"
+            ),
         ));
     }
     let name = require_bounded("name", name, 100)?;
     let description = require_bounded("description", description, 500)?;
     let author = require_bounded("author", author, 100)?;
 
-    let phases = match phase_raw.as_deref() {
-        None | Some("both") => vec![Phase::Request, Phase::Response],
-        Some("request") => vec![Phase::Request],
-        Some("response") => vec![Phase::Response],
-        Some(other) => {
-            return Err(format!(
-                "phase '{other}' must be one of request, response, both"
-            ));
-        }
+    let phases = match phase_raw {
+        None => vec![Phase::Request, Phase::Response],
+        Some((raw, line_no)) => match raw.as_str() {
+            "both" => vec![Phase::Request, Phase::Response],
+            "request" => vec![Phase::Request],
+            "response" => vec![Phase::Response],
+            other => {
+                return Err(at_line(
+                    line_no,
+                    format!("phase '{other}' must be one of request, response, both"),
+                ));
+            }
+        },
     };
 
-    let scopes = match scopes_raw.as_deref() {
+    let scopes = match scopes_raw {
         None => vec![
             TransformScope::Provider,
             TransformScope::Global,
             TransformScope::ApiKey,
         ],
-        Some(raw) => parse_scopes(raw)?,
+        Some((raw, line_no)) => parse_scopes(&raw).map_err(|error| at_line(line_no, error))?,
     };
 
-    let visibility = match visibility_raw.as_deref() {
+    let visibility = match visibility_raw {
         None => CustomTransformVisibility::Admin,
-        Some(raw) => CustomTransformVisibility::parse(raw)
-            .ok_or_else(|| format!("visibility '{raw}' must be one of admin, user"))?,
+        Some((raw, line_no)) => CustomTransformVisibility::parse(&raw).ok_or_else(|| {
+            at_line(line_no, format!("visibility '{raw}' must be one of admin, user"))
+        })?,
     };
 
     Ok(CustomTransformMeta {
@@ -174,7 +199,13 @@ pub fn parse_frontmatter(source: &str) -> Result<CustomTransformMeta, String> {
         phases,
         scopes,
         visibility,
+        id_line,
     })
+}
+
+/// CJS-VAL-7 line attribution prefix.
+pub fn at_line(line: usize, message: impl std::fmt::Display) -> String {
+    format!("line {line}: {message}")
 }
 
 /// CJS-FM-2 normalization: strip leading whitespace, one optional `*`, then one
@@ -187,20 +218,32 @@ fn normalize_frontmatter_line(line: &str) -> Option<&str> {
     if line.is_empty() { None } else { Some(line) }
 }
 
-fn require_value(key: &str, value: Option<String>) -> Result<String, String> {
+fn require_value(
+    key: &str,
+    value: Option<(String, usize)>,
+) -> Result<(String, usize), String> {
     match value {
-        Some(value) if !value.is_empty() => Ok(value),
-        _ => Err(format!(
+        Some((value, line_no)) if !value.is_empty() => Ok((value, line_no)),
+        Some((_, line_no)) => Err(at_line(
+            line_no,
+            format!("required frontmatter key '{key}' is missing or empty"),
+        )),
+        None => Err(format!(
             "required frontmatter key '{key}' is missing or empty"
         )),
     }
 }
 
-fn require_bounded(key: &str, value: Option<String>, max_chars: usize) -> Result<String, String> {
-    let value = require_value(key, value)?;
+fn require_bounded(
+    key: &str,
+    value: Option<(String, usize)>,
+    max_chars: usize,
+) -> Result<String, String> {
+    let (value, line_no) = require_value(key, value)?;
     if value.chars().count() > max_chars {
-        return Err(format!(
-            "frontmatter '{key}' must be at most {max_chars} characters"
+        return Err(at_line(
+            line_no,
+            format!("frontmatter '{key}' must be at most {max_chars} characters"),
         ));
     }
     Ok(value)

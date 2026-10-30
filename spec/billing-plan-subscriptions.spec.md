@@ -102,6 +102,11 @@ Changing `listed` MUST NOT disable or change an existing subscription.
 BP-D4. One plan MUST NOT contain two prices with the same `duration_seconds`. A listed
 plan MUST contain at least one price. An unlisted plan MAY contain zero prices.
 
+BP-D4a. A plan price `duration_seconds` MUST be a positive multiple of 86 400 (whole days).
+Plan create and update requests that violate this MUST be rejected (BP-A3). This rule does
+not apply to administrator assignments (BP-A7), whose durations stay any positive number
+of seconds.
+
 BP-D5. A price tuple `(price_nano_usd, duration_seconds)` means that a purchase costs the
 given prepaid amount and expires exactly `duration_seconds` after the purchase commits.
 
@@ -230,7 +235,9 @@ An update MUST replace every mutable field and every price row in one transactio
 BP-A3. Invalid names return HTTP 400 `invalid_plan_name`. Duplicate names return HTTP 409
 `plan_name_exists`. Invalid limits return HTTP 400 `invalid_plan_limits`. Invalid groups
 return HTTP 400 `invalid_plan_groups`. Invalid multipliers return HTTP 400
-`invalid_plan_multiplier`. Invalid prices return HTTP 400 `invalid_plan_prices`.
+`invalid_plan_multiplier`. Invalid prices return HTTP 400 `invalid_plan_prices`. A price
+duration that is not a whole number of days (BP-D4a) returns HTTP 400
+`invalid_plan_price_duration`.
 
 BP-A4. Updating or deleting an unknown plan returns HTTP 404 `not_found`. Deleting a plan
 with active subscriptions is allowed because subscriptions contain immutable snapshots.
@@ -392,32 +399,72 @@ description, four optional limits, groups, multiplier, listed state, and all pri
 BP-UI2. Plan mutations MUST use SWR optimistic updates, render skeletons while loading, and
 roll back on failure without closing a form that contains invalid data.
 
+BP-UI2a. The `/dashboard/plans` list multiplier column header is "用量倍率" (en
+`Multiplier`) in a 4.5rem track.
+
+BP-UI2b. The plan editor dialog body is a `<form>` whose Save button is `type="submit"`,
+and `DialogContent` receives `dirty` while any field differs from its initial value. Name,
+eligible groups, and multiplier carry a visible `*`. The four limit inputs are grouped
+under the legend "滑动窗口限额（至少填写一项，USD）" and carry no "optional" placeholder.
+
+BP-UI2c. The multiplier field MUST carry help text stating that plan-covered requests
+consume window quota at `settled amount × multiplier`, that the prepaid balance charge is
+not affected, and that the settled amount already includes the Channel and group
+multipliers.
+
+BP-UI2d. Price rows MUST show visible column labels "价格（USD）" and "有效期（天）" above
+the rows, and each input MUST have an accessible name including its row number. The
+duration MUST be a positive whole number of days (`/^[1-9]\d*$/`), matching BP-D4a.
+
+BP-UI2e. Validation runs on submit and places each error under its field (or under the
+limits group, groups selector, or price list) with `aria-invalid`, focusing the first
+invalid field; it MUST NOT use a summary toast. Server codes from BP-A3 MUST render as the
+error of the matching field; any other failure uses the localized error toast
+(`apiErrors.<code>`), never the raw server message.
+
 BP-UI3. `/dashboard/wallet` MUST show prepaid balance separately from the active plan. It
 MUST show each configured limit, current sliding-window usage, remaining capacity, and the
 subscription expiry time.
 
-BP-UI4. `/dashboard/wallet` MUST list marketplace plans and price options. Purchase MUST
-show the selected prepaid price and duration before confirmation. A successful purchase
+BP-UI4. `/dashboard/wallet` MUST list marketplace plans and price options. Each price
+option is a button labeled `${price_usd} / {duration}` (for example `$29 / 30 天`), where
+the duration is exact: whole days when `duration_seconds` is a multiple of 86400, else
+whole hours, else whole minutes, else seconds; it is never rounded. Pressing a price
+option MUST NOT purchase; it opens a confirmation `AlertDialog` that shows the plan name
+and price label, the amount deducted from the prepaid balance (`$`, 2 decimals), the
+prepaid balance after purchase (`$`, 2 decimals; "unlimited" for unlimited users), that
+the plan starts immediately, and the expiry time (now + `duration_seconds`, FL2 format).
+The confirm button reads "确认购买" (en "Confirm purchase") and uses `wallet-action`.
+When the user is not unlimited and the prepaid balance is below the price, the confirm
+button is disabled and the dialog shows "余额不足" (en "Insufficient balance") with a
+"去充值" (en "Recharge") button that closes the dialog and selects the wallet recharge tab
+(`?tab=recharge`). Only the confirm button sends the purchase request. A failed purchase
+keeps the dialog open and shows the localized `apiErrors.<code>` toast, never the raw
+server message. A successful purchase closes the dialog and
 MUST revalidate the session user, active subscription, marketplace, and ledger caches.
 
 BP-UI5. An admin viewing `/dashboard/wallet` MUST request orders and ledger rows with the
 admin's own username filter. The personal wallet MUST NOT display other users' rows.
 
-BP-UI6. The `/dashboard/users` edit dialog MUST contain a compact subscription section.
-It MUST fetch the target user's active subscription only while the dialog is open and MUST
-show a skeleton while the subscription or plan list loads. It MUST show the active plan
-name and expiry, or a localized no-active-plan state.
+BP-UI6. Subscription management on `/dashboard/users` MUST NOT live in the user edit
+dialog. Each editable user row MUST have a "Plan" action (`CalendarClock` icon) that opens
+a separate subscription dialog for that user. The dialog's only footer action is "Close";
+it has no cancel/save pair because its actions take effect immediately. It MUST fetch the
+target user's active subscription only while it is open and MUST show a skeleton while
+the subscription or plan list loads. It MUST show the active plan name and expiry, or a
+localized no-active-plan state.
 
-BP-UI7. The subscription section MUST let an administrator select any plan and enter a
+BP-UI7. The subscription dialog MUST let an administrator select any plan and enter a
 positive whole-number validity period in minutes, hours, or days. It MUST include listed
 and unlisted plans, including plans without price rows. Each dialog open MUST default the
 validity period to 30 days. The client MUST reject zero, negative, fractional, empty, and
-overflowing durations before sending PUT. Assigning a plan when no active subscription
-exists MAY proceed directly. Replacing an active subscription MUST require confirmation
-that current capacity ends and the replacement starts with zero usage.
+overflowing durations with an inline field error before sending PUT. Assigning a plan when
+no active subscription exists MAY proceed directly. Replacing an active subscription MUST
+require confirmation that current capacity ends and the replacement starts with zero usage.
 
-BP-UI8. The subscription section MUST provide a separate remove action when a subscription
+BP-UI8. The subscription dialog MUST provide a separate remove action when a subscription
 is active. Removal MUST require confirmation. PUT and DELETE MUST optimistically update
-the target-subscription SWR cache, roll back on failure, keep the user dialog open, show a
-safe localized error, and revalidate the target subscription after success. When the
-target is the signed-in administrator, the personal subscription cache MUST also update.
+the target-subscription SWR cache, roll back on failure, keep the subscription dialog open,
+show a safe localized error, and revalidate the target subscription and the users list
+after success (the list's plan column, `dashboard-ui-layout.spec.md` UP6). When the target
+is the signed-in administrator, the personal subscription cache MUST also update.

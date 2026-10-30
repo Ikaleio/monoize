@@ -1,7 +1,7 @@
-import { useCallback, useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useState, useEffect, useId, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Languages, Sun, Moon } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,17 +11,23 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { DashboardApiError } from "@/lib/api";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CapCaptcha } from "@/components/CapCaptcha";
+import {
+  LanguageDropdown,
+  ThemeDropdown,
+} from "@/components/preference-menus";
 import { useAuth } from "@/hooks/use-auth";
-import { useTheme } from "@/hooks/use-theme";
 import { usePublicSettings } from "@/lib/swr";
-import { toggleLanguage } from "@/i18n";
 import { motion, AnimatePresence } from "framer-motion";
 import { AnimatedButton } from "@/components/ui/motion";
 
@@ -37,6 +43,37 @@ const authErrorKeys: Record<string, string> = {
   captcha_invalid: "auth.captchaError",
   captcha_unavailable: "auth.captchaUnavailable",
 };
+
+const USERNAME_ERROR_CODES = new Set([
+  "invalid_username",
+  "reserved_username",
+  "username_exists",
+]);
+
+const USERNAME_PATTERN = /^[a-zA-Z0-9_]{3,22}$/;
+const MIN_PASSWORD_LENGTH = 8;
+
+interface FieldErrors {
+  username?: string;
+  password?: string;
+}
+
+/** DSA9a: only an in-app path other than /login may be a return target. */
+function returnPathFromState(state: unknown): string {
+  const from = (
+    state as { from?: { pathname?: string; search?: string; hash?: string } } | null
+  )?.from;
+  const pathname = from?.pathname;
+  if (
+    !pathname ||
+    !pathname.startsWith("/") ||
+    pathname.startsWith("//") ||
+    pathname === "/login"
+  ) {
+    return "/dashboard";
+  }
+  return `${pathname}${from?.search ?? ""}${from?.hash ?? ""}`;
+}
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -59,11 +96,18 @@ export function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [loading, setLoading] = useState(false);
   const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaHint, setCaptchaHint] = useState("");
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
-  const { resolvedTheme, setTheme } = useTheme();
+  const formId = useId();
+  const usernameId = `${formId}-username`;
+  const passwordId = `${formId}-password`;
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   const {
     data: publicSettings,
@@ -73,13 +117,23 @@ export function LoginPage() {
     mutate: retryPublicSettings,
   } = usePublicSettings();
   const registrationEnabled = publicSettings?.registration_enabled ?? false;
-  const siteName = publicSettings?.site_name ?? "Monoize Dashboard";
+  const siteDescription = publicSettings?.site_description?.trim() ?? "";
+  const captchaActive = Boolean(
+    publicSettings?.captcha_enabled && publicSettings.cap_api_endpoint,
+  );
 
   const { login, register, user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnPath = returnPathFromState(location.state);
 
   const handleCaptchaError = useCallback(() => {
     setError("auth.captchaError");
+  }, []);
+
+  const handleCaptchaToken = useCallback((token: string) => {
+    setCaptchaToken(token);
+    if (token) setCaptchaHint("");
   }, []);
 
   const resetCaptcha = useCallback(() => {
@@ -87,35 +141,79 @@ export function LoginPage() {
     setCaptchaResetKey((key) => key + 1);
   }, []);
 
+  // Every successful sign-in lands here, so there is exactly one redirect path.
   useEffect(() => {
     if (user) {
-      navigate("/dashboard");
+      navigate(returnPath, { replace: true });
     }
-  }, [user, navigate]);
+  }, [user, navigate, returnPath]);
+
+  const validate = (): FieldErrors => {
+    const errors: FieldErrors = {};
+    if (!username) {
+      errors.username = "auth.errors.usernameRequired";
+    } else if (!isLogin && !USERNAME_PATTERN.test(username)) {
+      errors.username = "auth.usernameRequirements";
+    }
+    if (!password) {
+      errors.password = "auth.errors.passwordRequired";
+    } else if (!isLogin && password.length < MIN_PASSWORD_LENGTH) {
+      errors.password = "auth.errors.invalidPassword";
+    }
+    return errors;
+  };
+
+  const showFieldErrors = (errors: FieldErrors) => {
+    setFieldErrors(errors);
+    if (errors.username) usernameRef.current?.focus();
+    else if (errors.password) passwordRef.current?.focus();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
 
+    const errors = validate();
+    showFieldErrors(errors);
+    if (errors.username || errors.password) return;
+
+    if (captchaActive && !captchaToken) {
+      setCaptchaHint("auth.errors.captchaRequired");
+      return;
+    }
+
+    setLoading(true);
     try {
       if (isLogin) {
         await login(username, password, captchaToken);
       } else {
         await register(username, password, captchaToken);
       }
-      navigate("/dashboard");
     } catch (err) {
-      setError(
-        err instanceof DashboardApiError &&
-          Object.hasOwn(authErrorKeys, err.code)
-          ? authErrorKeys[err.code]
-          : "auth.errors.failed",
-      );
+      const code = err instanceof DashboardApiError ? err.code : "";
+      const key = Object.hasOwn(authErrorKeys, code)
+        ? authErrorKeys[code]
+        : "auth.errors.failed";
+      if (USERNAME_ERROR_CODES.has(code)) {
+        showFieldErrors({ username: key });
+      } else if (code === "invalid_password") {
+        showFieldErrors({ password: key });
+      } else {
+        setError(key);
+      }
       resetCaptcha();
+      if (captchaActive) setCaptchaHint("auth.captchaReverify");
     } finally {
       setLoading(false);
     }
+  };
+
+  const switchMode = (nextIsLogin: boolean) => {
+    setIsLogin(nextIsLogin);
+    setError("");
+    setFieldErrors({});
+    setCaptchaHint("");
+    resetCaptcha();
   };
 
   return (
@@ -125,46 +223,10 @@ export function LoginPage() {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-          className="flex shrink-0 justify-end gap-2"
+          className="flex shrink-0 flex-wrap justify-end gap-2"
         >
-          <AnimatedButton>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-11 touch-manipulation sm:size-9"
-              onClick={() =>
-                setTheme(resolvedTheme === "dark" ? "light" : "dark")
-              }
-              title={t("theme.toggle")}
-            >
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={resolvedTheme}
-                  initial={{ rotate: -90, opacity: 0 }}
-                  animate={{ rotate: 0, opacity: 1 }}
-                  exit={{ rotate: 90, opacity: 0 }}
-                  transition={{ duration: 0.15 }}
-                >
-                  {resolvedTheme === "dark" ? (
-                    <Moon className="h-5 w-5" />
-                  ) : (
-                    <Sun className="h-5 w-5" />
-                  )}
-                </motion.div>
-              </AnimatePresence>
-            </Button>
-          </AnimatedButton>
-          <AnimatedButton>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-11 touch-manipulation sm:size-9"
-              onClick={toggleLanguage}
-              title={t("language.switchLanguage")}
-            >
-              <Languages aria-hidden="true" />
-            </Button>
-          </AnimatedButton>
+          <ThemeDropdown variant="ghost" className="h-11 touch-manipulation sm:h-9" />
+          <LanguageDropdown variant="ghost" className="h-11 touch-manipulation sm:h-9" />
         </motion.div>
 
         <motion.div
@@ -182,57 +244,123 @@ export function LoginPage() {
                 <MonoizeLogo className="h-full w-full" />
               </motion.div>
               <motion.div variants={itemVariants}>
-                <CardTitle className="text-2xl">{siteName}</CardTitle>
+                {publicSettings ? (
+                  <CardTitle className="text-2xl">
+                    <h1>{publicSettings.site_name}</h1>
+                  </CardTitle>
+                ) : publicSettingsError ? (
+                  <CardTitle className="text-2xl">
+                    <h1>Monoize</h1>
+                  </CardTitle>
+                ) : (
+                  <Skeleton className="mx-auto h-8 w-48" />
+                )}
               </motion.div>
-              <motion.div variants={itemVariants}>
-                <CardDescription>
-                  {isLogin
-                    ? t("auth.signInToAccount")
-                    : t("auth.createAccount")}
-                </CardDescription>
-              </motion.div>
+              {publicSettings ? (
+                siteDescription ? (
+                  <motion.div variants={itemVariants}>
+                    <CardDescription>{siteDescription}</CardDescription>
+                  </motion.div>
+                ) : null
+              ) : publicSettingsError ? null : (
+                <Skeleton className="mx-auto h-4 w-40" />
+              )}
             </CardHeader>
             <CardContent>
+              <h2 className="mb-4 text-center text-sm font-medium">
+                {isLogin ? t("auth.signInToAccount") : t("auth.createAccount")}
+              </h2>
               <motion.form
                 variants={containerVariants}
                 onSubmit={handleSubmit}
+                noValidate
                 className="space-y-4"
               >
-                <motion.div variants={itemVariants} className="space-y-2">
-                  <Label htmlFor="username">{t("auth.username")}</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder={t("auth.enterUsername")}
-                    required
-                    minLength={3}
-                    maxLength={22}
-                    pattern="[a-zA-Z0-9_]+"
-                    title={t("auth.usernameRequirements")}
-                    className="transition-all"
-                  />
-                </motion.div>
-                <motion.div variants={itemVariants} className="space-y-2">
-                  <Label htmlFor="password">{t("auth.password")}</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={t("auth.enterPassword")}
-                    required
-                    minLength={8}
-                    className="transition-all"
-                  />
+                <motion.div variants={itemVariants}>
+                  <Field data-invalid={fieldErrors.username ? true : undefined}>
+                    <FieldLabel htmlFor={usernameId}>{t("auth.username")}</FieldLabel>
+                    <Input
+                      ref={usernameRef}
+                      id={usernameId}
+                      name="username"
+                      type="text"
+                      autoComplete="username"
+                      value={username}
+                      onChange={(e) => {
+                        setUsername(e.target.value);
+                        setFieldErrors((current) => ({ ...current, username: undefined }));
+                      }}
+                      placeholder={t("auth.enterUsername")}
+                      required
+                      aria-invalid={fieldErrors.username ? true : undefined}
+                      className="transition-all"
+                    />
+                    {!isLogin && (
+                      <FieldDescription>{t("auth.usernameRequirements")}</FieldDescription>
+                    )}
+                    {fieldErrors.username && (
+                      <FieldError>{t(fieldErrors.username)}</FieldError>
+                    )}
+                  </Field>
                 </motion.div>
                 <motion.div variants={itemVariants}>
-                  {publicSettingsError ? (
-                    <QueryError
-                      onRetry={retryPublicSettings}
-                      retrying={publicSettingsValidating}
-                    />
+                  <Field data-invalid={fieldErrors.password ? true : undefined}>
+                    <FieldLabel htmlFor={passwordId}>{t("auth.password")}</FieldLabel>
+                    <div className="relative">
+                      <Input
+                        ref={passwordRef}
+                        id={passwordId}
+                        name="password"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete={isLogin ? "current-password" : "new-password"}
+                        value={password}
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          setFieldErrors((current) => ({ ...current, password: undefined }));
+                        }}
+                        placeholder={t("auth.enterPassword")}
+                        required
+                        aria-invalid={fieldErrors.password ? true : undefined}
+                        className="pr-11 transition-all"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-1/2 size-9 -translate-y-1/2 touch-manipulation"
+                        aria-label={t(showPassword ? "auth.hidePassword" : "auth.showPassword")}
+                        aria-pressed={showPassword}
+                        onClick={() => setShowPassword((current) => !current)}
+                      >
+                        {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                      </Button>
+                    </div>
+                    {!isLogin && (
+                      <FieldDescription>{t("auth.passwordRequirements")}</FieldDescription>
+                    )}
+                    {fieldErrors.password && (
+                      <FieldError>{t(fieldErrors.password)}</FieldError>
+                    )}
+                  </Field>
+                </motion.div>
+                <motion.div variants={itemVariants} className="space-y-2">
+                  {publicSettingsError && !publicSettings ? (
+                    <Alert variant="destructive">
+                      <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+                        <span className="min-w-0 flex-1 basis-40">
+                          {t("auth.settingsLoadFailed")}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={publicSettingsValidating}
+                          onClick={() => void retryPublicSettings()}
+                        >
+                          {t(publicSettingsValidating ? "common.loading" : "common.retry")}
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
                   ) : publicSettingsLoading ? (
                     <Skeleton className="h-12 w-full rounded-md" />
                   ) : publicSettings?.captcha_enabled &&
@@ -244,14 +372,21 @@ export function LoginPage() {
                     </Alert>
                   ) : publicSettings?.captcha_enabled &&
                     publicSettings.cap_api_endpoint ? (
-                    <CapCaptcha
-                      key={i18n.language}
-                      apiEndpoint={publicSettings.cap_api_endpoint}
-                      language={i18n.language}
-                      resetKey={captchaResetKey}
-                      onTokenChange={setCaptchaToken}
-                      onError={handleCaptchaError}
-                    />
+                    <>
+                      <CapCaptcha
+                        key={i18n.language}
+                        apiEndpoint={publicSettings.cap_api_endpoint}
+                        language={i18n.language}
+                        resetKey={captchaResetKey}
+                        onTokenChange={handleCaptchaToken}
+                        onError={handleCaptchaError}
+                      />
+                      {captchaHint && !captchaToken ? (
+                        <p role="alert" className="text-sm text-error-foreground">
+                          {t(captchaHint)}
+                        </p>
+                      ) : null}
+                    </>
                   ) : null}
                 </motion.div>
                 <AnimatePresence mode="wait">
@@ -278,7 +413,7 @@ export function LoginPage() {
                         publicSettingsLoading ||
                         !publicSettings ||
                         (publicSettings.captcha_enabled &&
-                          (!publicSettings.cap_api_endpoint || !captchaToken))
+                          !publicSettings.cap_api_endpoint)
                       }
                     >
                       {loading
@@ -310,11 +445,7 @@ export function LoginPage() {
                           {t("auth.noAccount")}{" "}
                           <button
                             type="button"
-                            onClick={() => {
-                              setIsLogin(false);
-                              setError("");
-                              resetCaptcha();
-                            }}
+                            onClick={() => switchMode(false)}
                             className="text-primary underline-offset-4 hover:underline"
                           >
                             {t("auth.signUp")}
@@ -325,11 +456,7 @@ export function LoginPage() {
                           {t("auth.hasAccount")}{" "}
                           <button
                             type="button"
-                            onClick={() => {
-                              setIsLogin(true);
-                              setError("");
-                              resetCaptcha();
-                            }}
+                            onClick={() => switchMode(true)}
                             className="text-primary underline-offset-4 hover:underline"
                           >
                             {t("auth.signIn")}

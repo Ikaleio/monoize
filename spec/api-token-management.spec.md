@@ -98,6 +98,17 @@ All endpoints in this spec require an authenticated dashboard session.
 - **Authorization:** Any authenticated user.
 - **Response:** `APIKey[]` for the current user.
 
+### 2.1a List a user's API keys (admin)
+
+- **Endpoint:** `GET /api/dashboard/users/{user_id}/api-keys`
+- **Authorization:** `admin` or `super_admin`; other roles receive `403 forbidden`.
+- **Response:** `APIKey[]` owned by `user_id`, with the same item shape and order as §2.1.
+- **Errors:** `404 not_found` if the user does not exist.
+
+TM-ADM-LIST-1. Every item's `key` field MUST be the empty string. The endpoint MUST NOT return any user's full key; `key_prefix` identifies the key.
+
+TM-ADM-LIST-2. The endpoint is read-only. Mutating another user's key through §2.4 remains forbidden by TM-QUERY-2.
+
 ### 2.2 Get API key
 
 - **Endpoint:** `GET /api/dashboard/tokens/{key_id}`
@@ -126,6 +137,8 @@ All endpoints in this spec require an authenticated dashboard session.
 
 TM-CREATE-1. The generated full key MUST start with the literal prefix `sk-`.
 
+TM-CREATE-1a. A present `expires_in_days` below `1` MUST be rejected with HTTP `400`, code `invalid_request`, and `param = "expires_in_days"`. An absent value creates a key without expiry.
+
 TM-CREATE-2. The server MUST compute `key_prefix` as the first 12 characters of the full key.
 
 TM-CREATE-3. The server MUST persist the full key as plaintext in `api_keys.key`. The `api_keys` table MUST NOT contain a hash, digest, or encrypted copy of the full key. Runtime token validation semantics are defined in `api-key-authentication.spec.md`.
@@ -147,6 +160,7 @@ TM-CREATE-5. `POST /api/dashboard/tokens` MUST read only the `api_key_max_per_us
   - `enabled`
   - `sub_account_enabled`
   - `sub_account_balance_nano_usd` (admin only)
+  - `expected_sub_account_balance_nano_usd` (admin only; see `api-key-sub-account-billing.spec.md` SA-ADM5)
   - `model_limits_enabled`
   - `model_limits`
   - `ip_whitelist`
@@ -158,6 +172,8 @@ TM-CREATE-5. `POST /api/dashboard/tokens` MUST read only the `api_key_max_per_us
   - `request_capture_retention`
   - `expires_at` (RFC3339 string or null)
 - **Errors:** `404 not_found` if the key does not exist or is not owned by the user.
+
+TM-UPD-0. `expires_at` distinguishes absent from `null`: an absent field keeps the stored expiry, `null` clears it (the key never expires), and an RFC3339 string replaces it. Any other string MUST be rejected with HTTP `400` and code `invalid_request`.
 
 TM-UPD-1. A successful API key update MUST invalidate in-memory API key cache entries for the updated key id before returning the response.
 
@@ -217,7 +233,7 @@ TM-TF-7. Runtime enforcement MUST be defensive: when an API key row is loaded fr
 
 TM-TF-8. Admin bypass: Users with role `super_admin` or `admin` (as determined by `UserRole::can_manage_system()`) are exempt from TM-TF-2 through TM-TF-5. For admin users, `validate_api_key_transforms` MUST accept any transform, and `sanitize_api_key_transforms` MUST preserve all transforms without filtering.
 
-TM-TF-9. When an API key create or update request is rejected by the server (including but not limited to transform validation failures), the frontend MUST display the server error message to the user via a toast notification. Silent failure is not acceptable.
+TM-TF-9. When an API key create or update request is rejected by the server (including but not limited to transform validation failures), the frontend MUST show a localized message: an inline field error when the error's `param` names a dialog field, otherwise a toast with the `apiErrors.<code>` text or the generic request-failed text. It MUST NOT display the raw server `message`. Silent failure is not acceptable.
 
 TM-TF-10. The dashboard transform registry consumed by the API key editor MUST carry explicit transform scope metadata. The API key editor MUST list only transforms whose scope includes `api_key`; transforms that are unavailable for API keys MUST be hidden rather than displayed and rejected later.
 
@@ -265,10 +281,22 @@ TM-Q2. Sub-account billing behavior is defined in `api-key-sub-account-billing.s
 
 ## 4. Dashboard balance controls
 
-TM-UI1. The create and edit dialogs MUST render `sub_account_balance_nano_usd` only when the authenticated user's role is `admin` or `super_admin`. The create control MUST accept only a non-negative integer; the edit control MUST accept a signed integer. The frontend MUST validate and submit its value as a decimal string using `BigInt`-equivalent integer arithmetic; it MUST NOT pass the value through JavaScript `Number`, `parseInt`, `parseFloat`, or `toFixed`. When an edit disables sub-account billing, the mutation MUST omit `sub_account_balance_nano_usd` so the server can consolidate the locked current balance.
+TM-UI1. The create dialog MUST render the initial sub-account balance input only when the authenticated user's role is `admin` or `super_admin` AND the dialog's sub-account switch is on. The input MUST accept a non-negative USD decimal with at most 9 fractional digits, MUST show the converted value as "= {nano} nano-USD" below it, and MUST convert to `sub_account_balance_nano_usd` with exact integer arithmetic (`BigInt`); it MUST NOT pass the value through JavaScript `Number`, `parseInt`, `parseFloat`, or `toFixed`. An invalid value MUST show an inline field error and block submit. The edit dialog MUST NOT render a balance input, and an edit mutation MUST NOT include `sub_account_balance_nano_usd`; balance changes go through TM-UI1a. When an edit disables sub-account billing, the server consolidates the locked current balance (`api-key-sub-account-billing.spec.md` SA-API6).
+
+TM-UI1a. For `admin` and `super_admin` users, each key row with `sub_account_enabled = true` MUST show an "Adjust balance" action next to the transfer action. It opens a separate dialog that shows the current balance, a signed USD decimal input (at most 9 fractional digits, exact `BigInt` conversion) for the new balance, and a preview "current → new". When the new balance is lower, the dialog MUST state that the difference is returned to the owner's wallet. Submit sends exactly `{ sub_account_balance_nano_usd, expected_sub_account_balance_nano_usd }`, where the expected value is the balance the dialog displayed. On `409 balance_changed` the dialog MUST stay open, revalidate the key list, display the fresh current balance, and show the localized message "balance changed (now $X), confirm and retry". On success the dialog closes, the row is updated from the response, the key list is revalidated, and the session user is refreshed.
 
 TM-UI2. A non-admin create or update mutation MUST omit `sub_account_balance_nano_usd` from its JSON request body.
 
 TM-UI3. The create and edit dialogs MUST render a `request_capture_retention` select with exactly the options `5m`, `1h`, `24h`, and `7d` (localized labels, stored values verbatim). The select MUST be rendered iff the dialog's `request_capture_mode` value is not `"off"`. When hidden, the mutation still submits the current draft value, so toggling the mode does not reset retention. The create dialog's initial value MUST be `"24h"`.
 
-TM-UI4. The create and edit dialogs MUST render one shared form component (`frontend-design-system.spec.md` DS67). Only the expiry field (`expires_in_days`) is create-only. Every other field MUST render with the same label, help text, and control in both modes. When `model_limits_enabled` is true, `model_limits` MUST be edited with `ModelMultiSelect` (DS63) with `allowCustom = true`; its options MUST be the `model_id` values from `GET /api/dashboard/marketplace/models`. The mutation MUST submit the selected IDs in display order.
+TM-UI4. The create and edit dialogs MUST render one shared form component (`frontend-design-system.spec.md` DS67). The expiry field renders in both modes. Create renders a whole-days input that accepts empty (never expires) or an integer ≥ 1 and submits `expires_in_days`; any other value shows an inline field error and blocks submit. Edit renders a date picker plus a "Never expires" checkbox and submits `expires_at` only when the value changed: the end of the selected local day as an RFC3339 string, or `null` when "Never expires" is checked. Every other field MUST render with the same label, help text, and control in both modes. When `model_limits_enabled` is true, `model_limits` MUST be edited with `ModelMultiSelect` (DS63) with `allowCustom = true`; its options MUST be the `model_id` values from `GET /api/dashboard/marketplace/models`. The mutation MUST submit the selected IDs in display order.
+
+TM-UI5. The key dialog MUST be a `<form>` whose primary button is `type="submit"`, so Enter in a single-line input submits. Its basic section MUST contain, in order: name, expiry, groups (TM-UI9), and the sub-account switch (plus the TM-UI1 balance input). All other fields MUST live in one "Advanced settings" section that is collapsed by default in both modes. The collapsed header MUST show "N configured", where N counts advanced items that differ from their create defaults: reasoning-envelope protection off, request capture not `"off"`, model limits on, a non-empty IP allowlist, a max multiplier, a non-empty transform chain, and at least one non-empty model redirect. The section MUST expand automatically when submit finds an invalid field inside it. The transform editor MUST render only for `admin` and `super_admin` users, with `TransformChainEditor layer="apiKey"`; non-admins MUST NOT see a transform section. The dialog MUST pass `dirty` to `DialogContent` when the draft differs from its initial value.
+
+TM-UI6. The transfer dialog MUST validate the USD amount inline (positive, at most 9 fractional digits). It MUST show the preview "account $A → $A−x; key $B → $B+x" (the account side reads "unlimited" for a `balance_unlimited` user). The transfer button MUST be disabled while the amount is invalid or, for a finite-balance user, exceeds the account balance. On success the frontend MUST set the row's sub-account balance from `api_key_balance_nano_usd`, revalidate the key list, and refresh the session user. `402 insufficient_balance` MUST show a localized message.
+
+TM-UI7. The list balance cell MUST display an enabled sub-account balance as `$` + `formatUsdDecimal(sub_account_balance_usd, 2)`.
+
+TM-UI8. `/dashboard/tokens` MUST show one read-only "API base URL" line with a `CopyButton` directly under the page header, and the create-result panel MUST repeat it next to the new key. The line MUST render the label, the URL in `font-mono`, and the copy action on one line in viewports ≥ 640 CSS px; it MUST NOT render a bordered box. The value is the public setting `api_base_url`; when that is empty, the line MUST show `window.location.origin` labelled "current site address (not configured by the admin)".
+
+TM-UI9. The group switch MUST read "Follow account group". Its help text MUST state that the key uses the account's current group, naming that group when known, and that turning it off allows an ordered list of groups.

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Card } from "@/components/ui/card";
+import { FieldError } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import {
@@ -12,6 +13,7 @@ import {
   type SettingsGroup as SettingsGroupModel,
   type SettingsGroupId,
 } from "./settings-categories";
+import { useSettingsRowState } from "./settings-context";
 import { useEntryVisible, useGroupVisible } from "./settings-search";
 
 interface SettingsBodyProps {
@@ -83,7 +85,14 @@ export function SettingsGroup({ id, footer, children }: SettingsGroupProps) {
   const group: SettingsGroupModel = SETTINGS_GROUPS[id];
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {group.titleKey ? <h3 className="text-sm font-semibold">{t(group.titleKey)}</h3> : null}
+      {group.titleKey ? (
+        <div className="flex flex-col gap-1">
+          <h3 className="text-sm font-semibold">{t(group.titleKey)}</h3>
+          {group.descriptionKey ? (
+            <p className="text-pretty text-sm text-muted-foreground">{t(group.descriptionKey)}</p>
+          ) : null}
+        </div>
+      ) : null}
       {group.editor ? (
         children
       ) : (
@@ -108,17 +117,20 @@ interface SettingRowProps {
 export function SettingRow({ id, switchControl = false, children }: SettingRowProps) {
   const { t } = useTranslation();
   const visible = useEntryVisible(id);
+  const { highlightId, fieldError } = useSettingsRowState();
   if (!visible) return null;
 
   const entry = getSettingEntry(id);
+  const error = fieldError?.entryId === id ? fieldError.message : null;
   return (
     <div
       id={`setting-${id}`}
       className={cn(
-        "px-4 py-4 sm:px-6",
+        "scroll-mt-4 px-4 py-4 transition-shadow sm:px-6",
         switchControl
           ? "flex items-start justify-between gap-6"
-          : "grid gap-3 [@container(min-width:40rem)]:grid-cols-[minmax(0,1fr)_20rem] [@container(min-width:40rem)]:gap-x-8"
+          : "grid gap-3 [@container(min-width:40rem)]:grid-cols-[minmax(0,1fr)_20rem] [@container(min-width:40rem)]:gap-x-8",
+        highlightId === id && "ring-2 ring-inset ring-ring"
       )}
     >
       {/* In two-column rows, pt-2 centers the 20px label line on the 36px control. */}
@@ -135,7 +147,10 @@ export function SettingRow({ id, switchControl = false, children }: SettingRowPr
           <p className="text-pretty text-sm text-muted-foreground">{t(entry.descriptionKey)}</p>
         ) : null}
       </div>
-      <div className={cn("min-w-0", switchControl && "shrink-0 pt-0.5")}>{children}</div>
+      <div className={cn("min-w-0", switchControl && "shrink-0 pt-0.5")}>
+        {children}
+        {error ? <FieldError className="mt-2">{error}</FieldError> : null}
+      </div>
     </div>
   );
 }
@@ -148,11 +163,22 @@ interface SettingBlockProps {
 /** The single entry of an editor group. */
 export function SettingBlock({ id, children }: SettingBlockProps) {
   const visible = useEntryVisible(id);
+  const { highlightId, fieldError } = useSettingsRowState();
   if (!visible) return null;
 
+  // Redirect errors render on their own row inside the editor.
+  const error =
+    fieldError?.entryId === id && fieldError.redirectIndex === undefined ? fieldError.message : null;
   return (
-    <div id={`setting-${id}`} className="min-w-0">
+    <div
+      id={`setting-${id}`}
+      className={cn(
+        "min-w-0 scroll-mt-4 rounded-md transition-shadow",
+        highlightId === id && "ring-2 ring-ring ring-offset-2 ring-offset-background"
+      )}
+    >
       {children}
+      {error ? <FieldError className="mt-2">{error}</FieldError> : null}
     </div>
   );
 }

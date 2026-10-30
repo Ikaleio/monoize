@@ -90,11 +90,17 @@ pub struct SourceSnapshot {
     pub models_dev_root: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SyncChange {
     pub model_id: String,
     pub kind: &'static str,
     pub fields: Vec<String>,
+    /// MP-A6: stored values of the changed fields (update, delete).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<serde_json::Map<String, Value>>,
+    /// MP-A6: values written by apply (insert, update).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<serde_json::Map<String, Value>>,
 }
 
 /// The computed apply plan for one source snapshot against the stored rows.
@@ -103,8 +109,8 @@ pub struct SyncPlan {
     pub updated: i32,
     pub skipped: i32,
     pub deleted: i32,
+    /// Every change, untruncated; serializers apply MP-A6/MP-D8 bounds.
     pub changes: Vec<SyncChange>,
-    pub truncated: bool,
     /// Fully merged rows to write (inserts, updates, and owned rows whose
     /// raw_json refreshes without a counted change, per MP-Y14).
     pub writes: Vec<ModelPriceRecord>,
@@ -742,20 +748,55 @@ pub fn map_new_api(root: &Value) -> Result<Vec<SyncCandidate>, String> {
     Ok(by_model.into_values().collect())
 }
 
-fn merge_field<T: Clone + PartialEq>(
+/// Changed field names plus their stored and incoming values (MP-A6).
+#[derive(Default)]
+struct FieldDiff {
+    fields: Vec<String>,
+    before: serde_json::Map<String, Value>,
+    after: serde_json::Map<String, Value>,
+}
+
+impl FieldDiff {
+    fn push<T: Serialize>(&mut self, field: &str, before: &T, after: &T) {
+        self.fields.push(field.to_string());
+        self.before.insert(field.to_string(), json!(before));
+        self.after.insert(field.to_string(), json!(after));
+    }
+}
+
+fn merge_field<T: Clone + PartialEq + Serialize>(
     field: &str,
     locked: &[String],
     stored: &Option<T>,
     incoming: &Option<T>,
-    changed: &mut Vec<String>,
+    diff: &mut FieldDiff,
 ) -> Option<T> {
     if locked.iter().any(|lock| lock == field) {
         return stored.clone();
     }
     if stored != incoming {
-        changed.push(field.to_string());
+        diff.push(field, stored, incoming);
     }
     incoming.clone()
+}
+
+/// Price columns shown for an inserted or deleted row in the MP-A6 preview.
+fn row_price_values(
+    billing_mode: &str,
+    prices: [(&str, &Option<String>); 6],
+    billing_expr: &Option<Value>,
+) -> serde_json::Map<String, Value> {
+    let mut values = serde_json::Map::new();
+    values.insert("billing_mode".to_string(), json!(billing_mode));
+    for (name, value) in prices {
+        if let Some(value) = value {
+            values.insert(name.to_string(), json!(value));
+        }
+    }
+    if let Some(expr) = billing_expr {
+        values.insert("billing_expr".to_string(), expr.clone());
+    }
+    values
 }
 
 /// MP-Y13..MP-Y15: computes the apply plan for one snapshot. `existing` is
@@ -777,16 +818,8 @@ pub fn compute_sync_plan(
         skipped: 0,
         deleted: 0,
         changes: Vec::new(),
-        truncated: false,
         writes: Vec::new(),
         delete_ids: Vec::new(),
-    };
-    let push_change = |plan: &mut SyncPlan, change: SyncChange| {
-        if plan.changes.len() < MAX_CHANGE_ENTRIES {
-            plan.changes.push(change);
-        } else {
-            plan.truncated = true;
-        }
     };
 
     let mut candidate_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -794,31 +827,26 @@ pub fn compute_sync_plan(
         candidate_ids.insert(candidate.model_id.clone());
         match existing_by_id.get(candidate.model_id.as_str()) {
             None => {
-                let mut fields: Vec<String> = vec!["billing_mode".to_string()];
-                for (name, value) in [
-                    ("input_usd_per_1m", &candidate.input_usd_per_1m),
-                    ("output_usd_per_1m", &candidate.output_usd_per_1m),
-                    ("cache_read_usd_per_1m", &candidate.cache_read_usd_per_1m),
-                    ("cache_write_usd_per_1m", &candidate.cache_write_usd_per_1m),
-                    ("reasoning_usd_per_1m", &candidate.reasoning_usd_per_1m),
-                    ("per_request_usd", &candidate.per_request_usd),
-                ] {
-                    if value.is_some() {
-                        fields.push(name.to_string());
-                    }
-                }
-                if candidate.billing_expr.is_some() {
-                    fields.push("billing_expr".to_string());
-                }
-                plan.inserted += 1;
-                push_change(
-                    &mut plan,
-                    SyncChange {
-                        model_id: candidate.model_id.clone(),
-                        kind: "insert",
-                        fields,
-                    },
+                let after = row_price_values(
+                    &candidate.billing_mode,
+                    [
+                        ("input_usd_per_1m", &candidate.input_usd_per_1m),
+                        ("output_usd_per_1m", &candidate.output_usd_per_1m),
+                        ("cache_read_usd_per_1m", &candidate.cache_read_usd_per_1m),
+                        ("cache_write_usd_per_1m", &candidate.cache_write_usd_per_1m),
+                        ("reasoning_usd_per_1m", &candidate.reasoning_usd_per_1m),
+                        ("per_request_usd", &candidate.per_request_usd),
+                    ],
+                    &candidate.billing_expr,
                 );
+                plan.inserted += 1;
+                plan.changes.push(SyncChange {
+                    model_id: candidate.model_id.clone(),
+                    kind: "insert",
+                    fields: after.keys().cloned().collect(),
+                    before: None,
+                    after: Some(after),
+                });
                 plan.writes.push(ModelPriceRecord {
                     model_id: candidate.model_id,
                     billing_mode: candidate.billing_mode,
@@ -841,23 +869,26 @@ pub fn compute_sync_plan(
                 // MP-Y13: manual rows and rows owned by another source are
                 // never modified by this run.
                 plan.skipped += 1;
-                push_change(
-                    &mut plan,
-                    SyncChange {
-                        model_id: candidate.model_id.clone(),
-                        kind: "skip",
-                        fields: Vec::new(),
-                    },
-                );
+                plan.changes.push(SyncChange {
+                    model_id: candidate.model_id.clone(),
+                    kind: "skip",
+                    fields: Vec::new(),
+                    before: None,
+                    after: None,
+                });
             }
             Some(stored) => {
                 let locked = &stored.locked_fields;
-                let mut changed: Vec<String> = Vec::new();
+                let mut changed = FieldDiff::default();
                 let billing_mode = if locked.iter().any(|lock| lock == "billing_mode") {
                     stored.billing_mode.clone()
                 } else {
                     if stored.billing_mode != candidate.billing_mode {
-                        changed.push("billing_mode".to_string());
+                        changed.push(
+                            "billing_mode",
+                            &stored.billing_mode,
+                            &candidate.billing_mode,
+                        );
                     }
                     candidate.billing_mode.clone()
                 };
@@ -922,20 +953,19 @@ pub fn compute_sync_plan(
                     enabled: stored.enabled,
                     updated_at: now,
                 };
-                if changed.is_empty() {
+                if changed.fields.is_empty() {
                     // MP-Y14: raw_json and updated_at still refresh, but an
                     // unchanged row is not counted as an update.
                     plan.skipped += 1;
                 } else {
                     plan.updated += 1;
-                    push_change(
-                        &mut plan,
-                        SyncChange {
-                            model_id: candidate.model_id.clone(),
-                            kind: "update",
-                            fields: changed,
-                        },
-                    );
+                    plan.changes.push(SyncChange {
+                        model_id: candidate.model_id.clone(),
+                        kind: "update",
+                        fields: changed.fields,
+                        before: Some(changed.before),
+                        after: Some(changed.after),
+                    });
                 }
                 plan.writes.push(merged);
             }
@@ -946,14 +976,24 @@ pub fn compute_sync_plan(
         for row in existing {
             if row.source == "models_dev" && !candidate_ids.contains(&row.model_id) {
                 plan.deleted += 1;
-                push_change(
-                    &mut plan,
-                    SyncChange {
-                        model_id: row.model_id.clone(),
-                        kind: "delete",
-                        fields: Vec::new(),
-                    },
-                );
+                plan.changes.push(SyncChange {
+                    model_id: row.model_id.clone(),
+                    kind: "delete",
+                    fields: Vec::new(),
+                    before: Some(row_price_values(
+                        &row.billing_mode,
+                        [
+                            ("input_usd_per_1m", &row.input_usd_per_1m),
+                            ("output_usd_per_1m", &row.output_usd_per_1m),
+                            ("cache_read_usd_per_1m", &row.cache_read_usd_per_1m),
+                            ("cache_write_usd_per_1m", &row.cache_write_usd_per_1m),
+                            ("reasoning_usd_per_1m", &row.reasoning_usd_per_1m),
+                            ("per_request_usd", &row.per_request_usd),
+                        ],
+                        &row.billing_expr,
+                    )),
+                    after: None,
+                });
                 plan.delete_ids.push(row.model_id.clone());
             }
         }
@@ -962,26 +1002,58 @@ pub fn compute_sync_plan(
     plan
 }
 
-/// MP-A6 preview body.
-pub fn preview_response(source: SyncSource, plan: &SyncPlan) -> Value {
+/// MP-A6: at most `MAX_CHANGE_ENTRIES` changes, ordered delete, update,
+/// insert, skip so reviewable changes survive truncation.
+fn bounded_changes(plan: &SyncPlan) -> (Vec<&SyncChange>, bool) {
+    let rank = |kind: &str| match kind {
+        "delete" => 0,
+        "update" => 1,
+        "insert" => 2,
+        _ => 3,
+    };
+    let mut changes: Vec<&SyncChange> = plan.changes.iter().collect();
+    changes.sort_by_key(|change| rank(change.kind));
+    let truncated = changes.len() > MAX_CHANGE_ENTRIES;
+    changes.truncate(MAX_CHANGE_ENTRIES);
+    (changes, truncated)
+}
+
+/// MP-A6 preview body. `preview_id` identifies the server-side snapshot that
+/// MP-A7 applies.
+pub fn preview_response(
+    source: SyncSource,
+    plan: &SyncPlan,
+    preview_id: &str,
+    expires_at: chrono::DateTime<Utc>,
+) -> Value {
+    let (changes, truncated) = bounded_changes(plan);
     let mut body = json!({
         "source": source.as_str(),
+        "preview_id": preview_id,
+        "expires_at": expires_at.to_rfc3339(),
         "insert": plan.inserted,
         "update": plan.updated,
         "skip": plan.skipped,
         "delete": plan.deleted,
-        "changes": plan.changes,
+        "changes": changes,
     });
-    if plan.truncated {
+    if truncated {
         body["truncated"] = json!(true);
     }
     body
 }
 
-/// MP-D8: run detail JSON, truncated below the byte bound.
+/// MP-D8: run detail JSON (field names only), truncated below the byte bound.
 pub fn run_detail_json(plan: &SyncPlan) -> Value {
-    let mut detail = json!({ "changes": plan.changes });
-    if plan.truncated {
+    let (changes, truncated) = bounded_changes(plan);
+    let changes: Vec<Value> = changes
+        .into_iter()
+        .map(|change| {
+            json!({ "model_id": change.model_id, "kind": change.kind, "fields": change.fields })
+        })
+        .collect();
+    let mut detail = json!({ "changes": changes });
+    if truncated {
         detail["truncated"] = json!(true);
     }
     let serialized = detail.to_string();
@@ -991,8 +1063,143 @@ pub fn run_detail_json(plan: &SyncPlan) -> Value {
     detail
 }
 
-/// MP-A7/MP-Y16: performs one apply run end to end and returns the finalized
-/// run row. The run row is inserted before the fetch so failures audit too.
+/// MP-A6a: how long a preview snapshot stays applicable.
+pub const PREVIEW_TTL: Duration = Duration::from_secs(10 * 60);
+/// Snapshots hold whole source documents; keep only the newest few.
+const MAX_STORED_PREVIEWS: usize = 4;
+
+/// A fetched snapshot plus the exact change list shown by MP-A6.
+pub struct StoredPreview {
+    pub source: SyncSource,
+    snapshot: SourceSnapshot,
+    changes: Vec<SyncChange>,
+    created: std::time::Instant,
+}
+
+static PREVIEWS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, StoredPreview>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn previews() -> &'static std::sync::Mutex<HashMap<String, StoredPreview>> {
+    &PREVIEWS
+}
+
+/// MP-A6: computes the plan for a fetched snapshot, stores the snapshot under
+/// a fresh id, and returns the preview body.
+pub fn store_preview(
+    source: SyncSource,
+    existing: &[ModelPriceRecord],
+    snapshot: SourceSnapshot,
+) -> Value {
+    let plan = compute_sync_plan(source, existing, snapshot.candidates.clone());
+    let preview_id = uuid::Uuid::new_v4().to_string();
+    let expires_at = Utc::now()
+        + chrono::Duration::from_std(PREVIEW_TTL).unwrap_or(chrono::Duration::minutes(10));
+    let body = preview_response(source, &plan, &preview_id, expires_at);
+    let mut stored = previews().lock().unwrap_or_else(|poison| poison.into_inner());
+    stored.retain(|_, preview| preview.created.elapsed() < PREVIEW_TTL);
+    while stored.len() >= MAX_STORED_PREVIEWS {
+        let Some(oldest) = stored
+            .iter()
+            .min_by_key(|(_, preview)| preview.created)
+            .map(|(id, _)| id.clone())
+        else {
+            break;
+        };
+        stored.remove(&oldest);
+    }
+    stored.insert(
+        preview_id,
+        StoredPreview {
+            source,
+            snapshot,
+            changes: plan.changes,
+            created: std::time::Instant::now(),
+        },
+    );
+    body
+}
+
+/// MP-A7: removes and returns an unexpired preview of `source`.
+pub fn take_preview(preview_id: &str, source: SyncSource) -> Option<StoredPreview> {
+    let mut stored = previews().lock().unwrap_or_else(|poison| poison.into_inner());
+    let preview = stored.remove(preview_id)?;
+    (preview.source == source && preview.created.elapsed() < PREVIEW_TTL).then_some(preview)
+}
+
+/// MP-A7 error for a preview whose change list no longer matches the
+/// stored rows.
+pub const PREVIEW_STALE_ERROR: &str = "preview_stale";
+
+/// MP-A7: applies a stored preview snapshot. The plan is recomputed against
+/// the current rows under the apply lock; when it differs from the previewed
+/// change list, nothing is written and no run row is created.
+pub async fn apply_previewed_sync_run(
+    store: &ModelPriceStore,
+    registry: &crate::model_registry_store::ModelRegistryStore,
+    preview: StoredPreview,
+) -> Result<PriceSyncRun, String> {
+    let _apply_guard = apply_lock().lock().await;
+    let existing = store.list().await?;
+    let plan = compute_sync_plan(preview.source, &existing, preview.snapshot.candidates);
+    if plan.changes != preview.changes {
+        return Err(PREVIEW_STALE_ERROR.to_string());
+    }
+    let run = store.insert_sync_run(preview.source.as_str()).await?;
+    let outcome = write_plan(
+        store,
+        registry,
+        preview.source,
+        &run.id,
+        &plan,
+        preview.snapshot.models_dev_root.as_ref(),
+    )
+    .await;
+    match outcome {
+        Ok(finalized) => Ok(finalized),
+        Err(error) => {
+            let _ = store
+                .finalize_sync_run(&run.id, "failed", 0, 0, 0, 0, Some(&error), &json!({}))
+                .await;
+            Err(error)
+        }
+    }
+}
+
+async fn write_plan(
+    store: &ModelPriceStore,
+    registry: &crate::model_registry_store::ModelRegistryStore,
+    source: SyncSource,
+    run_id: &str,
+    plan: &SyncPlan,
+    models_dev_root: Option<&Value>,
+) -> Result<PriceSyncRun, String> {
+    store.bulk_upsert_synced(&plan.writes).await?;
+    if !plan.delete_ids.is_empty() {
+        store
+            .delete_by_ids_with_source(&plan.delete_ids, source.as_str())
+            .await?;
+    }
+    // MP-Y10: a models_dev price sync also refreshes metadata rows.
+    if let Some(root) = models_dev_root {
+        registry.apply_models_dev_metadata(root).await?;
+    }
+    store
+        .finalize_sync_run(
+            run_id,
+            "success",
+            plan.inserted,
+            plan.updated,
+            plan.skipped,
+            plan.deleted,
+            None,
+            &run_detail_json(plan),
+        )
+        .await
+}
+
+/// MP-Y16/MP-Y20: fetch-and-apply run used by the automatic scheduler. The run
+/// row is inserted before the fetch so failures audit too. Dashboard applies
+/// go through `apply_previewed_sync_run` (MP-A7).
 pub async fn apply_sync_run(
     http: &reqwest::Client,
     store: &ModelPriceStore,
@@ -1027,28 +1234,15 @@ pub async fn apply_sync_run(
         let snapshot = fetch_source_snapshot(http, source, new_api_config).await?;
         let existing = store.list().await?;
         let plan = compute_sync_plan(source, &existing, snapshot.candidates);
-        store.bulk_upsert_synced(&plan.writes).await?;
-        if !plan.delete_ids.is_empty() {
-            store
-                .delete_by_ids_with_source(&plan.delete_ids, source.as_str())
-                .await?;
-        }
-        // MP-Y10: a models_dev price sync also refreshes metadata rows.
-        if let Some(root) = &snapshot.models_dev_root {
-            registry.apply_models_dev_metadata(root).await?;
-        }
-        store
-            .finalize_sync_run(
-                &run.id,
-                "success",
-                plan.inserted,
-                plan.updated,
-                plan.skipped,
-                plan.deleted,
-                None,
-                &run_detail_json(&plan),
-            )
-            .await
+        write_plan(
+            store,
+            registry,
+            source,
+            &run.id,
+            &plan,
+            snapshot.models_dev_root.as_ref(),
+        )
+        .await
     }
     .await;
 

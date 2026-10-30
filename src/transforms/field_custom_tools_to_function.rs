@@ -463,7 +463,13 @@ impl Transform for FieldCustomToolsToFunctionTransform {
                     "type": "array",
                     "items": { "type": "string", "minLength": 1 },
                     "default": ["apply_patch"],
-                    "description": "Custom tool names to convert. Omit for apply_patch only. Include \"*\" to convert every custom tool."
+                    "description": "Custom tool names to convert. Omit for apply_patch only. Include \"*\" to convert every custom tool.",
+                    "x-localized-description": {
+                        "en": "Custom tool names to convert. Omit for apply_patch only. Include \"*\" to convert every custom tool.",
+                        "zh": "要转换的自定义工具名称。不设置则只转换 apply_patch。包含 \"*\" 则转换所有自定义工具。",
+                        "zh-TW": "要轉換的自訂工具名稱。不設定則只轉換 apply_patch。包含 \"*\" 則轉換所有自訂工具。",
+                        "ja": "変換するカスタムツール名。省略すると apply_patch のみを変換します。\"*\" を含めるとすべてのカスタムツールを変換します。"
+                    }
                 }
             },
             "additionalProperties": false

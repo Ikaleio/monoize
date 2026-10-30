@@ -3,59 +3,57 @@
  *
  * Order and ids are part of the UI contract defined in
  * `spec/system-settings-ui.spec.md` (SSU-1, SSU-1a, SSU-1b). Entries are the single
- * source of every row label and description, so search always matches what the
- * page renders.
+ * source of every row label, description, and numeric constraint, so search and the
+ * change list always match what the page renders. Entry ids are linked from other pages
+ * through `?setting=<id>` and MUST NOT be renamed.
  */
 export const SETTINGS_CATEGORIES = [
   {
     id: "site",
-    titleKey: "settings.siteInformation",
-    descriptionKey: "settings.siteInfoDescription",
+    titleKey: "settings.categorySite",
+    descriptionKey: "settings.categorySiteDescription",
   },
   {
     id: "access",
-    titleKey: "settings.accessControl",
-    descriptionKey: "settings.accessControlDescription",
+    titleKey: "settings.categoryAccess",
+    descriptionKey: "settings.categoryAccessDescription",
   },
   {
-    id: "codex",
-    titleKey: "settings.codexModels",
-    descriptionKey: "settings.codexModelsDescription",
-  },
-  {
-    id: "suffix",
-    titleKey: "settings.reasoningSuffixMap",
-    descriptionKey: "settings.reasoningSuffixMapDescription",
-  },
-  {
-    id: "redirects",
-    titleKey: "settings.globalModelRedirects",
-    descriptionKey: "settings.globalModelRedirectsDescription",
+    id: "models",
+    titleKey: "settings.categoryModels",
+    descriptionKey: "settings.categoryModelsDescription",
   },
   {
     id: "transforms",
-    titleKey: "settings.globalTransforms",
-    descriptionKey: "settings.globalTransformsDescription",
+    titleKey: "settings.categoryTransforms",
+    descriptionKey: "settings.categoryTransformsDescription",
   },
   {
-    id: "affinity",
-    titleKey: "settings.affinityRouting",
-    descriptionKey: "settings.affinityRoutingDescription",
+    id: "routing",
+    titleKey: "settings.categoryRouting",
+    descriptionKey: "settings.categoryRoutingDescription",
   },
   {
-    id: "health",
-    titleKey: "settings.healthMonitoring",
-    descriptionKey: "settings.healthMonitoringDescription",
+    id: "billing",
+    titleKey: "settings.categoryBilling",
+    descriptionKey: "settings.categoryBillingDescription",
   },
   {
-    id: "extra",
-    titleKey: "settings.extraFieldsWhitelist",
-    descriptionKey: "settings.extraFieldsWhitelistDescription",
+    id: "privacy",
+    titleKey: "settings.categoryPrivacy",
+    descriptionKey: "settings.categoryPrivacyDescription",
+  },
+  {
+    id: "compatibility",
+    titleKey: "settings.categoryCompatibility",
+    descriptionKey: "settings.categoryCompatibilityDescription",
   },
 ] as const;
 
 export type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number];
 export type SettingsCategoryId = SettingsCategory["id"];
+
+export const SETTINGS_CATEGORY_IDS = SETTINGS_CATEGORIES.map((category) => category.id);
 
 /**
  * A row group renders its entries as rows on one `Card`; an editor group (`editor`)
@@ -64,28 +62,57 @@ export type SettingsCategoryId = SettingsCategory["id"];
 export interface SettingsGroup {
   category: SettingsCategoryId;
   titleKey?: string;
+  descriptionKey?: string;
   editor?: true;
 }
 
 export const SETTINGS_GROUPS = {
   site: { category: "site" },
-  "access.registration": { category: "access", titleKey: "settings.registration" },
-  "access.session": { category: "access", titleKey: "settings.sessionSecurity" },
-  codex: { category: "codex", editor: true },
-  suffix: { category: "suffix", editor: true },
-  redirects: { category: "redirects", editor: true },
-  transforms: { category: "transforms", editor: true },
-  affinity: { category: "affinity" },
-  "health.probe": { category: "health", titleKey: "settings.groupActiveProbe" },
-  "health.passive": { category: "health", titleKey: "settings.groupPassiveBreaker" },
-  "health.capture": { category: "health", titleKey: "settings.groupRequestCapture" },
-  "health.runtime": { category: "health", titleKey: "settings.groupRuntimeBehavior" },
-  "health.dashboard": {
-    category: "health",
+  "site.dashboard": {
+    category: "site",
     titleKey: "settings.dashboardPerformanceTitle",
     editor: true,
   },
-  extra: { category: "extra" },
+  "access.registration": { category: "access", titleKey: "settings.registration" },
+  "access.session": { category: "access", titleKey: "settings.sessionSecurity" },
+  "models.codex": {
+    category: "models",
+    titleKey: "settings.codexModels",
+    descriptionKey: "settings.codexModelsDescription",
+    editor: true,
+  },
+  "models.suffix": {
+    category: "models",
+    titleKey: "settings.reasoningSuffixMap",
+    descriptionKey: "settings.reasoningSuffixMapDescription",
+    editor: true,
+  },
+  "models.redirects": {
+    category: "models",
+    titleKey: "settings.globalModelRedirects",
+    descriptionKey: "settings.globalModelRedirectsDescription",
+    editor: true,
+  },
+  transforms: { category: "transforms", editor: true },
+  "routing.affinity": {
+    category: "routing",
+    titleKey: "settings.affinityRouting",
+    descriptionKey: "settings.affinityRoutingDescription",
+  },
+  "routing.probe": { category: "routing", titleKey: "settings.groupActiveProbe" },
+  "routing.passive": { category: "routing", titleKey: "settings.groupPassiveBreaker" },
+  "routing.timeouts": { category: "routing", titleKey: "settings.groupTimeouts" },
+  billing: { category: "billing" },
+  privacy: { category: "privacy" },
+  "compatibility.extra": {
+    category: "compatibility",
+    titleKey: "settings.extraFieldsWhitelist",
+    descriptionKey: "settings.extraFieldsWhitelistDescription",
+  },
+  "compatibility.protocol": {
+    category: "compatibility",
+    titleKey: "settings.groupProtocolConversion",
+  },
 } as const satisfies Record<string, SettingsGroup>;
 
 export type SettingsGroupId = keyof typeof SETTINGS_GROUPS;
@@ -100,10 +127,16 @@ export interface SettingEntry {
   rawLabel?: string;
   descriptionKey?: string;
   /**
-   * Extra searchable text keys: editor help text, and for editor entries the category
+   * Extra searchable text keys: editor help text, and for editor entries the group
    * description, which is the only prose describing the editor.
    */
   helpKeys?: readonly string[];
+  /** i18n key of search synonyms that appear in neither label nor description (SSU-16a). */
+  keywordsKey?: string;
+  /** Lower bound of a numeric entry (SSU-2b). */
+  min?: number;
+  /** i18n key of the unit suffix of a numeric entry (SSU-2b). */
+  unitKey?: string;
   /** API field names, matched verbatim by search. */
   fields: readonly string[];
 }
@@ -111,7 +144,7 @@ export interface SettingEntry {
 function extraFieldsEntry<K extends string>(subKey: K) {
   return {
     id: `extra_fields_${subKey}` as const,
-    group: "extra",
+    group: "compatibility.extra",
     rawLabel: subKey,
     helpKeys: ["settings.extraFieldsWhitelistHelp"],
     fields: ["monoize_extra_fields_whitelist", subKey],
@@ -119,11 +152,20 @@ function extraFieldsEntry<K extends string>(subKey: K) {
 }
 
 export const SETTING_ENTRIES = [
-  { id: "site_name", group: "site", labelKey: "settings.siteName", fields: ["site_name"] },
+  {
+    id: "site_name",
+    group: "site",
+    labelKey: "settings.siteName",
+    descriptionKey: "settings.siteNameDescription",
+    keywordsKey: "settings.keywordsSiteName",
+    fields: ["site_name"],
+  },
   {
     id: "site_description",
     group: "site",
     labelKey: "settings.siteDescription",
+    descriptionKey: "settings.siteDescriptionDescription",
+    keywordsKey: "settings.keywordsSiteDescription",
     fields: ["site_description"],
   },
   {
@@ -141,221 +183,8 @@ export const SETTING_ENTRIES = [
     fields: ["recharge_public_origin"],
   },
   {
-    id: "registration_enabled",
-    group: "access.registration",
-    labelKey: "settings.allowRegistration",
-    descriptionKey: "settings.allowRegistrationDescription",
-    fields: ["registration_enabled"],
-  },
-  {
-    id: "default_user_role",
-    group: "access.registration",
-    labelKey: "settings.defaultUserRole",
-    descriptionKey: "settings.defaultUserRoleDescription",
-    fields: ["default_user_role"],
-  },
-  {
-    id: "captcha_enabled",
-    group: "access.session",
-    labelKey: "settings.captchaEnabled",
-    descriptionKey: "settings.captchaEnabledDescription",
-    fields: ["captcha_enabled"],
-  },
-  {
-    id: "session_ttl_days",
-    group: "access.session",
-    labelKey: "settings.sessionDuration",
-    descriptionKey: "settings.sessionDurationDescription",
-    fields: ["session_ttl_days"],
-  },
-  {
-    id: "api_key_max_per_user",
-    group: "access.session",
-    labelKey: "settings.maxApiKeys",
-    descriptionKey: "settings.maxApiKeysDescription",
-    fields: ["api_key_max_per_user"],
-  },
-  {
-    id: "codex_model_ids",
-    group: "codex",
-    helpKeys: ["settings.codexModelsDescription", "settings.codexModelsCompatibilityHelp"],
-    fields: ["codex_model_ids"],
-  },
-  {
-    id: "reasoning_suffix_map",
-    group: "suffix",
-    helpKeys: ["settings.reasoningSuffixMapDescription", "settings.effortValues"],
-    fields: ["reasoning_suffix_map"],
-  },
-  {
-    id: "global_model_redirects",
-    group: "redirects",
-    helpKeys: ["settings.globalModelRedirectsDescription", "settings.globalModelRedirectsHelp"],
-    fields: ["global_model_redirects"],
-  },
-  {
-    id: "global_transforms",
-    group: "transforms",
-    helpKeys: ["settings.globalTransformsDescription", "settings.globalTransformsHelp"],
-    fields: ["global_transforms"],
-  },
-  {
-    id: "monoize_affinity_enabled",
-    group: "affinity",
-    labelKey: "settings.affinityEnabled",
-    descriptionKey: "settings.affinityEnabledDescription",
-    fields: ["monoize_affinity_enabled"],
-  },
-  {
-    id: "monoize_affinity_failback_mode",
-    group: "affinity",
-    labelKey: "settings.affinityFailbackMode",
-    descriptionKey: "settings.affinityFailbackModeDescription",
-    fields: ["monoize_affinity_failback_mode"],
-  },
-  {
-    id: "monoize_affinity_idle_ttl_seconds",
-    group: "affinity",
-    labelKey: "settings.affinityIdleTtlSeconds",
-    descriptionKey: "settings.affinityIdleTtlSecondsDescription",
-    fields: ["monoize_affinity_idle_ttl_seconds"],
-  },
-  {
-    id: "monoize_affinity_failback_delay_seconds",
-    group: "affinity",
-    labelKey: "settings.affinityFailbackDelaySeconds",
-    descriptionKey: "settings.affinityFailbackDelaySecondsDescription",
-    fields: ["monoize_affinity_failback_delay_seconds"],
-  },
-  {
-    id: "monoize_active_probe_enabled",
-    group: "health.probe",
-    labelKey: "settings.activeProbeEnabled",
-    descriptionKey: "settings.activeProbeEnabledDescription",
-    fields: ["monoize_active_probe_enabled"],
-  },
-  {
-    id: "monoize_active_probe_interval_seconds",
-    group: "health.probe",
-    labelKey: "settings.activeProbeIntervalSeconds",
-    descriptionKey: "settings.activeProbeIntervalSecondsDescription",
-    fields: ["monoize_active_probe_interval_seconds"],
-  },
-  {
-    id: "monoize_active_probe_success_threshold",
-    group: "health.probe",
-    labelKey: "settings.activeProbeSuccessThreshold",
-    descriptionKey: "settings.activeProbeSuccessThresholdDescription",
-    fields: ["monoize_active_probe_success_threshold"],
-  },
-  {
-    id: "monoize_active_probe_model",
-    group: "health.probe",
-    labelKey: "settings.activeProbeModel",
-    descriptionKey: "settings.activeProbeModelDescription",
-    fields: ["monoize_active_probe_model"],
-  },
-  {
-    id: "monoize_passive_failure_threshold",
-    group: "health.passive",
-    labelKey: "settings.passiveFailureThreshold",
-    descriptionKey: "settings.passiveFailureThresholdDescription",
-    fields: ["monoize_passive_failure_threshold"],
-  },
-  {
-    id: "monoize_passive_cooldown_seconds",
-    group: "health.passive",
-    labelKey: "settings.passiveCooldownSeconds",
-    descriptionKey: "settings.passiveCooldownSecondsDescription",
-    fields: ["monoize_passive_cooldown_seconds"],
-  },
-  {
-    id: "monoize_passive_window_seconds",
-    group: "health.passive",
-    labelKey: "settings.passiveWindowSeconds",
-    descriptionKey: "settings.passiveWindowSecondsDescription",
-    fields: ["monoize_passive_window_seconds"],
-  },
-  {
-    id: "monoize_passive_min_samples",
-    group: "health.passive",
-    labelKey: "settings.passiveMinSamples",
-    descriptionKey: "settings.passiveMinSamplesDescription",
-    fields: ["monoize_passive_min_samples"],
-  },
-  {
-    id: "monoize_passive_failure_rate_threshold",
-    group: "health.passive",
-    labelKey: "settings.passiveFailureRateThreshold",
-    descriptionKey: "settings.passiveFailureRateThresholdDescription",
-    fields: ["monoize_passive_failure_rate_threshold"],
-  },
-  {
-    id: "monoize_passive_rate_limit_cooldown_seconds",
-    group: "health.passive",
-    labelKey: "settings.passiveRateLimitCooldownSeconds",
-    descriptionKey: "settings.passiveRateLimitCooldownSecondsDescription",
-    fields: ["monoize_passive_rate_limit_cooldown_seconds"],
-  },
-  {
-    id: "monoize_request_capture_enabled",
-    group: "health.capture",
-    labelKey: "settings.requestCaptureEnabled",
-    descriptionKey: "settings.requestCaptureEnabledDescription",
-    fields: ["monoize_request_capture_enabled"],
-  },
-  {
-    id: "monoize_mask_sensitive_info",
-    group: "health.capture",
-    labelKey: "settings.maskSensitiveInfo",
-    descriptionKey: "settings.maskSensitiveInfoDescription",
-    fields: ["monoize_mask_sensitive_info"],
-  },
-  {
-    id: "monoize_request_capture_max_total_bytes",
-    group: "health.capture",
-    labelKey: "settings.requestCaptureMaxTotalMib",
-    descriptionKey: "settings.requestCaptureMaxTotalMibDescription",
-    fields: ["monoize_request_capture_max_total_bytes"],
-  },
-  {
-    id: "monoize_enable_estimated_billing",
-    group: "health.runtime",
-    labelKey: "settings.enableEstimatedBilling",
-    descriptionKey: "settings.enableEstimatedBillingDescription",
-    fields: ["monoize_enable_estimated_billing"],
-  },
-  {
-    id: "monoize_strip_cross_protocol_nested_extra",
-    group: "health.runtime",
-    labelKey: "settings.stripCrossProtocolNestedExtra",
-    descriptionKey: "settings.stripCrossProtocolNestedExtraDescription",
-    fields: ["monoize_strip_cross_protocol_nested_extra"],
-  },
-  {
-    id: "allow_free_when_unpriced",
-    group: "health.runtime",
-    labelKey: "settings.allowFreeWhenUnpriced",
-    descriptionKey: "settings.allowFreeWhenUnpricedDescription",
-    fields: ["allow_free_when_unpriced"],
-  },
-  {
-    id: "allow_free_when_missing_usage",
-    group: "health.runtime",
-    labelKey: "settings.allowFreeWhenMissingUsage",
-    descriptionKey: "settings.allowFreeWhenMissingUsageDescription",
-    fields: ["allow_free_when_missing_usage"],
-  },
-  {
-    id: "monoize_request_timeout_ms",
-    group: "health.runtime",
-    labelKey: "settings.requestTimeoutMs",
-    descriptionKey: "settings.requestTimeoutMsDescription",
-    fields: ["monoize_request_timeout_ms"],
-  },
-  {
     id: "dashboard_performance_targets",
-    group: "health.dashboard",
+    group: "site.dashboard",
     helpKeys: [
       "settings.dashboardPerformanceDescription",
       "settings.dashboardPerformanceGroups",
@@ -363,10 +192,257 @@ export const SETTING_ENTRIES = [
     ],
     fields: ["dashboard_performance_group_ids", "dashboard_performance_model_ids"],
   },
+  {
+    id: "registration_enabled",
+    group: "access.registration",
+    labelKey: "settings.allowRegistration",
+    descriptionKey: "settings.allowRegistrationDescription",
+    keywordsKey: "settings.keywordsRegistration",
+    fields: ["registration_enabled"],
+  },
+  {
+    id: "captcha_enabled",
+    group: "access.session",
+    labelKey: "settings.captchaEnabled",
+    descriptionKey: "settings.captchaEnabledDescription",
+    keywordsKey: "settings.keywordsCaptcha",
+    fields: ["captcha_enabled"],
+  },
+  {
+    id: "session_ttl_days",
+    group: "access.session",
+    labelKey: "settings.sessionDuration",
+    descriptionKey: "settings.sessionDurationDescription",
+    keywordsKey: "settings.keywordsSession",
+    min: 1,
+    unitKey: "settings.unitDays",
+    fields: ["session_ttl_days"],
+  },
+  {
+    id: "api_key_max_per_user",
+    group: "access.session",
+    labelKey: "settings.maxApiKeys",
+    descriptionKey: "settings.maxApiKeysDescription",
+    keywordsKey: "settings.keywordsApiKeyLimit",
+    min: 1,
+    fields: ["api_key_max_per_user"],
+  },
+  {
+    id: "codex_model_ids",
+    group: "models.codex",
+    helpKeys: ["settings.codexModelsDescription", "settings.codexModelsCompatibilityHelp"],
+    fields: ["codex_model_ids"],
+  },
+  {
+    id: "reasoning_suffix_map",
+    group: "models.suffix",
+    helpKeys: ["settings.reasoningSuffixMapDescription", "settings.effortValues"],
+    keywordsKey: "settings.keywordsReasoning",
+    fields: ["reasoning_suffix_map"],
+  },
+  {
+    id: "global_model_redirects",
+    group: "models.redirects",
+    helpKeys: ["settings.globalModelRedirectsDescription", "settings.globalModelRedirectsHelp"],
+    keywordsKey: "settings.keywordsRedirects",
+    fields: ["global_model_redirects"],
+  },
+  {
+    id: "global_transforms",
+    group: "transforms",
+    helpKeys: ["settings.categoryTransformsDescription", "settings.globalTransformsHelp"],
+    fields: ["global_transforms"],
+  },
+  {
+    id: "monoize_affinity_enabled",
+    group: "routing.affinity",
+    labelKey: "settings.affinityEnabled",
+    descriptionKey: "settings.affinityEnabledDescription",
+    keywordsKey: "settings.keywordsAffinity",
+    fields: ["monoize_affinity_enabled"],
+  },
+  {
+    id: "monoize_affinity_failback_mode",
+    group: "routing.affinity",
+    labelKey: "settings.affinityFailbackMode",
+    descriptionKey: "settings.affinityFailbackModeDescription",
+    fields: ["monoize_affinity_failback_mode"],
+  },
+  {
+    id: "monoize_affinity_idle_ttl_seconds",
+    group: "routing.affinity",
+    labelKey: "settings.affinityIdleTtlSeconds",
+    descriptionKey: "settings.affinityIdleTtlSecondsDescription",
+    min: 1,
+    unitKey: "settings.unitSeconds",
+    fields: ["monoize_affinity_idle_ttl_seconds"],
+  },
+  {
+    id: "monoize_affinity_failback_delay_seconds",
+    group: "routing.affinity",
+    labelKey: "settings.affinityFailbackDelaySeconds",
+    descriptionKey: "settings.affinityFailbackDelaySecondsDescription",
+    min: 0,
+    unitKey: "settings.unitSeconds",
+    fields: ["monoize_affinity_failback_delay_seconds"],
+  },
+  {
+    id: "monoize_active_probe_enabled",
+    group: "routing.probe",
+    labelKey: "settings.activeProbeEnabled",
+    descriptionKey: "settings.activeProbeEnabledDescription",
+    keywordsKey: "settings.keywordsProbe",
+    fields: ["monoize_active_probe_enabled"],
+  },
+  {
+    id: "monoize_active_probe_interval_seconds",
+    group: "routing.probe",
+    labelKey: "settings.activeProbeIntervalSeconds",
+    descriptionKey: "settings.activeProbeIntervalSecondsDescription",
+    keywordsKey: "settings.keywordsProbe",
+    min: 1,
+    unitKey: "settings.unitSeconds",
+    fields: ["monoize_active_probe_interval_seconds"],
+  },
+  {
+    id: "monoize_active_probe_success_threshold",
+    group: "routing.probe",
+    labelKey: "settings.activeProbeSuccessThreshold",
+    descriptionKey: "settings.activeProbeSuccessThresholdDescription",
+    keywordsKey: "settings.keywordsProbe",
+    min: 1,
+    unitKey: "settings.unitTimes",
+    fields: ["monoize_active_probe_success_threshold"],
+  },
+  {
+    id: "monoize_active_probe_model",
+    group: "routing.probe",
+    labelKey: "settings.activeProbeModel",
+    descriptionKey: "settings.activeProbeModelDescription",
+    keywordsKey: "settings.keywordsProbe",
+    fields: ["monoize_active_probe_model"],
+  },
+  {
+    id: "monoize_passive_failure_threshold",
+    group: "routing.passive",
+    labelKey: "settings.passiveFailureThreshold",
+    descriptionKey: "settings.passiveFailureThresholdDescription",
+    keywordsKey: "settings.keywordsBreaker",
+    min: 1,
+    unitKey: "settings.unitTimes",
+    fields: ["monoize_passive_failure_threshold"],
+  },
+  {
+    id: "monoize_passive_cooldown_seconds",
+    group: "routing.passive",
+    labelKey: "settings.passiveCooldownSeconds",
+    descriptionKey: "settings.passiveCooldownSecondsDescription",
+    keywordsKey: "settings.keywordsBreaker",
+    min: 1,
+    unitKey: "settings.unitSeconds",
+    fields: ["monoize_passive_cooldown_seconds"],
+  },
+  {
+    id: "monoize_passive_window_seconds",
+    group: "routing.passive",
+    labelKey: "settings.passiveWindowSeconds",
+    descriptionKey: "settings.passiveWindowSecondsDescription",
+    keywordsKey: "settings.keywordsBreaker",
+    min: 1,
+    unitKey: "settings.unitSeconds",
+    fields: ["monoize_passive_window_seconds"],
+  },
+  {
+    id: "monoize_passive_rate_limit_cooldown_seconds",
+    group: "routing.passive",
+    labelKey: "settings.passiveRateLimitCooldownSeconds",
+    descriptionKey: "settings.passiveRateLimitCooldownSecondsDescription",
+    keywordsKey: "settings.keywordsBreaker",
+    min: 1,
+    unitKey: "settings.unitSeconds",
+    fields: ["monoize_passive_rate_limit_cooldown_seconds"],
+  },
+  {
+    id: "monoize_request_timeout_ms",
+    group: "routing.timeouts",
+    labelKey: "settings.requestTimeoutMs",
+    descriptionKey: "settings.requestTimeoutMsDescription",
+    keywordsKey: "settings.keywordsTimeout",
+    min: 1,
+    unitKey: "settings.unitMilliseconds",
+    fields: ["monoize_request_timeout_ms"],
+  },
+  {
+    id: "monoize_stream_idle_timeout_ms",
+    group: "routing.timeouts",
+    labelKey: "settings.streamIdleTimeoutMs",
+    descriptionKey: "settings.streamIdleTimeoutMsDescription",
+    keywordsKey: "settings.keywordsTimeout",
+    min: 1,
+    unitKey: "settings.unitMilliseconds",
+    fields: ["monoize_stream_idle_timeout_ms"],
+  },
+  {
+    id: "monoize_enable_estimated_billing",
+    group: "billing",
+    labelKey: "settings.enableEstimatedBilling",
+    descriptionKey: "settings.enableEstimatedBillingDescription",
+    keywordsKey: "settings.keywordsBilling",
+    fields: ["monoize_enable_estimated_billing"],
+  },
+  {
+    id: "allow_free_when_unpriced",
+    group: "billing",
+    labelKey: "settings.allowFreeWhenUnpriced",
+    descriptionKey: "settings.allowFreeWhenUnpricedDescription",
+    keywordsKey: "settings.keywordsBilling",
+    fields: ["allow_free_when_unpriced"],
+  },
+  {
+    id: "allow_free_when_missing_usage",
+    group: "billing",
+    labelKey: "settings.allowFreeWhenMissingUsage",
+    descriptionKey: "settings.allowFreeWhenMissingUsageDescription",
+    keywordsKey: "settings.keywordsBilling",
+    fields: ["allow_free_when_missing_usage"],
+  },
+  {
+    id: "monoize_request_capture_enabled",
+    group: "privacy",
+    labelKey: "settings.requestCaptureEnabled",
+    descriptionKey: "settings.requestCaptureEnabledDescription",
+    keywordsKey: "settings.keywordsCapture",
+    fields: ["monoize_request_capture_enabled"],
+  },
+  {
+    id: "monoize_request_capture_max_total_bytes",
+    group: "privacy",
+    labelKey: "settings.requestCaptureMaxTotalMib",
+    descriptionKey: "settings.requestCaptureMaxTotalMibDescription",
+    keywordsKey: "settings.keywordsCapture",
+    min: 0,
+    unitKey: "settings.unitMib",
+    fields: ["monoize_request_capture_max_total_bytes"],
+  },
+  {
+    id: "monoize_mask_sensitive_info",
+    group: "privacy",
+    labelKey: "settings.maskSensitiveInfo",
+    descriptionKey: "settings.maskSensitiveInfoDescription",
+    keywordsKey: "settings.keywordsMask",
+    fields: ["monoize_mask_sensitive_info"],
+  },
   extraFieldsEntry("chat_completion"),
   extraFieldsEntry("responses"),
   extraFieldsEntry("messages"),
   extraFieldsEntry("gemini"),
+  {
+    id: "monoize_strip_cross_protocol_nested_extra",
+    group: "compatibility.protocol",
+    labelKey: "settings.stripCrossProtocolNestedExtra",
+    descriptionKey: "settings.stripCrossProtocolNestedExtraDescription",
+    fields: ["monoize_strip_cross_protocol_nested_extra"],
+  },
 ] as const satisfies readonly SettingEntry[];
 
 export type SettingEntryId = (typeof SETTING_ENTRIES)[number]["id"];
@@ -377,6 +453,10 @@ const ENTRY_BY_ID = new Map<string, SettingEntry>(
 
 export function getSettingEntry(id: SettingEntryId): SettingEntry {
   return ENTRY_BY_ID.get(id)!;
+}
+
+export function findSettingEntry(id: string): SettingEntry | undefined {
+  return ENTRY_BY_ID.get(id);
 }
 
 export function categoryOfGroup(group: SettingsGroupId): SettingsCategoryId {

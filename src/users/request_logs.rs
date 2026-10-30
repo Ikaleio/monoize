@@ -348,7 +348,9 @@ fn analytics_model_bucket_sql(is_sqlite: bool, user_scoped: bool) -> String {
     };
     format!(
         "SELECT {bucket_expr} AS bucket_idx, rl.model, {charge_columns}, COUNT(*) AS call_count, \
-         {token_sum} \
+         {token_sum}, \
+         CAST(SUM(COALESCE(rl.input_tokens, 0)) AS BIGINT) AS input_token_count, \
+         CAST(SUM(COALESCE(rl.cache_read_tokens, 0)) AS BIGINT) AS cache_read_token_count \
          FROM request_logs rl \
          WHERE rl.created_at_unix_ms >= $4 AND rl.created_at_unix_ms < $5{user_filter} \
          GROUP BY bucket_idx, rl.model \
@@ -365,6 +367,7 @@ fn append_request_log_filters(
     model: Option<&str>,
     status: Option<&str>,
     api_key_id: Option<&str>,
+    channel_id: Option<&str>,
     username: Option<&str>,
     search: Option<&str>,
     time_from: Option<&str>,
@@ -403,6 +406,11 @@ fn append_request_log_filters(
     if let Some(api_key_id) = api_key_id {
         sql.push_str(&format!(" AND rl.api_key_id = ${}", *idx));
         values.push(api_key_id.into());
+        *idx += 1;
+    }
+    if let Some(channel_id) = channel_id {
+        sql.push_str(&format!(" AND rl.channel_id = ${}", *idx));
+        values.push(channel_id.into());
         *idx += 1;
     }
     if let Some(username) = username {
@@ -772,6 +780,7 @@ impl UserStore {
         model: Option<&str>,
         status: Option<&str>,
         api_key_id: Option<&str>,
+        channel_id: Option<&str>,
         search: Option<&str>,
         time_from: Option<&str>,
         time_to: Option<&str>,
@@ -781,6 +790,7 @@ impl UserStore {
         let model = normalize_request_log_filter(model);
         let status = normalize_request_log_filter(status);
         let api_key_id = normalize_request_log_filter(api_key_id);
+        let channel_id = normalize_request_log_filter(channel_id);
         let search = normalize_request_log_filter(search);
         let txn = self
             .db
@@ -806,6 +816,7 @@ impl UserStore {
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
+            channel_id.as_deref(),
             None,
             search.as_deref(),
             time_from,
@@ -854,6 +865,7 @@ impl UserStore {
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
+            channel_id.as_deref(),
             None,
             search.as_deref(),
             time_from,
@@ -899,6 +911,7 @@ impl UserStore {
         model: Option<&str>,
         status: Option<&str>,
         api_key_id: Option<&str>,
+        channel_id: Option<&str>,
         username: Option<&str>,
         search: Option<&str>,
         time_from: Option<&str>,
@@ -909,6 +922,7 @@ impl UserStore {
         let model = normalize_request_log_filter(model);
         let status = normalize_request_log_filter(status);
         let api_key_id = normalize_request_log_filter(api_key_id);
+        let channel_id = normalize_request_log_filter(channel_id);
         let username = normalize_request_log_filter(username);
         let search = normalize_request_log_filter(search);
         let txn = self
@@ -935,6 +949,7 @@ impl UserStore {
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
+            channel_id.as_deref(),
             username.as_deref(),
             search.as_deref(),
             time_from,
@@ -983,6 +998,7 @@ impl UserStore {
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
+            channel_id.as_deref(),
             username.as_deref(),
             search.as_deref(),
             time_from,
@@ -1074,12 +1090,22 @@ impl UserStore {
                     .try_get::<Option<i64>>("", "token_count")
                     .map_err(|e| e.to_string())?
                     .unwrap_or(0);
+                let input_tokens: i64 = row
+                    .try_get::<Option<i64>>("", "input_token_count")
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or(0);
+                let cache_read_tokens: i64 = row
+                    .try_get::<Option<i64>>("", "cache_read_token_count")
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or(0);
                 Ok(AnalyticsModelBucketRow {
                     bucket_idx: bucket_idx.clamp(0, bucket_count - 1),
                     model,
                     cost_nano,
                     call_count,
                     token_count,
+                    input_tokens,
+                    cache_read_tokens,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -1184,6 +1210,20 @@ impl UserStore {
             today_cost_nano_usd,
             today_calls,
         })
+    }
+
+    /// Whether any retained request log row belongs to this user (DH-10).
+    pub async fn user_has_request_logs(&self, user_id: &str) -> Result<bool, String> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT 1 AS present FROM request_logs rl WHERE rl.user_id = $1 LIMIT 1",
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.is_some())
     }
 
     /// Global (not user-scoped) performance aggregates for one dashboard target

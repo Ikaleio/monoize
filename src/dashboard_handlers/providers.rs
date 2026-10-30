@@ -619,6 +619,44 @@ pub async fn reorder_providers(
     Ok(Json(json!({ "success": true })))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetChannelEnabledRequest {
+    pub enabled: bool,
+}
+
+/// CM-CH-EN-1: immediate Channel enable/disable from the Provider list.
+pub async fn set_channel_enabled(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((provider_id, channel_id)): Path<(String, String)>,
+    Json(body): Json<SetChannelEnabledRequest>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+
+    let updated = state
+        .monoize_store
+        .set_channel_enabled(&provider_id, &channel_id, body.enabled)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    if !updated {
+        return Err(AppError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "channel not found",
+        ));
+    }
+    advance_routing_config_revision(&state);
+
+    let provider = state
+        .monoize_store
+        .get_provider(&provider_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found"))?;
+    Ok(Json(provider_with_runtime(&state, provider).await))
+}
+
 pub async fn fetch_provider_models(
     State(state): State<AppState>,
     headers: HeaderMap,

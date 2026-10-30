@@ -18,14 +18,12 @@ fn parse_spend_window(raw: Option<&str>) -> AppResult<(&'static str, i64)> {
     match raw {
         None => Ok(("24h", 24)),
         Some("24h") => Ok(("24h", 24)),
-        Some("3d") => Ok(("3d", 72)),
         Some("7d") => Ok(("7d", 168)),
-        Some("14d") => Ok(("14d", 336)),
         Some("30d") => Ok(("30d", 720)),
         _ => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_spend_window",
-            "spend_window must be one of 24h, 3d, 7d, 14d, 30d",
+            "spend_window must be one of 24h, 7d, 30d",
         )
         .with_param("spend_window")),
     }
@@ -84,10 +82,14 @@ pub async fn get_admin_overview(
         .sum::<usize>()
         .min(usize::MAX);
 
-    let ranking_window_from = (now - chrono::Duration::hours(24)).to_rfc3339();
+    let spend_time_to = now;
+    let spend_time_from = now - chrono::Duration::hours(window_hours);
+    let spend_time_from_rfc = spend_time_from.to_rfc3339();
+    let spend_time_to_rfc = spend_time_to.to_rfc3339();
+
     let ranking = state
         .user_store
-        .get_users_usage_ranking(&ranking_window_from, &now.to_rfc3339(), 20)
+        .get_users_usage_ranking(&spend_time_from_rfc, &spend_time_to_rfc, 20)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     let users_ranking: Vec<Value> = ranking
@@ -102,10 +104,6 @@ pub async fn get_admin_overview(
         })
         .collect();
 
-    let spend_time_to = now;
-    let spend_time_from = now - chrono::Duration::hours(window_hours);
-    let spend_time_from_rfc = spend_time_from.to_rfc3339();
-    let spend_time_to_rfc = spend_time_to.to_rfc3339();
     let (window_calls, window_cost_nano_usd) = state
         .user_store
         .get_window_usage_totals(&spend_time_from_rfc, &spend_time_to_rfc)

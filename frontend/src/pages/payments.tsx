@@ -5,27 +5,41 @@ import { Button } from "@/components/ui/button";
 import { PageWrapper } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useSearchParamState } from "@/hooks/use-search-param-state";
 import type { PaymentChannel } from "@/lib/api";
+import { ORDER_STATUSES } from "@/lib/recharge";
 import { usePaymentChannels } from "@/lib/swr";
 import { ChannelDialog } from "./payments/channel-dialog";
 import { ChannelsTab } from "./payments/channels-tab";
 import { OrderFilters, OrdersTab, type OrderFilterState } from "./payments/orders-tab";
 
-type PaymentsTab = "channels" | "orders";
+const PAYMENTS_TABS = ["channels", "orders"] as const;
+const STATUS_FILTERS: readonly OrderFilterState["status"][] = ["all", ...ORDER_STATUSES];
 
 /**
  * `/dashboard/payments` (recharge-system.spec.md §11): admin page with two
  * tabs — payment-channel CRUD and the global recharge-orders view (RC-M1).
  * The page owns the shared toolbar row, so it also owns the channel dialog and
- * the order query state that the toolbar controls.
+ * the order query state that the toolbar controls. Tab and filters live in
+ * the URL (RC-M1).
  */
 export function PaymentsPage() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<PaymentsTab>("channels");
+  const [tab, setTab] = useSearchParamState<(typeof PAYMENTS_TABS)[number]>(
+    "tab",
+    "channels",
+    PAYMENTS_TABS,
+  );
+  const [status, setStatus] = useSearchParamState<OrderFilterState["status"]>(
+    "status",
+    "all",
+    STATUS_FILTERS,
+  );
+  const [username, setUsername] = useSearchParamState<string>("username", "");
   const { data: channels = [] } = usePaymentChannels();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<PaymentChannel | null>(null);
-  const [orderFilters, setOrderFilters] = useState<OrderFilterState>({ status: "all", username: "" });
+  const orderFilters: OrderFilterState = { status, username };
   const [ordersOffset, setOrdersOffset] = useState(0);
 
   const openChannelDialog = (channel: PaymentChannel | null) => {
@@ -55,7 +69,9 @@ export function PaymentsPage() {
             <OrderFilters
               value={orderFilters}
               onChange={(next) => {
-                setOrderFilters(next);
+                // Filters change one at a time; write only the changed param.
+                if (next.status !== status) setStatus(next.status);
+                if (next.username !== username) setUsername(next.username);
                 setOrdersOffset(0);
               }}
             />

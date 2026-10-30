@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Navigate, Outlet, Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -50,6 +50,7 @@ import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { UserCenterMenu } from "@/components/user-center-menu";
 import { springs } from "@/components/ui/motion";
 import { DashboardScrollParentContext } from "@/lib/dashboard-scroll";
+import { usePublicSettings } from "@/lib/swr";
 
 const navTransition = springs.snappy;
 
@@ -106,6 +107,8 @@ function AppSidebar() {
   const collapsed = !isMobile && state === "collapsed";
   const onNavigate = () => setOpenMobile(false);
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
+  const { data: publicSettings } = usePublicSettings();
+  const siteName = publicSettings?.site_name.trim() || "Monoize";
 
   const navItems = [
     {
@@ -125,28 +128,36 @@ function AppSidebar() {
     { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
   ];
 
-  const adminNavItems = [
-    { to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard") },
-    { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
-    { to: "/dashboard/models", icon: Database, label: t("nav.models") },
-    {
-      to: "/dashboard/plans",
-      icon: CalendarClock,
-      label: t("nav.billingPlans"),
-    },
-    { to: "/dashboard/payments", icon: CreditCard, label: t("nav.payments") },
-    { to: "/dashboard/users", icon: Users, label: t("nav.users") },
-    { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
-    {
-      to: "/dashboard/custom-transforms",
-      icon: Code2,
-      label: t("nav.customTransforms"),
-    },
-    {
-      to: "/dashboard/admin-settings",
-      icon: Settings,
-      label: t("nav.settings"),
-    },
+  // Task blocks separated by SidebarSeparator (DL6): overview / routing / billing /
+  // accounts / system.
+  const adminNavBlocks = [
+    [{ to: "/dashboard/admin", icon: Gauge, label: t("nav.adminDashboard") }],
+    [
+      { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
+      { to: "/dashboard/groups", icon: Boxes, label: t("nav.groups") },
+      {
+        to: "/dashboard/custom-transforms",
+        icon: Code2,
+        label: t("nav.customTransforms"),
+      },
+    ],
+    [
+      { to: "/dashboard/models", icon: Database, label: t("nav.models") },
+      {
+        to: "/dashboard/plans",
+        icon: CalendarClock,
+        label: t("nav.billingPlans"),
+      },
+      { to: "/dashboard/payments", icon: CreditCard, label: t("nav.payments") },
+    ],
+    [{ to: "/dashboard/users", icon: Users, label: t("nav.users") }],
+    [
+      {
+        to: "/dashboard/admin-settings",
+        icon: Settings,
+        label: t("nav.systemSettings"),
+      },
+    ],
   ];
 
   return (
@@ -185,6 +196,8 @@ function AppSidebar() {
               className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2.5 py-2.5 transition-colors hover:bg-accent/50"
             >
               <motion.div
+                // The tap gesture would otherwise add tabindex="0" inside the link (DS34c).
+                tabIndex={-1}
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 transition={springs.snappy}
@@ -192,14 +205,13 @@ function AppSidebar() {
               >
                 <MonoizeLogo className="size-full" />
               </motion.div>
-              <div className="flex min-w-0 flex-col leading-none">
-                <span className="truncate font-display text-sm font-semibold tracking-tight">
-                  Monoize
-                </span>
-                <span className="mt-0.5 truncate text-xs text-muted-foreground">
-                  Console
-                </span>
-              </div>
+              {/* Admin-set names can outgrow the rail: wrap instead of cutting a word mid-way. */}
+              <span
+                title={siteName}
+                className="line-clamp-2 min-w-0 break-words font-display text-sm font-semibold leading-4 tracking-tight"
+              >
+                {siteName}
+              </span>
             </Link>
             {!isMobile && (
               <Tooltip>
@@ -227,7 +239,7 @@ function AppSidebar() {
       <SidebarSeparator className="mx-3" />
       <SidebarContent>
         <nav aria-label={t("nav.sidebarTitle")}>
-          <SidebarGroup className="p-3 group-data-[collapsible=icon]:px-4">
+          <SidebarGroup className="px-3 py-2 group-data-[collapsible=icon]:px-4">
             <SidebarGroupContent>
               <SidebarMenu>
                 {navItems.map((item) => (
@@ -239,14 +251,19 @@ function AppSidebar() {
           {isAdmin && (
             <>
               <SidebarSeparator className="mx-3" />
-              <SidebarGroup className="p-3 group-data-[collapsible=icon]:px-4">
+              <SidebarGroup className="px-3 py-2 group-data-[collapsible=icon]:px-4">
                 <SidebarGroupLabel>{t("nav.admin")}</SidebarGroupLabel>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {adminNavItems.map((item) => (
-                      <NavLink key={item.to} {...item} />
-                    ))}
-                  </SidebarMenu>
+                <SidebarGroupContent className="flex flex-col gap-1">
+                  {adminNavBlocks.map((block, index) => (
+                    <Fragment key={block[0].to}>
+                      {index > 0 && <SidebarSeparator className="mx-2" />}
+                      <SidebarMenu>
+                        {block.map((item) => (
+                          <NavLink key={item.to} {...item} />
+                        ))}
+                      </SidebarMenu>
+                    </Fragment>
+                  ))}
                 </SidebarGroupContent>
               </SidebarGroup>
             </>
@@ -261,10 +278,21 @@ function AppSidebar() {
   );
 }
 
+const SIDEBAR_STORAGE_KEY = "monoize-sidebar";
+
 export function DashboardLayout() {
   const { user, loading } = useAuth();
   const { t } = useTranslation();
+  const location = useLocation();
   const [mainPane, setMainPane] = useState<HTMLElement | null>(null);
+  // Desktop collapse state survives reloads (DL1f); the mobile sheet is independent.
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => localStorage.getItem(SIDEBAR_STORAGE_KEY) !== "collapsed",
+  );
+  const changeSidebarOpen = (open: boolean) => {
+    setSidebarOpen(open);
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, open ? "expanded" : "collapsed");
+  };
 
   if (loading) {
     return (
@@ -281,11 +309,15 @@ export function DashboardLayout() {
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   return (
-    <SidebarProvider className="h-dvh overflow-hidden bg-background">
+    <SidebarProvider
+      open={sidebarOpen}
+      onOpenChange={changeSidebarOpen}
+      className="h-dvh overflow-hidden bg-background"
+    >
       <AppSidebar />
       <SidebarTrigger
         variant="outline"
@@ -295,11 +327,12 @@ export function DashboardLayout() {
         <Menu aria-hidden="true" />
       </SidebarTrigger>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden py-6 pt-16 lg:pt-6">
-        {/* The pane spans the full width so its scrollbar sits at the viewport edge (DL7c). */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {/* The pane spans the full width and height so its scrollbar and scrolled content
+            reach the viewport edges; page padding lives inside it (DL7c). */}
         <main
           ref={setMainPane}
-          className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-y-auto px-6 lg:px-8"
+          className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-y-auto px-6 pb-6 pt-16 lg:px-8 lg:pt-6"
         >
           <div className="mx-auto flex w-full min-w-0 max-w-6xl flex-1 flex-col">
             <DashboardScrollParentContext.Provider value={mainPane}>

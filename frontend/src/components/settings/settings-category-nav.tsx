@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { LayoutGroup, SharedTabIndicator } from "@/components/ui/motion";
+import { StatusDot } from "@/components/ui/status";
 import { useReducedMotionPreference } from "@/hooks/use-reduced-motion";
 import { SETTINGS_CATEGORIES, type SettingsCategoryId } from "./settings-categories";
 
@@ -9,6 +10,8 @@ interface SettingsCategoryNavProps {
   activeId: SettingsCategoryId;
   /** Match counts per category while searching; `null` in browse mode. */
   matchCounts: ReadonlyMap<SettingsCategoryId, number> | null;
+  /** Categories that contain an error; each shows a status dot (SSU-6). */
+  errorCategories: ReadonlySet<SettingsCategoryId>;
   onSelect: (id: SettingsCategoryId) => void;
 }
 
@@ -17,7 +20,12 @@ interface SettingsCategoryNavProps {
  * 56rem; otherwise one horizontal row that scrolls inside its own container and keeps
  * the active category (or, while searching, the first matching one) in view.
  */
-export function SettingsCategoryNav({ activeId, matchCounts, onSelect }: SettingsCategoryNavProps) {
+export function SettingsCategoryNav({
+  activeId,
+  matchCounts,
+  errorCategories,
+  onSelect,
+}: SettingsCategoryNavProps) {
   const { t } = useTranslation();
   const reduceMotion = useReducedMotionPreference();
   const listRef = useRef<HTMLUListElement>(null);
@@ -64,7 +72,15 @@ export function SettingsCategoryNav({ activeId, matchCounts, onSelect }: Setting
                       className="absolute inset-0 rounded-md bg-accent"
                     />
                   ) : null}
-                  <span className="relative">{t(category.titleKey)}</span>
+                  <span className="relative flex min-w-0 items-center gap-2">
+                    {t(category.titleKey)}
+                    {errorCategories.has(category.id) ? (
+                      <>
+                        <StatusDot variant="destructive" aria-hidden="true" />
+                        <span className="sr-only">{t("settings.categoryHasError")}</span>
+                      </>
+                    ) : null}
+                  </span>
                   {searching ? (
                     <span className="relative tabular-nums text-muted-foreground">
                       <span aria-hidden="true">{count}</span>

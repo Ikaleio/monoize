@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParamState } from "@/hooks/use-search-param-state";
 import { BookOpenText, ReceiptText } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActivityOrders } from "./activity-orders";
 import { ActivityLedger } from "./activity-ledger";
 
-type ActivityTab = "orders" | "ledger";
+const ACTIVITY_TABS = ["orders", "ledger"] as const;
 
 export function ActivityWorkspace({
   pageSize,
@@ -16,13 +17,19 @@ export function ActivityWorkspace({
   username: string;
 }) {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<ActivityTab>("orders");
+  const [activeTab, setActiveTab] = useSearchParamState(
+    "activity",
+    "orders",
+    ACTIVITY_TABS,
+  );
   const [ordersOffset, setOrdersOffset] = useState(0);
 
   return (
     <Tabs
       value={activeTab}
-      onValueChange={(value) => setActiveTab(value as ActivityTab)}
+      onValueChange={(value) =>
+        setActiveTab(value === "ledger" ? "ledger" : "orders")
+      }
     >
       <Card role="region" aria-label={t("wallet.activityTitle")}>
         <CardHeader className="border-b p-4">

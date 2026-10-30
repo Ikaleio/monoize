@@ -22,7 +22,6 @@ pub struct PublicSettings {
 pub struct SystemSettings {
     pub registration_enabled: bool,
     pub captcha_enabled: bool,
-    pub default_user_role: String,
     pub session_ttl_days: i64,
     pub api_key_max_per_user: i64,
     pub site_name: String,
@@ -46,8 +45,6 @@ pub struct SystemSettings {
     pub monoize_passive_failure_threshold: u32,
     pub monoize_passive_cooldown_seconds: u64,
     pub monoize_passive_window_seconds: u64,
-    pub monoize_passive_min_samples: u32,
-    pub monoize_passive_failure_rate_threshold: f64,
     pub monoize_passive_rate_limit_cooldown_seconds: u64,
     pub monoize_request_timeout_ms: u64,
     pub monoize_stream_idle_timeout_ms: u64,
@@ -287,7 +284,6 @@ impl Default for SystemSettings {
         Self {
             registration_enabled: true,
             captcha_enabled: true,
-            default_user_role: "user".to_string(),
             session_ttl_days: 7,
             api_key_max_per_user: 1000,
             site_name: "Monoize Dashboard".to_string(),
@@ -306,8 +302,6 @@ impl Default for SystemSettings {
             monoize_passive_failure_threshold: 3,
             monoize_passive_cooldown_seconds: 60,
             monoize_passive_window_seconds: 30,
-            monoize_passive_min_samples: 20,
-            monoize_passive_failure_rate_threshold: 0.6,
             monoize_passive_rate_limit_cooldown_seconds: 15,
             monoize_request_timeout_ms: 30000,
             monoize_stream_idle_timeout_ms: 120000,
@@ -387,8 +381,6 @@ impl SettingsStore {
         .await?;
         self.set_if_not_exists("captcha_enabled", &defaults.captcha_enabled.to_string())
             .await?;
-        self.set_if_not_exists("default_user_role", &defaults.default_user_role)
-            .await?;
         self.set_if_not_exists("session_ttl_days", &defaults.session_ttl_days.to_string())
             .await?;
         self.set_if_not_exists(
@@ -455,16 +447,6 @@ impl SettingsStore {
         self.set_if_not_exists(
             "monoize_passive_window_seconds",
             &defaults.monoize_passive_window_seconds.to_string(),
-        )
-        .await?;
-        self.set_if_not_exists(
-            "monoize_passive_min_samples",
-            &defaults.monoize_passive_min_samples.to_string(),
-        )
-        .await?;
-        self.set_if_not_exists(
-            "monoize_passive_failure_rate_threshold",
-            &defaults.monoize_passive_failure_rate_threshold.to_string(),
         )
         .await?;
         self.set_if_not_exists(
@@ -723,9 +705,6 @@ impl SettingsStore {
                 "captcha_enabled" => {
                     settings.captcha_enabled = decode_captcha_enabled(&row.value)?;
                 }
-                "default_user_role" => {
-                    settings.default_user_role = row.value;
-                }
                 "session_ttl_days" => {
                     settings.session_ttl_days = row.value.parse().unwrap_or(7);
                 }
@@ -806,13 +785,6 @@ impl SettingsStore {
                 }
                 "monoize_passive_window_seconds" => {
                     settings.monoize_passive_window_seconds = row.value.parse().unwrap_or(30);
-                }
-                "monoize_passive_min_samples" => {
-                    settings.monoize_passive_min_samples = row.value.parse().unwrap_or(20);
-                }
-                "monoize_passive_failure_rate_threshold" => {
-                    settings.monoize_passive_failure_rate_threshold =
-                        row.value.parse().unwrap_or(0.6);
                 }
                 "monoize_passive_rate_limit_cooldown_seconds" => {
                     settings.monoize_passive_rate_limit_cooldown_seconds =
@@ -914,7 +886,6 @@ impl SettingsStore {
                 settings.registration_enabled.to_string(),
             ),
             ("captcha_enabled", settings.captcha_enabled.to_string()),
-            ("default_user_role", settings.default_user_role.clone()),
             ("session_ttl_days", settings.session_ttl_days.to_string()),
             (
                 "api_key_max_per_user",
@@ -980,14 +951,6 @@ impl SettingsStore {
             (
                 "monoize_passive_window_seconds",
                 settings.monoize_passive_window_seconds.to_string(),
-            ),
-            (
-                "monoize_passive_min_samples",
-                settings.monoize_passive_min_samples.to_string(),
-            ),
-            (
-                "monoize_passive_failure_rate_threshold",
-                settings.monoize_passive_failure_rate_threshold.to_string(),
             ),
             (
                 "monoize_passive_rate_limit_cooldown_seconds",

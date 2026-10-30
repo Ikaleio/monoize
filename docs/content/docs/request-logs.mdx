@@ -5,7 +5,7 @@ description: Read the logs list, enable request capture, and inspect payloads in
 
 ## Logs list
 
-Open **Logs** in the sidebar. Monoize records one row for every API-key-authenticated forwarding request. Each row shows:
+Open **Request Logs** in the sidebar. Monoize records one row for every API-key-authenticated forwarding request. Each row shows:
 
 - the logical model, the serving Provider and Channel, and the API key name;
 - token counts: input, output, cache read, cache creation, and reasoning tokens;
@@ -14,6 +14,16 @@ Open **Logs** in the sidebar. Monoize records one row for every API-key-authenti
 - timing: total duration, time to first byte, and tokens per second for streams.
 
 The list enables real-time updates by default. Disable **Real-time updates** to stop the event stream and fallback polling. Use **Refresh** to update the list manually.
+
+When you scroll away from the top, new rows do not move the list. A **N new logs · Back to top** button appears. Select it to show the new rows.
+
+A failed row without usage shows a chip with the HTTP status and error code.
+
+## Filter logs
+
+Select **Filters** to show the filter fields. The button shows the number of active filters. Select **Clear filters** to remove them.
+
+Monoize stores filters in the page URL. Copy the URL to share the filtered view. Admins must filter by user before they select an API key.
 
 ![Request logs list](/images/en/request-logs.webp)
 
@@ -25,7 +35,7 @@ When a request needed more than one upstream attempt, the row lists each failed 
 
 Capture stores the exact payload of each upstream attempt on disk. Capture is off by default. Two switches control it:
 
-1. **System switch.** A `super_admin` enables request capture in **Settings**. When this switch is off, no capture is written for any key.
+1. **System switch.** A `super_admin` enables request capture in **System Settings → Privacy & Capture**. When this switch is off, no capture is written for any key.
 2. **Per-key mode.** Each API key sets `request_capture_mode`:
    - `off`: never capture.
    - `capture-all`: capture every request that reaches an upstream.
@@ -47,7 +57,7 @@ Capture keeps image and other multimodal payloads exactly as they appear in the 
 
 Each API key sets `request_capture_retention`: `5m`, `1h`, `24h`, or `7d`. The default is `24h`. A capture expires after this period. A cleanup task removes expired captures at startup and then every hour.
 
-A `super_admin` can set `monoize_request_capture_max_total_bytes` in **Settings**. The dashboard shows the value in MiB. When the total size of all captures exceeds this cap, Monoize deletes the oldest captures first until the total fits. Set `0` to disable the cap.
+A `super_admin` can set `monoize_request_capture_max_total_bytes` in **System Settings → Privacy & Capture**. The dashboard shows the value in MiB. When the total size of all captures exceeds this cap, Monoize deletes the oldest captures first until the total fits. Set `0` to disable the cap.
 
 Monoize compresses new capture files with zstd in a background task. It still reads uncompressed files from earlier versions.
 

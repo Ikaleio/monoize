@@ -96,3 +96,16 @@ export function nanoUsdToChartNumber(value: string | undefined): number {
 export function isZeroIntegerString(value: string | null | undefined): boolean {
 	return value != null && isSignedIntegerString(value) && BigInt(value) === 0n
 }
+
+/**
+ * Exact USD decimal → nano-USD (`BigInt`, no floating point). Returns null for
+ * malformed input, more than 9 fractional digits, a disallowed sign, or a value
+ * outside the signed 128-bit range.
+ */
+export function usdDecimalToNano(value: string, allowNegative = false): bigint | null {
+	const match = /^(-?)(\d+)(?:\.(\d{0,9}))?$/.exec(value.trim())
+	if (!match || (match[1] === '-' && !allowNegative)) return null
+	const magnitude = BigInt(match[2]) * 1_000_000_000n + BigInt((match[3] ?? '').padEnd(9, '0'))
+	const nano = match[1] === '-' ? -magnitude : magnitude
+	return nano > I128_MAX || nano < -I128_MAX - 1n ? null : nano
+}

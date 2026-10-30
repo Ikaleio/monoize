@@ -225,6 +225,8 @@ TF-8c. After SAC-1 authorization (`spec/security-access-control.spec.md`), the r
 
 TF-8b. A `config_schema` string property MAY carry `"format": "multiline"` to request a multi-line text editor in the dashboard (see `transform-config-ui.spec.md` TCU-3 rule 4). Exactly these properties MUST carry `"format": "multiline"`: `prompt_inject_system` property `content`, `prompt_append_empty_user` property `content`, and `image_output_to_markdown` property `template`.
 
+TF-8d. In a built-in transform's `config_schema`, every property object that carries a string `description` MUST also carry `x-localized-description`: a localized-text object with exactly the keys `en`, `zh`, `zh-TW`, and `ja`, each a non-empty string, where the `en` value equals `description`. The keyword is display metadata only: config parsing and validation MUST ignore it. The dashboard resolves it per `transform-config-ui.spec.md` TCU-1b.
+
 TF-9. Scope semantics are exact:
 1. `provider` means the transform MAY be configured in provider transform chains;
 2. `global` means the transform MAY be configured in the system settings global transform chain;

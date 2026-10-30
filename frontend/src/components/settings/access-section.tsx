@@ -1,7 +1,10 @@
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { TriangleAlert } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { StatusAlert } from "@/components/ui/status";
 import type { SystemSettings } from "@/lib/api";
-import { SettingRow, SettingsGroup } from "./settings-layout";
+import { SettingsGroup } from "./settings-layout";
+import { NumberRow, SwitchRow } from "./settings-rows";
 
 interface AccessSectionProps {
   settings: SystemSettings;
@@ -10,53 +13,43 @@ interface AccessSectionProps {
 
 /** Registration policy plus session and API-key limits. */
 export function AccessSection({ settings, onChange }: AccessSectionProps) {
+  const { t } = useTranslation();
+
   return (
     <>
+      {settings.registration_enabled && !settings.captcha_enabled ? (
+        <StatusAlert
+          variant="warning"
+          icon={<TriangleAlert className="size-4" aria-hidden="true" />}
+          title={t("settings.openRegistrationWarningTitle")}
+          description={t("settings.openRegistrationWarningDescription")}
+        />
+      ) : null}
+
       <SettingsGroup id="access.registration">
-        <SettingRow id="registration_enabled" switchControl>
-          <Switch
-            id="registration_enabled"
-            checked={settings.registration_enabled}
-            onCheckedChange={(checked) => onChange({ registration_enabled: checked })}
-          />
-        </SettingRow>
-        <SettingRow id="default_user_role">
-          <Input
-            id="default_user_role"
-            value={settings.default_user_role}
-            onChange={(e) => onChange({ default_user_role: e.target.value })}
-          />
-        </SettingRow>
+        <SwitchRow
+          id="registration_enabled"
+          checked={settings.registration_enabled}
+          onCheckedChange={(registration_enabled) => onChange({ registration_enabled })}
+        />
       </SettingsGroup>
 
       <SettingsGroup id="access.session">
-        <SettingRow id="captcha_enabled" switchControl>
-          <Switch
-            id="captcha_enabled"
-            checked={settings.captcha_enabled}
-            onCheckedChange={(checked) => onChange({ captcha_enabled: checked })}
-          />
-        </SettingRow>
-        <SettingRow id="session_ttl_days">
-          <Input
-            id="session_ttl_days"
-            type="number"
-            min="1"
-            value={settings.session_ttl_days}
-            onChange={(e) => onChange({ session_ttl_days: parseInt(e.target.value) || 7 })}
-          />
-        </SettingRow>
-        <SettingRow id="api_key_max_per_user">
-          <Input
-            id="api_key_max_per_user"
-            type="number"
-            min="1"
-            value={settings.api_key_max_per_user}
-            onChange={(e) =>
-              onChange({ api_key_max_per_user: parseInt(e.target.value) || 10 })
-            }
-          />
-        </SettingRow>
+        <SwitchRow
+          id="captcha_enabled"
+          checked={settings.captcha_enabled}
+          onCheckedChange={(captcha_enabled) => onChange({ captcha_enabled })}
+        />
+        <NumberRow
+          id="session_ttl_days"
+          value={settings.session_ttl_days}
+          onValueChange={(session_ttl_days) => onChange({ session_ttl_days })}
+        />
+        <NumberRow
+          id="api_key_max_per_user"
+          value={settings.api_key_max_per_user}
+          onValueChange={(api_key_max_per_user) => onChange({ api_key_max_per_user })}
+        />
       </SettingsGroup>
     </>
   );

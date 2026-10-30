@@ -1,15 +1,17 @@
 //! Persistence and runtime snapshot for custom JS transforms
 //! (`custom-js-transforms.spec.md` §4–§6).
 
-use super::frontmatter::{CustomTransformVisibility, parse_frontmatter};
+use super::frontmatter::{
+    CUSTOM_TRANSFORM_ID_PREFIX, CustomTransformVisibility, at_line, parse_frontmatter,
+};
 use super::sandbox::{self, SandboxLimits};
 use crate::db::DbPool;
 use crate::transforms::{CustomTransformSource, DynTransform, Phase, TransformScope};
 use chrono::Utc;
 use sea_orm::{ConnectionTrait, TransactionTrait};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 const DEFAULT_SOURCE_MAX_BYTES: usize = 262_144;
@@ -424,6 +426,127 @@ impl CustomTransformStore {
 
         self.reload().await.map_err(CustomTransformError::Internal)
     }
+
+    /// CJS-API-6: every Provider, global, and API-key chain that references a
+    /// `js:` id, keyed by that id. `global_chain` is the global chain's rule ids.
+    pub async fn references(
+        &self,
+        global_chain: &[String],
+    ) -> Result<BTreeMap<String, Vec<CustomTransformReference>>, String> {
+        let mut references: BTreeMap<String, Vec<CustomTransformReference>> = BTreeMap::new();
+
+        let provider_rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT id, name, transforms FROM monoize_providers ORDER BY name ASC, id ASC",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        for row in &provider_rows {
+            let Some(ids) = row_referenced_custom_ids(row) else {
+                continue;
+            };
+            let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+            let name: String = row.try_get("", "name").map_err(|e| e.to_string())?;
+            for transform_id in ids {
+                references
+                    .entry(transform_id)
+                    .or_default()
+                    .push(CustomTransformReference {
+                        kind: "provider",
+                        id: id.clone(),
+                        name: name.clone(),
+                        owner_user_id: None,
+                        owner_username: None,
+                    });
+            }
+        }
+
+        let global_ids: BTreeSet<&str> = global_chain
+            .iter()
+            .map(String::as_str)
+            .filter(|id| id.starts_with(CUSTOM_TRANSFORM_ID_PREFIX))
+            .collect();
+        for transform_id in global_ids {
+            references
+                .entry(transform_id.to_string())
+                .or_default()
+                .push(CustomTransformReference {
+                    kind: "global",
+                    id: "global_transforms".to_string(),
+                    name: "global_transforms".to_string(),
+                    owner_user_id: None,
+                    owner_username: None,
+                });
+        }
+
+        let key_rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT a.id, a.name, a.user_id, a.transforms, u.username \
+                 FROM api_keys a JOIN users u ON u.id = a.user_id \
+                 ORDER BY u.username ASC, a.name ASC, a.id ASC",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        for row in &key_rows {
+            let Some(ids) = row_referenced_custom_ids(row) else {
+                continue;
+            };
+            let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+            let name: String = row.try_get("", "name").map_err(|e| e.to_string())?;
+            let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
+            let username: String = row.try_get("", "username").map_err(|e| e.to_string())?;
+            for transform_id in ids {
+                references
+                    .entry(transform_id)
+                    .or_default()
+                    .push(CustomTransformReference {
+                        kind: "api_key",
+                        id: id.clone(),
+                        name: name.clone(),
+                        owner_user_id: Some(user_id.clone()),
+                        owner_username: Some(username.clone()),
+                    });
+            }
+        }
+
+        Ok(references)
+    }
+}
+
+/// One chain owner that references a custom transform (CJS-API-6).
+#[derive(Debug, Clone, Serialize)]
+pub struct CustomTransformReference {
+    pub kind: &'static str,
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_username: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PersistedRuleId {
+    transform: String,
+}
+
+/// Distinct `js:` ids in a row's persisted `transforms` chain; `None` when the
+/// column is missing or is not a rule array.
+fn row_referenced_custom_ids(row: &sea_orm::QueryResult) -> Option<BTreeSet<String>> {
+    let raw: String = row.try_get("", "transforms").ok()?;
+    let rules: Vec<PersistedRuleId> = serde_json::from_str(&raw).ok()?;
+    let ids: BTreeSet<String> = rules
+        .into_iter()
+        .map(|rule| rule.transform)
+        .filter(|id| id.starts_with(CUSTOM_TRANSFORM_ID_PREFIX))
+        .collect();
+    (!ids.is_empty()).then_some(ids)
 }
 
 struct ValidatedSource {
@@ -448,10 +571,13 @@ async fn validate_source_for_save(
     let meta = parse_frontmatter(source).map_err(CustomTransformError::Invalid)?;
     if let Some(expected_id) = expected_id {
         if meta.id != expected_id {
-            return Err(CustomTransformError::Invalid(format!(
-                "frontmatter id '{}' must equal the path id '{expected_id}'; \
-                 renaming requires delete plus create",
-                meta.id
+            return Err(CustomTransformError::Invalid(at_line(
+                meta.id_line,
+                format!(
+                    "frontmatter id '{}' must equal the path id '{expected_id}'; \
+                     renaming requires delete plus create",
+                    meta.id
+                ),
             )));
         }
     }

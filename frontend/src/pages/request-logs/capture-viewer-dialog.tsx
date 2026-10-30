@@ -26,7 +26,8 @@ import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useRequestCapture } from '@/lib/swr'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/format-time'
-import type { CaptureAttempt, CaptureFrameTruncation } from '@/lib/api'
+import type { CaptureAttempt, CaptureFrameTruncation, RequestLog } from '@/lib/api'
+import { readableRoute } from './utils'
 
 // RCV-F15: non-linear motion tokens, durations inside the 0.16s-0.30s band.
 const expandTransition = { duration: 0.22, ease: easings.easeOutExpo }
@@ -43,32 +44,39 @@ type Translate = (key: string, options?: Record<string, unknown>) => string
 interface CaptureViewerDialogProps {
 	open: boolean
 	onOpenChange: (open: boolean) => void
-	requestId: string | null
-	userId: string | null
+	/** The request-log row whose capture is shown; supplies FL9b name snapshots. */
+	log: RequestLog | null
+	isAdmin: boolean
+	knownTargets: ReadonlyMap<string, string>
 }
 
 export function CaptureViewerDialog({
 	open,
 	onOpenChange,
-	requestId,
-	userId
+	log,
+	isAdmin,
+	knownTargets
 }: CaptureViewerDialogProps) {
 	const { t } = useTranslation()
+	const requestId = log?.request_id ?? null
 	const { data, error, isLoading, mutate } = useRequestCapture(
 		requestId,
-		userId,
+		log?.user?.id ?? null,
 		open
 	)
-	const [attemptIndex, setAttemptIndex] = useState(0)
+	// null selects the final attempt (the terminal one users usually want first).
+	const [attemptIndex, setAttemptIndex] = useState<number | null>(null)
 	const [lastRequestId, setLastRequestId] = useState(requestId)
 	if (lastRequestId !== requestId) {
 		setLastRequestId(requestId)
-		setAttemptIndex(0)
+		setAttemptIndex(null)
 	}
 
 	const attempts = data?.dump?.attempts ?? []
+	const selectedIndex =
+		attemptIndex == null ? attempts.length - 1 : Math.min(attemptIndex, attempts.length - 1)
 	const selectedAttempt: CaptureAttempt | null =
-		attempts.length > 0 ? attempts[Math.min(attemptIndex, attempts.length - 1)] : null
+		attempts.length > 0 ? attempts[selectedIndex] : null
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -110,24 +118,20 @@ export function CaptureViewerDialog({
 						<div className='flex flex-wrap items-center gap-1.5 text-xs'>
 							<Badge
 								variant='secondary'
-								className='h-5 px-1.5 font-mono border-info-border bg-info-soft text-info-foreground'
+								className='h-5 px-1.5 font-mono border-0 bg-muted text-muted-foreground'
 							>
 								{data.dump.downstream_protocol}
 							</Badge>
-							{data.dump.is_stream ?
-								<Badge
-									variant='secondary'
-									className='h-5 px-1.5 border-info-border bg-info-soft text-info-foreground'
-								>
-									{t('requestLogs.capture.stream')}
-								</Badge>
-							:	<Badge
-									variant='secondary'
-									className='h-5 px-1.5 border-warning-border bg-warning-soft text-warning-foreground'
-								>
-									{t('requestLogs.capture.nonStream')}
-								</Badge>
-							}
+							<Badge
+								variant='secondary'
+								className='h-5 px-1.5 border-0 bg-muted text-muted-foreground'
+							>
+								{t(
+									data.dump.is_stream ?
+										'requestLogs.capture.stream'
+									:	'requestLogs.capture.nonStream'
+								)}
+							</Badge>
 							<span className='text-muted-foreground'>
 								{formatDateTime(data.created_at)}
 							</span>
@@ -143,24 +147,58 @@ export function CaptureViewerDialog({
 
 						{attempts.length > 1 && (
 							<Select
-								value={String(Math.min(attemptIndex, attempts.length - 1))}
+								value={String(selectedIndex)}
 								onValueChange={value => setAttemptIndex(Number(value))}
 							>
 								<SelectTrigger
-									className='h-8 w-full text-xs sm:w-80'
+									className='h-8 w-full text-xs sm:w-[28rem]'
 									aria-label={t('requestLogs.capture.attempt')}
 								>
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									{attempts.map((attempt, index) => (
-										<SelectItem key={index} value={String(index)}>
-											<span className='font-mono'>
-												#{attempt.attempt_number} · {attempt.provider_id} ·{' '}
-												{attempt.upstream_model}
-											</span>
-										</SelectItem>
-									))}
+									{attempts.map((attempt, index) => {
+										const isLast = index === attempts.length - 1
+										// Earlier attempts only exist because they failed over.
+										const failed =
+											attempt.error != null || !isLast || log?.status === 'error'
+										const succeeded = isLast && !failed && log?.status === 'success'
+										// RCV-F8: names per FL9b; ids only when unresolvable. Non-admins
+										// never see Provider/Channel identity (FL9).
+										const route =
+											isAdmin ?
+												(log &&
+													readableRoute(
+														log,
+														knownTargets,
+														attempt.provider_id,
+														attempt.channel_id
+													)) ||
+												[attempt.provider_id, attempt.channel_id]
+													.filter(Boolean)
+													.join('/')
+											:	null
+										return (
+											<SelectItem key={index} value={String(index)}>
+												<span className='inline-flex min-w-0 items-center gap-1.5'>
+													<span className='truncate'>
+														#{attempt.attempt_number}
+														{route ? ` · ${route}` : ''} ·{' '}
+														<span className='font-mono'>{attempt.upstream_model}</span>
+													</span>
+													{failed ?
+														<span className='shrink-0 rounded-md border border-error-border bg-error-soft px-1 text-[11px] text-error-foreground'>
+															{t('requestLogs.capture.attemptFailed')}
+														</span>
+													: succeeded ?
+														<span className='shrink-0 rounded-md border border-success-border bg-success-soft px-1 text-[11px] text-success-foreground'>
+															{t('requestLogs.capture.attemptSucceeded')}
+														</span>
+													:	null}
+												</span>
+											</SelectItem>
+										)
+									})}
 								</SelectContent>
 							</Select>
 						)}

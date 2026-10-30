@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, Landmark, LoaderCircle } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,25 +20,24 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { springs } from "@/components/ui/motion";
-import { DashboardApiError } from "@/lib/api";
+import type { RechargeChannel } from "@/lib/api";
+import { toastApiError } from "@/lib/api-error";
 import { formatNanoUsd } from "@/lib/exact-decimal";
 import { parseUsdToNano, previewPayAmount } from "@/lib/recharge";
 import { createRechargeOrderOptimistic, useRechargeChannels } from "@/lib/swr";
 import { QueryError } from "@/components/ui/query-error";
 
 const PRESET_AMOUNTS = ["5", "10", "25", "50", "100"];
+
+function channelBounds(channel: RechargeChannel): { min: bigint; max: bigint } | null {
+  const min = parseUsdToNano(channel.min_credit_usd);
+  const max = parseUsdToNano(channel.max_credit_usd);
+  return min !== null && max !== null ? { min, max } : null;
+}
 
 function RechargeDeskSkeleton() {
   return (
@@ -80,18 +78,14 @@ export function RechargeDesk({
   const [channelId, setChannelId] = useState<string | null>(null);
   const [amount, setAmount] = useState("10");
   const [submitting, setSubmitting] = useState(false);
+  const [clampNote, setClampNote] = useState<string | null>(null);
   const channel = useMemo(() => {
     if (!channels?.length) return null;
     return (
       channels.find((candidate) => candidate.id === channelId) ?? channels[0]
     );
   }, [channels, channelId]);
-  const bounds = useMemo(() => {
-    if (!channel) return null;
-    const min = parseUsdToNano(channel.min_credit_usd);
-    const max = parseUsdToNano(channel.max_credit_usd);
-    return min !== null && max !== null ? { min, max } : null;
-  }, [channel]);
+  const bounds = useMemo(() => (channel ? channelBounds(channel) : null), [channel]);
   const amountNano = useMemo(() => parseUsdToNano(amount), [amount]);
   const inRange =
     amountNano !== null &&
@@ -108,6 +102,34 @@ export function RechargeDesk({
       ? t("wallet.errors.invalid_amount")
       : t("wallet.errors.amount_out_of_range");
 
+  const changeAmount = (value: string) => {
+    setAmount(value);
+    setClampNote(null);
+  };
+
+  // ACC-15: a valid amount outside the new channel's bounds snaps to the nearest bound.
+  const selectChannel = (id: string) => {
+    setChannelId(id);
+    const next = channels?.find((candidate) => candidate.id === id);
+    const nextBounds = next ? channelBounds(next) : null;
+    if (!next || !nextBounds || amountNano === null) {
+      setClampNote(null);
+      return;
+    }
+    const clamped =
+      amountNano < nextBounds.min
+        ? next.min_credit_usd
+        : amountNano > nextBounds.max
+          ? next.max_credit_usd
+          : null;
+    if (clamped === null) {
+      setClampNote(null);
+      return;
+    }
+    setAmount(clamped);
+    setClampNote(t("wallet.amountClamped", { amount: clamped, name: next.name }));
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!channel || amountNano === null || !inRange || submitting) return;
@@ -123,13 +145,7 @@ export function RechargeDesk({
       window.location.assign(result.payment.url);
     } catch (caught) {
       setSubmitting(false);
-      toast.error(
-        caught instanceof DashboardApiError
-          ? t(`wallet.errors.${caught.code}`, {
-              defaultValue: t("wallet.errors.request_failed"),
-            })
-          : t("wallet.errors.request_failed"),
-      );
+      toastApiError(caught, t, t("wallet.rechargeFailed"));
     }
   };
 
@@ -189,15 +205,49 @@ export function RechargeDesk({
               </CardDescription>
             </CardHeader>
             <CardContent className="px-5 pb-5">
-              <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                <Field className="sm:col-span-2">
+              <FieldGroup className="grid gap-4">
+                <Field>
+                  <FieldLabel id="recharge-channel-label">
+                    {t("wallet.channel")}
+                  </FieldLabel>
+                  <ToggleGroup
+                    type="single"
+                    value={channel?.id ?? ""}
+                    onValueChange={(value) => value && selectChannel(value)}
+                    variant="outline"
+                    disabled={submitting}
+                    className="grid gap-2 sm:grid-cols-2"
+                    aria-labelledby="recharge-channel-label"
+                  >
+                    {channels.map((candidate) => (
+                      <ToggleGroupItem
+                        key={candidate.id}
+                        value={candidate.id}
+                        className="h-auto min-h-11 w-full min-w-0 justify-start px-3 py-2 text-left data-[state=on]:border-primary data-[state=on]:bg-primary/5 data-[state=on]:text-foreground"
+                      >
+                        <span className="min-w-0 break-words">
+                          {t("wallet.channelOption", {
+                            name: candidate.name,
+                            currency: candidate.currency,
+                            min: candidate.min_credit_usd,
+                            max: candidate.max_credit_usd,
+                          })}
+                        </span>
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                  {clampNote ? (
+                    <FieldDescription role="status">{clampNote}</FieldDescription>
+                  ) : null}
+                </Field>
+                <Field>
                   <FieldLabel id="recharge-presets-label">
                     {t("wallet.amountUsd")}
                   </FieldLabel>
                   <ToggleGroup
                     type="single"
                     value={PRESET_AMOUNTS.includes(amount) ? amount : ""}
-                    onValueChange={(value) => value && setAmount(value)}
+                    onValueChange={(value) => value && changeAmount(value)}
                     variant="outline"
                     disabled={submitting}
                     className="grid grid-cols-5 gap-2"
@@ -234,7 +284,7 @@ export function RechargeDesk({
                     inputMode="decimal"
                     disabled={submitting}
                     value={amount}
-                    onChange={(event) => setAmount(event.target.value)}
+                    onChange={(event) => changeAmount(event.target.value)}
                     placeholder={t("wallet.amountUsd")}
                     aria-invalid={invalidAmount}
                     aria-describedby={
@@ -259,45 +309,17 @@ export function RechargeDesk({
                     </p>
                   ) : null}
                 </Field>
-                <Field>
-                  <FieldLabel htmlFor="recharge-channel">
-                    {t("wallet.channel")}
-                  </FieldLabel>
-                  <Select
-                    value={channel?.id ?? ""}
-                    onValueChange={setChannelId}
-                    disabled={submitting}
-                  >
-                    <SelectTrigger
-                      id="recharge-channel"
-                      className="h-11 min-w-0 text-base"
-                    >
-                      <SelectValue
-                        placeholder={t("wallet.channelPlaceholder")}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {channels.map((candidate) => (
-                          <SelectItem key={candidate.id} value={candidate.id}>
-                            {candidate.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
               </FieldGroup>
             </CardContent>
           </div>
           <section
             aria-labelledby="wallet-payment-summary"
-            className="flex min-w-0 flex-col gap-4 border-t bg-muted/35 p-5 lg:border-l lg:border-t-0"
+            className="flex min-w-0 flex-col gap-4 border-t bg-muted/35 p-4 lg:border-l lg:border-t-0 lg:p-5"
           >
-            <h2 id="wallet-payment-summary" className="text-base font-semibold">
+            <h2 id="wallet-payment-summary" className="sr-only text-base font-semibold lg:not-sr-only">
               {t("wallet.paymentSummary")}
             </h2>
-            <dl className="flex flex-col gap-4 text-sm">
+            <dl className="hidden flex-col gap-4 text-sm lg:flex">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">
                   {t("wallet.creditAmount")}
@@ -317,9 +339,9 @@ export function RechargeDesk({
                 </dd>
               </div>
             </dl>
-            <Separator />
+            <Separator className="hidden lg:block" />
             <div
-              className="flex flex-col gap-3"
+              className="hidden flex-col gap-3 lg:flex"
               aria-live="polite"
               aria-atomic="true"
             >
@@ -345,6 +367,21 @@ export function RechargeDesk({
               </AnimatePresence>
             </div>
             <div className="flex flex-col gap-3">
+              <p
+                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm lg:hidden"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <span className="min-w-0 break-all font-semibold tabular-nums">
+                  {t("wallet.youPayCompact", {
+                    amount: preview ?? "—",
+                    currency: channel?.currency ?? "",
+                  })}
+                </span>
+                <span className="tabular-nums text-muted-foreground">
+                  1 USD = {channel?.usd_rate} {channel?.currency}
+                </span>
+              </p>
               <Button
                 type="submit"
                 variant="primary"

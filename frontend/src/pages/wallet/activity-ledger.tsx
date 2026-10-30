@@ -24,13 +24,19 @@ import { springs } from "@/components/ui/motion";
 import { formatDateTime } from "@/lib/format-time";
 import { formatNanoUsd } from "@/lib/exact-decimal";
 import { WALLET_LEDGER_KINDS } from "@/lib/recharge";
-import { useLedger } from "@/lib/swr";
+import { useApiKeys, useLedger } from "@/lib/swr";
+import type { LedgerEntry } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PaginationFooter } from "./pagination-footer";
 import { QueryError } from "@/components/ui/query-error";
 
 const PAGE_SIZE = 10;
 const ALL_KINDS = [...WALLET_LEDGER_KINDS];
+
+function metaString(entry: LedgerEntry, key: string): string | null {
+  const value = entry.meta_json?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
 
 export function ActivityLedger({
   active,
@@ -52,6 +58,21 @@ export function ActivityLedger({
   );
   const kindLabel = (value: string) =>
     t(`wallet.kinds.${value}`, { defaultValue: value });
+  const { data: apiKeys } = useApiKeys();
+  const keyNames = new Map(apiKeys?.map((key) => [key.id, key.name]));
+  // ACC-12: admin note, then API key name, then order id prefix.
+  const entryContext = (entry: LedgerEntry): string | null => {
+    const note = metaString(entry, "note");
+    if (note) return note;
+    const apiKeyId = metaString(entry, "api_key_id");
+    if (apiKeyId) {
+      return t("wallet.ledgerApiKey", {
+        name: keyNames.get(apiKeyId) ?? apiKeyId.slice(0, 8),
+      });
+    }
+    const orderId = metaString(entry, "order_id");
+    return orderId ? t("wallet.ledgerOrder", { id: orderId.slice(0, 8) }) : null;
+  };
 
   return (
     <motion.section
@@ -117,6 +138,7 @@ export function ActivityLedger({
             <DataListBody aria-label={t("wallet.ledgerTitle")}>
               {data.entries.map((entry, index) => {
                 const positive = !entry.delta_nano_usd.startsWith("-");
+                const context = entryContext(entry);
                 return (
                   <DataListRow key={entry.id} asChild>
                     <motion.li
@@ -130,7 +152,15 @@ export function ActivityLedger({
                       }
                     >
                       <DataListCell primary>
-                        <span className="font-medium">{kindLabel(entry.kind)}</span>
+                        <span className="block font-medium">{kindLabel(entry.kind)}</span>
+                        {context ? (
+                          <span
+                            className="block truncate text-muted-foreground"
+                            title={context}
+                          >
+                            {context}
+                          </span>
+                        ) : null}
                       </DataListCell>
                       <DataListCell label={t("wallet.delta")} align="end">
                         <span

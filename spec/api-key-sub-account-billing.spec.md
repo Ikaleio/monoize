@@ -134,6 +134,10 @@ SA-ADM3. If the new balance is **higher** than the current balance, only the API
 
 SA-ADM4. If the owning user has `balance_unlimited = true`, the refund credit step (SA-ADM2 step 3) MUST be skipped, but the sub-account balance MUST still be reduced and the ledger entry MUST still be written.
 
+SA-ADM5. `PUT /api/dashboard/tokens/{key_id}` MAY carry `expected_sub_account_balance_nano_usd: string` (admin only) together with `sub_account_balance_nano_usd`. Inside the SA-CC3 locked transaction, if the locked key balance differs from the expected value, the server MUST write nothing (no balance, field, or ledger change) and return HTTP `409` with code `balance_changed` and `param = "sub_account_balance_nano_usd"`. The expected value without `sub_account_balance_nano_usd` MUST be rejected with HTTP `400` and code `invalid_request`.
+
+SA-ADM6. The dashboard MUST send SA-ADM1 adjustments only from the dedicated adjust-balance dialog (`api-token-management.spec.md` TM-UI1a), always with `expected_sub_account_balance_nano_usd`. The general key edit form MUST NOT send `sub_account_balance_nano_usd`.
+
 ## 5. API surface changes
 
 ### 5.1 API key data model (read)
@@ -236,3 +240,4 @@ SA-MIG3. Data migration for existing keys:
 | Transfer to key with sub_account_enabled = 0       | 400  | `invalid_request`     | `"sub-account not enabled on this key"`                   |
 | Transfer amount ≤ 0                                | 400  | `invalid_request`     | `"transfer amount must be positive"`                      |
 | User insufficient balance for transfer             | 402  | `insufficient_balance`| `"insufficient balance for transfer"`                     |
+| Expected sub-account balance mismatch (SA-ADM5)    | 409  | `balance_changed`     | `"sub-account balance changed since it was read"`         |

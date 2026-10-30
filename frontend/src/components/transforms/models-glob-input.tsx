@@ -6,12 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 type ModelsGlobInputProps = {
+  id?: string;
   value: string[] | null | undefined;
   onChange: (value: string[] | null) => void;
   disabled?: boolean;
 };
 
-export function ModelsGlobInput({ value, onChange, disabled }: ModelsGlobInputProps) {
+export function ModelsGlobInput({ id, value, onChange, disabled }: ModelsGlobInputProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState("");
   const patterns = value ?? [];
@@ -41,6 +42,7 @@ export function ModelsGlobInput({ value, onChange, disabled }: ModelsGlobInputPr
   return (
     <div className="space-y-2">
       <Input
+        id={id}
         value={draft}
         disabled={disabled}
         placeholder={t("transforms.modelsPlaceholder")}
@@ -64,6 +66,7 @@ export function ModelsGlobInput({ value, onChange, disabled }: ModelsGlobInputPr
                   variant="ghost"
                   size="icon"
                   className="h-4 w-4 shrink-0"
+                  aria-label={t("transforms.modelsRemovePattern", { pattern })}
                   onClick={() => removePattern(pattern)}
                 >
                   <X aria-hidden="true" />

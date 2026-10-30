@@ -60,6 +60,28 @@ pub async fn list_custom_transforms(
     Ok(Json(json!({ "transforms": transforms })))
 }
 
+/// CJS-API-6: chains that reference each `js:` id.
+pub async fn list_custom_transform_references(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    crate::dashboard_handlers::session_helpers::require_admin(&headers, &state).await?;
+    let global_chain: Vec<String> = state
+        .monoize_runtime
+        .read()
+        .await
+        .global_transforms
+        .iter()
+        .map(|rule| rule.transform.clone())
+        .collect();
+    let references = state
+        .custom_transform_store
+        .references(&global_chain)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    Ok(Json(json!({ "references": references })))
+}
+
 pub async fn create_custom_transform(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -6,6 +6,7 @@ import { ImageIcon, RefreshCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion, springs } from "@/components/ui/motion";
 import { ChatMessage } from "./chat-message";
+import { RequestFailureMessage } from "./request-failure-message";
 import type { ImageJobState } from "./use-image-generation";
 
 /** Auto-scroll re-engages when the viewport is within this distance of the bottom (PG-L4). */
@@ -56,9 +57,7 @@ function ImageJobRow({
 
   return (
     <div className="flex w-fit max-w-full flex-wrap items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3">
-      <span className="min-w-0 break-all text-sm text-error-foreground">
-        {t("playground.imageError")}: {job.error}
-      </span>
+      {job.failure && <RequestFailureMessage failure={job.failure} />}
       <div className="flex items-center gap-1">
         <Button variant="outline" size="sm" onClick={onRetry} className="h-7 gap-1.5">
           <RefreshCcw aria-hidden="true" />

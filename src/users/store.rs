@@ -1,6 +1,6 @@
 use super::utils::parse_nano_usd;
 use super::{
-    AdminUpdateUserInput, ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput,
+    AdminUpdateUserInput, ApiKey, BalanceMutationError, BillingError, BillingErrorKind, CreateApiKeyInput,
     CreateApiKeyWithLimitError, ModelRedirectRule, PlanChargeAllocation,
     RESERVED_INTERNAL_USER_PREFIX, RegisterUserError, RequestCaptureMode, RequestCaptureRetention,
     Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore, canonicalize_group_ids,
@@ -927,18 +927,33 @@ impl UserStore {
         id: &str,
         input: AdminUpdateUserInput,
         actor_user_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), BalanceMutationError> {
         let AdminUpdateUserInput {
             username,
             password,
             role,
             enabled,
             balance_nano_usd,
+            balance_delta_nano_usd,
+            expected_balance_nano_usd,
+            balance_note,
             balance_unlimited,
             email,
             group_id,
         } = input;
-        let has_balance_change = balance_nano_usd.is_some() || balance_unlimited.is_some();
+        if balance_nano_usd.is_some() && balance_delta_nano_usd.is_some() {
+            return Err("balance and balance delta are mutually exclusive"
+                .to_string()
+                .into());
+        }
+        if expected_balance_nano_usd.is_some() && balance_nano_usd.is_none() {
+            return Err("expected balance requires an absolute balance"
+                .to_string()
+                .into());
+        }
+        let has_balance_change = balance_nano_usd.is_some()
+            || balance_delta_nano_usd.is_some()
+            || balance_unlimited.is_some();
         let revokes_sessions = password.is_some() || role.is_some() || enabled == Some(false);
         if username.is_none()
             && password.is_none()
@@ -959,10 +974,18 @@ impl UserStore {
             .as_deref()
             .map(parse_nano_usd)
             .transpose()?;
+        let parsed_delta = balance_delta_nano_usd
+            .as_deref()
+            .map(parse_nano_usd)
+            .transpose()?;
+        let parsed_expected = expected_balance_nano_usd
+            .as_deref()
+            .map(parse_nano_usd)
+            .transpose()?;
         if let Some(group_id) = group_id.as_deref()
             && self.get_group_by_id(group_id).await?.is_none()
         {
-            return Err(format!("unknown group id: {group_id}"));
+            return Err(format!("unknown group id: {group_id}").into());
         }
 
         let write = self.db.write().await;
@@ -971,7 +994,18 @@ impl UserStore {
             .lock_user_balance_tx(&tx, id)
             .await
             .map_err(|error| error.message)?;
-        let new_balance = parsed_balance.unwrap_or(current.balance);
+        if parsed_expected.is_some_and(|expected| expected != current.balance) {
+            return Err(BalanceMutationError::BalanceChanged);
+        }
+        let new_balance = match (parsed_balance, parsed_delta) {
+            (Some(balance), _) => balance,
+            (None, Some(delta)) => current
+                .balance
+                .checked_add(delta)
+                .ok_or_else(|| "invalid balance: delta overflow".to_string())?,
+            (None, None) => current.balance,
+        };
+        let writes_balance = parsed_balance.is_some() || parsed_delta.is_some();
         let new_unlimited = balance_unlimited.unwrap_or(current.unlimited);
         let now = Utc::now().to_rfc3339();
         let mut set_clauses = Vec::new();
@@ -998,7 +1032,7 @@ impl UserStore {
             values.push(SeaValue::Int(Some(if enabled { 1 } else { 0 })));
             idx += 1;
         }
-        if parsed_balance.is_some() {
+        if writes_balance {
             set_clauses.push(format!("balance_nano_usd = ${idx}"));
             values.push(new_balance.to_string().into());
             idx += 1;
@@ -1049,19 +1083,23 @@ impl UserStore {
             let delta = new_balance
                 .checked_sub(current.balance)
                 .ok_or_else(|| "balance delta overflow".to_string())?;
+            let mut meta = serde_json::json!({
+                "actor_user_id": actor_user_id,
+                "before_balance_nano_usd": current.balance.to_string(),
+                "after_balance_nano_usd": new_balance.to_string(),
+                "before_balance_unlimited": current.unlimited,
+                "after_balance_unlimited": new_unlimited,
+            });
+            if let Some(note) = balance_note {
+                meta["note"] = Value::String(note);
+            }
             self.insert_billing_ledger_tx(
                 &tx,
                 id,
                 "admin_adjustment",
                 delta,
                 Some(new_balance),
-                &serde_json::json!({
-                    "actor_user_id": actor_user_id,
-                    "before_balance_nano_usd": current.balance.to_string(),
-                    "after_balance_nano_usd": new_balance.to_string(),
-                    "before_balance_unlimited": current.unlimited,
-                    "after_balance_unlimited": new_unlimited,
-                }),
+                &meta,
                 &now,
             )
             .await
@@ -2312,9 +2350,9 @@ impl UserStore {
         key_id: &str,
         input: UpdateApiKeyInput,
         is_admin: bool,
-    ) -> Result<ApiKey, String> {
+    ) -> Result<ApiKey, BalanceMutationError> {
         validate_positive_max_multiplier(input.max_multiplier)?;
-        if let Some(expires_at) = input.expires_at.as_deref() {
+        if let Some(Some(expires_at)) = input.expires_at.as_ref() {
             DateTime::parse_from_rfc3339(expires_at)
                 .map_err(|_| "expires_at must be a valid RFC3339 timestamp".to_string())?;
         }
@@ -2330,17 +2368,32 @@ impl UserStore {
             .map(|entries| canonicalize_ip_whitelist(entries))
             .transpose()?;
         if input.sub_account_balance_nano_usd.is_some() && !is_admin {
-            return Err("only admins may set a sub-account balance".to_string());
+            return Err("only admins may set a sub-account balance".to_string().into());
         }
         if input.sub_account_enabled == Some(false) && input.sub_account_balance_nano_usd.is_some()
         {
             return Err(
                 "sub-account balance cannot be supplied while disabling sub-account billing"
-                    .to_string(),
+                    .to_string()
+                    .into(),
+            );
+        }
+        if input.expected_sub_account_balance_nano_usd.is_some()
+            && input.sub_account_balance_nano_usd.is_none()
+        {
+            return Err(
+                "expected sub-account balance requires sub_account_balance_nano_usd"
+                    .to_string()
+                    .into(),
             );
         }
         let requested_sub_account_balance = input
             .sub_account_balance_nano_usd
+            .as_deref()
+            .map(parse_nano_usd)
+            .transpose()?;
+        let expected_sub_account_balance = input
+            .expected_sub_account_balance_nano_usd
             .as_deref()
             .map(parse_nano_usd)
             .transpose()?;
@@ -2356,7 +2409,8 @@ impl UserStore {
         {
             return Err(
                 "a non-zero sub-account balance requires sub-account billing to be enabled"
-                    .to_string(),
+                    .to_string()
+                    .into(),
             );
         }
         let disabling_sub_account = input.sub_account_enabled == Some(false);
@@ -2373,7 +2427,9 @@ impl UserStore {
                 .unwrap_or_else(|| existing_key.group_ids.clone());
             if group_fields_changed && group_ids.is_empty() {
                 return Err(
-                    "group_ids must be non-empty when use_user_group is disabled".to_string(),
+                    "group_ids must be non-empty when use_user_group is disabled"
+                        .to_string()
+                        .into(),
                 );
             }
             group_ids
@@ -2495,9 +2551,14 @@ impl UserStore {
             idx += 1;
         }
         if let Some(expires_at) = &input.expires_at {
-            set_clauses.push(format!("expires_at = ${idx}"));
-            values.push(expires_at.clone().into());
-            idx += 1;
+            match expires_at {
+                Some(expires_at) => {
+                    set_clauses.push(format!("expires_at = ${idx}"));
+                    values.push(expires_at.clone().into());
+                    idx += 1;
+                }
+                None => set_clauses.push("expires_at = NULL".to_string()),
+            }
         }
 
         if set_clauses.is_empty() {
@@ -2581,6 +2642,9 @@ impl UserStore {
                     .map_err(|e| e.message)?;
                 }
             } else if let Some(new_balance) = requested_sub_account_balance {
+                if expected_sub_account_balance.is_some_and(|expected| expected != key.balance) {
+                    return Err(BalanceMutationError::BalanceChanged);
+                }
                 let now = Utc::now().to_rfc3339();
                 if new_balance < key.balance {
                     let refund = key
@@ -2666,7 +2730,7 @@ impl UserStore {
 
         self.get_api_key_by_id(key_id)
             .await?
-            .ok_or_else(|| "API key not found after update".to_string())
+            .ok_or_else(|| "API key not found after update".to_string().into())
     }
 
     /// Get API key by ID

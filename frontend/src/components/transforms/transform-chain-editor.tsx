@@ -1,70 +1,138 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, ArrowUpDown, GripVertical, Plus, Settings2, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import {
+  ArrowDownUp,
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  GripVertical,
+  Plus,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status";
 import { Switch } from "@/components/ui/switch";
+import { useAuth } from "@/hooks/use-auth";
 import type { Phase, TransformRegistryItem, TransformRuleConfig } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { resolveLocalizedText } from "./localized-text";
 import { TransformItemConfigDialog } from "./transform-item-config-dialog";
+import { transformRequiresConfig, validateTransformRule } from "./transform-schema";
+import type { TransformLayer } from "./transform-layer";
 
 type TransformChainEditorProps = {
   value: TransformRuleConfig[];
   registry: TransformRegistryItem[];
   loading?: boolean;
   onChange: (next: TransformRuleConfig[]) => void;
+  layer: TransformLayer;
 };
 
-export function TransformChainEditor({ value, registry, loading, onChange }: TransformChainEditorProps) {
+/** A rule with its position in the editor's full `value` array (TCU-10e). */
+type IndexedRule = { rule: TransformRuleConfig; index: number };
+
+type EditingState =
+  | { kind: "existing"; index: number }
+  | { kind: "pending"; rule: TransformRuleConfig };
+
+const CUSTOM_TRANSFORM_PREFIX = "js:";
+
+export function TransformChainEditor({
+  value,
+  registry,
+  loading,
+  onChange,
+  layer,
+}: TransformChainEditorProps) {
+  const indexed = useMemo(() => value.map((rule, index) => ({ rule, index })), [value]);
   const requestRules = useMemo(
-    () => value.filter((rule) => rule.phase === "request"),
-    [value]
+    () => indexed.filter((entry) => entry.rule.phase === "request"),
+    [indexed]
   );
   const responseRules = useMemo(
-    () => value.filter((rule) => rule.phase === "response"),
-    [value]
+    () => indexed.filter((entry) => entry.rule.phase === "response"),
+    [indexed]
   );
   const registryMap = useMemo(
     () => new Map(registry.map((item) => [item.type_id, item])),
     [registry]
   );
-  const [editing, setEditing] = useState<{ phase: Phase; index: number } | null>(null);
+  const [editing, setEditing] = useState<EditingState | null>(null);
 
-  if (loading) {
-    return <TransformChainSkeleton />;
-  }
-
-  const updatePhaseRules = (phase: Phase, nextPhaseRules: TransformRuleConfig[]) => {
-    const nextRequest = phase === "request" ? nextPhaseRules : requestRules;
-    const nextResponse = phase === "response" ? nextPhaseRules : responseRules;
-    onChange([...nextRequest, ...nextResponse]);
+  const addRule = (phase: Phase, item: TransformRegistryItem) => {
+    const rule: TransformRuleConfig = {
+      transform: item.type_id,
+      enabled: true,
+      models: null,
+      phase,
+      config: {},
+    };
+    // TCU-2d: a transform with required config joins the chain only on Save.
+    if (transformRequiresConfig(item)) {
+      setEditing({ kind: "pending", rule });
+      return;
+    }
+    onChange([...value, rule]);
   };
 
-  const editingRule = editing
-    ? (editing.phase === "request" ? requestRules[editing.index] : responseRules[editing.index]) ?? null
-    : null;
+  // Reorders one phase while keeping every rule of the other phase in its slot.
+  const movePhaseRule = (phaseRules: IndexedRule[], from: number, to: number) => {
+    if (from === to || from < 0 || to < 0 || from >= phaseRules.length || to >= phaseRules.length) {
+      return;
+    }
+    const reordered = phaseRules.map((entry) => entry.rule);
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    const next = [...value];
+    phaseRules.forEach((entry, position) => {
+      next[entry.index] = reordered[position];
+    });
+    onChange(next);
+  };
+
+  const editingRule =
+    editing?.kind === "pending"
+      ? editing.rule
+      : editing?.kind === "existing"
+        ? (value[editing.index] ?? null)
+        : null;
   const editingRegistry = editingRule ? registryMap.get(editingRule.transform) : undefined;
 
+  const sectionProps = {
+    registry,
+    registryMap,
+    onAdd: addRule,
+    onToggle: (index: number, enabled: boolean) =>
+      onChange(value.map((rule, idx) => (idx === index ? { ...rule, enabled } : rule))),
+    onDelete: (index: number) => onChange(value.filter((_, idx) => idx !== index)),
+    onMove: movePhaseRule,
+    onConfigure: (index: number) => setEditing({ kind: "existing", index }),
+  };
+
   return (
-    <div className="space-y-4">
-      <PhaseChainSection
-        phase="request"
-        rules={requestRules}
-        registry={registry}
-        registryMap={registryMap}
-        onChange={(next) => updatePhaseRules("request", next)}
-        onConfigure={(index) => setEditing({ phase: "request", index })}
-      />
-      <PhaseChainSection
-        phase="response"
-        rules={responseRules}
-        registry={registry}
-        registryMap={registryMap}
-        onChange={(next) => updatePhaseRules("response", next)}
-        onConfigure={(index) => setEditing({ phase: "response", index })}
-      />
+    <div className="space-y-4" data-transform-layer={layer}>
+      <LayerOrderLine layer={layer} />
+      {loading ? (
+        <TransformChainSkeleton />
+      ) : (
+        <>
+          <PhaseChainSection phase="request" rules={requestRules} {...sectionProps} />
+          <PhaseChainSection phase="response" rules={responseRules} {...sectionProps} />
+        </>
+      )}
 
       <TransformItemConfigDialog
         open={Boolean(editingRule)}
@@ -76,15 +144,59 @@ export function TransformChainEditor({ value, registry, loading, onChange }: Tra
           }
         }}
         onSave={(nextRule) => {
-          if (!editing) {
-            return;
+          if (editing?.kind === "pending") {
+            onChange([...value, nextRule]);
+          } else if (editing?.kind === "existing") {
+            onChange(value.map((rule, idx) => (idx === editing.index ? nextRule : rule)));
           }
-          const current = editing.phase === "request" ? requestRules : responseRules;
-          const next = current.map((rule, idx) => (idx === editing.index ? nextRule : rule));
-          updatePhaseRules(editing.phase, next);
         }}
       />
     </div>
+  );
+}
+
+const LAYER_LINKS: Record<TransformLayer, string> = {
+  provider: "/dashboard/providers",
+  global: "/dashboard/admin-settings?setting=global_transforms",
+  apiKey: "/dashboard/tokens",
+};
+
+const LAYER_ORDER: TransformLayer[] = ["provider", "global", "apiKey"];
+
+/** Read-only execution-order line with the current layer emphasized (TCU-13). */
+function LayerOrderLine({ layer }: { layer: TransformLayer }) {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const canOpenLayers = user?.role === "admin" || user?.role === "super_admin";
+  const labels: Record<TransformLayer, string> = {
+    provider: t("transforms.layerProvider"),
+    global: t("transforms.layerGlobal"),
+    apiKey: t("transforms.layerApiKey"),
+  };
+
+  return (
+    <p className="text-xs text-muted-foreground">
+      {t("transforms.executionOrderLabel")}
+      {LAYER_ORDER.map((entry, position) => (
+        <Fragment key={entry}>
+          {position > 0 && <span aria-hidden="true">{" → "}</span>}
+          {entry === layer ? (
+            <span aria-current="true" className="font-medium text-foreground">
+              {labels[entry]}
+            </span>
+          ) : canOpenLayers ? (
+            <Link
+              to={LAYER_LINKS[entry]}
+              className="underline-offset-4 hover:text-foreground hover:underline"
+            >
+              {labels[entry]}
+            </Link>
+          ) : (
+            <span>{labels[entry]}</span>
+          )}
+        </Fragment>
+      ))}
+    </p>
   );
 }
 
@@ -109,10 +221,13 @@ function TransformChainSkeleton() {
 
 type PhaseChainSectionProps = {
   phase: Phase;
-  rules: TransformRuleConfig[];
+  rules: IndexedRule[];
   registry: TransformRegistryItem[];
   registryMap: Map<string, TransformRegistryItem>;
-  onChange: (next: TransformRuleConfig[]) => void;
+  onAdd: (phase: Phase, item: TransformRegistryItem) => void;
+  onToggle: (index: number, enabled: boolean) => void;
+  onDelete: (index: number) => void;
+  onMove: (phaseRules: IndexedRule[], from: number, to: number) => void;
   onConfigure: (index: number) => void;
 };
 
@@ -121,147 +236,133 @@ function PhaseChainSection({
   rules,
   registry,
   registryMap,
-  onChange,
+  onAdd,
+  onToggle,
+  onDelete,
+  onMove,
   onConfigure,
 }: PhaseChainSectionProps) {
   const { t, i18n } = useTranslation();
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  // Drag state is section-local, so a drop in the other phase section is never accepted.
+  const [drag, setDrag] = useState<{ from: number; over: number | null } | null>(null);
   const available = useMemo(
     () => registry.filter((item) => item.supported_phases.includes(phase)),
     [registry, phase]
   );
-  const [addType, setAddType] = useState<string>(available[0]?.type_id ?? "");
-  const selectedAddType = available.some((item) => item.type_id === addType)
-    ? addType
-    : (available[0]?.type_id ?? "");
-  const selectedAddItem = available.find((item) => item.type_id === selectedAddType);
-  const selectedAddName = selectedAddItem
-    ? resolveLocalizedText(selectedAddItem.name, i18n.language, selectedAddItem.type_id)
-    : "";
 
   const title = phase === "request" ? t("transforms.requestChain") : t("transforms.responseChain");
   const PhaseIcon = phase === "request" ? ArrowUpDown : ArrowDownUp;
 
-  const addRule = () => {
-    if (!selectedAddType) {
-      return;
+  const startDrag = (event: DragEvent<HTMLElement>, position: number) => {
+    event.dataTransfer.effectAllowed = "move";
+    // Firefox starts a drag only when data is set.
+    event.dataTransfer.setData("text/plain", "");
+    const row = event.currentTarget.closest<HTMLElement>("[data-transform-rule-index]");
+    if (row) {
+      event.dataTransfer.setDragImage(row, 16, 16);
     }
-    const nextRule: TransformRuleConfig = {
-      transform: selectedAddType,
-      enabled: true,
-      models: null,
-      phase,
-      config: {},
-    };
-    onChange([...rules, nextRule]);
+    setDrag({ from: position, over: null });
   };
 
-  const reorder = (from: number, to: number) => {
-    if (from === to || from < 0 || to < 0 || from >= rules.length || to >= rules.length) {
-      return;
-    }
-    const next = [...rules];
-    const [item] = next.splice(from, 1);
-    next.splice(to, 0, item);
-    onChange(next);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Row keys include the rule index, so a move remounts the rows; keep keyboard focus on
+  // the moved rule, falling back to the opposite arrow when it reached the end.
+  const moveByButton = (from: number, to: number) => {
+    onMove(rules, from, to);
+    const direction = to < from ? "up" : "down";
+    requestAnimationFrame(() => {
+      const row = listRef.current?.querySelectorAll<HTMLElement>(":scope > [data-transform-rule-index]")[to];
+      const same = row?.querySelector<HTMLButtonElement>(`[data-move="${direction}"]`);
+      const other = row?.querySelector<HTMLButtonElement>(`[data-move="${direction === "up" ? "down" : "up"}"]`);
+      (same && !same.disabled ? same : other)?.focus();
+    });
   };
 
   return (
     <div className="space-y-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
-          <PhaseIcon className="h-4 w-4 text-muted-foreground" />
+          <PhaseIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <h3 className="text-sm font-medium">{title}</h3>
           <Badge variant="secondary" className="text-xs">{rules.length}</Badge>
         </div>
-        <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-          <Select value={selectedAddType} onValueChange={setAddType} disabled={available.length === 0}>
-            <SelectTrigger
-              className="h-9 min-w-0 w-full sm:w-[260px]"
-              aria-label={t("transforms.selectTransform")}
-            >
-              <SelectValue placeholder={t("transforms.selectTransform")}>
-                {selectedAddName ? (
-                  <span className="block min-w-0 truncate text-left">{selectedAddName}</span>
-                ) : undefined}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {available.map((item) => {
-                  const name = resolveLocalizedText(item.name, i18n.language, item.type_id);
-                  const description = resolveLocalizedText(item.description, i18n.language, "");
-                  return (
-                    <SelectItem key={item.type_id} value={item.type_id}>
-                      <span className="flex min-w-0 flex-col gap-0.5">
-                        <span className="truncate text-sm">{name}</span>
-                        <span className="truncate font-mono text-[10px] text-muted-foreground">
-                          {item.type_id}
-                        </span>
-                        {description && (
-                          <span className="max-w-[280px] truncate text-xs text-muted-foreground">
-                            {description}
-                          </span>
-                        )}
-                      </span>
-                    </SelectItem>
-                  );
-                })}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="w-full sm:w-auto"
-            onClick={addRule}
-            disabled={!selectedAddType}
-          >
-            <Plus data-icon="inline-start" />
-            {t("transforms.add")}
-          </Button>
-        </div>
+        <AddTransformCombobox
+          items={available}
+          language={i18n.language}
+          onSelect={(item) => onAdd(phase, item)}
+        />
       </div>
-      <div className="rounded-lg border p-3 space-y-2">
+      <div ref={listRef} className="space-y-2 rounded-lg border p-3">
         {rules.length === 0 && (
-          <p className="text-sm text-muted-foreground py-2">{t("transforms.emptyChain")}</p>
+          <p className="py-2 text-sm text-muted-foreground">{t("transforms.emptyChain")}</p>
         )}
-        {rules.map((rule, index) => {
+        {rules.map(({ rule, index }, position) => {
           const registryItem = registryMap.get(rule.transform);
-          const unknown = !registryItem;
           const name = registryItem
             ? resolveLocalizedText(registryItem.name, i18n.language, registryItem.type_id)
             : rule.transform;
+          const needsConfig = registryItem
+            ? validateTransformRule(rule, registryItem).length > 0
+            : false;
           const modelsSummary =
             !rule.models || rule.models.length === 0
               ? t("transforms.modelsAllModels")
               : rule.models.join(", ");
+          const isDragSource = drag?.from === position;
+          const isDropTarget = drag !== null && drag.over === position && drag.from !== position;
           return (
             <div
               key={`${phase}-${index}-${rule.transform}`}
-              className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2"
-              draggable
-              onDragStart={() => setDraggingIndex(index)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => {
-                if (draggingIndex === null) {
+              data-transform-rule-index={index}
+              className={cn(
+                "relative flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 sm:flex-nowrap",
+                isDragSource && "opacity-50"
+              )}
+              onDragOver={(event) => {
+                if (!drag) {
                   return;
                 }
-                reorder(draggingIndex, index);
-                setDraggingIndex(null);
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                if (drag.over !== position) {
+                  setDrag({ ...drag, over: position });
+                }
               }}
-              onDragEnd={() => setDraggingIndex(null)}
+              onDrop={(event) => {
+                if (!drag) {
+                  return;
+                }
+                event.preventDefault();
+                onMove(rules, drag.from, position);
+                setDrag(null);
+              }}
             >
-              <GripVertical className="h-4 w-4 text-muted-foreground cursor-grab" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{name}</span>
-                  {unknown && (
-                    <Badge variant="destructive">
-                      {t("transforms.unknown")}
-                    </Badge>
+              {isDropTarget && (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none absolute inset-x-0 h-0.5 rounded-full bg-primary",
+                    (drag?.from ?? 0) > position ? "-top-[5px]" : "-bottom-[5px]"
                   )}
+                />
+              )}
+              <span
+                draggable
+                aria-hidden="true"
+                className="flex shrink-0 cursor-grab touch-none items-center text-muted-foreground active:cursor-grabbing"
+                onDragStart={(event) => startDrag(event, position)}
+                onDragEnd={() => setDrag(null)}
+              >
+                <GripVertical className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-sm font-medium [overflow-wrap:anywhere]">{name}</span>
+                  <RuleStatusBadge
+                    registered={Boolean(registryItem)}
+                    custom={rule.transform.startsWith(CUSTOM_TRANSFORM_PREFIX)}
+                    needsConfig={needsConfig}
+                  />
                 </div>
                 <p className="truncate text-xs text-muted-foreground">
                   <span className="font-mono">{rule.transform}</span>
@@ -270,19 +371,43 @@ function PhaseChainSection({
                 </p>
               </div>
 
-              <div className="flex items-center gap-1">
+              <div className="flex w-full items-center justify-end gap-1 sm:w-auto">
                 <Switch
                   checked={rule.enabled}
-                  onCheckedChange={(enabled) =>
-                    onChange(rules.map((entry, idx) => (idx === index ? { ...entry, enabled } : entry)))
-                  }
+                  aria-label={t("transforms.enableRule", { name })}
+                  onCheckedChange={(enabled) => onToggle(index, enabled)}
                 />
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   className="size-11 touch-manipulation sm:size-7"
-                  aria-label={t("transforms.configure", { defaultValue: "Configure" })}
+                  aria-label={t("transforms.arrayMoveUp")}
+                  data-move="up"
+                  disabled={position === 0}
+                  onClick={() => moveByButton(position, position - 1)}
+                >
+                  <ChevronUp aria-hidden="true" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-11 touch-manipulation sm:size-7"
+                  aria-label={t("transforms.arrayMoveDown")}
+                  data-move="down"
+                  disabled={position === rules.length - 1}
+                  onClick={() => moveByButton(position, position + 1)}
+                >
+                  <ChevronDown aria-hidden="true" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-11 touch-manipulation sm:size-7"
+                  aria-label={t("transforms.configure")}
+                  data-transform-configure=""
                   onClick={() => onConfigure(index)}
                 >
                   <Settings2 aria-hidden="true" />
@@ -293,9 +418,9 @@ function PhaseChainSection({
                   size="icon"
                   className="size-11 touch-manipulation sm:size-7"
                   aria-label={t("common.delete")}
-                  onClick={() => onChange(rules.filter((_, idx) => idx !== index))}
+                  onClick={() => onDelete(index)}
                 >
-                  <Trash2 className="text-error-foreground" />
+                  <Trash2 className="text-error-foreground" aria-hidden="true" />
                 </Button>
               </div>
             </div>
@@ -303,5 +428,105 @@ function PhaseChainSection({
         })}
       </div>
     </div>
+  );
+}
+
+/** Row status badge per TCU-12a. */
+function RuleStatusBadge({
+  registered,
+  custom,
+  needsConfig,
+}: {
+  registered: boolean;
+  custom: boolean;
+  needsConfig: boolean;
+}) {
+  const { t } = useTranslation();
+  if (!registered) {
+    return custom ? (
+      <StatusBadge variant="warning" className="whitespace-normal">
+        {t("transforms.customUnavailable")}
+      </StatusBadge>
+    ) : (
+      <Badge variant="destructive">{t("transforms.unknown")}</Badge>
+    );
+  }
+  return needsConfig ? (
+    <StatusBadge variant="warning">{t("transforms.needsConfig")}</StatusBadge>
+  ) : null;
+}
+
+/** Searchable add-transform list grouped into built-in and custom items (TCU-2b–TCU-2d). */
+function AddTransformCombobox({
+  items,
+  language,
+  onSelect,
+}: {
+  items: TransformRegistryItem[];
+  language: string;
+  onSelect: (item: TransformRegistryItem) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const builtin = items.filter((item) => !item.type_id.startsWith(CUSTOM_TRANSFORM_PREFIX));
+  const custom = items.filter((item) => item.type_id.startsWith(CUSTOM_TRANSFORM_PREFIX));
+  const groups = [
+    { heading: t("transforms.groupBuiltin"), entries: builtin },
+    { heading: t("transforms.groupCustom"), entries: custom },
+  ].filter((group) => group.entries.length > 0);
+
+  return (
+    // `modal` keeps wheel scrolling inside the list when the editor sits in a modal dialog.
+    <Popover open={open} onOpenChange={setOpen} modal>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="w-full sm:w-auto"
+          disabled={items.length === 0}
+        >
+          <Plus data-icon="inline-start" aria-hidden="true" />
+          {t("transforms.addTransform")}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[min(320px,calc(100vw-2rem))] p-0" align="end">
+        <Command>
+          <CommandInput placeholder={t("transforms.searchTransforms")} />
+          <CommandList>
+            <CommandEmpty>{t("transforms.noMatchingTransform")}</CommandEmpty>
+            {groups.map((group) => (
+              <CommandGroup key={group.heading} heading={group.heading}>
+                {group.entries.map((item) => {
+                  const name = resolveLocalizedText(item.name, language, item.type_id);
+                  const description = resolveLocalizedText(item.description, language, "");
+                  return (
+                    <CommandItem
+                      key={item.type_id}
+                      value={item.type_id}
+                      keywords={description ? [name, description] : [name]}
+                      onSelect={() => {
+                        setOpen(false);
+                        onSelect(item);
+                      }}
+                    >
+                      <span className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
+                        <span className="text-sm">{name}</span>
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {item.type_id}
+                        </span>
+                        {description && (
+                          <span className="text-xs text-muted-foreground">{description}</span>
+                        )}
+                      </span>
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

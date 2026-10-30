@@ -1,8 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { mutate as globalMutate } from "swr";
 import { api, subscribeDashboardUnauthorized } from "@/lib/api";
 import type { User } from "@/lib/api";
-import { clearAuthenticatedCache } from "@/lib/swr";
+import { clearAuthenticatedCache, SWR_KEYS, useCurrentUser } from "@/lib/swr";
+
+const USER_REFRESH_INTERVAL_MS = 60000;
 
 interface AuthContextType {
   user: User | null;
@@ -17,53 +20,54 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const refreshUser = async () => {
-    try {
-      const userData = await api.me();
-      setUser(userData);
-    } catch {
-      setUser(null);
-      await clearAuthenticatedCache();
-    }
-  };
+  // isPaused stops polling and focus revalidation after logout or a 401 (DSA9b),
+  // so the login page does not keep probing /auth/me. The key stays subscribed
+  // so login can write the new user straight into the cache.
+  const [sessionActive, setSessionActive] = useState(true);
+  const { data, error, mutate } = useCurrentUser({
+    isPaused: () => !sessionActive,
+    refreshInterval: USER_REFRESH_INTERVAL_MS,
+  });
+  const user = sessionActive ? (data ?? null) : null;
+  const loading = sessionActive && data === undefined && !error;
 
   useEffect(() => {
     return subscribeDashboardUnauthorized(() => {
-      setUser(null);
+      setSessionActive(false);
       void clearAuthenticatedCache();
     });
   }, []);
 
-  useEffect(() => {
-    refreshUser().finally(() => setLoading(false));
-  }, []);
+  const adoptSession = async (next: User) => {
+    await clearAuthenticatedCache({ keepCurrentUser: true });
+    await globalMutate(SWR_KEYS.ME, next, { revalidate: false });
+    setSessionActive(true);
+  };
+
+  const refreshUser = async () => {
+    await mutate();
+  };
 
   const login = async (username: string, password: string, captchaToken: string) => {
     const response = await api.login(username, password, captchaToken);
-    await clearAuthenticatedCache();
-    setUser(response.user);
+    await adoptSession(response.user);
   };
 
   const register = async (username: string, password: string, captchaToken: string) => {
     const response = await api.register(username, password, captchaToken);
-    await clearAuthenticatedCache();
-    setUser(response.user);
+    await adoptSession(response.user);
   };
 
   const changePassword = async (currentPassword: string, newPassword: string) => {
     const response = await api.changePassword(currentPassword, newPassword);
-    await clearAuthenticatedCache();
-    setUser(response.user);
+    await adoptSession(response.user);
   };
 
   const logout = async () => {
     try {
       await api.logout();
     } finally {
-      setUser(null);
+      setSessionActive(false);
       await clearAuthenticatedCache();
     }
   };

@@ -1,20 +1,28 @@
-import type { ComponentProps } from 'react'
-import { TableVirtuoso } from 'react-virtuoso'
+import type { ComponentProps, Ref } from 'react'
+import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
+import { QueryError } from '@/components/ui/query-error'
 import type { RequestLog } from '@/lib/api'
 import { LogRowCells } from './log-row-cells'
 
 interface RequestLogsTableProps {
 	affinityTargetNames: ReadonlyMap<string, string>
+	emptyTitle: string
+	/** Set when the list request failed; rendered instead of the empty state. */
+	error: unknown
 	isAdmin: boolean
 	isInitialLoading: boolean
 	logs: RequestLog[]
+	onAtTopChange: (atTop: boolean) => void
 	onLoadMore: () => void
 	onOpenCapture: (log: RequestLog) => void
+	onRetry: () => unknown
 	onTooltipOpenChange: (tooltipId: string, open: boolean) => void
+	retrying: boolean
 	showIp: boolean
 	t: (key: string, options?: Record<string, unknown>) => string
+	virtuosoRef: Ref<TableVirtuosoHandle>
 }
 
 const tableComponents = {
@@ -26,7 +34,7 @@ const tableComponents = {
 		/>
 	),
 	TableHead: (props: ComponentProps<'thead'>) => (
-		<thead {...props} className='[&_tr]:border-b' />
+		<thead {...props} className='bg-card [&_tr]:border-b' />
 	),
 	TableBody: (props: ComponentProps<'tbody'>) => (
 		<tbody {...props} className='[&_tr:last-child]:border-0' />
@@ -74,14 +82,20 @@ function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isA
 
 export function RequestLogsTable({
 	affinityTargetNames,
+	emptyTitle,
+	error,
 	isAdmin,
 	isInitialLoading,
 	logs,
+	onAtTopChange,
 	onLoadMore,
 	onOpenCapture,
+	onRetry,
 	onTooltipOpenChange,
+	retrying,
 	showIp,
-	t
+	t,
+	virtuosoRef
 }: RequestLogsTableProps) {
 	if (isInitialLoading) {
 		return (
@@ -94,19 +108,27 @@ export function RequestLogsTable({
 	}
 
 	if (logs.length === 0) {
-		return (
-			<EmptyState title={t('requestLogs.noLogs')} className='h-full min-h-[20rem] px-4 py-0' />
-		)
+		if (error) {
+			return (
+				<div className='p-4'>
+					<QueryError onRetry={onRetry} retrying={retrying} />
+				</div>
+			)
+		}
+		return <EmptyState variant='inline' title={emptyTitle} className='h-full min-h-[20rem] px-4 py-0' />
 	}
 
 	return (
 		<div className='absolute inset-0 min-h-[240px]'>
 			<TableVirtuoso
+				ref={virtuosoRef}
 				style={{ height: '100%', overflowX: 'auto' }}
 				data={logs}
 				computeItemKey={(_index, log) => log.id}
 				overscan={480}
 				endReached={onLoadMore}
+				atTopStateChange={onAtTopChange}
+				atTopThreshold={8}
 				components={tableComponents}
 				fixedHeaderContent={() => <RequestLogsTableHeader isAdmin={isAdmin} t={t} />}
 				itemContent={(_index, log) => (

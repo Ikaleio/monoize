@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save, User, Lock, Globe, Mail, Coins } from "lucide-react";
+import { Save, User, Lock, Globe, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,7 +11,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Field,
   FieldDescription,
@@ -20,49 +19,85 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Separator } from "@/components/ui/separator";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  LanguageDropdown,
+  ThemeDropdown,
+} from "@/components/preference-menus";
 import { useAuth } from "@/hooks/use-auth";
-import { useTheme } from "@/hooks/use-theme";
 import { PageWrapper, StaggerList, StaggerItem, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
-import { setLanguage, getCurrentLanguage } from "@/i18n";
+import { apiErrorParam, toastApiError } from "@/lib/api-error";
 import { updateMeOptimistic } from "@/lib/swr";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
 import { getGravatarUrl } from "@/lib/utils";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { toast } from "sonner";
 
+const MIN_PASSWORD_LENGTH = 8;
+const SAVED_FEEDBACK_MS = 2000;
+
+/** Same rule as the backend `normalize_email` (dashboard-ui-layout.spec.md US6). */
+function isValidEmail(email: string): boolean {
+  if (email.length > 254 || /\s/.test(email)) return false;
+  const at = email.indexOf("@");
+  if (at <= 0 || email.indexOf("@", at + 1) !== -1) return false;
+  const domain = email.slice(at + 1);
+  return domain.includes(".") && domain.split(".").every(Boolean);
+}
+
+interface PasswordErrors {
+  current?: string;
+  next?: string;
+  confirm?: string;
+}
+
 export function UserSettingsPage() {
   const { t } = useTranslation();
-  const { user, changePassword, refreshUser } = useAuth();
-  const { theme, setTheme } = useTheme();
+  const { user, changePassword } = useAuth();
+  const formId = useId();
+  const usernameId = `${formId}-username`;
+  const emailId = `${formId}-email`;
+  const currentPasswordId = `${formId}-current-password`;
+  const newPasswordId = `${formId}-new-password`;
+  const confirmPasswordId = `${formId}-confirm-password`;
+  const emailRef = useRef<HTMLInputElement>(null);
+  const currentPasswordRef = useRef<HTMLInputElement>(null);
+  const newPasswordRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordRef = useRef<HTMLInputElement>(null);
+
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordErrors, setPasswordErrors] = useState<PasswordErrors>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [email, setEmail] = useState(user?.email || "");
+  const [emailError, setEmailError] = useState("");
   const [savingEmail, setSavingEmail] = useState(false);
   const [savedEmail, setSavedEmail] = useState(false);
-  const currentLang = getCurrentLanguage();
-  const passwordTooShort = newPassword.length > 0 && newPassword.length < 8;
-  const passwordMismatch =
-    confirmPassword.length > 0 && newPassword !== confirmPassword;
 
-  const handleSavePassword = async () => {
-    if (
-      !currentPassword ||
-      newPassword.length < 8 ||
-      newPassword !== confirmPassword
-    ) {
-      return;
+  const showPasswordErrors = (errors: PasswordErrors) => {
+    setPasswordErrors(errors);
+    if (errors.current) currentPasswordRef.current?.focus();
+    else if (errors.next) newPasswordRef.current?.focus();
+    else if (errors.confirm) confirmPasswordRef.current?.focus();
+  };
+
+  const handleSavePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const errors: PasswordErrors = {};
+    if (!currentPassword) {
+      errors.current = t("userSettings.errors.currentPasswordRequired");
     }
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      errors.next = t("userSettings.passwordTooShort");
+    }
+    if (newPassword !== confirmPassword) {
+      errors.confirm = t("userSettings.passwordMismatch");
+    }
+    showPasswordErrors(errors);
+    if (errors.current || errors.next || errors.confirm) return;
+
     setSaving(true);
     try {
       await changePassword(currentPassword, newPassword);
@@ -71,36 +106,54 @@ export function UserSettingsPage() {
       setConfirmPassword("");
       setSaved(true);
       toast.success(t("userSettings.passwordChanged"));
-      setTimeout(() => setSaved(false), 2000);
+      setTimeout(() => setSaved(false), SAVED_FEEDBACK_MS);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("common.error"));
+      const param = apiErrorParam(error);
+      if (param === "current_password") {
+        showPasswordErrors({
+          current: t("userSettings.errors.invalidCurrentPassword"),
+        });
+      } else if (param === "new_password") {
+        showPasswordErrors({ next: t("auth.errors.invalidPassword") });
+      } else {
+        toastApiError(error, t);
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  const handleSaveEmail = async () => {
+  const handleSaveEmail = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const emailValue = email.trim();
+    if (emailValue && !isValidEmail(emailValue)) {
+      setEmailError(t("userSettings.errors.invalidEmail"));
+      emailRef.current?.focus();
+      return;
+    }
+    setEmailError("");
     setSavingEmail(true);
     try {
-      const emailValue = email.trim() || null;
-      await updateMeOptimistic({ email: emailValue }, user ?? undefined);
-      await refreshUser();
+      const updated = await updateMeOptimistic(
+        { email: emailValue || null },
+        user ?? undefined,
+      );
+      setEmail(updated.email ?? "");
       setSavedEmail(true);
-      setTimeout(() => setSavedEmail(false), 2000);
+      setTimeout(() => setSavedEmail(false), SAVED_FEEDBACK_MS);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("common.error"));
+      if (apiErrorParam(error) === "email") {
+        setEmailError(t("userSettings.errors.invalidEmail"));
+        emailRef.current?.focus();
+      } else {
+        toastApiError(error, t);
+      }
     } finally {
       setSavingEmail(false);
     }
   };
 
   const gravatarUrl = getGravatarUrl(email || user?.email, 96);
-
-  const themeLabels = {
-    light: t("theme.light"),
-    dark: t("theme.dark"),
-    system: t("theme.system"),
-  };
 
   return (
     <PageWrapper className="space-y-6">
@@ -112,7 +165,7 @@ export function UserSettingsPage() {
         <PageHeader title={t("userSettings.title")} description={t("userSettings.description")} />
       </motion.div>
 
-      <StaggerList className="grid gap-6">
+      <StaggerList className="grid max-w-2xl gap-6">
         <StaggerItem>
           <Card>
             <CardHeader>
@@ -130,69 +183,46 @@ export function UserSettingsPage() {
                     {user?.username?.[0]?.toUpperCase() || "U"}
                   </AvatarFallback>
                 </Avatar>
-                <div className="flex-1 space-y-2">
-                  <Label>{t("auth.username")}</Label>
-                  <Input value={user?.username || ""} disabled />
-                  <p className="text-sm text-muted-foreground">
-                    {t("userSettings.usernameCannotChange")}
-                  </p>
-                </div>
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <Label htmlFor="email" className="inline-flex items-center gap-1">
-                  <Mail className="size-4" />
-                  {t("userSettings.email")}
-                </Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                />
-                <p className="text-sm text-muted-foreground">
-                  {t("userSettings.emailDescription")}
-                </p>
-                <Button
-                  onClick={handleSaveEmail}
-                  disabled={savingEmail}
-                  size="sm"
-                >
-                  <Save data-icon="inline-start" aria-hidden="true" />
-                  {savingEmail ? t("common.saving") : savedEmail ? t("common.saved") : t("common.save")}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </StaggerItem>
-
-        <StaggerItem>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Coins className="h-5 w-5" />
-                {t("userSettings.billing")}
-              </CardTitle>
-              <CardDescription>{t("userSettings.billingDescription")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">{t("userSettings.currentBalance")}</p>
-                  <p className="text-xl font-semibold tabular-nums">
-                    {user?.balance_unlimited
-                      ? t("users.unlimited")
-                      : formatUsdDecimal(user?.balance_usd, 2)}
-                  </p>
-                </div>
+                <Field className="min-w-0 flex-1">
+                  <FieldLabel htmlFor={usernameId}>{t("auth.username")}</FieldLabel>
+                  <Input id={usernameId} value={user?.username || ""} disabled />
+                  <FieldDescription>{t("userSettings.usernameCannotChange")}</FieldDescription>
+                </Field>
               </div>
               {user?.group_id && (
                 <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">{t("users.group")}</p>
+                  <p className="text-sm font-medium">{t("users.group")}</p>
                   <GroupsBadge groupIds={[user.group_id]} />
                 </div>
               )}
+              <Separator />
+              <form onSubmit={handleSaveEmail} noValidate className="space-y-3">
+                <Field data-invalid={emailError ? true : undefined}>
+                  <FieldLabel htmlFor={emailId} className="inline-flex items-center gap-1">
+                    <Mail className="size-4" />
+                    {t("userSettings.email")}
+                  </FieldLabel>
+                  <Input
+                    ref={emailRef}
+                    id={emailId}
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setEmailError("");
+                    }}
+                    placeholder="you@example.com"
+                    aria-invalid={emailError ? true : undefined}
+                  />
+                  <FieldDescription>{t("userSettings.emailDescription")}</FieldDescription>
+                  {emailError && <FieldError>{emailError}</FieldError>}
+                </Field>
+                <Button type="submit" disabled={savingEmail} size="sm">
+                  <Save data-icon="inline-start" aria-hidden="true" />
+                  {savingEmail ? t("common.saving") : savedEmail ? t("common.saved") : t("common.save")}
+                </Button>
+              </form>
             </CardContent>
           </Card>
         </StaggerItem>
@@ -206,75 +236,79 @@ export function UserSettingsPage() {
               </CardTitle>
               <CardDescription>{t("userSettings.securityDescription")}</CardDescription>
             </CardHeader>
-            <CardContent>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="current-password">
-                    {t("userSettings.currentPassword")}
-                  </FieldLabel>
-                  <Input
-                    id="current-password"
-                    type="password"
-                    autoComplete="current-password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                  />
-                </Field>
-                <Field data-invalid={passwordTooShort || undefined}>
-                  <FieldLabel htmlFor="new-password">
-                    {t("userSettings.newPassword")}
-                  </FieldLabel>
-                  <Input
-                    id="new-password"
-                    type="password"
-                    autoComplete="new-password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    aria-invalid={passwordTooShort || undefined}
-                  />
-                  <FieldDescription>
-                    {t("userSettings.passwordRequirements")}
-                  </FieldDescription>
-                  {passwordTooShort && (
-                    <FieldError>{t("userSettings.passwordTooShort")}</FieldError>
-                  )}
-                </Field>
-                <Field data-invalid={passwordMismatch || undefined}>
-                  <FieldLabel htmlFor="confirm-password">
-                    {t("userSettings.confirmPassword")}
-                  </FieldLabel>
-                  <Input
-                    id="confirm-password"
-                    type="password"
-                    autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    aria-invalid={passwordMismatch || undefined}
-                  />
-                  {passwordMismatch && (
-                    <FieldError>{t("userSettings.passwordMismatch")}</FieldError>
-                  )}
-                </Field>
-              </FieldGroup>
-            </CardContent>
-            <CardFooter>
-              <Button
-                onClick={handleSavePassword}
-                disabled={
-                  saving ||
-                  !currentPassword ||
-                  newPassword.length < 8 ||
-                  newPassword !== confirmPassword
-                }
-              >
-                <Save data-icon="inline-start" />
-                {saving
-                  ? t("common.saving")
-                  : saved
-                    ? t("common.saved")
-                    : t("userSettings.changePassword")}
-              </Button>
-            </CardFooter>
+            <form onSubmit={handleSavePassword} noValidate>
+              <CardContent>
+                <FieldGroup>
+                  <Field data-invalid={passwordErrors.current ? true : undefined}>
+                    <FieldLabel htmlFor={currentPasswordId}>
+                      {t("userSettings.currentPassword")}
+                    </FieldLabel>
+                    <Input
+                      ref={currentPasswordRef}
+                      id={currentPasswordId}
+                      type="password"
+                      autoComplete="current-password"
+                      value={currentPassword}
+                      onChange={(e) => {
+                        setCurrentPassword(e.target.value);
+                        setPasswordErrors((errors) => ({ ...errors, current: undefined }));
+                      }}
+                      aria-invalid={passwordErrors.current ? true : undefined}
+                    />
+                    {passwordErrors.current && <FieldError>{passwordErrors.current}</FieldError>}
+                  </Field>
+                  <Field data-invalid={passwordErrors.next ? true : undefined}>
+                    <FieldLabel htmlFor={newPasswordId}>
+                      {t("userSettings.newPassword")}
+                    </FieldLabel>
+                    <Input
+                      ref={newPasswordRef}
+                      id={newPasswordId}
+                      type="password"
+                      autoComplete="new-password"
+                      value={newPassword}
+                      onChange={(e) => {
+                        setNewPassword(e.target.value);
+                        setPasswordErrors((errors) => ({ ...errors, next: undefined }));
+                      }}
+                      aria-invalid={passwordErrors.next ? true : undefined}
+                    />
+                    <FieldDescription>
+                      {t("userSettings.passwordRequirements")}
+                    </FieldDescription>
+                    {passwordErrors.next && <FieldError>{passwordErrors.next}</FieldError>}
+                  </Field>
+                  <Field data-invalid={passwordErrors.confirm ? true : undefined}>
+                    <FieldLabel htmlFor={confirmPasswordId}>
+                      {t("userSettings.confirmPassword")}
+                    </FieldLabel>
+                    <Input
+                      ref={confirmPasswordRef}
+                      id={confirmPasswordId}
+                      type="password"
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => {
+                        setConfirmPassword(e.target.value);
+                        setPasswordErrors((errors) => ({ ...errors, confirm: undefined }));
+                      }}
+                      aria-invalid={passwordErrors.confirm ? true : undefined}
+                    />
+                    {passwordErrors.confirm && <FieldError>{passwordErrors.confirm}</FieldError>}
+                  </Field>
+                </FieldGroup>
+              </CardContent>
+              <CardFooter>
+                <Button type="submit" disabled={saving}>
+                  <Save data-icon="inline-start" />
+                  {saving
+                    ? t("common.saving")
+                    : saved
+                      ? t("common.saved")
+                      : t("userSettings.changePassword")}
+                </Button>
+              </CardFooter>
+            </form>
           </Card>
         </StaggerItem>
 
@@ -288,57 +322,24 @@ export function UserSettingsPage() {
               <CardDescription>{t("userSettings.preferencesDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>{t("userSettings.language")}</Label>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-sm font-medium">{t("userSettings.language")}</p>
                   <p className="text-sm text-muted-foreground">
                     {t("userSettings.languageDescription")}
                   </p>
                 </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline">{t(`language.${currentLang}`)}</Button>
-                  </DropdownMenuTrigger>
-                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setLanguage("en")}>
-                      {t("language.en")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setLanguage("zh")}>
-                      {t("language.zh")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setLanguage("ja")}>
-                      {t("language.ja")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setLanguage("zh-TW")}>
-                      {t("language.zh-TW")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <LanguageDropdown />
               </div>
               <Separator />
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>{t("userSettings.theme")}</Label>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-sm font-medium">{t("userSettings.theme")}</p>
                   <p className="text-sm text-muted-foreground">
                     {t("userSettings.themeDescription")}
                   </p>
                 </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline">{themeLabels[theme]}</Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setTheme("light")}>
-                      {t("theme.light")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setTheme("dark")}>
-                      {t("theme.dark")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setTheme("system")}>
-                      {t("theme.system")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <ThemeDropdown />
               </div>
             </CardContent>
           </Card>

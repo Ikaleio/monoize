@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, useReducedMotion } from "framer-motion";
 import {
@@ -91,6 +91,8 @@ export interface ComposerProps {
   /** True while a chat stream or image request is in flight (stop affordance). */
   isBusy: boolean;
   blockedHint: string | null;
+  /** No model is selected for the active mode (PG-CMP3a). */
+  modelMissing: boolean;
   prefs: PlaygroundPrefs;
   setPref: (name: keyof PlaygroundPrefs, value: string) => void;
   groups: Group[];
@@ -116,6 +118,7 @@ export function Composer({
   canSend,
   isBusy,
   blockedHint,
+  modelMissing,
   prefs,
   setPref,
   groups,
@@ -131,6 +134,7 @@ export function Composer({
   const shouldReduceMotion = useReducedMotion();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
 
   const finePointer = useMemo(
     () =>
@@ -181,7 +185,15 @@ export function Composer({
     // PG-CMP2: Enter submits only on fine-pointer devices; Shift+Enter always newline.
     if (event.key === "Enter" && !event.shiftKey && finePointer && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (canSend) onSend();
+      if (canSend) {
+        onSend();
+        return;
+      }
+      const hasContent =
+        text.trim().length > 0 || (mode === "chat" && attachments.length > 0);
+      if (modelMissing && hasContent && !isBusy && !modelsLoading) {
+        setModelPickerOpen(true);
+      }
     }
   };
 
@@ -272,6 +284,9 @@ export function Composer({
             records={models}
             kind={mode}
             isLoading={modelsLoading}
+            open={modelPickerOpen}
+            onOpenChange={setModelPickerOpen}
+            highlighted={modelMissing}
           />
           <ApiKeyDropdown
             value={prefs.apiKeyId}

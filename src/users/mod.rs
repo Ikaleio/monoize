@@ -336,9 +336,29 @@ pub struct AdminUpdateUserInput {
     pub role: Option<UserRole>,
     pub enabled: Option<bool>,
     pub balance_nano_usd: Option<String>,
+    /// Signed amount added to the locked balance; mutually exclusive with `balance_nano_usd`.
+    pub balance_delta_nano_usd: Option<String>,
+    /// Compare-and-set guard for `balance_nano_usd`.
+    pub expected_balance_nano_usd: Option<String>,
+    /// User-visible note stored as `meta.note` on the `admin_adjustment` ledger row.
+    pub balance_note: Option<String>,
     pub balance_unlimited: Option<bool>,
     pub email: Option<Option<String>>,
     pub group_id: Option<String>,
+}
+
+/// Failure of an admin balance mutation that carries an optimistic-concurrency guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BalanceMutationError {
+    /// The locked balance differs from the caller's expected value; nothing was written.
+    BalanceChanged,
+    Other(String),
+}
+
+impl From<String> for BalanceMutationError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
 }
 
 fn default_true() -> bool {
@@ -458,6 +478,8 @@ pub struct UpdateApiKeyInput {
     pub enabled: Option<bool>,
     pub sub_account_enabled: Option<bool>,
     pub sub_account_balance_nano_usd: Option<String>,
+    /// Compare-and-set guard for `sub_account_balance_nano_usd`.
+    pub expected_sub_account_balance_nano_usd: Option<String>,
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
@@ -469,7 +491,8 @@ pub struct UpdateApiKeyInput {
     pub reasoning_envelope_enabled: Option<bool>,
     pub request_capture_mode: Option<RequestCaptureMode>,
     pub request_capture_retention: Option<RequestCaptureRetention>,
-    pub expires_at: Option<String>, // RFC3339 format or null
+    /// `Some(None)` clears the expiry; `Some(Some(rfc3339))` sets it.
+    pub expires_at: Option<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -768,6 +791,8 @@ pub struct AnalyticsModelBucketRow {
     pub cost_nano: i128,
     pub call_count: i64,
     pub token_count: i64,
+    pub input_tokens: i64,
+    pub cache_read_tokens: i64,
 }
 
 pub struct AnalyticsProviderBucketRow {

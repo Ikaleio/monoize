@@ -745,7 +745,8 @@ MP-Y15. A `models_dev` sync run deletes rows with `source = "models_dev"` whose
 canonical model id is absent from the fetched snapshot. Other sources do not delete.
 
 MP-Y16. Each apply run inserts one `price_sync_runs` row at start (`status =
-"running"`) and finalizes it with counts. Row writes use set-based statements in
+"running"`) and finalizes it with counts. A scheduler run inserts it before the fetch; a
+preview apply (MP-A7) inserts it after the stale check passes. Row writes use set-based statements in
 fixed-size chunks below the portable SQLite bound-parameter limit; PostgreSQL uses the
 same chunking.
 
@@ -800,10 +801,16 @@ MP-A3. `DELETE /api/dashboard/model-prices/{model_id}` deletes one row; `404
 not_found` when absent.
 
 MP-A4. `GET /api/dashboard/model-prices/unpriced` returns
-`{ "models": string[] }`: the sorted distinct logical model names available for routing
+`{ "models": string[], "sources": { "<model>": UnpricedModelSource[] } }`: `models` is the
+sorted distinct logical model names available for routing
 (`database-provider-routing.spec.md` R-MDL-3 source set) whose pricing key resolves to
 no applicable price under MP-R2. The computation runs on request-local data with a
 bounded query count.
+
+MP-A4a. `sources[model]` lists every enabled Provider / enabled positive-weight Channel
+pair that serves `model`, in routing-catalog order, as
+`{ "provider_id", "provider_name", "channel_id", "channel_name" }`. It is read from the
+cached routing catalog (DPT-RC2) and MUST NOT add per-model database queries.
 
 MP-A5. `GET /api/dashboard/price-sync/runs?limit=N` returns the most recent
 `price_sync_runs` rows ordered by `started_at DESC`, default limit 20, maximum 100.
@@ -812,76 +819,204 @@ MP-A6. `POST /api/dashboard/price-sync/{source}/preview` fetches the source and
 returns the computed diff without writing `model_prices` rows:
 
 ```json
-{ "source": "models_dev", "insert": 12, "update": 3, "skip": 5, "delete": 1,
-  "changes": [ { "model_id": "gpt-4o", "kind": "update", "fields": ["input_usd_per_1m"] } ] }
+{ "source": "models_dev", "preview_id": "7c0e…", "expires_at": "2026-10-30T12:10:00Z",
+  "insert": 12, "update": 3, "skip": 5, "delete": 1,
+  "changes": [
+    { "model_id": "gpt-4o", "kind": "update", "fields": ["input_usd_per_1m"],
+      "before": { "input_usd_per_1m": "2.5" }, "after": { "input_usd_per_1m": "2" } },
+    { "model_id": "old-model", "kind": "delete", "fields": [],
+      "before": { "billing_mode": "per_token", "input_usd_per_1m": "1" } },
+    { "model_id": "manual-model", "kind": "skip", "fields": [] }
+  ] }
 ```
 
-`changes` is truncated to at most 500 entries plus `"truncated": true`.
+- `kind` is one of `insert`, `update`, `delete`, `skip`.
+- `update` entries carry `before` and `after` objects keyed by each changed field with the
+  stored and incoming values. `insert` entries carry `after` with `billing_mode` and every
+  non-null price column and `billing_expr`. `delete` entries carry `before` with the same
+  keys taken from the stored row. `skip` entries carry neither.
+- `changes` is ordered `delete`, `update`, `insert`, `skip` (stable within a kind) and is
+  truncated to at most 500 entries plus `"truncated": true`. The four counts always
+  describe the untruncated plan.
+- A `new_api` preview while `price_sync_new_api_base_url` is empty returns HTTP `400` code
+  `price_sync_new_api_not_configured`.
 
-MP-A7. `POST /api/dashboard/price-sync/{source}/apply` performs MP-Y13..MP-Y16 and
-returns the finalized run row.
+MP-A6a. Each successful preview stores its fetched source snapshot and its complete,
+untruncated change list in process memory under `preview_id` for 10 minutes
+(`expires_at`). At most 4 previews are kept; storing a fifth evicts the oldest. Snapshots
+are not shared between processes.
+
+MP-A7. `POST /api/dashboard/price-sync/{source}/apply` takes the body
+`{ "preview_id": string }` and applies exactly the snapshot of that preview:
+
+- A missing, malformed, unknown, expired, or other-source `preview_id` returns HTTP `409`
+  code `price_sync_preview_expired` and writes nothing. A preview id is consumed by its
+  first apply attempt.
+- Under the apply lock, the server recomputes the plan from the stored snapshot against
+  the current `model_prices` rows. When the recomputed complete change list (kinds,
+  fields, `before`, `after`) differs from the previewed one, it returns HTTP `409` code
+  `price_sync_preview_stale`, writes nothing, and inserts no run row.
+- Otherwise it performs MP-Y13..MP-Y16 with that plan (inserting the run row only at this
+  point) and returns the finalized run row. Apply never re-fetches the source.
+- Run `detail_json` (MP-D8) stores `model_id`, `kind`, and `fields` only, with the same
+  ordering and 500-entry bound as MP-A6.
+
+The automatic scheduler (§9.7) keeps its fetch-and-apply run and does not use previews.
 
 MP-A8. `tool_prices`, `allow_free_when_unpriced`, `allow_free_when_missing_usage`,
 `price_sync_auto_enabled`, `price_sync_new_api_base_url`, and
 `price_sync_new_api_token` are read and written through the existing
 `GET/PUT /api/dashboard/settings` endpoints.
 
+MP-A8a. Every `/dashboard/models` settings write (tool prices, automatic-sync switch,
+new-api connection) MUST send only the keys it changes; it MUST NOT send a full settings
+object read earlier, so it never overwrites unrelated settings. The new-api connection
+write omits `price_sync_new_api_token` when the token field was not edited (MP-Y2a).
+
 MP-A9. Group `billing_ratio` is read through `GET /api/dashboard/groups` and written
 through the group create/update endpoints (`groups-registry.spec.md` §2).
 
 ## 11. Dashboard UI
 
-MP-UI1. The page at `/dashboard/models` contains exactly five tabs in this order:
+MP-UI1. The page at `/dashboard/models` contains exactly four tabs in this order:
 
-1. `Model Pricing` (模型定价)
-2. `Unpriced Models` (未定价模型)
-3. `Tool Prices` (工具价格)
-4. `Upstream Sync` (上游同步)
-5. `Group Pricing` (分组定价)
+1. `Model Pricing` (模型定价), URL value `pricing` (default)
+2. `Unpriced Models` (未定价模型), URL value `unpriced`
+3. `Tool Prices` (工具价格), URL value `tools`
+4. `Upstream Sync` (上游同步), URL value `sync`
+
+The selected tab MUST be stored in the `?tab=` search parameter with `replace`; the
+default tab removes the parameter, and an unknown value selects the default tab. Reloading
+or opening `/dashboard/models?tab=<value>` MUST select that tab.
+
+MP-UI1a. The Unpriced Models trigger MUST show a secondary badge with the MP-A4 model
+count when the count is greater than 0, and no badge when it is 0; its accessible name
+MUST include the count. When the tab row overflows horizontally, the row MUST fade the
+clipped edge(s) to signal scrolling, and tab triggers MUST draw their focus ring inset.
 
 MP-UI2. Every tab uses SWR for data loading, renders a skeleton while loading, and
-applies optimistic updates for user-triggered mutations.
+applies optimistic updates for user-triggered mutations. Request failures MUST show the
+localized `apiErrors.<code>` message (`frontend-design-system.spec.md` error rules), never
+the raw server `message`.
 
 MP-UI3. Model Pricing tab: a virtualized `DataList` (DS68) with columns Model, Mode,
 Input $/1M, Output $/1M, Source, Status (enabled + lock count), Updated, and Actions.
 The Updated cell MUST use `formatDateTime` (DS66). The Mode cell MUST show a `fast`
 badge when `billing_expr.service_tiers.fast` exists. The row edit action opens the
 pricing editor dialog (DS67). The row delete action opens DS59 confirmation and, after
-confirmation, deletes the price row. The pricing editor has one section per
-`billing_mode` selected by a mode switcher: per-token price fields, per-request price
-field, and a tiered editor for `billing_expr`. The tiered editor MUST include the
-standard context tiers and an optional Fast / Priority table (`service_tiers.fast`).
-All price inputs are decimal strings; conversion and validation MUST NOT pass values
-through JavaScript `Number` or `parseFloat`. When the search query matches no row, the
-tab MUST render a no-match inline empty state, not the no-prices empty state.
+confirmation, deletes the price row. When the search query matches no row, the tab MUST
+render a no-match inline empty state, not the no-prices empty state.
 
-MP-UI4. Unpriced Models tab: renders MP-A4 results in a virtualized `DataList` with a
-per-row action that opens the pricing editor dialog pre-filled with the model id.
+MP-UI3a. Price cells (shared with `model-marketplace.spec.md` §4.2) MUST follow MP-UI10:
+
+- `per_token`: the input / output column price (a null output shows the input price per
+  MP-R5).
+- `per_request`: the Input cell shows `<price> / 次` (en `<price> / request`); the Output
+  cell shows `—`.
+- `tiered_expr`: the first tier's input / output price followed by muted text
+  `起 · n 档` (en `from · n tiers`) when there are 2 or more tiers. The top-level price
+  columns MUST NOT be shown for a tiered row.
+- When the row has 2 or more tiers or a `service_tiers.fast` table, the price is a
+  focusable tooltip trigger whose tooltip lists every tier (`≤ threshold` / `> previous
+  threshold`, input / output) and, when present, the Fast table in the same format.
+
+MP-UI3b. Status cell: a disabled row shows the secondary "disabled" badge; an enabled row
+that is incomplete under MP-R3 MUST show a warning badge "不完整" (en `Incomplete`) whose
+title explains that the model counts as unpriced; only an enabled complete row shows the
+success "enabled" badge.
+
+MP-UI3c. Pricing editor dialog:
+
+- The dialog body is a `<form>`; Save is its `type="submit"` button, so Enter in a
+  single-line input submits. `DialogContent` receives `dirty` whenever the model id, the
+  price form, locks, or metadata differ from the values loaded when the dialog opened.
+- One section per `billing_mode` is selected by a mode switcher: per-token price fields,
+  per-request price field, and a tiered editor for `billing_expr`. The tiered editor MUST
+  include the standard context tiers and an optional Fast / Priority table
+  (`service_tiers.fast`). Every tier exposes input, output, cache read, cache write 5m,
+  cache write 1h, and reasoning prices.
+- The dialog description states the unit for the selected mode: USD per 1M tokens for
+  `per_token` and `tiered_expr`, USD per request for `per_request`.
+- Required fields carry a visible `*` and `aria-required`: model id (create mode),
+  `input_usd_per_1m` (per_token), `per_request_usd` (per_request), each tier's input price,
+  and each non-last tier's token threshold.
+- Validation runs on submit. Each invalid field shows its message directly below it,
+  sets `aria-invalid` and `aria-describedby`, and the first invalid field receives focus
+  (opening the metadata section when needed). Validation errors MUST NOT use toasts;
+  toasts are only for server errors. Metadata token limits, when filled, MUST be positive
+  integers.
+- In create mode, when the typed model id equals an existing price row, the dialog MUST
+  show "该模型已有定价" under the field with an "改为编辑" button that switches the dialog
+  to edit mode for that row, hide the remaining fields, and disable Save.
+- All price inputs are decimal strings; conversion and validation MUST NOT pass values
+  through JavaScript `Number` or `parseFloat`.
+- On close, focus returns to the control that opened the dialog when it is still
+  connected (`frontend-design-system.spec.md` focus return).
+
+MP-UI4. Unpriced Models tab: renders MP-A4 results in a virtualized `DataList`. Each row
+shows the model and, on a muted second line, its MP-A4a sources as
+`Provider / Channel` pairs. The per-row action opens the pricing editor pre-filled with
+the model id: in edit mode when a (disabled or incomplete) price row already exists, else
+in create mode.
 
 MP-UI5. Tool Prices tab: an editor for the `tool_prices` object. Each row has usage
 class, USD price, a unit selector (`1k_calls`, `minute`, `session`), and a
-`minimum_units` input enabled only for `minute` and `session`. Invalid decimal or
-negative prices are blocked before submission.
+`minimum_units` input enabled only for `minute` and `session`. Invalid, empty, or
+duplicate values are shown under the offending cell (`aria-invalid`) on save and block
+submission.
+
+MP-UI5a. While the tool-price rows differ from the stored setting, the tab MUST show the
+sticky unsaved-changes bar used by the system settings page ("未保存的修改", "放弃修改",
+"保存修改"); it is the tab's only save action. Discard restores the stored rows. The tab
+stays mounted while other tabs are selected, so a draft survives tab switches, and the
+Tool Prices trigger shows a modified dot while the draft exists. In-app navigation away
+from `/dashboard/models` and closing the browser tab MUST ask for confirmation
+(`useUnsavedChangesGuard`). Save writes only `tool_prices` (MP-A8a).
 
 MP-UI6. Upstream Sync tab: one card per source (models.dev, OpenRouter, new-api) with
-last-run status from MP-A5, a preview action rendering the MP-A6 diff, and an apply
-action. The new-api card exposes the base-URL and token settings.
+last-run status from MP-A5 and a "预览" (outline) action. Cards MUST NOT expose an apply
+action. The last-run summary uses the format `新增 n · 更新 n · 删除 n`; the runs table
+uses the same wording with the skipped count. The new-api card exposes the base-URL and
+token fields with visible labels; its preview action is disabled with the visible reason
+"请先填写并保存 Base URL" while the stored base URL is empty.
 
 MP-UI6a. The models.dev card additionally exposes the metadata sync action
 (`POST /api/dashboard/model-metadata/sync/models-dev`,
-`model-metadata-dashboard.spec.md` §2). The preview action calls MP-A6 and renders the
-returned diff in a dialog without mutating client caches. The apply action calls MP-A7
-and, on success, revalidates the model-prices, unpriced-models, sync-runs, and
-model-metadata caches.
+`model-metadata-dashboard.spec.md` §2). The preview action calls MP-A6 and opens the
+preview dialog without mutating client caches. The dialog:
+
+- shows the four counts and a `SegmentedControl` with "变更" (insert + update, default),
+  "删除", and "跳过"; skip rows are hidden until "跳过" is selected;
+- lists each change with its kind and its MP-A6 values, rendering update rows as
+  `field: old → new` and insert / delete rows as `field: value`, with localized field
+  names and prices in the MP-UI10 format;
+- has the footer actions "取消" and "应用 N 项变更" (N = insert + update + delete, disabled
+  when N = 0). When delete > 0 the apply button uses the destructive variant, names the
+  delete count, and opens a destructive confirmation that states the number of rows that
+  will be deleted before MP-A7 runs.
+
+Apply MUST be reachable only from the preview dialog of the same source and MUST send that
+preview's `preview_id` (MP-A7). On success it closes the dialog and revalidates the
+model-prices, unpriced-models, sync-runs, model-metadata, marketplace, and providers
+caches. A `409` response shows its localized message, asks for a new preview, and closes
+the dialog because preview ids are single-use.
+
+MP-A6 lists only `skip` rows owned by `manual` or another source. Rows skipped because
+their values are unchanged count toward `skip` without an entry; when the "跳过" filter is
+selected and `skip` exceeds the listed entries, the dialog MUST state that the remaining
+models already match the upstream price and are not listed.
 
 MP-UI6b. The Upstream Sync tab MUST expose one `price_sync_auto_enabled` switch above
 the source cards. The switch description MUST state the fixed 24-hour interval and the
-source order. The switch mutation MUST use the existing optimistic settings update. A
+source order and MUST link to the billing settings category
+(`/dashboard/admin-settings?category=billing`) for the unpriced / missing-usage settlement
+switches. The switch mutation MUST be an optimistic partial settings update (MP-A8a). A
 failed mutation MUST restore the prior value and display an error toast. While settings
 are loading, the automatic-sync block MUST render a skeleton.
 
-MP-UI7. Group Pricing tab: lists registry groups with an editable `billing_ratio`
-column persisting through the group update endpoint.
+MP-UI7. Group `billing_ratio` is edited on `/dashboard/groups` (a list column and an
+editor field, `dashboard-ui-layout.spec.md` GP2/GP3). `/dashboard/models` has no group
+pricing tab.
 
 MP-UI8. The system settings page exposes `allow_free_when_unpriced` and
 `allow_free_when_missing_usage` as two switches in the billing/health settings
@@ -889,6 +1024,12 @@ category. Each description states the fail-closed default.
 
 MP-UI9. The Provider editor dialog exposes both Provider overrides as three-state
 selectors (`Inherit global`, `On`, `Off`) mapping to `null`, `true`, `false`.
+
+MP-UI10. USD prices on `/dashboard/models` and `/dashboard/marketplace` use one shared
+formatter: the exact stored decimal string with thousands separators, trailing fractional
+zeros trimmed, and at least 2 fractional digits (`$5.00`, `$0.60306`, `$1,234.50`). It
+MUST NOT round and MUST NOT pass the value through JavaScript `Number`. A null price
+renders as `—`.
 
 ## 12. Migration
 

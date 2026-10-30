@@ -3,6 +3,11 @@ import type { FileUIPart, UIMessage } from "ai";
 import { normalizePlaygroundImageSize } from "./image-size";
 import { normalizePlaygroundImageQuality } from "./image-quality";
 import { loadPlaygroundImage } from "./image-source";
+import {
+  cleanErrorMessage,
+  REQUEST_ID_HEADER,
+  type PlaygroundRequestFailure,
+} from "./request-failure";
 
 export interface ComposerAttachment {
   id: string;
@@ -24,8 +29,36 @@ export interface ImageRequestInput {
 export interface ImageJobState {
   id: string;
   status: "pending" | "error";
-  error?: string;
+  failure?: PlaygroundRequestFailure;
   input: ImageRequestInput;
+}
+
+/** Restorable hook state for the new-chat undo (PG-CMP5a). */
+export interface ImageStateSnapshot {
+  failedJob: ImageJobState | null;
+  completedInputs: Map<string, ImageRequestInput>;
+}
+
+class ImageRequestError extends Error {
+  readonly status: number | null;
+  readonly requestId: string | null;
+
+  constructor(message: string, status: number | null, requestId: string | null) {
+    super(message);
+    this.status = status;
+    this.requestId = requestId;
+  }
+}
+
+function imageFailure(error: unknown): PlaygroundRequestFailure {
+  if (error instanceof ImageRequestError) {
+    return { message: error.message, status: error.status, requestId: error.requestId };
+  }
+  return {
+    message: error instanceof Error ? cleanErrorMessage(error.message) : "",
+    status: null,
+    requestId: null,
+  };
 }
 
 interface ImageApiDataItem {
@@ -73,8 +106,11 @@ export function buildImageEditForm(
 }
 
 async function readImageStream(response: Response): Promise<ImageApiDataItem[]> {
+  const requestId = response.headers.get(REQUEST_ID_HEADER);
+  // Protocol violations carry no upstream text; PG-CHAT2b renders the empty message.
+  const malformed = () => new ImageRequestError("", null, requestId);
   if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
-    throw new Error("expected an image event stream");
+    throw malformed();
   }
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   const items: ImageApiDataItem[] = [];
@@ -92,16 +128,25 @@ async function readImageStream(response: Response): Promise<ImageApiDataItem[]> 
       completed = true;
       return;
     }
-    const event = JSON.parse(data) as ImageApiDataItem & {
+    let event: ImageApiDataItem & {
       type?: string;
       error?: { message?: string; code?: string };
     };
+    try {
+      event = JSON.parse(data);
+    } catch {
+      throw malformed();
+    }
     if (event.type === "error" || event.error) {
-      throw new Error(event.error?.message || event.error?.code || "image generation failed");
+      throw new ImageRequestError(
+        event.error?.message || event.error?.code || "",
+        null,
+        requestId,
+      );
     }
     if (event.type === "image_generation.completed" || event.type === "image_edit.completed") {
       if (!event.b64_json && !event.url) {
-        throw new Error("image stream completed without image data");
+        throw malformed();
       }
       items.push({
         b64_json: event.b64_json,
@@ -125,8 +170,7 @@ async function readImageStream(response: Response): Promise<ImageApiDataItem[]> 
         readFrame(frame);
       }
     }
-    if (!completed) throw new Error("image stream ended before completion");
-    if (items.length === 0) throw new Error("empty image response");
+    if (!completed || items.length === 0) throw malformed();
     return items;
   } finally {
     await reader.cancel().catch(() => {});
@@ -186,14 +230,18 @@ export async function requestImages(
   }
 
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
+    let message = "";
     try {
       const body = await response.json();
-      message = body.error?.message || body.error?.code || message;
+      message = body.error?.message || body.error?.code || "";
     } catch {
       /* non-JSON error body */
     }
-    throw new Error(message);
+    throw new ImageRequestError(
+      message,
+      response.status,
+      response.headers.get(REQUEST_ID_HEADER),
+    );
   }
 
   return readImageStream(response);
@@ -259,7 +307,7 @@ export function usePlaygroundImages(appendMessage: (message: UIMessage) => void)
     async (jobState: ImageJobState) => {
       const controller = new AbortController();
       controllerRef.current = controller;
-      setJob({ ...jobState, status: "pending", error: undefined });
+      setJob({ ...jobState, status: "pending", failure: undefined });
       try {
         const items = await requestImages(jobState.input, controller.signal);
         const message = buildAssistantImageMessage(items);
@@ -275,7 +323,7 @@ export function usePlaygroundImages(appendMessage: (message: UIMessage) => void)
         setJob({
           ...jobState,
           status: "error",
-          error: (error as Error).message || "request failed",
+          failure: imageFailure(error),
         });
       } finally {
         controllerRef.current = null;
@@ -348,5 +396,21 @@ export function usePlaygroundImages(appendMessage: (message: UIMessage) => void)
     setJob(null);
   }, [setJob]);
 
-  return { job, generate, retry, regenerate, rerun, abort, clear, reset };
+  const snapshot = useCallback(
+    (): ImageStateSnapshot => ({
+      failedJob: jobRef.current?.status === "error" ? jobRef.current : null,
+      completedInputs: new Map(completedInputsRef.current),
+    }),
+    [],
+  );
+
+  const restore = useCallback(
+    (state: ImageStateSnapshot) => {
+      completedInputsRef.current = new Map(state.completedInputs);
+      setJob(state.failedJob);
+    },
+    [setJob],
+  );
+
+  return { job, generate, retry, regenerate, rerun, abort, clear, reset, snapshot, restore };
 }

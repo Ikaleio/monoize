@@ -58,6 +58,11 @@ pub struct UserResponse {
     pub today_cost_nano_usd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub today_cost_usd: Option<String>,
+    /// Admin users list only: active subscription plan name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_plan_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_plan_expires_at: Option<String>,
 }
 
 impl UserResponse {
@@ -89,6 +94,8 @@ impl UserResponse {
             today_calls,
             today_cost_nano_usd,
             today_cost_usd,
+            active_plan_name: None,
+            active_plan_expires_at: None,
         }
     }
 }
@@ -324,6 +331,36 @@ pub async fn get_me(
     Ok(Json(response))
 }
 
+fn is_valid_email(email: &str) -> bool {
+    if email.len() > 254 || email.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.contains('@')
+        && domain.contains('.')
+        && domain.split('.').all(|label| !label.is_empty())
+}
+
+/// Trims an email and maps blank input to `None` (US6). Rejects an invalid
+/// address with `invalid_email` so every email write path reports one code.
+pub(crate) fn normalize_email(email: Option<&str>) -> AppResult<Option<&str>> {
+    let Some(email) = email.map(str::trim).filter(|email| !email.is_empty()) else {
+        return Ok(None);
+    };
+    if !is_valid_email(email) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_email",
+            "email address is not valid",
+        )
+        .with_param("email"));
+    }
+    Ok(Some(email))
+}
+
 pub async fn update_me(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -332,6 +369,11 @@ pub async fn update_me(
     let user = get_current_user(&headers, &state).await?;
 
     let user_store = &state.user_store;
+    let email = body
+        .email
+        .as_ref()
+        .map(|email| normalize_email(email.as_deref()))
+        .transpose()?;
 
     user_store
         .update_user(
@@ -342,7 +384,7 @@ pub async fn update_me(
             None,
             None,
             None,
-            body.email.as_ref().map(|e| e.as_deref()),
+            email,
             None,
         )
         .await
@@ -372,7 +414,8 @@ pub async fn change_password(
             StatusCode::BAD_REQUEST,
             "invalid_password",
             "password must be at least 8 characters",
-        ));
+        )
+        .with_param("new_password"));
     }
 
     let current_password_is_valid =
@@ -384,7 +427,8 @@ pub async fn change_password(
             StatusCode::UNAUTHORIZED,
             "invalid_current_password",
             "current password is incorrect",
-        ));
+        )
+        .with_param("current_password"));
     }
 
     let session_ttl_days = state

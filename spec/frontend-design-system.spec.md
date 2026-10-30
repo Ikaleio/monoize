@@ -54,6 +54,8 @@ DS5a. Dashboard status soft backgrounds and borders SHOULD use lower saturation 
 
 DS5b. The dashboard body background MAY use the product grid texture. Implementations MUST NOT remove the grid texture unless the product specification is updated.
 
+DS5c. Property badges (for example stream/non-stream, protocol, type, or role) MUST use neutral `bg-muted text-muted-foreground` or `Badge variant="secondary"`. Status tokens (`success`, `warning`, `info`, `error`) MUST express only an outcome or a risk. An entity MUST show one effective status. When several apply, the precedence is: disabled, then not receiving traffic, then unhealthy, then healthy.
+
 ## 2. Cards
 
 DS6. Base `Card` MUST be a static surface by default.
@@ -139,7 +141,7 @@ DS22e. Below wide mode, the header MUST NOT render. A `DataListCell` with a `lab
 
 DS22f. `DataListHead` and `DataListCell` MUST accept `align = "start" | "end"`. In wide mode, a header cell and the body cells of the same column MUST use the same text alignment.
 
-DS22g. Header labels MUST use `text-xs font-medium text-muted-foreground`. Row cells MUST use `text-sm`. Rows MUST use `px-4 py-3`, `divide-y` separators, and `hover:bg-muted/50`. Call sites MUST NOT override row padding or cell font size.
+DS22g. Header labels MUST use `text-xs font-medium text-muted-foreground`. Row cells MUST use `text-sm`. Rows MUST use `px-4 py-3`, `divide-y` separators, and `hover:bg-muted/50`. Call sites MUST NOT override row padding or cell font size. Exception: `DataList` MUST accept `dense?: boolean`; when `dense` is true, wide-mode rows MUST use `py-1.5` and rows below wide mode keep `py-3`. A list MAY set `dense` only when every wide-mode cell renders exactly one line of text.
 
 DS22h. `DataListBody` and `DataListRow` MUST forward refs and unknown props to `ul` and `li` elements, so that a virtualization library can supply them as list and item components. `DataListRow` MUST support `asChild` composition.
 
@@ -174,9 +176,11 @@ DS28. Text inputs and textareas MUST use focus ring feedback from shadcn primiti
 
 DS29. Text inputs and textareas MUST NOT scale on focus.
 
-DS30. Field validation errors MUST render inline when the error is tied to a specific field.
+DS29a. `Input`, `Textarea`, and `SelectTrigger` MUST render text at 16 px (`text-base`) below the `md` breakpoint and at 14 px (`text-sm`) at `md` and above, so iOS Safari does not zoom the page on focus. A call-site font-size class MAY change the `md`-and-above size only.
 
-DS31. Operation failures that are not tied to a specific field MUST render as toast or alert feedback.
+DS30. Field validation errors MUST render inline when the error is tied to a specific field. DS74 defines the inline error contract.
+
+DS31. Operation failures that are not tied to a specific field MUST render as toast or alert feedback. DS74 defines the toast content.
 
 ## 9. Inline alignment
 
@@ -205,7 +209,8 @@ DS34c. Hover/press scale affordance on action buttons MUST be applied through th
 - hover scale MUST be `1.02`;
 - tap scale MUST be `0.98`;
 - the wrapper MUST respect reduced motion per DS32-DS34;
-- the wrapper MUST forward all props it does not consume (event handlers, ARIA and data attributes) to its underlying element, so that `asChild` composition (for example Radix `DialogTrigger asChild`) keeps its injected open/close handlers functional.
+- the wrapper MUST forward all props it does not consume (event handlers, ARIA and data attributes) to its underlying element, so that `asChild` composition (for example Radix `DialogTrigger asChild`) keeps its injected open/close handlers functional;
+- the wrapper MUST NOT be a Tab stop. It MUST render with `tabIndex={-1}`, because the framer-motion tap gesture otherwise adds `tabindex="0"`. Pressing Tab from the preceding control MUST focus the wrapped button directly. The same rule applies to every other motion element with `whileTap` (for example the sidebar brand mark inside its link).
 
 Pages MUST NOT wrap buttons in ad-hoc `motion.div` elements with `whileHover`/`whileTap` scale handlers.
 
@@ -247,6 +252,9 @@ DS40d. Hovering or focusing a collapsed badge collection MUST open a small porta
 - Focus caused by a fine-pointer trigger click MUST NOT reopen the popover after pointer-leave close logic runs.
 - A trigger activation whose PointerEvent reports `mouse` or `pen` MUST be treated as fine-pointer activation even when viewport media queries report coarse or no-hover capability.
 - On touch pointers, coarse-pointer devices, or devices that report no hover capability, tapping the collection trigger MAY toggle the popover open or closed.
+- Closing the popover MUST NOT move focus to the trigger unless the popover was opened from the keyboard and focus would otherwise be lost. A focus move caused by closing MUST NOT reopen the popover.
+- A click inside the popover content MUST NOT propagate to the trigger's React ancestors (for example an expandable card header).
+- The pager buttons MUST have localized accessible names (`common.previousPage`, `common.nextPage`).
 
 DS40d-1. A collapsed badge collection MUST call its `onOpenChange` callback only when the collection popover open state changes. Parent rerenders that do not change the popover open state MUST NOT emit an open-change callback.
 
@@ -267,7 +275,7 @@ Badge-shaped containers MUST NOT use `rounded-full`.
 
 DS40g. Fully circular (`rounded-full`) shapes are reserved for non-badge elements: status dots, avatars, switch tracks and thumbs, segmented-control indicators, and loading/ping indicators.
 
-DS40h. Table body cells within one table MUST share the table's base font size. Adjacent sibling cells MUST NOT mix arbitrary smaller sizes (for example `text-[10px]` or `text-[11px]`) with the base size. Secondary detail text nested inside a badge (for example the `ModelBadge` bracket details) MAY be one visual step smaller than the badge label.
+DS40h. Table body cells within one table MUST share the table's base font size for primary values and badges. In a fixed two-line dense row, the secondary (second) line of a cell MAY use exactly one smaller step (11px, `text-[11px]`) and MUST then use muted foreground. No other sizes are allowed. Secondary detail text nested inside a badge (for example the `ModelBadge` bracket details) MAY be one visual step smaller than the badge label.
 
 ## 12. Sidebar and Navigation
 
@@ -308,7 +316,8 @@ DS49. Icon-only dashboard action buttons intended for touch use MUST expose an a
 ## 16. Accessible Feedback and Controls
 
 DS53. Error notices MUST use the `error-foreground`, `error-soft`, and `error-border`
-semantic tokens. Error text on its soft surface MUST have contrast of at least 4.5:1
+semantic tokens. Inline field errors (`FieldError` and an invalid `Field`) MUST use
+`text-error-foreground`. Error text on its soft surface MUST have contrast of at least 4.5:1
 in both themes. The destructive button palette MUST remain independent.
 
 DS54. Shared data-load failure notices MUST expose an alert and a localized retry
@@ -356,6 +365,8 @@ DS61. Data-load failure. Every dashboard surface that reads data through SWR MUS
 - Without cached data, `QueryError` MUST replace the content region. The surface MUST NOT render its empty state or a fabricated empty list.
 - With cached data, `QueryError stale` MUST render above the cached content.
 - The surface MUST NOT display the raw error message.
+- When the request failed with HTTP 403 or error code `forbidden`, the surface MUST render `QueryError forbidden`. It shows `common.forbidden` and MUST NOT show a retry button.
+- A list or picker MUST check the request error before it checks for empty data. A failed request MUST NOT render an empty state or a "nothing found" message.
 
 DS62. Enabled state. A row whose enabled state the reader can change MUST show only a `Switch`, with `aria-label = common.enableItem(name)`. It MUST NOT show an adjacent "enabled" or "disabled" text label. A read-only enabled state MUST render `StatusBadge variant="success"` with `common.enabled`. A read-only disabled state MUST render `Badge variant="secondary"` with `common.disabled`. The `info` status variant MUST NOT represent a disabled state.
 
@@ -372,16 +383,65 @@ DS63. Model set selection. Every control that edits a set of exact model IDs MUS
 
 DS64. Model redirect rules MUST be edited with `ModelRedirectsEditor` from `components/settings/model-redirects-editor.tsx`. Pages MUST NOT define a second redirect editor.
 
-DS65. Segmented choice. A control that selects one value from 2 to 6 fixed short options (for example a time window, or a view switch inside a dialog) MUST use `SegmentedControl` from `components/ui/segmented-control.tsx`. Each option MUST be `Button variant="outline"` with `h-9 px-3 text-sm tabular-nums` and `aria-pressed`. The selected option MUST use `bg-accent text-accent-foreground`. The option label is the option value unless the caller passes `label`. Text links separated by `/` MUST NOT be used as a segmented choice.
+DS65. Segmented choice. A control that selects one value from 2 to 6 fixed short options (for example a time window, or a view switch inside a dialog) MUST use `SegmentedControl` from `components/ui/segmented-control.tsx`. Each option MUST be `Button variant="outline"` with `h-9 px-3 text-sm tabular-nums` and `aria-pressed`. The selected option MUST have at least 3:1 non-text contrast against the unselected options in both themes. It MUST use `border-foreground bg-foreground text-background font-semibold`. The option label is the option value unless the caller passes `label`. Text links separated by `/` MUST NOT be used as a segmented choice.
 
 DS66. Time display. Absolute timestamps in tables, lists, dialogs, and key-value rows MUST use `formatDateTime` (local `YYYY-MM-DD HH:mm:ss`). Calendar dates without a time of day MUST use `formatDate` (local `YYYY-MM-DD`). Both MUST come from `lib/format-time.ts`. These surfaces MUST NOT use relative time strings or `toLocaleString`, `toLocaleDateString`, or `toLocaleTimeString`. Chart axis ticks and compact menu metadata are exempt.
 
-DS67. Entity editors. A create or edit form for a persisted entity MUST render in `Dialog` and follow DS25–DS26c. `Sheet` MUST NOT host entity editors. The create form and the edit form of one entity type MUST render the same form component. Fields that exist in both modes MUST share label, help text, control type, and order.
+DS67. Entity editors. A create or edit form for a persisted entity MUST render in `Dialog` and follow DS25–DS26c. `Sheet` MUST NOT host entity editors. The create form and the edit form of one entity type MUST render the same form component. Fields that exist in both modes MUST share label, help text, control type, and order. The fields MUST be inside a `<form onSubmit>` whose primary action is a `type="submit"` button, so that Enter in a single-line input submits the form. Every label MUST be bound to its control with `htmlFor` and an id from `useId`.
 
 DS68. Entity lists. A list of persisted entities with row actions MUST use `DataList` inside `DataTableShell`. Lists that can exceed 100 rows MUST virtualize with `Virtuoso`, `virtualDataListComponents`, and the dashboard main pane as `customScrollParent`. The request-log stream, editable price grids, and the custom-transform card grid (`custom-js-transforms.spec.md` CJS-UI-3) are exempt. Exempt surfaces MUST still follow DS59–DS62 for their row or card actions.
 
 DS69. Page-header primary action. The primary action in `PageHeader` MUST render `Button` with the default variant inside `AnimatedButton`. Its leading icon MUST use `data-icon="inline-start"` and MUST NOT set size or margin classes.
 
-DS70. Mutation feedback. A successful create or update submitted from an editor dialog MUST close the dialog and show one success toast that names the entity type. If the page renders a persistent result panel for the created entity (for example the one-time API key value), that panel replaces the toast. A successful inline toggle, reorder, or deletion MUST NOT show a toast; the changed row is the feedback. Every failed mutation MUST restore the previous visible state and show one error toast.
+DS70. Mutation feedback. A successful create or update submitted from an editor dialog MUST close the dialog and show one success toast that names the entity type. If the page renders a persistent result panel for the created entity (for example the one-time API key value), that panel replaces the toast. A successful inline toggle, reorder, or deletion MUST NOT show a toast; the changed row is the feedback. The undo toast required by DS78 for immediate reversible actions is the only exception. Every failed mutation MUST restore the previous visible state and show one error toast through `toastApiError` (DS74).
 
 DS71. Button icons. `Button` and `DropdownMenuItem` size their icons to 16 px and separate icon and label with an 8 px gap. An icon inside either element MUST NOT set `h-*`, `w-*`, `size-*`, `mr-*`, or `ml-*` classes. An icon that precedes a label MUST use `data-icon="inline-start"`. A decorative icon MUST set `aria-hidden="true"`. Color classes (for example `text-error-foreground` on a delete icon) remain allowed. Elements without a built-in gap, such as `TabsTrigger` and badges, are out of scope.
+
+## 18. Editing Safety, Errors, and URL State
+
+DS72. Toast placement. The shared `Toaster` MUST render toasts at `top-center`. A toast MUST NOT cover a dialog footer, a sticky save bar, or another bottom-anchored action.
+
+DS73. Unsaved edits. An editor that holds unsaved edits MUST NOT discard them without confirmation.
+
+- An editor dialog MUST pass `dirty={true}` to `DialogContent` while its draft differs from the saved state. While `dirty` is true, outside click, Escape, and the close button MUST NOT close the dialog. They MUST open an `AlertDialog` titled `guards.discardTitle` with the actions `guards.keepEditing` and `guards.discard`. `guards.discard` MUST close the editor dialog. `guards.keepEditing` MUST close only the confirmation. While `dirty` is false, the dialog MUST keep the default Radix close behavior.
+- A page-level draft (for example a settings form or an editable tab) MUST render the node returned by `useUnsavedChangesGuard(dirty)` from `hooks/use-unsaved-changes-guard.tsx`. While `dirty` is true, in-app navigation to a different pathname MUST open an `AlertDialog` (`guards.leaveTitle`) with `guards.keepEditing` and `guards.discardAndLeave`, and the browser `beforeunload` prompt MUST be registered. A navigation that changes only the search string or hash on the same pathname MUST NOT be blocked. If the draft becomes clean while the prompt is open, the pending navigation MUST proceed.
+- Background revalidation MUST NOT overwrite an open draft. An editor MUST hydrate its draft once per open.
+
+DS74. Validation and error feedback.
+
+- A validation error tied to a field MUST render below that field through `FieldError` (`role="alert"`, `text-error-foreground`), and the control MUST set `aria-invalid="true"`. Each label MUST be bound with `htmlFor` to a `useId` id.
+- On submit with invalid fields, the editor MUST show the section that contains the first invalid field and focus that field.
+- A server error whose `DashboardApiError.param` names a field MUST render on that field. `apiErrorParam(error)` from `lib/api-error.ts` returns the param.
+- A failure not tied to a field MUST render one toast through `toastApiError(error, t, title?)`. The message MUST be `apiErrors.<code>` when that key exists, otherwise `common.requestFailed`. UI text MUST NOT show the raw server `message`, an SDK error class name, or an internal id.
+- `DashboardApiError` MUST expose `code` (from `error.code`) and `param` (from `error.param`, or `null`).
+
+DS75. Numeric and list input. A control that edits a number MUST use `NumberField` (`components/ui/number-field.tsx`). A control that edits a list of strings as text MUST use `ListField` (`components/ui/list-field.tsx`).
+
+- While the control has focus, it MUST keep the typed text unchanged. It MUST NOT parse, clamp, reformat, or refill a default during typing.
+- `NumberField` MUST parse and validate on blur and on Enter. An empty, non-numeric, non-integer (when `integer`), or out-of-range value MUST show an inline localized error (`common.validation.*`, for example "Must be a whole number ≥ 1."), set `aria-invalid`, report `onValidityChange(false)`, and MUST NOT call `onValueChange`. A valid value MUST call `onValueChange` once. An empty value is valid only with `allowEmpty` and then emits `null`. An unmounted field that last reported invalid MUST report `onValidityChange(true)`.
+- An editor MUST block save while any of its `NumberField`s reports invalid.
+- A unit MUST render as suffix text after the input (for example `ms`, `USD`, or a localized day unit). Money MUST be entered as a USD decimal string and converted with `parseUsdToNanoBigInt`; users MUST NOT type nano-USD.
+- `ListField` MUST split on blur and on Enter: on commas and newlines with `separator="comma"`, on newlines with `separator="newline"`. It MUST trim entries, drop empty entries, and remove duplicates in first-seen order.
+- When the parent value changes while the control does not have focus, the control MUST show the new value and clear its error.
+
+DS76. Error, empty, and forbidden states.
+
+- Data-load failures follow DS61. A 403 renders `QueryError forbidden`.
+- Admin-only routes MUST be guarded at the router (`dashboard-ui-layout.spec.md` DL6a). Pages MUST NOT implement a page-local no-permission state.
+- A render error inside the dashboard shell MUST render `RouteErrorBoundary` in the content area. The sidebar MUST stay usable. Navigation to another route MUST clear the error.
+- A page with independent panels MUST wrap each panel in `PanelErrorBoundary` (`components/ui/error-boundary.tsx`, props `{ children, title? }`). A panel render error MUST render a compact alert with `errors.panelDescription` and a retry button that remounts the panel. Other panels MUST stay rendered.
+
+DS77. URL state. A page tab MUST be stored in the `tab` search param. List filters MUST be stored in search params. Both MUST be written with `replace` navigation, and a param MUST be removed when it equals its default. `useSearchParamState(key, defaultValue, allowed?)` from `hooks/use-search-param-state.ts` MUST be used for single string params. An unknown value MUST read as the default.
+
+DS78. Consequential actions. An action MUST match the tier of its consequence:
+
+- Charging money, bulk writes, deletion, and disabling another user MUST first open an `AlertDialog` that states the concrete consequence, for example the amount, the number of rows, or the number of affected keys. A destructive confirmation action MUST use `buttonVariants({ variant: "destructive" })`.
+- A reversible action that takes effect immediately (for example enabling or disabling a Provider, or starting a new conversation) MUST NOT open a confirmation. It MUST show a toast with an undo action that restores the previous state.
+- A balance write MUST send a delta or the expected current value, never an absolute value computed from a stale snapshot.
+- The UI MUST NOT offer an action that disables the signed-in account.
+
+DS79. Focus order. A wrapper element that only adds motion or layout MUST NOT be a Tab stop. An element that only expands or collapses a region MUST be a `button` with `aria-expanded`. A tooltip trigger that carries information MUST be focusable.
+
+DS80. Modified indicator. A "customized" or "filters active" marker MUST use `ModifiedDot` (`components/ui/modified-dot.tsx`): a 6 px `bg-primary` dot with `aria-hidden`. The adjacent control's accessible name MUST state the condition.
+
+DS81. Focus return. When `DialogContent`, `AlertDialogContent`, or `ConfirmDeleteDialog` closes, focus MUST return to the element that had focus when the dialog opened, if that element is still connected. Otherwise Radix default focus handling applies.

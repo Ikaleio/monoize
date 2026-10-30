@@ -30,7 +30,7 @@ export function normalizeSettingsQuery(query: string): string {
 /**
  * Matches entries whose search text contains every whitespace-separated token of
  * `normalizedQuery` (SSU-16). The search text covers translated labels, descriptions,
- * help text, group and category titles, plus raw API field names.
+ * help text, search keywords, group and category titles, plus raw API field names.
  */
 export function matchSettingEntries(normalizedQuery: string, t: TFunction): SettingsSearchResult {
   const tokens = normalizedQuery.split(/\s+/);
@@ -45,6 +45,7 @@ export function matchSettingEntries(normalizedQuery: string, t: TFunction): Sett
       entry.rawLabel,
       entry.descriptionKey && t(entry.descriptionKey),
       ...(entry.helpKeys ?? []).map((key) => t(key)),
+      entry.keywordsKey && t(entry.keywordsKey),
       group.titleKey && t(group.titleKey),
       t(category.titleKey),
       ...entry.fields,

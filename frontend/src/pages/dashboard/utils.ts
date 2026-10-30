@@ -1,4 +1,4 @@
-import type { DashboardAnalytics, RequestLog } from "@/lib/api";
+import type { DashboardAnalytics, PublicSystemSettings } from "@/lib/api";
 import { formatCacheHitRate } from "@/lib/live-usage";
 import { formatNanoUsd, isSignedIntegerString } from "@/lib/exact-decimal";
 import {
@@ -7,18 +7,26 @@ import {
   type UsageWindow,
 } from "@/lib/usage-window";
 
-export const CHART_COLORS = Array.from(
-  { length: 16 },
-  (_, index) => `hsl(var(--chart-${index + 1}))`
-);
+/** Series beyond this rank merge into OTHER_SERIES (DH-6g). */
+const MAX_NAMED_SERIES = 8;
+export const OTHER_SERIES = "__other__";
+export const OTHER_SERIES_COLOR = "hsl(var(--muted-foreground))";
 
-/** Stable hash → palette index so the same model always gets the same color. */
-export function modelToColor(modelId: string): string {
-  let hash = 0;
-  for (let i = 0; i < modelId.length; i++) {
-    hash = ((hash << 5) - hash + modelId.charCodeAt(i)) | 0;
-  }
-  return CHART_COLORS[((hash % CHART_COLORS.length) + CHART_COLORS.length) % CHART_COLORS.length];
+function seriesColor(rank: number): string {
+  return rank < MAX_NAMED_SERIES
+    ? `hsl(var(--chart-${rank + 1}))`
+    : OTHER_SERIES_COLOR;
+}
+
+/** DH-8b: the configured base URL, or the current origin when it is empty. */
+export function resolveApiBase(settings: PublicSystemSettings | undefined): {
+  url: string;
+  isFallback: boolean;
+} {
+  const configured = settings?.api_base_url?.trim() ?? "";
+  return configured
+    ? { url: configured, isFallback: false }
+    : { url: window.location.origin, isFallback: true };
 }
 
 /** Compact SI-style token counts (e.g. 10M, 1.2B). */
@@ -49,17 +57,6 @@ export function shortBucketLabel(label: string): string {
   return `${months[monthIndex]} ${Number(dd)}`;
 }
 
-export function tokensFromLog(log: RequestLog): number {
-  const t = log.tokens;
-  return (
-    (t.input ?? 0) +
-    (t.output ?? 0) +
-    (t.cache_read ?? 0) +
-    (t.cache_creation ?? 0) +
-    (t.reasoning ?? 0)
-  );
-}
-
 export interface ModelUsageRow {
   model: string;
   tokens: number;
@@ -67,39 +64,44 @@ export interface ModelUsageRow {
   chargeNano: bigint;
 }
 
-export function aggregateRecentUsage(logs: RequestLog[]): ModelUsageRow[] {
-  const map = new Map<
-    string,
-    { tokens: number; cacheRead: number; input: number; chargeNano: bigint }
-  >();
-
-  for (const log of logs) {
-    const model = log.model || "unknown";
-    const current = map.get(model) ?? {
-      tokens: 0,
-      cacheRead: 0,
-      input: 0,
-      chargeNano: 0n,
-    };
-    current.tokens += tokensFromLog(log);
-    current.cacheRead += log.tokens.cache_read ?? 0;
-    current.input += log.tokens.input ?? 0;
-    const charge = log.billing?.charge_nano_usd;
-    if (charge != null && isSignedIntegerString(charge)) {
-      current.chargeNano += BigInt(charge);
+/** DH-7a: per-model totals from the full server-side aggregation. */
+export function aggregateModelUsage(
+  analytics: DashboardAnalytics | undefined,
+): ModelUsageRow[] {
+  const rows = new Map<string, { tokens: number; chargeNano: bigint }>();
+  const entry = (model: string) => {
+    let row = rows.get(model);
+    if (!row) {
+      row = { tokens: 0, chargeNano: 0n };
+      rows.set(model, row);
     }
-    map.set(model, current);
+    return row;
+  };
+
+  for (const bucket of analytics?.buckets ?? []) {
+    for (const [model, tokens] of Object.entries(bucket.tokens_by_model ?? {})) {
+      entry(model).tokens += Number(tokens) || 0;
+    }
+    for (const [model, cost] of Object.entries(bucket.cost_by_model ?? {})) {
+      if (isSignedIntegerString(cost)) entry(model).chargeNano += BigInt(cost);
+    }
   }
 
-  return [...map.entries()]
-    .map(([model, row]) => ({
-      model,
-      tokens: row.tokens,
-      cacheHitRate: row.input > 0 ? row.cacheRead / row.input : null,
-      chargeNano: row.chargeNano,
-    }))
-    .filter((row) => row.tokens > 0 || row.chargeNano !== 0n)
-    .sort((a, b) => b.tokens - a.tokens);
+  return [...rows.entries()]
+    .filter(([, row]) => row.tokens > 0 || row.chargeNano !== 0n)
+    .map(([model, row]) => {
+      const cache = analytics?.cache_by_model?.[model];
+      return {
+        model,
+        tokens: row.tokens,
+        chargeNano: row.chargeNano,
+        cacheHitRate:
+          cache && cache.input_tokens > 0
+            ? cache.cache_read_tokens / cache.input_tokens
+            : null,
+      };
+    })
+    .sort((a, b) => b.tokens - a.tokens || a.model.localeCompare(b.model));
 }
 
 export function formatCharge(nano: bigint): string {
@@ -110,20 +112,23 @@ export function formatCacheHit(rate: number | null): string {
   return formatCacheHitRate(rate);
 }
 
-export interface CumulativeSeries {
-  models: string[];
-  /** Cumulative stacked rows for AreaChart. */
+export interface UsageSeries {
+  /** Bar series keys in rank order; ends with OTHER_SERIES when models merged. */
+  series: string[];
+  /** Rank color per real model and per OTHER_SERIES (DH-6g). */
+  colors: Record<string, string>;
+  /** One row per bucket, keyed by series. */
   rows: Array<Record<string, number | string>>;
-  /** Per-bucket (non-cumulative) totals by model. */
+  /** Per-bucket tokens per real model; the tooltip expands OTHER_SERIES from this. */
   bucketByModel: Array<Record<string, number>>;
   bucketTotals: number[];
-  cumulativeTotals: number[];
+  windowTotal: number;
 }
 
-export function buildCumulativeTokenSeries(
+export function buildUsageSeries(
   analytics: DashboardAnalytics | undefined,
-  window: UsageWindow
-): CumulativeSeries {
+  window: UsageWindow,
+): UsageSeries {
   const buckets = analytics?.buckets ?? [];
   // DH-6c: labels come from the response time range; the backend `label`
   // field truncates minutes (`%H:00`) so it cannot distinguish 5-minute
@@ -141,15 +146,19 @@ export function buildCumulativeTokenSeries(
   }
 
   const models = [...totals.entries()]
-    .filter(([, v]) => v > 0)
-    .sort((a, b) => b[1] - a[1])
-    .map(([k]) => k);
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([model]) => model);
+  const named = models.slice(0, MAX_NAMED_SERIES);
+  const hasOther = models.length > MAX_NAMED_SERIES;
+  const colors: Record<string, string> = { [OTHER_SERIES]: OTHER_SERIES_COLOR };
+  models.forEach((model, rank) => {
+    colors[model] = seriesColor(rank);
+  });
 
-  const running = new Map<string, number>(models.map((m) => [m, 0]));
-  const rows: Array<Record<string, number | string>> = [];
-  const bucketByModel: Array<Record<string, number>> = [];
+  let windowTotal = 0;
+  const rows: UsageSeries["rows"] = [];
+  const bucketByModel: UsageSeries["bucketByModel"] = [];
   const bucketTotals: number[] = [];
-  const cumulativeTotals: number[] = [];
 
   buckets.forEach((bucket, index) => {
     const perBucket: Record<string, number> = {};
@@ -158,24 +167,30 @@ export function buildCumulativeTokenSeries(
       const value = Number(bucket.tokens_by_model?.[model] ?? 0) || 0;
       perBucket[model] = value;
       bucketTotal += value;
-      running.set(model, (running.get(model) ?? 0) + value);
     }
     const start = starts?.[index];
     const row: Record<string, number | string> = {
       label: start ? bucketLabelForWindow(window, start) : shortBucketLabel(bucket.label),
-      rawLabel: bucket.label,
+      bucketIndex: index,
     };
-    let cum = 0;
-    for (const model of models) {
-      const value = running.get(model) ?? 0;
-      row[model] = value;
-      cum += value;
+    let namedTotal = 0;
+    for (const model of named) {
+      row[model] = perBucket[model] ?? 0;
+      namedTotal += perBucket[model] ?? 0;
     }
+    if (hasOther) row[OTHER_SERIES] = bucketTotal - namedTotal;
+    windowTotal += bucketTotal;
     rows.push(row);
     bucketByModel.push(perBucket);
     bucketTotals.push(bucketTotal);
-    cumulativeTotals.push(cum);
   });
 
-  return { models, rows, bucketByModel, bucketTotals, cumulativeTotals };
+  return {
+    series: hasOther ? [...named, OTHER_SERIES] : named,
+    colors,
+    rows,
+    bucketByModel,
+    bucketTotals,
+    windowTotal,
+  };
 }

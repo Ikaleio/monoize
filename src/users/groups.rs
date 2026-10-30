@@ -27,8 +27,9 @@ pub struct CreateGroupInput {
     pub description: String,
     #[serde(default)]
     pub user_selectable: bool,
+    /// Omitted: append after the current last group (GR-A3a).
     #[serde(default)]
-    pub sort_order: i32,
+    pub sort_order: Option<i32>,
     #[serde(default)]
     pub billing_ratio: Option<String>,
 }
@@ -300,6 +301,10 @@ impl UserStore {
         if self.group_name_exists(None, &name).await? {
             return Err(GroupStoreError::NameExists);
         }
+        let sort_order = match input.sort_order {
+            Some(value) => value,
+            None => self.next_sort_order().await?,
+        };
         let result = self
             .db
             .write()
@@ -312,7 +317,7 @@ impl UserStore {
                     name.clone().into(),
                     description.clone().into(),
                     SeaValue::Int(Some(if input.user_selectable { 1 } else { 0 })),
-                    SeaValue::Int(Some(input.sort_order)),
+                    SeaValue::Int(Some(sort_order)),
                     billing_ratio.clone().into(),
                     now.to_rfc3339().into(),
                 ],
@@ -333,7 +338,7 @@ impl UserStore {
             description,
             is_default: false,
             user_selectable: input.user_selectable,
-            sort_order: input.sort_order,
+            sort_order,
             billing_ratio,
             created_at: now,
             updated_at: now,
@@ -689,5 +694,19 @@ impl UserStore {
             .ok_or_else(|| GroupStoreError::Storage("count query returned no row".to_string()))?;
         let count: i64 = row.try_get("", "cnt").map_err(storage)?;
         Ok(count > 0)
+    }
+
+    async fn next_sort_order(&self) -> Result<i32, GroupStoreError> {
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT CAST(COALESCE(MAX(sort_order), -1) + 1 AS INTEGER) AS next_sort FROM monoize_groups",
+                vec![],
+            ))
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| GroupStoreError::Storage("max query returned no row".to_string()))?;
+        row.try_get("", "next_sort").map_err(storage)
     }
 }

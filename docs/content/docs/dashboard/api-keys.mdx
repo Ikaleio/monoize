@@ -19,10 +19,24 @@ Requests without a valid key receive HTTP `401`.
 
 ## Create a key
 
-1. Open **Token Management** in the sidebar.
-2. Click the create button and enter a name.
-3. Set the options you need. All options have safe defaults.
-4. Copy the full key. The list shows the full key again later; keys are not write-only in Monoize.
+1. Open **API Keys** in the sidebar.
+2. Click **Create Key** and enter a name.
+3. Set the expiry, groups, and sub-account balance in the basic section.
+4. Expand **Advanced settings** to set the other options. The section header shows how many options are set.
+5. Copy the full key. The list shows the full key again later; keys are not write-only in Monoize.
+
+The **API Keys** page and the creation result show the API base URL with a copy button. When an admin did not set this URL, the page shows the current site address.
+
+## Edit the expiry
+
+Open the key editor and select a new expiry date. Select the never-expires option to remove the expiry.
+
+## Change a sub-account balance
+
+The key editor does not change the balance. Use these row actions on a key with a sub-account balance:
+
+- **Transfer** moves USD from your account balance to the key. The dialog shows both balances before and after the transfer.
+- **Adjust balance** sets the key balance directly. Only admins see this action. If the balance changed after you opened the dialog, Monoize rejects the change and shows the new balance.
 
 ## Find a key
 
@@ -36,7 +50,7 @@ Type text in the search box above the list. The list shows only the keys whose n
 | Enabled | A disabled key fails authentication at once. | Enabled |
 | Model limits | When on, the key can call only the listed model patterns. | Off |
 | IP whitelist | When set, requests must come from a listed IPv4/IPv6 address or CIDR range. | Empty |
-| Groups | The key routes only to Providers whose groups intersect the key's groups. | Inherit the user's group |
+| Groups | The key routes only to Providers whose groups intersect the key's groups. | Follow account group |
 | Max multiplier | The key skips Channel model entries whose price multiplier exceeds this value. | No cap |
 | Sub-account balance | When on, the key spends its own balance instead of the user balance. | Off |
 | Request capture | `off`, `capture-all`, or `capture-only-abnormal`. See [Request Logs](/en/docs/request-logs). | `off` |
@@ -57,7 +71,7 @@ The first matching rule rewrites the model before routing, billing, and model-li
 
 ## Groups
 
-- **Inherit user group** (default): the key follows the owning user's group.
+- **Follow account group** (default): the key follows the owning user's group.
 - **Explicit groups**: select one or more groups. Order matters; Monoize prefers Providers from earlier groups. See [Routing and Reliability](/en/docs/routing).
 
 An active subscription limits both modes to the subscription's groups. Selecting another group cannot expand this limit.

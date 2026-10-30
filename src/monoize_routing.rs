@@ -157,6 +157,20 @@ pub struct ApiTypeOverride {
     pub api_type: MonoizeProviderType,
 }
 
+fn serialize_sorted_models<S: serde::Serializer>(
+    models: &HashMap<String, MonoizeModelEntry>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+    let mut entries: Vec<_> = models.iter().collect();
+    entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let mut map = serializer.serialize_map(Some(entries.len()))?;
+    for (key, value) in entries {
+        map.serialize_entry(key, value)?;
+    }
+    map.end()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonoizeModelEntry {
     pub redirect: Option<String>,
@@ -183,7 +197,8 @@ pub struct MonoizeChannel {
     pub passive_window_seconds_override: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
-    #[serde(default)]
+    /// CM-READ-1: serialized in ascending key order so API reads are stable.
+    #[serde(default, serialize_with = "serialize_sorted_models")]
     pub models: HashMap<String, MonoizeModelEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_probe_enabled_override: Option<bool>,
@@ -2147,6 +2162,36 @@ impl MonoizeRoutingStore {
         txn.commit().await.map_err(|e| e.to_string())?;
         self.catalog.invalidate();
         Ok(())
+    }
+
+    /// CM-CH-EN-1: flips one Channel's `enabled` flag without touching any other field.
+    pub async fn set_channel_enabled(
+        &self,
+        provider_id: &str,
+        channel_id: &str,
+        enabled: bool,
+    ) -> Result<bool, String> {
+        let result = self
+            .db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "UPDATE monoize_channels SET enabled = $1, updated_at = $2
+                 WHERE id = $3 AND provider_id = $4",
+                vec![
+                    SeaValue::Int(Some(i32::from(enabled))),
+                    Utc::now().to_rfc3339().into(),
+                    channel_id.into(),
+                    provider_id.into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        self.catalog.invalidate();
+        Ok(true)
     }
 
     async fn replace_channels_on(

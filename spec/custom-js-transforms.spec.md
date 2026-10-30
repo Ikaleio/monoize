@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-- Version: `1.0.0`
+- Version: `1.1.0`
 - Product name: Monoize
 - Scope: administrator-authored JavaScript custom transforms executed in an embedded
   QuickJS sandbox, their persistence, the admin CRUD API, registry exposure and
@@ -110,6 +110,29 @@ otherwise the save is rejected. Renaming requires delete plus create.
 CJS-VAL-6. Create MUST reject a frontmatter `id` that already exists with HTTP `409`
 and error code `custom_transform_exists`.
 
+CJS-VAL-7. Line attribution. When a CJS-VAL-2 through CJS-VAL-5 rejection is attributable
+to one line of the submitted source, the detail message MUST begin with `line <N>: `,
+where `<N>` is the 1-based line number in the submitted source (lines split on `\n`).
+Exactly these rejections are attributable:
+
+1. the source does not begin with a block comment: the first non-whitespace line;
+2. the first normalized frontmatter line is not `@monoize-transform`: that line, or the
+   opener line when the comment has no non-empty line;
+3. a frontmatter line that is not `key: value`, has an unknown key, or repeats a key:
+   that line;
+4. a required key with an empty value, an `id` that violates CJS-ID-2, a length-bound
+   violation, or an invalid `phase`, `scopes`, or `visibility` value: the line of that
+   key;
+5. the CJS-VAL-5 id mismatch: the line of the `id` key;
+6. a JS exception during CJS-VAL-3 (including syntax errors) whose stack contains a
+   frame in the user source: the line of the innermost user-source frame.
+
+The runtime evaluates the user source under the script name `transform.js` so user-source
+frames are distinguishable from host glue; apply-time exception descriptions (CJS-EX-5)
+carry the same `line <N>: ` prefix. Rejections that are not attributable (missing
+required key, unterminated comment, size bound, missing `transform` function, non-object
+`configSchema` without a user frame) carry no prefix.
+
 ## 4. Persistence
 
 CJS-DB-1. Custom transforms persist in table `custom_transforms` with exactly these
@@ -143,9 +166,9 @@ CJS-DB-4. Runtime SQL MUST bind and compare `enabled` as a boolean. Integer lite
 
 ## 5. Admin API
 
-All four endpoints require an authenticated session whose user role passes the same
-admin check as provider management (`require_admin`). Non-admin callers receive HTTP
-`403`.
+All endpoints in this section require an authenticated session whose user role passes
+the same admin check as provider management (`require_admin`). Non-admin callers receive
+HTTP `403`.
 
 CJS-API-1. `GET /api/dashboard/custom-transforms` returns
 `{ "transforms": [CustomTransform, ...] }` ordered by `id` ascending, including disabled
@@ -173,6 +196,27 @@ referencing the deleted id become no-ops per CJS-RT-3.
 
 CJS-API-5. Every successful mutation (CJS-API-2 through CJS-API-4) MUST bump the shared
 configuration epoch used by replica polling.
+
+CJS-API-6. `GET /api/dashboard/custom-transforms/references` returns
+`{ "references": { "<transform id>": [CustomTransformReference, ...], ... } }`. It scans
+every Provider transform chain, the global transform chain (`global_transforms`
+setting), and every API key's transform chain of every user. A chain references id `X`
+when at least one of its rules (enabled or not) has `transform = X` and `X` starts with
+`js:`. The map contains one key per referenced `js:` id, including ids that no longer
+exist in `custom_transforms`; unreferenced ids are absent. `CustomTransformReference` is:
+
+| field | type | meaning |
+| --- | --- | --- |
+| `kind` | `"provider"` \| `"global"` \| `"api_key"` | chain owner kind |
+| `id` | string | Provider id, the literal `global_transforms`, or the API key id |
+| `name` | string | Provider name, the literal `global_transforms`, or the API key name |
+| `owner_user_id` | string | present only for `api_key`: the key owner's user id |
+| `owner_username` | string | present only for `api_key`: the key owner's username |
+
+Each chain owner appears at most once per id even when several of its rules reference the
+id. Entries are ordered: Providers by name, then the global entry, then API keys by
+owner username and key name. A persisted chain that fails to parse as a rule array is
+skipped.
 
 ## 6. Runtime registration and lookup
 
@@ -374,8 +418,9 @@ CJS-UI-3. Layout: one card per custom transform in a responsive grid (1 column b
 `md`, 2 columns from `md`, 3 columns from `xl`). Each card displays: the plain `name`,
 the id as secondary monospace text, the `description`, the `author`, badge chips for
 each declared phase and scope, a visibility badge, an `enabled` switch, an edit action,
-and a delete action behind a confirmation dialog. There is no table view. Card actions
-follow `frontend-design-system.spec.md` DS59–DS62, and the card applies no hover transform.
+and a delete action behind a confirmation dialog, and a reference-count control
+(CJS-UI-8). There is no table view. Card actions follow `frontend-design-system.spec.md`
+DS59–DS62, and the card applies no hover transform.
 
 CJS-UI-4. Motion: card entrance animates opacity `0 → 1` and y-offset `12px → 0` with
 the project `easeOutExpo` token and a per-card stagger of `0.05s`
@@ -383,17 +428,66 @@ the project `easeOutExpo` token and a per-card stagger of `0.05s`
 shared Dialog primitive and therefore inherits PM3 through PM7.
 
 CJS-UI-5. Editor dialog: creating or editing opens a dialog containing a JavaScript
-code editor with syntax highlighting (CodeMirror), plus exactly these toolbar actions:
+code editor with syntax highlighting (CodeMirror), plus exactly these toolbar controls:
 
 1. copy — copies the current editor buffer to the clipboard;
 2. format — reformats the buffer with Prettier (babel parser) in the browser and
    replaces the buffer on success; a parse failure shows an error toast and leaves the
    buffer unchanged;
-3. save — submits the buffer as `source`.
+3. line wrap — a toggle (`aria-pressed`) that enables CodeMirror line wrapping
+   (`EditorView.lineWrapping`); its initial state on each open is on when the viewport is
+   narrower than the `sm` breakpoint (640px) and off otherwise;
+4. save — the footer submit button; it submits the buffer as `source`.
 
-A server-side validation failure keeps the dialog open with the buffer intact and shows
-the server detail message. The create action pre-fills the buffer with a commented
-template containing a valid frontmatter block and a `transform` function skeleton.
+The create action pre-fills the buffer with a commented template containing a valid
+frontmatter block and a `transform` function skeleton.
+
+A save failure keeps the dialog open with the buffer intact and MUST render inline inside
+the dialog, not only as a toast: a persistent destructive `Alert` above the editor with
+the localized title "Save failed" and a body that is:
+
+1. for `invalid_custom_transform`: the server detail message with any `line <N>: `
+   prefix (CJS-VAL-7) removed and the line shown as a localized "Line N" control that
+   moves the editor cursor to that line and scrolls it into view;
+2. for `custom_transform_exists`: a localized "this id already exists" message attributed
+   to the `id` frontmatter line;
+3. for any other error: the localized API error message (`apiErrorMessage`).
+
+Every attributed line is highlighted in the editor with an error line decoration. The
+alert and the line highlights clear on the next buffer edit and at the start of the next
+save. No error toast is shown for a save failure.
+
+CJS-UI-5a. Client pre-check: before sending a save, the page parses the frontmatter with
+the same rules as CJS-FM-1 through CJS-FM-6 and CJS-ID-2 (including line attribution per
+CJS-VAL-7 items 1 through 4). In edit mode it also flags a frontmatter `id` that differs
+from the edited transform's id, attributed to the `id` line. When any issue is found the
+save request is not sent; every issue is listed in the CJS-UI-5 alert with a localized
+message and its line, and its line is highlighted.
+
+CJS-UI-5b. Edit mode shows the edited transform's id read-only as monospace text next
+to the dialog title, with the note "The id cannot be changed. To rename, create a new
+transform and delete the old one."
+
+CJS-UI-5c. Dialog size: from the `sm` breakpoint the dialog is at most `max-w-5xl` wide
+and exactly `85dvh` tall; the editor fills the remaining height (flex `1`) and scrolls
+internally. Below `sm` the dialog is `calc(100dvh - 2rem)` tall (the full viewport minus
+the shared dialog viewport padding).
+
+CJS-UI-5d. Unsaved-change guard: the dialog content passes
+`dirty = (buffer !== initial buffer)` to the shared `DialogContent dirty` guard, so Esc,
+outside click and the close button ask "Discard unsaved changes?" before closing. A
+successful save closes without asking.
+
+CJS-UI-5e. Create-mode draft: while the create dialog is open, the buffer is written to
+`sessionStorage` key `monoize-custom-transform-draft` as `{ source, saved_at }` whenever
+it differs from the template, and the key is removed when it equals the template. When
+the create dialog opens and a stored draft exists whose source differs from the template,
+the dialog shows an inline prompt above the editor with the draft's save time and two
+actions: "Restore" (loads the draft into the buffer) and "Discard" (removes the stored
+draft). While the prompt is unresolved, the stored draft is neither overwritten nor
+removed. After the prompt is resolved (or when no draft existed), a successful save or a
+close of the dialog (which CJS-UI-5d confirms when dirty) removes the stored draft. Edit
+mode never reads or writes the draft.
 
 CJS-UI-6. The page header contains a copy-skill action that copies the canonical
 authoring skill document (§12) to the clipboard. Its feedback follows
@@ -401,6 +495,38 @@ authoring skill document (§12) to the clipboard. Its feedback follows
 
 CJS-UI-7. The empty state (zero custom transforms, load complete) renders an explicit
 localized empty message plus the create action; it MUST NOT render a bare blank grid.
+Both the page description and the empty-state description state that a created transform
+takes effect only after it is added to a Provider, global, or API key transform chain,
+and link to the three chain editors: Providers `/dashboard/providers`, global
+`/dashboard/admin-settings?setting=global_transforms`, API keys `/dashboard/tokens`.
+
+CJS-UI-8. References: the page fetches CJS-API-6 through one shared SWR hook
+(`useCustomTransformReferences`) and revalidates it after every successful custom
+transform mutation. Each card footer shows a reference control: "Used in N places" when
+the transform has `N ≥ 1` references, "Not used" when it has none, and a skeleton while
+the references are loading. When the references request fails, the control is omitted.
+Activating the control (when `N ≥ 1`) opens a popover listing the references grouped
+under "Providers", "Global", and "API keys", each entry a link:
+
+1. Provider → `/dashboard/providers?provider=<provider id>` labeled with the Provider
+   name;
+2. global → `/dashboard/admin-settings?setting=global_transforms` labeled "Global
+   transform chain";
+3. API key owned by the current user → `/dashboard/tokens` labeled with the key name;
+4. API key owned by another user → `/dashboard/users?q=<owner username>` labeled with
+   the key name and the owner username.
+
+CJS-UI-9. Confirmations state the reference count `N` from CJS-UI-8:
+
+1. the delete confirmation says the transform is used in `N` places and that those
+   chains skip it after deletion, or that no chain uses it when `N = 0`;
+2. switching `enabled` off for a transform with `N ≥ 1` opens a confirmation stating it
+   is used in `N` places and that those chains skip it while it is disabled; the flag
+   changes only after confirmation. Switching off with `N = 0` (or while references are
+   unavailable) and switching on apply immediately.
+
+CJS-UI-10. Mutation failures on this page (toggle, delete) show `toastApiError` toasts;
+raw server messages are never shown except the CJS-UI-5 item 1 script diagnostics.
 
 ## 12. Copyable authoring skill
 

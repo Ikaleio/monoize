@@ -23,8 +23,8 @@ pub use analytics_request_logs::{
 pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,
     TransferToSubAccountRequest, UpdateApiKeyRequest, batch_delete_api_keys, create_api_key,
-    delete_api_key, get_api_key, get_apikey_presets, list_my_api_keys, transfer_to_sub_account,
-    update_api_key,
+    delete_api_key, get_api_key, get_apikey_presets, list_my_api_keys, list_user_api_keys_admin,
+    transfer_to_sub_account, update_api_key,
 };
 pub use auth::{
     AuthResponse, ChangePasswordRequest, LoginRequest, RegisterRequest, UpdateMeRequest,
@@ -41,7 +41,8 @@ pub use billing_plans::{
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use custom_transforms::{
     CreateCustomTransformRequest, UpdateCustomTransformRequest, create_custom_transform,
-    delete_custom_transform, list_custom_transforms, update_custom_transform,
+    delete_custom_transform, list_custom_transform_references, list_custom_transforms,
+    update_custom_transform,
 };
 pub use groups::{
     DashboardGroupsResponse, create_group, delete_group, list_dashboard_groups, reorder_groups,
@@ -63,7 +64,7 @@ pub use providers::{
     FetchChannelModelsRequest, TestChannelRequest, create_provider, delete_provider,
     fetch_channel_models, fetch_provider_models, get_provider, get_provider_presets,
     get_transform_registry, list_providers, probe_channel_websocket, reorder_providers,
-    test_channel, update_provider,
+    set_channel_enabled, test_channel, update_provider,
 };
 pub use settings::{
     UpdateSettingsRequest, get_config_overview, get_dashboard_stats, get_public_settings,

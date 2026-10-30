@@ -8,6 +8,11 @@ import {
 } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { withRawReasoningRewrite } from "@/components/playground/responses-sse";
+import {
+  cleanErrorMessage,
+  REQUEST_ID_HEADER,
+  type PlaygroundRequestFailure,
+} from "@/components/playground/request-failure";
 
 export type ChatRequestAuth =
   | { mode: "internal"; group: string }
@@ -120,6 +125,10 @@ export function sanitizeForModel(messages: UIMessage[]): UIMessage[] {
  * field is extracted before falling back to JSON serialization.
  */
 export function describeStreamError(error: unknown): string {
+  return cleanErrorMessage(rawStreamErrorText(error));
+}
+
+function rawStreamErrorText(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (error && typeof error === "object") {
     const record = error as { message?: unknown; error?: { message?: unknown } };
@@ -134,6 +143,10 @@ export function describeStreamError(error: unknown): string {
     }
   }
   return String(error);
+}
+
+function isSuccessStatus(status: number): boolean {
+  return status >= 200 && status < 300;
 }
 
 function parseFinite(value: string): number | undefined {
@@ -159,6 +172,11 @@ function parsePositiveInt(value: string): number | undefined {
 export class MonoizeChatTransport implements ChatTransport<UIMessage> {
   private config: ChatRequestConfig;
   private missingModelMessage: string;
+  /**
+   * Structured failure of the latest request. `useChat` only receives the error
+   * text from the UI stream, so status and request id travel out of band.
+   */
+  lastFailure: PlaygroundRequestFailure | null = null;
 
   constructor(config: ChatRequestConfig, missingModelMessage: string) {
     this.config = config;
@@ -173,6 +191,7 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
   async sendMessages(
     options: Parameters<ChatTransport<UIMessage>["sendMessages"]>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
+    this.lastFailure = null;
     const config = this.config;
     if (!config.model.trim()) {
       throw new Error(this.missingModelMessage);
@@ -181,15 +200,25 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
       throw new Error(config.auth.message);
     }
 
+    let requestId: string | null = null;
+    let responseStatus: number | null = null;
+    const baseFetch = globalThis.fetch.bind(globalThis);
     const provider = createPlaygroundOpenAIProvider(
       config.auth,
       window.location.origin,
-      globalThis.fetch.bind(globalThis),
+      async (input, init) => {
+        const response = await baseFetch(input, init);
+        requestId = response.headers.get(REQUEST_ID_HEADER);
+        responseStatus = response.status;
+        return response;
+      },
     );
 
     const systemPrompt = config.systemPrompt.trim();
     const result = streamText({
       model: provider.responses(config.model.trim()),
+      // The gateway already fails over between Channels (PG-CHAT1a).
+      maxRetries: 0,
       messages: await convertToModelMessages(sanitizeForModel(options.messages)),
       ...(systemPrompt ? { system: systemPrompt } : {}),
       ...(parseFinite(config.temperature) !== undefined
@@ -214,7 +243,17 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
     return toUIMessageStream({
       stream: result.fullStream,
       // Default onError masks messages; the playground surfaces upstream error text.
-      onError: describeStreamError,
+      onError: (error) => {
+        const message = describeStreamError(error);
+        this.lastFailure = {
+          message,
+          // PG-CHAT2b: only a non-2xx response has a status. Mid-stream errors
+          // after a 2xx response carry an SDK-invented statusCode; ignore it.
+          status: responseStatus !== null && !isSuccessStatus(responseStatus) ? responseStatus : null,
+          requestId,
+        };
+        return message;
+      },
     });
   }
 

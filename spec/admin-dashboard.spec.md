@@ -54,9 +54,9 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
     - `stale`: boolean; true when `now - last_seen_at` is greater than
       `3 * MONOIZE_METERING_SHIP_INTERVAL_SECONDS`.
 - `spend`: object:
-  - `window`: one of `"24h"`, `"3d"`, `"7d"`, `"14d"`, `"30d"`;
+  - `window`: one of `"24h"`, `"7d"`, `"30d"`;
   - `window_hours`: integer hours corresponding to `window`
-    (24, 72, 168, 336, 720);
+    (24, 168, 720);
   - `time_from`: RFC 3339 inclusive lower bound (`now - window_hours`);
   - `time_to`: RFC 3339 exclusive upper bound (`now`);
   - `calls`: integer COUNT of request-log rows with
@@ -80,8 +80,8 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
   - `username`: string or null;
   - `call_count`: integer;
   - `cost_nano_usd`: nano-dollar integer string.
-    The aggregation window MUST be the last 24 hours ending now, computed from
-    `request_logs.created_at_unix_ms >= now - 24h` and only over rows whose
+    The aggregation window MUST be the same rolling window as `spend`
+    (`time_from` inclusive, `time_to` exclusive), computed only over rows whose
     `created_at_unix_ms` is not null. Charge decoding MUST follow the existing
     analytics aggregate rules (RL-analytics).
 - `channel_health`: array of objects, one per channel known to the routing
@@ -105,8 +105,8 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
     canonical `charge_nano_usd`.
 
 AD-2a. `GET /api/dashboard/admin/overview` MUST accept an optional
-`spend_window` query parameter. Allowed values are exactly `24h`, `3d`,
-`7d`, `14d`, and `30d`. An omitted parameter MUST default to `24h`. An
+`spend_window` query parameter. Allowed values are exactly `24h`, `7d`, and
+`30d`. An omitted parameter MUST default to `24h`. An
 empty string or any other value MUST return HTTP 400, code
 `invalid_spend_window`, and `param = "spend_window"` before executing any
 usage-aggregation database query.
@@ -132,8 +132,9 @@ usernames. It MUST NOT load raw request-log rows into application memory.
 
 ADF-1. `/dashboard/admin` MUST be reachable only through a nav item rendered
 exclusively for admin-role sessions (same role predicate as the existing admin
-nav items). Direct navigation by a non-admin MUST show an unauthorized/empty
-state without calling the admin endpoint.
+nav items). Direct navigation by a non-admin MUST render the shared `RequireAdmin`
+no-permission state; the page component MUST NOT mount and MUST NOT call the admin
+endpoint.
 
 ADF-2. The page MUST render inside the dashboard main pane (`dashboard-ui-layout.spec.md`
 DL7). It MUST NOT render an additional `main` element, an internal vertical scroll
@@ -165,23 +166,34 @@ bindings. Values that are technical identifiers (version, listen address, metric
 path, database, egress proxy, routing revision) MUST use the monospace font. Counts
 and durations MUST use the body font with tabular numerals.
 
-ADF-4. The User usage ranking card title MUST state the 24-hour window. Its description
-MUST state the sort order and the 20-user limit without repeating the window. The card
+ADF-4. The User usage ranking card title MUST NOT state a window, because the ranking uses
+the selected spend window (ADF-5). Its description MUST state the sort order, the 20-user
+limit, and that the ranking follows the time range selected above, without naming a value.
+A username MUST be a link to `/dashboard/logs?username=<username>`; a null username renders
+the user id as plain monospace text. The card
 MUST render a semantic table built from the shared `Table` primitives with columns:
 rank, username (or user id in monospace when username is null), call count, and cost
 formatted as USD with 6 fractional digits. Call count and cost MUST be end-aligned in
 both header and body cells. Rows MUST be ordered as the endpoint returns them and MUST
 use `user_id` as their key. The table MUST NOT have a bounded viewport or virtualized
 rows, because AD-2 bounds the ranking to 20 rows. An empty ranking MUST render the
-localized no-usage state.
+localized no-usage state naming the window of the returned data
+(e.g. "最近 24 小时没有请求").
 
 ADF-5. The Model/channel health card header MUST render, on its first row, the title,
 the summary "{total} channels · {unhealthy} unhealthy", and at the inline end the
-segmented spend-window control. `unhealthy` counts channels whose derived status is
-unhealthy or cooling-down. The control MUST use the literal ASCII labels `24h`, `3d`,
-`7d`, `14d`, and `30d`, in that order, default to `24h`, expose `aria-pressed` on each
-button, and render labels at 0.875rem or larger. These labels MUST NOT be translated.
-The selection MUST be held only in React component state. The first row MUST wrap so
+"unhealthy only ({unhealthy})" toggle followed by the segmented spend-window control.
+`unhealthy` counts channels whose derived status is unhealthy or cooling-down. The toggle
+is a button with `aria-pressed`, is disabled when `unhealthy = 0`, and when on restricts
+the list to those channels. While `unhealthy > 0`, the "{unhealthy} unhealthy" part of the
+summary MUST be a button that turns the toggle on. When `unhealthy` falls to 0 the list
+shows every channel. The toggle state is React component state.
+The spend-window control MUST use the literal ASCII labels `24h`, `7d`, and `30d`, in that
+order, default to `24h`, expose `aria-pressed` on each button, and render labels at
+0.875rem or larger. These labels MUST NOT be translated. It applies to the health card and
+the user ranking. The selection MUST live in the URL query parameter `window`, written
+with `replace`; the parameter is absent for `24h`, and a missing or unknown value selects
+`24h`. The first row MUST wrap so
 the control remains usable on narrow widths. The second row MUST show the process-wide
 `spend.cost_nano_usd` (USD, 2 fractional digits), `spend.calls`, and a localized note
 that the window is rolling, ends now, and does not reset at midnight.
@@ -193,6 +205,11 @@ Affinity (`auto` as plain text when auto session affinity is enabled, `—` othe
 Status, Spend (end-aligned; selected-window cost with 2 fractional digits, and the call
 count on a second muted line), and Last probe (end-aligned timestamp or `—`). At a
 content width of 1118 CSS pixels, every column MUST be visible without horizontal scrolling.
+The channel name MUST be a link to
+`/dashboard/providers?provider=<provider_id>&channel=<channel_id>`. In narrow mode each row
+MUST render at most 2 lines of text: line 1 is the channel name, the status badge, and the
+logs button of ADF-5d; line 2 is "provider · window cost · call count". Weight, affinity,
+last probe, and `unhealthy_models` are hidden in narrow mode.
 
 ADF-5b. Status MUST derive from `cooldown_active`, `enabled`, and `healthy`, in this order.
 The client MUST use the server-computed `cooldown_active` (AD-2b) instead of comparing
@@ -204,7 +221,13 @@ otherwise `enabled = false` renders disabled (`Badge variant="secondary"`); othe
 cell MUST list those model ids in monospace `text-error-foreground`, truncated to one
 line with the full list in the `title` attribute.
 
-ADF-5c. The health list MUST be virtualized with `Virtuoso`, using
+ADF-5d. A row whose derived status is unhealthy or cooling-down MUST render a ghost icon
+button (`ScrollText`, `size-11 sm:size-9`) next to the status badge, linking to
+`/dashboard/logs?channel_id=<channel_id>&status=error`, with the `aria-label` and `title`
+"view request logs of {channel}".
+
+ADF-5c. Rows MUST be ordered by status severity (unhealthy, cooling-down, disabled,
+healthy), and within one severity in endpoint order (Provider priority). The health list MUST be virtualized with `Virtuoso`, using
 `virtualDataListComponents` and the DL7b main pane as `customScrollParent`. Its height
 MUST equal the height of its rendered rows. In wide mode, its header row MUST be sticky
 at the top of the main pane. Each row MUST use `channel_id` as its virtual item key. An
@@ -229,7 +252,8 @@ show the raw error message. A failed refresh with cached data MUST keep the cach
 and render `QueryError` with `stale` above the health card. Mutations do not exist on
 this page. The SWR cache key MUST include the selected `spend_window`. The hook MUST set
 `keepPreviousData: true`. A spend-window switch MUST NOT show a skeleton. While a fetch
-for a newly selected window is in flight, only the health list MUST dim (`opacity-60`);
+for a newly selected window is in flight, only the health list and the ranking table MUST
+dim (`opacity-60`);
 the header, totals, and spend-window control MUST remain fully opaque. Dim MUST apply
 only when `data.spend.window` differs from the selected window, so a same-window
 10-second refresh does not dim.

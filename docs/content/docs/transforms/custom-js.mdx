@@ -20,11 +20,13 @@ The page shows one card per transform with its name, ID, description, author, ph
 - **New Transform** opens a code editor with syntax highlighting, copy, and format actions.
 - The enabled switch on a card enables or disables the transform.
 - **Copy Authoring Skill** copies a complete authoring guide to the clipboard. Paste it into an AI assistant to generate scripts.
+- The card footer shows **Used in N places** or **Not used**. Select it to list the Providers, global chain, and API keys that reference the transform.
 
 `visibility: user` lets a non-admin attach the transform to an API-key chain.
 `visibility: admin` (the default) lets only an administrator attach the transform.
 `GET /api/dashboard/transforms/registry` requires an admin session and lists every enabled custom transform.
-A disabled or deleted transform never runs. Chains that still reference it skip it without error.
+A disabled or deleted transform never runs. Chains that still reference it skip it without error. The chain editor marks this rule with a warning.
+The delete and disable confirmations show the reference count.
 
 ## Frontmatter
 
@@ -55,6 +57,7 @@ Each script starts with one block comment that declares the metadata:
 
 Monoize validates the frontmatter and evaluates the script once on save.
 A save with invalid frontmatter, a syntax error, or a missing `transform` function is rejected.
+The editor stays open and shows a **Save failed** alert with the server detail. When one line caused the error, the editor highlights that line.
 
 ## The transform function
 

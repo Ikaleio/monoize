@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-The Model Marketplace page presents all registered model metadata to logged-in dashboard users in a read-only, searchable catalog list. It differs from the Model Database (admin-only, CRUD) in that it exposes no mutation controls and is accessible to every authenticated role (`user`, `admin`, `super_admin`).
+The Model Marketplace page presents the models the signed-in user can route to, with the prices that user pays before Channel multipliers, in a read-only, searchable catalog list. It differs from the Model Database (admin-only, CRUD) in that it exposes no mutation controls and is accessible to every authenticated role (`user`, `admin`, `super_admin`).
 
 ## 2. Routing
 
@@ -20,9 +20,17 @@ The Model Marketplace page presents all registered model metadata to logged-in d
 - Server-side: returns metadata whose model ID is offered by at least one enabled Provider through an enabled Channel whose weight is greater than zero.
 - The endpoint MUST obtain the metadata result through one set-based query that joins `model_metadata_records`, `monoize_channel_models`, `monoize_channels`, and `monoize_providers`.
 - The metadata query MUST select only metadata columns, MUST use `DISTINCT`, and MUST order results by `model_id ASC`.
-- Each returned row MUST additionally carry `input_usd_per_1m` and `output_usd_per_1m` from the enabled `model_prices` row with the same `model_id` (`model-pricing.spec.md` §2.1), or `null` for each field when no enabled row exists.
-- The endpoint MUST NOT hydrate Provider or Channel objects and MUST NOT return a Provider or Channel secret.
+- Provider group sets per model MUST be read from the cached routing catalog (`database-provider-routing.spec.md` DPT-RC2); the endpoint MUST NOT add per-model database queries.
+- The endpoint MUST NOT hydrate Provider or Channel objects into the response and MUST NOT return a Provider or Channel secret.
 - The page renders the filtered `MarketplaceModelRecord[]` array.
+
+MM-D1. Reachable groups. For a non-admin caller, the reachable group set is the caller's own group (`users.group_id`; the default group when that id matches no row) together with every group whose `user_selectable` is true. A model is reachable when at least one serving Provider's `group_ids` intersects that set. Non-admin callers MUST receive only reachable models. Admin callers (`admin`, `super_admin`) receive every offered model.
+
+MM-D2. Each row MUST carry `groups: string[]`: the names, in registry order (GR-D5), of the groups through which the caller can route to the model (for admins, every group of every serving Provider).
+
+MM-D3. Each row MUST carry, from the enabled `model_prices` row with the same `model_id` (`model-pricing.spec.md` §2.1), `billing_mode`, `input_usd_per_1m`, `output_usd_per_1m`, `per_request_usd`, and `billing_expr`; each is `null` when no enabled row exists.
+
+MM-D4. Price ratio. For a non-admin caller, every price in MM-D3 (the three columns and every `*_usd_per_1m` value inside `billing_expr.tiers` and `billing_expr.service_tiers.*.tiers`) MUST be multiplied, with exact decimal arithmetic truncated to 9 fractional digits, by the `billing_ratio` of the row's pricing group. The pricing group is the caller's own group when a serving Provider belongs to it; otherwise it is `groups[0]` (the group MM-UI2b tells the caller to select), because MP-G1 bills the group actually used for routing. Each row MUST carry that ratio as `price_ratio` (canonical decimal string). For admins, prices are the base prices and `price_ratio` is `"1"`. Channel multipliers are not applied, because they depend on routing.
 
 ## 4. UI Structure
 
@@ -37,7 +45,8 @@ PageWrapper
 └── DataTableShell (when data exists)
     ├── toolbar
     │   ├── TableToolbarSearch (inline start)
-    │   └── p: filtered and total model counts (inline end)
+    │   ├── p: filtered and total model counts (inline end)
+    │   └── p: group-ratio note (full row; MM-UI5)
     ├── EmptyState card (when the catalog is empty)
     └── DataList (when the catalog is non-empty)
         ├── inline EmptyState (when zero records match the query)
@@ -54,14 +63,20 @@ Each row MUST render through the `DataList` primitives (`frontend-design-system.
 
 | Column | Label key | Data accessor | Format | Alignment |
 | ------ | --------- | ------------- | ------ | --------- |
-| Model | `modelMarketplace.modelId` | `record.model_id`, `record.models_dev_provider` | Line 1: model icon, complete model ID in monospace, copy button. Line 2: provider as muted text; em dash when absent | start |
+| Model | `modelMarketplace.modelId` | `record.model_id`, `record.models_dev_provider`, `record.groups` | Line 1: model icon, complete model ID in monospace, copy button. Line 2 (muted): `<provider> · 分组：<groups joined by ", ">`, omitting an absent part; em dash when both are absent. Line 3 (muted, non-admin only): `需在 API 密钥中选择 <groups[0]> 分组` when the caller's own group is not in `record.groups` | start |
 | Mode | `modelMarketplace.mode` | `record.mode` | Plain text; em dash when absent | start |
-| Input | `modelMarketplace.inputPerMillion` | `record.input_usd_per_1m` | `$X` with 3 fractional digits; em dash when null | end |
-| Output | `modelMarketplace.outputPerMillion` | `record.output_usd_per_1m` | `$X` with 3 fractional digits; em dash when null | end |
+| Input | `modelMarketplace.inputPerMillion` | `billing_mode`, prices, `billing_expr` | `model-pricing.spec.md` MP-UI3a input cell; prices in the MP-UI10 format | end |
+| Output | `modelMarketplace.outputPerMillion` | `billing_mode`, prices, `billing_expr` | `model-pricing.spec.md` MP-UI3a output cell; prices in the MP-UI10 format | end |
 | Context | `modelMarketplace.context` | `record.max_tokens` | Human-readable, for example `128K` or `1M`; em dash when null | end |
 | Max output | `modelMarketplace.maxOutput` | `record.max_output_tokens` | Human-readable, for example `16K`; em dash when null | end |
 
+MM-UI2a. Prices MUST use the exact-decimal formatter shared with the admin price list (MP-UI10: trailing zeros trimmed to a minimum of 2 fractional digits). For `tiered_expr` rows the cell shows the first-tier price followed by muted `起 · n 档` when there are 2 or more tiers, and a tooltip lists every tier and the Fast table. A `per_request` row shows `<price> / 次` in the Input column and `—` in the Output column.
+
 MM-UI3. The model icon MUST render without a background plate and MUST be hidden from assistive technology.
+
+MM-UI5. For a non-admin caller with at least one row whose `price_ratio` is not `"1"`, the toolbar MUST show a muted note on its own line: `部分价格已包含分组倍率（见各行）；实际扣费还会乘以所用 Channel 的倍率。` (`modelMarketplace.ratioNote`). No note is shown for admins or when every ratio is `1`.
+
+MM-UI2b. For a non-admin caller, the Model cell adds muted lines after line 2: `需在 API 密钥中选择 <groups[0]> 分组` when the caller's own group is not in `record.groups`, and `已按 <pricing group> 分组倍率 <ratio>× 计算` (`modelMarketplace.rowRatio`) when the row's `price_ratio` is not `"1"`.
 
 MM-UI4. The copy button MUST copy the complete `model_id` to the clipboard. Its accessible name MUST include the model ID. After a successful copy, its icon MUST change to a check mark for 2 seconds. The copy button is the only row action.
 
@@ -93,7 +108,7 @@ When the successful catalog is empty:
 
 1. The page MUST NOT expose any mutation controls (no create, edit, delete, sync buttons). Copying a model ID is not a mutation.
 2. The page MUST use `useMarketplaceModels()` from `@/lib/swr` — which calls `GET /api/dashboard/marketplace/models`.
-3. The backend endpoint MUST only return models present in at least one enabled Provider and at least one enabled Channel whose weight is greater than zero.
+3. The backend endpoint MUST only return models present in at least one enabled Provider and at least one enabled Channel whose weight is greater than zero, and, for non-admin callers, only models reachable through the caller's groups (MM-D1).
 4. The page MUST render the catalog list defined in sections 4.2 and 4.3.
 5. All user-visible strings MUST go through `t()` (i18next). Keys live under `modelMarketplace.*`.
 6. Navigation entry MUST appear in the common `navItems` array (visible to all roles).
@@ -117,8 +132,12 @@ Keys under `modelMarketplace`:
 | `inputPerMillion`   | Input (per 1M tokens)                                                        | 输入（每 1M tokens）                           |
 | `outputPerMillion`  | Output (per 1M tokens)                                                       | 输出（每 1M tokens）                           |
 | `copyModelId`       | Copy {{model}}                                                               | 复制 {{model}}                                 |
+| `groupsLine`        | Groups: {{groups}}                                                           | 分组：{{groups}}                               |
+| `requiresKeyGroup`  | Select the {{group}} group on your API key                                   | 需在 API 密钥中选择 {{group}} 分组             |
+| `ratioNote`         | Some prices include a group multiplier (see each row). …                     | 部分价格已包含分组倍率（见各行）；…            |
+| `rowRatio`          | Priced at the {{group}} group multiplier ({{ratio}}×)                        | 已按 {{group}} 分组倍率 {{ratio}}× 计算        |
 
-Nav key `nav.marketplace`: en = `Models`, zh = `模型广场`
+Nav key `nav.marketplace`: en = `Model Marketplace`, zh = `模型广场`
 
 ## 7. Fetch Failure and Search States
 

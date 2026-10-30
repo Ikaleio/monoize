@@ -14,10 +14,16 @@ DH-1. The page MUST render these sections in this vertical order inside the dash
 content scroll pane:
 
 1. greeting header;
-2. account overview;
-3. usage chart panel;
-4. recent usage table and API information panel (side-by-side on `lg+`, stacked below);
-5. performance panel.
+2. getting-started card (only when DH-4a admits it);
+3. account overview;
+4. API information panel;
+5. usage chart panel;
+6. recent usage table;
+7. performance panel (omitted when DH-9d applies).
+
+Sections 4 through 7 MUST each occupy the full content width. Each of sections 2 through
+7 MUST be wrapped in its own `PanelErrorBoundary`, so a render failure in one section
+leaves every other section usable.
 
 DH-2. The page MUST use a compact Vercel/shadcn card layout. Decorative metric icons
 inside metric value rows are forbidden. Section titles MUST use nonlinear typography:
@@ -26,21 +32,48 @@ leading-none tracking-tight` for card/section titles unless a section specifies
 otherwise.
 
 DH-3. Desktop content MAY scroll vertically inside the main content pane (DL7). The page
-MUST NOT create page-level horizontal overflow at mobile, tablet, or desktop widths.
+MUST NOT create page-level horizontal overflow at mobile, tablet, or desktop widths: at
+every viewport width from 320 to 1920 CSS pixels, the dashboard `main` element MUST satisfy
+`scrollWidth <= clientWidth`. Grid tracks MUST be explicit and grid or flex children that
+contain tables MUST set `min-width: 0`, so horizontal overflow stays inside the table
+container.
 
 ## Greeting Header
 
 DH-4. Row A MUST render greeting only (no action controls). Title text MUST come from
-i18n key `dashboard.greeting` with `username` interpolation. Subtitle MUST come from
-`dashboard.subtitle`.
+i18n key `dashboard.greeting` with `username` interpolation. The greeting MUST be neutral:
+it MUST NOT name a time of day (zh: `你好，{{username}}`, en: `Hello, {{username}}`).
+Subtitle MUST come from `dashboard.subtitle`. Refresh controls belong to the usage chart
+header (DH-6j).
+
+DH-4a. The getting-started card MUST render between the greeting and the account overview
+if and only if at least one condition holds after its input resolves:
+
+- `GET /api/dashboard/tokens` resolved with zero API keys;
+- the analytics payload resolved with `has_any_request = false` (DH-10).
+
+While both inputs are unresolved the card MUST NOT render. Its steps, in order, are:
+
+1. create an API key: a link to `/dashboard/tokens`. The step is complete when the user has
+   at least one API key;
+2. copy the API base URL: a button that copies the DH-8b effective base URL in place, with
+   DS58 feedback. The step is complete after one successful copy in this browser; that fact
+   is stored in localStorage key `monoize-home-api-base-copied`;
+3. top up: a link to `/dashboard/wallet?tab=recharge`. The step is complete when
+   `balance_nano_usd` is greater than zero. The step MUST be absent when
+   `balance_unlimited` is true, or when `GET /api/dashboard/recharge/channels` has not
+   resolved with at least one channel.
+
+A completed step MUST show a check icon in place of its number and MUST keep its action
+available.
 
 ## Account Overview
 
 DH-5. The account overview MUST render as one full-width Card with one flat metric grid.
-It MUST NOT render separate nested metric cards. On `lg+`, the grid MUST render five
-columns in one row, with the balance column wider than each other column. From `sm` to
-below `lg`, the balance cell MUST span both columns and the remaining cells MUST render
-in two columns. Below `sm`, all cells MUST stack in one column.
+It MUST NOT render separate nested metric cards. At `xl` and above, the grid MUST render
+five columns in one row, with the balance column wider than each other column. Below `xl`,
+the balance cell MUST span two columns and the remaining four cells MUST render in two
+columns, at every width including below `sm`.
 
 DH-5a. The grid MUST render five cells in this order:
 
@@ -54,6 +87,10 @@ The cells MUST use shared outer Card boundaries and standard border-token separa
 No metric cell MAY use a colored accent border. Values MUST use display typography and
 tabular numbers. Labels and supporting text MUST use muted semantic text tokens.
 
+The balance cell MUST render a top-up link to `/dashboard/wallet?tab=recharge` when
+`balance_unlimited` is false and `GET /api/dashboard/recharge/channels` resolved with at
+least one channel. Otherwise the link MUST be absent.
+
 DH-5b. Balance data MUST be sourced from the authenticated session user
 (`GET /api/dashboard/auth/me`), not from admin-only billing-plan endpoints. The value
 MUST be the localized unlimited label when `balance_unlimited` is true. Otherwise it
@@ -63,21 +100,23 @@ Dashboard home MUST NOT parse `balance_usd` through JavaScript `Number` or depen
 its runtime JSON type.
 
 DH-5c. The account overview MUST fetch
-`GET /api/dashboard/analytics?buckets=24&range_hours=24` through the shared SWR analytics
-hook, independent of the usage chart's selected window. The payload MUST contain only
-the authenticated account's request-log rows, including when the caller is an admin.
-It MUST derive:
+`GET /api/dashboard/analytics?buckets=24&range_hours=24&tz_offset_minutes=<local offset>`
+through the shared SWR analytics hook, independent of the selected usage window. The local
+offset MUST equal `-new Date().getTimezoneOffset()`. The payload MUST contain only the
+authenticated account's request-log rows, including when the caller is an admin. It MUST
+derive:
 
-- today's spend from `today_cost_nano_usd`, formatted as USD with 4 fractional digits
-  (UTC calendar-day start of this account's rows);
-- today's requests from `today_calls`, formatted as a localized integer
-  (UTC calendar-day start of this account's rows);
+- today's spend from `today_cost_nano_usd`, formatted as USD with 4 fractional digits;
+- today's requests from `today_calls`, formatted as a localized integer;
 - 24-hour Tokens as the sum of every positive `tokens_by_model` value in all returned
   buckets, formatted with the shared compact-token formatter;
 - active models as the count of distinct model ids whose 24-hour Token sum is greater
   than zero.
 
-When the usage chart also selects `24h`, both consumers MUST use the same SWR cache key.
+"Today" MUST mean the browser's local calendar day (DH-10). The today's-spend supporting
+text MUST state that the value follows the local time zone. When the selected usage window
+is `24h`, the account overview, chart, and recent usage MUST use one SWR cache key. The hook
+MUST poll every 60000 ms while the document is visible.
 
 DH-5d. The fifth cell MUST render active models. Subscription state belongs to the Wallet page and MUST NOT alter the account overview.
 
@@ -88,11 +127,13 @@ DH-5e. The account overview MUST NOT display `my_api_keys_count`.
 DH-6. The usage panel MUST occupy the full content width and MUST render:
 
 - title from `dashboard.usage.title` (default English: "Your Usage");
-- subtitle from `dashboard.usage.subtitle` (default English: "Token usage for the
-  current account in the selected time range");
-- a time-window control at the top-right of the card header (DH-6i);
-- a horizontal stacked cumulative area chart;
-- a single-row paginated legend below the chart.
+- subtitle from `dashboard.usage.subtitle`;
+- the window total: the sum of all `tokens_by_model` values of the selected window, as one
+  compact-formatted number in the card header;
+- the update indicator and refresh button (DH-6j) and the page's only time-window control
+  (DH-6i) at the top-right of the card header;
+- a per-bucket stacked bar chart;
+- a wrapping legend below the chart.
 
 The panel MUST NOT render a "Group By" control.
 
@@ -107,8 +148,8 @@ derived from the selected window `W`:
 | `30d` | 720           | 30        | 1 day        |
 
 This mapping MUST be defined in exactly one shared frontend module consumed by both the
-usage chart and the recent usage panel. The frontend MUST NOT invent synthetic fallback
-matrix values.
+usage chart and the recent usage panel. Both panels MUST read the same analytics payload.
+The frontend MUST NOT invent synthetic fallback matrix values.
 
 DH-6b. Each analytics bucket MUST include `tokens_by_model: Record<string, number>` where
 each value is the exact integer sum of
@@ -120,9 +161,9 @@ same `i64` column; an uncast `SUM` MUST NOT be used because PostgreSQL decoding 
 fails with a NUMERIC/INT8 mismatch. Models with zero total tokens across all buckets MUST
 be omitted.
 
-DH-6c. The chart Y-axis MUST represent cumulative tokens: for each model series at bucket
-index `i`, the plotted value equals the sum of that model's `tokens_by_model` over
-buckets `0..i` inclusive. The X-axis MUST show one label per bucket. Bucket start
+DH-6c. The chart Y-axis MUST represent tokens per bucket: for each series at bucket index
+`i`, the plotted value equals that series' `tokens_by_model` in bucket `i` alone. Values
+MUST NOT accumulate across buckets. The X-axis MUST show one label per bucket. Bucket start
 instants MUST be computed on the frontend as
 `start_i = time_from + i * (time_to - time_from) / bucket_count` from the analytics
 response `time_from` / `time_to` fields. The label format depends on the selected window
@@ -144,7 +185,7 @@ line label MUST be:
 
 The line label MUST render in the reserved top margin above the plotting area. The
 horizontal center of the label MUST equal the X coordinate of the final reference line.
-The label MUST NOT overlap an Area series. No glyph may be clipped by the chart
+The label MUST NOT overlap a bar. No glyph may be clipped by the chart
 container.
 
 DH-6e. Hover/focus tooltip MUST show:
@@ -155,36 +196,29 @@ DH-6e. Hover/focus tooltip MUST show:
   that bucket, sorted descending by bucket tokens, each with percentage of that bucket's
   total;
 - bucket total tokens labeled by `dashboard.usage.periodTotal` (default English:
-  "Period total");
-- cumulative total tokens through that bucket.
+  "Period total").
+
+The per-model list MUST expand the merged "Other" series into its individual models.
 
 Tooltip copy MUST NOT hardcode a "daily" period because bucket width varies with the
 selected window. Token display MUST use compact SI-style formatting (e.g. `10M`, `1.2B`)
 with at most one fractional digit when abbreviated.
 
-DH-6f. The legend MUST paginate every model present in the chart series. It MUST compute
-the page size from the available legend width as
-`clamp(floor(legend_width_css_px / 160), 1, 8)`. It MUST recompute the page size when the
-legend width changes. Thus, a wide card shows more models per page than a narrow card.
+DH-6f. The legend MUST list every chart series (at most 8 models plus "Other", DH-6g)
+without pagination. It MUST wrap: two equal columns below `sm`, more columns at wider
+widths. Each item shows color swatch + model id in monospace. Legend color for a series
+MUST equal the chart series color. Long model ids MUST truncate, expose the full id through
+`title`, and MUST NOT cause horizontal page overflow.
 
-The legend MUST render as one horizontal footer row below the chart. The visible model
-items MUST occupy the available left/center area. Each item shows color swatch + model id
-in monospace. Legend color for a model MUST equal the chart series color for that model.
-Long model ids MUST truncate without causing horizontal page overflow.
+DH-6g. Series order and color MUST derive from each model's token total in the selected
+window, sorted descending with ties broken by model id. The model at rank `r` (0-based,
+`r < 8`) MUST use `--chart-(r+1)`. Models at rank 8 and later MUST merge into one series
+labeled by `dashboard.usage.other` that uses the muted-foreground token. Therefore no two
+series in one chart share a color. Recent usage swatches (DH-7a) MUST use the same mapping.
 
-The pagination controls MUST appear at the right edge of the same footer row, immediately
-after the visible legend items. They MUST contain, in order: a previous-page icon button,
-localized text in the form `current / total`, and a next-page icon button. The buttons
-MUST be real `<button>` elements with localized accessible names. Previous MUST be
-disabled on page 1. Next MUST be disabled on the final page. The current page MUST clamp
-to the new final page when a data or time-window change reduces the model count.
-
-DH-6g. Chart series colors MUST use CSS variables `--chart-1` … `--chart-16` (stable hash
-of model id → palette index is allowed).
-
-DH-6h. The chart MUST be rendered with `@/components/ui/chart` and Recharts `AreaChart` /
-stacked `Area` elements. Empty analytics MUST show an `EmptyState` instead of an empty
-axes frame with fake data.
+DH-6h. The chart MUST be rendered with `@/components/ui/chart` and Recharts `BarChart` /
+stacked `Bar` elements. Empty analytics MUST show an `EmptyState` instead of an empty axes
+frame with fake data. Its copy MUST follow DH-6k.
 
 DH-6i. Time-window control contract (shared by DH-6 and DH-7):
 
@@ -194,48 +228,62 @@ DH-6i. Time-window control contract (shared by DH-6 and DH-7):
 - the group MUST carry a localized `aria-label` from `dashboard.usage.timeRange`
   (default English: "Time range"). Each option MUST be a real `<button>` element with
   `aria-pressed` reflecting its selection state, and MUST be keyboard operable;
-- the default selected window MUST be `1h` on every mount of `/dashboard`;
-- the selection MUST be held only in React component state. It MUST NOT be written to
-  `localStorage`, `sessionStorage`, cookies, or the URL.
+- the default selected window MUST be `24h`;
+- the selection MUST persist across mounts in localStorage key `monoize-home-window`. A
+  missing or unrecognized stored value MUST resolve to the default;
+- the page MUST render exactly one such control, in the usage panel header. It MUST govern
+  the usage chart and the recent usage panel.
+
+DH-6j. The usage panel header MUST show `dashboard.usage.updatedAt` with the local `HH:mm`
+of the displayed payload's `time_to`, and one icon button with a localized accessible name.
+Activating the button MUST revalidate the selected-window analytics, the 24-hour analytics,
+and `SWR_KEYS.ME`. The button MUST be disabled and its icon MUST spin while the
+selected-window request is pending. Analytics hooks on this page MUST set
+`refreshInterval: 60000`.
+
+DH-6k. Empty-window copy depends on account history:
+
+- `has_any_request = false`: the title states that no request exists yet, and the action is
+  a link to `/dashboard/tokens` labeled by `dashboard.usage.createApiKey`;
+- `has_any_request = true`: the title MUST name the selected window (zh: `最近 24 小时没有请求`).
+  When the selected window is not `30d`, the action is a button labeled by
+  `dashboard.usage.viewThirtyDays` that selects `30d`.
+
+The recent usage panel MUST use the same window-naming title.
 
 ## Recent Usage Panel
 
-DH-7. The recent usage panel header MUST render its own time-window control that follows
-DH-6i. Its selection state is independent of the usage chart's selection; each panel
-holds its own React state, both defaulting to `1h`.
+DH-7. The recent usage panel MUST NOT render a time-window control. Its header MUST name
+the selected window and MUST render a `dashboard.recentUsage.viewLogs` link to
+`/dashboard/logs?range=<W>`. For `admin` and `super_admin` the link MUST also carry
+`username=<own username>`, because the logs page otherwise lists every account.
 
-DH-7a. Table rows MUST be per-model aggregates computed from the authenticated user's
-own request logs (`GET /api/dashboard/request-logs?...&scope=self`). The `scope=self`
-parameter MUST force the current-account filter even when the caller is an admin.
-The request MUST be fetched with these query parameters for the selected window `W`:
+DH-7a. Tokens, charge, and cache hit rate MUST come from the full server-side aggregation
+of `GET /api/dashboard/analytics` for the selected window (DH-6a, DH-10). They MUST NOT be
+derived from paginated request logs, so they cover every matching row regardless of count.
+For each model:
 
-- `time_from = now − range_hours(W)` and `time_to = now`, both ISO-8601, where
-  `range_hours(W)` uses the DH-6a mapping and `now` is evaluated at fetch time (so each
-  SWR revalidation observes logs created after the window was selected);
-- `limit = 200`, `offset = 0`. The aggregate is page-limited: when more than 200 log
-  rows exist inside the window, only the 200 most recent rows are aggregated.
+- Tokens = the sum of that model's `tokens_by_model` over all buckets;
+- Charge = the `BigInt` sum of that model's `cost_by_model` over all buckets, formatted as
+  USD via `formatNanoUsd` with 4 fractional digits;
+- Cache hit rate = `cache_by_model[model].cache_read_tokens /
+  cache_by_model[model].input_tokens` when input tokens > 0, else em dash; format per
+  `user-live-usage.spec.md` LU-11.
 
-Columns MUST be:
+Rows MUST sort by Tokens descending with ties broken by model id. Models with zero tokens
+and zero charge MUST be omitted. While the payload is first loading, the panel MUST show a
+skeleton table (DH-12a). When zero rows match the selected window, the panel MUST show the
+DH-6k window-naming empty state.
 
-- Model (monospace model id);
-- Tokens (sum of input + output + cache_read + cache_creation + reasoning when present);
-- Cache hit rate (`cache_read / input` when input > 0; em dash otherwise; format per
-  `user-live-usage.spec.md` LU-11);
-- Charge (sum of `billing.charge_nano_usd` as USD via `formatNanoUsd` / `BigInt`).
+DH-7b. The Recent Usage card MUST have a bounded ready-state height of at most 28rem. When
+the table is taller than the available card content area, only the table region MUST scroll
+vertically. The card header MUST remain visible. Below `sm` the Cache hit column MUST be
+hidden and its value MUST render as secondary text under the model id. Long model ids MUST
+truncate inside the Model cell, so Tokens and Charge stay visible without horizontal
+scrolling at a 320 CSS pixel viewport.
 
-Rows MUST sort by Tokens descending. Models with zero tokens and zero charge MUST be
-omitted. While logs are first loading with no data for the panel, the panel MUST show a
-skeleton table (DH-12a). When zero rows match the selected window, the panel MUST show
-the localized empty state.
-
-DH-7b. The Recent Usage card MUST have a bounded ready-state height. When the table is
-taller than the available card content area, only the table region MUST scroll
-vertically. The card header and time-window control MUST remain visible. Horizontal
-table overflow MUST remain available for narrow viewports.
-
-DH-7c. The Recent Usage and API Information cards MUST share a maximum height of
-28rem. At `lg` and above, both cards MUST stretch to the same grid-row height.
-API rows MUST scroll within their card when content exceeds the available height.
+DH-7c. The API Information card MUST render the base URL row at full width and the four
+endpoint rows in a grid: one column below `sm`, two from `sm`, four from `xl`.
 
 ## API Information Panel
 
@@ -244,14 +292,17 @@ DH-8. The API information panel MUST be visible to all authenticated dashboard u
 
 DH-8a. Data source: `api_base_url` from `GET /api/dashboard/settings/public`.
 
-DH-8b. If a successfully loaded `api_base_url` is empty, show an explicit unavailable
-state. For `admin` and `super_admin`, show a configuration action linking to
-`/dashboard/admin-settings`. For `user`, state that the administrator has not configured
-the API base URL; do not instruct the user to open system settings. If non-empty, show:
+DH-8b. The effective base URL is the trimmed `api_base_url` when it is non-empty, otherwise
+`window.location.origin`. For a successfully loaded payload, the panel MUST show:
 
-- the configured API base URL;
+- the effective base URL. When `api_base_url` is empty, its label MUST be
+  `dashboard.apiBaseUrlFallback` (zh: `当前站点地址（管理员未单独配置）`);
 - derived endpoint paths in this order: `/v1/chat/completions`, `/v1/responses`,
   `/v1/messages`, `/v1/models`.
+
+When `api_base_url` is empty and the role is `admin` or `super_admin`, the panel MUST also
+show a link to `/dashboard/admin-settings?setting=api_base_url`. Role `user` MUST NOT see a
+configuration link or an instruction to configure anything.
 
 DH-8c. Each base URL or endpoint row MUST be one button that copies the full absolute URL
 to the clipboard. The row MUST show a trailing `Copy` icon. Copy feedback MUST follow
@@ -336,17 +387,26 @@ Semantics:
 - Model rows: include every id in `dashboard_performance_model_ids` (order preserved).
   Metrics aggregate request logs whose `model` equals that id. Global aggregates as above.
 - When both configured lists are empty, `groups` and `models` MUST be empty arrays and
-  the UI MUST show an empty state. Non-admin empty copy MUST NOT instruct the user to
-  open admin settings with an admin-only deep link requirement; it MAY say performance
-  targets are not configured.
+  the UI MUST follow DH-9d.
+
+DH-9d. When a successfully loaded payload has empty `groups` and `models`:
+
+- role `user`: the page MUST NOT render the performance panel;
+- role `admin` or `super_admin`: the panel MUST show an empty state with a link to
+  `/dashboard/admin-settings?setting=dashboard_performance_targets`.
+
+DH-9e. The panel subtitle MUST use plain language and MUST NOT contain the terms
+`avgTTFT`, `avgTPS`, or "brick" (zh: `近 24 小时可用性、首字延迟与输出速度`). When rows
+exist, the panel MUST render a legend that shows the color and localized name of each
+status: `up`, `degraded`, `down`, `empty`.
 
 DH-9c. The performance panel UI MUST render, for each returned group and model row:
 
 - name/id;
 - a horizontal uptime brick strip (`brick_count` equal-sized squares, color-coded by
   status using success/warning/destructive/muted tokens);
-- `avgTTFT` formatted as milliseconds with at most 1 fractional digit, or em dash;
-- `avgTPS` formatted with at most 2 fractional digits and a `t/s` suffix, or em dash.
+- average time to first token formatted as milliseconds with at most 1 fractional digit, or em dash;
+- average output speed formatted with at most 2 fractional digits and a `t/s` suffix, or em dash.
 
 The ready state MUST use one semantic table with four columns in this order: target name,
 availability bricks, average TTFT, average TPS. Target names and availability bricks
@@ -375,9 +435,20 @@ additionally:
   query parameter and MUST NOT return system-wide analytics;
 - select and group token sums per model bucket as defined in DH-6b;
 - include `tokens_by_model` on every bucket object in the JSON response;
-- continue to return `cost_by_model`, `calls_by_model`, `calls_by_provider`, totals, and
-  today fields unchanged in meaning. The `today_*` fields remain the UTC calendar-day
-  aggregate of the caller's own rows.
+- include top-level `cache_by_model: Record<string, { input_tokens: number,
+  cache_read_tokens: number }>`. Each value is the exact sum of `input_tokens` and
+  `cache_read_tokens` for that model over `[time_from, time_to)`, computed by the database
+  over every matching row. A model whose two sums are both zero MUST be omitted;
+- include top-level `has_any_request: boolean`, which is true if and only if at least one
+  retained `request_logs` row with this `user_id` exists at any time. It MUST be resolved
+  by a `LIMIT 1` query;
+- accept optional query parameter `tz_offset_minutes`, an integer equal to local time minus
+  UTC in minutes (UTC+8 is `480`). Absent means `0`. A value outside `[-840, 840]` MUST
+  return HTTP `400` with code `invalid_tz_offset` and `param: "tz_offset_minutes"`;
+- continue to return `cost_by_model`, `calls_by_model`, `calls_by_provider`, and totals
+  unchanged in meaning. The `today_*` fields aggregate the caller's rows with
+  `created_at_unix_ms >= today_start`, where `today_start` is the start of the calendar day
+  containing `now + tz_offset_minutes`, converted back to UTC.
 
 DH-10a. Cost fields remain signed base-10 integer strings in nano-USD with checked `i128`
 aggregation. Token and call counts are integers. The frontend MUST NOT narrow monetary
@@ -399,8 +470,8 @@ All motion MUST respect reduced-motion rules (DS32–DS34).
 ## Loading Contract
 
 DH-12. Before required dashboard data resolves, the page MUST render skeleton
-placeholders that mirror the ready layout: greeting, account overview, usage chart,
-recent/API row, and performance panel.
+placeholders that mirror the ready layout: greeting, account overview, API information,
+usage chart, recent usage, and performance panel.
 
 DH-12a. A panel MUST show its skeleton only during the first load of that panel: while
 its SWR hook reports `isLoading` AND the hook exposes no data (neither current nor
@@ -408,8 +479,7 @@ kept-previous data). A rendered chart or table MUST NOT be swapped back to a ske
 because SWR is revalidating an already-populated key (`isValidating` MUST NOT unmount
 panel content).
 
-DH-12b. The usage-chart analytics hook and the recent-usage request-logs hook MUST use
-SWR `keepPreviousData: true`. When the user switches windows and data for a previously
+DH-12b. The selected-window analytics hook MUST use SWR `keepPreviousData: true`. When the user switches windows and data for a previously
 viewed window exists in the SWR cache, the panel MUST keep rendering the previous
 window's data until the new payload resolves, and MAY indicate the pending fetch with a
 non-layout-shifting treatment (reduced content opacity). The panel MUST NOT show a
@@ -418,7 +488,7 @@ still shows the skeleton.
 
 DH-12c. The usage chart's Card and its `framer-motion` entry wrapper MUST remain mounted
 across revalidations and window switches; page-entry motion plays at most once per page
-mount. Recharts `Area` elements MUST set `isAnimationActive={false}` so a background
+mount. Recharts `Bar` elements MUST set `isAnimationActive={false}` so a background
 data refresh cannot replay the grow-from-zero enter animation. The recent-usage panel
 follows the same mount and motion rules.
 

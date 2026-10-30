@@ -17,14 +17,14 @@ A request first selects a Provider, then selects a Channel inside it. See [Routi
 Each Provider row shows RPM and TPM for the last 60 seconds. The visible page refreshes every 10 seconds.
 RPM counts persisted requests across all users and terminal statuses. TPM sums input and output tokens without counting cached or reasoning tokens again.
 In-flight requests and retry-chain entries do not count. An empty window shows `0`; unavailable metrics show `—`.
-The screenshot uses local example traffic.
+Each Provider row shows its position and retry policy. Each Channel row shows one status, its model count, and its weight share.
 
 ## Create a Provider
 
 1. Open **Providers** in the sidebar.
-2. Click the create button and enter a name.
-3. Set the retry options when the defaults do not fit:
-   - `max_retries`: total retry budget across the Provider. `-1` means unlimited within the route.
+2. Click **Add Provider** and enter a name.
+3. Set the retry options under **Routing** when the defaults do not fit:
+   - **Provider attempts**: **Try all available Channels** (default, stored as `max_retries = -1`) or **Set a number** N (stored as `max_retries = N - 1`).
    - `channel_max_retries`: retries inside one Channel before moving on. Default `0`.
    - `channel_retry_interval_ms`: wait time between in-Channel retries. Default `0`.
 4. Keep `circuit_breaker_enabled` on unless you have a reason to disable it.
@@ -38,6 +38,8 @@ The screenshot uses local example traffic.
 5. Optional: set a per-Channel `proxy_url` to override the process-level upstream proxy.
 
 When you edit a Channel later, leave the API key field empty to keep the stored key.
+
+When you save an invalid form, the editor opens the section and Channel that contain the error. It then focuses the field and shows the error next to it. Required fields show **Required**.
 
 ## Decision models
 
@@ -102,13 +104,17 @@ Click **Detect WebSocket** to probe `GET {base}/v1/responses`. The result writes
 
 ## Test a Channel
 
-Open the Channel and run Sequential test or Concurrent test.
+Expand the Provider and click **Choose models to test** on the Channel row, or click **Test** in the Channel editor after saving. Then run Sequential test or Concurrent test. Concurrent test runs at most 5 requests at a time. Results stay on the page after you close the dialog, a running test continues in the background, and **Stop** cancels it. **Retest failed** reruns only the failed models.
+
+The Channel switch in the expanded Provider row turns the Channel on or off immediately, without opening the editor.
 
 The test sends a short streaming completion with a 16-token output cap. HTTP 2xx is not enough. The stream must reach a protocol terminal event.
 
 For a Responses Channel, `response.completed` is a pass. `response.incomplete` without an error object is also a pass. A reasoning model can hit the 16-token cap and return `incomplete`. That result still means the Channel is reachable.
 
 ## Map models
+
+To change several models, select **Select** in **Supported models**. Then filter the list, select models, and delete them or set one multiplier. The model picker can select or clear all current results. **Add manually** accepts several model IDs.
 
 Each Channel lists the logical models it serves. A model entry has:
 
@@ -134,7 +140,7 @@ Missing tool prices always fail open. Monoize records the unpriced tool class an
 
 ## Provider transforms
 
-A Provider can hold an ordered list of transform rules. They run on every request that the Provider serves, after Provider selection and before upstream encoding. See [Transforms](/en/docs/transforms).
+A Provider can hold an ordered list of transform rules. They run on every request that the Provider serves, after Provider selection and before upstream encoding. The execution order is Provider → global → API key. The editor shows this order. See [Transforms](/en/docs/transforms).
 
 ## Groups
 

@@ -1,13 +1,16 @@
 const API_BASE = "/api/dashboard";
 
-/** Error carrying the backend `error.code`, for code-keyed localized toasts. */
+/** Error carrying the backend `error.code` and `error.param`, for code-keyed localized feedback. */
 export class DashboardApiError extends Error {
   readonly code: string;
+  /** Request field the backend rejected, when it names one. */
+  readonly param: string | null;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, param: string | null = null) {
     super(message);
     this.name = "DashboardApiError";
     this.code = code;
+    this.param = param;
   }
 }
 
@@ -73,6 +76,27 @@ export interface User {
   today_calls?: number;
   today_cost_nano_usd?: string;
   today_cost_usd?: string;
+  /** Admin users list only (A11). */
+  active_plan_name?: string;
+  active_plan_expires_at?: string;
+}
+
+export interface UpdateUserInput {
+  username?: string;
+  password?: string;
+  role?: User["role"];
+  enabled?: boolean;
+  balance_nano_usd?: string;
+  balance_usd?: string;
+  /** Signed delta applied to the locked balance (A6). */
+  balance_delta_nano_usd?: string;
+  /** Compare-and-set guard for `balance_nano_usd` (A7). */
+  expected_balance_nano_usd?: string;
+  /** User-visible ledger note (A8). */
+  balance_note?: string;
+  balance_unlimited?: boolean;
+  email?: string | null;
+  group_id?: string;
 }
 
 export interface BillingPlan {
@@ -190,6 +214,18 @@ export interface CustomTransform {
   updated_at: string;
 }
 
+/** One chain owner referencing a custom transform (custom-js-transforms.spec.md CJS-API-6). */
+export interface CustomTransformReference {
+  kind: "provider" | "global" | "api_key";
+  id: string;
+  name: string;
+  owner_user_id?: string;
+  owner_username?: string;
+}
+
+/** Referencing chains keyed by `js:` transform id; unreferenced ids are absent. */
+export type CustomTransformReferences = Record<string, CustomTransformReference[]>;
+
 export interface ModelRedirectRule {
   pattern: string;
   replace: string;
@@ -251,6 +287,7 @@ export interface UpdateApiKeyInput {
   enabled?: boolean;
   sub_account_enabled?: boolean;
   sub_account_balance_nano_usd?: string;
+  expected_sub_account_balance_nano_usd?: string;
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
@@ -258,7 +295,8 @@ export interface UpdateApiKeyInput {
   group_ids?: string[];
   max_multiplier?: string;
   transforms?: TransformRuleConfig[];
-  expires_at?: string;
+  /** `null` clears the expiry (TM-UPD-0). */
+  expires_at?: string | null;
   model_redirects?: ModelRedirectRule[];
   reasoning_envelope_enabled?: boolean;
   request_capture_mode?: RequestCaptureMode;
@@ -268,7 +306,6 @@ export interface UpdateApiKeyInput {
 export interface SystemSettings {
   registration_enabled: boolean;
   captcha_enabled: boolean;
-  default_user_role: string;
   session_ttl_days: number;
   api_key_max_per_user: number;
   site_name: string;
@@ -291,10 +328,9 @@ export interface SystemSettings {
   monoize_passive_failure_threshold: number;
   monoize_passive_cooldown_seconds: number;
   monoize_passive_window_seconds: number;
-  monoize_passive_min_samples: number;
-  monoize_passive_failure_rate_threshold: number;
   monoize_passive_rate_limit_cooldown_seconds: number;
   monoize_request_timeout_ms: number;
+  monoize_stream_idle_timeout_ms: number;
   monoize_enable_estimated_billing: boolean;
   monoize_extra_fields_whitelist: Record<string, string[]>;
   monoize_strip_cross_protocol_nested_extra: boolean;
@@ -507,19 +543,39 @@ export type PriceSyncSource = "models_dev" | "openrouter" | "new_api";
 
 export interface PriceSyncChange {
   model_id: string;
-  kind: "insert" | "update" | "delete";
+  kind: "insert" | "update" | "delete" | "skip";
   fields?: string[];
+  /** Stored values of the changed fields (update, delete). */
+  before?: Record<string, unknown>;
+  /** Values apply writes (insert, update). */
+  after?: Record<string, unknown>;
 }
 
 // model-pricing.spec.md MP-A6 preview payload.
 export interface PriceSyncPreview {
   source: PriceSyncSource;
+  /** MP-A7 applies exactly this snapshot until `expires_at`. */
+  preview_id: string;
+  expires_at: string;
   insert: number;
   update: number;
   skip: number;
   delete: number;
   changes: PriceSyncChange[];
   truncated?: boolean;
+}
+
+/** MP-A4a: an enabled Provider/Channel pair serving an unpriced model. */
+export interface UnpricedModelSource {
+  provider_id: string;
+  provider_name: string;
+  channel_id: string;
+  channel_name: string;
+}
+
+export interface UnpricedModels {
+  models: string[];
+  sources: Record<string, UnpricedModelSource[]>;
 }
 
 export interface PublicSystemSettings {
@@ -759,10 +815,17 @@ export interface ModelMetadataRecord {
 }
 
 // Marketplace rows join the enabled `model_prices` row on `model_id`
-// (model-marketplace.spec.md); prices are decimal USD-per-1M strings.
+// (model-marketplace.spec.md §3); prices are decimal strings already
+// multiplied by `price_ratio` (the ratio of the row's pricing group, MM-D4; "1" for admins).
 export interface MarketplaceModelRecord extends ModelMetadataRecord {
   input_usd_per_1m: string | null;
   output_usd_per_1m: string | null;
+  per_request_usd: string | null;
+  billing_mode: BillingMode | null;
+  billing_expr: BillingExpr | null;
+  /** Group names through which the caller can route to this model. */
+  groups: string[];
+  price_ratio: string;
 }
 
 export interface UpsertModelMetadataInput {
@@ -1034,6 +1097,11 @@ export interface DashboardAnalytics {
   total_calls: number;
   today_cost_nano_usd: string;
   today_calls: number;
+  has_any_request: boolean;
+  cache_by_model: Record<
+    string,
+    { input_tokens: number; cache_read_tokens: number }
+  >;
 }
 
 export type DashboardPerformanceBrickStatus =
@@ -1083,6 +1151,7 @@ export interface RequestLogsFilter {
   model?: string;
   status?: string;
   api_key_id?: string;
+  channel_id?: string;
   username?: string;
   search?: string;
   time_from?: string;
@@ -1158,6 +1227,7 @@ class ApiClient {
       throw new DashboardApiError(
         data.error?.code || "request_failed",
         data.error?.message || data.error?.code || "Request failed",
+        typeof data.error?.param === "string" ? data.error.param : null,
       );
     }
 
@@ -1229,24 +1299,16 @@ class ApiClient {
     });
   }
 
-  async updateUser(
-    id: string,
-    updates: {
-      username?: string;
-      password?: string;
-      role?: string;
-      enabled?: boolean;
-      balance_nano_usd?: string;
-      balance_usd?: string;
-      balance_unlimited?: boolean;
-      email?: string | null;
-      group_id?: string;
-    },
-  ): Promise<User> {
+  async updateUser(id: string, updates: UpdateUserInput): Promise<User> {
     return this.request(`/users/${id}`, {
       method: "PUT",
       body: JSON.stringify(updates),
     });
+  }
+
+  /** Admin read-only list of another user's keys; `key` is always "" (TM-ADM-LIST-1). */
+  async listUserApiKeys(userId: string): Promise<ApiKey[]> {
+    return this.request(`/users/${encodeURIComponent(userId)}/api-keys`);
   }
 
   // Billing plans
@@ -1479,6 +1541,17 @@ class ApiClient {
     });
   }
 
+  async setChannelEnabled(
+    providerId: string,
+    channelId: string,
+    enabled: boolean,
+  ): Promise<Provider> {
+    return this.request(
+      `/providers/${providerId}/channels/${channelId}/enabled`,
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+    );
+  }
+
   async getTransformRegistry(): Promise<TransformRegistryItem[]> {
     return this.request("/transforms/registry");
   }
@@ -1488,6 +1561,13 @@ class ApiClient {
       "/custom-transforms",
     );
     return response.transforms;
+  }
+
+  async listCustomTransformReferences(): Promise<CustomTransformReferences> {
+    const response = await this.request<{ references: CustomTransformReferences }>(
+      "/custom-transforms/references",
+    );
+    return response.references;
   }
 
   async createCustomTransform(source: string): Promise<CustomTransform> {
@@ -1563,7 +1643,7 @@ class ApiClient {
     });
   }
 
-  async listUnpricedModels(): Promise<{ models: string[] }> {
+  async listUnpricedModels(): Promise<UnpricedModels> {
     return this.request("/model-prices/unpriced");
   }
 
@@ -1577,9 +1657,10 @@ class ApiClient {
     });
   }
 
-  async applyPriceSync(source: PriceSyncSource): Promise<PriceSyncRun> {
+  async applyPriceSync(source: PriceSyncSource, previewId: string): Promise<PriceSyncRun> {
     return this.request(`/price-sync/${encodeURIComponent(source)}/apply`, {
       method: "POST",
+      body: JSON.stringify({ preview_id: previewId }),
     });
   }
 
@@ -1626,7 +1707,7 @@ class ApiClient {
       supported?: boolean;
       http_status?: number | null;
       warmup?: ProbeChannelWebsocketResult["warmup"];
-      error?: string | null | { code?: string; message?: string };
+      error?: string | null | { code?: string; message?: string; param?: string | null };
     } = {};
     try {
       data = (await response.json()) as typeof data;
@@ -1646,6 +1727,7 @@ class ApiClient {
       throw new DashboardApiError(
         errorCode || "unauthorized",
         errorMessage || "unauthorized",
+        typeof data.error === "object" && data.error ? (data.error.param ?? null) : null,
       );
     }
     if (
@@ -1681,6 +1763,7 @@ class ApiClient {
     if (filters?.model) params.set("model", filters.model);
     if (filters?.status) params.set("status", filters.status);
     if (filters?.api_key_id) params.set("api_key_id", filters.api_key_id);
+    if (filters?.channel_id) params.set("channel_id", filters.channel_id);
     if (filters?.username) params.set("username", filters.username);
     if (filters?.search) params.set("search", filters.search);
     if (filters?.time_from) params.set("time_from", filters.time_from);
@@ -1704,10 +1787,12 @@ class ApiClient {
   async getDashboardAnalytics(
     buckets = 8,
     rangeHours = 24,
+    tzOffsetMinutes = 0,
   ): Promise<DashboardAnalytics> {
     const params = new URLSearchParams();
     params.set("buckets", String(buckets));
     params.set("range_hours", String(rangeHours));
+    params.set("tz_offset_minutes", String(tzOffsetMinutes));
     return this.request(`/analytics?${params.toString()}`);
   }
 
@@ -1730,10 +1815,12 @@ class ApiClient {
     channelId: string,
     model?: string,
     stream = true,
+    signal?: AbortSignal,
   ): Promise<ChannelTestResult> {
     return this.request(`/providers/${providerId}/channels/${channelId}/test`, {
       method: "POST",
       body: JSON.stringify({ ...(model ? { model } : {}), stream }),
+      signal,
     });
   }
 

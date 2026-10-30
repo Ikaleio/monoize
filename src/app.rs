@@ -1684,6 +1684,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::delete_user),
         )
         .route(
+            "/dashboard/users/{user_id}/api-keys",
+            get(crate::dashboard_handlers::list_user_api_keys_admin),
+        )
+        .route(
             "/dashboard/users/{user_id}/billing-plan-subscription",
             get(crate::dashboard_handlers::get_user_billing_plan_subscription)
                 .put(crate::dashboard_handlers::assign_user_billing_plan_subscription)
@@ -1813,6 +1817,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
                 .post(crate::dashboard_handlers::create_custom_transform),
         )
         .route(
+            "/dashboard/custom-transforms/references",
+            get(crate::dashboard_handlers::list_custom_transform_references),
+        )
+        .route(
             "/dashboard/custom-transforms/{id}",
             put(crate::dashboard_handlers::update_custom_transform)
                 .delete(crate::dashboard_handlers::delete_custom_transform),
@@ -1884,6 +1892,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/providers/{provider_id}/channels/{channel_id}/test",
             post(crate::dashboard_handlers::test_channel),
+        )
+        .route(
+            "/dashboard/providers/{provider_id}/channels/{channel_id}/enabled",
+            put(crate::dashboard_handlers::set_channel_enabled),
         )
         .route(
             "/dashboard/fetch-channel-models",

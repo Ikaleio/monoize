@@ -1,27 +1,33 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/hooks/use-auth";
 import {
+  useApiKeys,
   useDashboardAnalytics,
   useDashboardPerformance,
   usePublicSettings,
-  useWindowedRequestLogs,
+  useRechargeChannels,
 } from "@/lib/swr";
 import {
-  DEFAULT_USAGE_WINDOW,
+  readStoredUsageWindow,
+  storeUsageWindow,
   USAGE_WINDOW_QUERY,
   type UsageWindow,
 } from "@/lib/usage-window";
+import { PanelErrorBoundary } from "@/components/ui/error-boundary";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AccountStrip } from "./dashboard/account-strip";
+import { GettingStartedCard } from "./dashboard/getting-started";
 import { UsageChartPanel } from "./dashboard/usage-chart";
 import { RecentUsagePanel } from "./dashboard/recent-usage";
 import { ApiInfoPanel } from "./dashboard/api-info-panel";
 import { PerformancePanel } from "./dashboard/performance-panel";
+import { buildUsageSeries } from "./dashboard/utils";
 
 const ACCOUNT_OVERVIEW_QUERY = USAGE_WINDOW_QUERY["24h"];
+const USAGE_REFRESH_INTERVAL_MS = 60000;
 
 function GreetingSkeleton() {
   return (
@@ -34,26 +40,28 @@ function GreetingSkeleton() {
 
 export function DashboardPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
 
-  // Windows live in React state only (DH-6i): default 1h on every mount,
-  // independent selections for the chart and the recent-usage table.
-  const [chartWindow, setChartWindow] =
-    useState<UsageWindow>(DEFAULT_USAGE_WINDOW);
-  const [recentWindow, setRecentWindow] =
-    useState<UsageWindow>(DEFAULT_USAGE_WINDOW);
+  const [usageWindow, setUsageWindowState] = useState<UsageWindow>(
+    readStoredUsageWindow,
+  );
+  const setUsageWindow = useCallback((next: UsageWindow) => {
+    storeUsageWindow(next);
+    setUsageWindowState(next);
+  }, []);
 
-  const chartQuery = USAGE_WINDOW_QUERY[chartWindow];
-  // keepPreviousData: a window switch keeps showing the previous chart until
-  // the new payload resolves (DH-12b) instead of flashing a skeleton.
+  const usageQuery = USAGE_WINDOW_QUERY[usageWindow];
+  // keepPreviousData: a window switch keeps showing the previous payload until
+  // the new one resolves (DH-12b) instead of flashing a skeleton.
   const {
     data: usageAnalytics,
     error: usageError,
     isLoading: usageLoading,
     isValidating: usageValidating,
     mutate: retryUsage,
-  } = useDashboardAnalytics(chartQuery.buckets, chartQuery.rangeHours, {
+  } = useDashboardAnalytics(usageQuery.buckets, usageQuery.rangeHours, {
     keepPreviousData: true,
+    refreshInterval: USAGE_REFRESH_INTERVAL_MS,
   });
   const {
     data: accountAnalytics,
@@ -64,14 +72,8 @@ export function DashboardPage() {
   } = useDashboardAnalytics(
     ACCOUNT_OVERVIEW_QUERY.buckets,
     ACCOUNT_OVERVIEW_QUERY.rangeHours,
+    { refreshInterval: USAGE_REFRESH_INTERVAL_MS },
   );
-  const {
-    data: requestLogsResponse,
-    error: logsError,
-    isLoading: logsLoading,
-    isValidating: logsValidating,
-    mutate: retryLogs,
-  } = useWindowedRequestLogs(recentWindow, 200);
   const {
     data: publicSettings,
     error: settingsError,
@@ -86,6 +88,13 @@ export function DashboardPage() {
     isValidating: performanceValidating,
     mutate: retryPerformance,
   } = useDashboardPerformance();
+  const { data: apiKeys } = useApiKeys();
+  const { data: rechargeChannels } = useRechargeChannels();
+
+  const series = useMemo(
+    () => buildUsageSeries(usageAnalytics, usageWindow),
+    [usageAnalytics, usageWindow],
+  );
 
   const tt = useCallback(
     (
@@ -102,11 +111,24 @@ export function DashboardPage() {
     [t],
   );
 
-  const logs = requestLogsResponse?.data;
+  const refreshUsage = useCallback(() => {
+    void retryUsage();
+    void retryAccount();
+    void refreshUser();
+  }, [retryUsage, retryAccount, refreshUser]);
+
   const userLoading = !user;
+  const canTopUp =
+    Boolean(user) &&
+    !user?.balance_unlimited &&
+    (rechargeChannels?.length ?? 0) > 0;
+  const hasAnyRequest =
+    usageAnalytics?.has_any_request ?? accountAnalytics?.has_any_request;
+  const showGettingStarted =
+    apiKeys?.length === 0 || hasAnyRequest === false;
 
   return (
-    <PageWrapper className="flex min-h-0 flex-col gap-4 pb-6">
+    <PageWrapper className="flex min-h-0 min-w-0 flex-col gap-4 pb-6">
       <motion.header
         initial={{ opacity: 0, y: -12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -117,7 +139,7 @@ export function DashboardPage() {
           <GreetingSkeleton />
         ) : (
           <PageHeader
-            title={tt("dashboard.greeting", "Good afternoon, {{username}}", {
+            title={tt("dashboard.greeting", "Hello, {{username}}", {
               username: user?.username ?? "User",
             })}
             description={tt(
@@ -128,59 +150,82 @@ export function DashboardPage() {
         )}
       </motion.header>
 
-      <AccountStrip
-        user={user}
-        analytics={accountAnalytics}
-        failed={Boolean(accountError)}
-        onRetry={retryAccount}
-        retrying={accountValidating}
-        loading={
-          userLoading ||
-          (accountAnalyticsLoading && accountAnalytics === undefined)
-        }
-      />
-      <UsageChartPanel
-        analytics={usageAnalytics}
-        failed={Boolean(usageError)}
-        onRetry={retryUsage}
-        retrying={usageValidating}
-        loading={usageLoading && !usageAnalytics}
-        pending={usageLoading && usageAnalytics !== undefined}
-        window={chartWindow}
-        onWindowChange={setChartWindow}
-      />
-
-      <section className="grid min-h-0 items-stretch gap-4 lg:grid-cols-3">
-        <div className="min-h-0 lg:col-span-2">
-          <RecentUsagePanel
-            logs={logs}
-            failed={Boolean(logsError)}
-            onRetry={retryLogs}
-            retrying={logsValidating}
-            loading={logsLoading && !requestLogsResponse}
-            pending={logsLoading && requestLogsResponse !== undefined}
-            window={recentWindow}
-            onWindowChange={setRecentWindow}
-          />
-        </div>
-        <div className="min-h-0">
-          <ApiInfoPanel
+      {showGettingStarted && user ? (
+        <PanelErrorBoundary>
+          <GettingStartedCard
+            user={user}
             settings={publicSettings}
-            loading={publicSettingsLoading}
-            failed={Boolean(settingsError)}
-            onRetry={retrySettings}
-            retrying={settingsValidating}
+            hasApiKey={(apiKeys?.length ?? 0) > 0}
+            canTopUp={canTopUp}
           />
-        </div>
-      </section>
+        </PanelErrorBoundary>
+      ) : null}
 
-      <PerformancePanel
-        data={performance}
-        loading={performanceLoading}
-        failed={Boolean(performanceError)}
-        onRetry={retryPerformance}
-        retrying={performanceValidating}
-      />
+      <PanelErrorBoundary>
+        <AccountStrip
+          user={user}
+          analytics={accountAnalytics}
+          canTopUp={canTopUp}
+          failed={Boolean(accountError)}
+          onRetry={retryAccount}
+          retrying={accountValidating}
+          loading={
+            userLoading ||
+            (accountAnalyticsLoading && accountAnalytics === undefined)
+          }
+        />
+      </PanelErrorBoundary>
+
+      <PanelErrorBoundary>
+        <ApiInfoPanel
+          settings={publicSettings}
+          loading={publicSettingsLoading}
+          failed={Boolean(settingsError)}
+          onRetry={retrySettings}
+          retrying={settingsValidating}
+        />
+      </PanelErrorBoundary>
+
+      <PanelErrorBoundary>
+        <UsageChartPanel
+          analytics={usageAnalytics}
+          series={series}
+          failed={Boolean(usageError)}
+          onRetry={retryUsage}
+          retrying={usageValidating}
+          loading={usageLoading && !usageAnalytics}
+          pending={usageLoading && usageAnalytics !== undefined}
+          window={usageWindow}
+          onWindowChange={setUsageWindow}
+          onRefresh={refreshUsage}
+        />
+      </PanelErrorBoundary>
+
+      <PanelErrorBoundary>
+        <RecentUsagePanel
+          analytics={usageAnalytics}
+          colors={series.colors}
+          username={user?.username}
+          isAdmin={user?.role === "admin" || user?.role === "super_admin"}
+          failed={Boolean(usageError)}
+          onRetry={retryUsage}
+          retrying={usageValidating}
+          loading={usageLoading && !usageAnalytics}
+          pending={usageLoading && usageAnalytics !== undefined}
+          window={usageWindow}
+          onShowThirtyDays={() => setUsageWindow("30d")}
+        />
+      </PanelErrorBoundary>
+
+      <PanelErrorBoundary>
+        <PerformancePanel
+          data={performance}
+          loading={performanceLoading}
+          failed={Boolean(performanceError)}
+          onRetry={retryPerformance}
+          retrying={performanceValidating}
+        />
+      </PanelErrorBoundary>
     </PageWrapper>
   );
 }

@@ -1,7 +1,6 @@
 import useSWR, { mutate } from "swr";
 import type { SWRConfiguration } from "swr";
 import { api } from "./api";
-import { usageWindowStartIso, type UsageWindow } from "./usage-window";
 import type { SpendWindow } from "./spend-window";
 import type {
   User,
@@ -18,6 +17,7 @@ import type {
   UpdateProviderInput,
   CreateApiKeyInput,
   UpdateApiKeyInput,
+  UpdateUserInput,
   TransformRegistryItem,
   RequestLogsResponse,
   RequestLogsFilter,
@@ -29,6 +29,7 @@ import type {
   UpsertModelPriceInput,
   PriceSyncRun,
   PriceSyncSource,
+  UnpricedModels,
   BillingPlan,
   BillingPlanInput,
   BillingPlanSubscription,
@@ -37,6 +38,7 @@ import type {
   UpdateGroupInput,
   UserLiveUsage,
   CustomTransform,
+  CustomTransformReferences,
   RechargeChannel,
   RechargeOrder,
   RechargeOrdersResponse,
@@ -63,13 +65,14 @@ const fetchers = {
   transformRegistry: () => api.getTransformRegistry(),
   modelMetadata: () => api.listModelMetadata(),
   modelPrices: () => api.listModelPrices(),
-  unpricedModels: async () => (await api.listUnpricedModels()).models,
+  unpricedModels: () => api.listUnpricedModels(),
   priceSyncRuns: () => api.listPriceSyncRuns(),
   billingPlans: () => api.listBillingPlans(),
   billingPlanMarketplace: () => api.listBillingPlanMarketplace(),
   billingPlanSubscription: () => api.getBillingPlanSubscription(),
   marketplaceModels: () => api.listMarketplaceModels(),
   customTransforms: () => api.listCustomTransforms(),
+  customTransformReferences: () => api.listCustomTransformReferences(),
 };
 
 // SWR cache keys
@@ -98,6 +101,7 @@ export const SWR_KEYS = {
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
   LIVE_USAGE: "/dashboard/me/live-usage",
   CUSTOM_TRANSFORMS: "/dashboard/custom-transforms",
+  CUSTOM_TRANSFORM_REFERENCES: "/dashboard/custom-transforms/references",
   RECHARGE_CHANNELS: "/dashboard/recharge/channels",
   RECHARGE_ORDERS: "/dashboard/recharge/orders",
   LEDGER: "/dashboard/ledger",
@@ -159,6 +163,15 @@ export function useApiKeys(config?: SWRConfiguration) {
     ...defaultConfig,
     ...config,
   });
+}
+
+/** Admin read-only keys of another user (TM 2.1a); `null` pauses the request. */
+export function useUserApiKeys(userId: string | null, config?: SWRConfiguration) {
+  return useSWR<ApiKey[]>(
+    userId ? `${SWR_KEYS.USERS}/${userId}/api-keys` : null,
+    () => api.listUserApiKeys(userId!),
+    { ...defaultConfig, ...config },
+  );
 }
 
 // Billing plans hook (admin only)
@@ -286,6 +299,15 @@ export function useCustomTransforms(config?: SWRConfiguration) {
   );
 }
 
+// Chains referencing each custom transform (admin only; CJS-UI-8)
+export function useCustomTransformReferences(config?: SWRConfiguration) {
+  return useSWR<CustomTransformReferences>(
+    SWR_KEYS.CUSTOM_TRANSFORM_REFERENCES,
+    fetchers.customTransformReferences,
+    { ...defaultConfig, ...config },
+  );
+}
+
 export function useModelMetadata(config?: SWRConfiguration) {
   return useSWR<ModelMetadataRecord[]>(
     SWR_KEYS.MODEL_METADATA,
@@ -306,7 +328,7 @@ export function useModelPrices(config?: SWRConfiguration) {
 }
 
 export function useUnpricedModels(config?: SWRConfiguration) {
-  return useSWR<string[]>(SWR_KEYS.UNPRICED_MODELS, fetchers.unpricedModels, {
+  return useSWR<UnpricedModels>(SWR_KEYS.UNPRICED_MODELS, fetchers.unpricedModels, {
     ...defaultConfig,
     ...config,
   });
@@ -345,30 +367,6 @@ export function useRequestLogs(
   );
 }
 
-// Recent-usage request logs scoped to a time window (dashboard-home-overview
-// spec DH-7a). The SWR key carries only the window token so the cache entry is
-// stable per selection; time bounds are evaluated at fetch time so every
-// revalidation observes logs created after the window was selected.
-// keepPreviousData satisfies DH-12b (no skeleton flash on window switch).
-export function useWindowedRequestLogs(
-  window: UsageWindow,
-  limit = 200,
-  config?: SWRConfiguration,
-) {
-  return useSWR<RequestLogsResponse>(
-    `${SWR_KEYS.REQUEST_LOGS}?window=${window}&limit=${limit}&scope=self`,
-    () => {
-      const now = new Date();
-      return api.listRequestLogs(limit, 0, {
-        time_from: usageWindowStartIso(window, now),
-        time_to: now.toISOString(),
-        scope: "self",
-      });
-    },
-    { ...defaultConfig, keepPreviousData: true, ...config },
-  );
-}
-
 // Capture detail hook (request-capture-viewer.spec.md RCV-F5): the key is
 // null until `enabled` is true, so no fetch happens before the dialog opens;
 // the cache entry survives close/reopen per normal SWR semantics.
@@ -392,9 +390,10 @@ export function useDashboardAnalytics(
   rangeHours = 24,
   config?: SWRConfiguration,
 ) {
+  const tzOffsetMinutes = -new Date().getTimezoneOffset();
   return useSWR<DashboardAnalytics>(
-    `${SWR_KEYS.ANALYTICS}?buckets=${buckets}&range_hours=${rangeHours}`,
-    () => api.getDashboardAnalytics(buckets, rangeHours),
+    `${SWR_KEYS.ANALYTICS}?buckets=${buckets}&range_hours=${rangeHours}&tz=${tzOffsetMinutes}`,
+    () => api.getDashboardAnalytics(buckets, rangeHours, tzOffsetMinutes),
     { ...defaultConfig, ...config },
   );
 }
@@ -519,28 +518,15 @@ export async function updateMeOptimistic(
   }
 }
 
-export async function updateSettingsOptimistic(
-  newSettings: SystemSettings,
-  onError?: (error: Error) => void,
-) {
-  // Optimistic update
-  mutate(SWR_KEYS.SETTINGS, newSettings, false);
-
-  try {
-    const updated = await api.updateSettings(newSettings);
-    // Revalidate with server data
-    mutate(SWR_KEYS.SETTINGS, updated, false);
-    mutate(SWR_KEYS.PUBLIC_SETTINGS);
-    mutate(SWR_KEYS.PROVIDERS);
-    return updated;
-  } catch (error) {
-    // Rollback on error
-    mutate(SWR_KEYS.SETTINGS);
-    if (onError && error instanceof Error) {
-      onError(error);
-    }
-    throw error;
-  }
+/**
+ * System settings page write (system-settings-ui.spec.md SSU-22): sends only the changed
+ * keys, then refreshes the public settings and Providers that derive from them.
+ */
+export async function patchSettingsOptimistic(patch: Partial<SystemSettings>) {
+  const updated = await patchPricingSettingsOptimistic(patch);
+  mutate(SWR_KEYS.PUBLIC_SETTINGS);
+  mutate(SWR_KEYS.PROVIDERS);
+  return updated;
 }
 
 export async function createUserOptimistic(
@@ -586,22 +572,39 @@ export async function createUserOptimistic(
 
 export async function updateUserOptimistic(
   userId: string,
-  updates: Partial<User> & { password?: string },
+  updates: UpdateUserInput,
   currentUsers: User[],
   onError?: (error: Error) => void,
 ) {
-  // Optimistic update
+  // Only fields that map 1:1 onto the list row are applied optimistically;
+  // delta/expected/note/password are request-only and the response fills in the rest.
+  const optimisticFields: Partial<User> = {};
+  if (updates.username !== undefined) optimisticFields.username = updates.username;
+  if (updates.role !== undefined) optimisticFields.role = updates.role;
+  if (updates.enabled !== undefined) optimisticFields.enabled = updates.enabled;
+  if (updates.balance_unlimited !== undefined) {
+    optimisticFields.balance_unlimited = updates.balance_unlimited;
+  }
+  if (updates.email !== undefined) optimisticFields.email = updates.email;
+  if (updates.group_id !== undefined) optimisticFields.group_id = updates.group_id;
   const updatedUsers = currentUsers.map((u) =>
-    u.id === userId ? { ...u, ...updates } : u,
+    u.id === userId ? { ...u, ...optimisticFields } : u,
   );
   mutate(SWR_KEYS.USERS, updatedUsers, false);
 
   try {
-    await api.updateUser(userId, updates);
+    const updated = await api.updateUser(userId, updates);
+    mutate(
+      SWR_KEYS.USERS,
+      (users: User[] | undefined) =>
+        users?.map((u) => (u.id === userId ? { ...u, ...updated } : u)),
+      false,
+    );
     // Revalidate to get the real data
     mutate(SWR_KEYS.USERS);
     mutate(SWR_KEYS.ME);
     mutate(SWR_KEYS.STATS);
+    return updated;
   } catch (error) {
     // Rollback on error
     mutate(SWR_KEYS.USERS, currentUsers, false);
@@ -659,7 +662,10 @@ export async function createGroupOptimistic(
     description: (input.description ?? "").trim(),
     is_default: false,
     user_selectable: input.user_selectable ?? false,
-    sort_order: input.sort_order ?? 0,
+    // GR-A3a: an omitted sort_order appends after the current last group.
+    sort_order:
+      input.sort_order ??
+      currentGroups.reduce((max, group) => Math.max(max, group.sort_order), -1) + 1,
     billing_ratio: input.billing_ratio ?? "1",
     created_at: now,
     updated_at: now,
@@ -1035,6 +1041,11 @@ export async function updateApiKeyOptimistic(
 
   try {
     const result = await api.updateApiKey(keyId, input);
+    mutate(
+      SWR_KEYS.API_KEYS,
+      (keys: ApiKey[] | undefined) => keys?.map((k) => (k.id === keyId ? result : k)),
+      false,
+    );
     // Revalidate
     mutate(SWR_KEYS.API_KEYS);
     return result;
@@ -1046,6 +1057,36 @@ export async function updateApiKeyOptimistic(
     }
     throw error;
   }
+}
+
+/** SA-TX: moves `amountUsd` from the owner's wallet into the key's sub-account (TM-UI6). */
+export async function transferToSubAccountAndRefresh(keyId: string, amountUsd: string) {
+  const result = await api.transferToSubAccount(keyId, { amount_usd: amountUsd });
+  mutate(
+    SWR_KEYS.API_KEYS,
+    (keys: ApiKey[] | undefined) =>
+      keys?.map((k) =>
+        k.id === keyId
+          ? {
+              ...k,
+              sub_account_balance_nano_usd: result.api_key_balance_nano_usd,
+              sub_account_balance_usd: nanoToUsdDecimalString(result.api_key_balance_nano_usd),
+            }
+          : k,
+      ),
+    false,
+  );
+  mutate(SWR_KEYS.API_KEYS);
+  return result;
+}
+
+function nanoToUsdDecimalString(nano: string): string {
+  const value = BigInt(nano);
+  const negative = value < 0n;
+  const absolute = negative ? -value : value;
+  const fraction = (absolute % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
+  const whole = (absolute / 1_000_000_000n).toString();
+  return `${negative ? "-" : ""}${whole}${fraction ? `.${fraction}` : ""}`;
 }
 
 export async function deleteApiKeyOptimistic(
@@ -1173,17 +1214,47 @@ export async function deleteProviderOptimistic(
   }
 }
 
-export async function reorderProviders(
-  providerIds: string[],
-  onError?: (error: Error) => void,
-) {
+// PL8: the list reflects the new order immediately so consecutive moves build
+// on it; a failure revalidates from the server.
+export async function reorderProviders(nextProviders: Provider[]) {
+  mutate(
+    SWR_KEYS.PROVIDERS,
+    nextProviders.map((provider, priority) => ({ ...provider, priority })),
+    false,
+  );
   try {
-    await api.reorderProviders(providerIds);
+    await api.reorderProviders(nextProviders.map((provider) => provider.id));
+  } finally {
     mutate(SWR_KEYS.PROVIDERS);
+  }
+}
+
+// CM-CH-EN-1: optimistic Channel enable toggle with rollback on failure.
+export async function setChannelEnabledOptimistic(
+  providerId: string,
+  channelId: string,
+  enabled: boolean,
+) {
+  const patch = (value: boolean) => (providers: Provider[] | undefined) =>
+    providers?.map((provider) =>
+      provider.id !== providerId
+        ? provider
+        : {
+            ...provider,
+            channels: provider.channels.map((channel) =>
+              channel.id === channelId ? { ...channel, enabled: value } : channel,
+            ),
+          },
+    );
+  mutate(SWR_KEYS.PROVIDERS, patch(enabled), false);
+  try {
+    const result = await api.setChannelEnabled(providerId, channelId, enabled);
+    mutate(providerDetailSWRKey(providerId), result, false);
+    mutate(SWR_KEYS.PROVIDERS);
+    mutate(SWR_KEYS.MARKETPLACE_MODELS);
+    return result;
   } catch (error) {
-    if (onError && error instanceof Error) {
-      onError(error);
-    }
+    mutate(SWR_KEYS.PROVIDERS, patch(!enabled), false);
     throw error;
   }
 }
@@ -1369,10 +1440,11 @@ export async function deleteModelPriceOptimistic(
 
 export async function applyPriceSync(
   source: PriceSyncSource,
+  previewId: string,
   onError?: (error: Error) => void,
 ) {
   try {
-    const run = await api.applyPriceSync(source);
+    const run = await api.applyPriceSync(source, previewId);
     mutate(SWR_KEYS.MODEL_PRICES);
     mutate(SWR_KEYS.UNPRICED_MODELS);
     mutate(SWR_KEYS.PRICE_SYNC_RUNS);
@@ -1381,6 +1453,32 @@ export async function applyPriceSync(
     mutate(SWR_KEYS.PROVIDERS);
     return run;
   } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Pricing-tab settings write (model-pricing.spec.md MP-A8): sends only the
+ * given keys, so unrelated settings are never overwritten with a stale copy.
+ */
+export async function patchPricingSettingsOptimistic(
+  patch: Partial<SystemSettings>,
+  onError?: (error: Error) => void,
+) {
+  mutate(
+    SWR_KEYS.SETTINGS,
+    (current: SystemSettings | undefined) => (current ? { ...current, ...patch } : current),
+    false,
+  );
+  try {
+    const updated = await api.updateSettings(patch);
+    mutate(SWR_KEYS.SETTINGS, updated, false);
+    return updated;
+  } catch (error) {
+    mutate(SWR_KEYS.SETTINGS);
     if (onError && error instanceof Error) {
       onError(error);
     }
@@ -1400,6 +1498,7 @@ export async function createCustomTransformOptimistic(
     const created = await api.createCustomTransform(source);
     mutate(SWR_KEYS.CUSTOM_TRANSFORMS);
     mutate(SWR_KEYS.TRANSFORM_REGISTRY);
+    mutate(SWR_KEYS.CUSTOM_TRANSFORM_REFERENCES);
     return created;
   } catch (error) {
     if (onError && error instanceof Error) {
@@ -1426,6 +1525,7 @@ export async function updateCustomTransformOptimistic(
     const updated = await api.updateCustomTransform(id, input);
     mutate(SWR_KEYS.CUSTOM_TRANSFORMS);
     mutate(SWR_KEYS.TRANSFORM_REGISTRY);
+    mutate(SWR_KEYS.CUSTOM_TRANSFORM_REFERENCES);
     return updated;
   } catch (error) {
     mutate(SWR_KEYS.CUSTOM_TRANSFORMS, currentTransforms, false);
@@ -1451,6 +1551,7 @@ export async function deleteCustomTransformOptimistic(
     await api.deleteCustomTransform(id);
     mutate(SWR_KEYS.CUSTOM_TRANSFORMS);
     mutate(SWR_KEYS.TRANSFORM_REGISTRY);
+    mutate(SWR_KEYS.CUSTOM_TRANSFORM_REFERENCES);
   } catch (error) {
     mutate(SWR_KEYS.CUSTOM_TRANSFORMS, currentTransforms, false);
     if (onError && error instanceof Error) {
@@ -1648,6 +1749,14 @@ export function clearCache() {
   return mutate(() => true, undefined, { revalidate: false });
 }
 
-export function clearAuthenticatedCache() {
-  return mutate((key) => key !== SWR_KEYS.PUBLIC_SETTINGS, undefined, { revalidate: false });
+// `keepCurrentUser` leaves SWR_KEYS.ME in place when the session rotates, so the
+// shell never observes a logged-out gap and redirects to /login.
+export function clearAuthenticatedCache(options?: { keepCurrentUser?: boolean }) {
+  return mutate(
+    (key) =>
+      key !== SWR_KEYS.PUBLIC_SETTINGS &&
+      !(options?.keepCurrentUser && key === SWR_KEYS.ME),
+    undefined,
+    { revalidate: false },
+  );
 }

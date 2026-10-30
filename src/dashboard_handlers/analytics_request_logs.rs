@@ -6,8 +6,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Sse};
-use chrono::NaiveTime;
-use chrono::Utc;
+use chrono::{DateTime, NaiveTime, Utc};
 use dashmap::DashMap;
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
@@ -31,6 +30,8 @@ pub struct RequestLogsQuery {
     pub status: Option<String>,
     #[serde(default)]
     pub api_key_id: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<String>,
     #[serde(default)]
     pub username: Option<String>,
     #[serde(default)]
@@ -115,6 +116,12 @@ pub async fn list_my_request_logs(
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
     let restrict_to_self = scope_self || !is_admin;
+    // Channels are admin-only information; non-admin callers ignore this filter.
+    let channel_id = if is_admin {
+        query.channel_id.as_deref()
+    } else {
+        None
+    };
     let (mut logs, total, total_charge_nano_usd) = if restrict_to_self {
         state
             .user_store
@@ -125,6 +132,7 @@ pub async fn list_my_request_logs(
                 query.model.as_deref(),
                 query.status.as_deref(),
                 query.api_key_id.as_deref(),
+                channel_id,
                 query.search.as_deref(),
                 query.time_from.as_deref(),
                 query.time_to.as_deref(),
@@ -139,6 +147,7 @@ pub async fn list_my_request_logs(
                 query.model.as_deref(),
                 query.status.as_deref(),
                 query.api_key_id.as_deref(),
+                channel_id,
                 query.username.as_deref(),
                 query.search.as_deref(),
                 query.time_from.as_deref(),
@@ -215,6 +224,20 @@ pub struct AnalyticsQuery {
     pub buckets: i64,
     #[serde(default = "default_analytics_range_hours")]
     pub range_hours: i64,
+    #[serde(default)]
+    pub tz_offset_minutes: i64,
+}
+
+const MAX_TZ_OFFSET_MINUTES: i64 = 840;
+
+/// Start of the calendar day containing `now` at a fixed offset, as a UTC instant (DH-10).
+fn local_day_start(now: DateTime<Utc>, tz_offset_minutes: i64) -> DateTime<Utc> {
+    let offset = chrono::Duration::minutes(tz_offset_minutes);
+    (now + offset)
+        .date_naive()
+        .and_time(NaiveTime::MIN)
+        .and_utc()
+        - offset
 }
 
 fn default_analytics_buckets() -> i64 {
@@ -233,15 +256,19 @@ pub async fn get_dashboard_analytics(
     let user = get_current_user(&headers, &state).await?;
     let buckets = query.buckets.clamp(1, 48);
     let range_hours = query.range_hours.clamp(1, 720);
+    if query.tz_offset_minutes.abs() > MAX_TZ_OFFSET_MINUTES {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_tz_offset",
+            "tz_offset_minutes must be between -840 and 840",
+        )
+        .with_param("tz_offset_minutes"));
+    }
 
     let now = Utc::now();
     let time_to = now.to_rfc3339();
     let time_from = (now - chrono::Duration::hours(range_hours)).to_rfc3339();
-    let today_start = now
-        .date_naive()
-        .and_time(NaiveTime::MIN)
-        .and_utc()
-        .to_rfc3339();
+    let today_start = local_day_start(now, query.tz_offset_minutes).to_rfc3339();
 
     let user_id_filter = Some(user.id.clone());
 
@@ -254,6 +281,12 @@ pub async fn get_dashboard_analytics(
             &today_start,
             buckets,
         )
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    let has_any_request = state
+        .user_store
+        .user_has_request_logs(&user.id)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
@@ -278,9 +311,28 @@ pub async fn get_dashboard_analytics(
         (0..buckets).map(|_| BTreeMap::new()).collect();
     let mut calls_by_provider_buckets: Vec<BTreeMap<String, i64>> =
         (0..buckets).map(|_| BTreeMap::new()).collect();
+    // (input_tokens, cache_read_tokens) over the whole window.
+    let mut cache_by_model: BTreeMap<String, (i64, i64)> = BTreeMap::new();
 
     for row in &raw.model_buckets {
         let idx = row.bucket_idx.clamp(0, buckets - 1) as usize;
+        if row.input_tokens != 0 || row.cache_read_tokens != 0 {
+            let (input, cache_read) = cache_by_model.entry(row.model.clone()).or_insert((0, 0));
+            *input = input.checked_add(row.input_tokens).ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "analytics token count overflow",
+                )
+            })?;
+            *cache_read = cache_read.checked_add(row.cache_read_tokens).ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "analytics token count overflow",
+                )
+            })?;
+        }
         let cost = cost_by_model_buckets[idx]
             .entry(row.model.clone())
             .or_insert(0);
@@ -352,6 +404,19 @@ pub async fn get_dashboard_analytics(
         "total_calls": raw.total_calls,
         "today_cost_nano_usd": raw.today_cost_nano_usd.to_string(),
         "today_calls": raw.today_calls,
+        "has_any_request": has_any_request,
+        "cache_by_model": cache_by_model
+            .iter()
+            .map(|(model, (input_tokens, cache_read_tokens))| {
+                (
+                    model.clone(),
+                    json!({
+                        "input_tokens": input_tokens,
+                        "cache_read_tokens": cache_read_tokens,
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<String, Value>>(),
     })))
 }
 

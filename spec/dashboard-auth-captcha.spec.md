@@ -71,9 +71,9 @@ CAP-U2. The frontend MUST bundle the pinned Cap WASM solver and its pako decompr
 
 CAP-U3. While public settings are loading, the login form MUST show a skeleton in the widget position and MUST disable submission. If `captcha_enabled` is `false`, the page MUST omit the widget and allow submission without a token. If `captcha_enabled` is `true` and `cap_api_endpoint` is `null`, the page MUST show a configuration error and disable submission.
 
-CAP-U4. When `captcha_enabled` is `true`, the client MUST enable submission only after the widget emits a non-empty token and MUST send that token as `captcha_token`. When it is `false`, the client MUST send an empty token and MUST NOT gate submission on a token.
+CAP-U4. When `captcha_enabled` is `true`, the submit control MUST remain enabled while no token exists. A submission without a token MUST NOT send a request and MUST show `auth.errors.captchaRequired` directly below the widget with `role="alert"`. The client MUST send the widget token as `captcha_token`. When `captcha_enabled` is `false`, the client MUST send an empty token and MUST NOT gate submission on a token.
 
-CAP-U5. After a failed login or registration request, the client MUST clear the stored token and reset the widget. Switching between login and registration MUST also clear the token and reset the widget.
+CAP-U5. After a failed login or registration request, the client MUST clear the stored token and reset the widget. Switching between login and registration MUST also clear the token and reset the widget. After a failed request with CAPTCHA enabled, the page MUST show `auth.captchaReverify` directly below the widget until a new token arrives.
 
 CAP-U6. Widget solve and widget error messages MUST use the active dashboard locale. Supported dashboard locales MUST remain English, Simplified Chinese, Traditional Chinese, and Japanese.
 
@@ -105,5 +105,30 @@ network errors, and response parsing errors MUST use a generic localized retry
 message. The page MUST NOT render the original exception message.
 
 CAP-U11. Authentication error notices MUST expose an alert and use DS53 error tokens.
-If public settings fail to load, the page MUST offer a retry that revalidates those
-settings. A retry MUST remain disabled while the request is pending.
+If public settings fail to load, the page MUST state `auth.settingsLoadFailed` and MUST
+offer a retry that revalidates those settings. A retry MUST remain disabled while the
+request is pending.
+
+CAP-U12. The login page heading MUST be one `h1` with `site_name`, followed by
+`site_description` as the subtitle when it is non-empty. While public settings load, both
+MUST render as skeletons. If public settings failed and no cached value exists, the `h1`
+MUST read `Monoize` and the subtitle MUST be absent.
+
+CAP-U13. The form MUST set `noValidate` and use only localized inline validation through
+`FieldError`, with `aria-invalid` on the control and focus on the first invalid field:
+
+- login mode requires non-empty username and password only;
+- registration mode additionally requires a username of 3 to 22 characters from
+  `[a-zA-Z0-9_]` and a password of at least 8 characters. Both rules MUST be visible as
+  field descriptions before submission;
+- server codes `invalid_username`, `reserved_username`, and `username_exists` MUST render
+  below the username field; `invalid_password` MUST render below the password field.
+
+CAP-U14. Inputs MUST set `autocomplete`: `username` on the username field; `current-password`
+in login mode and `new-password` in registration mode on the password field. The password
+field MUST have a toggle button with a localized accessible name and `aria-pressed`.
+
+CAP-U15. The theme control MUST be a dropdown with the three options light, dark, and
+system. The language control MUST be a dropdown that lists all supported languages by native
+name and whose trigger shows the current language name. Both MUST use the same components as
+the account menu.

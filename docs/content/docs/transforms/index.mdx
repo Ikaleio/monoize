@@ -14,8 +14,8 @@ Monoize ships 36 built-in transforms. Each transform has its own page in this se
 | Scope | Configured in | Runs for |
 | --- | --- | --- |
 | Provider | The Provider edit dialog | Every request that Provider serves |
-| Global | **Settings**, global transform chain | Every request |
-| API key | The key edit dialog in **Token Management** | Every request with that key |
+| Global | **System Settings → Global Transforms** | Every request |
+| API key | The key edit dialog in **API Keys** | Every request with that key |
 
 Execution order per phase: Provider chain first, then the global chain, then the API-key chain. Inside one chain, rules run in list order. The output of one rule is the input of the next.
 

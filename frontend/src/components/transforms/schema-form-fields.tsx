@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import { Braces, ChevronDown, ChevronUp, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -13,6 +14,8 @@ import {
   JSON_VALUE_KINDS,
   convertTypedJsonDraft,
   defaultDraftForProperty,
+  resolvePropertyDescription,
+  resolvePropertyLabel,
   resolveWidgetKind,
   typedJsonDraftKind,
   widgetTypeBadge,
@@ -92,16 +95,23 @@ function FieldRow({
   disabled,
   onChange,
 }: FieldRowProps) {
-  const { t } = useTranslation();
-  const label = property.title ?? fieldKey;
+  const { t, i18n } = useTranslation();
+  const controlId = useId();
+  const errorId = `${controlId}-error`;
+  const label = resolvePropertyLabel(property, fieldKey, i18n.language);
+  const description = resolvePropertyDescription(property, i18n.language);
   const badge = widgetTypeBadge(property);
   const error = errors[path];
-  const isUnset = draft.kind === "unset";
+  // TCU-8a: only optional fields have an unset state.
+  const showUnset = draft.kind === "unset" && !required;
+  const editorDraft = draft.kind === "unset" ? defaultDraftForProperty(property) : draft;
 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Label className="text-sm font-medium">{label}</Label>
+        <Label htmlFor={showUnset ? undefined : controlId} className="text-sm font-medium">
+          {label}
+        </Label>
         <Badge variant="outline" className="font-mono text-[10px] uppercase">
           {badge}
         </Badge>
@@ -115,10 +125,10 @@ function FieldRow({
           </Badge>
         )}
       </div>
-      {property.description && (
-        <p className="text-xs text-muted-foreground">{property.description}</p>
+      {description && (
+        <p className="text-xs text-muted-foreground">{description}</p>
       )}
-      {isUnset ? (
+      {showUnset ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed px-3 py-2">
           <span className="text-xs text-muted-foreground">
             {t("transforms.fieldNotSet")}
@@ -145,8 +155,11 @@ function FieldRow({
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <DraftValueEditor
+              id={controlId}
+              invalid={Boolean(error)}
+              describedBy={error ? errorId : undefined}
               property={property}
-              draft={draft}
+              draft={editorDraft}
               path={path}
               errors={errors}
               disabled={disabled}
@@ -168,12 +181,20 @@ function FieldRow({
           )}
         </div>
       )}
-      {error && <p className="text-xs text-error-foreground">{error}</p>}
+      {error && (
+        <p id={errorId} className="text-xs text-error-foreground">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
 
 type DraftValueEditorProps = {
+  /** Id of the primary control, bound to the field label (TCU-4a). */
+  id?: string;
+  invalid?: boolean;
+  describedBy?: string;
   property?: JsonSchemaProperty;
   draft: DraftValue;
   path: string;
@@ -183,6 +204,9 @@ type DraftValueEditorProps = {
 };
 
 function DraftValueEditor({
+  id,
+  invalid,
+  describedBy,
   property,
   draft,
   path,
@@ -191,6 +215,11 @@ function DraftValueEditor({
   onChange,
 }: DraftValueEditorProps) {
   const widget = resolveWidgetKind(property);
+  const controlProps: ControlProps = {
+    id,
+    "aria-invalid": invalid || undefined,
+    "aria-describedby": describedBy,
+  };
 
   if (widget === "enum" && draft.kind === "enum") {
     const options = (property?.enum ?? []).map((member) => String(member));
@@ -200,7 +229,7 @@ function DraftValueEditor({
         disabled={disabled}
         onValueChange={(next) => onChange({ kind: "enum", value: next })}
       >
-        <SelectTrigger className="h-11 w-full sm:h-9">
+        <SelectTrigger {...controlProps} className="h-11 w-full sm:h-9">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -218,6 +247,7 @@ function DraftValueEditor({
     return (
       <div className="flex h-11 items-center gap-2 sm:h-9">
         <Switch
+          {...controlProps}
           checked={draft.value}
           disabled={disabled}
           onCheckedChange={(next) => onChange({ kind: "boolean", value: next })}
@@ -232,6 +262,7 @@ function DraftValueEditor({
   if ((widget === "number" || widget === "integer") && draft.kind === "number") {
     return (
       <Input
+        {...controlProps}
         className="h-11 sm:h-9"
         type="number"
         inputMode={widget === "integer" ? "numeric" : "decimal"}
@@ -248,6 +279,7 @@ function DraftValueEditor({
   if (widget === "string" && draft.kind === "string") {
     return (
       <Input
+        {...controlProps}
         className="h-11 sm:h-9"
         value={draft.text}
         disabled={disabled}
@@ -259,6 +291,7 @@ function DraftValueEditor({
   if (widget === "string-multiline" && draft.kind === "string") {
     return (
       <Textarea
+        {...controlProps}
         value={draft.text}
         rows={4}
         disabled={disabled}
@@ -307,7 +340,14 @@ function DraftValueEditor({
 
   // A schema/value type mismatch (or an untyped "json" property) falls back to
   // the typed JSON value editor so no stored value is ever hidden or coerced.
-  return <TypedJsonValueEditor draft={draft} disabled={disabled} onChange={onChange} />;
+  return (
+    <TypedJsonValueEditor
+      controlProps={controlProps}
+      draft={draft}
+      disabled={disabled}
+      onChange={onChange}
+    />
+  );
 }
 
 type ArrayItemsEditorProps = {
@@ -356,6 +396,7 @@ function ArrayItemsEditor({
         >
           <div className="min-w-0 flex-1">
             <DraftValueEditor
+              invalid={Boolean(errors[`${path}.${index}`])}
               property={property?.items}
               draft={item}
               path={`${path}.${index}`}
@@ -526,6 +567,7 @@ function KeyValueMapEditor({
             </Button>
           </div>
           <TypedJsonValueEditor
+            controlProps={{ "aria-invalid": Boolean(errors[`${path}.${index}`]) || undefined }}
             draft={entry.value}
             disabled={disabled}
             onChange={(next) =>
@@ -558,13 +600,25 @@ function KeyValueMapEditor({
   );
 }
 
+type ControlProps = {
+  id?: string;
+  "aria-invalid"?: boolean;
+  "aria-describedby"?: string;
+};
+
 type TypedJsonValueEditorProps = {
+  controlProps?: ControlProps;
   draft: DraftValue;
   disabled?: boolean;
   onChange: (draft: DraftValue) => void;
 };
 
-function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEditorProps) {
+function TypedJsonValueEditor({
+  controlProps,
+  draft,
+  disabled,
+  onChange,
+}: TypedJsonValueEditorProps) {
   const { t } = useTranslation();
   const kind = typedJsonDraftKind(draft);
 
@@ -591,7 +645,7 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
       const parsed = JSON.parse(draft.text.trim());
       onChange({ kind: "json", text: JSON.stringify(parsed, null, 2) });
     } catch {
-      toast.error(t("transforms.validationInvalidJson"));
+      toast.error(t("transforms.validation.invalidJson"));
     }
   };
 
@@ -605,7 +659,7 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
             onChange(convertTypedJsonDraft(draft, next as JsonValueKind))
           }
         >
-          <SelectTrigger className="h-8 w-[130px] text-xs">
+          <SelectTrigger className="h-8 w-[130px] text-xs" aria-label={t("transforms.valueKind")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -636,6 +690,7 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
 
       {draft.kind === "string" && (
         <Input
+          {...controlProps}
           value={draft.text}
           disabled={disabled}
           placeholder={t("transforms.stringValuePlaceholder")}
@@ -644,6 +699,7 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
       )}
       {draft.kind === "number" && (
         <Input
+          {...controlProps}
           type="number"
           inputMode="decimal"
           value={draft.text}
@@ -655,6 +711,7 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
       {draft.kind === "boolean" && (
         <div className="flex h-9 items-center gap-2">
           <Switch
+            {...controlProps}
             checked={draft.value}
             disabled={disabled}
             onCheckedChange={(next) => onChange({ kind: "boolean", value: next })}
@@ -671,6 +728,7 @@ function TypedJsonValueEditor({ draft, disabled, onChange }: TypedJsonValueEdito
       )}
       {draft.kind === "json" && (
         <Textarea
+          {...controlProps}
           value={draft.text}
           rows={4}
           disabled={disabled}

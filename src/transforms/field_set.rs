@@ -76,8 +76,24 @@ impl Transform for FieldSetTransform {
             "type": "object",
             "properties": {
                 "path": { "type": "string", "minLength": 1 },
-                "value": { "description": "JSON value written at path. Example: \"normal\"." },
-                "when_equals": { "description": "Optional. When set, write only if the current value equals this JSON value. Leave empty to always write." }
+                "value": {
+                    "description": "JSON value written at path. Example: \"normal\".",
+                    "x-localized-description": {
+                        "en": "JSON value written at path. Example: \"normal\".",
+                        "zh": "写入 path 的 JSON 值。示例：\"normal\"。",
+                        "zh-TW": "寫入 path 的 JSON 值。範例：\"normal\"。",
+                        "ja": "path に書き込む JSON 値。例：\"normal\"。"
+                    }
+                },
+                "when_equals": {
+                    "description": "Optional. When set, write only if the current value equals this JSON value. Leave empty to always write.",
+                    "x-localized-description": {
+                        "en": "Optional. When set, write only if the current value equals this JSON value. Leave empty to always write.",
+                        "zh": "可选。设置后，仅当当前值等于此 JSON 值时才写入。不设置则始终写入。",
+                        "zh-TW": "選填。設定後，僅當目前值等於此 JSON 值時才寫入。不設定則一律寫入。",
+                        "ja": "任意。設定すると、現在の値がこの JSON 値と等しい場合のみ書き込みます。未設定なら常に書き込みます。"
+                    }
+                }
             },
             "required": ["path", "value"],
             "additionalProperties": false

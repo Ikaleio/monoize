@@ -17,7 +17,6 @@ use std::sync::atomic::Ordering;
 pub struct UpdateSettingsRequest {
     pub registration_enabled: Option<bool>,
     pub captcha_enabled: Option<bool>,
-    pub default_user_role: Option<String>,
     pub session_ttl_days: Option<i64>,
     pub api_key_max_per_user: Option<i64>,
     pub site_name: Option<String>,
@@ -36,8 +35,6 @@ pub struct UpdateSettingsRequest {
     pub monoize_passive_failure_threshold: Option<u32>,
     pub monoize_passive_cooldown_seconds: Option<u64>,
     pub monoize_passive_window_seconds: Option<u64>,
-    pub monoize_passive_min_samples: Option<u32>,
-    pub monoize_passive_failure_rate_threshold: Option<f64>,
     pub monoize_passive_rate_limit_cooldown_seconds: Option<u64>,
     pub monoize_request_timeout_ms: Option<u64>,
     pub monoize_stream_idle_timeout_ms: Option<u64>,
@@ -58,6 +55,32 @@ pub struct UpdateSettingsRequest {
     pub price_sync_new_api_base_url: Option<String>,
     pub price_sync_new_api_token: Option<String>,
     pub recharge_public_origin: Option<String>,
+}
+
+/// SSU-27: reports the offending rule through `param` so the console can jump to its row.
+fn validate_global_model_redirects(rules: &[ModelRedirectRule]) -> AppResult<()> {
+    let invalid = |message: String, param: String| {
+        AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message).with_param(param)
+    };
+    if let Err(message) = validate_model_redirects(rules) {
+        let Some(index) = rules
+            .iter()
+            .position(|rule| validate_model_redirects(std::slice::from_ref(rule)).is_err())
+        else {
+            return Err(invalid(message, "global_model_redirects".to_string()));
+        };
+        let rule = &rules[index];
+        let field = if !rule.pattern.trim().is_empty() && rule.replace.trim().is_empty() {
+            "replace"
+        } else {
+            "pattern"
+        };
+        return Err(invalid(
+            message,
+            format!("global_model_redirects[{index}].{field}"),
+        ));
+    }
+    Ok(())
 }
 
 /// MP-Y2: read APIs never return a stored token; `""` = unset, `"__set__"` = set.
@@ -108,8 +131,6 @@ pub async fn update_settings(
         settings.monoize_passive_failure_threshold,
         settings.monoize_passive_cooldown_seconds,
         settings.monoize_passive_window_seconds,
-        settings.monoize_passive_min_samples,
-        settings.monoize_passive_failure_rate_threshold.to_bits(),
         settings.monoize_passive_rate_limit_cooldown_seconds,
         settings.monoize_active_probe_enabled,
         settings.monoize_active_probe_interval_seconds,
@@ -123,16 +144,14 @@ pub async fn update_settings(
     if let Some(v) = body.captcha_enabled {
         settings.captcha_enabled = v;
     }
-    if let Some(v) = body.default_user_role {
-        settings.default_user_role = v;
-    }
     if let Some(v) = body.session_ttl_days {
         if v <= 0 {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "session_ttl_days must be positive",
-            ));
+            )
+            .with_param("session_ttl_days"));
         }
         settings.session_ttl_days = v;
     }
@@ -142,7 +161,8 @@ pub async fn update_settings(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "api_key_max_per_user must be positive",
-            ));
+            )
+            .with_param("api_key_max_per_user"));
         }
         settings.api_key_max_per_user = v;
     }
@@ -159,9 +179,7 @@ pub async fn update_settings(
         settings.global_transforms = v;
     }
     if let Some(v) = body.global_model_redirects {
-        validate_model_redirects(&v).map_err(|message| {
-            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-        })?;
+        validate_global_model_redirects(&v)?;
         settings.global_model_redirects = v;
     }
     if let Some(v) = body.reasoning_suffix_map {
@@ -203,14 +221,6 @@ pub async fn update_settings(
     }
     if let Some(v) = body.monoize_passive_window_seconds {
         settings.monoize_passive_window_seconds = v.max(1);
-    }
-    if let Some(v) = body.monoize_passive_min_samples {
-        settings.monoize_passive_min_samples = v.max(1);
-    }
-    if let Some(v) = body.monoize_passive_failure_rate_threshold {
-        if v.is_finite() {
-            settings.monoize_passive_failure_rate_threshold = v.clamp(0.01, 1.0);
-        }
     }
     if let Some(v) = body.monoize_passive_rate_limit_cooldown_seconds {
         settings.monoize_passive_rate_limit_cooldown_seconds = v.max(1);
@@ -261,6 +271,7 @@ pub async fn update_settings(
     if let Some(v) = body.tool_prices {
         crate::settings::validate_tool_prices(&v).map_err(|message| {
             AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+                .with_param("tool_prices")
         })?;
         settings.tool_prices = v;
     }
@@ -280,6 +291,7 @@ pub async fn update_settings(
         let trimmed = v.trim().to_string();
         crate::settings::validate_recharge_public_origin(&trimmed).map_err(|message| {
             AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+                .with_param("recharge_public_origin")
         })?;
         settings.recharge_public_origin = trimmed;
     }
@@ -332,8 +344,6 @@ pub async fn update_settings(
         updated.monoize_passive_failure_threshold,
         updated.monoize_passive_cooldown_seconds,
         updated.monoize_passive_window_seconds,
-        updated.monoize_passive_min_samples,
-        updated.monoize_passive_failure_rate_threshold.to_bits(),
         updated.monoize_passive_rate_limit_cooldown_seconds,
         updated.monoize_active_probe_enabled,
         updated.monoize_active_probe_interval_seconds,

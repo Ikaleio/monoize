@@ -5,6 +5,7 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 import { easings, motion } from "@/components/ui/motion"
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
+import { useReturnFocus } from "@/components/ui/use-return-focus"
 
 type AlertDialogProps = React.ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Root
@@ -84,9 +85,10 @@ AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
->(({ className, children, ...props }, ref) => {
+>(({ className, children, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
   const { open } = useAlertDialogState()
   const reduced = useReducedMotionPreference()
+  const returnFocus = useReturnFocus(onOpenAutoFocus, onCloseAutoFocus)
   const touchScrollStyle: React.CSSProperties = {
     WebkitOverflowScrolling: "touch",
   }
@@ -101,6 +103,8 @@ const AlertDialogContent = React.forwardRef<
               <AlertDialogPrimitive.Content
                 ref={ref}
                 {...props}
+                onOpenAutoFocus={returnFocus.onOpenAutoFocus}
+                onCloseAutoFocus={returnFocus.onCloseAutoFocus}
                 style={touchScrollStyle}
                 className={cn(
                   "relative z-50 flex w-full max-w-lg flex-col overflow-y-auto overscroll-contain border bg-background p-6 shadow-lg sm:rounded-lg",

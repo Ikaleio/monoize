@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CreditCard, Pencil, Plus, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { Link } from "react-router-dom";
+import { CircleAlert, CreditCard, Pencil, Plus, Trash2 } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,11 +20,13 @@ import {
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { QueryError } from "@/components/ui/query-error";
 import type { PaymentChannel } from "@/lib/api";
+import { toastApiError } from "@/lib/api-error";
 import { cn } from "@/lib/utils";
 import {
   deletePaymentChannelOptimistic,
   updatePaymentChannelOptimistic,
   usePaymentChannels,
+  useSettings,
 } from "@/lib/swr";
 
 interface ChannelsTabProps {
@@ -38,6 +41,8 @@ interface ChannelsTabProps {
 export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
   const { t } = useTranslation();
   const { data, error, isLoading, isValidating, mutate } = usePaymentChannels();
+  const { data: settings } = useSettings();
+  const originUnset = settings !== undefined && !settings.recharge_public_origin.trim();
   const channels = useMemo(() => data ?? [], [data]);
   const [deleteTarget, setDeleteTarget] = useState<PaymentChannel | null>(null);
 
@@ -46,14 +51,14 @@ export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
       channel.id,
       { enabled },
       channels,
-      (error) => toast.error(error.message),
+      (toggleError) => toastApiError(toggleError, t, t("payments.toggleFailed")),
     ).catch(() => undefined);
   };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
     await deletePaymentChannelOptimistic(deleteTarget.id, channels, (deleteError) =>
-      toast.error(deleteError.message),
+      toastApiError(deleteError, t, t("payments.deleteFailed")),
     ).catch(() => undefined);
   };
 
@@ -73,6 +78,20 @@ export function ChannelsTab({ onCreate, onEdit }: ChannelsTabProps) {
 
   return (
     <>
+      {originUnset ? (
+        <Alert variant="destructive" className="mb-3">
+          <CircleAlert aria-hidden="true" />
+          <AlertTitle>{t("payments.originUnsetTitle")}</AlertTitle>
+          <AlertDescription>
+            <Link
+              to="/dashboard/admin-settings?setting=recharge_public_origin"
+              className="font-medium underline underline-offset-4"
+            >
+              {t("payments.originUnsetAction")}
+            </Link>
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {error ? <QueryError onRetry={mutate} retrying={isValidating} stale={data !== undefined} /> : null}
 
       {data !== undefined ? (

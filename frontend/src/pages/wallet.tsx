@@ -91,7 +91,10 @@ export function WalletPage() {
               transition={reduced ? { duration: 0 } : springs.gentle}
             >
               {tab === "overview" ? (
-                <PlanAllowance className="min-w-0 rounded-lg border bg-card" />
+                <PlanAllowance
+                  className="min-w-0 rounded-lg border bg-card"
+                  onRecharge={openRecharge}
+                />
               ) : tab === "recharge" ? (
                 <div className="min-w-0">
                   <RechargeDesk

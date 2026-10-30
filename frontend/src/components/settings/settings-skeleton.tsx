@@ -18,7 +18,7 @@ export function SettingsPageSkeleton() {
           <>
             <Skeleton className="h-9 w-full" />
             <div className="flex gap-1 overflow-hidden [@container(min-width:56rem)]:flex-col">
-              {Array.from({ length: 9 }, (_, index) => (
+              {Array.from({ length: 8 }, (_, index) => (
                 <Skeleton
                   key={index}
                   className="h-11 w-28 shrink-0 sm:h-9 [@container(min-width:56rem)]:w-full"

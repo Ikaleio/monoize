@@ -1,90 +1,57 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  BookMarked,
-  Braces,
-  Check,
-  Code2,
-  Copy,
-  Pencil,
-  Plus,
-  Trash2,
-  UserRound,
-} from "lucide-react";
-import CodeMirror from "@uiw/react-codemirror";
-import { javascript } from "@codemirror/lang-javascript";
-import { format as prettierFormat } from "prettier/standalone";
-import * as prettierPluginBabel from "prettier/plugins/babel";
-import * as prettierPluginEstree from "prettier/plugins/estree";
-import { toast } from "sonner";
+import { BookMarked, Check, Code2, Pencil, Plus, Trash2, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
-import { AnimatedButton, PageWrapper, motion, springs, transitions } from "@/components/ui/motion";
+import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { QueryError } from "@/components/ui/query-error";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useAuth } from "@/hooks/use-auth";
 import { formatDate } from "@/lib/format-time";
+import { toastApiError } from "@/lib/api-error";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
-import { useTheme } from "@/hooks/use-theme";
 import {
   useCustomTransforms,
-  createCustomTransformOptimistic,
+  useCustomTransformReferences,
   updateCustomTransformOptimistic,
   deleteCustomTransformOptimistic,
 } from "@/lib/swr";
-import type { CustomTransform } from "@/lib/api";
+import type { CustomTransform, CustomTransformReference } from "@/lib/api";
 import skillMarkdown from "@/skills/monoize-custom-transform-design.skill.md?raw";
-
-const CREATE_TEMPLATE = `/**
- * @monoize-transform
- * id: js:my-transform
- * name: My Transform
- * description: Describe what this transform does.
- * author: admin
- * phase: request
- * scopes: provider, global, api_key
- * visibility: admin
- */
-
-// Optional: declare a config schema rendered in the chain editor.
-// const configSchema = {
-//   type: "object",
-//   properties: {
-//     example: { type: "string", title: "Example" }
-//   }
-// };
-
-function transform(ctx) {
-  // ctx.phase: "request" | "response"
-  // ctx.kind: "request" | "response" | "stream"
-  // ctx.data: URP payload (mutable JSON)
-  // ctx.config: rule config object
-  // ctx.state: per-request state, survives across stream events
-  // Monoize.fetch(url, options): host HTTP bridge
-}
-`;
+import { EditorDialog } from "./custom-transforms/editor-dialog";
+import { ChainEntryLinks, TransformReferences } from "./custom-transforms/references";
 
 export function CustomTransformsPage() {
   const { t } = useTranslation();
+  const { user } = useAuth();
   const { data, error, isLoading, isValidating, mutate } = useCustomTransforms();
+  const { data: referenceMap, error: referencesError } = useCustomTransformReferences();
   const skillCopy = useCopyToClipboard();
   const transforms = useMemo(() => data ?? [], [data]);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<CustomTransform | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CustomTransform | null>(null);
+  const [disableTarget, setDisableTarget] = useState<CustomTransform | null>(null);
+
+  // Undefined while loading or after a failed request (CJS-UI-8).
+  const referencesOf = (id: string): CustomTransformReference[] | undefined =>
+    referenceMap ? (referenceMap[id] ?? []) : undefined;
 
   const openCreate = () => {
     setEditTarget(null);
@@ -96,25 +63,41 @@ export function CustomTransformsPage() {
     setEditorOpen(true);
   };
 
-  const toggleEnabled = async (item: CustomTransform, enabled: boolean) => {
-    await updateCustomTransformOptimistic(item.id, { enabled }, transforms, (error) =>
-      toast.error(error.message)
-    ).catch(() => undefined);
+  const setEnabled = async (item: CustomTransform, enabled: boolean) => {
+    await updateCustomTransformOptimistic(item.id, { enabled }, transforms).catch((toggleError) =>
+      toastApiError(toggleError, t),
+    );
+  };
+
+  const toggleEnabled = (item: CustomTransform, enabled: boolean) => {
+    // CJS-UI-9: disabling a referenced transform asks first.
+    if (!enabled && (referencesOf(item.id)?.length ?? 0) > 0) {
+      setDisableTarget(item);
+      return;
+    }
+    void setEnabled(item, enabled);
   };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    await deleteCustomTransformOptimistic(deleteTarget.id, transforms, (deleteError) =>
-      toast.error(deleteError.message)
-    ).catch(() => undefined);
+    await deleteCustomTransformOptimistic(deleteTarget.id, transforms).catch((deleteError) =>
+      toastApiError(deleteError, t),
+    );
   };
+
+  const deleteReferences = deleteTarget ? referencesOf(deleteTarget.id) : undefined;
+  const disableCount = disableTarget ? (referencesOf(disableTarget.id)?.length ?? 0) : 0;
 
   return (
     <PageWrapper>
       <div className="space-y-6">
         <PageHeader
           title={t("customTransforms.title")}
-          description={t("customTransforms.description")}
+          description={
+            <>
+              {t("customTransforms.description")} <ChainEntryLinks />
+            </>
+          }
           actions={
             <>
               <Button variant="outline" onClick={() => void skillCopy.copy(skillMarkdown)}>
@@ -144,7 +127,11 @@ export function CustomTransformsPage() {
             variant="card"
             icon={<Code2 className="size-10" aria-hidden="true" />}
             title={t("customTransforms.emptyTitle")}
-            description={t("customTransforms.emptyDescription")}
+            description={
+              <>
+                {t("customTransforms.emptyDescription")} <ChainEntryLinks />
+              </>
+            }
             action={
               <Button onClick={openCreate}>
                 <Plus data-icon="inline-start" aria-hidden="true" />
@@ -163,6 +150,13 @@ export function CustomTransformsPage() {
               >
                 <TransformCard
                   item={item}
+                  references={
+                    <TransformReferences
+                      references={referencesOf(item.id)}
+                      loading={referenceMap === undefined && !referencesError}
+                      currentUserId={user?.id}
+                    />
+                  }
                   onToggle={(enabled) => toggleEnabled(item, enabled)}
                   onEdit={() => openEdit(item)}
                   onDelete={() => setDeleteTarget(item)}
@@ -188,12 +182,54 @@ export function CustomTransformsPage() {
             if (!open) setDeleteTarget(null);
           }}
           title={t("customTransforms.deleteTitle")}
-          description={t("customTransforms.deleteDescription", {
-            name: deleteTarget?.name,
-            id: deleteTarget?.id,
-          })}
+          description={
+            deleteReferences === undefined
+              ? t("customTransforms.deleteDescription", {
+                  name: deleteTarget?.name,
+                  id: deleteTarget?.id,
+                })
+              : deleteReferences.length > 0
+                ? t("customTransforms.deleteDescriptionUsed", {
+                    name: deleteTarget?.name,
+                    id: deleteTarget?.id,
+                    count: deleteReferences.length,
+                  })
+                : t("customTransforms.deleteDescriptionUnused", {
+                    name: deleteTarget?.name,
+                    id: deleteTarget?.id,
+                  })
+          }
           onConfirm={handleDelete}
         />
+
+        <AlertDialog
+          open={disableTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setDisableTarget(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("customTransforms.disableTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("customTransforms.disableDescription", {
+                  name: disableTarget?.name,
+                  count: disableCount,
+                })}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (disableTarget) void setEnabled(disableTarget, false);
+                }}
+              >
+                {t("customTransforms.disableConfirm")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </PageWrapper>
   );
@@ -228,11 +264,13 @@ function CardGridSkeleton() {
 
 function TransformCard({
   item,
+  references,
   onToggle,
   onEdit,
   onDelete,
 }: {
   item: CustomTransform;
+  references: ReactNode;
   onToggle: (enabled: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -273,154 +311,39 @@ function TransformCard({
         ))}
       </div>
 
-      <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3">
-        <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-          <UserRound className="size-4 shrink-0" aria-hidden="true" />
-          <span className="truncate">{item.author}</span>
-          <span className="shrink-0">·</span>
-          <span className="truncate tabular-nums">
-            {t("customTransforms.updatedAt", { date: formatDate(item.updated_at) })}
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 touch-manipulation sm:size-9"
-            aria-label={t("common.editItem", { name: item.name })}
-            onClick={onEdit}
-          >
-            <Pencil />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 touch-manipulation sm:size-9"
-            aria-label={t("common.deleteItem", { name: item.name })}
-            onClick={onDelete}
-          >
-            <Trash2 className="text-error-foreground" />
-          </Button>
+      <div className="mt-auto space-y-2 border-t pt-3">
+        <div className="flex min-h-8 items-center">{references}</div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+            <UserRound className="size-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">{item.author}</span>
+            <span className="shrink-0">·</span>
+            <span className="truncate tabular-nums">
+              {t("customTransforms.updatedAt", { date: formatDate(item.updated_at) })}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-11 touch-manipulation sm:size-9"
+              aria-label={t("common.editItem", { name: item.name })}
+              onClick={onEdit}
+            >
+              <Pencil />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-11 touch-manipulation sm:size-9"
+              aria-label={t("common.deleteItem", { name: item.name })}
+              onClick={onDelete}
+            >
+              <Trash2 className="text-error-foreground" />
+            </Button>
+          </div>
         </div>
       </div>
     </Card>
-  );
-}
-
-function EditorDialog({
-  open,
-  target,
-  currentTransforms,
-  onOpenChange,
-}: {
-  open: boolean;
-  target: CustomTransform | null;
-  currentTransforms: CustomTransform[];
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const { resolvedTheme } = useTheme();
-  const [source, setSource] = useState("");
-  const [saving, setSaving] = useState(false);
-  // Reset the buffer when the dialog opens for a different target.
-  const [lastKey, setLastKey] = useState<string | null>(null);
-  const openKey = open ? (target?.id ?? "__create__") : null;
-  if (openKey !== lastKey) {
-    setLastKey(openKey);
-    if (openKey !== null) {
-      setSource(target?.source ?? CREATE_TEMPLATE);
-    }
-  }
-
-  const codeCopy = useCopyToClipboard();
-
-  const formatCode = async () => {
-    try {
-      const formatted = await prettierFormat(source, {
-        parser: "babel",
-        plugins: [prettierPluginBabel, prettierPluginEstree],
-      });
-      setSource(formatted);
-    } catch (error) {
-      const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-      toast.error(t("customTransforms.formatError", { message }));
-    }
-  };
-
-  const save = async () => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      if (target) {
-        await updateCustomTransformOptimistic(target.id, { source }, currentTransforms);
-      } else {
-        await createCustomTransformOptimistic(source);
-      }
-      toast.success(t("customTransforms.saveSuccess"));
-      onOpenChange(false);
-    } catch (error) {
-      // Keep the dialog open with the buffer intact (CJS-UI-5) and surface
-      // the server-side validation detail.
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>
-            {target
-              ? t("customTransforms.editorEditTitle")
-              : t("customTransforms.editorCreateTitle")}
-          </DialogTitle>
-          <DialogDescription>{t("customTransforms.editorDescription")}</DialogDescription>
-        </DialogHeader>
-
-        <div className="flex items-center justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => void codeCopy.copy(source)}>
-            {codeCopy.copied ? (
-              <Check data-icon="inline-start" aria-hidden="true" />
-            ) : (
-              <Copy data-icon="inline-start" aria-hidden="true" />
-            )}
-            {codeCopy.copied ? t("common.copied") : t("customTransforms.copyCode")}
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={formatCode}>
-            <Braces data-icon="inline-start" aria-hidden="true" />
-            {t("customTransforms.format")}
-          </Button>
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={springs.smooth}
-          className="min-h-0 flex-1 overflow-hidden rounded-md border"
-        >
-          <CodeMirror
-            value={source}
-            height="420px"
-            theme={resolvedTheme}
-            extensions={[javascript()]}
-            onChange={setSource}
-            basicSetup={{
-              lineNumbers: true,
-              foldGutter: true,
-              highlightActiveLine: true,
-              autocompletion: false,
-            }}
-          />
-        </motion.div>
-
-        <DialogFooter>
-          <Button type="button" onClick={save} disabled={saving || source.trim().length === 0}>
-            {saving ? t("common.saving") : t("common.save")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

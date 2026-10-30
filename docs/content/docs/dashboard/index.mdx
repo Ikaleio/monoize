@@ -13,6 +13,7 @@ Open the Monoize listen address in a browser. The default is `http://localhost:8
 
 Select the collapse button beside Monoize to show navigation icons only.
 Select the Monoize icon to expand the sidebar.
+The admin navigation has separate blocks for the system dashboard, routing, pricing and payments, users, and system settings.
 Press `Ctrl+B` on Windows or Linux, or `Command+B` on macOS, to toggle the sidebar.
 On mobile, select the menu button at the upper left to open navigation.
 Select a destination to navigate and close the menu.
@@ -34,19 +35,32 @@ Open the account menu at the bottom to view your balance and account actions.
 | Dashboard | Traffic, cost, and health for the signed-in account |
 | System Dashboard | Admin-only system status, usage ranking, and Channel health |
 | Providers | Providers, Channels, model mapping, health, transforms |
-| Token Management | API keys, quotas, model restrictions, transforms |
-| Logs | Request logs and the capture viewer |
-| Models | Model prices, tool prices, upstream price sync, and group billing ratios |
+| API Keys | API keys, balances, model restrictions, transforms |
+| Request Logs | Request logs and the capture viewer |
+| Model Marketplace | Models that your group can reach, with prices that include your group multiplier |
+| Groups | Groups and group billing multipliers |
+| Model Pricing | Model prices, unpriced models, tool prices, and upstream price sync |
 | Users | Accounts, balances, subscription assignment, and the billing ledger |
-| Settings | System settings, global transforms, request capture switch |
+| System Settings | Eight categories of system settings, including global transforms and the request capture switch |
+| Account Settings | Your profile and password |
 
 ## Home Dashboard and System Dashboard
 
 The Home Dashboard shows traffic, cost, and health for the signed-in account only.
+A **Getting started** card appears when the account has no API key or no request. It links to the next steps.
+The API base URL appears before the usage chart.
+Select a time window (`1h`, `24h`, `7d`, `30d`) in the usage section. The window applies to the chart and the recent usage table. The default is `24h`. The dashboard remembers your selection.
+"Today" values use the local time zone of your browser.
 
 System Dashboard is an admin page. It shows system-wide health and spend.
-Spend uses a rolling window (`24h`, `3d`, `7d`, `14d`, `30d`).
+Spend uses a rolling window (`24h`, `7d`, `30d`). The default is `24h`. The window applies to the health summary and the user ranking.
 The window ends at the current time. The window does not reset at midnight.
+
+## System settings
+
+**System Settings** has eight categories: Site, Access & Sessions, Model Mapping, Global Transforms, Routing & Reliability, Billing, Privacy & Capture, and Protocol Compatibility.
+The save bar shows the number of unsaved changes. Select **View changes** to compare old and new values.
+Monoize asks for confirmation before it saves a high-risk change. High-risk changes affect security, billing, or privacy.
 
 ## Language
 
@@ -58,8 +72,8 @@ Each overview section loads independently. If loading fails, select **Retry** in
 A failed refresh keeps the previous data visible and shows a failure notice.
 Unavailable usage values appear as an em dash, not zero.
 
-If the API base URL is missing, administrators can open system settings from the API information section.
-Regular users see the configuration status without an administrator action.
+If the API base URL is missing, the API information section shows the current site address.
+Administrators can open system settings from that section.
 
 On the sign-in page, scroll to reach the form in a short window or at increased zoom.
 If the page cannot load its settings, select **Retry** before signing in.

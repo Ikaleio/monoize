@@ -1,10 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, Eye, EyeOff, RadioTower, RefreshCw, Search, WifiOff } from 'lucide-react'
+import useSWR from 'swr'
+import type { TableVirtuosoHandle } from 'react-virtuoso'
+import {
+	ArrowUp,
+	ChevronDown,
+	Eye,
+	EyeOff,
+	RadioTower,
+	RefreshCw,
+	Search,
+	WifiOff,
+	X
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ModifiedDot } from '@/components/ui/modified-dot'
+import { QueryError } from '@/components/ui/query-error'
 import {
 	Select,
 	SelectContent,
@@ -12,76 +26,164 @@ import {
 	SelectTrigger,
 	SelectValue
 } from '@/components/ui/select'
-import { useRequestLogs, useApiKeys, useProviders } from '@/lib/swr'
+import { SWR_KEYS, useRequestLogs, useApiKeys, useProviders, useUserApiKeys } from '@/lib/swr'
 import { useRequestLogSSE } from '@/lib/sse'
 import { useAuth } from '@/hooks/use-auth'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import type { RequestLog, RequestLogsFilter, RequestLogsResponse } from '@/lib/api'
+import { api } from '@/lib/api'
+import type { RequestLog, RequestLogsFilter, RequestLogsResponse, User } from '@/lib/api'
 import { PageWrapper, motion, transitions } from '@/components/ui/motion'
 import { PageHeader } from '@/components/ui/page-header'
 import { AnimatePresence } from 'framer-motion'
 import { CaptureViewerDialog } from './request-logs/capture-viewer-dialog'
 import { DateRangePicker } from './request-logs/date-range-picker'
+import {
+	RELATIVE_TIME_RANGES,
+	relativeRangeStart,
+	type TimeRangeValue
+} from './request-logs/time-range'
 import { RequestLogsTable } from './request-logs/request-logs-table'
 import { asObject, formatCost } from './request-logs/utils'
 
 const REQUEST_LOGS_PAGE_SIZE = 100
+const STATUS_FILTER_VALUES = ['pending', 'success', 'client_gone', 'error'] as const
+// Every URL parameter owned by the logs filter contract (LOGS-3).
+const FILTER_PARAM_KEYS = [
+	'q',
+	'model',
+	'status',
+	'api_key_id',
+	'username',
+	'channel_id',
+	'from',
+	'to',
+	'range'
+] as const
+
+function parseIsoParam(value: string): Date | undefined {
+	if (!value) return undefined
+	const date = new Date(value)
+	return Number.isNaN(date.getTime()) ? undefined : date
+}
 
 export function RequestLogsPage() {
-	const { t } = useTranslation()
+	const { t, i18n } = useTranslation()
 	const { user } = useAuth()
 	const isMobile = useIsMobile()
-	const [searchParams] = useSearchParams()
+	const [searchParams, setSearchParams] = useSearchParams()
 	const isAdmin = user?.role === 'super_admin' || user?.role === 'admin'
-	const usernameFromQuery = isAdmin ? (searchParams.get('username')?.trim() ?? '') : ''
 
-	const [searchInput, setSearchInput] = useState('')
-	// FL7c: only the debounced value participates in fetch filters so each
-	// keystroke does not issue a new request-log query and list reset.
-	const [debouncedSearch, setDebouncedSearch] = useState('')
-	useEffect(() => {
-		const handle = window.setTimeout(() => {
-			setDebouncedSearch(searchInput.trim())
-		}, 300)
-		return () => window.clearTimeout(handle)
-	}, [searchInput])
-	const [modelInput, setModelInput] = useState('')
-	const [usernameInput, setUsernameInput] = useState(usernameFromQuery)
-	const [appliedUsernameQuery, setAppliedUsernameQuery] = useState(usernameFromQuery)
-	const [filters, setFilters] = useState<RequestLogsFilter>(() => ({
-		username: usernameFromQuery || undefined
+	// LOGS-3: the URL is the single source of truth for every applied filter.
+	const urlQ = searchParams.get('q')?.trim() ?? ''
+	const urlModel = searchParams.get('model')?.trim() ?? ''
+	const rawStatus = searchParams.get('status') ?? ''
+	const urlStatus = STATUS_FILTER_VALUES.find(value => value === rawStatus) ?? ''
+	const urlApiKeyId = searchParams.get('api_key_id')?.trim() ?? ''
+	const urlUsername = isAdmin ? (searchParams.get('username')?.trim() ?? '') : ''
+	const urlChannelId = isAdmin ? (searchParams.get('channel_id')?.trim() ?? '') : ''
+	const rawRange = searchParams.get('range')
+	const urlRange = RELATIVE_TIME_RANGES.find(value => value === rawRange)
+	const fromParam = urlRange ? '' : (searchParams.get('from') ?? '')
+	const toParam = urlRange ? '' : (searchParams.get('to') ?? '')
+
+	const updateParams = useCallback(
+		(patch: Partial<Record<(typeof FILTER_PARAM_KEYS)[number], string | undefined>>) => {
+			setSearchParams(
+				prev => {
+					const next = new URLSearchParams(prev)
+					for (const [key, value] of Object.entries(patch)) {
+						if (value) next.set(key, value)
+						else next.delete(key)
+					}
+					return next
+				},
+				{ replace: true }
+			)
+		},
+		[setSearchParams]
+	)
+
+	// A relative range is recomputed from "now" whenever it is (re)selected or
+	// loaded, so shared links never pin an old window.
+	const [rangeAnchor, setRangeAnchor] = useState(() => ({
+		range: urlRange,
+		from: urlRange ? relativeRangeStart(urlRange) : undefined
 	}))
-	if (appliedUsernameQuery !== usernameFromQuery) {
-		setAppliedUsernameQuery(usernameFromQuery)
-		setUsernameInput(usernameFromQuery)
-		setFilters(prev => ({ ...prev, username: usernameFromQuery || undefined }))
+	if (rangeAnchor.range !== urlRange) {
+		setRangeAnchor({ range: urlRange, from: urlRange ? relativeRangeStart(urlRange) : undefined })
 	}
+	const timeFrom = useMemo(
+		() => (urlRange ? rangeAnchor.from : parseIsoParam(fromParam)),
+		[urlRange, rangeAnchor.from, fromParam]
+	)
+	const timeTo = useMemo(() => (urlRange ? undefined : parseIsoParam(toParam)), [urlRange, toParam])
+	const timeRangeValue = useMemo<TimeRangeValue>(
+		() => ({ range: urlRange, from: timeFrom, to: timeTo }),
+		[urlRange, timeFrom, timeTo]
+	)
+
+	// Text drafts follow the URL when it changes from outside (deep links,
+	// "clear filters"), but local typing is never overwritten.
+	const [searchInput, setSearchInput] = useState(urlQ)
+	const [syncedQ, setSyncedQ] = useState(urlQ)
+	if (syncedQ !== urlQ) {
+		setSyncedQ(urlQ)
+		if (searchInput.trim() !== urlQ) setSearchInput(urlQ)
+	}
+	// FL7c: only the debounced value reaches the URL and the fetch filters.
+	useEffect(() => {
+		const trimmed = searchInput.trim()
+		if (trimmed === urlQ) return
+		const handle = window.setTimeout(() => updateParams({ q: trimmed || undefined }), 300)
+		return () => window.clearTimeout(handle)
+	}, [searchInput, urlQ, updateParams])
+
+	const [modelInput, setModelInput] = useState(urlModel)
+	const [syncedModel, setSyncedModel] = useState(urlModel)
+	if (syncedModel !== urlModel) {
+		setSyncedModel(urlModel)
+		setModelInput(urlModel)
+	}
+	const [usernameInput, setUsernameInput] = useState(urlUsername)
+	const [syncedUsername, setSyncedUsername] = useState(urlUsername)
+	if (syncedUsername !== urlUsername) {
+		setSyncedUsername(urlUsername)
+		setUsernameInput(urlUsername)
+	}
+
 	const [showIp, setShowIp] = useState(false)
 	const [requestOffset, setRequestOffset] = useState(0)
 	const [loadedLogs, setLoadedLogs] = useState<RequestLog[]>([])
 	const [totalCount, setTotalCount] = useState(0)
 	// This REST aggregate covers every filtered row and must never be derived from loadedLogs.
 	const [totalCharge, setTotalCharge] = useState<string>('0')
-	const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined)
-	const [timeTo, setTimeTo] = useState<Date | undefined>(undefined)
 	const [filtersExpanded, setFiltersExpanded] = useState(() => !isMobile)
 	const [automaticUpdatesEnabled, setAutomaticUpdatesEnabled] = useState(true)
 	const openTooltipIdsRef = useRef<Set<string>>(new Set())
 	const pendingPageDataRef = useRef<RequestLogsResponse | null>(null)
 	const pendingNewestDataRef = useRef<RequestLogsResponse | null>(null)
 	const pendingSSERef = useRef<RequestLog[]>([])
-	const [flushSignal, setFlushSignal] = useState(0)
+	// Points at the latest buffer flush; event callbacks call it so they stay stable.
+	const flushBuffersRef = useRef<() => void>(() => {})
+	// LOGS-7: while the table is scrolled away from the top, live rows are
+	// buffered so the rows being read do not move.
+	const atTopRef = useRef(true)
+	const [atTop, setAtTop] = useState(true)
+	const [bufferedNewRowCount, setBufferedNewRowCount] = useState(0)
+	const loadedLogsRef = useRef<RequestLog[]>([])
+	const virtuosoRef = useRef<TableVirtuosoHandle>(null)
 	const [captureOpen, setCaptureOpen] = useState(false)
-	const [captureTarget, setCaptureTarget] = useState<{
-		requestId: string
-		userId: string
-	} | null>(null)
+	const [captureTarget, setCaptureTarget] = useState<RequestLog | null>(null)
 	const captureRevalidateTimerRef = useRef<number | null>(null)
+
+	useEffect(() => {
+		loadedLogsRef.current = loadedLogs
+	}, [loadedLogs])
 
 	const handleOpenCapture = useCallback((log: RequestLog) => {
 		if (!log.request_id || !log.user?.id) return
-		setCaptureTarget({ requestId: log.request_id, userId: log.user.id })
+		setCaptureTarget(log)
 		setCaptureOpen(true)
 	}, [])
 
@@ -93,23 +195,28 @@ export function RequestLogsPage() {
 
 		openTooltipIdsRef.current.delete(tooltipId)
 		if (openTooltipIdsRef.current.size === 0) {
-			setFlushSignal(c => c + 1)
+			flushBuffersRef.current()
 		}
 	}, [])
 
-	const { data: apiKeys } = useApiKeys()
+	const handleAtTopChange = useCallback((next: boolean) => {
+		atTopRef.current = next
+		setAtTop(next)
+		if (next) flushBuffersRef.current()
+	}, [])
 
 	const activeFilters = useMemo<RequestLogsFilter>(() => {
 		const f: RequestLogsFilter = {}
-		if (filters.status) f.status = filters.status
-		if (filters.model) f.model = filters.model
-		if (filters.api_key_id) f.api_key_id = filters.api_key_id
-		if (isAdmin && filters.username) f.username = filters.username
-		if (debouncedSearch) f.search = debouncedSearch
+		if (urlStatus) f.status = urlStatus
+		if (urlModel) f.model = urlModel
+		if (urlApiKeyId) f.api_key_id = urlApiKeyId
+		if (urlChannelId) f.channel_id = urlChannelId
+		if (urlUsername) f.username = urlUsername
+		if (urlQ) f.search = urlQ
 		if (timeFrom) f.time_from = timeFrom.toISOString()
 		if (timeTo) f.time_to = timeTo.toISOString()
 		return f
-	}, [filters, debouncedSearch, isAdmin, timeFrom, timeTo])
+	}, [urlStatus, urlModel, urlApiKeyId, urlChannelId, urlUsername, urlQ, timeFrom, timeTo])
 
 	const filterKey = useMemo(() => JSON.stringify(activeFilters), [activeFilters])
 
@@ -119,34 +226,40 @@ export function RequestLogsPage() {
 		setLoadedLogs([])
 		setTotalCount(0)
 		setTotalCharge('0')
+		pendingPageDataRef.current = null
+		pendingNewestDataRef.current = null
+		atTopRef.current = true
+		setAtTop(true)
+		setBufferedNewRowCount(0)
 	}, [filterKey])
 
-	const {
-		data: pageData,
-		error: logsError,
-		isLoading,
-		isValidating,
-		mutate
-	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters, {
-		refreshInterval: 0,
-		revalidateOnFocus: automaticUpdatesEnabled,
-		revalidateOnReconnect: automaticUpdatesEnabled,
-		isPaused: () => openTooltipIdsRef.current.size > 0
-	})
-	const pageSettled = pageData != null || logsError != null
-	const { data: providers } = useProviders(undefined, isAdmin && pageSettled)
-	const affinityTargetNames = useMemo(() => {
-		const names = new Map<string, string>()
-		for (const provider of providers ?? []) {
-			for (const channel of provider.channels ?? []) {
-				const readableNames = [provider.name.trim(), channel.name.trim()].filter(Boolean)
-				if (readableNames.length > 0) {
-					names.set(`${provider.id}/${channel.id}`, readableNames.join('/'))
-				}
-			}
-		}
-		return names
-	}, [providers])
+	// LOGS-1 / FL38a: tooltip pause applies to periodic and focus revalidation
+	// only. SWR checks `isPaused` synchronously when a new key starts its first
+	// fetch, so this layout effect (declared before the SWR hooks, therefore run
+	// before their key-change effects) lifts the pause for that one fetch.
+	const bypassTooltipPauseRef = useRef(false)
+	const swrRequestKey = `${filterKey}@${requestOffset}`
+	useLayoutEffect(() => {
+		bypassTooltipPauseRef.current = true
+	}, [swrRequestKey])
+	useEffect(() => {
+		bypassTooltipPauseRef.current = false
+	}, [swrRequestKey])
+	const isTooltipPaused = useCallback(
+		() => !bypassTooltipPauseRef.current && openTooltipIdsRef.current.size > 0,
+		[]
+	)
+
+	// LOGS-10: admins pick from the filtered user's keys; regular users from their own.
+	const { data: ownApiKeys } = useApiKeys()
+	const { data: users } = useSWR<User[]>(
+		isAdmin && urlUsername ? SWR_KEYS.USERS : null,
+		() => api.listUsers()
+	)
+	const filteredUserId = users?.find(item => item.username === urlUsername)?.id ?? null
+	const { data: filteredUserApiKeys } = useUserApiKeys(isAdmin ? filteredUserId : null)
+	const tokenOptions = isAdmin ? filteredUserApiKeys : ownApiKeys
+	const tokenSelectNeedsUser = isAdmin && !urlUsername
 
 	const matchesActiveFilters = useCallback(
 		(log: RequestLog) => {
@@ -164,6 +277,9 @@ export function RequestLogsPage() {
 			}
 			if (activeFilters.status && log.status !== activeFilters.status) return false
 			if (activeFilters.api_key_id && log.api_key?.id !== activeFilters.api_key_id) {
+				return false
+			}
+			if (activeFilters.channel_id && log.channel?.id !== activeFilters.channel_id) {
 				return false
 			}
 
@@ -268,6 +384,16 @@ export function RequestLogsPage() {
 						const existingIndex = next.findIndex(
 							item => item.request_id === log.request_id
 						)
+						// A buffered `pending` event can be flushed after the server
+						// snapshot that already holds the terminal row (FL37e); it
+						// must never downgrade that row back to pending.
+						if (
+							existingIndex >= 0 &&
+							log.status === 'pending' &&
+							next[existingIndex].status !== 'pending'
+						) {
+							continue
+						}
 						if (existingIndex >= 0) {
 							next.splice(existingIndex, 1)
 							if (matchesFilters) next.unshift(log)
@@ -286,20 +412,133 @@ export function RequestLogsPage() {
 		[matchesActiveFilters]
 	)
 
+	// Counts buffered rows that are not on screen yet, for the "N new logs" pill.
+	const countBufferedNewRows = useCallback(() => {
+		const known = new Set<string>()
+		for (const log of loadedLogsRef.current) {
+			known.add(log.id)
+			if (log.request_id) known.add(log.request_id)
+		}
+		const fresh = new Set<string>()
+		const consider = (log: RequestLog) => {
+			if (known.has(log.id) || (log.request_id && known.has(log.request_id))) return
+			fresh.add(log.request_id || log.id)
+		}
+		for (const log of pendingNewestDataRef.current?.data ?? []) consider(log)
+		if (pendingPageDataRef.current?.offset === 0) {
+			for (const log of pendingPageDataRef.current.data) consider(log)
+		}
+		for (const log of pendingSSERef.current) {
+			if (matchesActiveFilters(log)) consider(log)
+		}
+		setBufferedNewRowCount(fresh.size)
+	}, [matchesActiveFilters])
+
+	const receiveSSELogs = useCallback(
+		(logs: RequestLog[]) => {
+			if (openTooltipIdsRef.current.size > 0 || !atTopRef.current) {
+				pendingSSERef.current = [...pendingSSERef.current, ...logs]
+				if (!atTopRef.current) countBufferedNewRows()
+				return
+			}
+			prependSSELogs(logs)
+		},
+		[countBufferedNewRows, prependSSELogs]
+	)
+
+	// Server responses arrive through SWR `onSuccess` (an external callback), and
+	// are either applied or buffered per FL38 (tooltip open) and FL37e (scrolled).
+	// Both hooks share a cache key at offset 0, where the two merges coincide, so
+	// whichever hook started the request applying it is equivalent.
+	const applyPageData = (data: RequestLogsResponse) => {
+		setTotalCount(data.total)
+		setTotalCharge(data.total_charge_nano_usd)
+		setLoadedLogs(prev => {
+			if (data.offset === 0) return preservePendingItems(prev, data.data)
+			const existingIds = new Set(prev.map(log => log.id))
+			const appended = data.data.filter(log => !existingIds.has(log.id))
+			return appended.length === 0 ? prev : [...prev, ...appended]
+		})
+	}
+
+	const applyNewestData = (data: RequestLogsResponse) => {
+		setTotalCount(data.total)
+		setTotalCharge(data.total_charge_nano_usd)
+		setLoadedLogs(prev => {
+			if (prev.length === 0 || requestOffset === 0) {
+				return preservePendingItems(prev, data.data)
+			}
+			const newestIds = new Set(data.data.map(log => log.id))
+			const tail = prev.filter(log => !newestIds.has(log.id))
+			return [...data.data, ...tail].slice(0, data.total)
+		})
+	}
+
+	const handlePageResponse = (data: RequestLogsResponse) => {
+		// Appended pages (offset > 0) land below the reading position and only
+		// wait for tooltips; a first-page replacement also waits for the top.
+		const holdForScroll = data.offset === 0 && !atTopRef.current
+		if (openTooltipIdsRef.current.size > 0 || holdForScroll) {
+			pendingPageDataRef.current = data
+			if (holdForScroll) countBufferedNewRows()
+			return
+		}
+		pendingPageDataRef.current = null
+		applyPageData(data)
+	}
+
+	const handleNewestResponse = (data: RequestLogsResponse) => {
+		if (openTooltipIdsRef.current.size > 0 || !atTopRef.current) {
+			pendingNewestDataRef.current = data
+			if (!atTopRef.current) countBufferedNewRows()
+			return
+		}
+		pendingNewestDataRef.current = null
+		applyNewestData(data)
+	}
+
+	const {
+		data: pageData,
+		error: logsError,
+		isLoading,
+		isValidating,
+		mutate
+	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters, {
+		refreshInterval: 0,
+		revalidateOnFocus: automaticUpdatesEnabled,
+		revalidateOnReconnect: automaticUpdatesEnabled,
+		isPaused: isTooltipPaused,
+		onSuccess: handlePageResponse
+	})
+	const pageSettled = pageData != null || logsError != null
+	const { data: providers } = useProviders(undefined, isAdmin && pageSettled)
+	const affinityTargetNames = useMemo(() => {
+		const names = new Map<string, string>()
+		for (const provider of providers ?? []) {
+			for (const channel of provider.channels ?? []) {
+				const readableNames = [provider.name.trim(), channel.name.trim()].filter(Boolean)
+				if (readableNames.length > 0) {
+					names.set(`${provider.id}/${channel.id}`, readableNames.join('/'))
+				}
+			}
+		}
+		return names
+	}, [providers])
+
 	const { connected: sseConnected, event: sseEvent } = useRequestLogSSE(
 		automaticUpdatesEnabled && pageSettled
 	)
 
-	const { data: newestPageData, mutate: mutateNewest } = useRequestLogs(
+	const { error: newestError, mutate: mutateNewest } = useRequestLogs(
 		REQUEST_LOGS_PAGE_SIZE,
 		0,
 		activeFilters,
 		{
-			refreshInterval:
-				automaticUpdatesEnabled && pageSettled && !sseConnected ? 3000 : 0,
+			refreshInterval: automaticUpdatesEnabled && pageSettled && !sseConnected ? 3000 : 0,
 			revalidateOnFocus: automaticUpdatesEnabled && pageSettled,
 			revalidateOnReconnect: automaticUpdatesEnabled && pageSettled,
-			isPaused: () => openTooltipIdsRef.current.size > 0
+			isPaused: isTooltipPaused,
+			onSuccess: handleNewestResponse
 		}
 	)
 
@@ -353,19 +592,14 @@ export function RequestLogsPage() {
 		)
 		if (hasTerminalRow) scheduleCaptureFlagRevalidate()
 
-		if (openTooltipIdsRef.current.size > 0) {
-			pendingSSERef.current = [...pendingSSERef.current, ...sseEvent.logs]
-			return
-		}
-
-		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SSE event with the local visible list
-		prependSSELogs(sseEvent.logs)
+		// eslint-disable-next-line react-hooks/set-state-in-effect -- SSE batches arrive as hook state; hand each one once to the tooltip/scroll-gated row list
+		receiveSSELogs(sseEvent.logs)
 	}, [
 		automaticUpdatesEnabled,
 		sseEvent,
 		mutate,
 		mutateNewest,
-		prependSSELogs,
+		receiveSSELogs,
 		scheduleCaptureFlagRevalidate
 	])
 
@@ -389,96 +623,42 @@ export function RequestLogsPage() {
 		captureRevalidateTimerRef.current = null
 	}, [automaticUpdatesEnabled])
 
-	useEffect(() => {
-		if (!pageData) return
-
-		if (openTooltipIdsRef.current.size > 0) {
-			pendingPageDataRef.current = pageData
-			return
-		}
-
-		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SWR page response with tooltip-safe local rows
-		setTotalCount(pageData.total)
-		setTotalCharge(pageData.total_charge_nano_usd)
-		setLoadedLogs(prev => {
-			if (requestOffset === 0) {
-				return preservePendingItems(prev, pageData.data)
-			}
-
-			const existingIds = new Set(prev.map(log => log.id))
-			const appended = pageData.data.filter(log => !existingIds.has(log.id))
-			if (appended.length === 0) return prev
-			return [...prev, ...appended]
-		})
-		pendingPageDataRef.current = null
-	}, [pageData, requestOffset, preservePendingItems])
-
-	useEffect(() => {
-		if (!newestPageData) return
-
-		if (openTooltipIdsRef.current.size > 0) {
-			pendingNewestDataRef.current = newestPageData
-			return
-		}
-
-		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SWR refresh with tooltip-safe local rows
-		setTotalCount(newestPageData.total)
-		setTotalCharge(newestPageData.total_charge_nano_usd)
-		setLoadedLogs(prev => {
-			if (prev.length === 0 || requestOffset === 0) {
-				return preservePendingItems(prev, newestPageData.data)
-			}
-
-			const newestIds = new Set(newestPageData.data.map(log => log.id))
-			const tail = prev.filter(log => !newestIds.has(log.id))
-			const merged = [...newestPageData.data, ...tail]
-			return merged.slice(0, newestPageData.total)
-		})
-		pendingNewestDataRef.current = null
-	}, [newestPageData, requestOffset, preservePendingItems])
-
-	useEffect(() => {
+	// Applies buffered data once no tooltip is open; live rows above the reading
+	// position additionally wait until the table is back at the top (FL37e).
+	const flushBuffers = () => {
 		if (openTooltipIdsRef.current.size > 0) return
+		const atTopNow = atTopRef.current
 
-		const bufferedPage = pendingPageDataRef.current
-		const bufferedNewest = pendingNewestDataRef.current
-
+		const bufferedNewest = atTopNow ? pendingNewestDataRef.current : null
 		if (bufferedNewest) {
 			pendingNewestDataRef.current = null
-			setTotalCount(bufferedNewest.total)
-			setTotalCharge(bufferedNewest.total_charge_nano_usd)
-			setLoadedLogs(prev => {
-				if (prev.length === 0 || requestOffset === 0) {
-					return preservePendingItems(prev, bufferedNewest.data)
-				}
-				const newestIds = new Set(bufferedNewest.data.map(log => log.id))
-				const tail = prev.filter(log => !newestIds.has(log.id))
-				const merged = [...bufferedNewest.data, ...tail]
-				return merged.slice(0, bufferedNewest.total)
-			})
+			applyNewestData(bufferedNewest)
 		}
 
-		if (bufferedPage) {
+		const bufferedPage = pendingPageDataRef.current
+		if (bufferedPage && (bufferedPage.offset !== 0 || atTopNow)) {
 			pendingPageDataRef.current = null
-			setTotalCount(bufferedPage.total)
-			setTotalCharge(bufferedPage.total_charge_nano_usd)
-			setLoadedLogs(prev => {
-				if (requestOffset === 0) {
-					return preservePendingItems(prev, bufferedPage.data)
-				}
-				const existingIds = new Set(prev.map(log => log.id))
-				const appended = bufferedPage.data.filter(log => !existingIds.has(log.id))
-				if (appended.length === 0) return prev
-				return [...prev, ...appended]
-			})
+			applyPageData(bufferedPage)
 		}
 
+		if (!atTopNow) return
 		if (pendingSSERef.current.length > 0) {
 			const bufferedSSE = pendingSSERef.current
 			pendingSSERef.current = []
 			prependSSELogs(bufferedSSE)
 		}
-	}, [flushSignal, prependSSELogs, preservePendingItems, requestOffset])
+		setBufferedNewRowCount(0)
+	}
+	useEffect(() => {
+		flushBuffersRef.current = flushBuffers
+	})
+
+	const jumpToNewest = () => {
+		atTopRef.current = true
+		setAtTop(true)
+		flushBuffers()
+		virtuosoRef.current?.scrollToIndex({ index: 0 })
+	}
 
 	const visibleLogs = useMemo(() => {
 		if (loadedLogs.length > 0) return loadedLogs
@@ -488,6 +668,8 @@ export function RequestLogsPage() {
 	const isInitialLoading = isLoading && visibleLogs.length === 0
 	const visibleTotal = pageData?.total ?? totalCount
 	const hasMore = visibleLogs.length < visibleTotal
+	const listError = logsError ?? newestError
+	const retryList = () => Promise.all([mutate(), mutateNewest()])
 
 	const sortedLogs = useMemo(() => {
 		const sorted = [...visibleLogs]
@@ -505,40 +687,74 @@ export function RequestLogsPage() {
 		setRequestOffset(visibleLogs.length)
 	}
 
-	const handleStatusChange = (value: string) => {
-		setFilters(prev => ({
-			...prev,
-			status: value === 'all' ? undefined : value
-		}))
-	}
-
 	const handleModelCommit = () => {
 		const trimmed = modelInput.trim()
-		setFilters(prev => ({
-			...prev,
-			model: trimmed || undefined
-		}))
+		if (trimmed !== urlModel) updateParams({ model: trimmed || undefined })
 	}
 
 	const handleUsernameCommit = () => {
 		const trimmed = usernameInput.trim()
-		setFilters(prev => ({
-			...prev,
-			username: trimmed || undefined
-		}))
+		// A selected key belongs to the previous user, so it is cleared with it.
+		if (trimmed !== urlUsername) {
+			updateParams({ username: trimmed || undefined, api_key_id: undefined })
+		}
 	}
 
-	const handleTokenChange = (value: string) => {
-		setFilters(prev => ({
-			...prev,
-			api_key_id: value === 'all' ? undefined : value
-		}))
+	const handleTimeRangeChange = (next: TimeRangeValue) => {
+		if (next.range) {
+			if (next.range === urlRange) {
+				setRangeAnchor({ range: next.range, from: relativeRangeStart(next.range) })
+			}
+			updateParams({ range: next.range, from: undefined, to: undefined })
+			return
+		}
+		updateParams({
+			range: undefined,
+			from: next.from?.toISOString(),
+			to: next.to?.toISOString()
+		})
 	}
 
-	const handleTimeRangeChange = (from: Date | undefined, to: Date | undefined) => {
-		setTimeFrom(from)
-		setTimeTo(to)
+	const panelFilterCount = [
+		urlModel,
+		urlStatus,
+		urlApiKeyId,
+		urlUsername,
+		urlChannelId,
+		urlRange || timeFrom || timeTo
+	].filter(Boolean).length
+	const hasAnyFilter = panelFilterCount > 0 || urlQ !== '' || searchInput.trim() !== ''
+
+	const clearFilters = () => {
+		setSearchInput('')
+		setModelInput('')
+		setUsernameInput('')
+		setSearchParams(
+			prev => {
+				const next = new URLSearchParams(prev)
+				for (const key of FILTER_PARAM_KEYS) next.delete(key)
+				return next
+			},
+			{ replace: true }
+		)
 	}
+
+	const channelFilterLabel = useMemo(() => {
+		if (!urlChannelId) return null
+		for (const provider of providers ?? []) {
+			const channel = provider.channels?.find(item => item.id === urlChannelId)
+			if (channel) return `${provider.name}/${channel.name}`
+		}
+		const fromLogs = sortedLogs.find(log => log.channel?.id === urlChannelId)
+		const names = [fromLogs?.provider?.name, fromLogs?.channel?.name].filter(Boolean)
+		return names.length > 0 ? names.join('/') : t('requestLogs.unknownChannel')
+	}, [urlChannelId, providers, sortedLogs, t])
+
+	const selectedTokenMissing =
+		urlApiKeyId !== '' && !tokenOptions?.some(key => key.id === urlApiKeyId)
+	const selectedTokenFallbackName =
+		sortedLogs.find(log => log.api_key?.id === urlApiKeyId)?.api_key?.name ||
+		t('requestLogs.selectedToken')
 
 	const showingSummary = !!pageData || visibleLogs.length > 0
 
@@ -558,6 +774,7 @@ export function RequestLogsPage() {
 						<Input
 							className='pl-10 h-9'
 							placeholder={t('requestLogs.searchPlaceholder')}
+							aria-label={t('requestLogs.searchPlaceholder')}
 							value={searchInput}
 							onChange={e => setSearchInput(e.target.value)}
 						/>
@@ -597,7 +814,7 @@ export function RequestLogsPage() {
 							size='icon'
 							className='size-9'
 							onClick={() => {
-								void mutate()
+								void retryList()
 							}}
 							disabled={isValidating}
 							title={t('requestLogs.refresh')}
@@ -627,10 +844,15 @@ export function RequestLogsPage() {
 						type='button'
 						variant='ghost'
 						size='sm'
-						className='h-9 px-2 text-muted-foreground'
+						className='relative h-9 gap-1 px-2 text-muted-foreground'
 						onClick={() => setFiltersExpanded(prev => !prev)}
-						aria-label={t('requestLogs.toggleFilters')}
+						aria-expanded={filtersExpanded}
 					>
+						<span className='text-xs'>
+							{panelFilterCount > 0 ?
+								t('requestLogs.filtersWithCount', { count: panelFilterCount })
+							:	t('requestLogs.filters')}
+						</span>
 						<motion.span
 							animate={{ rotate: filtersExpanded ? 180 : 0 }}
 							transition={transitions.fast}
@@ -638,8 +860,20 @@ export function RequestLogsPage() {
 						>
 							<ChevronDown className='h-4 w-4' />
 						</motion.span>
+						{panelFilterCount > 0 && <ModifiedDot className='absolute right-0.5 top-1' />}
 					</Button>
 					<div className='ml-auto flex items-center gap-3 text-xs text-muted-foreground'>
+						{hasAnyFilter && (
+							<Button
+								type='button'
+								variant='ghost'
+								size='sm'
+								className='h-7 px-2 text-xs'
+								onClick={clearFilters}
+							>
+								{t('requestLogs.clearFilters')}
+							</Button>
+						)}
 						{showingSummary && (
 							<span className='font-medium text-foreground'>
 								{t('requestLogs.totalCost')}: {formatCost(pageData?.total_charge_nano_usd ?? totalCharge)}
@@ -669,6 +903,7 @@ export function RequestLogsPage() {
 									<Input
 										className='w-[140px]'
 										placeholder={t('requestLogs.filterUsernamePlaceholder')}
+										aria-label={t('requestLogs.filterUsernamePlaceholder')}
 										value={usernameInput}
 										onChange={e => setUsernameInput(e.target.value)}
 										onBlur={handleUsernameCommit}
@@ -680,6 +915,7 @@ export function RequestLogsPage() {
 								<Input
 									className='w-[200px]'
 									placeholder={t('requestLogs.filterModelPlaceholder')}
+									aria-label={t('requestLogs.filterModelPlaceholder')}
 									value={modelInput}
 									onChange={e => setModelInput(e.target.value)}
 									onBlur={handleModelCommit}
@@ -688,15 +924,31 @@ export function RequestLogsPage() {
 									}}
 								/>
 								<Select
-									value={filters.api_key_id || 'all'}
-									onValueChange={handleTokenChange}
+									value={tokenSelectNeedsUser && !urlApiKeyId ? '' : urlApiKeyId || 'all'}
+									onValueChange={value =>
+										updateParams({ api_key_id: value === 'all' ? undefined : value })
+									}
+									disabled={tokenSelectNeedsUser}
 								>
-									<SelectTrigger className='w-[140px]'>
-										<SelectValue placeholder={t('requestLogs.filterToken')} />
+									<SelectTrigger
+										className='w-[140px]'
+										aria-label={t('requestLogs.filterToken')}
+										title={tokenSelectNeedsUser ? t('requestLogs.tokenFilterNeedsUser') : undefined}
+									>
+										<SelectValue
+											placeholder={
+												tokenSelectNeedsUser ?
+													t('requestLogs.tokenFilterNeedsUser')
+												:	t('requestLogs.filterToken')
+											}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										<SelectItem value='all'>{t('requestLogs.allTokens')}</SelectItem>
-										{apiKeys?.map(key => (
+										{selectedTokenMissing && (
+											<SelectItem value={urlApiKeyId}>{selectedTokenFallbackName}</SelectItem>
+										)}
+										{tokenOptions?.map(key => (
 											<SelectItem key={key.id} value={key.id}>
 												{key.name}
 											</SelectItem>
@@ -704,10 +956,12 @@ export function RequestLogsPage() {
 									</SelectContent>
 								</Select>
 								<Select
-									value={filters.status || 'all'}
-									onValueChange={handleStatusChange}
+									value={urlStatus || 'all'}
+									onValueChange={value =>
+										updateParams({ status: value === 'all' ? undefined : value })
+									}
 								>
-									<SelectTrigger className='w-[120px]'>
+									<SelectTrigger className='w-[120px]' aria-label={t('requestLogs.filterStatus')}>
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
@@ -727,16 +981,34 @@ export function RequestLogsPage() {
 									</SelectContent>
 								</Select>
 								<DateRangePicker
-									from={timeFrom}
-									to={timeTo}
+									value={timeRangeValue}
 									onChange={handleTimeRangeChange}
+									language={i18n.language}
 									t={t}
 								/>
+								{channelFilterLabel && (
+									<span className='inline-flex h-9 items-center gap-1 rounded-md border bg-muted px-2 text-xs'>
+										<span className='text-muted-foreground'>{t('requestLogs.channel')}:</span>
+										<span className='max-w-48 truncate'>{channelFilterLabel}</span>
+										<button
+											type='button'
+											className='ml-0.5 inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+											aria-label={t('requestLogs.clearChannelFilter')}
+											onClick={() => updateParams({ channel_id: undefined })}
+										>
+											<X className='size-3.5' aria-hidden='true' />
+										</button>
+									</span>
+								)}
 							</div>
 						</motion.div>
 					)}
 				</AnimatePresence>
 			</motion.div>
+
+			{listError != null && visibleLogs.length > 0 && (
+				<QueryError stale onRetry={retryList} retrying={isValidating} />
+			)}
 
 			<motion.div
 				initial={false}
@@ -744,22 +1016,42 @@ export function RequestLogsPage() {
 			>
 				<RequestLogsTable
 					affinityTargetNames={affinityTargetNames}
+					emptyTitle={hasAnyFilter ? t('requestLogs.noMatchingLogs') : t('requestLogs.noLogs')}
+					error={listError}
 					isAdmin={isAdmin}
 					isInitialLoading={isInitialLoading}
 					logs={sortedLogs}
+					onAtTopChange={handleAtTopChange}
 					onLoadMore={handleLoadMore}
 					onOpenCapture={handleOpenCapture}
+					onRetry={retryList}
 					onTooltipOpenChange={onTooltipOpenChange}
+					retrying={isValidating}
 					showIp={showIp}
 					t={t}
+					virtuosoRef={virtuosoRef}
 				/>
+				{!atTop && bufferedNewRowCount > 0 && (
+					<div className='pointer-events-none absolute inset-x-0 top-10 z-10 flex justify-center'>
+						<Button
+							type='button'
+							size='sm'
+							className='pointer-events-auto h-7 gap-1 rounded-full px-3 text-xs shadow-md'
+							onClick={jumpToNewest}
+						>
+							<ArrowUp className='size-3.5' aria-hidden='true' />
+							{t('requestLogs.newLogsPill', { count: bufferedNewRowCount })}
+						</Button>
+					</div>
+				)}
 			</motion.div>
 
 			<CaptureViewerDialog
 				open={captureOpen}
 				onOpenChange={setCaptureOpen}
-				requestId={captureTarget?.requestId ?? null}
-				userId={captureTarget?.userId ?? null}
+				log={captureTarget}
+				isAdmin={isAdmin}
+				knownTargets={affinityTargetNames}
 			/>
 		</PageWrapper>
 	)

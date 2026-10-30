@@ -24,6 +24,10 @@ DSA8. If a dashboard endpoint requires authentication and the request contains n
 
 DSA9. A dashboard API response with HTTP `401` and error code `unauthorized` MUST invalidate the browser's authenticated state. The dashboard MUST clear cached authenticated data and navigate to `/login` instead of rendering the response error in the current page.
 
+DSA9a. When the dashboard shell redirects an unauthenticated visitor to `/login`, it MUST pass the current location as router state `from` and MUST replace the history entry. After successful login or registration, and when an already authenticated user opens `/login`, the page MUST navigate with `replace` to `from.pathname + from.search + from.hash`. If `from` is absent, its pathname does not start with exactly one `/`, or its pathname is `/login`, the target MUST be `/dashboard`.
+
+DSA9b. The dashboard browser MUST hold the session user in SWR key `SWR_KEYS.ME`. While a session is active, it MUST revalidate that key on window focus and every 60000 ms. A failed revalidation other than DSA9 MUST retain the last user object. After DSA9 or logout, it MUST stop requesting `GET /api/dashboard/auth/me` until the next login or registration.
+
 ## 2. Non-browser clients
 
 DSA10. The backend MAY accept `Authorization: Bearer <session-token>` for non-browser dashboard clients. This compatibility MUST NOT cause the dashboard browser to expose or persist the token.

@@ -1,27 +1,27 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-	AlertTriangle,
 	ArrowDown,
 	ArrowUp,
 	ChevronRight,
 	GripVertical,
 	Layers,
+	ListChecks,
 	Loader2,
 	Pencil,
 	Radio,
-	Server,
 	Trash2,
 	Zap
 } from 'lucide-react'
 import { AnimatePresence } from 'framer-motion'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { toast } from 'sonner'
 import { mutate } from 'swr'
 import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { StackedModelList } from '@/components/StackedModelList'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { motion, transitions } from '@/components/ui/motion'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status'
@@ -33,24 +33,29 @@ import {
 	TooltipTrigger
 } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
+import { toastApiError } from '@/lib/api-error'
 import { cn } from '@/lib/utils'
 import { SWR_KEYS, useDashboardGroups } from '@/lib/swr'
-import { Virtuoso } from 'react-virtuoso'
 import type {
-	ChannelTestResult,
 	ModelMetadataRecord,
-	Provider,
-	ProviderType
+	MonoizeChannel,
+	Provider
 } from '@/lib/api'
-import { ChannelTestDialog } from './ChannelTestDialog'
+import { useChannelTests } from './channel-test-context'
+import { useMediaQuery } from './use-media-query'
 import {
 	ChannelRuntimeStatus,
 	ProviderModelRuntimeBadge
 } from './ProviderRuntimeStatus'
 import {
-	PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
-	PROVIDER_TYPE_CONFIG
+	PROVIDER_CHANNEL_ROW_HEIGHT,
+	PROVIDER_CHANNEL_ROW_HEIGHT_COMPACT,
+	PROVIDER_TYPE_CONFIG,
+	providerRoutingSummary,
+	resolveQuickTestModel
 } from './shared'
+
+export type ProviderDragState = 'source' | 'before' | 'after' | null
 
 type ProviderCardProps = {
 	provider: Provider
@@ -60,28 +65,20 @@ type ProviderCardProps = {
 	onDelete: (provider: Provider) => void
 	onMove: (from: number, to: number) => void
 	onToggle: (provider: Provider, enabled: boolean) => void
+	onToggleChannel: (provider: Provider, channel: MonoizeChannel, enabled: boolean) => void
+	canDrag: boolean
+	dragState: ProviderDragState
 	onDragStart: (providerId: string) => void
-	onDrop: (targetProviderId: string) => void
+	onDragOver: (providerId: string) => void
+	onDrop: (providerId: string) => void
+	onDragEnd: () => void
 	modelMetadata: ModelMetadataRecord[]
+	globalProbeModel?: string | null
+	/** PL12e: a new object expands the card, scrolls to it and highlights `channelId`. */
+	focusRequest: { channelId: string | null } | null
 }
 
 const providerActionButtonClass = 'size-11 touch-manipulation sm:size-8'
-
-function useFinePointer() {
-	const [isFinePointer, setIsFinePointer] = useState(() =>
-		typeof window === 'undefined' ? false : window.matchMedia('(pointer: fine)').matches
-	)
-
-	useEffect(() => {
-		const media = window.matchMedia('(pointer: fine)')
-		const syncPointerState = () => setIsFinePointer(media.matches)
-		syncPointerState()
-		media.addEventListener('change', syncPointerState)
-		return () => media.removeEventListener('change', syncPointerState)
-	}, [])
-
-	return isFinePointer
-}
 
 export function ProviderCard({
 	provider,
@@ -91,38 +88,58 @@ export function ProviderCard({
 	onDelete,
 	onMove,
 	onToggle,
+	onToggleChannel,
+	canDrag,
+	dragState,
 	onDragStart,
+	onDragOver,
 	onDrop,
-	modelMetadata
+	onDragEnd,
+	modelMetadata,
+	globalProbeModel,
+	focusRequest
 }: ProviderCardProps) {
 	const { t, i18n } = useTranslation()
+	const { openTest } = useChannelTests()
 	const numberFormatter = useMemo(
 		() => new Intl.NumberFormat(i18n.resolvedLanguage ?? i18n.language, { maximumFractionDigits: 0 }),
 		[i18n.resolvedLanguage, i18n.language]
 	)
+	const contentId = useId()
+	const cardRef = useRef<HTMLDivElement>(null)
+	const channelListRef = useRef<VirtuosoHandle>(null)
 	const [expanded, setExpanded] = useState(false)
-	const [testDialogOpen, setTestDialogOpen] = useState(false)
-	const [testDialogChannel, setTestDialogChannel] = useState<{
-		id: string
-		name: string
-		models: string[]
-		providerType: ProviderType
-	} | null>(null)
-	const [quickTestingChannelId, setQuickTestingChannelId] = useState<string | null>(
-		null
-	)
-	const canDragCard = useFinePointer()
+	const [highlightChannelId, setHighlightChannelId] = useState<string | null>(null)
+	const [quickTestingChannelId, setQuickTestingChannelId] = useState<string | null>(null)
+	const isWide = useMediaQuery('(min-width: 640px)')
+	const rowHeight = isWide ? PROVIDER_CHANNEL_ROW_HEIGHT : PROVIDER_CHANNEL_ROW_HEIGHT_COMPACT
+
+	useEffect(() => {
+		if (!focusRequest) return
+		setExpanded(true)
+		setHighlightChannelId(focusRequest.channelId)
+		const frame = requestAnimationFrame(() => {
+			cardRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+			const channelIndex = provider.channels.findIndex(channel => channel.id === focusRequest.channelId)
+			if (channelIndex >= 0) channelListRef.current?.scrollToIndex({ index: channelIndex, align: 'center' })
+		})
+		const timer = window.setTimeout(() => setHighlightChannelId(null), 2000)
+		return () => {
+			cancelAnimationFrame(frame)
+			window.clearTimeout(timer)
+		}
+		// Only a new request object triggers the deep-link focus.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [focusRequest])
+
 	const modelEntries = useMemo(
 		() => Array.from(new Set(provider.channels.flatMap(channel => Object.keys(channel.models ?? {})))).sort(),
 		[provider.channels]
 	)
-	const modelMetadataById = useMemo(() => {
-		const map = new Map<string, ModelMetadataRecord>()
-		for (const item of modelMetadata) {
-			map.set(item.model_id, item)
-		}
-		return map
-	}, [modelMetadata])
+	const modelMetadataById = useMemo(
+		() => new Map(modelMetadata.map(item => [item.model_id, item])),
+		[modelMetadata]
+	)
 	const unpricedModelIdSet = useMemo(
 		() => new Set(provider.unpriced_model_ids ?? []),
 		[provider.unpriced_model_ids]
@@ -131,207 +148,176 @@ export function ProviderCard({
 		() => new Map((provider.model_runtime_statuses ?? []).map(status => [status.model, status])),
 		[provider.model_runtime_statuses]
 	)
-	const attentionModelCount = useMemo(
-		() =>
-			(provider.model_runtime_statuses ?? []).filter(
-				status =>
-					status.availability_status !== 'healthy' ||
-					status.pricing_status !== 'complete'
-			).length || unpricedModelIdSet.size,
-		[provider.model_runtime_statuses, unpricedModelIdSet]
-	)
-	const unavailableModelCount = useMemo(
-		() =>
-			(provider.model_runtime_statuses ?? []).filter(
-				status => status.availability_status === 'unavailable'
-			).length,
-		[provider.model_runtime_statuses]
-	)
+	const statusCounts = useMemo(() => {
+		const statuses = provider.model_runtime_statuses ?? []
+		const unpriced = new Set(provider.unpriced_model_ids ?? [])
+		for (const status of statuses) {
+			if (status.pricing_status !== 'complete') unpriced.add(status.model)
+		}
+		return {
+			unavailable: statuses.filter(status => status.availability_status === 'unavailable').length,
+			degraded: statuses.filter(status => status.availability_status === 'degraded').length,
+			unpriced: unpriced.size
+		}
+	}, [provider.model_runtime_statuses, provider.unpriced_model_ids])
 	const { data: registryGroups = [] } = useDashboardGroups(provider.group_ids.length > 0)
 	const groupNameById = useMemo(
 		() => new Map(registryGroups.map(group => [group.id, group.name])),
 		[registryGroups]
 	)
+	const totalWeight = useMemo(
+		() => provider.channels.reduce((sum, channel) => sum + (channel.enabled && channel.weight > 0 ? channel.weight : 0), 0),
+		[provider.channels]
+	)
 
-	const channelTypeLabelEntries = useMemo(() => {
-		const types = Array.from(new Set(provider.channels.map(channel => channel.provider_type)))
-		return types
-			.map(type => ({
-				key: type,
-				label: PROVIDER_TYPE_CONFIG[type]?.label ?? type
-			}))
-			.sort((a, b) => a.label.localeCompare(b.label))
-	}, [provider.channels])
-
-	const headerBadgeItems = useMemo(() => {
-		const channelTypeLabel = channelTypeLabelEntries
-			.map(entry => entry.label)
+	const metadataBadges = useMemo(() => {
+		const channelTypeLabel = Array.from(new Set(provider.channels.map(channel => PROVIDER_TYPE_CONFIG[channel.provider_type]?.label ?? channel.provider_type)))
 			.sort()
 			.join(' / ')
-		const items = []
+		const labels = [
+			...(channelTypeLabel ? [{ key: 'channel-types', label: channelTypeLabel }] : []),
+			...provider.group_ids.map(groupId => ({ key: `group-${groupId}`, label: groupNameById.get(groupId) ?? groupId }))
+		]
+		return labels.map(({ key, label }) => {
+			const badge = <Badge variant='outline' className='max-w-none text-xs'><span className='whitespace-nowrap'>{label}</span></Badge>
+			return { key, collapsed: badge, full: badge }
+		})
+	}, [groupNameById, provider.channels, provider.group_ids])
 
-		if (channelTypeLabel) {
-			items.push({
-				key: 'channel-types',
-				collapsed: (
-					<Badge variant='outline' className='max-w-[10rem] text-xs'>
-						<span className='truncate'>{channelTypeLabel}</span>
-					</Badge>
-				),
-				full: (
-					<Badge variant='outline' className='max-w-none text-xs'>
-						<span className='whitespace-nowrap'>{channelTypeLabel}</span>
-					</Badge>
-				)
-			})
-		}
-
-		if (attentionModelCount > 0) {
-			items.push({
-				key: 'model-attention',
-				collapsed: (
-					<StatusBadge variant={unavailableModelCount > 0 ? 'destructive' : 'warning'}>
-						<AlertTriangle className='h-3 w-3 mr-1 shrink-0' />
-						{t('providers.modelsRequireAttention', { count: attentionModelCount })}
-					</StatusBadge>
-				),
-				full: (
-					<StatusBadge variant={unavailableModelCount > 0 ? 'destructive' : 'warning'}>
-						{t('providers.modelAttentionSummary', {
-							count: attentionModelCount,
-							unavailable: unavailableModelCount
-						})}
-					</StatusBadge>
-				)
-			})
-		}
-
-		for (const groupId of provider.group_ids) {
-			const label = groupNameById.get(groupId) ?? `${groupId.slice(0, 8)}…`
-			items.push({
-				key: `group-${groupId}`,
-				collapsed: (
-					<Badge variant='outline' className='max-w-[10rem] text-xs'>
-						<span className='truncate'>{label}</span>
-					</Badge>
-				),
-				full: (
-					<Badge variant='outline' className='max-w-none text-xs'>
-						<span className='whitespace-nowrap'>{label}</span>
-					</Badge>
-				)
-			})
-		}
-
-		return items
-	}, [attentionModelCount, channelTypeLabelEntries, groupNameById, provider.group_ids, t, unavailableModelCount])
-
-	const handleQuickTest = async (channelId: string) => {
-		setQuickTestingChannelId(channelId)
+	const handleQuickTest = async (channel: MonoizeChannel, model: string) => {
+		setQuickTestingChannelId(channel.id)
 		try {
-			const result: ChannelTestResult = await api.testChannel(
-				provider.id,
-				channelId,
-				undefined,
-				false
-			)
+			const result = await api.testChannel(provider.id, channel.id, undefined, false)
 			if (result.success) {
-				toast.success(
-					`${t('providers.testPassed')} — ${t('providers.testLatency', { ms: result.latency_ms })}`,
-					{ description: result.model }
-				)
+				toast.success(t('providers.quickTestPassed', { channel: channel.name, ms: result.latency_ms }), { description: result.model ?? model })
 			} else {
-				toast.error(t('providers.testFailed'), {
-					description: result.error ?? result.model
-				})
+				toast.error(t('providers.quickTestFailed', { channel: channel.name }), { description: result.error ?? result.model ?? model })
 			}
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : t('common.error'))
+		} catch (error) {
+			toastApiError(error, t, t('providers.quickTestFailed', { channel: channel.name }))
 		} finally {
 			setQuickTestingChannelId(null)
 			mutate(SWR_KEYS.PROVIDERS)
 		}
 	}
 
+	const weightText = (channel: MonoizeChannel) => {
+		const models = t('providers.modelCount', { count: Object.keys(channel.models ?? {}).length })
+		const share = channel.enabled && channel.weight > 0 && totalWeight > 0
+			? Math.round((channel.weight / totalWeight) * 100)
+			: null
+		const weight = share == null
+			? t('providers.weightValue', { weight: channel.weight })
+			: t('providers.weightShare', { weight: channel.weight, percent: share })
+		return `${models} · ${weight}`
+	}
+
 	return (
 		<motion.div
+			ref={cardRef}
 			initial={{ opacity: 0, y: 20 }}
-			animate={{ opacity: 1, y: 0 }}
+			animate={{ opacity: dragState === 'source' ? 0.5 : 1, y: 0 }}
 			transition={{ delay: index * 0.08, ...transitions.normal }}
-			whileHover={canDragCard ? { y: -2, transition: { duration: 0.2 } } : undefined}
+			className='relative'
+			onDragOver={event => {
+				if (!canDrag) return
+				event.preventDefault()
+				onDragOver(provider.id)
+			}}
+			onDrop={event => {
+				if (!canDrag) return
+				event.preventDefault()
+				onDrop(provider.id)
+			}}
 		>
-			<Card
-				className='transition-shadow hover:shadow-md'
-				draggable={canDragCard}
-				onDragStart={event => {
-					if (!canDragCard) {
-						event.preventDefault()
-						return
-					}
-					onDragStart(provider.id)
-				}}
-				onDragOver={event => {
-					if (canDragCard) {
-						event.preventDefault()
-					}
-				}}
-				onDrop={() => {
-					if (canDragCard) {
-						onDrop(provider.id)
-					}
-				}}
-			>
-				<CardHeader
-					className={cn('cursor-pointer select-none py-3', expanded && 'pb-4')}
-					onClick={() => setExpanded(value => !value)}
-					>
-						<div className='flex flex-col items-stretch justify-between gap-3 lg:flex-row lg:items-center'>
-							<div className='flex min-w-0 items-center gap-3 lg:flex-1'>
-								<GripVertical
-									className={cn(
-										'h-4 w-4 text-muted-foreground/50 transition-colors shrink-0',
-										canDragCard ? 'cursor-grab hover:text-muted-foreground' : 'hidden sm:block'
-									)}
-									onClick={event => event.stopPropagation()}
-								/>
-							<motion.div
-								animate={{ rotate: expanded ? 90 : 0 }}
-								transition={{ duration: 0.15 }}
-								className='shrink-0'
-							>
-								<ChevronRight className='h-4 w-4 text-muted-foreground' />
-							</motion.div>
-							<div className='flex h-8 w-8 items-center justify-center rounded-lg bg-secondary shrink-0'>
-								<Server className='h-4 w-4' />
-							</div>
-							<div className='flex items-center gap-2 min-w-0 flex-wrap'>
-								<CardTitle className='min-w-0 break-words text-base leading-normal [overflow-wrap:anywhere]'>
-									{provider.name}
-								</CardTitle>
-								<BadgeOverflowList
-									items={headerBadgeItems}
-									visibleCount={3}
-									ariaLabel={`${provider.name}: ${t('common.status')}`}
-									contentClassName='max-w-[min(28rem,calc(100vw-2rem))]'
-								/>
-								<span className='hidden lg:inline text-xs text-muted-foreground whitespace-nowrap'>
-									[{t('providers.priority')}: {provider.priority} ·{' '}
-									{t('providers.maxRetriesLabel')}: {provider.max_retries}]
-								</span>
+			{dragState === 'before' || dragState === 'after' ?
+				<div
+					aria-hidden='true'
+					className={cn('pointer-events-none absolute inset-x-0 z-10 h-0.5 rounded-full bg-primary', dragState === 'before' ? '-top-2' : '-bottom-2')}
+				/>
+			: 	null}
+			<TooltipProvider delayDuration={300}>
+			<Card className='transition-shadow hover:shadow-md'>
+				<CardHeader className={cn('py-3', expanded && 'pb-4')}>
+					<div className='flex flex-col items-stretch gap-3 lg:flex-row lg:items-center'>
+						<div className='flex min-w-0 items-start gap-1 lg:flex-1'>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type='button'
+										draggable={canDrag}
+										onDragStart={event => {
+											event.dataTransfer.effectAllowed = 'move'
+											event.dataTransfer.setData('text/plain', provider.id)
+											onDragStart(provider.id)
+										}}
+										onDragEnd={onDragEnd}
+										aria-label={t('providers.dragHandle', { name: provider.name })}
+										className={cn(
+											'hidden size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex',
+											canDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+										)}
+									>
+										<GripVertical className='size-4' aria-hidden='true' />
+									</button>
+								</TooltipTrigger>
+								<TooltipContent>{t('providers.dragHint')}</TooltipContent>
+							</Tooltip>
+							<div className='min-w-0 flex-1'>
+								<div className='flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1'>
+									<button
+										type='button'
+										aria-expanded={expanded}
+										aria-controls={expanded ? contentId : undefined}
+										onClick={() => setExpanded(value => !value)}
+										className='-ml-1 flex min-w-0 items-center gap-2 rounded-sm px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+									>
+										<motion.span
+											animate={{ rotate: expanded ? 90 : 0 }}
+											transition={{ duration: 0.15 }}
+											className='shrink-0'
+										>
+											<ChevronRight className='size-4 text-muted-foreground' aria-hidden='true' />
+										</motion.span>
+										<span className='min-w-0 break-words text-base font-semibold leading-normal [overflow-wrap:anywhere]'>
+											{provider.name}
+										</span>
+									</button>
+									{!provider.enabled ? <Badge variant='secondary' className='shrink-0'>{t('providers.statusDisabled')}</Badge> : null}
+									<div className={cn('flex min-w-0 flex-wrap items-center gap-1.5', !provider.enabled && 'opacity-60')}>
+										{statusCounts.unavailable > 0 ?
+											<StatusBadge variant='destructive' className='shrink-0'>{t('providers.modelsUnavailable', { count: statusCounts.unavailable })}</StatusBadge>
+										: 	null}
+										{statusCounts.degraded > 0 ?
+											<StatusBadge variant='warning' className='shrink-0'>{t('providers.modelsDegraded', { count: statusCounts.degraded })}</StatusBadge>
+										: 	null}
+										{statusCounts.unpriced > 0 ?
+											<StatusBadge variant='warning' className='shrink-0'>{t('providers.modelsUnpriced', { count: statusCounts.unpriced })}</StatusBadge>
+										: 	null}
+										<BadgeOverflowList
+											items={metadataBadges}
+											visibleCount={2}
+											ariaLabel={t('providers.metadataBadgesAria', { name: provider.name })}
+											contentClassName='max-w-[min(28rem,calc(100vw-2rem))]'
+										/>
+									</div>
+								</div>
+								<p className='pl-7 text-xs text-muted-foreground'>
+									{providerRoutingSummary(index, provider.max_retries, t)}
+								</p>
 							</div>
 						</div>
-						<div
-							className='flex w-full flex-wrap items-center gap-4 lg:w-auto lg:shrink-0 lg:flex-nowrap'
-							onClick={event => event.stopPropagation()}
-						>
-							<TooltipProvider delayDuration={300}>
+						<div className='flex w-full flex-wrap items-center gap-4 lg:w-auto lg:shrink-0 lg:flex-nowrap'>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<div
 											tabIndex={0}
 											role='group'
 											aria-label={t('providers.liveUsageLabel', { name: provider.name })}
-											className='grid w-40 shrink-0 cursor-help grid-cols-[2.5rem_minmax(0,1fr)] gap-x-2 rounded-sm text-left font-mono text-sm font-normal leading-5 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+											className={cn(
+												'grid w-40 shrink-0 cursor-help grid-cols-[2.5rem_minmax(0,1fr)] gap-x-2 rounded-sm text-left font-mono text-sm font-normal leading-5 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+												!provider.enabled && 'opacity-60'
+											)}
 										>
 											<span>{t('providers.liveRpm')}</span>
 											<span className='tabular-nums [overflow-wrap:anywhere]'>
@@ -347,14 +333,12 @@ export function ProviderCard({
 										{t('providers.liveUsageHelp')}
 									</TooltipContent>
 								</Tooltip>
-							<div className='hidden md:flex items-center gap-2'>
 								<Switch
-									aria-label={t('providers.providerEnabled')}
+									aria-label={t('providers.providerEnabledAria', { name: provider.name })}
 									checked={provider.enabled}
 									onCheckedChange={value => onToggle(provider, value)}
 								/>
-							</div>
-								<div className='flex items-center gap-0.5 sm:gap-1'>
+								<div className='ml-auto flex items-center gap-0.5 sm:gap-1 lg:ml-0'>
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<Button
@@ -386,7 +370,7 @@ export function ProviderCard({
 										<TooltipContent>{t('providers.moveDown')}</TooltipContent>
 									</Tooltip>
 
-									<Separator orientation='vertical' className='h-7 mx-1 sm:h-6' />
+									<Separator orientation='vertical' className='mx-1 h-7 sm:h-6' />
 
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -417,29 +401,13 @@ export function ProviderCard({
 										<TooltipContent>{t('common.delete')}</TooltipContent>
 									</Tooltip>
 								</div>
-							</TooltipProvider>
-						</div>
-					</div>
-					<div className='md:hidden mt-2 flex items-center justify-between gap-2 text-sm text-muted-foreground'>
-						<span>
-							[{t('providers.priority')}: {provider.priority} ·{' '}
-							{t('providers.maxRetriesLabel')}: {provider.max_retries}]
-						</span>
-						<div
-							className='flex items-center gap-2'
-							onClick={event => event.stopPropagation()}
-						>
-							<Switch
-								aria-label={t('providers.providerEnabled')}
-								checked={provider.enabled}
-								onCheckedChange={value => onToggle(provider, value)}
-							/>
 						</div>
 					</div>
 				</CardHeader>
 				<AnimatePresence initial={false}>
 					{expanded && (
 						<motion.div
+							id={contentId}
 							initial={{ height: 0, opacity: 0 }}
 							animate={{ height: 'auto', opacity: 1 }}
 							exit={{ height: 0, opacity: 0 }}
@@ -447,9 +415,9 @@ export function ProviderCard({
 							style={{ overflow: 'hidden' }}
 						>
 							<CardContent className='space-y-5 pt-2'>
-								<div>
-									<div className='flex items-center gap-2 mb-3'>
-										<Layers className='h-4 w-4 text-muted-foreground' />
+								<div className={cn(!provider.enabled && 'opacity-60')}>
+									<div className='mb-3 flex items-center gap-2'>
+										<Layers className='size-4 text-muted-foreground' aria-hidden='true' />
 										<h4 className='text-sm font-medium'>
 											{t('providers.modelsSection')}
 										</h4>
@@ -458,27 +426,22 @@ export function ProviderCard({
 										</Badge>
 									</div>
 									<StackedModelList className='mt-1'>
-										{modelEntries.map(model => {
-											const meta = modelMetadataById.get(model)
-											const highlightUnpriced = unpricedModelIdSet.has(model)
-
-											return (
-												<div key={model} className='min-w-0 max-w-full shrink-0'>
-													<ProviderModelRuntimeBadge
-														model={model}
-														metadata={meta}
-														status={modelRuntimeStatusById.get(model)}
-														highlightUnpriced={highlightUnpriced}
-													/>
-												</div>
-											)
-										})}
+										{modelEntries.map(model => (
+											<div key={model} className='min-w-0 max-w-full shrink-0'>
+												<ProviderModelRuntimeBadge
+													model={model}
+													metadata={modelMetadataById.get(model)}
+													status={modelRuntimeStatusById.get(model)}
+													highlightUnpriced={unpricedModelIdSet.has(model)}
+												/>
+											</div>
+										))}
 									</StackedModelList>
 								</div>
 
 								<div>
-									<div className='flex items-center gap-2 mb-3'>
-										<Radio className='h-4 w-4 text-muted-foreground' />
+									<div className='mb-3 flex items-center gap-2'>
+										<Radio className='size-4 text-muted-foreground' aria-hidden='true' />
 										<h4 className='text-sm font-medium'>
 											{t('providers.channelsSection')}
 										</h4>
@@ -486,69 +449,92 @@ export function ProviderCard({
 											{provider.channels.length}
 										</Badge>
 									</div>
-									<div className='rounded-lg border overflow-hidden'>
+									<div className='overflow-hidden rounded-lg border'>
 										<Virtuoso
+											ref={channelListRef}
 											style={{
-												height: Math.min(
-													provider.channels.length * PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
-													190
-												)
+												height: Math.min(provider.channels.length * rowHeight, isWide ? 190 : 300)
 											}}
 											data={provider.channels}
-											itemContent={(_idx, channel) => (
-												<div className='flex min-h-10 items-center gap-3 px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors border-b last:border-b-0'>
-													<span className='flex min-w-0 items-center gap-3'>
-														<ChannelRuntimeStatus
-															channel={channel}
-															perModelCircuitBreak={provider.per_model_circuit_break}
-														/>
-														<span className='min-w-0 truncate font-medium'>
-															{channel.name}
-														</span>
-														<span className='hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:inline'>
+											computeItemKey={(_index, channel) => channel.id}
+											itemContent={(_index, channel) => {
+												const models = Object.keys(channel.models ?? {}).sort()
+												const quickModel = resolveQuickTestModel(channel, provider, globalProbeModel)
+												return (
+													<div
+														style={{ minHeight: rowHeight }}
+														className={cn(
+															'flex flex-col justify-center gap-2 border-b px-3 py-2 text-sm transition-colors last:border-b-0 hover:bg-muted/50 sm:grid sm:grid-cols-[6.5rem_minmax(0,11rem)_minmax(0,1fr)_minmax(0,11rem)_auto_auto] sm:items-center sm:gap-3 sm:py-1.5',
+															highlightChannelId === channel.id && 'bg-primary/10 ring-1 ring-inset ring-primary'
+														)}
+													>
+														<div className='flex min-w-0 items-center gap-2 sm:contents'>
+															<span className='flex shrink-0 items-center'>
+																<ChannelRuntimeStatus
+																	channel={channel}
+																	perModelCircuitBreak={provider.per_model_circuit_break}
+																/>
+															</span>
+															<span className='min-w-0 flex-1 truncate font-medium'>{channel.name}</span>
+															{/* Line 1 on narrow screens; pinned to grid column 5 at sm so the weight text keeps line 2's width. */}
+															<Switch
+																className='shrink-0 sm:col-start-5 sm:row-start-1'
+																aria-label={t('providers.channelEnabledAria', { name: channel.name })}
+																checked={channel.enabled}
+																onCheckedChange={value => onToggleChannel(provider, channel, value)}
+															/>
+														</div>
+														<span className='hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:block'>
 															{channel.base_url}
 														</span>
-													</span>
-													<span className='ml-auto flex items-center gap-3 shrink-0'>
-														<span className='inline-flex items-center rounded-md border overflow-hidden h-7'>
-															<button
-																type='button'
-																className='flex items-center gap-1.5 px-2.5 h-full text-xs font-medium hover:bg-muted/80 transition-colors disabled:opacity-50 disabled:pointer-events-none border-r cursor-pointer'
-																disabled={quickTestingChannelId === channel.id}
-																onClick={() => handleQuickTest(channel.id)}
-															>
-																{quickTestingChannelId === channel.id ?
-																	<Loader2 className='h-3 w-3 animate-spin' />
-																:	<Zap className='h-3 w-3' />
-																}
-																{t('providers.quickTest')}
-															</button>
-															<button
-																type='button'
-																className='flex items-center justify-center w-7 h-full hover:bg-muted/80 transition-colors cursor-pointer'
-																onClick={() => {
-															setTestDialogChannel({
-																id: channel.id,
-																name: channel.name,
-																models: Object.keys(channel.models ?? {}).sort(),
-																providerType: channel.provider_type
-															})
-																	setTestDialogOpen(true)
-																}}
-															>
-																<ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />
-															</button>
-														</span>
-														<span className='text-xs text-muted-foreground'>
-															{Object.keys(channel.models ?? {}).length}M ·{' '}
-															W:{channel.weight}
-														</span>
-														{channel.enabled ?
-															<StatusBadge variant='success'>{t('common.enabled')}</StatusBadge>
-														:	<Badge variant='secondary'>{t('common.disabled')}</Badge>}
-													</span>
-												</div>
-											)}
+														<div className='flex items-center gap-3 sm:contents'>
+															<span className='min-w-0 flex-1 text-xs text-muted-foreground sm:truncate'>
+																{weightText(channel)}
+															</span>
+															<span className='inline-flex h-11 shrink-0 items-center overflow-hidden rounded-md border sm:h-7'>
+																<Tooltip>
+																	<TooltipTrigger asChild>
+																		<button
+																			type='button'
+																			className='flex h-full cursor-pointer items-center gap-1.5 border-r px-2.5 text-xs font-medium transition-colors hover:bg-muted/80 disabled:pointer-events-none disabled:opacity-50'
+																			disabled={quickTestingChannelId === channel.id || !quickModel}
+																			onClick={() => quickModel && handleQuickTest(channel, quickModel)}
+																		>
+																			{quickTestingChannelId === channel.id ?
+																				<Loader2 className='size-3 animate-spin' aria-hidden='true' />
+																			: 	<Zap className='size-3' aria-hidden='true' />}
+																			{t('providers.quickTest')}
+																		</button>
+																	</TooltipTrigger>
+																	<TooltipContent>
+																		{quickModel ? t('providers.quickTestModel', { model: quickModel }) : t('providers.quickTestNoModel')}
+																	</TooltipContent>
+																</Tooltip>
+																<Tooltip>
+																	<TooltipTrigger asChild>
+																		<button
+																			type='button'
+																			className='flex h-full w-11 cursor-pointer items-center justify-center transition-colors hover:bg-muted/80 sm:w-7'
+																			aria-label={t('providers.testSelectModels')}
+																			onClick={() => openTest({
+																				providerId: provider.id,
+																				providerName: provider.name,
+																				channelId: channel.id,
+																				channelName: channel.name,
+																				providerType: channel.provider_type,
+																				models
+																			})}
+																		>
+																			<ListChecks className='size-3.5 text-muted-foreground' aria-hidden='true' />
+																		</button>
+																	</TooltipTrigger>
+																	<TooltipContent>{t('providers.testSelectModels')}</TooltipContent>
+																</Tooltip>
+															</span>
+														</div>
+													</div>
+												)
+											}}
 										/>
 									</div>
 								</div>
@@ -557,22 +543,7 @@ export function ProviderCard({
 					)}
 				</AnimatePresence>
 			</Card>
-
-			{testDialogChannel && (
-				<ChannelTestDialog
-					open={testDialogOpen}
-					onOpenChange={open => {
-						setTestDialogOpen(open)
-						if (!open) setTestDialogChannel(null)
-					}}
-					providerId={provider.id}
-					channelId={testDialogChannel.id}
-					channelName={testDialogChannel.name}
-					providerName={provider.name}
-					models={testDialogChannel.models}
-					providerType={testDialogChannel.providerType}
-				/>
-			)}
+			</TooltipProvider>
 		</motion.div>
 	)
 }

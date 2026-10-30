@@ -42,9 +42,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { OrderStatusBadge } from "@/components/recharge/order-status-badge";
+import { CopyButton } from "@/components/ui/copy-button";
 import { PaginationFooter } from "@/pages/wallet/pagination-footer";
 import { formatDateTime } from "@/lib/format-time";
-import { DashboardApiError } from "@/lib/api";
+import { toastApiError } from "@/lib/api-error";
+import { formatUsdDecimal } from "@/lib/exact-decimal";
 import type { RechargeOrder, RechargeOrderStatus } from "@/lib/api";
 import { ORDER_STATUSES, SUPPORTS_REFUND } from "@/lib/recharge";
 import {
@@ -157,13 +159,7 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
         refundTarget,
         needsManual,
         pageKey,
-        (error) => {
-          const message =
-            error instanceof DashboardApiError
-              ? t(`payments.errors.${error.code}`, { defaultValue: error.message })
-              : error.message;
-          toast.error(message);
-        },
+        (error) => toastApiError(error, t, t("payments.refundFailed")),
       );
       toast.success(t("payments.refunded"));
       setRefundTarget(null);
@@ -203,7 +199,7 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
           />
         }
       >
-        <DataList columns="9.5rem minmax(0,1fr) minmax(0,1fr) 5.5rem 7rem 5rem 5.5rem 6.5rem">
+        <DataList columns="9.5rem minmax(0,1fr) minmax(0,1fr) 5.5rem 7rem 5rem 7.5rem 6.5rem">
           <DataListHeader>
             <DataListHead>{t("common.created")}</DataListHead>
             <DataListHead>{t("payments.user")}</DataListHead>
@@ -212,7 +208,7 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
             <DataListHead align="end">{t("wallet.payment")}</DataListHead>
             <DataListHead>{t("common.status")}</DataListHead>
             <DataListHead>{t("wallet.orderId")}</DataListHead>
-            <DataListHead align="end">{t("common.actions")}</DataListHead>
+            <DataListHead align="end">{t("payments.refund")}</DataListHead>
           </DataListHeader>
           <TooltipProvider delayDuration={200}>
             <DataListBody aria-label={t("payments.ordersTab")}>
@@ -238,7 +234,7 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
                     </span>
                   </DataListCell>
                   <DataListCell label={t("wallet.credit")} align="end">
-                    <span className="tabular-nums">${order.credit_usd}</span>
+                    <span className="tabular-nums">{formatUsdDecimal(order.credit_usd, 2)}</span>
                   </DataListCell>
                   <DataListCell label={t("wallet.payment")} align="end">
                     <span className="whitespace-nowrap tabular-nums">
@@ -249,36 +245,42 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
                     <OrderStatusBadge status={order.status} />
                   </DataListCell>
                   <DataListCell label={t("wallet.orderId")}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="rounded-sm font-mono text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          {order.id.slice(0, 8)}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <span className="font-mono">{order.id}</span>
-                        {order.error_code && (
-                          <span className="ml-2 text-error-foreground">{order.error_code}</span>
-                        )}
-                      </TooltipContent>
-                    </Tooltip>
+                    <span className="inline-flex items-center gap-0.5">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className="rounded-sm font-mono text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {order.id.slice(0, 8)}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <span className="font-mono">{order.id}</span>
+                          {order.error_code && (
+                            <span className="ml-2 text-error-foreground">{order.error_code}</span>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                      <CopyButton value={order.id} label={t("wallet.copyOrderId")} />
+                    </span>
                   </DataListCell>
                   <DataListActions>
-                    <Button
-                      variant="ghost"
-                      className="h-11 px-3 sm:h-9"
-                      disabled={order.status !== "succeeded"}
-                      onClick={() => {
-                        setManualChecked(false);
-                        setRefundTarget(order);
-                      }}
-                    >
-                      <Undo2 aria-hidden="true" />
-                      {t("payments.refund")}
-                    </Button>
+                    {order.status === "succeeded" ? (
+                      <Button
+                        variant="ghost"
+                        className="h-11 px-3 sm:h-9"
+                        onClick={() => {
+                          setManualChecked(false);
+                          setRefundTarget(order);
+                        }}
+                      >
+                        <Undo2 aria-hidden="true" />
+                        {t("payments.refund")}
+                      </Button>
+                    ) : (
+                      <span className="px-3 text-muted-foreground">—</span>
+                    )}
                   </DataListActions>
                 </DataListRow>
               ))}
@@ -309,12 +311,39 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
             <AlertDialogTitle>{t("payments.refundTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {t("payments.refundDescription", {
-                credit: `$${refundTarget?.credit_usd ?? ""}`,
+                credit: formatUsdDecimal(refundTarget?.credit_usd, 2),
                 username: refundTarget?.username ?? refundTarget?.user_id ?? "",
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {needsManual && (
+          {refundTarget ? (
+            <dl className="grid gap-2 rounded-lg border p-3 text-sm">
+              <div className="grid gap-1">
+                <dt className="text-muted-foreground">{t("wallet.orderId")}</dt>
+                <dd className="flex min-w-0 items-center gap-1">
+                  <span className="min-w-0 break-all font-mono">{refundTarget.id}</span>
+                  <CopyButton value={refundTarget.id} label={t("wallet.copyOrderId")} />
+                </dd>
+              </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <dt className="text-muted-foreground">{t("wallet.channelCol")}</dt>
+                <dd className="min-w-0 break-words">{refundTarget.channel_name}</dd>
+              </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <dt className="text-muted-foreground">{t("payments.paidAmount")}</dt>
+                <dd className="font-medium tabular-nums">
+                  {refundTarget.pay_amount} {refundTarget.pay_currency}
+                </dd>
+              </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <dt className="text-muted-foreground">{t("wallet.credit")}</dt>
+                <dd className="font-medium tabular-nums">
+                  {formatUsdDecimal(refundTarget.credit_usd, 2)}
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+          {needsManual && refundTarget && (
             <div className="flex items-start gap-3 rounded-lg border p-3">
               <Checkbox
                 id="manual-refund"
@@ -325,7 +354,10 @@ export function OrdersTab({ filters, offset, onOffsetChange }: OrdersTabProps) {
                 htmlFor="manual-refund"
                 className="text-sm font-normal leading-snug"
               >
-                {t("payments.manualRefund")}
+                {t("payments.manualRefund", {
+                  amount: refundTarget.pay_amount,
+                  currency: refundTarget.pay_currency,
+                })}
               </Label>
             </div>
           )}

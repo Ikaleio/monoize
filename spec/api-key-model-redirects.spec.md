@@ -175,9 +175,9 @@ the stored list before accepting forwarding requests.
 
 ## Frontend
 
-FR-1. The dashboard API key create dialog in `frontend/src/pages/api-keys.tsx` MUST expose a section labeled `Model Redirects` after the transform editor.
+FR-1. The dashboard API key create dialog in `frontend/src/pages/api-keys.tsx` MUST expose a section labeled `Model Redirects` inside the collapsible advanced-settings section (`api-token-management.spec.md` TM-UI5), after the transform editor. For users without the transform editor (non-admins, TM-UI5) it MUST be the last advanced item.
 
-FR-2. The dashboard API key edit dialog in `frontend/src/pages/api-keys.tsx` MUST expose the same `Model Redirects` section after the transform editor.
+FR-2. The dashboard API key edit dialog in `frontend/src/pages/api-keys.tsx` MUST expose the same `Model Redirects` section at the same position.
 
 FR-3. The `Model Redirects` section MUST render the current `model_redirects` array as an ordered list of rows. Each row MUST contain:
 

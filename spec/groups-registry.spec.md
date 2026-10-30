@@ -127,12 +127,16 @@ GR-A2. The endpoint is read-only and MUST NOT create or modify rows.
 - Endpoint: `POST /api/dashboard/groups`
 - Authorization: admin (`role` is `admin` or `super_admin`).
 - Request body: `{ "name": string, "description"?: string, "user_selectable"?: boolean, "sort_order"?: integer, "billing_ratio"?: string }`
-  with defaults `description = ""`, `user_selectable = false`, `sort_order = 0`,
-  `billing_ratio = "1"`.
+  with defaults `description = ""`, `user_selectable = false`, and `billing_ratio = "1"`.
 - Response: `201` + created `Group` object with server-generated UUID v4 `id` and
   `is_default = false`.
 - A `billing_ratio` that violates GR-D8 MUST be rejected with HTTP `400` code
   `invalid_request`.
+
+GR-A3a. When `sort_order` is omitted, the server MUST store
+`max(sort_order of existing rows) + 1` (`0` when the registry is empty), so the new group
+is ordered after every existing group. An explicit `sort_order` is stored as given. The
+dashboard create dialog always omits it (`dashboard-ui-layout.spec.md` GP3).
 
 GR-A3. `name` MUST be trimmed; the trimmed value MUST be 1..64 characters, else HTTP `400`
 code `invalid_group_name`. `description` MUST be trimmed; the trimmed value MUST be at most
@@ -168,6 +172,9 @@ invalidation cost is accepted).
 - Response: `{ "success": true }`.
 - Errors: `404 not_found` for an unknown id; HTTP `400` code `cannot_delete_default_group`
   when the target row has `is_default = 1`; HTTP `409` code `group_required_by_plan` when deletion would leave a billing plan without an eligible group.
+- Clients MUST localize these codes and MUST NOT show the server `message`. The dashboard
+  pre-checks `group_required_by_plan` before sending the request
+  (`dashboard-ui-layout.spec.md` GP4).
 
 GR-A7. Because the default group cannot be deleted, the registry always contains at least
 one row and GR-D2 cannot be violated by deletion.

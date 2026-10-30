@@ -1,4 +1,6 @@
+import type { TFunction } from "i18next";
 import type { TransformRegistryItem, TransformRuleConfig } from "@/lib/api";
+import { resolveLocalizedText } from "./localized-text";
 
 export type JsonSchemaProperty = {
   type?: string;
@@ -10,6 +12,10 @@ export type JsonSchemaProperty = {
   format?: string;
   title?: string;
   description?: string;
+  /** Localized field label per transform-config-ui.spec.md TCU-1b. */
+  "x-localized-title"?: Record<string, string>;
+  /** Localized field description per TCU-1b / urp-transform-system.spec.md TF-8d. */
+  "x-localized-description"?: Record<string, string>;
   default?: unknown;
   items?: JsonSchemaProperty;
   properties?: Record<string, JsonSchemaProperty>;
@@ -61,12 +67,133 @@ export type JsonValueKind = "string" | "number" | "boolean" | "null" | "json";
 
 export const JSON_VALUE_KINDS: JsonValueKind[] = ["string", "number", "boolean", "null", "json"];
 
-export type DraftError = { path: string; message: string };
+/** Validation error codes per transform-config-ui.spec.md TCU-5a. */
+export type TransformValidationCode =
+  | "required"
+  | "minLength"
+  | "minimum"
+  | "maximum"
+  | "minItems"
+  | "enum"
+  | "notString"
+  | "notNumber"
+  | "notInteger"
+  | "notBoolean"
+  | "notArray"
+  | "notObject"
+  | "invalidJson"
+  | "duplicateKey"
+  | "phaseUnsupported"
+  | "configNotObject";
+
+export type TransformValidationParams = Record<string, string | number>;
+
+export type DraftError = {
+  path: string;
+  code: TransformValidationCode;
+  params?: TransformValidationParams;
+};
 
 export type TransformRuleValidationError = {
   field: string;
-  message: string;
+  code: TransformValidationCode;
+  params?: TransformValidationParams;
 };
+
+/** Localized reason text for one validation error (TCU-5a). */
+export function formatTransformValidationError(
+  error: { code: TransformValidationCode; params?: TransformValidationParams },
+  t: TFunction
+): string {
+  if (error.code === "phaseUnsupported") {
+    const phase = error.params?.phase;
+    return t("transforms.validation.phaseUnsupported", {
+      phase: t(phase === "response" ? "transforms.responseChain" : "transforms.requestChain"),
+    });
+  }
+  return t(`transforms.validation.${error.code}`, error.params ?? {});
+}
+
+/**
+ * Builds the host-form save-blocking message "{rule} · {field}: {reason}" for
+ * the first error of an invalid rule (TCU-5c).
+ */
+export function formatTransformRuleError(
+  invalid: { index: number; errors: TransformRuleValidationError[] },
+  rules: TransformRuleConfig[],
+  registry: TransformRegistryItem[],
+  t: TFunction,
+  language: string
+): string {
+  const rule = rules[invalid.index];
+  const typeId = rule?.transform ?? "";
+  const registryItem = registry.find((item) => item.type_id === typeId);
+  const ruleName = registryItem
+    ? resolveLocalizedText(registryItem.name, language, typeId)
+    : typeId;
+  const error = invalid.errors[0];
+  if (!error) {
+    return ruleName;
+  }
+  let field: string;
+  if (error.code === "phaseUnsupported") {
+    field = t("transforms.validation.fieldPhase");
+  } else if (error.code === "configNotObject") {
+    field = t("transforms.config");
+  } else {
+    const schema = registryItem ? getSchemaObject(registryItem.config_schema) : null;
+    field = formatSchemaPath(schema, error.field, language);
+  }
+  return t("transforms.validation.ruleError", {
+    rule: ruleName,
+    field,
+    reason: formatTransformValidationError(error, t),
+  });
+}
+
+/** Field label per TCU-1b: localized title, then `title`, then the key. */
+export function resolvePropertyLabel(
+  property: JsonSchemaProperty | undefined,
+  key: string,
+  language: string
+): string {
+  const fallback = typeof property?.title === "string" && property.title ? property.title : key;
+  const localized = property?.["x-localized-title"];
+  return isRecord(localized) ? resolveLocalizedText(localized, language, fallback) : fallback;
+}
+
+/** Field description per TCU-1b; empty string when the schema has none. */
+export function resolvePropertyDescription(
+  property: JsonSchemaProperty | undefined,
+  language: string
+): string {
+  const fallback = typeof property?.description === "string" ? property.description : "";
+  const localized = property?.["x-localized-description"];
+  return isRecord(localized) ? resolveLocalizedText(localized, language, fallback) : fallback;
+}
+
+function formatSchemaPath(
+  schema: JsonSchemaObject | null,
+  path: string,
+  language: string
+): string {
+  const labels: string[] = [];
+  let properties: Record<string, JsonSchemaProperty> | undefined = schema?.properties;
+  let current: JsonSchemaProperty | undefined;
+  for (const segment of path.split(".")) {
+    const property = properties?.[segment];
+    if (!property && /^\d+$/.test(segment)) {
+      // Array item or key/value map row index.
+      labels.push(`#${Number(segment) + 1}`);
+      current = current?.type === "array" ? current.items : undefined;
+    } else {
+      labels.push(resolvePropertyLabel(property, segment, language));
+      current = property;
+    }
+    properties = current?.properties;
+  }
+  return labels.join(" › ");
+}
 
 export function getSchemaObject(schema: Record<string, unknown>): JsonSchemaObject | null {
   if (!isRecord(schema)) {
@@ -185,11 +312,12 @@ export function buildDraftValue(
         return buildTypedJsonDraft(value);
       }
       const properties = property?.properties ?? {};
+      const requiredKeys = property && Array.isArray(property.required) ? property.required : [];
       const fields: Record<string, DraftValue> = {};
       for (const [subKey, subProperty] of Object.entries(properties)) {
         fields[subKey] = Object.prototype.hasOwnProperty.call(value, subKey)
           ? buildDraftValue(subProperty ?? undefined, value[subKey])
-          : { kind: "unset" };
+          : absentDraft(subProperty ?? undefined, requiredKeys.includes(subKey));
       }
       const extra: Record<string, unknown> = {};
       for (const [subKey, subValue] of Object.entries(value)) {
@@ -214,6 +342,14 @@ export function buildDraftValue(
     default:
       return buildTypedJsonDraft(value);
   }
+}
+
+/**
+ * Initial draft for a key absent from the stored config (TCU-8 rules 2 and 3):
+ * required keys open as an active editor, optional keys as unset.
+ */
+function absentDraft(property: JsonSchemaProperty | undefined, required: boolean): DraftValue {
+  return required ? defaultDraftForProperty(property) : { kind: "unset" };
 }
 
 /** Draft created when the user activates an unset field or appends an array row. */
@@ -345,7 +481,7 @@ export function buildDraftConfig(
   for (const [key, property] of Object.entries(properties)) {
     drafts[key] = Object.prototype.hasOwnProperty.call(config, key)
       ? buildDraftValue(property ?? undefined, config[key])
-      : { kind: "unset" };
+      : absentDraft(property ?? undefined, isRequiredSchemaKey(schema, key));
   }
   const extra: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config)) {
@@ -376,7 +512,7 @@ export function serializeDraftValue(
   switch (draft.kind) {
     case "unset":
       return required
-        ? { present: false, errors: [{ path, message: "is required" }] }
+        ? { present: false, errors: [{ path, code: "required" }] }
         : { present: false, errors: [] };
     case "string": {
       if (
@@ -392,9 +528,7 @@ export function serializeDraftValue(
           return {
             present: true,
             value: "",
-            errors: [
-              { path, message: `must be at least ${property.minLength} characters` },
-            ],
+            errors: [{ path, code: "minLength", params: { min: property.minLength } }],
           };
         }
         return { present: true, value: "", errors: [] };
@@ -406,14 +540,14 @@ export function serializeDraftValue(
       if (trimmed === "") {
         if (widget === "number" || widget === "integer") {
           return required
-            ? { present: false, errors: [{ path, message: "is required" }] }
+            ? { present: false, errors: [{ path, code: "required" }] }
             : { present: false, errors: [] };
         }
-        return { present: true, errors: [{ path, message: "must be a number" }] };
+        return { present: true, errors: [{ path, code: "notNumber" }] };
       }
       const parsed = Number(trimmed);
       if (!Number.isFinite(parsed)) {
-        return { present: true, errors: [{ path, message: "must be a number" }] };
+        return { present: true, errors: [{ path, code: "notNumber" }] };
       }
       return finishScalar(property, parsed, path);
     }
@@ -429,12 +563,12 @@ export function serializeDraftValue(
     case "json": {
       const trimmed = draft.text.trim();
       if (trimmed === "") {
-        return { present: true, errors: [{ path, message: "Invalid JSON" }] };
+        return { present: true, errors: [{ path, code: "invalidJson" }] };
       }
       try {
         return finishScalar(property, JSON.parse(trimmed), path);
       } catch {
-        return { present: true, errors: [{ path, message: "Invalid JSON" }] };
+        return { present: true, errors: [{ path, code: "invalidJson" }] };
       }
     }
     case "array": {
@@ -459,7 +593,8 @@ export function serializeDraftValue(
       ) {
         errors.push({
           path,
-          message: `must have at least ${property.minItems} item(s)`,
+          code: "minItems",
+          params: { min: property.minItems },
         });
       }
       return { present: true, value: values, errors };
@@ -495,7 +630,7 @@ export function serializeDraftValue(
           return;
         }
         if (seen.has(key)) {
-          errors.push({ path: `${path}.${index}`, message: `duplicate key "${key}"` });
+          errors.push({ path: `${path}.${index}`, code: "duplicateKey", params: { key } });
           return;
         }
         seen.add(key);
@@ -570,7 +705,8 @@ export function validateValueAgainstProperty(
     if (!property.enum.includes(value)) {
       errors.push({
         path,
-        message: `must be one of: ${property.enum.map(String).join(", ")}`,
+        code: "enum",
+        params: { values: property.enum.map(String).join(", ") },
       });
     }
     return errors;
@@ -579,49 +715,47 @@ export function validateValueAgainstProperty(
   switch (property.type) {
     case "string": {
       if (typeof value !== "string") {
-        errors.push({ path, message: "must be a string" });
+        errors.push({ path, code: "notString" });
         return errors;
       }
       if (typeof property.minLength === "number" && value.length < property.minLength) {
-        errors.push({
-          path,
-          message: `must be at least ${property.minLength} characters`,
-        });
+        errors.push({ path, code: "minLength", params: { min: property.minLength } });
       }
       return errors;
     }
     case "boolean": {
       if (typeof value !== "boolean") {
-        errors.push({ path, message: "must be a boolean" });
+        errors.push({ path, code: "notBoolean" });
       }
       return errors;
     }
     case "integer":
     case "number": {
       if (typeof value !== "number" || !Number.isFinite(value)) {
-        errors.push({ path, message: "must be a number" });
+        errors.push({ path, code: "notNumber" });
         return errors;
       }
       if (property.type === "integer" && !Number.isInteger(value)) {
-        errors.push({ path, message: "must be an integer" });
+        errors.push({ path, code: "notInteger" });
       }
       if (typeof property.minimum === "number" && value < property.minimum) {
-        errors.push({ path, message: `must be >= ${property.minimum}` });
+        errors.push({ path, code: "minimum", params: { min: property.minimum } });
       }
       if (typeof property.maximum === "number" && value > property.maximum) {
-        errors.push({ path, message: `must be <= ${property.maximum}` });
+        errors.push({ path, code: "maximum", params: { max: property.maximum } });
       }
       return errors;
     }
     case "array": {
       if (!Array.isArray(value)) {
-        errors.push({ path, message: "must be an array" });
+        errors.push({ path, code: "notArray" });
         return errors;
       }
       if (typeof property.minItems === "number" && value.length < property.minItems) {
         errors.push({
           path,
-          message: `must have at least ${property.minItems} item(s)`,
+          code: "minItems",
+          params: { min: property.minItems },
         });
       }
       value.forEach((item, index) => {
@@ -633,7 +767,7 @@ export function validateValueAgainstProperty(
     }
     case "object": {
       if (!isRecord(value)) {
-        errors.push({ path, message: "must be an object" });
+        errors.push({ path, code: "notObject" });
         return errors;
       }
       const properties = property.properties;
@@ -641,7 +775,7 @@ export function validateValueAgainstProperty(
         const requiredKeys = Array.isArray(property.required) ? property.required : [];
         for (const requiredKey of requiredKeys) {
           if (!Object.prototype.hasOwnProperty.call(value, requiredKey)) {
-            errors.push({ path: `${path}.${requiredKey}`, message: "is required" });
+            errors.push({ path: `${path}.${requiredKey}`, code: "required" });
           }
         }
         for (const [subKey, subProperty] of Object.entries(properties)) {
@@ -663,6 +797,12 @@ export function validateValueAgainstProperty(
   }
 }
 
+/** True when a newly added rule must be configured before it joins a chain (TCU-2d). */
+export function transformRequiresConfig(registryItem: TransformRegistryItem): boolean {
+  const schema = getSchemaObject(registryItem.config_schema);
+  return Array.isArray(schema?.required) && schema.required.length > 0;
+}
+
 export function validateTransformRule(
   rule: TransformRuleConfig,
   registryItem?: TransformRegistryItem
@@ -675,7 +815,8 @@ export function validateTransformRule(
   if (!registryItem.supported_phases.includes(rule.phase)) {
     errors.push({
       field: "phase",
-      message: `phase "${rule.phase}" is not supported by transform "${rule.transform}"`,
+      code: "phaseUnsupported",
+      params: { phase: rule.phase },
     });
   }
 
@@ -685,20 +826,14 @@ export function validateTransformRule(
   }
 
   if (!isRecord(rule.config)) {
-    errors.push({
-      field: "config",
-      message: "config must be a JSON object",
-    });
+    errors.push({ field: "config", code: "configNotObject" });
     return errors;
   }
 
   const required = Array.isArray(schema.required) ? schema.required : [];
   for (const key of required) {
     if (!Object.prototype.hasOwnProperty.call(rule.config, key) || rule.config[key] === undefined) {
-      errors.push({
-        field: key,
-        message: "is required",
-      });
+      errors.push({ field: key, code: "required" });
     }
   }
 
@@ -709,7 +844,7 @@ export function validateTransformRule(
     }
     const property = (rawProperty ?? {}) as JsonSchemaProperty;
     for (const error of validateValueAgainstProperty(property, rule.config[key], key)) {
-      errors.push({ field: error.path, message: error.message });
+      errors.push({ field: error.path, code: error.code, params: error.params });
     }
   }
 
@@ -732,6 +867,7 @@ export function findFirstInvalidTransformRule(
   return null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** Shared plain-object guard for untyped config JSON in this module family. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

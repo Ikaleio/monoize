@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 import { Plus, Server } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { ConfirmDeleteDialog } from '@/components/ui/confirm-delete-dialog'
 import { QueryError } from '@/components/ui/query-error'
-import { toast } from 'sonner'
-import type { Provider } from '@/lib/api'
+import type { MonoizeChannel, Provider } from '@/lib/api'
+import { toastApiError } from '@/lib/api-error'
 import {
 	useProviders,
 	useModelMetadata,
@@ -14,18 +16,30 @@ import {
 	useTransformRegistry,
 	deleteProviderOptimistic,
 	updateProviderOptimistic,
-	reorderProviders
+	reorderProviders,
+	setChannelEnabledOptimistic
 } from '@/lib/swr'
 import { AnimatedButton, PageWrapper, motion, transitions } from '@/components/ui/motion'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { CardsPageSkeleton } from '@/components/ui/page-skeleton'
-import { ProviderCard } from './providers/ProviderCard'
+import { ChannelTestProvider } from './providers/ChannelTestDialog'
+import { ProviderCard, type ProviderDragState } from './providers/ProviderCard'
 import { ProviderDialog } from './providers/ProviderDialog'
 import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
+import { useMediaQuery } from './providers/use-media-query'
 
 export function ProvidersPage() {
+	return (
+		<ChannelTestProvider>
+			<ProvidersPageContent />
+		</ChannelTestProvider>
+	)
+}
+
+function ProvidersPageContent() {
 	const { t } = useTranslation()
+	const [searchParams, setSearchParams] = useSearchParams()
 	const {
 		data: providersData,
 		error: providersError,
@@ -33,7 +47,7 @@ export function ProvidersPage() {
 		isValidating,
 		mutate: reloadProviders
 	} = useProviders({ refreshInterval: 10000 })
-	const providers = providersData ?? []
+	const providers = useMemo(() => providersData ?? [], [providersData])
 	const { data: settings } = useSettings()
 	const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
 		useTransformRegistry()
@@ -41,59 +55,111 @@ export function ProvidersPage() {
 	const { data: modelPrices = [] } = useModelPrices()
 	const reasoningSuffixMap =
 		settings?.reasoning_suffix_map ?? DEFAULT_REASONING_SUFFIX_MAP
+	const canDrag = useMediaQuery('(pointer: fine)')
 	const [createOpen, setCreateOpen] = useState(false)
 	const [editProvider, setEditProvider] = useState<Provider | null>(null)
 	const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null)
 	const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null)
+	const [dragOverProviderId, setDragOverProviderId] = useState<string | null>(null)
+	const [focusRequest, setFocusRequest] = useState<{ providerId: string; request: { channelId: string | null } } | null>(null)
+	const hasGroups = providers.some(provider => provider.group_ids.length > 0)
 
-	const applyReorder = async (orderedIds: string[]) => {
+	// PL12e: apply `?provider=&channel=` once (state adjusted during render), then drop the params.
+	const deepLinkProvider = searchParams.get('provider')
+	const deepLinkChannel = searchParams.get('channel')
+	const deepLinkKey = deepLinkProvider && providersData !== undefined ? `${deepLinkProvider}\n${deepLinkChannel ?? ''}` : null
+	const [appliedDeepLink, setAppliedDeepLink] = useState<string | null>(null)
+	if (deepLinkProvider && providersData !== undefined && deepLinkKey !== appliedDeepLink) {
+		setAppliedDeepLink(deepLinkKey)
+		setFocusRequest(providersData.some(provider => provider.id === deepLinkProvider)
+			? { providerId: deepLinkProvider, request: { channelId: deepLinkChannel } }
+			: null)
+	}
+	useEffect(() => {
+		if (deepLinkKey === null) return
+		setSearchParams(current => {
+			const next = new URLSearchParams(current)
+			next.delete('provider')
+			next.delete('channel')
+			return next
+		}, { replace: true })
+	}, [deepLinkKey, setSearchParams])
+
+	const applyOrder = async (next: Provider[]) => {
 		try {
-			await reorderProviders(orderedIds)
+			await reorderProviders(next)
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('common.error'))
+			toastApiError(error, t, t('providers.reorderFailed'))
 		}
 	}
 
-	const moveProvider = async (from: number, to: number) => {
-		if (to < 0 || to >= providers.length || from === to) {
-			return
-		}
+	const moveProvider = (from: number, to: number) => {
+		if (to < 0 || to >= providers.length || from === to) return
 		const next = [...providers]
 		const [item] = next.splice(from, 1)
 		next.splice(to, 0, item)
-		await applyReorder(next.map(provider => provider.id))
+		void applyOrder(next)
 	}
 
-	const handleDrop = async (targetProviderId: string) => {
-		if (!draggingProviderId || draggingProviderId === targetProviderId) {
-			return
-		}
-		const next = [...providers]
-		const from = next.findIndex(provider => provider.id === draggingProviderId)
-		const to = next.findIndex(provider => provider.id === targetProviderId)
-		if (from < 0 || to < 0) {
-			return
-		}
-		const [item] = next.splice(from, 1)
-		next.splice(to, 0, item)
+	const endDrag = () => {
 		setDraggingProviderId(null)
-		await applyReorder(next.map(provider => provider.id))
+		setDragOverProviderId(null)
+	}
+
+	const handleDrop = (targetProviderId: string) => {
+		const from = providers.findIndex(provider => provider.id === draggingProviderId)
+		const to = providers.findIndex(provider => provider.id === targetProviderId)
+		endDrag()
+		if (from >= 0 && to >= 0) moveProvider(from, to)
+	}
+
+	const dragStateFor = (providerId: string, index: number): ProviderDragState => {
+		if (!draggingProviderId) return null
+		if (providerId === draggingProviderId) return 'source'
+		if (providerId !== dragOverProviderId) return null
+		const from = providers.findIndex(provider => provider.id === draggingProviderId)
+		return from < index ? 'after' : 'before'
 	}
 
 	const confirmDelete = async () => {
 		if (!deleteTarget) return
+		const target = deleteTarget
 		try {
-			await deleteProviderOptimistic(deleteTarget.id, providers)
+			await deleteProviderOptimistic(target.id, providers)
+			toast.success(t('providers.deleteSuccess', { name: target.name }))
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('common.error'))
+			toastApiError(error, t, t('providers.deleteFailed'))
 		}
 	}
 
+	// PL12c: immediate toggle with an undo action instead of a confirmation.
 	const handleToggle = async (provider: Provider, enabled: boolean) => {
 		try {
 			await updateProviderOptimistic(provider.id, { enabled }, providers)
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('common.error'))
+			toastApiError(error, t, t('providers.toggleFailed', { name: provider.name }))
+			return
+		}
+		toast.success(
+			enabled ? t('providers.enabledToast', { name: provider.name }) : t('providers.disabledToast', { name: provider.name }),
+			{
+				action: {
+					label: t('providers.undo'),
+					onClick: () => {
+						updateProviderOptimistic(provider.id, { enabled: !enabled }, providers).catch(error =>
+							toastApiError(error, t, t('providers.toggleFailed', { name: provider.name }))
+						)
+					}
+				}
+			}
+		)
+	}
+
+	const handleToggleChannel = async (provider: Provider, channel: MonoizeChannel, enabled: boolean) => {
+		try {
+			await setChannelEnabledOptimistic(provider.id, channel.id, enabled)
+		} catch (error) {
+			toastApiError(error, t, t('providers.channelToggleFailed', { name: channel.name }))
 		}
 	}
 
@@ -105,6 +171,27 @@ export function ProvidersPage() {
 		)
 	}
 
+	const header = (
+		<motion.div
+			initial={{ opacity: 0, y: -10 }}
+			animate={{ opacity: 1, y: 0 }}
+			transition={transitions.normal}
+		>
+			<PageHeader
+				title={t('providers.title')}
+				description={hasGroups ? `${t('providers.description')} ${t('providers.descriptionGroups')}` : t('providers.description')}
+				actions={providersError && !providersData ? undefined : (
+					<AnimatedButton>
+						<Button onClick={() => setCreateOpen(true)}>
+							<Plus data-icon='inline-start' aria-hidden='true' />
+							{t('providers.addProvider')}
+						</Button>
+					</AnimatedButton>
+				)}
+			/>
+		</motion.div>
+	)
+
 	const errorState = providersError ? (
 		<QueryError onRetry={reloadProviders} retrying={isValidating} stale={providersData !== undefined} />
 	) : null
@@ -112,13 +199,7 @@ export function ProvidersPage() {
 	if (providersError && !providersData) {
 		return (
 			<PageWrapper className='space-y-6'>
-				<motion.div
-					initial={{ opacity: 0, y: -10 }}
-					animate={{ opacity: 1, y: 0 }}
-					transition={transitions.normal}
-				>
-					<PageHeader title={t('providers.title')} description={t('providers.description')} />
-				</motion.div>
+				{header}
 				{errorState}
 			</PageWrapper>
 		)
@@ -126,20 +207,7 @@ export function ProvidersPage() {
 
 	return (
 		<PageWrapper className='space-y-6'>
-			<motion.div
-				initial={{ opacity: 0, y: -10 }}
-				animate={{ opacity: 1, y: 0 }}
-				transition={transitions.normal}
-			>
-				<PageHeader title={t('providers.title')} description={t('providers.description')} actions={(
-					<AnimatedButton>
-						<Button onClick={() => setCreateOpen(true)}>
-							<Plus data-icon='inline-start' aria-hidden='true' />
-							{t('providers.addProvider')}
-						</Button>
-					</AnimatedButton>
-				)} />
-			</motion.div>
+			{header}
 
 			{errorState}
 
@@ -170,9 +238,16 @@ export function ProvidersPage() {
 						onDelete={setDeleteTarget}
 						onMove={moveProvider}
 						onToggle={handleToggle}
+						onToggleChannel={handleToggleChannel}
+						canDrag={canDrag}
+						dragState={dragStateFor(provider.id, index)}
 						onDragStart={setDraggingProviderId}
+						onDragOver={setDragOverProviderId}
 						onDrop={handleDrop}
+						onDragEnd={endDrag}
 						modelMetadata={modelMetadata}
+						globalProbeModel={settings?.monoize_active_probe_model}
+						focusRequest={focusRequest?.providerId === provider.id ? focusRequest.request : null}
 					/>
 				))}
 			</div>
@@ -194,9 +269,7 @@ export function ProvidersPage() {
 			<ProviderDialog
 				open={!!editProvider}
 				onOpenChange={open => {
-					if (!open) {
-						setEditProvider(null)
-					}
+					if (!open) setEditProvider(null)
 				}}
 				mode='edit'
 				current={editProvider}
@@ -215,7 +288,11 @@ export function ProvidersPage() {
 					if (!open) setDeleteTarget(null)
 				}}
 				title={t('providers.deleteConfirm')}
-				description={t('providers.deleteConfirmDesc', { name: deleteTarget?.name })}
+				description={
+					deleteTarget?.live_usage && deleteTarget.live_usage.rpm > 0
+						? `${t('providers.deleteConfirmDesc', { name: deleteTarget.name })} ${t('providers.deleteConfirmTraffic', { count: deleteTarget.live_usage.rpm })}`
+						: t('providers.deleteConfirmDesc', { name: deleteTarget?.name })
+				}
 				onConfirm={confirmDelete}
 			/>
 		</PageWrapper>

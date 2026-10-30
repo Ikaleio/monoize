@@ -50,6 +50,10 @@ PM10. Shared popup primitives MUST keep Radix accessibility and interaction cont
 - outside-click behavior,
 - close button behavior.
 
+The dirty-dialog guard (`frontend-design-system.spec.md` DS73) is the only permitted
+change to escape-key, outside-click, and close-button behavior. Focus return on close
+follows DS81.
+
 PM11. Shared popup primitives MUST preserve DOM mount during exit animation and unmount only after exit transition completes.
 
 PM12. Shared popup primitives MUST apply a secondary content-layer motion without requiring changes in page-level children:

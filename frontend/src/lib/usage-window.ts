@@ -1,12 +1,30 @@
 // Shared time-window model for the /dashboard usage chart and recent-usage
-// panel (dashboard-home-overview.spec.md DH-6a/DH-6c/DH-6i/DH-7a). Keeping the
-// mapping in one module guarantees the two panels cannot drift.
+// panel (dashboard-home-overview.spec.md DH-6a/DH-6c/DH-6i/DH-7a).
 
 export type UsageWindow = "1h" | "24h" | "7d" | "30d";
 
 export const USAGE_WINDOWS: UsageWindow[] = ["1h", "24h", "7d", "30d"];
 
-export const DEFAULT_USAGE_WINDOW: UsageWindow = "1h";
+export const DEFAULT_USAGE_WINDOW: UsageWindow = "24h";
+
+const USAGE_WINDOW_STORAGE_KEY = "monoize-home-window";
+
+export function readStoredUsageWindow(): UsageWindow {
+  try {
+    const stored = window.localStorage.getItem(USAGE_WINDOW_STORAGE_KEY);
+    return USAGE_WINDOWS.find((option) => option === stored) ?? DEFAULT_USAGE_WINDOW;
+  } catch {
+    return DEFAULT_USAGE_WINDOW;
+  }
+}
+
+export function storeUsageWindow(value: UsageWindow): void {
+  try {
+    window.localStorage.setItem(USAGE_WINDOW_STORAGE_KEY, value);
+  } catch {
+    // Storage may be unavailable; the selection still applies to this mount.
+  }
+}
 
 export interface UsageWindowQuery {
   rangeHours: number;
@@ -21,12 +39,6 @@ export const USAGE_WINDOW_QUERY: Record<UsageWindow, UsageWindowQuery> = {
   "7d": { rangeHours: 168, buckets: 7 },
   "30d": { rangeHours: 720, buckets: 30 },
 };
-
-/** ISO-8601 start of the window ending at `now` (DH-7a `time_from`). */
-export function usageWindowStartIso(window: UsageWindow, now: Date = new Date()): string {
-  const { rangeHours } = USAGE_WINDOW_QUERY[window];
-  return new Date(now.getTime() - rangeHours * 3_600_000).toISOString();
-}
 
 /**
  * Bucket start instants reconstructed from the analytics response range

@@ -1,17 +1,20 @@
-import { useContext, type ReactNode } from "react";
+import { useContext, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { ScrollText } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Virtuoso } from "react-virtuoso";
 import type {
   AdminOverview,
   AdminOverviewChannelHealth,
 } from "@/lib/api";
-import { SPEND_WINDOWS, type SpendWindow } from "@/lib/spend-window";
+import { DEFAULT_SPEND_WINDOW, SPEND_WINDOWS, type SpendWindow } from "@/lib/spend-window";
 import { DashboardScrollParentContext } from "@/lib/dashboard-scroll";
 import { formatNanoUsd } from "@/lib/exact-decimal";
 import { formatDateTime } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -38,6 +41,19 @@ import {
 } from "@/components/ui/table";
 
 type ChannelStatus = "cooling" | "disabled" | "healthy" | "unhealthy";
+
+/** ADF-5c: the order in which an on-call admin needs to read the rows. */
+const STATUS_SEVERITY: Record<ChannelStatus, number> = {
+  unhealthy: 0,
+  cooling: 1,
+  disabled: 2,
+  healthy: 3,
+};
+
+const WIDE_ONLY = "hidden [@container(min-width:56rem)]:block";
+const NARROW_ONLY = "[@container(min-width:56rem)]:hidden";
+const LINK_CLASS =
+  "rounded-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 interface KeyValueRow {
   label: string;
@@ -77,6 +93,10 @@ function channelStatus(channel: AdminOverviewChannelHealth): ChannelStatus {
   if (channel.cooldown_active) return "cooling";
   if (!channel.enabled) return "disabled";
   return channel.healthy ? "healthy" : "unhealthy";
+}
+
+function isAbnormal(status: ChannelStatus): boolean {
+  return status === "cooling" || status === "unhealthy";
 }
 
 function KeyValueRows({ rows }: { rows: KeyValueRow[] }) {
@@ -200,7 +220,15 @@ export function ReplicaStatusCard({ data }: { data: AdminOverview }) {
   );
 }
 
-export function UsageRankingCard({ data, className }: { data: AdminOverview; className?: string }) {
+export function UsageRankingCard({
+  data,
+  pending,
+  className,
+}: {
+  data: AdminOverview;
+  pending: boolean;
+  className?: string;
+}) {
   const { t } = useTranslation();
   const rows = data.users_ranking;
   const title = t("adminDashboard.usageRanking");
@@ -208,9 +236,16 @@ export function UsageRankingCard({ data, className }: { data: AdminOverview; cla
   return (
     <Card className={cn("overflow-clip", className)}>
       <SectionHeader title={title} description={t("adminDashboard.rankingDescription")} />
-      <CardContent className="border-t p-0">
+      <CardContent className={cn("border-t p-0 transition-opacity", pending && "opacity-60")}>
         {rows.length === 0 ? (
-          <EmptyState variant="inline" title={t("adminDashboard.noUsage")} className="py-8" />
+          <EmptyState
+            variant="inline"
+            // Names the window of the data on screen, which lags the control while pending.
+            title={t("adminDashboard.noUsage", {
+              window: t(`adminDashboard.windowName${data.spend?.window ?? DEFAULT_SPEND_WINDOW}`),
+            })}
+            className="py-8"
+          />
         ) : (
           <Table aria-label={title} className="table-fixed">
             <TableHeader>
@@ -226,9 +261,19 @@ export function UsageRankingCard({ data, className }: { data: AdminOverview; cla
                 <TableRow key={row.user_id}>
                   <TableCell className="pl-5 tabular-nums text-muted-foreground">{index + 1}</TableCell>
                   <TableCell>
-                    <span className={cn("block truncate", !row.username && "font-mono")} title={row.username || row.user_id}>
-                      {row.username || row.user_id}
-                    </span>
+                    {row.username ? (
+                      <Link
+                        to={`/dashboard/logs?${new URLSearchParams({ username: row.username })}`}
+                        className={cn("block truncate", LINK_CLASS)}
+                        title={row.username}
+                      >
+                        {row.username}
+                      </Link>
+                    ) : (
+                      <span className="block truncate font-mono" title={row.user_id}>
+                        {row.user_id}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{formatNumber(row.call_count)}</TableCell>
                   <TableCell className="pr-5 text-right tabular-nums">{formatNanoUsd(row.cost_nano_usd, 6)}</TableCell>
@@ -242,25 +287,101 @@ export function UsageRankingCard({ data, className }: { data: AdminOverview; cla
   );
 }
 
-function ChannelStatusCell({ channel, status }: { channel: AdminOverviewChannelHealth; status: ChannelStatus }) {
+function ChannelStatusBadge({ status }: { status: ChannelStatus }) {
   const { t } = useTranslation();
+  if (status === "cooling") {
+    return <StatusBadge variant="warning">{t("adminDashboard.coolingDown")}</StatusBadge>;
+  }
+  if (status === "disabled") return <Badge variant="secondary">{t("adminDashboard.disabled")}</Badge>;
+  if (status === "healthy") {
+    return <StatusBadge variant="success">{t("adminDashboard.healthy")}</StatusBadge>;
+  }
+  return <StatusBadge variant="destructive">{t("adminDashboard.unhealthy")}</StatusBadge>;
+}
+
+/** ADF-5d: abnormal rows lead straight to the failing requests of that Channel. */
+function ChannelLogsLink({ channel }: { channel: AdminOverviewChannelHealth }) {
+  const { t } = useTranslation();
+  const label = t("adminDashboard.viewChannelLogs", { channel: channel.channel_name });
+  const params = new URLSearchParams({ channel_id: channel.channel_id, status: "error" });
+  return (
+    <Button asChild variant="ghost" size="icon" className="size-11 shrink-0 sm:size-9">
+      <Link to={`/dashboard/logs?${params}`} aria-label={label} title={label}>
+        <ScrollText aria-hidden="true" />
+      </Link>
+    </Button>
+  );
+}
+
+function ChannelStatusCell({ channel, status }: { channel: AdminOverviewChannelHealth; status: ChannelStatus }) {
   const models = channel.unhealthy_models ?? [];
   return (
     <>
-      {status === "cooling" ? (
-        <StatusBadge variant="warning">{t("adminDashboard.coolingDown")}</StatusBadge>
-      ) : status === "disabled" ? (
-        <Badge variant="secondary">{t("adminDashboard.disabled")}</Badge>
-      ) : status === "healthy" ? (
-        <StatusBadge variant="success">{t("adminDashboard.healthy")}</StatusBadge>
-      ) : (
-        <StatusBadge variant="destructive">{t("adminDashboard.unhealthy")}</StatusBadge>
-      )}
+      <span className="flex items-center gap-1">
+        <ChannelStatusBadge status={status} />
+        {isAbnormal(status) ? <ChannelLogsLink channel={channel} /> : null}
+      </span>
       {models.length > 0 ? (
         <span className="mt-1 block truncate font-mono text-error-foreground" title={models.join(", ")}>
           {models.join(", ")}
         </span>
       ) : null}
+    </>
+  );
+}
+
+function ChannelHealthRow({ channel }: { channel: AdminOverviewChannelHealth }) {
+  const { t } = useTranslation();
+  const status = channelStatus(channel);
+  const providerParams = new URLSearchParams({
+    provider: channel.provider_id,
+    channel: channel.channel_id,
+  });
+  const cost = formatNanoUsd(channel.window_cost_nano_usd ?? "0", 2);
+  const calls = t("adminDashboard.callsCount", { count: channel.window_calls ?? 0 });
+
+  return (
+    <>
+      <DataListCell primary>
+        <div className="flex min-w-0 items-center gap-2">
+          <Link
+            to={`/dashboard/providers?${providerParams}`}
+            className={cn("min-w-0 truncate font-medium", LINK_CLASS)}
+            title={channel.channel_name}
+          >
+            {channel.channel_name}
+          </Link>
+          <span className={cn("ml-auto flex shrink-0 items-center gap-1", NARROW_ONLY)}>
+            <ChannelStatusBadge status={status} />
+            {isAbnormal(status) ? <ChannelLogsLink channel={channel} /> : null}
+          </span>
+        </div>
+        <span className="block truncate text-muted-foreground" title={channel.provider_name}>
+          {channel.provider_name}
+          <span className={cn("tabular-nums", NARROW_ONLY)}>
+            {" · "}
+            {cost} · {calls}
+          </span>
+        </span>
+      </DataListCell>
+      <DataListCell label={t("adminDashboard.weight")} align="end" className={WIDE_ONLY}>
+        <span className="tabular-nums">{channel.weight}</span>
+      </DataListCell>
+      <DataListCell label={t("adminDashboard.affinity")} className={WIDE_ONLY}>
+        {channel.session_affinity_auto ? "auto" : <span className="text-muted-foreground">—</span>}
+      </DataListCell>
+      <DataListCell label={t("adminDashboard.status")} className={WIDE_ONLY}>
+        <ChannelStatusCell channel={channel} status={status} />
+      </DataListCell>
+      <DataListCell label={t("adminDashboard.spend")} align="end" className={WIDE_ONLY}>
+        <span className="block tabular-nums">{cost}</span>
+        <span className="block tabular-nums text-muted-foreground">{calls}</span>
+      </DataListCell>
+      <DataListCell label={t("adminDashboard.lastProbe")} align="end" className={WIDE_ONLY}>
+        <span className="tabular-nums text-muted-foreground">
+          {channel.last_probe_at == null ? "—" : formatDateTime(channel.last_probe_at)}
+        </span>
+      </DataListCell>
     </>
   );
 }
@@ -278,11 +399,23 @@ export function ChannelHealthCard({
 }) {
   const { t } = useTranslation();
   const scrollParent = useContext(DashboardScrollParentContext);
+  const [abnormalOnlyRequested, setAbnormalOnlyRequested] = useState(false);
   const rows = data.channel_health;
-  const unhealthy = rows.filter((channel) => {
-    const status = channelStatus(channel);
-    return status === "cooling" || status === "unhealthy";
-  }).length;
+  const sortedRows = useMemo(
+    () =>
+      [...rows].sort(
+        (a, b) => STATUS_SEVERITY[channelStatus(a)] - STATUS_SEVERITY[channelStatus(b)]
+      ),
+    [rows]
+  );
+  const abnormalRows = useMemo(
+    () => sortedRows.filter((channel) => isAbnormal(channelStatus(channel))),
+    [sortedRows]
+  );
+  const unhealthy = abnormalRows.length;
+  // Recovery of the last abnormal Channel must not leave an empty list behind.
+  const abnormalOnly = abnormalOnlyRequested && unhealthy > 0;
+  const visibleRows = abnormalOnly ? abnormalRows : sortedRows;
 
   return (
     <Card className="overflow-clip">
@@ -291,15 +424,43 @@ export function ChannelHealthCard({
           <div className="flex min-w-0 flex-col gap-1.5">
             <CardTitle>{t("adminDashboard.channelHealth")}</CardTitle>
             <CardDescription className="tabular-nums">
-              {t("adminDashboard.channelSummary", { count: rows.length, unhealthy })}
+              {t("adminDashboard.channelSummaryTotal", { count: rows.length })}
+              {" · "}
+              {unhealthy > 0 ? (
+                <button
+                  type="button"
+                  className={cn("underline", LINK_CLASS)}
+                  onClick={() => setAbnormalOnlyRequested(true)}
+                >
+                  {t("adminDashboard.channelSummaryUnhealthy", { count: unhealthy })}
+                </button>
+              ) : (
+                t("adminDashboard.channelSummaryUnhealthy", { count: unhealthy })
+              )}
             </CardDescription>
           </div>
-          <SegmentedControl
-            value={spendWindow}
-            options={SPEND_WINDOWS}
-            onChange={onSpendWindowChange}
-            ariaLabel={t("adminDashboard.spendWindowAria")}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              aria-pressed={abnormalOnly}
+              disabled={unhealthy === 0}
+              onClick={() => setAbnormalOnlyRequested(!abnormalOnly)}
+              className={cn(
+                "h-9 px-3 text-sm",
+                abnormalOnly &&
+                  "bg-foreground text-background hover:bg-foreground/90 hover:text-background"
+              )}
+            >
+              {t("adminDashboard.abnormalOnly", { count: unhealthy })}
+            </Button>
+            <SegmentedControl
+              value={spendWindow}
+              options={SPEND_WINDOWS}
+              onChange={onSpendWindowChange}
+              ariaLabel={t("adminDashboard.spendWindowAria")}
+            />
+          </div>
         </div>
         <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm text-muted-foreground">
           <span>
@@ -319,7 +480,7 @@ export function ChannelHealthCard({
         {rows.length === 0 ? (
           <EmptyState variant="inline" title={t("adminDashboard.noChannels")} className="py-8" />
         ) : (
-          <DataList columns="minmax(0,1fr) 4.5rem 5rem 10rem 8rem 10.5rem">
+          <DataList columns="minmax(0,1fr) 4.5rem 5rem 11rem 8rem 10.5rem">
             <DataListHeader>
               <DataListHead>{t("adminDashboard.channel")}</DataListHead>
               <DataListHead align="end">{t("adminDashboard.weight")}</DataListHead>
@@ -331,44 +492,11 @@ export function ChannelHealthCard({
             {scrollParent && (
               <Virtuoso
                 customScrollParent={scrollParent}
-                data={rows}
+                data={visibleRows}
                 context={{ label: t("adminDashboard.channelHealth") }}
                 computeItemKey={(_index, channel) => channel.channel_id}
                 components={virtualDataListComponents}
-                itemContent={(_index, channel) => (
-                  <>
-                    <DataListCell primary>
-                      <span className="block truncate font-medium" title={channel.channel_name}>
-                        {channel.channel_name}
-                      </span>
-                      <span className="block truncate text-muted-foreground" title={channel.provider_name}>
-                        {channel.provider_name}
-                      </span>
-                    </DataListCell>
-                    <DataListCell label={t("adminDashboard.weight")} align="end">
-                      <span className="tabular-nums">{channel.weight}</span>
-                    </DataListCell>
-                    <DataListCell label={t("adminDashboard.affinity")}>
-                      {channel.session_affinity_auto ? "auto" : <span className="text-muted-foreground">—</span>}
-                    </DataListCell>
-                    <DataListCell label={t("adminDashboard.status")}>
-                      <ChannelStatusCell channel={channel} status={channelStatus(channel)} />
-                    </DataListCell>
-                    <DataListCell label={t("adminDashboard.spend")} align="end">
-                      <span className="block tabular-nums">
-                        {formatNanoUsd(channel.window_cost_nano_usd ?? "0", 2)}
-                      </span>
-                      <span className="block tabular-nums text-muted-foreground">
-                        {t("adminDashboard.callsCount", { count: channel.window_calls ?? 0 })}
-                      </span>
-                    </DataListCell>
-                    <DataListCell label={t("adminDashboard.lastProbe")} align="end">
-                      <span className="tabular-nums text-muted-foreground">
-                        {channel.last_probe_at == null ? "—" : formatDateTime(channel.last_probe_at)}
-                      </span>
-                    </DataListCell>
-                  </>
-                )}
+                itemContent={(_index, channel) => <ChannelHealthRow channel={channel} />}
               />
             )}
           </DataList>

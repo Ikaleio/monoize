@@ -5,7 +5,17 @@ import { useTranslation } from "react-i18next";
 import { motion, useReducedMotion } from "framer-motion";
 import { CalendarClock, LoaderCircle, ShoppingCart } from "lucide-react";
 import { toast } from "sonner";
+import type { TFunction } from "i18next";
 import { GroupsBadge } from "@/components/GroupsBadge";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -18,8 +28,41 @@ import {
   useBillingPlanMarketplace,
   useBillingPlanSubscription,
 } from "@/lib/swr";
-import type { BillingPlanWindowUsage } from "@/lib/api";
+import type { BillingPlanPrice, BillingPlanWindowUsage } from "@/lib/api";
+import { toastApiError } from "@/lib/api-error";
 import { QueryError } from "@/components/ui/query-error";
+
+const SECONDS_PER_DAY = 86400;
+const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_MINUTE = 60;
+
+/** Exact plan duration in the largest unit that divides it; never rounds. */
+function formatPlanDuration(seconds: number, t: TFunction): string {
+  if (seconds % SECONDS_PER_DAY === 0) {
+    return t("wallet.duration.days", { count: seconds / SECONDS_PER_DAY });
+  }
+  if (seconds % SECONDS_PER_HOUR === 0) {
+    return t("wallet.duration.hours", { count: seconds / SECONDS_PER_HOUR });
+  }
+  if (seconds % SECONDS_PER_MINUTE === 0) {
+    return t("wallet.duration.minutes", { count: seconds / SECONDS_PER_MINUTE });
+  }
+  return t("wallet.duration.seconds", { count: seconds });
+}
+
+/** BP-UI4 price label: `$29 / 30 天`. */
+function formatPlanPrice(price: BillingPlanPrice, t: TFunction): string {
+  return t("wallet.planPrice", {
+    price: `$${price.price_usd}`,
+    duration: formatPlanDuration(price.duration_seconds, t),
+  });
+}
+
+interface PurchaseTarget {
+  planId: string;
+  planName: string;
+  price: BillingPlanPrice;
+}
 
 function PlanAllowanceSkeleton({ className }: { className?: string }) {
   return (
@@ -88,7 +131,14 @@ function AllowanceMeter({
   );
 }
 
-export function PlanAllowance({ className }: { className?: string }) {
+export function PlanAllowance({
+  className,
+  onRecharge,
+}: {
+  className?: string;
+  /** Switches the wallet to the recharge tab (ACC-3 insufficient balance). */
+  onRecharge: () => void;
+}) {
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
@@ -107,10 +157,32 @@ export function PlanAllowance({ className }: { className?: string }) {
     mutate: mutatePlans,
   } = useBillingPlanMarketplace();
   const [purchasing, setPurchasing] = useState<string | null>(null);
+  const [purchaseTarget, setPurchaseTarget] = useState<PurchaseTarget | null>(null);
 
   if (isLoading || plansLoading) {
     return <PlanAllowanceSkeleton className={className} />;
   }
+
+  const balanceAfter =
+    purchaseTarget && user && !user.balance_unlimited
+      ? BigInt(user.balance_nano_usd) - BigInt(purchaseTarget.price.price_nano_usd)
+      : null;
+  const insufficient = balanceAfter !== null && balanceAfter < 0n;
+
+  const confirmPurchase = async () => {
+    if (!purchaseTarget || purchasing !== null || insufficient) return;
+    const { planId, price } = purchaseTarget;
+    setPurchasing(price.id);
+    try {
+      await purchaseBillingPlanOptimistic(planId, price.id, price.price_nano_usd);
+      toast.success(t("wallet.purchaseSuccess"));
+      setPurchaseTarget(null);
+    } catch (error) {
+      toastApiError(error, t, t("wallet.purchaseFailed"));
+    } finally {
+      setPurchasing(null);
+    }
+  };
 
   const hasBlockingError =
     (subscriptionError && subscription === undefined) ||
@@ -215,37 +287,20 @@ export function PlanAllowance({ className }: { className?: string }) {
                         variant="outline"
                         className="h-11"
                         disabled={purchasing !== null}
-                        onClick={async () => {
-                          setPurchasing(price.id);
-                          try {
-                            await purchaseBillingPlanOptimistic(
-                              plan.id,
-                              price.id,
-                              price.price_nano_usd,
-                            );
-                            toast.success(t("wallet.purchaseSuccess"));
-                          } catch {
-                            toast.error(t("wallet.errors.request_failed"));
-                          } finally {
-                            setPurchasing(null);
-                          }
-                        }}
+                        onClick={() =>
+                          setPurchaseTarget({
+                            planId: plan.id,
+                            planName: plan.name,
+                            price,
+                          })
+                        }
                       >
-                        {purchasing === price.id ? (
-                          <LoaderCircle
-                            data-icon="inline-start"
-                            className="animate-spin"
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <ShoppingCart
-                            data-icon="inline-start"
-                            aria-hidden="true"
-                          />
-                        )}
+                        <ShoppingCart
+                          data-icon="inline-start"
+                          aria-hidden="true"
+                        />
                         <span className="tabular-nums">
-                          {price.price_usd} USD /{" "}
-                          {Math.round(price.duration_seconds / 86400)}d
+                          {formatPlanPrice(price, t)}
                         </span>
                       </Button>
                     ))}
@@ -256,6 +311,99 @@ export function PlanAllowance({ className }: { className?: string }) {
           </div>
         )}
       </CardContent>
+
+      <AlertDialog
+        open={purchaseTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && purchasing === null) setPurchaseTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("wallet.purchaseConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {purchaseTarget
+                ? t("wallet.purchaseConfirmPlan", {
+                    plan: purchaseTarget.planName,
+                    price: formatPlanPrice(purchaseTarget.price, t),
+                  })
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {purchaseTarget ? (
+            <dl className="grid gap-2 rounded-lg border p-3 text-sm">
+              <div className="flex flex-wrap justify-between gap-2">
+                <dt className="text-muted-foreground">{t("wallet.purchaseDeduct")}</dt>
+                <dd className="font-medium tabular-nums">
+                  {formatNanoUsd(purchaseTarget.price.price_nano_usd, 2)}
+                </dd>
+              </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <dt className="text-muted-foreground">{t("wallet.purchaseBalanceAfter")}</dt>
+                <dd
+                  className={
+                    insufficient
+                      ? "font-medium tabular-nums text-error-foreground"
+                      : "font-medium tabular-nums"
+                  }
+                >
+                  {balanceAfter === null
+                    ? t("wallet.unlimited")
+                    : formatNanoUsd(balanceAfter, 2)}
+                </dd>
+              </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <dt className="text-muted-foreground">{t("wallet.purchaseStarts")}</dt>
+                <dd>{t("wallet.purchaseStartsNow")}</dd>
+              </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <dt className="text-muted-foreground">{t("wallet.purchaseExpires")}</dt>
+                <dd className="tabular-nums">
+                  {formatDateTime(
+                    Date.now() + purchaseTarget.price.duration_seconds * 1000,
+                  )}
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+          {insufficient ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-error-border bg-error-soft p-3 text-sm text-error-foreground">
+              <span role="alert">{t("wallet.purchaseInsufficient")}</span>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 sm:h-9"
+                onClick={() => {
+                  setPurchaseTarget(null);
+                  onRecharge();
+                }}
+              >
+                {t("wallet.goRecharge")}
+              </Button>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={purchasing !== null}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              className="bg-wallet-action text-wallet-action-foreground hover:bg-wallet-action/90"
+              disabled={purchasing !== null || insufficient}
+              onClick={() => void confirmPurchase()}
+            >
+              {purchasing !== null ? (
+                <LoaderCircle
+                  data-icon="inline-start"
+                  className="animate-spin"
+                  aria-hidden="true"
+                />
+              ) : null}
+              {t("wallet.purchaseConfirm")}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
