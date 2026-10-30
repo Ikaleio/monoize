@@ -12,6 +12,16 @@ pub struct RequestContext {
     /// Anthropic cache targets whose `cache_control` a Monoize rule inserted in this attempt.
     /// Later rules may retune these markers; markers sent by the client are never touched.
     pub anthropic_cache_markers: HashSet<AnthropicCacheTarget>,
+    /// Downstream `/v1/messages` headers forwarded only to `type=messages` upstreams (PM8, PM8h).
+    pub anthropic_client_headers: AnthropicClientHeaders,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnthropicClientHeaders {
+    /// Non-empty downstream `anthropic-version` value.
+    pub version: Option<String>,
+    /// Downstream `anthropic-beta` tokens in first-seen order without duplicates.
+    pub beta: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

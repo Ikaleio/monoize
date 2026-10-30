@@ -1,6 +1,5 @@
 use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
-use crate::handlers::usage::usage_to_chat_usage_json;
 use crate::urp::stream_helpers::*;
 use crate::urp::{self, FinishReason, Node, NodeDelta, NodeHeader, UrpStreamEvent};
 use axum::response::sse::Event;
@@ -67,7 +66,7 @@ fn chat_delta_scores<'a>(
 }
 
 async fn emit_chat_terminal_scores(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     id: &str,
     created: i64,
     model: &str,
@@ -264,36 +263,131 @@ fn chat_delta_with_extras(
     chat_delta_with_raw_extras(delta, &mut event_delta_extra, pending_envelope_extra)
 }
 
-async fn emit_chat_choice_extra_chunk(
-    tx: &mpsc::Sender<Event>,
-    id: &str,
-    created: i64,
-    model: &str,
-    extra_body: &HashMap<String, Value>,
-) -> AppResult<()> {
-    let Some(choice_extra) = extra_body
-        .get(CHAT_CHOICE_EXTRA_BODY_KEY)
-        .and_then(Value::as_object)
-        .filter(|extra| !extra.is_empty())
-    else {
-        return Ok(());
-    };
-    let mut choice = json!({ "index": 0, "delta": {}, "finish_reason": Value::Null });
-    if let Some(choice) = choice.as_object_mut() {
+/// Downstream Chat chunk sink. It repeats upstream top-level chunk fields on every chunk
+/// (DC6a) and attaches pending choice-level fields to the next chunk that has a choice (DC6).
+pub(crate) struct ChatOut {
+    tx: mpsc::Sender<Event>,
+    envelope_extra: std::sync::Mutex<Map<String, Value>>,
+    pending_choice_extra: std::sync::Mutex<Map<String, Value>>,
+}
+
+impl ChatOut {
+    fn new(tx: mpsc::Sender<Event>) -> Self {
+        Self {
+            tx,
+            envelope_extra: Default::default(),
+            pending_choice_extra: Default::default(),
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
+
+    fn set_envelope_extra(&self, extra: Option<&Map<String, Value>>) {
+        let mut envelope = self.envelope_extra.lock().expect("chat envelope lock");
+        *envelope = extra
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| !key.starts_with("_monoize_"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+    }
+
+    fn stash_choice_extra(&self, extra_body: &HashMap<String, Value>) {
+        let Some(choice_extra) = extra_body
+            .get(CHAT_CHOICE_EXTRA_BODY_KEY)
+            .and_then(Value::as_object)
+        else {
+            return;
+        };
+        let mut pending = self.pending_choice_extra.lock().expect("chat choice lock");
         for (key, value) in choice_extra {
             if !key.starts_with("_monoize_") {
-                choice.entry(key.clone()).or_insert_with(|| value.clone());
+                pending.insert(key.clone(), value.clone());
             }
         }
     }
-    let chunk = json!({
+
+    fn has_pending_choice_extra(&self) -> bool {
+        !self
+            .pending_choice_extra
+            .lock()
+            .expect("chat choice lock")
+            .is_empty()
+    }
+
+    async fn send_chunk(&self, chunk: &Value) -> AppResult<()> {
+        let mut chunk = chunk.clone();
+        if let Some(obj) = chunk.as_object_mut()
+            && obj.get("object").and_then(Value::as_str) == Some("chat.completion.chunk")
+        {
+            for (key, value) in self.envelope_extra.lock().expect("chat envelope lock").iter() {
+                obj.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+            if let Some(choice) = obj
+                .get_mut("choices")
+                .and_then(Value::as_array_mut)
+                .and_then(|choices| choices.first_mut())
+                .and_then(Value::as_object_mut)
+            {
+                let pending =
+                    std::mem::take(&mut *self.pending_choice_extra.lock().expect("chat choice lock"));
+                for (key, value) in pending {
+                    choice.entry(key).or_insert(value);
+                }
+            }
+        }
+        send_plain_sse_json(&self.tx, &chunk).await
+    }
+
+    async fn send_done(&self) -> AppResult<()> {
+        send_plain_sse_data(&self.tx, "[DONE]").await
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_chat_chunk_string(
+    tx: &ChatOut,
+    id: &str,
+    created: i64,
+    logical_model: &str,
+    delta_template: Value,
+    content: &str,
+    patch: fn(&mut Value, &str),
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let base = json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": logical_model,
+        "choices": [{ "index": 0, "delta": delta_template, "finish_reason": Value::Null }]
+    });
+    for chunk in split_json_value_by_string_patch(base, content, patch, max_frame_length) {
+        tx.send_chunk(&chunk).await?;
+    }
+    Ok(())
+}
+
+/// Flushes choice-level fields that no delta chunk carried before the terminal chunk.
+async fn flush_pending_choice_extra(
+    tx: &ChatOut,
+    id: &str,
+    created: i64,
+    model: &str,
+) -> AppResult<()> {
+    if !tx.has_pending_choice_extra() {
+        return Ok(());
+    }
+    tx.send_chunk(&json!({
         "id": id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": model,
-        "choices": [choice]
-    });
-    send_plain_sse_json(tx, &chunk).await
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": Value::Null }]
+    }))
+    .await
 }
 
 fn chat_delta_with_raw_extras(
@@ -376,9 +470,9 @@ fn validate_chat_media_event(event: &UrpStreamEvent) -> Result<(), String> {
     }
 }
 
-async fn emit_chat_media_error(tx: &mpsc::Sender<Event>, message: &str) -> AppResult<()> {
-    send_plain_sse_json(tx, &urp::media::error_body(message)).await?;
-    send_plain_sse_data(tx, "[DONE]").await?;
+async fn emit_chat_media_error(tx: &ChatOut, message: &str) -> AppResult<()> {
+    tx.send_chunk(&urp::media::error_body(message)).await?;
+    tx.send_done().await?;
     Err(crate::error::AppError::new(
         axum::http::StatusCode::BAD_GATEWAY,
         "unsupported_media",
@@ -391,15 +485,17 @@ pub(crate) async fn emit_synthetic_chat_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
     sse_max_frame_length: Option<usize>,
-    tx: mpsc::Sender<Event>,
+    include_usage: bool,
+    sender: mpsc::Sender<Event>,
 ) -> AppResult<()> {
+    let tx = ChatOut::new(sender);
     if let Some(body) = resp
         .outcome
         .as_ref()
         .and_then(|outcome| outcome.failure_body(false))
     {
-        send_plain_sse_json(&tx, &body).await?;
-        send_plain_sse_data(&tx, "[DONE]").await?;
+        tx.send_chunk(&body).await?;
+        tx.send_done().await?;
         return Ok(());
     }
 
@@ -408,13 +504,29 @@ pub(crate) async fn emit_synthetic_chat_stream(
     }
     let projected = crate::urp::tool_signature::project_response(resp);
     let resp = &projected;
-    let id = format!("chatcmpl_{}", uuid::Uuid::new_v4());
-    let created = now_ts();
+    let id = urp::encode::openai_chat::chat_completion_id(&resp.id);
+    let created = resp.created_at.unwrap_or_else(now_ts);
+    tx.set_envelope_extra(Some(
+        &resp
+            .extra_body
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    ));
+    tx.send_chunk(&json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": logical_model,
+        "choices": [{ "index": 0, "delta": first_chunk_delta(), "finish_reason": Value::Null }]
+    }))
+    .await?;
     let mut saw_tool = false;
     let mut saw_legacy_function_call = false;
     let mut text_offset = 0u64;
     let mut tool_idx = 0usize;
-    for node in &resp.output {
+    let mut reasoning_indexes = ReasoningDetailIndexes::default();
+    for (node_index, node) in resp.output.iter().enumerate() {
         match node {
             Node::Reasoning {
                 metadata,
@@ -425,94 +537,25 @@ pub(crate) async fn emit_synthetic_chat_stream(
                 extra_body,
                 ..
             } => {
-                if let Some(rc_value) = metadata
-                    .chat_content
-                    .then(|| content.as_deref().or(summary.as_deref()))
-                    .flatten()
-                    .filter(|s| !s.is_empty())
-                {
-                    send_chat_chunk_string(
-                        &tx,
-                        &id,
-                        created,
-                        logical_model,
-                        json!({ "reasoning_content": "" }),
-                        rc_value,
-                        chat_delta_path_reasoning_content,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
-                if let Some(detail) = extra_body
-                    .get(urp::CHAT_REASONING_DETAIL_EXTRA_KEY)
-                    .and_then(Value::as_object)
-                {
-                    for detail in urp::reasoning::chat_details(
-                        content.as_deref(),
-                        summary.as_deref(),
-                        encrypted.as_ref(),
-                        node.id().map(String::as_str),
-                        source.as_deref(),
-                        Some(detail),
-                    ) {
-                        emit_native_chat_reasoning_detail(
-                            &tx,
-                            &id,
-                            created,
-                            logical_model,
-                            detail.as_object().expect("reasoning detail object"),
-                        )
-                        .await?;
-                    }
-                    continue;
-                }
-                let format = source.as_deref().filter(|format| !format.is_empty());
-                if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
-                    send_chat_chunk_string(
-                        &tx,
-                        &id,
-                        created,
-                        logical_model,
-                        chat_reasoning_delta_from_summary("", format),
-                        summary,
-                        chat_delta_path_reasoning_summary,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
-                if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
-                    send_chat_chunk_string(
-                        &tx,
-                        &id,
-                        created,
-                        logical_model,
-                        chat_reasoning_delta_from_text("", format),
-                        content,
-                        chat_delta_path_reasoning_text,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
-                if let Some(data) = encrypted {
-                    let sig = data
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| data.to_string());
-                    if !sig.is_empty() {
-                        let reasoning_id = node.id().map(String::as_str);
-                        send_chat_chunk_string(
-                            &tx,
-                            &id,
-                            created,
-                            logical_model,
-                            chat_reasoning_delta_from_encrypted("", format, reasoning_id),
-                            &sig,
-                            chat_delta_path_reasoning_encrypted,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
-                }
+                let mut no_envelope_extra = HashMap::new();
+                emit_reasoning_delta(
+                    &tx,
+                    &id,
+                    created,
+                    logical_model,
+                    node_index as u32,
+                    node.id().map(String::as_str),
+                    content.as_deref(),
+                    encrypted.as_ref(),
+                    summary.as_deref(),
+                    source.as_deref(),
+                    metadata,
+                    extra_body,
+                    &mut no_envelope_extra,
+                    &mut reasoning_indexes,
+                    sse_max_frame_length,
+                )
+                .await?;
             }
             Node::ToolCall {
                 tool_type,
@@ -641,28 +684,20 @@ pub(crate) async fn emit_synthetic_chat_stream(
     let native_finish_reason = resp
         .extra_body
         .get(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY)
-        .and_then(Value::as_str)
-        .filter(|reason| !reason.is_empty());
-    let finish_reason = if resp.finish_reason == Some(urp::FinishReason::Other) {
-        native_finish_reason.unwrap_or("error")
-    } else if resp.finish_reason == Some(FinishReason::ToolCalls) && saw_legacy_function_call {
-        "function_call"
-    } else if let Some(reason) = resp.finish_reason {
-        finish_reason_to_chat(reason)
-    } else if saw_tool {
-        "tool_calls"
-    } else if saw_legacy_function_call {
-        "function_call"
-    } else {
-        finish_reason_to_chat(resp.finish_reason.unwrap_or(urp::FinishReason::Stop))
-    };
+        .and_then(Value::as_str);
+    let finish_reason = chat_stream_finish_reason(
+        resp.finish_reason,
+        native_finish_reason,
+        saw_tool,
+        saw_legacy_function_call,
+    );
     emit_chat_terminal_sequence(
         &tx,
         &id,
         created,
         logical_model,
         finish_reason,
-        resp.usage.as_ref(),
+        resp.usage.as_ref().filter(|_| include_usage),
         resp.extra_body
             .get(CHAT_CHOICE_EXTRA_BODY_KEY)
             .and_then(Value::as_object),
@@ -670,21 +705,31 @@ pub(crate) async fn emit_synthetic_chat_stream(
     .await
 }
 
-fn finish_reason_to_chat(reason: urp::FinishReason) -> &'static str {
-    match reason {
-        urp::FinishReason::Stop => "stop",
-        urp::FinishReason::Length
-        | FinishReason::ContextLimit
-        | FinishReason::Paused
-        | FinishReason::Compaction => "length",
-        urp::FinishReason::ToolCalls => "tool_calls",
-        urp::FinishReason::ContentFilter => "content_filter",
-        urp::FinishReason::Other => "error",
+/// The first chunk of every Chat stream (DC7b), as OpenAI sends it.
+fn first_chunk_delta() -> Value {
+    json!({ "role": "assistant", "content": "", "refusal": Value::Null })
+}
+
+fn chat_stream_finish_reason<'a>(
+    finish_reason: Option<FinishReason>,
+    native_finish_reason: Option<&'a str>,
+    saw_tool: bool,
+    saw_legacy_function_call: bool,
+) -> &'a str {
+    match finish_reason {
+        Some(FinishReason::Other) => native_finish_reason
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or("stop"),
+        Some(FinishReason::ToolCalls) if saw_legacy_function_call => "function_call",
+        Some(reason) => urp::encode::openai_chat::finish_reason_to_chat(reason),
+        None if saw_tool => "tool_calls",
+        None if saw_legacy_function_call => "function_call",
+        None => "stop",
     }
 }
 
 async fn emit_chat_terminal_sequence(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     id: &str,
     created: i64,
     model: &str,
@@ -692,6 +737,7 @@ async fn emit_chat_terminal_sequence(
     usage: Option<&urp::Usage>,
     choice_extra: Option<&serde_json::Map<String, Value>>,
 ) -> AppResult<()> {
+    flush_pending_choice_extra(tx, id, created, model).await?;
     let mut finish = json!({
         "id": id,
         "object": "chat.completion.chunk",
@@ -712,7 +758,7 @@ async fn emit_chat_terminal_sequence(
             }
         }
     }
-    send_plain_sse_json(tx, &finish).await?;
+    tx.send_chunk(&finish).await?;
 
     if let Some(usage) = usage {
         let usage_chunk = json!({
@@ -721,21 +767,24 @@ async fn emit_chat_terminal_sequence(
             "created": created,
             "model": model,
             "choices": [],
-            "usage": usage_to_chat_usage_json(usage),
+            "usage": urp::encode::openai_chat::encode_chat_usage(usage),
         });
-        send_plain_sse_json(tx, &usage_chunk).await?;
+        tx.send_chunk(&usage_chunk).await?;
     }
 
-    send_plain_sse_data(tx, "[DONE]").await
+    tx.send_done().await
 }
 
 pub(crate) async fn encode_urp_stream_as_chat(
     mut rx: mpsc::Receiver<UrpStreamEvent>,
-    tx: mpsc::Sender<Event>,
+    sender: mpsc::Sender<Event>,
     logical_model: &str,
     sse_max_frame_length: Option<usize>,
     mask_sensitive_info: bool,
+    include_usage: bool,
 ) -> AppResult<()> {
+    let tx = ChatOut::new(sender);
+    let mut reasoning_indexes = ReasoningDetailIndexes::default();
     let mut signature_projection = crate::urp::tool_signature::SignatureProjection::default();
     let mut chat_id = String::new();
     let mut created = 0i64;
@@ -784,13 +833,19 @@ pub(crate) async fn encode_urp_stream_as_chat(
             return emit_chat_media_error(&tx, &error).await;
         }
         if let UrpStreamEvent::NodeDelta { extra_body, .. } = &event {
-            emit_chat_choice_extra_chunk(&tx, &chat_id, created, logical_model, extra_body).await?;
+            tx.stash_choice_extra(extra_body);
         }
         match event {
-            UrpStreamEvent::ResponseStart { extra_body, .. } => {
-                chat_id = format!("chatcmpl_{}", uuid::Uuid::new_v4());
+            UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
+                chat_id = urp::encode::openai_chat::chat_completion_id(&id);
                 created = now_ts();
-                let mut delta = json!({ "role": "assistant" });
+                tx.set_envelope_extra(
+                    extra_body
+                        .get(urp::CHAT_CHUNK_EXTRA_KEY)
+                        .and_then(Value::as_object),
+                );
+                tx.stash_choice_extra(&extra_body);
+                let mut delta = first_chunk_delta();
                 merge_chat_delta_extra_preserving_typed(
                     &mut delta,
                     native_chat_delta_extra(&extra_body),
@@ -806,7 +861,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         "finish_reason": Value::Null
                     }]
                 });
-                send_plain_sse_json(&tx, &chunk).await?;
+                tx.send_chunk(&chunk).await?;
             }
             UrpStreamEvent::NodeStart {
                 node_index,
@@ -981,6 +1036,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &chat_id,
                     created,
                     logical_model,
+                    node_index,
+                    metadata.item_id.as_deref(),
                     content.as_deref(),
                     encrypted.as_ref(),
                     summary.as_deref(),
@@ -988,6 +1045,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &metadata,
                     &extra_body,
                     &mut pending_envelope_extra,
+                    &mut reasoning_indexes,
                     sse_max_frame_length,
                 )
                 .await?;
@@ -1170,8 +1228,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                 mask_sensitive_info
                             ));
                     }
-                    send_plain_sse_json(&tx, &body).await?;
-                    send_plain_sse_data(&tx, "[DONE]").await?;
+                    tx.send_chunk(&body).await?;
+                    tx.send_done().await?;
                     return Ok(());
                 }
 
@@ -1225,6 +1283,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                 &chat_id,
                                 created,
                                 logical_model,
+                                node_index as u32,
+                                node.id().map(String::as_str),
                                 content.as_deref(),
                                 encrypted.as_ref(),
                                 summary.as_deref(),
@@ -1232,6 +1292,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                 metadata,
                                 extra_body,
                                 &mut pending_envelope_extra,
+                                &mut reasoning_indexes,
                                 sse_max_frame_length,
                             )
                             .await?;
@@ -1364,33 +1425,23 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             "finish_reason": Value::Null
                         }]
                     });
-                    send_plain_sse_json(&tx, &chunk).await?;
+                    tx.send_chunk(&chunk).await?;
                 }
-                let native_finish_reason = extra_body
-                    .get(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY)
-                    .and_then(Value::as_str)
-                    .filter(|reason| !reason.is_empty());
-                let finish_reason = if finish_reason == Some(FinishReason::Other) {
-                    native_finish_reason.unwrap_or("error")
-                } else if finish_reason == Some(FinishReason::ToolCalls) && saw_legacy_function_call
-                {
-                    "function_call"
-                } else if let Some(reason) = finish_reason {
-                    finish_reason_to_chat(reason)
-                } else if saw_tool {
-                    "tool_calls"
-                } else if saw_legacy_function_call {
-                    "function_call"
-                } else {
-                    finish_reason_to_chat(finish_reason.unwrap_or(FinishReason::Stop))
-                };
+                let finish_reason = chat_stream_finish_reason(
+                    finish_reason,
+                    extra_body
+                        .get(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY)
+                        .and_then(Value::as_str),
+                    saw_tool,
+                    saw_legacy_function_call,
+                );
                 emit_chat_terminal_sequence(
                     &tx,
                     &chat_id,
                     created,
                     logical_model,
                     finish_reason,
-                    usage.as_ref(),
+                    usage.as_ref().filter(|_| include_usage),
                     extra_body
                         .get(CHAT_CHOICE_EXTRA_BODY_KEY)
                         .and_then(Value::as_object),
@@ -1414,8 +1465,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &message,
                     &extra_body,
                 );
-                send_plain_sse_json(&tx, &payload).await?;
-                send_plain_sse_data(&tx, "[DONE]").await?;
+                tx.send_chunk(&payload).await?;
+                tx.send_done().await?;
                 finished = true;
             }
         }
@@ -1438,7 +1489,7 @@ fn reasoning_delta_has_chat_surface(
 }
 
 async fn emit_chat_provider_content_part(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     chat_id: &str,
     created: i64,
     logical_model: &str,
@@ -1466,11 +1517,11 @@ async fn emit_chat_provider_content_part(
             "finish_reason": Value::Null
         }]
     });
-    send_plain_sse_json(tx, &chunk).await
+    tx.send_chunk(&chunk).await
 }
 
 async fn emit_tool_call_header(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     chat_id: &str,
     created: i64,
     logical_model: &str,
@@ -1523,13 +1574,13 @@ async fn emit_tool_call_header(
             "finish_reason": Value::Null
         }]
     });
-    send_plain_sse_json(tx, &chunk).await?;
+    tx.send_chunk(&chunk).await?;
     tool_call.header_sent = true;
     Ok(())
 }
 
 async fn emit_tool_call_arguments_delta(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     chat_id: &str,
     created: i64,
     logical_model: &str,
@@ -1582,33 +1633,67 @@ async fn emit_tool_call_arguments_delta(
     .await
 }
 
-async fn emit_native_chat_reasoning_detail(
-    tx: &mpsc::Sender<Event>,
-    chat_id: &str,
-    created: i64,
-    logical_model: &str,
-    detail: &serde_json::Map<String, Value>,
-) -> AppResult<()> {
-    let chunk = json!({
-        "id": chat_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": logical_model,
-        "choices": [{
-            "index": 0,
-            "delta": { "reasoning_details": [Value::Object(detail.clone())] },
-            "finish_reason": Value::Null
-        }]
-    });
-    send_plain_sse_json(tx, &chunk).await
+/// DC5: one stable `index` per logical synthesized detail (node, detail type) in a stream.
+#[derive(Default)]
+struct ReasoningDetailIndexes {
+    next: u64,
+    assigned: HashMap<(u32, String), u64>,
 }
 
+impl ReasoningDetailIndexes {
+    fn index_for(&mut self, node_index: u32, kind: &str) -> u64 {
+        let next = &mut self.next;
+        *self
+            .assigned
+            .entry((node_index, kind.to_string()))
+            .or_insert_with(|| {
+                let index = *next;
+                *next += 1;
+                index
+            })
+    }
+
+    fn observe_native(&mut self, index: u64) {
+        self.next = self.next.max(index + 1);
+    }
+}
+
+fn chat_delta_path_reasoning_detail_text(value: &mut Value, content: &str) {
+    let delta = &mut value["choices"][0]["delta"];
+    delta["reasoning"] = json!(content);
+    delta["reasoning_details"][0]["text"] = json!(content);
+}
+
+fn chat_delta_path_reasoning_detail_summary(value: &mut Value, content: &str) {
+    let delta = &mut value["choices"][0]["delta"];
+    delta["reasoning"] = json!(content);
+    delta["reasoning_details"][0]["summary"] = json!(content);
+}
+
+fn chat_delta_path_reasoning_detail_data(value: &mut Value, content: &str) {
+    value["choices"][0]["delta"]["reasoning_details"][0]["data"] = json!(content);
+}
+
+fn chat_delta_path_scalar(field: &'static str) -> fn(&mut Value, &str) {
+    match field {
+        "reasoning_content" => |value, content| {
+            value["choices"][0]["delta"]["reasoning_content"] = json!(content);
+        },
+        _ => |value, content| {
+            value["choices"][0]["delta"]["reasoning_opaque"] = json!(content);
+        },
+    }
+}
+
+/// Emits one reasoning delta, or one terminal-only reasoning node, under DC5.
 #[allow(clippy::too_many_arguments)]
 async fn emit_reasoning_delta(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     chat_id: &str,
     created: i64,
     logical_model: &str,
+    node_index: u32,
+    item_id: Option<&str>,
     content: Option<&str>,
     encrypted: Option<&Value>,
     summary: Option<&str>,
@@ -1616,15 +1701,30 @@ async fn emit_reasoning_delta(
     metadata: &urp::ReasoningMetadata,
     extra_body: &HashMap<String, Value>,
     pending_envelope_extra: &mut HashMap<String, Value>,
+    indexes: &mut ReasoningDetailIndexes,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     let mut event_delta_extra = native_chat_delta_extra(extra_body);
-
-    if let Some(rc_value) = metadata
-        .chat_content
-        .then(|| content.or(summary))
-        .flatten()
-        .filter(|s| !s.is_empty())
+    let surface = extra_body
+        .get(urp::CHAT_REASONING_SURFACE_EXTRA_KEY)
+        .and_then(Value::as_str);
+    let mut content = content;
+    let mut encrypted = encrypted;
+    let scalar = match surface {
+        Some(urp::CHAT_REASONING_SURFACE_REASONING_CONTENT) => content
+            .take()
+            .map(|content| ("reasoning_content", content.to_string())),
+        Some(urp::CHAT_REASONING_SURFACE_REASONING_OPAQUE) => encrypted.take().and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| (!value.is_null()).then(|| value.to_string()))
+                .map(|value| ("reasoning_opaque", value))
+        }),
+        _ => None,
+    };
+    if let Some((field, value)) = scalar
+        && !value.is_empty()
     {
         send_chat_chunk_string(
             tx,
@@ -1632,96 +1732,109 @@ async fn emit_reasoning_delta(
             created,
             logical_model,
             chat_delta_with_raw_extras(
-                json!({ "reasoning_content": "" }),
+                json!({ (field): "" }),
                 &mut event_delta_extra,
                 pending_envelope_extra,
             ),
-            rc_value,
-            chat_delta_path_reasoning_content,
+            &value,
+            chat_delta_path_scalar(field),
             sse_max_frame_length,
         )
         .await?;
     }
-    if let Some(detail) = extra_body
-        .get(urp::CHAT_REASONING_DETAIL_EXTRA_KEY)
-        .and_then(Value::as_object)
+    let plain = content
+        .filter(|content| !content.is_empty())
+        .or(summary.filter(|summary| !summary.is_empty()));
     {
-        let details = urp::reasoning::chat_details(
-            content,
-            summary,
-            encrypted,
-            metadata.item_id.as_deref(),
-            source,
-            Some(detail),
-        );
-        for detail in details {
-            let delta = json!({ "reasoning_details": [detail] });
-            let delta =
-                chat_delta_with_raw_extras(delta, &mut event_delta_extra, pending_envelope_extra);
-            send_plain_sse_json(tx, &json!({"id":chat_id,"object":"chat.completion.chunk","created":created,"model":logical_model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]})).await?;
+        if let Some(rc_value) = metadata.chat_content.then_some(plain).flatten() {
+            send_chat_chunk_string(
+                tx,
+                chat_id,
+                created,
+                logical_model,
+                chat_delta_with_raw_extras(
+                    json!({ "reasoning_content": "" }),
+                    &mut event_delta_extra,
+                    pending_envelope_extra,
+                ),
+                rc_value,
+                chat_delta_path_scalar("reasoning_content"),
+                sse_max_frame_length,
+            )
+            .await?;
         }
-        return Ok(());
-    }
-
-    let format = source.filter(|format| !format.is_empty());
-    let reasoning_id = metadata.item_id.as_deref();
-
-    if let Some(signature) = encrypted.and_then(|value| {
-        value
-            .as_str()
-            .map(str::to_string)
-            .or_else(|| (!value.is_null()).then(|| value.to_string()))
-            .filter(|signature| !signature.is_empty())
-    }) {
-        send_chat_chunk_string(
-            tx,
-            chat_id,
-            created,
-            logical_model,
-            chat_delta_with_raw_extras(
-                chat_reasoning_delta_from_encrypted("", format, reasoning_id),
-                &mut event_delta_extra,
-                pending_envelope_extra,
-            ),
-            &signature,
-            chat_delta_path_reasoning_encrypted,
-            sse_max_frame_length,
-        )
-        .await?;
-    }
-    if let Some(content) = content.filter(|content| !content.is_empty()) {
-        send_chat_chunk_string(
-            tx,
-            chat_id,
-            created,
-            logical_model,
-            chat_delta_with_raw_extras(
-                chat_reasoning_delta_from_text("", format),
-                &mut event_delta_extra,
-                pending_envelope_extra,
-            ),
-            content,
-            chat_delta_path_reasoning_text,
-            sse_max_frame_length,
-        )
-        .await?;
-    }
-    if let Some(summary) = summary.filter(|summary| !summary.is_empty()) {
-        send_chat_chunk_string(
-            tx,
-            chat_id,
-            created,
-            logical_model,
-            chat_delta_with_raw_extras(
-                chat_reasoning_delta_from_summary("", format),
-                &mut event_delta_extra,
-                pending_envelope_extra,
-            ),
-            summary,
-            chat_delta_path_reasoning_summary,
-            sse_max_frame_length,
-        )
-        .await?;
+        let native = extra_body.contains_key(urp::CHAT_REASONING_DETAIL_EXTRA_KEY);
+        for mut detail in urp::reasoning::chat_node_details(
+            metadata, item_id, content, summary, encrypted, source, extra_body,
+        ) {
+            let kind = detail
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            match detail.get("index").and_then(Value::as_u64) {
+                Some(index) => indexes.observe_native(index),
+                None if !native => {
+                    detail.insert("index".into(), json!(indexes.index_for(node_index, &kind)));
+                }
+                None => {}
+            }
+            let (field, patch): (&str, Option<fn(&mut Value, &str)>) = match kind.as_str() {
+                "reasoning.text" => ("text", Some(chat_delta_path_reasoning_detail_text)),
+                "reasoning.summary" => ("summary", Some(chat_delta_path_reasoning_detail_summary)),
+                "reasoning.encrypted" => ("data", Some(chat_delta_path_reasoning_detail_data)),
+                _ => ("", None),
+            };
+            let payload = detail
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let alias = matches!(kind.as_str(), "reasoning.text" | "reasoning.summary");
+            match (payload, patch) {
+                // An Anthropic signature is opaque and must not be split across chunks.
+                (Some(payload), Some(patch)) if !detail.contains_key("signature") => {
+                    detail.insert(field.into(), json!(""));
+                    let mut delta = json!({ "reasoning_details": [Value::Object(detail)] });
+                    if alias {
+                        delta["reasoning"] = json!("");
+                    }
+                    send_chat_chunk_string(
+                        tx,
+                        chat_id,
+                        created,
+                        logical_model,
+                        chat_delta_with_raw_extras(
+                            delta,
+                            &mut event_delta_extra,
+                            pending_envelope_extra,
+                        ),
+                        &payload,
+                        patch,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                (payload, _) => {
+                    let mut delta = json!({ "reasoning_details": [Value::Object(detail)] });
+                    if alias && let Some(payload) = payload.filter(|payload| !payload.is_empty()) {
+                        delta["reasoning"] = json!(payload);
+                    }
+                    let delta = chat_delta_with_raw_extras(
+                        delta,
+                        &mut event_delta_extra,
+                        pending_envelope_extra,
+                    );
+                    tx.send_chunk(&json!({
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": logical_model,
+                        "choices": [{ "index": 0, "delta": delta, "finish_reason": Value::Null }]
+                    }))
+                    .await?;
+                }
+            }
+        }
     }
     if !event_delta_extra.is_empty() || !pending_envelope_extra.is_empty() {
         let delta =
@@ -1737,7 +1850,7 @@ async fn emit_reasoning_delta(
                 "finish_reason": Value::Null
             }]
         });
-        send_plain_sse_json(tx, &chunk).await?;
+        tx.send_chunk(&chunk).await?;
     }
     Ok(())
 }
@@ -1770,7 +1883,7 @@ fn chat_text_node_delta(node: &Node, text_offset: u64) -> Value {
 }
 
 async fn emit_chat_semantic_node(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     id: &str,
     created: i64,
     model: &str,
@@ -1779,11 +1892,11 @@ async fn emit_chat_semantic_node(
     let delta = crate::urp::encode::openai_chat::encode_assistant_chat_message_from_nodes(
         std::slice::from_ref(node),
     );
-    send_plain_sse_json(tx, &json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]})).await
+    tx.send_chunk(&json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":delta,"finish_reason":null}]})).await
 }
 
 async fn send_chat_text_chunk(
-    tx: &mpsc::Sender<Event>,
+    tx: &ChatOut,
     id: &str,
     created: i64,
     model: &str,
@@ -1809,10 +1922,10 @@ async fn send_chat_text_chunk(
                 let mut part = chunk.clone();
                 patch(&mut part, if content.is_empty() { "" } else { &text });
                 part["choices"][0]["logprobs"][field] = urp::logprobs::encode_openai(&scores);
-                send_plain_sse_json(tx, &part).await?;
+                tx.send_chunk(&part).await?;
             }
         } else {
-            send_plain_sse_json(tx, &chunk).await?;
+            tx.send_chunk(&chunk).await?;
         }
     } else {
         send_chat_chunk_string(
@@ -1832,7 +1945,7 @@ async fn send_chat_text_chunk(
         .and_then(|value| value.as_array().cloned())
         .filter(|values| !values.is_empty())
     {
-        send_plain_sse_json(tx, &json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":{"annotations":annotations},"finish_reason":null}]})).await?;
+        tx.send_chunk(&json!({"id":id,"object":"chat.completion.chunk","created":created,"model":model,"choices":[{"index":0,"delta":{"annotations":annotations},"finish_reason":null}]})).await?;
     }
     Ok(())
 }

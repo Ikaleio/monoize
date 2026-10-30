@@ -502,7 +502,13 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let model = obj
         .get("model")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing model".to_string())?
+        .ok_or_else(|| {
+            if obj.contains_key("prompt") {
+                "missing model: Monoize routes by model and cannot resolve the model stored in a prompt template; send model explicitly".to_string()
+            } else {
+                "missing model".to_string()
+            }
+        })?
         .to_string();
 
     let mut input_nodes = Vec::new();
@@ -957,7 +963,7 @@ fn decode_reasoning_node(
             "source",
         ],
     );
-    let metadata = crate::urp::ReasoningMetadata {
+    let mut metadata = crate::urp::ReasoningMetadata {
         summary_parts: item_obj
             .get("summary")
             .and_then(crate::urp::reasoning::text_part_shapes),
@@ -986,9 +992,20 @@ fn decode_reasoning_node(
         .and_then(|v| v.as_str())
         .filter(|source| !source.is_empty())
         .map(|s| s.to_string());
+    metadata.native_empty = synthesize_missing_id
+        && text.is_none()
+        && summary.is_none()
+        && encrypted.as_ref().is_none_or(|value| {
+            value.is_null() || value.as_str().is_some_and(str::is_empty)
+        })
+        && item_obj
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty());
     (text.is_some()
         || summary.is_some()
         || encrypted.is_some()
+        || metadata.native_empty
         || (!synthesize_missing_id
             && (item_obj.contains_key("summary") || item_obj.contains_key("content"))))
     .then(|| {
@@ -1018,6 +1035,21 @@ fn reasoning_content_to_text(item_obj: &Map<String, Value>) -> Option<String> {
         .filter_map(|part| part.get("text").and_then(Value::as_str))
         .collect::<String>();
     (!text.is_empty()).then_some(text)
+}
+
+fn responses_output_provider_item(item_type: &str, item_obj: &Map<String, Value>) -> Node {
+    Node::ProviderItem {
+        id: item_obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+        origin_protocol: ProviderProtocol::Responses,
+        role: OrdinaryRole::Assistant,
+        item_type: item_type.to_string(),
+        body: Value::Object(item_obj.clone()),
+        extra_body: HashMap::new(),
+    }
 }
 
 fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
@@ -1159,9 +1191,9 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                     }
                 }
                 "image_generation_call" => {
-                    if let Some(node) = decode_image_generation_call_node(item_obj) {
-                        nodes.push(node);
-                    }
+                    nodes.push(decode_image_generation_call_node(item_obj).unwrap_or_else(|| {
+                        responses_output_provider_item(item_type, item_obj)
+                    }));
                 }
                 "input_text" | "output_text" | "text" | "image" | "image_url" | "input_image"
                 | "output_image" | "file" | "document" | "input_file" | "output_file" | "audio"
@@ -1172,20 +1204,7 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                             .map(|part| part.into_node(responses_item_role(item_obj))),
                     );
                 }
-                _ => {
-                    nodes.push(Node::ProviderItem {
-                        id: item_obj
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-                        origin_protocol: ProviderProtocol::Responses,
-                        role: OrdinaryRole::Assistant,
-                        item_type: item_type.to_string(),
-                        body: Value::Object(item_obj.clone()),
-                        extra_body: HashMap::new(),
-                    });
-                }
+                _ => nodes.push(responses_output_provider_item(item_type, item_obj)),
             }
         }
     }

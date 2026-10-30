@@ -1397,9 +1397,12 @@ const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
     "thinking",
     "include_reasoning",
     "user_id",
+    // Vercel AI Gateway; the Chat encoder emits it only for the vercel dialect (PC0b).
+    "providerOptions",
 ];
 
 const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
+    "access_programs",
     "background",
     "context_management",
     "conversation",
@@ -1426,13 +1429,17 @@ const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
 const EXTRA_WHITELIST_ANTHROPIC: &[&str] = &[
     "cache_control",
     "container",
+    "context_management",
+    "diagnostics",
+    "inference_geo",
     "max_tokens",
+    "mcp_servers",
     "metadata",
     "output_config",
     "service_tier",
+    "speed",
     "stop_sequences",
     "top_k",
-    "inference_geo",
 ];
 
 const EXTRA_WHITELIST_GEMINI: &[&str] = &[
@@ -1440,6 +1447,10 @@ const EXTRA_WHITELIST_GEMINI: &[&str] = &[
     "safetySettings",
     "cachedContent",
     "labels",
+    "continuationToken",
+    "serviceTier",
+    // Mapped to `serviceTier` by the Gemini encoder.
+    "service_tier",
 ];
 
 const EXTRA_WHITELIST_OPENAI_IMAGE: &[&str] = &[
@@ -1576,6 +1587,12 @@ pub(super) async fn call_streaming_image_capable_upstream(
     })
 }
 
+/// Messages body members that another protocol family may carry under the same name with an
+/// incompatible shape (Responses `context_management`), so they pass the default Messages
+/// whitelist only for a Messages downstream (XF6g).
+const MESSAGES_SAME_FAMILY_EXTRA_FIELDS: &[&str] =
+    &["context_management", "diagnostics", "mcp_servers", "speed"];
+
 /// Filter `req.extra_body` to only contain fields allowed by the upstream
 /// provider type's whitelist, optionally extended by a provider-level override.
 ///
@@ -1583,6 +1600,7 @@ pub(super) async fn call_streaming_image_capable_upstream(
 pub(super) fn filter_extra_body_for_provider(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,
+    downstream: DownstreamProtocol,
     provider_override: &Option<Vec<String>>,
 ) {
     if let Some(overrides) = provider_override {
@@ -1600,11 +1618,15 @@ pub(super) fn filter_extra_body_for_provider(
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
+    let same_family = downstream.is_same_family(provider_type);
 
     req.extra_body.retain(|k, _| {
         k.starts_with("_monoize_")
-            || defaults.contains(&k.as_str())
             || override_set.contains(k.as_str())
+            || (defaults.contains(&k.as_str())
+                && (same_family
+                    || provider_type != ProviderType::Messages
+                    || !MESSAGES_SAME_FAMILY_EXTRA_FIELDS.contains(&k.as_str())))
     });
 }
 
@@ -1771,10 +1793,13 @@ fn active_tool_transports(
 }
 
 fn messages_custom_bridge_names(req: &urp::UrpRequest) -> HashSet<String> {
+    // Messages and Gemini share the `{"input": string}` function bridge for custom tools.
     active_tool_transports(req)
         .filter(|(_, transport)| {
-            transport.protocol == urp::ProviderProtocol::Messages
-                && transport.original.tool_type == urp::ToolCallType::Custom
+            matches!(
+                transport.protocol,
+                urp::ProviderProtocol::Messages | urp::ProviderProtocol::Gemini
+            ) && transport.original.tool_type == urp::ToolCallType::Custom
                 && transport.wire_type == urp::ToolCallType::Function
         })
         .map(|(name, _)| name.to_owned())
@@ -1924,9 +1949,10 @@ pub(super) fn promote_responses_additional_tools(
                 custom.name = alias;
             }
         }
-        if provider_type == ProviderType::Messages
+        if (provider_type == ProviderType::Messages
             && tool.tool_type == "custom"
-            && !custom_tool_has_messages_input_schema(&tool)
+            && !custom_tool_has_messages_input_schema(&tool))
+            || (provider_type == ProviderType::Gemini && tool.tool_type == "custom")
         {
             tool = messages_custom_bridge_function(tool);
         }
@@ -1990,7 +2016,7 @@ pub(super) fn promote_responses_additional_tools(
     if let Some(urp::ToolChoice::Specific(choice)) = &mut req.tool_choice {
         bridge_namespace_selector(choice, &aliases);
     }
-    if provider_type == ProviderType::Messages {
+    if matches!(provider_type, ProviderType::Messages | ProviderType::Gemini) {
         bridge_messages_custom_history(req);
     }
 }
@@ -2165,6 +2191,20 @@ fn provider_supports_tool_definition(
         return provider_supports_custom_tool(tool, provider_type);
     }
 
+    if provider_type == ProviderType::Gemini
+        && tool.origin_protocol != Some(urp::ProviderProtocol::Gemini)
+        && urp::encode::gemini::is_gemini_mappable_tool(&tool.tool_type)
+    {
+        return true;
+    }
+
+    // PC3: the Chat encoder maps web-search built-ins per dialect or drops them.
+    if provider_type == ProviderType::ChatCompletion
+        && urp::encode::openai_chat::is_web_search_builtin(&tool.tool_type)
+    {
+        return true;
+    }
+
     if let Some(origin) = tool.origin_protocol {
         return matches!(
             (origin, provider_type),
@@ -2226,14 +2266,15 @@ fn selector_matches_tool(
     }
     match selector.get("type").and_then(Value::as_str) {
         Some("function") => {
-            tool.tool_type == "function"
-                && selector_name(selector, "function")
-                    .zip(
-                        tool.function
-                            .as_ref()
-                            .map(|function| function.name.as_str()),
-                    )
-                    .is_some_and(|(selected, available)| selected == available)
+            let available = match tool.tool_type.as_str() {
+                "function" => tool.function.as_ref().map(|function| function.name.as_str()),
+                // A named selector also addresses a native tool (Messages server tools).
+                "custom" | "namespace" => None,
+                _ => tool.name.as_deref(),
+            };
+            selector_name(selector, "function")
+                .zip(available)
+                .is_some_and(|(selected, available)| selected == available)
         }
         Some("custom") => {
             tool.tool_type == "custom"
@@ -2277,11 +2318,131 @@ fn allowed_tool_references_mut(choice: &mut urp::ToolChoice) -> Option<&mut Vec<
     obj.get_mut("tools").and_then(Value::as_array_mut)
 }
 
+/// T1g.1: the Responses and Messages web search definitions are mutual native equivalents.
+fn map_web_search_tool_definition(
+    tool: &mut urp::ToolDefinition,
+    provider_type: ProviderType,
+) -> bool {
+    let config = tool.config.as_ref().and_then(Value::as_object);
+    let mut mapped = Map::new();
+    if let Some(location) = config.and_then(|config| config.get("user_location")) {
+        mapped.insert("user_location".to_string(), location.clone());
+    }
+    match provider_type {
+        ProviderType::Messages
+            if matches!(tool.tool_type.as_str(), "web_search" | "web_search_preview")
+                && tool.origin_protocol == Some(urp::ProviderProtocol::Responses) =>
+        {
+            if let Some(domains) = config
+                .and_then(|config| config.get("filters"))
+                .and_then(|filters| filters.get("allowed_domains"))
+            {
+                mapped.insert("allowed_domains".to_string(), domains.clone());
+            }
+            tool.tool_type = "web_search_20250305".to_string();
+            tool.name = Some("web_search".to_string());
+            tool.origin_protocol = Some(urp::ProviderProtocol::Messages);
+        }
+        ProviderType::Responses
+            if tool.tool_type.starts_with("web_search_")
+                && tool.origin_protocol == Some(urp::ProviderProtocol::Messages) =>
+        {
+            if let Some(domains) = config.and_then(|config| config.get("allowed_domains")) {
+                mapped.insert("filters".to_string(), json!({ "allowed_domains": domains }));
+            }
+            tool.tool_type = "web_search".to_string();
+            tool.name = None;
+            tool.origin_protocol = Some(urp::ProviderProtocol::Responses);
+        }
+        _ => return false,
+    }
+    tool.description = None;
+    tool.config = Some(Value::Object(mapped));
+    tool.extra_body.clear();
+    true
+}
+
+/// T1g.1: a mapped definition and the forced choice selecting it move together.
+pub(super) fn map_web_search_tools_for_provider(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+) {
+    let Some(tools) = req.tools.as_mut() else {
+        return;
+    };
+    let mut mapped_names = Vec::new();
+    for tool in tools.iter_mut() {
+        let original_name = tool.name.clone();
+        if map_web_search_tool_definition(tool, provider_type) {
+            mapped_names.push(original_name);
+        }
+    }
+    if mapped_names.is_empty() {
+        return;
+    }
+    let Some(urp::ToolChoice::Specific(Value::Object(selector))) = &req.tool_choice else {
+        return;
+    };
+    let selects_mapped_tool = match provider_type {
+        ProviderType::Messages => matches!(
+            selector.get("type").and_then(Value::as_str),
+            Some("web_search" | "web_search_preview")
+        ),
+        _ => {
+            selector.get("type").and_then(Value::as_str) == Some("function")
+                && selector_name(selector, "function")
+                    .is_some_and(|name| mapped_names.iter().flatten().any(|mapped| mapped == name))
+        }
+    };
+    if selects_mapped_tool {
+        req.tool_choice = Some(urp::ToolChoice::Specific(match provider_type {
+            ProviderType::Messages => json!({ "type": "function", "function": { "name": "web_search" } }),
+            _ => json!({ "type": "web_search" }),
+        }));
+    }
+}
+
+/// PR4c.2z and RC4h: controls for chat-shaped clients replaying statelessly through Responses.
+pub(super) fn apply_cross_family_responses_controls(req: &mut urp::UrpRequest) {
+    req.extra_body
+        .entry("include".to_string())
+        .or_insert_with(|| json!(["reasoning.encrypted_content"]));
+    req.extra_body
+        .entry("store".to_string())
+        .or_insert(Value::Bool(false));
+    let Some(reasoning) = req.reasoning.as_mut() else {
+        return;
+    };
+    let Some(mode) = reasoning.mode.as_deref() else {
+        return;
+    };
+    if !matches!(mode, "enabled" | "adaptive") {
+        return;
+    }
+    if reasoning.effort.is_none()
+        && let Some(budget) = reasoning.budget_tokens
+    {
+        reasoning.effort = Some(
+            match budget {
+                0..=1024 => "low",
+                1025..=4096 => "medium",
+                4097..=16384 => "high",
+                _ => "xhigh",
+            }
+            .to_string(),
+        );
+    }
+    if reasoning.summary.is_none() && reasoning.display.as_deref() != Some("omitted") {
+        reasoning.summary = Some("auto".to_string());
+    }
+}
+
 pub(super) fn filter_tools_for_provider(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,
     downstream: DownstreamProtocol,
 ) {
+    map_web_search_tools_for_provider(req, provider_type);
     let Some(tools) = req.tools.as_mut() else {
         if matches!(req.tool_choice, Some(urp::ToolChoice::Specific(_))) {
             req.tool_choice = None;
@@ -2342,7 +2503,7 @@ pub(super) fn filter_tools_for_provider(
             .iter()
             .any(|tool| selector_matches_tool(selector, tool))
     {
-        req.tool_choice = None;
+        req.tool_choice = Some(urp::ToolChoice::Mode("auto".to_string()));
     }
 }
 
@@ -2460,6 +2621,7 @@ mod media_resource_routing_tests {
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,
+            client_anthropic_headers: Default::default(),
             origin_key: None,
             origin_peer_channel_ids: vec![],
         }

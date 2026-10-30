@@ -439,6 +439,21 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let response_history = Arc::new(Mutex::new(
         crate::handlers::responses_history::ResponseHistoryStore::default(),
     ));
+    // SAN-D1 step 2: request logs and early errors can name any configured host.
+    if let Some(proxy_url) = runtime.node.upstream_proxy_url.as_deref() {
+        crate::error_sanitize::register_configured_url(proxy_url);
+    }
+    match monoize_store.list_providers().await {
+        Ok(providers) => {
+            for channel in providers.iter().flat_map(|provider| &provider.channels) {
+                crate::error_sanitize::register_configured_url(&channel.base_url);
+                if let Some(proxy_url) = channel.proxy_url.as_deref() {
+                    crate::error_sanitize::register_configured_url(proxy_url);
+                }
+            }
+        }
+        Err(err) => tracing::warn!(error = %err, "failed to load configured upstream hosts"),
+    }
     let routing_config_revision = Arc::new(AtomicU64::new(0));
     let settings_update_lock = Arc::new(Mutex::new(()));
     let transform_registry = Arc::new(crate::transforms::registry());
@@ -1601,6 +1616,10 @@ fn build_v1_router() -> Router<AppState> {
         .route("/v1/systemone", post(crate::handlers::create_system_one))
         .route("/v1/decisions", post(crate::handlers::create_decisions))
         .route("/v1/messages", post(crate::handlers::create_messages))
+        .route(
+            "/v1/messages/count_tokens",
+            post(crate::handlers::count_messages_tokens),
+        )
         .route(
             "/v1/images/generations",
             post(crate::handlers::image_api::create_image_generation),

@@ -213,6 +213,19 @@ async fn consume_responses_json_frames(
             || event_name.starts_with("response.function_call_")
             || event_name.starts_with("response.image_generation")
             || event_name.starts_with("image_generation.");
+        if response_start_sent
+            && event_name == "response.in_progress"
+            && let Some(source) = data_val.get("response").and_then(Value::as_object)
+        {
+            let _ = tx
+                .send(UrpStreamEvent::ProviderControl {
+                    protocol: "responses".to_string(),
+                    event_name: crate::urp::RESPONSES_IN_PROGRESS_CONTROL.to_string(),
+                    data: Value::Object(source.clone()),
+                    extra_body: HashMap::new(),
+                })
+                .await;
+        }
         if !response_start_sent && (native_start_event || terminal_response_event || output_event) {
             let source_response = data_val.get("response").and_then(Value::as_object).cloned();
             let sanitized_source_response = source_response.as_ref().map(|source| {

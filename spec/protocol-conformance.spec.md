@@ -45,13 +45,14 @@ PCT-7. Gemini conversion MUST satisfy `spec/gemini-codec.spec.md` for requests, 
 Gemini conversion selects candidate index zero when present, otherwise the first candidate. It MUST NOT concatenate independent alternatives.
 Representable citations, grounding links, and token scores MUST use typed fields. Native-only data MUST remain restricted to Gemini.
 Available text and reasoning deltas MUST stream before completion. Native finish metadata, not EOF alone, establishes successful completion.
+Cross-protocol Gemini attempts MUST reach the single-version upstream path (PP2a), send model-valid thinking controls (PG4b), carry a signature on the first function call of every current-turn step for Gemini 3+ (PG4f), and forward only Gemini-provenance signatures (PG5a3).
 Existing Gemini feature, protocol contract, cross-protocol, and streaming checks provide local verification evidence.
 Report behavior that those checks do not cover. This scope does not establish complete test coverage.
 Public Gemini HTTP endpoints, Live API, and file or cache management remain outside this scope.
 
 ## Documentation sources
 
-The source review date is 2026-09-19 for existing protocols and 2026-09-22 for Gemini.
+The source review date is 2026-09-19 for existing protocols and 2026-10-31 for Gemini.
 Protocol agents maintain concrete test mappings in the coverage report.
 
 - [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
@@ -68,4 +69,5 @@ Protocol agents maintain concrete test mappings in the coverage report.
 - [Gemini GenerateContent](https://ai.google.dev/api/generate-content)
 - [Gemini Content and Part](https://ai.google.dev/api/caching#Content)
 - [Gemini function calling](https://ai.google.dev/gemini-api/docs/function-calling)
-- [Gemini thought signatures](https://ai.google.dev/gemini-api/docs/thought-signatures)
+- [Gemini thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)
+- [Gemini thinking](https://ai.google.dev/gemini-api/docs/generate-content/thinking)

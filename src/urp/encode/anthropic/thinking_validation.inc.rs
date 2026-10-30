@@ -1,203 +1,119 @@
-/// Encodes one Messages request and rejects provider-invalid thinking combinations before the
-/// caller can dispatch the body upstream.
+/// Encodes one Messages request and rejects provider-invalid thinking controls that Monoize
+/// generated before the caller can dispatch the body upstream. Explicit client Messages
+/// controls are forwarded unvalidated (RC4d, RC4f).
 pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
     let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Messages)?;
     prepare_schema_custom_tools(&mut prepared)?;
     validate_complete_tool_inputs(&prepared.input)?;
     let body = encode_prepared_request(&prepared, upstream_model);
-    validate_outbound_thinking_request(&body, upstream_model)?;
+    let explicit = |key: &str| {
+        prepared
+            .reasoning
+            .as_ref()
+            .is_some_and(|reasoning| reasoning.extra_body.contains_key(key))
+    };
+    validate_generated_thinking_controls(
+        &body,
+        upstream_model,
+        explicit(MESSAGES_THINKING_CONFIG_EXTRA_KEY),
+        explicit(MESSAGES_OUTPUT_CONFIG_EXTRA_KEY),
+    )?;
     Ok(body)
 }
 
-fn validate_outbound_thinking_request(body: &Value, upstream_model: &str) -> Result<(), String> {
-    let obj = body
-        .as_object()
-        .ok_or_else(|| "Messages request body must be an object".to_string())?;
-
-    if model_rejects_nondefault_sampling(upstream_model) {
-        validate_default_temperature(obj)?;
-        validate_absent_top_k(obj)?;
-        if let Some(top_p) = obj.get("top_p") {
-            let top_p = top_p.as_f64().ok_or_else(|| {
-                "Messages top_p must be numeric for this adaptive-thinking model".to_string()
-            })?;
-            if top_p != 1.0 {
+fn validate_generated_thinking_controls(
+    body: &Value,
+    upstream_model: &str,
+    explicit_thinking: bool,
+    explicit_output_config: bool,
+) -> Result<(), String> {
+    if explicit_thinking {
+        return Ok(());
+    }
+    let Some(obj) = body.as_object() else {
+        return Ok(());
+    };
+    let Some(thinking) = obj.get("thinking").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let thinking_type = thinking.get("type").and_then(Value::as_str);
+    match thinking_type {
+        Some("enabled") => {
+            let budget = thinking
+                .get("budget_tokens")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    "Messages thinking.type=enabled requires integer budget_tokens".to_string()
+                })?;
+            if budget < 1024 {
+                return Err("Messages thinking budget_tokens must be at least 1024".to_string());
+            }
+            let max_tokens = obj
+                .get("max_tokens")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "Messages max_tokens must be a non-negative integer".to_string())?;
+            if budget >= max_tokens {
+                return Err(format!(
+                    "Messages thinking budget_tokens ({budget}) must be less than max_tokens ({max_tokens})"
+                ));
+            }
+            if tool_choice_forces_use(obj.get("tool_choice")) {
                 return Err(
-                    "Messages top_p must be omitted or equal to 1 for this adaptive-thinking model"
+                    "Messages manual thinking is incompatible with forced tool_choice type any or tool"
                         .to_string(),
                 );
             }
         }
-    }
-
-    let Some(thinking_value) = obj.get("thinking") else {
-        return Ok(());
-    };
-    let thinking = thinking_value
-        .as_object()
-        .ok_or_else(|| "Messages thinking must be an object".to_string())?;
-    let thinking_type = thinking
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Messages thinking.type must be a string".to_string())?;
-
-    match thinking_type {
-        "disabled" => {
-            if model_has_always_on_adaptive_thinking(upstream_model) {
+        Some("adaptive") => {
+            if tool_choice_forces_use(obj.get("tool_choice"))
+                && model_rejects_forced_tool_choice_with_adaptive(upstream_model)
+            {
                 return Err(format!(
-                    "Messages model {upstream_model} does not support thinking.type=disabled"
+                    "Messages model {upstream_model} does not support forced tool_choice with thinking"
                 ));
             }
-            if thinking.contains_key("budget_tokens") {
-                return Err(
-                    "Messages thinking.type=disabled must not include budget_tokens".to_string(),
-                );
+            if !explicit_output_config
+                && body.pointer("/output_config/effort").and_then(Value::as_str) == Some("xhigh")
+                && !model_supports_xhigh_effort(upstream_model)
+            {
+                return Err(format!(
+                    "Messages model {upstream_model} does not support output_config.effort=xhigh"
+                ));
             }
-            if thinking.contains_key("display") {
-                return Err("Messages thinking.type=disabled must not include display".to_string());
-            }
-            return Ok(());
         }
-        "enabled" => {
-            validate_thinking_display(thinking)?;
-            validate_manual_thinking(thinking, obj, upstream_model)?;
-        }
-        "adaptive" => {
-            validate_thinking_display(thinking)?;
-            validate_adaptive_thinking(thinking, obj, upstream_model)?;
-        }
-        other => {
-            return Err(format!(
-                "Messages thinking.type must be enabled, adaptive, or disabled; got {other}"
-            ));
-        }
+        _ => return Ok(()),
     }
 
-    validate_default_temperature(obj)?;
-    validate_absent_top_k(obj)?;
-    if let Some(top_p) = obj.get("top_p") {
-        let top_p = top_p
-            .as_f64()
-            .ok_or_else(|| "Messages top_p must be numeric when thinking is active".to_string())?;
-        if !(0.95..=1.0).contains(&top_p) {
-            return Err(
-                "Messages top_p must be between 0.95 and 1 when thinking is active".to_string(),
-            );
-        }
+    if let Some(temperature) = obj.get("temperature")
+        && temperature.as_f64() != Some(1.0)
+    {
+        return Err("Messages temperature must be omitted or equal to 1 when thinking is active".to_string());
     }
-    if tool_choice_forces_use(obj.get("tool_choice")) {
-        return Err(
-            "Messages thinking is incompatible with forced tool_choice type any or tool"
-                .to_string(),
-        );
+    if obj.contains_key("top_k") {
+        return Err("Messages top_k must be omitted when thinking is active".to_string());
+    }
+    if let Some(top_p) = obj.get("top_p") {
+        // Current models default top_p to 0.99 and answer every other value with HTTP 400.
+        let allowed = if model_rejects_nondefault_sampling(upstream_model) {
+            top_p.as_f64() == Some(0.99)
+        } else {
+            top_p.as_f64().is_some_and(|top_p| (0.95..=1.0).contains(&top_p))
+        };
+        if !allowed {
+            return Err(format!(
+                "Messages top_p value {top_p} is not accepted with thinking on model {upstream_model}"
+            ));
+        }
     }
     if obj
         .get("messages")
         .and_then(Value::as_array)
         .and_then(|messages| messages.last())
-        .and_then(Value::as_object)
         .and_then(|message| message.get("role"))
         .and_then(Value::as_str)
         == Some("assistant")
     {
         return Err("Messages thinking is incompatible with assistant prefill".to_string());
-    }
-
-    Ok(())
-}
-
-fn validate_manual_thinking(
-    thinking: &Map<String, Value>,
-    request: &Map<String, Value>,
-    upstream_model: &str,
-) -> Result<(), String> {
-    if model_requires_adaptive_thinking(upstream_model) {
-        return Err(format!(
-            "Messages model {upstream_model} does not support thinking.type=enabled; use adaptive"
-        ));
-    }
-    let budget = thinking
-        .get("budget_tokens")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            "Messages thinking.type=enabled requires integer budget_tokens".to_string()
-        })?;
-    if budget < 1024 {
-        return Err("Messages thinking budget_tokens must be at least 1024".to_string());
-    }
-    let max_tokens = request
-        .get("max_tokens")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "Messages max_tokens must be a non-negative integer".to_string())?;
-    if budget >= max_tokens {
-        return Err(format!(
-            "Messages thinking budget_tokens ({budget}) must be less than max_tokens ({max_tokens})"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_adaptive_thinking(
-    thinking: &Map<String, Value>,
-    request: &Map<String, Value>,
-    upstream_model: &str,
-) -> Result<(), String> {
-    if !model_supports_adaptive(upstream_model) {
-        return Err(format!(
-            "Messages model {upstream_model} does not support thinking.type=adaptive"
-        ));
-    }
-    if thinking.contains_key("budget_tokens") {
-        return Err("Messages thinking.type=adaptive must not include budget_tokens".to_string());
-    }
-    if let Some(effort) = request
-        .get("output_config")
-        .and_then(Value::as_object)
-        .and_then(|config| config.get("effort"))
-    {
-        let effort = effort.as_str().ok_or_else(|| {
-            "Messages output_config.effort must be a string with adaptive thinking".to_string()
-        })?;
-        if !matches!(effort, "low" | "medium" | "high" | "xhigh" | "max") {
-            return Err(format!(
-                "Messages output_config.effort is invalid for adaptive thinking: {effort}"
-            ));
-        }
-        if effort == "xhigh" && !model_supports_xhigh_effort(upstream_model) {
-            return Err(format!(
-                "Messages model {upstream_model} does not support output_config.effort=xhigh"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_thinking_display(thinking: &Map<String, Value>) -> Result<(), String> {
-    let Some(display) = thinking.get("display") else {
-        return Ok(());
-    };
-    if matches!(display.as_str(), Some("summarized" | "omitted" | "updates")) {
-        return Ok(());
-    }
-    Err("Messages thinking.display must be summarized, omitted, or updates".to_string())
-}
-
-fn validate_default_temperature(request: &Map<String, Value>) -> Result<(), String> {
-    let Some(temperature) = request.get("temperature") else {
-        return Ok(());
-    };
-    let temperature = temperature
-        .as_f64()
-        .ok_or_else(|| "Messages temperature must be numeric".to_string())?;
-    if temperature != 1.0 {
-        return Err("Messages temperature must be omitted or equal to 1".to_string());
-    }
-    Ok(())
-}
-
-fn validate_absent_top_k(request: &Map<String, Value>) -> Result<(), String> {
-    if request.contains_key("top_k") {
-        return Err("Messages top_k must be omitted for this request".to_string());
     }
     Ok(())
 }
@@ -213,43 +129,110 @@ fn tool_choice_forces_use(tool_choice: Option<&Value>) -> bool {
     }
 }
 
-fn model_requires_adaptive_thinking(model: &str) -> bool {
-    let model = model.to_lowercase();
-    if !model_supports_adaptive(&model) {
-        return false;
-    }
-    if model.contains("fable") || (model.contains("mythos") && !model.contains("preview")) {
-        return true;
-    }
-    claude_family_version(&model, "opus").is_some_and(|version| version >= (4, 7))
-        || claude_family_version(&model, "sonnet").is_some_and(|version| version >= (5, 0))
+fn denotes_claude_model(model: &str) -> bool {
+    model.contains("claude")
+        || ["opus-", "sonnet-", "haiku-"]
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
 }
 
-fn model_has_always_on_adaptive_thinking(model: &str) -> bool {
-    let model = model.to_lowercase();
-    model_supports_adaptive(&model) && (model.contains("fable") || model.contains("mythos"))
+fn family_at_least(model: &str, family: &str, minimum: (u32, u32)) -> bool {
+    claude_family_version(model, family).is_some_and(|version| version >= minimum)
 }
 
-fn model_rejects_nondefault_sampling(model: &str) -> bool {
+/// RC4d.1: models that answer `thinking.type = "disabled"` with HTTP 400.
+fn model_rejects_disabled_thinking(model: &str) -> bool {
     let model = model.to_lowercase();
-    if !model_supports_adaptive(&model) {
-        return false;
-    }
-    if model.contains("fable") || model.contains("mythos") {
-        return true;
-    }
-    claude_family_version(&model, "opus").is_some_and(|version| version >= (4, 7))
-        || claude_family_version(&model, "sonnet").is_some_and(|version| version >= (5, 0))
+    denotes_claude_model(&model)
+        && (model.contains("fable")
+            || model.contains("mythos")
+            || family_at_least(&model, "opus", (5, 5))
+            || family_at_least(&model, "sonnet", (5, 5)))
 }
 
+/// RC4: the thinking type generated for normalized effort `none`.
+fn generated_disabled_thinking_type(model: &str) -> Option<&'static str> {
+    if !model_rejects_disabled_thinking(model) {
+        return Some("disabled");
+    }
+    // Sonnet 5.5 turns up-front thinking off with `between_tools`; other always-on
+    // models think without configuration, so the field is omitted.
+    (claude_family_version(&model.to_lowercase(), "sonnet") == Some((5, 5)))
+        .then_some("between_tools")
+}
+
+/// RC4d.1: models that accept `output_config.effort = "xhigh"`.
 fn model_supports_xhigh_effort(model: &str) -> bool {
     let model = model.to_lowercase();
-    if !model_supports_adaptive(&model) {
-        return false;
+    denotes_claude_model(&model)
+        && (model.contains("fable")
+            || (model.contains("mythos") && !model.contains("preview"))
+            || family_at_least(&model, "opus", (4, 7))
+            || family_at_least(&model, "sonnet", (5, 0))
+            || family_at_least(&model, "haiku", (5, 5)))
+}
+
+/// RC4d.1: models that answer non-default sampling values with HTTP 400.
+fn model_rejects_nondefault_sampling(model: &str) -> bool {
+    let model = model.to_lowercase();
+    denotes_claude_model(&model)
+        && (model.contains("fable")
+            || model.contains("mythos")
+            || family_at_least(&model, "opus", (4, 7))
+            || family_at_least(&model, "sonnet", (5, 0))
+            || family_at_least(&model, "haiku", (5, 5)))
+}
+
+/// RC4d.1: adaptive-thinking models that reject forced tool use.
+fn model_rejects_forced_tool_choice_with_adaptive(model: &str) -> bool {
+    let model = model.to_lowercase();
+    denotes_claude_model(&model)
+        && (family_at_least(&model, "fable", (5, 1))
+            || family_at_least(&model, "mythos", (5, 1))
+            || family_at_least(&model, "opus", (5, 5))
+            || family_at_least(&model, "sonnet", (5, 5)))
+}
+
+/// RC4: generated adaptive effort for a bare thinking budget.
+fn effort_from_budget(budget: u64, model: &str) -> &'static str {
+    match budget {
+        0..=1024 => "low",
+        1025..=4096 => "medium",
+        4097..=16384 => "high",
+        _ if model_supports_xhigh_effort(model) => "xhigh",
+        _ => "max",
     }
-    if model.contains("fable") || (model.contains("mythos") && !model.contains("preview")) {
-        return true;
+}
+
+/// RC4g: default `max_tokens`, bounded by the model's documented synchronous output limit.
+fn messages_default_max_tokens(model: &str) -> u64 {
+    let model = model.to_lowercase();
+    if !denotes_claude_model(&model) || model.contains("fable") || model.contains("mythos") {
+        return 128_000;
     }
-    claude_family_version(&model, "opus").is_some_and(|version| version >= (4, 7))
-        || claude_family_version(&model, "sonnet").is_some_and(|version| version >= (5, 0))
+    if let Some(version) = claude_family_version(&model, "opus") {
+        return match version {
+            v if v >= (4, 6) => 128_000,
+            v if v >= (4, 5) => 64_000,
+            v if v >= (4, 0) => 32_000,
+            _ => 4_096,
+        };
+    }
+    if let Some(version) = claude_family_version(&model, "sonnet") {
+        return match version {
+            v if v >= (4, 6) => 128_000,
+            v if v >= (3, 7) => 64_000,
+            v if v >= (3, 5) => 8_192,
+            _ => 4_096,
+        };
+    }
+    if let Some(version) = claude_family_version(&model, "haiku") {
+        return match version {
+            v if v >= (5, 5) => 128_000,
+            v if v >= (4, 0) => 64_000,
+            v if v >= (3, 5) => 8_192,
+            _ => 4_096,
+        };
+    }
+    128_000
 }

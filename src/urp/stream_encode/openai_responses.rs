@@ -5,7 +5,7 @@ use crate::urp::stream_helpers::*;
 use crate::urp::{self, ToolResultContent, UrpStreamEvent};
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 use tokio::sync::mpsc;
 

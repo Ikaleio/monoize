@@ -244,7 +244,7 @@ IR13. HTTP status codes follow existing Monoize conventions:
 - `402` for insufficient balance.
 - `403` for model not allowed.
 - `429` for quota exceeded.
-- `502` for upstream errors (all sub-requests failed).
+- the RTA-8 status of the final failed attempt for upstream errors (all sub-requests failed).
 
 ### 5.5 Streaming response mapping (`stream = true`)
 

@@ -1,6 +1,7 @@
 mod account_balance;
 mod billing;
 mod compact;
+mod count_tokens;
 mod decisions;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
@@ -29,6 +30,7 @@ use crate::users::{
 };
 use axum::Json;
 use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
@@ -50,6 +52,7 @@ use usage::*;
 pub use account_balance::{codex_usage, deepseek_user_balance};
 pub(crate) use compact::classify_openai_compact_scheme;
 pub use compact::compact_response;
+pub use count_tokens::count_messages_tokens;
 pub use decisions::{create_decisions, create_system_one};
 pub use responses_websocket::responses_websocket;
 
@@ -248,12 +251,20 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
     .into_response())
 }
 
+/// SE1e: a body rejected before decoding uses the endpoint's native envelope.
+#[allow(clippy::result_large_err)]
+fn native_json_body(body: Result<Json<Value>, JsonRejection>) -> AppResult<Value> {
+    body.map(|Json(body)| body).map_err(|rejection| {
+        AppError::new(rejection.status(), "invalid_json", rejection.body_text())
+    })
+}
+
 pub async fn create_response(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> AppResult<Response> {
-    create_response_inner(state, headers, body, None).await
+    create_response_inner(state, headers, native_json_body(body)?, None).await
 }
 
 pub(crate) async fn create_response_prefer_websocket(
@@ -318,24 +329,27 @@ async fn create_response_inner(
 
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::Responses;
-        let stream = deferred_forward_event_stream(
+        return commit_forward_event_stream(
             downstream,
-            forward_stream_typed(
-                state.clone(),
-                auth.clone(),
-                req,
-                max_multiplier,
-                downstream,
-                request_id.clone(),
-                request_ip.clone(),
-                extract_client_session_id(&headers),
-                capture.clone(),
-                ws_turn,
-            ),
-        );
-        return Ok(Sse::new(stream)
-            .keep_alive(api_stream_keep_alive())
-            .into_response());
+            request_id.clone(),
+            api_stream_keep_alive(),
+            |commit| {
+                forward_stream_typed(
+                    state.clone(),
+                    auth.clone(),
+                    req,
+                    max_multiplier,
+                    downstream,
+                    request_id.clone(),
+                    request_ip.clone(),
+                    extract_client_session_id(&headers),
+                    capture.clone(),
+                    ws_turn,
+                    commit,
+                )
+            },
+        )
+        .await;
     }
 
     let session_id = extract_client_session_id(&headers);
@@ -359,15 +373,18 @@ async fn create_response_inner(
             .await
         }
     });
-    let value = join_while_client_present(handle, watch).await?;
-    Ok(Json(value).into_response())
+    let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
+    let mut response = Json(value).into_response();
+    crate::error::append_forwarded_headers(&mut response, forwarded_headers);
+    Ok(response)
 }
 
 pub async fn create_chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> AppResult<Response> {
+    let body = native_json_body(body)?;
     let auth = auth_tenant(&headers, &state).await?;
     let request_id = extract_request_id(&headers);
     let capture_session = state
@@ -397,24 +414,27 @@ pub async fn create_chat_completions(
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::ChatCompletions;
-        let stream = deferred_forward_event_stream(
+        return commit_forward_event_stream(
             downstream,
-            forward_stream_typed(
-                state.clone(),
-                auth.clone(),
-                req,
-                max_multiplier,
-                downstream,
-                request_id.clone(),
-                request_ip.clone(),
-                extract_client_session_id(&headers),
-                capture.clone(),
-                None,
-            ),
-        );
-        return Ok(Sse::new(stream)
-            .keep_alive(api_stream_keep_alive())
-            .into_response());
+            request_id.clone(),
+            api_stream_keep_alive(),
+            |commit| {
+                forward_stream_typed(
+                    state.clone(),
+                    auth.clone(),
+                    req,
+                    max_multiplier,
+                    downstream,
+                    request_id.clone(),
+                    request_ip.clone(),
+                    extract_client_session_id(&headers),
+                    capture.clone(),
+                    None,
+                    commit,
+                )
+            },
+        )
+        .await;
     }
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
@@ -437,19 +457,56 @@ pub async fn create_chat_completions(
             .await
         }
     });
-    let value = join_while_client_present(handle, watch).await?;
-    Ok(Json(value).into_response())
+    let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
+    let mut response = Json(value).into_response();
+    crate::error::append_forwarded_headers(&mut response, forwarded_headers);
+    Ok(response)
 }
 
 pub async fn create_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> Response {
-    let request_id = extract_request_id(&headers);
-    match create_messages_inner(state, headers, body).await {
+    let request_id = canonical_request_id(&headers);
+    let wire_request_id = messages_wire_request_id(&request_id);
+    let body = match native_json_body(body) {
+        Ok(body) => body,
+        Err(err) => {
+            let mut response = anthropic_error_response(err, Some(&wire_request_id));
+            insert_messages_request_id_header(&mut response, &wire_request_id);
+            return response;
+        }
+    };
+    let mut response = match create_messages_inner(state, headers, body, request_id).await {
         Ok(response) => response,
-        Err(err) => anthropic_error_response(err, request_id.as_deref()),
+        Err(err) => anthropic_error_response(err, Some(&wire_request_id)),
+    };
+    insert_messages_request_id_header(&mut response, &wire_request_id);
+    response
+}
+
+/// The canonical request id keyed by request logs: the (middleware-normalized) `x-request-id`.
+pub(super) fn canonical_request_id(headers: &HeaderMap) -> String {
+    extract_request_id(headers)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string())
+}
+
+/// DM4b: Messages wire request ids carry the `req_` prefix of Anthropic request ids.
+pub(super) fn messages_wire_request_id(canonical: &str) -> String {
+    if canonical.starts_with("req_") {
+        canonical.to_string()
+    } else {
+        format!("req_{canonical}")
+    }
+}
+
+pub(super) fn insert_messages_request_id_header(response: &mut Response, request_id: &str) {
+    if let Ok(value) = axum::http::HeaderValue::from_str(request_id) {
+        response
+            .headers_mut()
+            .insert(axum::http::HeaderName::from_static("request-id"), value);
     }
 }
 
@@ -457,9 +514,10 @@ async fn create_messages_inner(
     state: AppState,
     headers: HeaderMap,
     body: Value,
+    request_id: String,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    let request_id = extract_request_id(&headers);
+    let request_id = Some(request_id);
     let capture_session = state
         .request_capture
         .maybe_start_session(
@@ -477,6 +535,7 @@ async fn create_messages_inner(
     });
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
+    req.context.anthropic_client_headers = anthropic_client_headers(&headers);
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
@@ -487,24 +546,27 @@ async fn create_messages_inner(
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::AnthropicMessages;
-        let stream = deferred_forward_event_stream(
+        return commit_forward_event_stream(
             downstream,
-            forward_stream_typed(
-                state.clone(),
-                auth.clone(),
-                req,
-                max_multiplier,
-                downstream,
-                request_id.clone(),
-                request_ip.clone(),
-                extract_client_session_id(&headers),
-                capture.clone(),
-                None,
-            ),
-        );
-        return Ok(Sse::new(stream)
-            .keep_alive(messages_stream_keep_alive())
-            .into_response());
+            request_id.clone(),
+            messages_stream_keep_alive(),
+            |commit| {
+                forward_stream_typed(
+                    state.clone(),
+                    auth.clone(),
+                    req,
+                    max_multiplier,
+                    downstream,
+                    request_id.clone(),
+                    request_ip.clone(),
+                    extract_client_session_id(&headers),
+                    capture.clone(),
+                    None,
+                    commit,
+                )
+            },
+        )
+        .await;
     }
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
@@ -527,46 +589,21 @@ async fn create_messages_inner(
             .await
         }
     });
-    let value = join_while_client_present(handle, watch).await?;
-    Ok(Json(value).into_response())
+    let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
+    let mut response = Json(value).into_response();
+    crate::error::append_forwarded_headers(&mut response, forwarded_headers);
+    Ok(response)
 }
 
 fn anthropic_error_response(err: AppError, request_id: Option<&str>) -> Response {
-    let error_type = err
-        .upstream_type
-        .as_deref()
-        .unwrap_or(&err.error_type)
-        .to_string();
-    let mut error = json!({
-        "type": error_type,
-        "message": err.message,
-    });
-    if let Some(obj) = error.as_object_mut() {
-        if let Some(status) = err.upstream_status {
-            obj.insert("upstream_status".to_string(), Value::from(status));
-        }
-        if let Some(code) = err.upstream_code {
-            obj.insert("upstream_code".to_string(), Value::String(code));
-        }
-        if let Some(error_type) = err.upstream_type {
-            obj.insert("upstream_type".to_string(), Value::String(error_type));
-        }
-        if let Some(param) = err.upstream_param {
-            obj.insert("upstream_param".to_string(), Value::String(param));
-        }
-    }
-    let mut body = json!({ "type": "error", "error": error });
-    if let Some(request_id) = request_id.filter(|value| !value.is_empty()) {
-        body.as_object_mut().expect("Anthropic error body").insert(
-            "request_id".to_string(),
-            Value::String(request_id.to_string()),
-        );
-    }
-
+    let request_id = request_id
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let body = anthropic_error_json(&err, &request_id);
     let mut response = (err.status, Json(body)).into_response();
-    if let Some(request_id) = request_id
-        && let Ok(value) = axum::http::HeaderValue::from_str(request_id)
-    {
+    crate::error::append_forwarded_headers(&mut response, err.forwarded_headers);
+    if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
         response
             .headers_mut()
             .insert(axum::http::HeaderName::from_static("request-id"), value);
@@ -797,6 +834,8 @@ struct MonoizeAttempt {
     /// `x-session-affinity` and `x-opencode-session`, for request-log
     /// persistence.
     session_affinity_value: Option<String>,
+    /// PM8/PM8h: downstream `/v1/messages` headers, sent only when the attempt targets `messages`.
+    client_anthropic_headers: urp::AnthropicClientHeaders,
     /// RTA-6c: `scheme://host:port` from Channel `base_url`, when parseable.
     origin_key: Option<String>,
     /// Enabled positive-weight Channels of this Provider that share `origin_key`.
@@ -843,6 +882,13 @@ struct TriedProvider {
     /// Never persisted.
     #[serde(skip)]
     client_error: String,
+    /// SE1d: `FWD` of this attempt's upstream response. Never persisted.
+    #[serde(skip)]
+    forwarded_headers: crate::error::ForwardedHeaders,
+    /// RTA-8b: the code the upstream reported, without the local fallback that
+    /// `upstream_code` applies. Never persisted.
+    #[serde(skip)]
+    reported_upstream_code: Option<String>,
     upstream_status: Option<u16>,
     upstream_code: Option<String>,
     upstream_type: Option<String>,
@@ -878,6 +924,11 @@ impl TriedProvider {
                 &app_err.message,
                 mask_sensitive_info,
             ),
+            forwarded_headers: app_err.forwarded_headers.clone(),
+            reported_upstream_code: app_err
+                .upstream_code
+                .clone()
+                .filter(|code| !code.is_empty()),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(
                 app_err
@@ -981,6 +1032,27 @@ impl DownstreamProtocol {
                 | (Self::AnthropicMessages, ProviderType::Messages)
         )
     }
+}
+
+/// XTRA-5a: the downstream wire family when an upstream response must have its
+/// foreign passthrough state removed. Image and media provider output carries
+/// only metadata that the Image API and media encoders consume.
+pub(super) fn foreign_response_target(
+    downstream: DownstreamProtocol,
+    provider_type: ProviderType,
+) -> Option<urp::ProviderProtocol> {
+    let wire_family = matches!(
+        provider_type,
+        ProviderType::Responses
+            | ProviderType::ChatCompletion
+            | ProviderType::Messages
+            | ProviderType::Gemini
+    );
+    (wire_family && !downstream.is_same_family(provider_type)).then_some(match downstream {
+        DownstreamProtocol::Responses => urp::ProviderProtocol::Responses,
+        DownstreamProtocol::ChatCompletions => urp::ProviderProtocol::ChatCompletion,
+        DownstreamProtocol::AnthropicMessages => urp::ProviderProtocol::Messages,
+    })
 }
 
 pub(crate) fn provider_type_protocol(provider_type: ProviderType) -> Option<urp::ProviderProtocol> {
