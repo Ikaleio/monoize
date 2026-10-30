@@ -4,7 +4,6 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{AnthropicCacheTarget, Node};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -71,29 +70,11 @@ impl Transform for CacheAnthropicAutoTransform {
             return Ok(());
         }
 
-        let explicit_breakpoints = req
-            .input
-            .iter()
-            .filter(|node| match node {
-                Node::Text { extra_body, .. }
-                | Node::Image { extra_body, .. }
-                | Node::Audio { extra_body, .. }
-                | Node::File { extra_body, .. }
-                | Node::Refusal { extra_body, .. }
-                | Node::Reasoning { extra_body, .. }
-                | Node::ToolCall { extra_body, .. }
-                | Node::ToolResult { extra_body, .. }
-                | Node::ProviderItem { extra_body, .. }
-                | Node::NextDownstreamEnvelopeExtra { extra_body } => {
-                    extra_body.contains_key("cache_control")
-                }
-            })
-            .count();
-        CacheConfig::from_dyn(config)?.apply_marker(
+        let slot_free = crate::urp::cache_breakpoint::anthropic_breakpoint_count(req) < 4;
+        CacheConfig::from_dyn(config)?.apply_request_marker(
             &mut req.extra_body,
             &mut req.context.anthropic_cache_markers,
-            AnthropicCacheTarget::Request,
-            explicit_breakpoints < 4,
+            slot_free,
         );
         Ok(())
     }

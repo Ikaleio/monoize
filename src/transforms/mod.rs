@@ -572,6 +572,7 @@ pub fn text_node(role: OrdinaryRole, content: impl Into<String>) -> Node {
         content: content.into(),
         phase: None,
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }
 }
 

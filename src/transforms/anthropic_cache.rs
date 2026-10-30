@@ -2,7 +2,7 @@
 //! (`spec/auto-cache-transforms.spec.md` DEF-11 through DEF-15).
 
 use crate::transforms::{TransformConfig, TransformError};
-use crate::urp::AnthropicCacheTarget;
+use crate::urp::{AnthropicCacheTarget, CacheBreakpoint, UrpRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -21,6 +21,12 @@ enum CacheTtl {
 #[serde(default)]
 pub(super) struct CacheConfig {
     ttl: CacheTtl,
+}
+
+/// The DEF-3 Anthropic cache slot count.
+pub(super) fn anthropic_slot_count(req: &UrpRequest) -> usize {
+    crate::urp::cache_breakpoint::anthropic_breakpoint_count(req)
+        + usize::from(req.extra_body.contains_key("cache_control"))
 }
 
 impl TransformConfig for CacheConfig {
@@ -57,16 +63,35 @@ impl CacheConfig {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))
     }
 
-    /// Applies this rule's marker to one target. A marker inserted by an earlier Monoize rule is
-    /// retuned, so later scopes (API key after Provider) win; a client marker is left untouched.
-    /// `slot_free` gates only the creation of a new breakpoint.
-    pub(super) fn apply_marker(
+    /// Applies this rule's marker to a typed target (DEF-15). A marker inserted by an earlier
+    /// Monoize rule is retuned, so later scopes (API key after Provider) win; a client marker is
+    /// left untouched. `slot_free` gates only the creation of a new breakpoint.
+    pub(super) fn apply_breakpoint(
         &self,
-        extra_body: &mut HashMap<String, Value>,
+        slot: &mut Option<CacheBreakpoint>,
         owned: &mut HashSet<AnthropicCacheTarget>,
         target: AnthropicCacheTarget,
         slot_free: bool,
     ) {
+        match slot {
+            Some(marker) if owned.contains(&target) => *marker = self.breakpoint(),
+            Some(_) => {}
+            None if slot_free => {
+                *slot = Some(self.breakpoint());
+                owned.insert(target);
+            }
+            None => {}
+        }
+    }
+
+    /// The same rule for the top-level automatic-caching control, which stays a request field.
+    pub(super) fn apply_request_marker(
+        &self,
+        extra_body: &mut HashMap<String, Value>,
+        owned: &mut HashSet<AnthropicCacheTarget>,
+        slot_free: bool,
+    ) {
+        let target = AnthropicCacheTarget::Request;
         match extra_body.get_mut("cache_control") {
             Some(marker) if owned.contains(&target) => *marker = self.cache_control(),
             Some(_) => {}
@@ -80,6 +105,13 @@ impl CacheConfig {
 
     /// `5m` omits `ttl` because Anthropic defaults to a 5-minute TTL, which keeps the wire
     /// format of older rules.
+    fn breakpoint(&self) -> CacheBreakpoint {
+        CacheBreakpoint::anthropic(match self.ttl {
+            CacheTtl::FiveMinutes => None,
+            CacheTtl::OneHour => Some("1h"),
+        })
+    }
+
     fn cache_control(&self) -> Value {
         match self.ttl {
             CacheTtl::FiveMinutes => json!({"type": "ephemeral"}),

@@ -154,6 +154,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
                     content: String::new(),
                     phase: None,
                     extra_body,
+                    cache_breakpoint: None,
                 };
             }
         }

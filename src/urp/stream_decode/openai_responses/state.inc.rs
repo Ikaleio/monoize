@@ -65,6 +65,7 @@ fn map_output_item_done(
                 is_error: false,
                 content: Vec::new(),
                 extra_body: item_extra_body_from_value(item),
+                cache_breakpoint: None,
             });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
             events.push(UrpStreamEvent::NodeDone {
@@ -636,6 +637,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 content: left_content,
                 phase: left_phase,
                 extra_body: left_extra,
+                cache_breakpoint: _,
             },
             Node::Text {
                 logprobs: right_logprobs,
@@ -646,6 +648,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 content: right_content,
                 phase: right_phase,
                 extra_body: right_extra,
+                cache_breakpoint: _,
             },
         ) => {
             if left_role != right_role {
@@ -671,6 +674,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 },
                 phase: merge_optional_string_field("message.phase", left_phase, right_phase)?,
                 extra_body: merge_extra_body(left_extra, right_extra),
+                cache_breakpoint: None,
             })
         }
         (
@@ -682,6 +686,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 name: left_name,
                 arguments: left_arguments,
                 extra_body: left_extra,
+                cache_breakpoint: _,
             },
             Node::ToolCall {
                 namespace: right_namespace, signature: right_signature,
@@ -691,6 +696,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 name: right_name,
                 arguments: right_arguments,
                 extra_body: right_extra,
+                cache_breakpoint: _,
             },
         ) => Ok(Node::ToolCall {
             namespace: right_namespace.clone().or_else(|| left_namespace.clone()),
@@ -712,6 +718,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
                 right_arguments,
             )?,
             extra_body: merge_extra_body(left_extra, right_extra),
+            cache_breakpoint: None,
         }),
         (left, right) if left == right || nodes_semantically_match(left, right) => Ok(right.clone()),
         (left, right)

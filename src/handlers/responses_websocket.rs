@@ -23,6 +23,8 @@ const DEFAULT_MAX_AGE_SECS: usize = 3_600;
 const MAX_GENERATING_TURNS: usize = 16;
 const MAX_NAMED_LANES: usize = 32;
 const MAX_STREAM_ID_LEN: usize = 256;
+/// WS15a: bound on each downstream write and on the final close.
+const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 const FIRST_EVENT_MESSAGE: &str = "Expected a 'response.create' message as the first websocket event.";
 
 #[derive(Clone, Copy, Debug)]
@@ -99,6 +101,8 @@ struct CacheEntry {
     public_id: String,
     input: Vec<Value>,
     output: Vec<Value>,
+    /// Steer inputs the upstream left pending for required input (WS7).
+    pending_steers: Vec<Value>,
     /// The turn's normalized request without `input`.
     controls: Map<String, Value>,
     strip_encrypted: bool,
@@ -120,10 +124,18 @@ struct Connection {
     outbound: mpsc::Sender<Message>,
     v1: AtomicBool,
     closed: AtomicBool,
-    /// Ordered by lane creation; the default lane is scanned first (WS8a).
     entries: StdMutex<Vec<CacheEntry>>,
+    /// WS8a: lane creation order for `item_reference` resolution.
+    lane_order: StdMutex<HashMap<LaneKey, usize>>,
+    /// WS5a: request models whose responses contained reasoning items.
     active: StdMutex<HashMap<LaneKey, ActiveTurn>>,
     generating: Arc<Semaphore>,
+    /// WS14: started turns; rejected events never count.
+    accepted_turns: std::sync::atomic::AtomicUsize,
+    /// Wakes the reader when a lane ends the connection (WS15).
+    shutdown: tokio::sync::Notify,
+    /// WS2g: observed by upstream feeders after their turn left `active`.
+    lifetime: watch::Sender<bool>,
 }
 
 #[derive(Debug)]
@@ -263,6 +275,11 @@ impl Connection {
         self.closed.load(Ordering::Acquire)
     }
 
+    fn mark_closed(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.lifetime.send_replace(true);
+    }
+
     fn is_v1(&self) -> bool {
         self.v1.load(Ordering::Acquire)
     }
@@ -292,6 +309,16 @@ impl Connection {
         }
     }
 
+    fn set_pending_steers(&self, lane: &LaneKey, public_id: &str, items: &[Value]) {
+        if let Ok(mut entries) = self.entries.lock()
+            && let Some(entry) = entries
+                .iter_mut()
+                .find(|entry| entry.lane == *lane && entry.public_id == public_id)
+        {
+            entry.pending_steers = items.to_vec();
+        }
+    }
+
     fn remove_entry(&self, lane: &LaneKey, public_id: Option<&str>) {
         if let Ok(mut entries) = self.entries.lock() {
             entries.retain(|entry| {
@@ -313,11 +340,14 @@ impl Connection {
         let Ok(entries) = self.entries.lock() else {
             return;
         };
-        let ordered = entries
-            .iter()
-            .filter(|entry| entry.lane.is_none())
-            .chain(entries.iter().filter(|entry| entry.lane.is_some()));
-        let ordered: Vec<&CacheEntry> = ordered.collect();
+        let order = self.lane_order.lock().map(|order| order.clone()).unwrap_or_default();
+        let mut ordered: Vec<&CacheEntry> = entries.iter().collect();
+        ordered.sort_by_key(|entry| {
+            (
+                entry.lane.is_some(),
+                order.get(&entry.lane).copied().unwrap_or(usize::MAX),
+            )
+        });
         for item in items.iter_mut() {
             if item.get("type").and_then(Value::as_str) != Some("item_reference") {
                 continue;
@@ -373,11 +403,13 @@ async fn serve_responses_websocket(
     let writer = tokio::spawn(async move {
         while let Some(message) = outbound_rx.recv().await {
             let close = matches!(message, Message::Close(_));
-            if sink.send(message).await.is_err() || close {
+            // WS15a: a peer that stops reading cannot hold the connection open.
+            let sent = tokio::time::timeout(WRITE_DEADLINE, sink.send(message)).await;
+            if !matches!(sent, Ok(Ok(()))) || close {
                 break;
             }
         }
-        let _ = sink.close().await;
+        let _ = tokio::time::timeout(WRITE_DEADLINE, sink.close()).await;
     });
 
     let beta = headers
@@ -397,13 +429,16 @@ async fn serve_responses_websocket(
         v1: AtomicBool::new(v1_header),
         closed: AtomicBool::new(false),
         entries: StdMutex::new(Vec::new()),
+        lane_order: StdMutex::new(HashMap::new()),
         active: StdMutex::new(HashMap::new()),
         generating: Arc::new(Semaphore::new(MAX_GENERATING_TURNS)),
+        accepted_turns: std::sync::atomic::AtomicUsize::new(0),
+        shutdown: tokio::sync::Notify::new(),
+        lifetime: watch::channel(false).0,
     });
 
     let mut lanes: HashMap<LaneKey, LaneHandle> = HashMap::new();
     let mut named_lanes = 0usize;
-    let mut accepted_turns = 0usize;
     let mut inbound_bytes = 0usize;
     let mut first_text = true;
     let max_age = tokio::time::sleep(std::time::Duration::from_secs(limits.max_age_secs as u64));
@@ -412,11 +447,14 @@ async fn serve_responses_websocket(
     loop {
         let message = tokio::select! {
             message = stream.next() => message,
+            () = conn.shutdown.notified() => break,
             _ = &mut max_age => {
                 // WS15a: the official 60-minute connection lifetime.
-                let _ = conn
-                    .send_error(&None, WsError::connection_limit("60 minutes"))
-                    .await;
+                let _ = tokio::time::timeout(
+                    WRITE_DEADLINE,
+                    conn.send_error(&None, WsError::connection_limit("60 minutes")),
+                )
+                .await;
                 break;
             }
         };
@@ -532,16 +570,13 @@ async fn serve_responses_websocket(
                     }
                     continue;
                 }
-                accepted_turns += 1;
-                if accepted_turns > limits.max_turns {
-                    let _ = conn
-                        .send_error(&None, WsError::connection_limit("turn quota"))
-                        .await;
-                    break;
-                }
                 let handle = lanes.entry(lane.clone()).or_insert_with(|| {
                     if lane.is_some() {
                         named_lanes += 1;
+                    }
+                    if let Ok(mut order) = conn.lane_order.lock() {
+                        let next = order.len();
+                        order.entry(lane.clone()).or_insert(next);
                     }
                     spawn_lane(conn.clone(), lane.clone())
                 });
@@ -577,16 +612,19 @@ async fn serve_responses_websocket(
         }
     }
 
-    conn.closed.store(true, Ordering::Release);
+    conn.mark_closed();
     if let Ok(active) = conn.active.lock() {
         for turn in active.values() {
             turn.control.send_replace(ResponsesWsControl::Disconnected);
         }
     }
     drop(lanes);
-    let _ = conn.outbound.send(Message::Close(None)).await;
+    let _ = tokio::time::timeout(WRITE_DEADLINE, conn.outbound.send(Message::Close(None))).await;
     drop(conn);
-    let _ = writer.await;
+    let mut writer = writer;
+    if tokio::time::timeout(WRITE_DEADLINE, &mut writer).await.is_err() {
+        writer.abort();
+    }
 }
 
 fn valid_stream_id(stream_id: &str) -> bool {
@@ -598,29 +636,30 @@ fn valid_stream_id(stream_id: &str) -> bool {
 }
 
 fn spawn_lane(conn: Arc<Connection>, key: LaneKey) -> LaneHandle {
-    let (relay_tx, mut relay_rx) = mpsc::unbounded_channel::<Value>();
+    let (relay_tx, relay_rx) = mpsc::unbounded_channel::<Value>();
     let lane = Arc::new(ResponsesWsLane::new(relay_tx));
-    {
-        let conn = conn.clone();
-        let key = key.clone();
-        tokio::spawn(async move {
-            while let Some(value) = relay_rx.recv().await {
-                if !conn.send(&key, value).await {
-                    break;
-                }
-            }
-        });
-    }
     let (jobs, jobs_rx) = mpsc::unbounded_channel();
-    tokio::spawn(run_lane(conn, key, lane, jobs_rx));
+    tokio::spawn(run_lane(conn, key, lane, jobs_rx, relay_rx));
     LaneHandle { jobs }
+}
+
+/// WS4a/WS2i: interrupt and steer acknowledgements share the response's
+/// sequence space; provider-control notifications keep their upstream fields.
+async fn forward_relay(conn: &Connection, key: &LaneKey, mut value: Value, next_sequence: &mut i64) {
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
+    if (kind.starts_with("response.interrupt.") || kind.starts_with("response.steer."))
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("sequence_number".to_string(), json!(*next_sequence));
+        *next_sequence += 1;
+    }
+    let _ = conn.send(key, value).await;
 }
 
 /// The input of one turn after WS8/WS10/WS18 assembly.
 struct PreparedTurn {
     request: Map<String, Value>,
     full_input: Vec<Value>,
-    new_input_len: usize,
     previous: Option<String>,
     same_lane_previous: bool,
     warmup: bool,
@@ -646,6 +685,7 @@ struct FinishedTurn {
     controls: Map<String, Value>,
     full_input: Vec<Value>,
     output: Vec<Value>,
+    pending_steers: Vec<Value>,
     strip_encrypted: bool,
 }
 
@@ -654,8 +694,10 @@ async fn run_lane(
     key: LaneKey,
     lane: Arc<ResponsesWsLane>,
     mut jobs: mpsc::UnboundedReceiver<LaneJob>,
+    mut relay: mpsc::UnboundedReceiver<Value>,
 ) {
     let mut last: Option<FinishedTurn> = None;
+    let mut next_sequence = 0i64;
     loop {
         if conn.is_closed() {
             break;
@@ -663,10 +705,22 @@ async fn run_lane(
         let successor = lane.take_successor();
         let job = match successor {
             Some(successor) => Err(successor),
-            None => match jobs.recv().await {
-                Some(job) => Ok(job),
-                None => break,
-            },
+            None => {
+                let job = tokio::select! {
+                    biased;
+                    value = relay.recv() => {
+                        if let Some(value) = value {
+                            forward_relay(&conn, &key, value, &mut next_sequence).await;
+                        }
+                        continue;
+                    }
+                    job = jobs.recv() => job,
+                };
+                match job {
+                    Some(job) => Ok(job),
+                    None => break,
+                }
+            }
         };
         if conn.is_closed() {
             break;
@@ -674,11 +728,20 @@ async fn run_lane(
         let Ok(permit) = conn.generating.clone().acquire_owned().await else {
             break;
         };
+        // Queued turns may wait here past a downstream close; they must not start.
+        if conn.is_closed() {
+            break;
+        }
         let prepared = match job {
             Ok(job) => prepare_job(&conn, &key, job),
             Err(successor) => match last.take() {
-                Some(steered) => prepare_successor(&conn, steered, successor),
-                None => continue,
+                Some(steered) => Ok(prepare_successor(steered, successor)),
+                None => {
+                    // No steered turn to continue: drop the upstream successor
+                    // instead of letting a later turn read its frames.
+                    lane.close().await;
+                    continue;
+                }
             },
         };
         let prepared = match prepared {
@@ -691,7 +754,16 @@ async fn run_lane(
                 continue;
             }
         };
-        last = run_turn(&conn, &key, &lane, prepared).await;
+        // WS14/WS15: only started turns count toward the turn quota.
+        if conn.accepted_turns.fetch_add(1, Ordering::AcqRel) + 1 > conn.limits.max_turns {
+            let _ = conn
+                .send_error(&None, WsError::connection_limit("turn quota"))
+                .await;
+            conn.mark_closed();
+            conn.shutdown.notify_one();
+            break;
+        }
+        last = run_turn(&conn, &key, &lane, prepared, &mut relay, &mut next_sequence).await;
         drop(permit);
     }
     lane.close().await;
@@ -711,20 +783,22 @@ fn input_items(input: Option<&Value>) -> Result<Vec<Value>, WsError> {
 
 fn concat_history(
     limits: &ResponsesWebsocketLimits,
-    input: &[Value],
-    output: &[Value],
+    entry: &CacheEntry,
     incoming: Vec<Value>,
 ) -> Result<Vec<Value>, WsError> {
-    let items = input
+    let items = entry
+        .input
         .len()
-        .saturating_add(output.len())
+        .saturating_add(entry.output.len())
+        .saturating_add(entry.pending_steers.len())
         .saturating_add(incoming.len());
     if items > limits.history_max_items {
         return Err(WsError::history_limit());
     }
     let mut full = Vec::with_capacity(items);
-    full.extend(input.iter().cloned());
-    full.extend(output.iter().cloned());
+    full.extend(entry.input.iter().cloned());
+    full.extend(entry.output.iter().cloned());
+    full.extend(entry.pending_steers.iter().cloned());
     full.extend(incoming);
     if serialized_len(&full) > limits.history_max_bytes {
         return Err(WsError::history_limit());
@@ -735,9 +809,6 @@ fn concat_history(
 /// WS5a: request encrypted reasoning for replay; strip it downstream when the
 /// client did not ask for it.
 fn ensure_encrypted_reasoning(request: &mut Map<String, Value>) -> bool {
-    if request.get("reasoning").is_none_or(Value::is_null) {
-        return false;
-    }
     let include = request
         .entry("include")
         .or_insert_with(|| Value::Array(Vec::new()));
@@ -777,7 +848,6 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
         }
         let mut incoming = input_items(event.get("input"))?;
         conn.resolve_item_references(&mut incoming);
-        let new_input_len = incoming.len();
         let entries = conn
             .entries
             .lock()
@@ -793,16 +863,16 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
             error,
             evict: Some(previous.clone()),
         };
-        let full_input = concat_history(limits, &entry.input, &entry.output, incoming).map_err(evict)?;
-        let controls = entry.controls.clone();
-        let strip_encrypted = entry.strip_encrypted;
+        let full_input = concat_history(limits, entry, incoming).map_err(evict)?;
+        let mut controls = entry.controls.clone();
+        // A warmup entry never requested encrypted reasoning (WS5a).
+        let strip_encrypted = ensure_encrypted_reasoning(&mut controls) || entry.strip_encrypted;
         drop(entries);
         let client_metadata = controls.get("client_metadata").cloned();
         let request = finish_request(limits, controls, &full_input).map_err(evict)?;
         return Ok(PreparedTurn {
             request,
             full_input,
-            new_input_len,
             previous: Some(previous),
             same_lane_previous: true,
             warmup: false,
@@ -823,12 +893,25 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
             .into());
         }
     };
+    // WS7: any rejection of a same-lane continuation evicts the referenced entry.
+    prepare_create(conn, key, event, previous.clone()).map_err(|error| PrepareError {
+        error,
+        evict: previous.filter(|previous| conn.entry_lane(previous).as_ref() == Some(key)),
+    })
+}
+
+fn prepare_create(
+    conn: &Connection,
+    key: &LaneKey,
+    mut event: Map<String, Value>,
+    previous: Option<String>,
+) -> Result<PreparedTurn, WsError> {
+    let limits = &conn.limits;
     if previous.is_some() && event.get("conversation").is_some_and(|value| !value.is_null()) {
         return Err(WsError::invalid_request(
             "conversation and previous_response_id are mutually exclusive",
             "previous_response_id",
-        )
-        .into());
+        ));
     }
     event.remove("type");
     event.remove("stream_id");
@@ -839,12 +922,10 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
             "background_not_supported",
             "background not supported",
             Some("background"),
-        )
-        .into());
+        ));
     }
     let mut incoming = input_items(event.remove("input").as_ref())?;
     conn.resolve_item_references(&mut incoming);
-    let new_input_len = incoming.len();
     let (full_input, same_lane_previous) = match previous.as_deref() {
         Some(previous) => {
             let entries = conn
@@ -852,29 +933,19 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
                 .lock()
                 .map_err(|_| WsError::invalid("connection state is unavailable"))?;
             let Some(entry) = entries.iter().find(|entry| entry.public_id == previous) else {
-                return Err(WsError::previous_response_not_found(previous).into());
+                return Err(WsError::previous_response_not_found(previous));
             };
             let same_lane = entry.lane == *key;
-            let full = concat_history(limits, &entry.input, &entry.output, incoming).map_err(|error| {
-                PrepareError {
-                    error,
-                    evict: same_lane.then(|| previous.to_string()),
-                }
-            })?;
-            (full, same_lane)
+            (concat_history(limits, entry, incoming)?, same_lane)
         }
         None => (incoming, false),
     };
     let strip_encrypted = !warmup && ensure_encrypted_reasoning(&mut event);
     let client_metadata = event.get("client_metadata").cloned();
-    let request = finish_request(limits, event, &full_input).map_err(|error| PrepareError {
-        error,
-        evict: previous.clone().filter(|_| same_lane_previous),
-    })?;
+    let request = finish_request(limits, event, &full_input)?;
     Ok(PreparedTurn {
         request,
         full_input,
-        new_input_len,
         previous,
         same_lane_previous,
         warmup,
@@ -884,36 +955,39 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
     })
 }
 
-/// WS18: the request of an automatic steering successor.
+/// WS18: steer input as Responses input items.
+fn steer_items(input: Value) -> Vec<Value> {
+    match input {
+        Value::String(text) => vec![json!({"role": "user", "content": text})],
+        Value::Array(items) => items,
+        other => vec![other],
+    }
+}
+
+/// WS18: the request of an automatic steering successor. The upstream already
+/// generates it, so history limits only decide retention (WS17), never admission.
 fn prepare_successor(
-    conn: &Connection,
     steered: FinishedTurn,
     successor: crate::upstream_websocket::ResponsesWsSuccessor,
-) -> Result<PreparedTurn, PrepareError> {
-    let steer_inputs: Vec<Value> = successor
-        .steer_inputs
-        .into_iter()
-        .flat_map(|input| match input {
-            Value::String(text) => vec![json!({"role": "user", "content": text})],
-            Value::Array(items) => items,
-            other => vec![other],
-        })
-        .collect();
-    let new_input_len = steer_inputs.len();
-    let full_input = concat_history(&conn.limits, &steered.full_input, &steered.output, steer_inputs)?;
+) -> PreparedTurn {
+    let mut full_input = steered.full_input;
+    full_input.extend(steered.output);
+    full_input.extend(steered.pending_steers);
+    full_input.extend(successor.steer_inputs.into_iter().flat_map(steer_items));
     let client_metadata = steered.controls.get("client_metadata").cloned();
-    let request = finish_request(&conn.limits, steered.controls, &full_input)?;
-    Ok(PreparedTurn {
+    let mut request = steered.controls;
+    request.insert("input".to_string(), Value::Array(full_input.clone()));
+    request.insert("stream".to_string(), Value::Bool(true));
+    PreparedTurn {
         request,
         full_input,
-        new_input_len,
         previous: Some(steered.public_id),
         same_lane_previous: false,
         warmup: false,
         strip_encrypted: steered.strip_encrypted,
         client_metadata,
         successor: Some((successor.channel_id, successor.upstream_model)),
-    })
+    }
 }
 
 /// How a turn ended downstream.
@@ -923,6 +997,7 @@ struct TurnOutcome {
     output: Vec<Value>,
     appendable: bool,
     disconnected: bool,
+    next_sequence: Option<i64>,
 }
 
 async fn run_turn(
@@ -930,6 +1005,8 @@ async fn run_turn(
     key: &LaneKey,
     lane: &Arc<ResponsesWsLane>,
     prepared: PreparedTurn,
+    relay: &mut mpsc::UnboundedReceiver<Value>,
+    next_sequence: &mut i64,
 ) -> Option<FinishedTurn> {
     let public_id = format!("resp_monoize_{}", uuid::Uuid::new_v4().simple());
     let (control_tx, control_rx) = watch::channel(ResponsesWsControl::Running);
@@ -947,6 +1024,14 @@ async fn run_turn(
             },
         );
     }
+    // The reader sets `closed` before signalling registered turns, so a turn
+    // registered after that signal observes `closed` here.
+    if conn.is_closed() {
+        if let Ok(mut active) = conn.active.lock() {
+            active.remove(key);
+        }
+        return None;
+    }
     let turn = ResponsesWsTurn {
         control: control_rx.clone(),
         steer: Arc::new(StdMutex::new(Some(steer_rx))),
@@ -954,10 +1039,11 @@ async fn run_turn(
         state: state.clone(),
         public_response_id: public_id.clone(),
         previous_response_id: prepared.previous.clone(),
-        new_input_len: prepared.new_input_len,
         warmup: prepared.warmup,
         successor: prepared.successor.clone(),
         client_metadata: prepared.client_metadata.clone(),
+        encrypted_include_added: prepared.strip_encrypted,
+        connection_closed: conn.lifetime.subscribe(),
     };
 
     // WS11: every turn has its own request id; the upgrade id only correlates.
@@ -1007,10 +1093,13 @@ async fn run_turn(
                 .await;
             TurnOutcome::default()
         }
-        Ok(response) => bridge.run(response).await,
+        Ok(response) => bridge.run(response, relay).await,
     };
     if state.local_warmup() && outcome.status.is_none() && !outcome.disconnected {
         outcome = send_local_warmup(conn, key, &public_id, &prepared).await;
+    }
+    if let Some(sequence) = outcome.next_sequence {
+        *next_sequence = sequence;
     }
     if let Ok(mut active) = conn.active.lock()
         && active.get(key).is_some_and(|turn| turn.public_id == public_id)
@@ -1019,7 +1108,7 @@ async fn run_turn(
     }
     drop(control_tx);
 
-    let finished = if outcome.disconnected {
+    let mut finished = if outcome.disconnected {
         None
     } else {
         match outcome.status.as_deref() {
@@ -1027,15 +1116,17 @@ async fn run_turn(
                 let mut controls = prepared.request;
                 controls.remove("input");
                 controls.remove("stream");
-                if conn.limits.fits(
+                let fits = conn.limits.fits(
                     prepared.full_input.len().saturating_add(outcome.output.len()),
                     input_bytes.saturating_add(serialized_len(&outcome.output)),
-                ) {
+                );
+                if fits {
                     conn.set_entry(CacheEntry {
                         lane: key.clone(),
                         public_id: public_id.clone(),
                         input: prepared.full_input.clone(),
                         output: outcome.output.clone(),
+                        pending_steers: Vec::new(),
                         controls: controls.clone(),
                         strip_encrypted: prepared.strip_encrypted,
                         appendable: outcome.appendable,
@@ -1045,10 +1136,11 @@ async fn run_turn(
                     conn.remove_entry(key, None);
                 }
                 Some(FinishedTurn {
-                    public_id,
+                    public_id: public_id.clone(),
                     controls,
                     full_input: prepared.full_input,
                     output: outcome.output,
+                    pending_steers: Vec::new(),
                     strip_encrypted: prepared.strip_encrypted,
                 })
             }
@@ -1063,8 +1155,37 @@ async fn run_turn(
         }
     };
     if state.upstream_kind() == UPSTREAM_KIND_WEBSOCKET {
-        // WS2i: the feeder may still be reading steering follow-ups.
-        lane.wait_idle().await;
+        // WS2i: the feeder may still be reading steering follow-ups; their
+        // acknowledgements continue this response's sequence.
+        let feeders = state.wait_feeders();
+        tokio::pin!(feeders);
+        loop {
+            tokio::select! {
+                biased;
+                value = relay.recv() => match value {
+                    Some(value) => forward_relay(conn, key, value, next_sequence).await,
+                    None => break,
+                },
+                () = &mut feeders => break,
+            }
+        }
+        // WS7: steering left pending for required input belongs to the history
+        // the next continuation replays.
+        let pending: Vec<Value> = state
+            .take_pending_steers()
+            .into_iter()
+            .flat_map(steer_items)
+            .collect();
+        if !pending.is_empty() {
+            conn.set_pending_steers(key, &public_id, &pending);
+            if let Some(finished) = finished.as_mut() {
+                finished.pending_steers = pending;
+            }
+        }
+    }
+    // WS17: only a successor reads the finished turn; the cache entry holds the rest.
+    if !lane.has_successor() {
+        finished = None;
     }
     finished
 }
@@ -1142,6 +1263,7 @@ async fn send_local_warmup(
         output: Vec::new(),
         appendable,
         disconnected: false,
+        next_sequence: Some(2),
     }
 }
 
@@ -1162,7 +1284,7 @@ struct TurnBridge {
 struct BridgeTracker {
     created: Option<Value>,
     done_items: BTreeMap<u64, Value>,
-    last_sequence: Option<i64>,
+    next_sequence: Option<i64>,
     outcome: TurnOutcome,
     failed: bool,
 }
@@ -1173,7 +1295,11 @@ enum BridgeFlow {
 }
 
 impl TurnBridge {
-    async fn run(mut self, response: Response) -> TurnOutcome {
+    async fn run(
+        mut self,
+        response: Response,
+        relay: &mut mpsc::UnboundedReceiver<Value>,
+    ) -> TurnOutcome {
         let mut body = response.into_body().into_data_stream();
         let mut buffer = Vec::new();
         let mut tracker = BridgeTracker::default();
@@ -1207,6 +1333,14 @@ impl TurnBridge {
                     }
                     continue;
                 }
+                value = relay.recv() => {
+                    if let Some(value) = value
+                        && !self.forward_relay(value, &mut tracker).await
+                    {
+                        return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
+                    }
+                    continue;
+                }
                 chunk = body.next() => match chunk {
                     Some(chunk) => chunk,
                     None => break,
@@ -1226,6 +1360,7 @@ impl TurnBridge {
                             .await;
                     }
                     tracker.outcome.status = None;
+                    tracker.outcome.next_sequence = tracker.next_sequence;
                     return tracker.outcome;
                 }
             };
@@ -1270,6 +1405,7 @@ impl TurnBridge {
         if tracker.failed {
             tracker.outcome.status = None;
         }
+        tracker.outcome.next_sequence = tracker.next_sequence;
         tracker.outcome
     }
 
@@ -1278,6 +1414,19 @@ impl TurnBridge {
             self.input_items.saturating_add(output.len()),
             self.input_bytes.saturating_add(serialized_len(output)),
         )
+    }
+
+    /// Interleaves a relayed acknowledgement into this response's sequence.
+    async fn forward_relay(&self, mut value: Value, tracker: &mut BridgeTracker) -> bool {
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
+        if (kind.starts_with("response.interrupt.") || kind.starts_with("response.steer."))
+            && let Some(object) = value.as_object_mut()
+        {
+            let sequence = tracker.next_sequence.unwrap_or(0);
+            object.insert("sequence_number".to_string(), json!(sequence));
+            tracker.next_sequence = Some(sequence + 1);
+        }
+        self.conn.send(&self.key, value).await
     }
 
     async fn forward_event(&mut self, data: String, tracker: &mut BridgeTracker) -> BridgeFlow {
@@ -1293,7 +1442,11 @@ impl TurnBridge {
             .unwrap_or_default()
             .to_string();
         if let Some(sequence) = event.get("sequence_number").and_then(Value::as_i64) {
-            tracker.last_sequence = Some(sequence);
+            // One sequence per public response: relayed acknowledgements are
+            // interleaved, so pipeline events are renumbered after them.
+            let next = tracker.next_sequence.unwrap_or(sequence);
+            event["sequence_number"] = json!(next);
+            tracker.next_sequence = Some(next + 1);
         }
         if kind == "error" {
             tracker.failed = true;
@@ -1371,7 +1524,7 @@ impl TurnBridge {
         response["completed_at"] = json!(chrono::Utc::now().timestamp());
         response["usage"] = Value::Null;
         response["output"] = Value::Array(output.clone());
-        let sequence = tracker.last_sequence.map_or(0, |sequence| sequence + 1);
+        let sequence = tracker.next_sequence.unwrap_or(0);
         let appendable = self.conn.is_v1() && self.retainable(&output);
         let accepted = json!({
             "type": "response.interrupt.accepted",
@@ -1395,6 +1548,7 @@ impl TurnBridge {
             output,
             appendable,
             disconnected: !delivered,
+            next_sequence: Some(sequence + 2),
         }
     }
 }

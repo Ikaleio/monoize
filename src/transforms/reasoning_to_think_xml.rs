@@ -165,6 +165,7 @@ fn text_node(id: Option<String>, content: String) -> Node {
         content,
         phase: None,
         extra_body: HashMap::new(),
+        cache_breakpoint: None,
     }
 }
 

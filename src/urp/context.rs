@@ -9,7 +9,8 @@ pub struct RequestContext {
     pub api_key_id: Option<String>,
     pub response_history: Option<ResponseHistoryContext>,
     pub tool_transports: HashMap<String, ToolTransport>,
-    /// Anthropic cache targets whose `cache_control` a Monoize rule inserted in this attempt.
+    /// Anthropic cache targets whose marker a Monoize rule inserted in this attempt. `System` and
+    /// `LastToolResult` own a typed `cache_breakpoint`; `Request` owns top-level `cache_control`.
     /// Later rules may retune these markers; markers sent by the client are never touched.
     pub anthropic_cache_markers: HashSet<AnthropicCacheTarget>,
     /// Downstream `/v1/messages` headers forwarded only to `type=messages` upstreams (PM8, PM8h).

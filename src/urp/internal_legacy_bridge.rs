@@ -174,6 +174,7 @@ impl Part {
                     phase,
                     content,
                     extra_body,
+                    cache_breakpoint: None,
                 }
             }
             Part::Image {
@@ -249,6 +250,7 @@ impl Part {
                 name,
                 arguments,
                 extra_body,
+                cache_breakpoint: None,
             },
             Part::Refusal {
                 logprobs,
@@ -607,6 +609,7 @@ mod canonical_bridge_tests {
                     ProviderProtocol::Responses,
                 )],
                 extra_body: HashMap::from([("phase".into(), json!("stale"))]),
+                cache_breakpoint: None,
             };
             let Node::Text {
                 logprobs: _,
@@ -646,6 +649,7 @@ mod canonical_bridge_tests {
                 signature: Some(json!("signature")),
                 arguments: "{}".into(),
                 extra_body: HashMap::new(),
+                cache_breakpoint: None,
             },
             Node::Audio {
                 id: None,

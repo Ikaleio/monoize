@@ -23,13 +23,13 @@ GEM-2. Decoders MUST map supported text, reasoning, media, function calls, funct
 Encoders MUST read current typed values. Deleting a typed value MUST prevent native metadata from restoring it.
 Unknown fields, native array boundaries, and protocol-specific extensions MAY remain scoped metadata.
 Unknown Parts and server tool Parts MUST remain Gemini ProviderItems and MUST NOT become client function calls or ordinary text.
-Response decoding renders `executableCode` and `codeExecutionResult` Parts as assistant text under PG5d1, because no downstream protocol can carry them; Gemini-native request decoding keeps them as ProviderItems.
+Response decoding renders `executableCode` and `codeExecutionResult` Parts as assistant text under PG5d1, because no downstream protocol has a typed representation for them; Gemini-native request decoding keeps them as ProviderItems.
 Thought Parts are thought summaries: they decode to `Reasoning.summary` (PG5a).
 
 GEM-3. Request conversion MUST preserve Content and Part order, instruction placement, function identity, and supported media MIME types.
 System and developer text maps to `systemInstruction`. Gemini system instructions MUST reject unsupported media.
 Envelope controls and node extras of other protocols MUST NOT add Content members or split Content (PG4e).
-Signed Parts MUST retain their individual signatures and order during history replay. Text and media signatures travel through signature carriers (PG5a). Only signatures with Gemini provenance reach the wire (PG5a3); the first unsigned function call of each current-turn step receives the documented dummy signature on Gemini 3+ (PG4f).
+Signed Parts MUST retain their individual signatures and order during history replay. Text and media signatures travel through signature carriers bound to their owning text (PG5a); continuation tokens and server-tool Parts use their own carriers (PG5d2, PG8). Only signatures with Gemini provenance reach the wire (PG5a3); the first unsigned function call of each current-turn step receives the documented dummy signature on Gemini 3+ (PG4f).
 Function-result objects and ordered media parts MUST retain their typed content and matching call identity.
 
 GEM-4. Temperature, top-p, output limits, stop sequences, reasoning configuration, response formats, tools, and tool choice MUST map bidirectionally.
@@ -57,7 +57,7 @@ Streaming MUST retain the candidate index selected in the first candidate-bearin
 Native error objects MUST fail decoding even when they also contain candidates.
 Missing candidates without prompt blocking MUST fail decoding.
 An absent or unspecified finish reason MUST remain absent in non-stream decoding.
-Finish reasons map under the PG5d table: prompt blocking and filter or policy stops map to ContentFilter; `MAX_TOKENS` and the resumable `CONTINUATION` map to Length (incomplete, never failed); other non-success reasons fail with the native reason as error code.
+Finish reasons map under the PG5d table: prompt blocking and filter or policy stops map to ContentFilter; `MAX_TOKENS` and the resumable `CONTINUATION` map to Length (incomplete, never failed), and the token round-trips through a carrier under PG5d2; other non-success reasons fail with the native reason as error code.
 Typed ResponseOutcome MUST describe completion, incomplete output, or failure consistently with the finish reason.
 A failed or cancelled typed outcome MUST NOT encode as successful Gemini completion.
 An explicit Completed outcome MUST encode STOP regardless of stale finish metadata.
