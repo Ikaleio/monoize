@@ -2231,7 +2231,6 @@ fn place_server_tool_parts(parts: &mut Vec<Value>, relocate: bool) {
                     parts.insert(index + 1, tail);
                 }
                 index += 1;
-                position = offset;
                 break;
             }
             position += length;
