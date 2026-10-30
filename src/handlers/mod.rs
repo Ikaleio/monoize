@@ -255,8 +255,56 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
 #[allow(clippy::result_large_err)]
 fn native_json_body(body: Result<Json<Value>, JsonRejection>) -> AppResult<Value> {
     body.map(|Json(body)| body).map_err(|rejection| {
-        AppError::new(rejection.status(), "invalid_json", rejection.body_text())
+        let status = rejection.status();
+        let code = if status == StatusCode::PAYLOAD_TOO_LARGE {
+            "request_too_large"
+        } else {
+            "invalid_json"
+        };
+        AppError::new(status, code, rejection.body_text())
     })
+}
+
+/// SE1e: the body-limit layer rejects an oversized `Content-Length` before any
+/// handler runs, so its plain-text 413 is rendered natively here. Runs inside
+/// the request-id layers, which supply the canonical id.
+pub(crate) async fn native_body_limit_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = request.uri().path();
+    let messages = match path.strip_prefix("/api").unwrap_or(path) {
+        "/v1/responses" | "/v1/chat/completions" => false,
+        "/v1/messages" => true,
+        _ => return next.run(request).await,
+    };
+    let request_id = request.headers().get("x-request-id").cloned();
+    let response = next.run(request).await;
+    // A handler's own 413 is already a native JSON error.
+    let plain_text = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/plain"));
+    if response.status() != StatusCode::PAYLOAD_TOO_LARGE || !plain_text {
+        return response;
+    }
+    let err = AppError::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "request_too_large",
+        "request body exceeds the configured size limit",
+    );
+    if !messages {
+        return err.into_response();
+    }
+    let request_id = request_id
+        .as_ref()
+        .and_then(|value| value.to_str().ok())
+        .map(messages_wire_request_id)
+        .unwrap_or_else(|| messages_wire_request_id(&uuid::Uuid::new_v4().to_string()));
+    let mut response = anthropic_error_response(err, Some(&request_id));
+    insert_messages_request_id_header(&mut response, &request_id);
+    response
 }
 
 pub async fn create_response(

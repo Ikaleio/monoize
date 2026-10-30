@@ -133,10 +133,18 @@ const CREDENTIAL_ERROR_SIGNALS: [&str; 4] = [
     "permission_denied",
 ];
 
-/// STRM-2b: decoders synthesize status 400 for a terminal frame without a
-/// `status` member; well-known retryable classes must not reach the client as
-/// a 400, and a credential signal must reach RTA-8b.
-fn pre_output_error_status(http_status: u16, code: &str, error_type: Option<&str>) -> StatusCode {
+/// STRM-2b: an explicit frame `status` wins. Decoders synthesize a status for a
+/// frame without one, so well-known retryable classes must not reach the client
+/// as a 400, and a credential signal must reach RTA-8b.
+fn pre_output_error_status(
+    explicit: Option<StatusCode>,
+    http_status: u16,
+    code: &str,
+    error_type: Option<&str>,
+) -> StatusCode {
+    if let Some(status) = explicit {
+        return status;
+    }
     let signal = |expected: &[&str]| {
         expected.contains(&code) || error_type.is_some_and(|value| expected.contains(&value))
     };
@@ -190,7 +198,21 @@ async fn probe_stream_first_output(
                 commit.accept(Vec::new());
                 buffered.push(event)
             }
-            Some(crate::urp::UrpStreamEvent::Error { code, message, .. }) => {
+            Some(crate::urp::UrpStreamEvent::Error {
+                code,
+                message,
+                extra_body,
+            }) => {
+                let explicit_status = extra_body
+                    .get("status")
+                    .or_else(|| {
+                        extra_body
+                            .get("error")
+                            .and_then(|error| error.get("status"))
+                    })
+                    .and_then(Value::as_u64)
+                    .filter(|status| (400..=599).contains(status))
+                    .and_then(|status| StatusCode::from_u16(status as u16).ok());
                 let _ = decode_handle.await;
                 let terminal = runtime_metrics.lock().await.terminal.terminal_error.clone();
                 let http_status = terminal
@@ -210,7 +232,12 @@ async fn probe_stream_first_output(
                 );
                 // `upstream_status` stays unset: the status is synthesized by the
                 // decoder and must not trigger an RTA-6c shared-origin blast.
-                let status = pre_output_error_status(http_status, &code, error_type.as_deref());
+                let status = pre_output_error_status(
+                    explicit_status,
+                    http_status,
+                    &code,
+                    error_type.as_deref(),
+                );
                 let error = AppError::new(status, code, message).with_upstream_error(
                     None,
                     reported_code,

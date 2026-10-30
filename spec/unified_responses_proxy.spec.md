@@ -2160,7 +2160,7 @@ SE1d. Forwarded rate-limit headers. Let `FWD(headers)` be the upstream response 
 - on a streaming success: `FWD` of the attempt that caused `COMMIT`. A later pre-output retry MUST NOT change committed headers.
 On cross-family routes and for WebSocket upstream attempts, Monoize MUST NOT forward any of these headers.
 
-SE1e. A request body that is not valid JSON, or that is rejected before decoding (missing JSON content type, body too large), MUST produce the SE1 envelope of its endpoint. The status is the rejection status (`400` for a syntax error, `415` for a missing JSON content type, `413` for an oversized body, `422` for valid JSON of the wrong shape), `code` is `invalid_json`, and `message` is the local rejection text. On `POST /v1/messages` SE1b and SE1c apply.
+SE1e. A request body that is not valid JSON, or that is rejected before decoding (missing JSON content type, body too large), MUST produce the SE1 envelope of its endpoint. The status is the rejection status (`400` for a syntax error, `415` for a missing JSON content type, `413` for an oversized body, `422` for valid JSON of the wrong shape), `code` is `invalid_json` (`request_too_large` for `413`), and `message` is the local rejection text. On `POST /v1/messages` SE1b and SE1c apply. The `413` rule covers both enforcement points of the C5 limit: a `Content-Length` above the limit, rejected before the handler runs, and a streamed body that overflows while being read. Every such response also carries `x-request-id`. Other paths keep the `413` response of the limit layer.
 
 ### 9.2 Mid-stream errors
 
