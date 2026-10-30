@@ -3257,7 +3257,9 @@ fn responses_output_items_semantically_match(left: &Value, right: &Value) -> boo
 
 /// STR3l: each terminal `output[]` item that matches an already emitted `output_item.done`
 /// reuses that item's encoder-local wire `id`; a `completed` terminal also takes its status.
-/// Matching is one-to-one: semantic identity first, then the same position and type.
+/// Matching is one-to-one and runs in passes over the whole terminal array: equal non-empty
+/// `id` of the same type first, then semantic identity, then the same position and type, so an
+/// earlier item cannot claim an emitted item that a later terminal item matches by exact id.
 fn reconcile_terminal_output_with_done_items(
     response: &mut Value,
     completed_output_items: &[(usize, Value)],
@@ -3266,29 +3268,43 @@ fn reconcile_terminal_output_with_done_items(
     let Some(output) = response.get_mut("output").and_then(Value::as_array_mut) else {
         return;
     };
+    let same_type = |left: &Value, right: &Value| {
+        left.get("type").and_then(Value::as_str).is_some()
+            && left.get("type").and_then(Value::as_str) == right.get("type").and_then(Value::as_str)
+    };
     let mut used = vec![false; completed_output_items.len()];
-    for (terminal_position, terminal_item) in output.iter_mut().enumerate() {
-        let semantic = completed_output_items
-            .iter()
-            .enumerate()
-            .position(|(slot, (_, done_item))| {
-                !used[slot] && responses_output_items_semantically_match(done_item, terminal_item)
-            });
-        let matched = semantic.or_else(|| {
-            completed_output_items
-                .iter()
-                .enumerate()
-                .position(|(slot, (output_index, done_item))| {
+    let mut matches: Vec<Option<usize>> = vec![None; output.len()];
+    for pass in 0..3 {
+        for (terminal_position, terminal_item) in output.iter().enumerate() {
+            if matches[terminal_position].is_some() {
+                continue;
+            }
+            let found = completed_output_items.iter().enumerate().position(
+                |(slot, (output_index, done_item))| {
                     !used[slot]
-                        && *output_index == terminal_position
-                        && done_item.get("type").and_then(Value::as_str)
-                            == terminal_item.get("type").and_then(Value::as_str)
-                })
-        });
-        let Some(slot) = matched else {
+                        && match pass {
+                            0 => {
+                                same_type(done_item, terminal_item)
+                                    && non_empty_string_field_matches(done_item, terminal_item, "id")
+                            }
+                            1 => responses_output_items_semantically_match(done_item, terminal_item),
+                            _ => {
+                                *output_index == terminal_position
+                                    && same_type(done_item, terminal_item)
+                            }
+                        }
+                },
+            );
+            if let Some(slot) = found {
+                used[slot] = true;
+                matches[terminal_position] = Some(slot);
+            }
+        }
+    }
+    for (terminal_item, slot) in output.iter_mut().zip(matches) {
+        let Some(slot) = slot else {
             continue;
         };
-        used[slot] = true;
         let done_item = &completed_output_items[slot].1;
         let Some(obj) = terminal_item.as_object_mut() else {
             continue;
