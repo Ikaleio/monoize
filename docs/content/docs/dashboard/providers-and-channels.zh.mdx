@@ -101,7 +101,7 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 - 其他类型的 Channel 传非空 `chat_dialect` 时返回 `400`。把类型从 Chat Completion 改成其他类型时，编辑器会清除该值。
 - **协议覆盖**中的规则按模型 glob 选择接口类型。规则选择 **Chat Completion** 时，会显示自己的 **Chat 方言**。对匹配的模型，Monoize 用此值代替 Channel 方言。
 - `chat_completion` 规则省略 `chat_dialect` 或传 `null` 时，API 保存 `generic`。其他类型的规则传非空值时返回 `400`。未知值也返回 `400`。两种情况的 `param` 都是 `api_type_overrides[i].chat_dialect`。
-- 新增此字段的升级会把所有现有 Chat Completion Channel 和覆盖规则设为 `generic`。升级后，请为每个 OpenAI、DeepSeek、OpenRouter 或 Vercel Channel 选择方言。
+- 新增此字段的升级会把所有现有 Chat Completion Channel 和覆盖规则设为 `generic`。升级后，请为每个 OpenAI、DeepSeek、OpenRouter 或 Vercel Channel 选择方言。指向这些厂商的 Chat Completion 覆盖规则也要选择方言。匹配到的规则方言会取代 Channel 方言。
 
 ## 上游 WebSocket
 

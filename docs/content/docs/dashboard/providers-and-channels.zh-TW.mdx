@@ -101,7 +101,7 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 - 其他類型的 Channel 傳非空 `chat_dialect` 時回傳 `400`。把類型從 Chat Completion 改成其他類型時，編輯器會清除該值。
 - **協定覆寫**中的規則依模型 glob 選擇介面類型。規則選擇 **Chat Completion** 時，會顯示自己的 **Chat 方言**。對符合的模型，Monoize 以此值取代 Channel 方言。
 - `chat_completion` 規則省略 `chat_dialect` 或傳 `null` 時，API 保存 `generic`。其他類型的規則傳非空值時回傳 `400`。未知值也回傳 `400`。兩種情況的 `param` 都是 `api_type_overrides[i].chat_dialect`。
-- 新增此欄位的升級會把所有現有 Chat Completion Channel 和覆寫規則設為 `generic`。升級後，請為每個 OpenAI、DeepSeek、OpenRouter 或 Vercel Channel 選擇方言。
+- 新增此欄位的升級會把所有現有 Chat Completion Channel 和覆寫規則設為 `generic`。升級後，請為每個 OpenAI、DeepSeek、OpenRouter 或 Vercel Channel 選擇方言。指向這些廠商的 Chat Completion 覆寫規則也要選擇方言。符合的規則方言會取代 Channel 方言。
 
 ## 上游 WebSocket
 

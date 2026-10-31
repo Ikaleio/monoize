@@ -102,7 +102,7 @@ OpenCode Zen または OpenCode Go への生存プローブでは、Channel の�
 - 別タイプの Channel に null 以外の `chat_dialect` を送ると `400` を返します。タイプを Chat Completion から変更すると、エディターは値を消去します。
 - **プロトコルの上書き**のルールは、モデル glob で API タイプを選択します。ルールが **Chat Completion** を選択すると、ルール独自の **Chat ダイアレクト** を表示します。一致するモデルでは、Monoize は Channel のダイアレクトの代わりにこの値を使います。
 - `chat_completion` ルールが `chat_dialect` を省略するか `null` を送ると、API は `generic` を保存します。別タイプのルールに null 以外の値を送ると `400` を返します。不明な値も `400` を返します。どちらも `param` は `api_type_overrides[i].chat_dialect` です。
-- このフィールドを追加するアップグレードは、既存のすべての Chat Completion Channel と上書きルールを `generic` にします。アップグレード後、OpenAI、DeepSeek、OpenRouter、Vercel の各 Channel にダイアレクトを選択してください。
+- このフィールドを追加するアップグレードは、既存のすべての Chat Completion Channel と上書きルールを `generic` にします。アップグレード後、OpenAI、DeepSeek、OpenRouter、Vercel の各 Channel にダイアレクトを選択してください。これらのベンダーへ向かう Chat Completion 上書きルールにも選択してください。一致したルールのダイアレクトは Channel のダイアレクトより優先されます。
 
 ## 上流 WebSocket
 

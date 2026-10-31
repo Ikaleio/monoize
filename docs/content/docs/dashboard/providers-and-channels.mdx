@@ -101,7 +101,7 @@ Set **Chat dialect** in Connection when **API type** is **Chat Completion**. The
 - A non-null `chat_dialect` on another Channel type returns `400`. When you change the type away from Chat Completion, the editor clears the value.
 - A rule under **Protocol overrides** selects the API type by model glob. When a rule selects **Chat Completion**, the rule shows its own **Chat dialect**. Monoize uses that value instead of the Channel dialect for matching models.
 - The API stores `generic` when a `chat_completion` rule omits `chat_dialect` or sends `null`. Other rule types return `400` for a non-null value. An unknown value returns `400`. In both cases, `param` is `api_type_overrides[i].chat_dialect`.
-- The upgrade that adds this field sets `generic` on every existing Chat Completion Channel and override rule. After the upgrade, select the dialect for each OpenAI, DeepSeek, OpenRouter, or Vercel Channel.
+- The upgrade that adds this field sets `generic` on every existing Chat Completion Channel and override rule. After the upgrade, select the dialect for each OpenAI, DeepSeek, OpenRouter, or Vercel Channel. Also select it on each Chat Completion override rule that routes to these vendors. A matching rule's dialect replaces the Channel dialect.
 
 ## Upstream WebSocket
 
