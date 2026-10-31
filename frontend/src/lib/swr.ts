@@ -1138,20 +1138,75 @@ export async function batchDeleteApiKeysOptimistic(
 }
 
 // Provider mutation helpers
+
+/** Builds the list entry shown while a create request is pending. */
+function pendingProvider(input: CreateProviderInput, currentProviders: Provider[]): Provider {
+  const now = new Date().toISOString();
+  const id = `pending-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return {
+    id,
+    name: input.name,
+    channels: input.channels.map((channel, index) => {
+      const entry = {
+        ...channel,
+        id: channel.id ?? `${id}-${index}`,
+        weight: channel.weight ?? 1,
+        enabled: channel.enabled ?? true,
+      };
+      delete entry.api_key;
+      return entry;
+    }),
+    max_retries: input.max_retries ?? -1,
+    channel_max_retries: input.channel_max_retries ?? 0,
+    channel_retry_interval_ms: input.channel_retry_interval_ms ?? 0,
+    circuit_breaker_enabled: input.circuit_breaker_enabled ?? true,
+    per_model_circuit_break: input.per_model_circuit_break ?? false,
+    transforms: input.transforms ?? [],
+    api_type_overrides: input.api_type_overrides ?? [],
+    group_ids: input.group_ids ?? [],
+    enabled: input.enabled ?? true,
+    // The server appends a provider without an explicit priority after the current maximum.
+    priority:
+      input.priority ??
+      currentProviders.reduce((max, provider) => Math.max(max, provider.priority + 1), 0),
+    created_at: now,
+    updated_at: now,
+  };
+}
+
 export async function createProviderOptimistic(
   input: CreateProviderInput,
-  _currentProviders: Provider[],
+  currentProviders: Provider[],
   onError?: (error: Error) => void,
 ) {
+  const pending = pendingProvider(input, currentProviders);
+  // Server order is priority ascending, then creation time, so the new entry follows its peers.
+  const insertAt = currentProviders.findIndex((provider) => provider.priority > pending.priority);
+  const optimistic = [...currentProviders];
+  optimistic.splice(insertAt === -1 ? optimistic.length : insertAt, 0, pending);
+  mutate(SWR_KEYS.PROVIDERS, optimistic, false);
+
   try {
     const result = await api.createProvider(input);
-    // Revalidate to get the new provider
+    mutate(
+      SWR_KEYS.PROVIDERS,
+      (providers: Provider[] | undefined) =>
+        (providers ?? optimistic).map((provider) => (provider.id === pending.id ? result : provider)),
+      false,
+    );
     mutate(SWR_KEYS.PROVIDERS);
     mutate(SWR_KEYS.STATS);
     mutate(SWR_KEYS.CONFIG);
     mutate(SWR_KEYS.MARKETPLACE_MODELS);
     return result;
   } catch (error) {
+    mutate(
+      SWR_KEYS.PROVIDERS,
+      (providers: Provider[] | undefined) =>
+        (providers ?? optimistic).filter((provider) => provider.id !== pending.id),
+      false,
+    );
+    mutate(SWR_KEYS.PROVIDERS);
     if (onError && error instanceof Error) {
       onError(error);
     }

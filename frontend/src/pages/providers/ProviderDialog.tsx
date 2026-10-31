@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Virtuoso } from 'react-virtuoso'
 import { useTranslation } from 'react-i18next'
@@ -246,7 +246,7 @@ export function ProviderDialog({
 }) {
 	const { t, i18n } = useTranslation()
 	const isEdit = mode === 'edit'
-	const titleId = useId()
+	const titleRef = useRef<HTMLHeadingElement>(null)
 	const [form, setFormState] = useState<ProviderForm>(emptyForm)
 	const [dirty, setDirty] = useState(false)
 	const [hydrated, setHydrated] = useState(false)
@@ -500,13 +500,12 @@ export function ProviderDialog({
 		<>
 			<Dialog open={open} onOpenChange={next => { if (!next) requestClose() }}>
 				<DialogContent
-					aria-labelledby={titleId}
 					className='flex h-[calc(100dvh-2rem)] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-[94vh] sm:w-[96vw] sm:max-w-[1500px] sm:rounded-xl sm:border [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:size-10 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>div:first-child]:h-full [&>div:first-child]:min-h-0 [&>div:first-child]:flex-1 [&>div:first-child]:gap-0 [&>div:first-child]:overflow-hidden'
 					onPointerDownOutside={event => event.preventDefault()}
 					onOpenAutoFocus={event => {
 						// PL4.1: never land on the enable switch.
 						event.preventDefault()
-						requestAnimationFrame(() => document.getElementById(isEdit ? titleId : 'provider-name')?.focus())
+						requestAnimationFrame(() => (isEdit ? titleRef.current : document.getElementById('provider-name'))?.focus())
 					}}
 				>
 					<form
@@ -522,7 +521,7 @@ export function ProviderDialog({
 					<DialogHeader className='shrink-0 border-b bg-background py-3 pl-4 pr-16 text-left sm:pl-6 sm:pr-16'>
 						<div className='flex min-w-0 items-center justify-between gap-3'>
 							<div className='min-w-0'>
-								<DialogTitle id={titleId} tabIndex={-1} className='truncate text-base outline-none sm:text-lg'>
+								<DialogTitle ref={titleRef} tabIndex={-1} className='truncate text-base outline-none sm:text-lg'>
 									{isEdit ? t('providers.editor.editTitle') : t('providers.editor.createTitle')}
 									{form.name ? <span className='font-normal text-muted-foreground'> · {form.name}</span> : null}
 								</DialogTitle>
