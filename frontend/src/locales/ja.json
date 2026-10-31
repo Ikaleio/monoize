@@ -788,6 +788,15 @@
 		"detectWebsocketRunning": "検出中…",
 		"detectWebsocketSuccess": "上流 WebSocket の Upgrade に成功しました。Provider を保存すると値が永続化されます。",
 		"detectWebsocketFailure": "上流 WebSocket の Upgrade に失敗しました。",
+		"chatDialect": "Chat ダイアレクト",
+		"chatDialectHint": "上流へ送るリクエスト形式を選択します：推論フィールド、最大トークンフィールド、キャッシュマーカー、Provider 拡張。Monoize は Base URL やモデルから判定しません。",
+		"chatDialects": {
+			"generic": "汎用（OpenAI 互換）",
+			"openai": "OpenAI",
+			"deepseek": "DeepSeek",
+			"openrouter": "OpenRouter",
+			"vercel": "Vercel AI Gateway"
+		},
 		"modelsSection": "モデル",
 		"channelsSection": "Channel",
 		"statusHealthy": "正常",

@@ -156,6 +156,10 @@ Channel Responses WebSocket memory MAY be present:
 
 - `websocket_supported: boolean | null`. `null` or absent means unknown. `true` means prefer an upstream Responses WebSocket when the client is a Responses WebSocket and the attempt effective API type is `responses`. `false` means that attempt MUST use HTTP. Lazy detection MUST NOT overwrite a non-null value (`unified_responses_proxy.spec.md` WS2e).
 
+Channel Chat dialect is present on every `chat_completion` Channel and only there:
+
+- `chat_dialect: "openai" | "deepseek" | "openrouter" | "vercel" | "generic" | null`. The value selects the upstream Chat request shape: reasoning fields, maximum output-token field, cache markers, and provider extensions (`unified_responses_proxy.spec.md` PC0). It is an operator setting. The server MUST NOT derive it from `base_url`, any host, any URL, or any model identifier.
+
 ## 2. Invariants
 
 CP-INV-1. `channels.length >= 1`.
@@ -198,6 +202,24 @@ CP-INV-15. Every non-null `extra_headers` value MUST satisfy all of the followin
 - every value is at most 4096 characters and contains neither CR (`0x0D`) nor LF (`0x0A`).
 
 CP-INV-15a. On persist, the server MUST trim keys and serialize the map as JSON with keys sorted ascending by byte order. An entry whose trimmed key is empty MUST cause rejection under CP-INV-15. Values MUST NOT be trimmed.
+
+CP-INV-16. Storage: `monoize_channels.chat_dialect` is a nullable TEXT column. It MUST be non-null if and only if the Channel `provider_type` is `chat_completion`. The value MUST be one of `openai`, `deepseek`, `openrouter`, `vercel`, and `generic`.
+
+CP-INV-16a. Write rules apply to each entry of `channels` in `POST /api/dashboard/providers` and `PUT /api/dashboard/providers/{provider_id}`. The rule is evaluated from that entry alone, because `channels` replaces the stored list:
+
+| Entry `provider_type` | Entry `chat_dialect` | Result |
+| --- | --- | --- |
+| `chat_completion` | absent or `null` | store `generic` |
+| `chat_completion` | one of the five values, exact and case-sensitive | store that value |
+| `chat_completion` | any other string, including `""` | HTTP `400` |
+| any other type | absent or `null` | store NULL |
+| any other type | any string | HTTP `400` |
+
+Each HTTP `400` MUST use `type = "invalid_request_error"`, `code = "invalid_request"`, and `param = "channels[i].chat_dialect"`, where `i` is the zero-based index of the first offending entry. The request MUST NOT change stored state. A non-string, non-null JSON value fails request-body parsing with HTTP `422`, as every other mistyped field does.
+
+CP-INV-16b. Read responses return `chat_dialect` as a string for a `chat_completion` Channel. A `chat_completion` row that holds NULL MUST read as `generic`. The member is absent for every other type.
+
+CP-INV-16c. `m20261031_000059_channel_chat_dialect` backfills every existing `chat_completion` row with `generic` and every other row with NULL (`initial-seaorm-migration.spec.md` ISM4.12p). A `chat_completion` Channel therefore keeps `generic` after the migration until an operator selects another dialect, including a Channel on an OpenAI, DeepSeek, OpenRouter, or Vercel endpoint.
 
 CM-AFF-0. A **direct Cloudflare Workers AI Channel** has a `base_url` that satisfies all of these conditions:
 1. The URL parses successfully.
@@ -301,7 +323,7 @@ CM-READ-1. Every Channel `models` object in any Provider response (list, get, cr
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null, websocket_supported?: boolean | null }>`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null, websocket_supported?: boolean | null, chat_dialect?: "openai" | "deepseek" | "openrouter" | "vercel" | "generic" | null }>`
   - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -461,6 +483,8 @@ CP-FE-6. The "保存并关闭" action of the provider unsaved-changes confirmati
 CP-FE-7. The null choice for `session_affinity_auto` MUST use a label that identifies URL-based automatic selection. It MUST NOT use the global-inheritance label used by unrelated nullable settings.
 
 CP-FE-7a. The Channel editor MUST expose `websocket_supported` as a three-state control: unknown (`null`), supported (`true`), not supported (`false`). The control MUST appear in the Connection section immediately after Channel `provider_type`. The control MUST NOT appear under routing affinity. When Channel `provider_type` is `responses`, the editor MUST expose a "Detect WebSocket" action that calls `POST /api/dashboard/probe-channel-websocket` and writes `supported` into the draft `websocket_supported` field. The action MUST NOT persist until the Provider save. The action MUST be disabled when `base_url` is empty, or when the Channel has no draft API key and no stored `channel_id`.
+
+CP-FE-7b. The Channel editor MUST expose `chat_dialect` as a Select immediately after Channel `provider_type`, if and only if `provider_type` is `chat_completion`. The Select MUST offer exactly the five CP-INV-16 values and MUST show a hint that the dialect selects the request shape: reasoning fields, maximum output-token field, cache markers, and provider extensions. A new Channel draft MUST start with `generic`. Changing `provider_type` to `chat_completion` MUST set `generic` when the draft value is empty. Changing `provider_type` to any other value MUST set the draft value to `null`. The value MUST NOT change when `base_url` or models change.
 
 CP-FE-8. The Channel liveness-test dialog MUST contain a `Stream response` checkbox. The checkbox MUST be checked whenever a stream-capable Channel test dialog opens. It MUST be disabled and unchecked for a Channel type whose liveness test does not define streaming.
 

@@ -795,6 +795,15 @@
 		"detectWebsocketRunning": "Detecting…",
 		"detectWebsocketSuccess": "Upstream WebSocket upgrade succeeded. Save the Provider to persist this value.",
 		"detectWebsocketFailure": "Upstream WebSocket upgrade failed.",
+		"chatDialect": "Chat dialect",
+		"chatDialectHint": "Selects the request shape sent upstream: reasoning fields, the maximum token field, cache markers, and provider extensions. Monoize does not detect it from the Base URL or model.",
+		"chatDialects": {
+			"generic": "Generic (OpenAI-compatible)",
+			"openai": "OpenAI",
+			"deepseek": "DeepSeek",
+			"openrouter": "OpenRouter",
+			"vercel": "Vercel AI Gateway"
+		},
 		"modelsSection": "Models",
 		"channelsSection": "Channels",
 		"statusHealthy": "Healthy",

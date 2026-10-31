@@ -5,6 +5,8 @@ pub fn provider_presets() -> Value {
         {
             "id": "openai_official",
             "defaults": {
+                "provider_type": "chat_completion",
+                "chat_dialect": "openai",
                 "base_url": "https://api.openai.com/v1",
                 "models": {
                     "gpt-4.1": { "redirect": null, "multiplier": "1" },
@@ -29,6 +31,7 @@ pub fn provider_presets() -> Value {
         {
             "id": "anthropic_claude",
             "defaults": {
+                "provider_type": "messages",
                 "base_url": "https://api.anthropic.com/v1",
                 "models": {
                     "claude-sonnet-4": { "redirect": "claude-sonnet-4-20250514", "multiplier": "1" },
@@ -48,6 +51,8 @@ pub fn provider_presets() -> Value {
         {
             "id": "deepseek",
             "defaults": {
+                "provider_type": "chat_completion",
+                "chat_dialect": "deepseek",
                 "base_url": "https://api.deepseek.com/v1",
                 "models": {
                     "deepseek-r1": { "redirect": "deepseek-reasoner", "multiplier": "1" },
@@ -59,6 +64,7 @@ pub fn provider_presets() -> Value {
         {
             "id": "google_gemini",
             "defaults": {
+                "provider_type": "gemini",
                 "base_url": "https://generativelanguage.googleapis.com/v1beta",
                 "models": {
                     "gemini-2.5-pro": { "redirect": null, "multiplier": "1" },
@@ -70,6 +76,8 @@ pub fn provider_presets() -> Value {
         {
             "id": "xai_grok",
             "defaults": {
+                "provider_type": "chat_completion",
+                "chat_dialect": "generic",
                 "base_url": "https://api.x.ai",
                 "models": {
                     "grok-4": { "redirect": null, "multiplier": "1" },

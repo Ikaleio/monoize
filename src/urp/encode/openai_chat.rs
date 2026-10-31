@@ -540,8 +540,9 @@ fn push_part_into_pending_chat_message(
     }
 }
 
-/// PC0: the Chat Completions wire dialect of one upstream attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// PC0: the Chat Completions wire dialect of one upstream attempt, set on its Channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ChatDialect {
     OpenAi,
     DeepSeek,
@@ -551,23 +552,25 @@ pub enum ChatDialect {
 }
 
 impl ChatDialect {
-    pub fn resolve(base_url: &str, upstream_model: &str) -> Self {
-        let host = reqwest::Url::parse(base_url.trim())
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-            .unwrap_or_default();
-        if host == "api.openai.com" || host.ends_with(".openai.azure.com") {
-            Self::OpenAi
-        } else if host == "openrouter.ai" || host.ends_with(".openrouter.ai") {
-            Self::OpenRouter
-        } else if host == "ai-gateway.vercel.sh" {
-            Self::Vercel
-        } else if host == "api.deepseek.com"
-            || upstream_model.to_ascii_lowercase().contains("deepseek")
-        {
-            Self::DeepSeek
-        } else {
-            Self::Generic
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "openai" => Some(Self::OpenAi),
+            "deepseek" => Some(Self::DeepSeek),
+            "openrouter" => Some(Self::OpenRouter),
+            "vercel" => Some(Self::Vercel),
+            "generic" => Some(Self::Generic),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::DeepSeek => "deepseek",
+            Self::OpenRouter => "openrouter",
+            Self::Vercel => "vercel",
+            Self::Generic => "generic",
         }
     }
 

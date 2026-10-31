@@ -1311,12 +1311,12 @@ pub(super) fn encode_request_for_provider(
             req, &model,
         )
         .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message))?,
-        ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request_checked(
-            req,
-            &model,
-            urp::encode::openai_chat::ChatDialect::resolve(&attempt.base_url, &model),
-        )
-        .map_err(|error| AppError::new(StatusCode::BAD_REQUEST, error.code, error.message))?,
+        ProviderType::ChatCompletion => {
+            urp::encode::openai_chat::encode_request_checked(req, &model, attempt.chat_dialect)
+                .map_err(|error| {
+                    AppError::new(StatusCode::BAD_REQUEST, error.code, error.message)
+                })?
+        }
         ProviderType::Messages => urp::encode::anthropic::encode_request_checked(req, &model)
             .map_err(|message| {
                 AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)

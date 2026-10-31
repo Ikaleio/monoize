@@ -788,6 +788,15 @@
 		"detectWebsocketRunning": "检测中…",
 		"detectWebsocketSuccess": "上游 WebSocket 升级成功。保存 Provider 后才会持久化该值。",
 		"detectWebsocketFailure": "上游 WebSocket 升级失败。",
+		"chatDialect": "Chat 方言",
+		"chatDialectHint": "选择发给上游的请求形状：推理字段、最大 Token 字段、缓存标记和 Provider 扩展。Monoize 不会根据 Base URL 或模型判断。",
+		"chatDialects": {
+			"generic": "通用（OpenAI 兼容）",
+			"openai": "OpenAI",
+			"deepseek": "DeepSeek",
+			"openrouter": "OpenRouter",
+			"vercel": "Vercel AI Gateway"
+		},
 		"modelsSection": "模型",
 		"channelsSection": "Channel",
 		"statusHealthy": "健康",

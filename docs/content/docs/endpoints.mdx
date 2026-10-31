@@ -61,19 +61,20 @@ Chat streams end with `data: [DONE]`. Monoize sends the usage chunk only when th
 
 ### Chat dialects
 
-For each `chat_completion` attempt, Monoize selects one dialect from the Channel base URL host and the upstream model. The first matching row applies.
+Each `chat_completion` Channel stores one dialect in its `chat_dialect` setting. Monoize uses this value for each attempt on that Channel. Monoize does not select a dialect from the base URL or the model.
 
-| Dialect | Match | Reasoning in assistant history | Generated output-token field |
+| Dialect | Use for | Reasoning in assistant history | Generated output-token field |
 | --- | --- | --- | --- |
-| `openai` | Host `api.openai.com` or `*.openai.azure.com` | None | `max_completion_tokens` |
-| `openrouter` | Host `openrouter.ai` or `*.openrouter.ai` | `reasoning_details` and `reasoning` | `max_tokens` |
-| `vercel` | Host `ai-gateway.vercel.sh` | `reasoning_details` and `reasoning` | `max_tokens` |
-| `deepseek` | Host `api.deepseek.com`, or a model id that contains `deepseek` | `reasoning_content` | `max_tokens` |
-| `generic` | Every other attempt | `reasoning_details` and `reasoning` | `max_completion_tokens` |
+| `openai` | Official OpenAI endpoints | None | `max_completion_tokens` |
+| `openrouter` | OpenRouter | `reasoning_details` and `reasoning` | `max_tokens` |
+| `vercel` | Vercel AI Gateway | `reasoning_details` and `reasoning` | `max_tokens` |
+| `deepseek` | DeepSeek | `reasoning_content` | `max_tokens` |
+| `generic` | Other OpenAI-compatible endpoints. This is the default | `reasoning_details` and `reasoning` | `max_completion_tokens` |
 
-- Host rows come first. A DeepSeek model on OpenRouter uses the `openrouter` dialect.
-- No per-Channel override exists. A retry on another Channel selects the dialect again.
-- `generic` follows OpenRouter-compatible behavior. A strict relay on an unlisted host can reject its extension fields.
+- Set the dialect in the Channel editor. See [Providers and Channels](/en/docs/dashboard/providers-and-channels).
+- A retry on another Channel uses the dialect of that Channel.
+- A Channel of another type that reaches Chat through a Protocol override uses `generic`.
+- `generic` follows OpenRouter-compatible behavior. A strict relay can reject its extension fields. Select another dialect for that Channel.
 - A Chat client keeps its own output-token field name, except on `deepseek`. The table applies to other clients.
 - Effort uses `reasoning_effort`, including `none`. If a request has both fields, `reasoning.effort` takes precedence over `reasoning_effort`.
 - A native Chat `reasoning` object reaches `openrouter`, `vercel`, and `generic` upstreams only. `openai` and `deepseek` upstreams do not receive it.

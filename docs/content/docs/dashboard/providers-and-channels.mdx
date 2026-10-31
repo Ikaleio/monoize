@@ -92,6 +92,15 @@ OpenCode Go uses `x-opencode-session` to bind prompt cache to one session. A req
 
 A Channel liveness probe to OpenCode Zen or OpenCode Go sends the literal value `mono-probe` when the Channel extra headers do not already set these names.
 
+## Chat dialect
+
+Set **Chat dialect** in Connection when **API type** is **Chat Completion**. The dialect selects the request shape: reasoning fields, the maximum token field, cache markers, and provider extensions. The field accepts `generic`, `openai`, `deepseek`, `openrouter`, and `vercel`. See [Chat dialects](/en/docs/endpoints#chat-dialects).
+
+- A new Chat Completion Channel starts with `generic`. Monoize does not detect the dialect from the Base URL or the model.
+- The API stores `generic` when a `chat_completion` Channel omits `chat_dialect` or sends `null`. An unknown value returns `400` with `param` set to `channels[i].chat_dialect`.
+- A non-null `chat_dialect` on another Channel type returns `400`. When you change the type away from Chat Completion, the editor clears the value.
+- The upgrade that adds this field sets `generic` on every existing Chat Completion Channel. After the upgrade, select the dialect for each OpenAI, DeepSeek, OpenRouter, or Vercel Channel.
+
 ## Upstream WebSocket
 
 Set **Upstream WebSocket** in Connection, immediately after **API type**. Do not put this control under Routing affinity. The values are:

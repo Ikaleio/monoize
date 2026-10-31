@@ -193,6 +193,16 @@ PP3. The preset `xai_grok` MUST use xAI base URL:
 
 - `https://api.x.ai`
 
+PP4. Every provider preset `defaults` object MUST contain `provider_type`. It MUST contain a non-null `chat_dialect` if and only if `provider_type = "chat_completion"`. The required values are:
+
+| Preset | `provider_type` | `chat_dialect` |
+| --- | --- | --- |
+| `openai_official` | `chat_completion` | `openai` |
+| `anthropic_claude` | `messages` | absent |
+| `deepseek` | `chat_completion` | `deepseek` |
+| `google_gemini` | `gemini` | absent |
+| `xai_grok` | `chat_completion` | `generic` |
+
 ## 3. Unknown fields policy
 
 F1. For URP-based downstream endpoints (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`), Monoize MUST preserve unknown request keys under internal passthrough state and forward them to the upstream request under §7.6.
@@ -651,7 +661,7 @@ The nested value wins because the only Chat dialect that documents both fields (
 
 RC4. Effort `none` requests disabled reasoning. An absent effort permits the upstream default. Monoize MUST NOT replace explicit `none` with an absent effort. When the selected upstream provider type is:
 
-- `chat_completion`: the encoding depends on the Chat dialect `D` resolved under PC0. Let `E` be the normalized typed effort, where a typed disabled mode yields `E = none`. Let `B` be typed `budget_tokens`, `S` typed `summary`, and `M` typed `mode`.
+- `chat_completion`: the encoding depends on the attempt's Chat dialect `D` (PC0). Let `E` be the normalized typed effort, where a typed disabled mode yields `E = none`. Let `B` be typed `budget_tokens`, `S` typed `summary`, and `M` typed `mode`.
   - Native-object case: the typed request preserves an explicit native Chat `reasoning` object (Chat request origin) and `D` is `openrouter`, `vercel`, or `generic`. That object is the single reasoning-control container. Monoize MUST preserve its non-control members, MUST write `effort = E` when `E` is present, MUST write `max_tokens = B` only when `E` is absent and `B` is present, MUST write `summary = S` when `S` is present, MUST write `enabled = (M != "disabled")` when `M` is present, and MUST omit the top-level `reasoning_effort` shorthand.
   - Otherwise, when `E` is present, Monoize MUST send `reasoning_effort = E`, including `none`, and MUST NOT send a `reasoning` object. Exception: for the `deepseek` dialect, `E = none` MUST be sent as `thinking: { "type": "disabled" }` without `reasoning_effort`, because DeepSeek toggles thinking only through `thinking.type` and accepts `reasoning_effort` values `low`, `high`, `max`; an explicit native `thinking` object already carries the disabled type.
   - Otherwise, when `D` is `openrouter` or `vercel` and `E` is absent: if `B` is present, Monoize MUST send `reasoning: { "max_tokens": B }`; else if `M` is present and not `disabled`, Monoize MUST send `reasoning: { "enabled": true }`.
@@ -730,7 +740,7 @@ RC4h. For a Messages downstream and upstream provider type `responses`, Monoize 
 - `mode = "disabled"` MUST encode `reasoning.effort = "none"` and no summary.
 - `budget_tokens`, `display`, and `thinking.type` MUST NOT appear on the upstream Responses request.
 
-RC4e. Assistant-history reasoning fields sent to an upstream Chat Completions provider follow PC8a for the resolved dialect. For the `openrouter`, `vercel`, and `generic` dialects, details decoded from a Chat `reasoning_details` array are authoritative: Monoize MUST preserve their entries and order. A scalar alias derived from such same-Chat details MUST NOT be added. This rule does not prohibit a downstream Chat response from exposing the simple `reasoning` alias allowed by ENC8.
+RC4e. Assistant-history reasoning fields sent to an upstream Chat Completions provider follow PC8a for the attempt's dialect (PC0). For the `openrouter`, `vercel`, and `generic` dialects, details decoded from a Chat `reasoning_details` array are authoritative: Monoize MUST preserve their entries and order. A scalar alias derived from such same-Chat details MUST NOT be added. This rule does not prohibit a downstream Chat response from exposing the simple `reasoning` alias allowed by ENC8.
 
 RC5. If Monoize generated provider-native reasoning-control fields under RC4, Monoize MUST NOT forward conflicting source fields from passthrough state to the same upstream request.
 
@@ -1064,15 +1074,11 @@ PR8a. Monoize MUST decode Responses `custom_tool_call` items into `ToolCall(tool
 
 PC1. Monoize MUST call the upstream path `POST /v1/chat/completions`.
 
-PC0. Chat dialect resolution. For every upstream attempt whose provider type is `chat_completion`, Monoize MUST resolve exactly one Chat dialect from the Channel `base_url` host `H` (lowercased, without port) and the upstream model identifier `m` (lowercased), applying the first matching row:
+PC0. Chat dialect. For every upstream attempt whose effective API type is `chat_completion`, the Chat dialect `D` MUST equal the selected Channel's stored `chat_dialect` (`channel-management.spec.md` CP-INV-16). `D` is exactly one of `openai`, `deepseek`, `openrouter`, `vercel`, and `generic`. If the stored value is NULL, `D = generic`. This case covers a `chat_completion` Channel row with NULL and a Channel of another `provider_type` whose attempt reaches `chat_completion` through `api_type_overrides`.
 
-1. `openai`: `H = "api.openai.com"` or `H` ends with `.openai.azure.com`.
-2. `openrouter`: `H = "openrouter.ai"` or `H` ends with `.openrouter.ai`.
-3. `vercel`: `H = "ai-gateway.vercel.sh"`.
-4. `deepseek`: `H = "api.deepseek.com"` or `m` contains `deepseek`.
-5. `generic`: every other attempt, including an unparseable `base_url`. `generic` is the OpenRouter-compatible union behavior. It is permissive and is not strict OpenAI Chat: a strict relay on an unlisted host can reject its extension fields. The resolution has no per-Channel override, so the `deepseek` model-identifier row also applies to a relay on an unlisted host that serves OpenRouter semantics, and a DeepSeek relay whose model identifier lacks `deepseek` resolves to `generic`.
+No code path, migration, or preset MAY derive `D` from the Channel `base_url`, any host, any URL, or any model identifier. An attempt that does not target `chat_completion` MUST ignore `D`.
 
-Host rows precede the model row, so a DeepSeek model served by OpenRouter or Vercel uses that gateway's dialect. The dialect is attempt-local: a retry on another Channel resolves again.
+`generic` is the OpenRouter-compatible union behavior. It is permissive and is not strict OpenAI Chat: a strict relay can reject its extension fields, and the operator selects another dialect for that Channel. The dialect is attempt-local: a retry on another Channel uses that Channel's value.
 
 PC0a. Maximum output-token field. When typed `max_output_tokens` is present, the Chat encoder MUST emit exactly one of `max_tokens` and `max_completion_tokens`:
 
@@ -1758,7 +1764,7 @@ DC5. Reasoning:
 - A `chat_content` presentation option (RCD, RSRC) additionally renders `reasoning_content` from the node's plain text.
 - Backward compatibility for downstream Chat Completions requests: Monoize MUST parse assistant-message reasoning from both OpenRouter fields `reasoning` and `reasoning_details` and legacy fields `reasoning_content` and `reasoning_opaque`.
 
-DC5a. For DeepSeek V4 thinking-mode tool loops, an assistant message that contains tool calls and non-empty `reasoning_content` MUST replay that `reasoning_content` byte-for-byte on the next outbound DeepSeek V4 Chat request. A no-tool prior turn MAY omit it. Monoize MUST preserve provenance so this DeepSeek replay field is not confused with an OpenRouter scalar alias.
+DC5a. For DeepSeek V4 thinking-mode tool loops, an assistant message that contains tool calls and non-empty `reasoning_content` MUST replay that `reasoning_content` byte-for-byte on the next outbound Chat request on the `deepseek` dialect (PC0). A no-tool prior turn MAY omit it. Monoize MUST preserve provenance so this DeepSeek replay field is not confused with an OpenRouter scalar alias.
 
 DC5b. A post-start OpenRouter chunk with top-level `error` is terminal failure state.
 A non-stream choice with `error` and `finish_reason="error"` is also terminal failure state.
@@ -1772,7 +1778,7 @@ The decoder MUST reject incoming `_monoize_` members at chunk, choice, error, an
 Other unknown provider fields MUST remain at their original owner.
 DeepSeek `finish_reason="insufficient_system_resource"` MUST NOT normalize to `stop`.
 
-DC5c. DeepSeek Chat requests MUST preserve the normalized reasoning effort value without model-specific remapping. The normal Chat reasoning container rules in RC4 apply, including the `deepseek` exception that sends effort `none` as `thinking: { "type": "disabled" }`; no other thinking control is synthesized. An explicit native `thinking` object MUST be reconstructed from current typed controls and unknown native members. The maximum output-token field for the `deepseek` dialect MUST be `max_tokens` (PC0a).
+DC5c. Chat requests on the `deepseek` dialect (PC0) MUST preserve the normalized reasoning effort value without model-specific remapping. The normal Chat reasoning container rules in RC4 apply, including the `deepseek` exception that sends effort `none` as `thinking: { "type": "disabled" }`; no other thinking control is synthesized. An explicit native `thinking` object MUST be reconstructed from current typed controls and unknown native members. The maximum output-token field for the `deepseek` dialect MUST be `max_tokens` (PC0a).
 
 DC6. If the selected upstream provider type is `chat_completion` and the upstream response contains additional non-standard fields inside `choices[0]`, `choices[0].delta`, or `choices[0].message`, other than fields explicitly mapped by DC4 through DC5, Monoize MUST preserve those fields in the downstream response, streaming or non-streaming, for `POST /v1/chat/completions`. In streaming, a choice-level field such as DeepSeek `choices[0].logprobs` on a non-terminal token frame MUST be preserved on a non-terminal downstream choice frame; it MUST NOT be delayed until the terminal frame, moved below `delta`, or discarded. A choice-level field MUST ride on the downstream chunk that carries the same upstream frame's delta; Monoize MUST NOT emit an extra empty-delta chunk only to carry it.
 

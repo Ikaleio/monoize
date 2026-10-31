@@ -652,6 +652,7 @@ export interface MonoizeChannel {
   extra_headers?: Record<string, string> | null;
   session_affinity_auto?: boolean | null;
   websocket_supported?: boolean | null;
+  chat_dialect?: ChatDialect | null;
   _healthy?: boolean;
   _last_success_at?: string;
   _health_status?: "healthy" | "probing" | "unhealthy";
@@ -686,6 +687,7 @@ export type ProviderType =
   | "replicate"
   | "system_one"
   | "openai_decisions";
+export type ChatDialect = "openai" | "deepseek" | "openrouter" | "vercel" | "generic";
 export type AffinityFailbackMode = "sticky" | "prefer_higher_priority";
 
 export interface ApiTypeOverride {
@@ -752,6 +754,7 @@ export interface CreateMonoizeChannelInput {
   extra_headers?: Record<string, string> | null;
   session_affinity_auto?: boolean | null;
   websocket_supported?: boolean | null;
+  chat_dialect?: ChatDialect | null;
 }
 
 export interface CreateProviderInput {

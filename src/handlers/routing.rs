@@ -698,6 +698,9 @@ pub(super) async fn collect_provider_attempts(
                 channel.session_affinity_auto,
             ),
             websocket_supported: effective_websocket_supported(state, &channel),
+            chat_dialect: channel
+                .chat_dialect
+                .unwrap_or(urp::encode::openai_chat::ChatDialect::Generic),
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,

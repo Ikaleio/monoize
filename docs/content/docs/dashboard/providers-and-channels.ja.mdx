@@ -93,6 +93,15 @@ OpenCode Go は `x-opencode-session` でプロンプトキャッシュをセッ�
 
 OpenCode Zen または OpenCode Go への生存プローブでは、Channel の追加ヘッダーにこれらの名前がないとき、リテラル値 `mono-probe` を送ります。
 
+## Chat ダイアレクト
+
+**API タイプ**が **Chat Completion** のとき、接続セクションで **Chat ダイアレクト** を設定します。ダイアレクトはリクエスト形式を決めます：推論フィールド、最大トークンフィールド、キャッシュマーカー、Provider 拡張。値は `generic`、`openai`、`deepseek`、`openrouter`、`vercel` です。[Chat ダイアレクト](/ja/docs/endpoints#chat-ダイアレクト)を参照してください。
+
+- 新しい Chat Completion Channel の既定値は `generic` です。Monoize は Base URL やモデルからダイアレクトを判定しません。
+- `chat_completion` Channel が `chat_dialect` を省略するか `null` を送ると、API は `generic` を保存します。不明な値は `400` を返し、`param` は `channels[i].chat_dialect` です。
+- 別タイプの Channel に null 以外の `chat_dialect` を送ると `400` を返します。タイプを Chat Completion から変更すると、エディターは値を消去します。
+- このフィールドを追加するアップグレードは、既存のすべての Chat Completion Channel を `generic` にします。アップグレード後、OpenAI、DeepSeek、OpenRouter、Vercel の各 Channel にダイアレクトを選択してください。
+
 ## 上流 WebSocket
 
 **接続** の **API type** の直後に **上流 WebSocket** を置きます。Routing affinity の下に置かないでください。値は次のとおりです。

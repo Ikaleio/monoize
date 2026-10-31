@@ -61,19 +61,20 @@ Chat ストリームは `data: [DONE]` で終わります。Monoize が使用量
 
 ### Chat ダイアレクト
 
-`chat_completion` の試行ごとに、Monoize は Channel の base URL のホストと上流モデルからダイアレクトを 1 つ選びます。表の上から順に、最初に一致した行を使います。
+各 `chat_completion` Channel は `chat_dialect` 設定にダイアレクトを 1 つ保持します。その Channel の各試行はこの値を使います。Monoize は base URL やモデルからダイアレクトを選びません。
 
-| ダイアレクト | 一致条件 | assistant 履歴の推論フィールド | 生成する出力トークンフィールド |
+| ダイアレクト | 対象 | assistant 履歴の推論フィールド | 生成する出力トークンフィールド |
 | --- | --- | --- | --- |
-| `openai` | ホストが `api.openai.com` または `*.openai.azure.com` | なし | `max_completion_tokens` |
-| `openrouter` | ホストが `openrouter.ai` または `*.openrouter.ai` | `reasoning_details` と `reasoning` | `max_tokens` |
-| `vercel` | ホストが `ai-gateway.vercel.sh` | `reasoning_details` と `reasoning` | `max_tokens` |
-| `deepseek` | ホストが `api.deepseek.com`、またはモデル id が `deepseek` を含む | `reasoning_content` | `max_tokens` |
-| `generic` | その他すべての試行 | `reasoning_details` と `reasoning` | `max_completion_tokens` |
+| `openai` | OpenAI 公式エンドポイント | なし | `max_completion_tokens` |
+| `openrouter` | OpenRouter | `reasoning_details` と `reasoning` | `max_tokens` |
+| `vercel` | Vercel AI Gateway | `reasoning_details` と `reasoning` | `max_tokens` |
+| `deepseek` | DeepSeek | `reasoning_content` | `max_tokens` |
+| `generic` | その他の OpenAI 互換エンドポイント。これが既定値です | `reasoning_details` と `reasoning` | `max_completion_tokens` |
 
-- ホストの行が優先されます。OpenRouter 上の DeepSeek モデルは `openrouter` ダイアレクトを使います。
-- Channel ごとの上書きはできません。別の Channel へのリトライでは、ダイアレクトを選び直します。
-- `generic` は OpenRouter 互換の動作をします。一覧にないホストの厳格なリレーは、拡張フィールドを拒否する場合があります。
+- ダイアレクトは Channel エディターで設定します。[Provider と Channel](/ja/docs/dashboard/providers-and-channels) を参照してください。
+- 別の Channel へのリトライでは、その Channel のダイアレクトを使います。
+- 別タイプの Channel がプロトコル上書きで Chat に移る場合は `generic` を使います。
+- `generic` は OpenRouter 互換の動作をします。厳格なリレーは拡張フィールドを拒否する場合があります。その Channel には別のダイアレクトを選択してください。
 - Chat クライアントは自身の出力トークンフィールド名を維持します（`deepseek` を除く）。表はその他のクライアントに適用されます。
 - 推論の強度は `reasoning_effort` で送ります（`none` を含む）。両方のフィールドがある場合、`reasoning.effort` が `reasoning_effort` より優先されます。
 - ネイティブの Chat `reasoning` オブジェクトは `openrouter`、`vercel`、`generic` の上流にのみ届きます。`openai` と `deepseek` の上流には送りません。

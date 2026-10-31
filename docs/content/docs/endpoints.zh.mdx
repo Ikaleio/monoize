@@ -61,19 +61,20 @@ Chat 流以 `data: [DONE]` 结束。只有请求将 `stream_options.include_usag
 
 ### Chat 方言
 
-对每次 `chat_completion` 尝试，Monoize 根据 Channel base URL 的主机和上游模型选择一种方言。按表格顺序取第一条匹配项。
+每个 `chat_completion` Channel 在 `chat_dialect` 设置中保存一种方言。该 Channel 上的每次尝试都使用这个值。Monoize 不根据 base URL 或模型选择方言。
 
-| 方言 | 匹配条件 | assistant 历史中的推理字段 | 生成的输出 Token 字段 |
+| 方言 | 适用上游 | assistant 历史中的推理字段 | 生成的输出 Token 字段 |
 | --- | --- | --- | --- |
-| `openai` | 主机为 `api.openai.com` 或 `*.openai.azure.com` | 无 | `max_completion_tokens` |
-| `openrouter` | 主机为 `openrouter.ai` 或 `*.openrouter.ai` | `reasoning_details` 和 `reasoning` | `max_tokens` |
-| `vercel` | 主机为 `ai-gateway.vercel.sh` | `reasoning_details` 和 `reasoning` | `max_tokens` |
-| `deepseek` | 主机为 `api.deepseek.com`，或模型 id 包含 `deepseek` | `reasoning_content` | `max_tokens` |
-| `generic` | 其他所有尝试 | `reasoning_details` 和 `reasoning` | `max_completion_tokens` |
+| `openai` | OpenAI 官方端点 | 无 | `max_completion_tokens` |
+| `openrouter` | OpenRouter | `reasoning_details` 和 `reasoning` | `max_tokens` |
+| `vercel` | Vercel AI Gateway | `reasoning_details` 和 `reasoning` | `max_tokens` |
+| `deepseek` | DeepSeek | `reasoning_content` | `max_tokens` |
+| `generic` | 其他 OpenAI 兼容端点。这是默认值 | `reasoning_details` 和 `reasoning` | `max_completion_tokens` |
 
-- 主机规则优先。OpenRouter 上的 DeepSeek 模型使用 `openrouter` 方言。
-- 方言不能按 Channel 覆盖。重试到其他 Channel 时会重新选择方言。
-- `generic` 采用 OpenRouter 兼容行为。未列出主机上的严格中转站可能拒绝其扩展字段。
+- 在 Channel 编辑器中设置方言。参见 [Provider 与 Channel](/zh/docs/dashboard/providers-and-channels)。
+- 重试到其他 Channel 时，使用该 Channel 的方言。
+- 其他类型的 Channel 通过协议覆盖规则转到 Chat 时，使用 `generic`。
+- `generic` 采用 OpenRouter 兼容行为。严格的中转站可能拒绝其扩展字段。请为该 Channel 选择其他方言。
 - Chat 客户端保留自己使用的输出 Token 字段名，`deepseek` 除外。表格适用于其他客户端。
 - 推理力度使用 `reasoning_effort`，包括 `none`。请求同时带两个字段时，`reasoning.effort` 优先于 `reasoning_effort`。
 - 原生 Chat `reasoning` 对象只发送给 `openrouter`、`vercel` 和 `generic` 上游。`openai` 和 `deepseek` 上游不会收到。

@@ -497,6 +497,20 @@ fn validate_channel_proxy_urls<'a>(
     Ok(())
 }
 
+/// CP-INV-16a: reports the first offending Channel through `param`.
+#[allow(clippy::result_large_err)]
+fn validate_channel_chat_dialects(
+    channels: &[crate::monoize_routing::CreateMonoizeChannelInput],
+) -> AppResult<()> {
+    for (index, channel) in channels.iter().enumerate() {
+        crate::monoize_routing::channel_chat_dialect(channel).map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+                .with_param(format!("channels[{index}].chat_dialect"))
+        })?;
+    }
+    Ok(())
+}
+
 pub async fn create_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -504,6 +518,7 @@ pub async fn create_provider(
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
     validate_channel_proxy_urls(body.channels.iter())?;
+    validate_channel_chat_dialects(&body.channels)?;
 
     let provider = state
         .monoize_store
@@ -528,6 +543,7 @@ pub async fn update_provider(
     require_admin(&headers, &state).await?;
     if let Some(channels) = body.channels.as_ref() {
         validate_channel_proxy_urls(channels.iter())?;
+        validate_channel_chat_dialects(channels)?;
     }
 
     let prev_provider = state

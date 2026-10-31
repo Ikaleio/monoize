@@ -92,6 +92,15 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 
 對 OpenCode Zen 或 OpenCode Go 的存活探測：當 Channel 自訂標頭未設定這兩個名稱時，送出字面值 `mono-probe`。
 
+## Chat 方言
+
+當**介面類型**為 **Chat Completion** 時，在「連線」中設定 **Chat 方言**。方言決定請求形狀：推理欄位、最大 Token 欄位、快取標記和 Provider 擴充。可選值為 `generic`、`openai`、`deepseek`、`openrouter` 和 `vercel`。參見 [Chat 方言](/zh-TW/docs/endpoints#chat-方言)。
+
+- 新的 Chat Completion Channel 預設使用 `generic`。Monoize 不依 Base URL 或模型判斷方言。
+- `chat_completion` Channel 省略 `chat_dialect` 或傳 `null` 時，API 保存 `generic`。未知值回傳 `400`，`param` 為 `channels[i].chat_dialect`。
+- 其他類型的 Channel 傳非空 `chat_dialect` 時回傳 `400`。把類型從 Chat Completion 改成其他類型時，編輯器會清除該值。
+- 新增此欄位的升級會把所有現有 Chat Completion Channel 設為 `generic`。升級後，請為每個 OpenAI、DeepSeek、OpenRouter 或 Vercel Channel 選擇方言。
+
 ## 上游 WebSocket
 
 在 **連線** 中、**介面類型** 之後設定 **上游 WebSocket**。不要把該控制項放在路由親和下。取值如下：

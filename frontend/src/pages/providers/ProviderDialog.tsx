@@ -62,6 +62,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import type {
 	CreateProviderInput,
 	AffinityFailbackMode,
+	ChatDialect,
 	FetchChannelModelsInput,
 	ModelMetadataRecord,
 	ModelPriceRecord,
@@ -86,6 +87,7 @@ import { ChannelModelEditor } from './ChannelModelEditor'
 import { ModelPickerDialog } from './ModelPickerDialog'
 import {
 	buildPricedModelIdSet,
+	CHAT_DIALECTS,
 	effectiveChannelStatus,
 	effectiveStatusBadge,
 	emptyChannelRow,
@@ -175,7 +177,8 @@ function buildInput(form: ProviderForm): CreateProviderInput {
 			proxy_url: channel.proxy_url.trim() || null,
 			extra_headers: parseExtraHeaders(channel.extra_headers) ?? null,
 			session_affinity_auto: channel.session_affinity_auto,
-			websocket_supported: channel.websocket_supported
+			websocket_supported: channel.websocket_supported,
+			chat_dialect: channel.chat_dialect
 		})),
 		transforms: form.transforms,
 		api_type_overrides: form.api_type_overrides,
@@ -882,8 +885,13 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 					<Input id='channel-name' aria-invalid={Boolean(error('name')) || undefined} value={ch.name} onChange={event => update({ name: event.target.value })} />
 				</Field>
 				<Field id='channel-provider-type' label={t('providers.editor.apiType')}>
-					<Select value={ch.provider_type} onValueChange={(provider_type: ProviderType) => update({ provider_type })}><SelectTrigger id='channel-provider-type'><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select>
+					<Select value={ch.provider_type} onValueChange={(provider_type: ProviderType) => update({ provider_type, chat_dialect: provider_type === 'chat_completion' ? ch.chat_dialect ?? 'generic' : null })}><SelectTrigger id='channel-provider-type'><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{providerTypes.map(type => <SelectItem key={type} value={type}>{PROVIDER_TYPE_CONFIG[type].label}</SelectItem>)}</SelectGroup></SelectContent></Select>
 				</Field>
+				{ch.provider_type === 'chat_completion' ? (
+					<Field id='channel-chat-dialect' label={t('providers.chatDialect')} hint={t('providers.chatDialectHint')} className='sm:col-span-2'>
+						<Select value={ch.chat_dialect ?? 'generic'} onValueChange={(chat_dialect: ChatDialect) => update({ chat_dialect })}><SelectTrigger id='channel-chat-dialect'><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{CHAT_DIALECTS.map(dialect => <SelectItem key={dialect} value={dialect}>{t(`providers.chatDialects.${dialect}`)}</SelectItem>)}</SelectGroup></SelectContent></Select>
+					</Field>
+				) : null}
 				{ch.provider_type === 'responses' ? (
 					<div className='grid gap-2 sm:col-span-2 sm:grid-cols-[1fr_auto] sm:items-end'>
 						<NullableBoolean

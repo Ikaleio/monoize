@@ -2663,6 +2663,7 @@ mod media_resource_routing_tests {
             extra_headers: None,
             session_affinity_auto: false,
             websocket_supported: None,
+            chat_dialect: urp::encode::openai_chat::ChatDialect::Generic,
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,

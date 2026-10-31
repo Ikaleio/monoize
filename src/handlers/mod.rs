@@ -872,6 +872,8 @@ struct MonoizeAttempt {
     session_affinity_auto: bool,
     /// WS2e: effective Responses WebSocket memory after replica overlay.
     websocket_supported: Option<bool>,
+    /// PC0: the Channel's Chat dialect; only `chat_completion` attempts read it.
+    chat_dialect: urp::encode::openai_chat::ChatDialect,
     /// CM-AFF-1a/1b: client header or decoded-body conversation identifier.
     client_session_id: Option<String>,
     /// CM-AFF-2 rule 2: `mono-*` digest of instructions plus the first two

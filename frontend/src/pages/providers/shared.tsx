@@ -7,6 +7,7 @@ import { StatusBadge, StatusDot } from '@/components/ui/status'
 import type {
 	AffinityFailbackMode,
 	ApiTypeOverride,
+	ChatDialect,
 	ModelPriceRecord,
 	MonoizeChannel,
 	Provider,
@@ -45,6 +46,7 @@ export type ChannelRow = {
 	extra_headers: string
 	session_affinity_auto: boolean | null
 	websocket_supported: boolean | null
+	chat_dialect: ChatDialect | null
 }
 
 export type ProviderForm = {
@@ -87,6 +89,8 @@ export const PROVIDER_TYPE_CONFIG: Record<
 	openai_decisions: { label: 'OpenAI Decisions', path: '/v1/decisions', icon: OpenAI }
 }
 
+export const CHAT_DIALECTS: ChatDialect[] = ['generic', 'openai', 'deepseek', 'openrouter', 'vercel']
+
 export const PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT = 40
 export const DEFAULT_REASONING_SUFFIX_MAP: Record<string, string> = {
 	'-thinking': 'high',
@@ -124,7 +128,8 @@ export function emptyChannelRow(): ChannelRow {
 		proxy_url: '',
 		extra_headers: '',
 		session_affinity_auto: null,
-		websocket_supported: null
+		websocket_supported: null,
+		chat_dialect: 'generic'
 	}
 }
 
@@ -207,7 +212,8 @@ export function fromProvider(provider: Provider): ProviderForm {
 			proxy_url: channel.proxy_url ?? '',
 			extra_headers: channel.extra_headers && Object.keys(channel.extra_headers).length > 0 ? JSON.stringify(channel.extra_headers, null, 2) : '',
 			session_affinity_auto: channel.session_affinity_auto ?? null,
-			websocket_supported: channel.websocket_supported ?? null
+			websocket_supported: channel.websocket_supported ?? null,
+			chat_dialect: channel.chat_dialect ?? null
 		})),
 		transforms: (provider.transforms ?? []).map(rule => ({ ...rule, config: { ...rule.config } })),
 		api_type_overrides: (provider.api_type_overrides ?? []).map(rule => ({ ...rule }))

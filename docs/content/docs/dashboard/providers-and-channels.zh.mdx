@@ -92,6 +92,15 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 对 OpenCode Zen 或 OpenCode Go 的存活探测：当 Channel 自定义请求头未设置这两个名称时，发送字面值 `mono-probe`。
 
+## Chat 方言
+
+当**接口类型**为 **Chat Completion** 时，在“连接”中设置 **Chat 方言**。方言决定请求形状：推理字段、最大 Token 字段、缓存标记和 Provider 扩展。可选值为 `generic`、`openai`、`deepseek`、`openrouter` 和 `vercel`。参见 [Chat 方言](/zh/docs/endpoints#chat-方言)。
+
+- 新的 Chat Completion Channel 默认使用 `generic`。Monoize 不根据 Base URL 或模型判断方言。
+- `chat_completion` Channel 省略 `chat_dialect` 或传 `null` 时，API 保存 `generic`。未知值返回 `400`，`param` 为 `channels[i].chat_dialect`。
+- 其他类型的 Channel 传非空 `chat_dialect` 时返回 `400`。把类型从 Chat Completion 改成其他类型时，编辑器会清除该值。
+- 新增此字段的升级会把所有现有 Chat Completion Channel 设为 `generic`。升级后，请为每个 OpenAI、DeepSeek、OpenRouter 或 Vercel Channel 选择方言。
+
 ## 上游 WebSocket
 
 在 **连接** 中、**接口类型** 之后设置 **上游 WebSocket**。不要把该控件放在路由亲和下。取值如下：

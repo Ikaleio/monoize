@@ -3,6 +3,7 @@ use crate::db_cache::{REQUEST_PATH_CACHE_TTL, SnapshotCache};
 use crate::exact_decimal::Multiplier;
 use crate::settings::default_reasoning_suffix_map;
 use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
+use crate::urp::encode::openai_chat::ChatDialect;
 use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -227,6 +228,9 @@ pub struct MonoizeChannel {
     /// WS2e: null = unknown, true = prefer WS, false = HTTP only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub websocket_supported: Option<bool>,
+    /// CP-INV-16: present exactly on `chat_completion` Channels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_dialect: Option<ChatDialect>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _healthy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -322,6 +326,9 @@ pub struct CreateMonoizeChannelInput {
     /// WS2e: explicit Responses upstream WebSocket memory.
     #[serde(default)]
     pub websocket_supported: Option<bool>,
+    /// CP-INV-16a: kept as raw text so an unknown value reports through `param`.
+    #[serde(default)]
+    pub chat_dialect: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -899,6 +906,31 @@ fn validate_channel_extra_headers(
     Ok(())
 }
 
+/// CP-INV-16a: maps one Channel input to its stored dialect, or the rejection message.
+pub fn channel_chat_dialect(
+    input: &CreateMonoizeChannelInput,
+) -> Result<Option<ChatDialect>, String> {
+    let requested = input.chat_dialect.as_deref();
+    if input.provider_type != MonoizeProviderType::ChatCompletion {
+        return match requested {
+            None => Ok(None),
+            Some(_) => Err(format!(
+                "channel '{}' chat_dialect is only valid when provider_type is chat_completion",
+                input.name
+            )),
+        };
+    }
+    let Some(requested) = requested else {
+        return Ok(Some(ChatDialect::Generic));
+    };
+    ChatDialect::from_str(requested).map(Some).ok_or_else(|| {
+        format!(
+            "channel '{}' has invalid chat_dialect '{requested}'; expected openai, deepseek, openrouter, vercel, or generic",
+            input.name
+        )
+    })
+}
+
 /// CP-INV-15a: trim keys, drop nothing else, canonical JSON with sorted keys;
 /// an empty map persists as NULL.
 fn normalized_extra_headers_json(raw: Option<&BTreeMap<String, String>>) -> Option<String> {
@@ -949,6 +981,18 @@ fn decode_channel_row(
         .map_err(|e| format!("channel {id} missing provider_type: {e}"))?;
     let provider_type = MonoizeProviderType::from_str(&provider_type_raw)
         .ok_or_else(|| format!("channel {id} invalid provider type: {provider_type_raw}"))?;
+    let chat_dialect = match row
+        .try_get::<Option<String>>("", "chat_dialect")
+        .map_err(|e| e.to_string())?
+    {
+        Some(raw) => Some(
+            ChatDialect::from_str(&raw)
+                .ok_or_else(|| format!("channel {id} invalid chat_dialect: {raw}"))?,
+        ),
+        // CP-INV-16b: a chat row holding NULL reads as the fixed default.
+        None if provider_type == MonoizeProviderType::ChatCompletion => Some(ChatDialect::Generic),
+        None => None,
+    };
     Ok(MonoizeChannel {
         id: id.clone(),
         name: row.try_get("", "name").map_err(|e| e.to_string())?,
@@ -1082,6 +1126,7 @@ fn decode_channel_row(
             .map_err(|e| e.to_string())?
             .map(|value| decode_database_bool("channel", &id, "websocket_supported", value))
             .transpose()?,
+        chat_dialect,
         _healthy: None,
         _last_success_at: None,
         _health_status: None,
@@ -1435,7 +1480,8 @@ impl MonoizeRoutingStore {
                             active_probe_success_threshold_override, active_probe_model_override,
                             affinity_enabled_override, affinity_idle_ttl_seconds_override,
                             affinity_failback_mode_override, affinity_failback_delay_seconds_override,
-                            proxy_url, extra_headers, session_affinity_auto, websocket_supported
+                            proxy_url, extra_headers, session_affinity_auto, websocket_supported,
+                            chat_dialect
                      FROM monoize_channels{provider_filter}
                      ORDER BY created_at ASC"
                 ),
@@ -1607,7 +1653,7 @@ impl MonoizeRoutingStore {
                           c.affinity_enabled_override, c.affinity_idle_ttl_seconds_override,
                           c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
                           c.proxy_url, c.extra_headers, c.session_affinity_auto, c.websocket_supported,
-                          cm.model_name, cm.redirect, cm.multiplier
+                          c.chat_dialect, cm.model_name, cm.redirect, cm.multiplier
                    FROM monoize_channels c
                    JOIN monoize_providers p ON p.id = c.provider_id
                    JOIN monoize_channel_models cm ON cm.channel_id = c.id
@@ -2237,6 +2283,7 @@ impl MonoizeRoutingStore {
             api_key: String,
             input: &'a CreateMonoizeChannelInput,
             models: HashMap<String, MonoizeModelEntry>,
+            chat_dialect: Option<ChatDialect>,
         }
 
         let mut prepared = Vec::with_capacity(channels.len());
@@ -2263,13 +2310,14 @@ impl MonoizeRoutingStore {
                 api_key,
                 input,
                 models: canonicalize_models(&input.models),
+                chat_dialect: channel_chat_dialect(input)?,
             });
         }
 
         const CHANNEL_INSERT_CHUNK_SIZE: usize = 18;
         let now = Utc::now().to_rfc3339();
         for chunk in prepared.chunks(CHANNEL_INSERT_CHUNK_SIZE) {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 26);
+            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 27);
             let mut rows = Vec::with_capacity(chunk.len());
             for channel in chunk {
                 let start = values.len() + 1;
@@ -2310,12 +2358,16 @@ impl MonoizeRoutingStore {
                     normalized_extra_headers_json(input.extra_headers.as_ref()).into(),
                     opt_bool_to_value(input.session_affinity_auto),
                     opt_bool_to_value(input.websocket_supported),
+                    channel
+                        .chat_dialect
+                        .map(|dialect| dialect.as_str().to_string())
+                        .into(),
                     now.clone().into(),
                     now.clone().into(),
                 ]);
                 rows.push(format!(
                     "({})",
-                    (start..start + 26)
+                    (start..start + 27)
                         .map(|index| format!("${index}"))
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -2335,6 +2387,7 @@ impl MonoizeRoutingStore {
                       extra_headers,
                       session_affinity_auto,
                       websocket_supported,
+                      chat_dialect,
                       created_at, updated_at)
                      VALUES {}",
                     rows.join(", ")
