@@ -73,7 +73,7 @@ Each `chat_completion` Channel stores one dialect in its `chat_dialect` setting.
 
 - Set the dialect in the Channel editor. See [Providers and Channels](/en/docs/dashboard/providers-and-channels).
 - A retry on another Channel uses the dialect of that Channel.
-- A Channel of another type that reaches Chat through a Protocol override uses `generic`.
+- A Protocol override that selects `chat_completion` has its own dialect. That value replaces the Channel dialect for models that match the rule.
 - `generic` follows OpenRouter-compatible behavior. A strict relay can reject its extension fields. Select another dialect for that Channel.
 - A Chat client keeps its own output-token field name, except on `deepseek`. The table applies to other clients.
 - Effort uses `reasoning_effort`, including `none`. If a request has both fields, `reasoning.effort` takes precedence over `reasoning_effort`.

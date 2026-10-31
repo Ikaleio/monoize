@@ -586,11 +586,12 @@ pub(super) async fn collect_provider_attempts(
             .get(&urp.model)
             .expect("eligible channel must retain its model entry");
         let upstream_model = resolve_upstream_model(&urp.model, model_entry);
-        let effective_provider_type = crate::monoize_routing::resolve_effective_api_type(
+        let selected_override = crate::monoize_routing::matching_api_type_override(
             &provider.api_type_overrides,
-            channel.provider_type,
             &urp.model,
         );
+        let effective_provider_type =
+            selected_override.map_or(channel.provider_type, |entry| entry.api_type);
         let passive_failure_count_threshold = channel
             .passive_failure_count_threshold_override
             .unwrap_or(runtime.passive_failure_count_threshold)
@@ -698,8 +699,8 @@ pub(super) async fn collect_provider_attempts(
                 channel.session_affinity_auto,
             ),
             websocket_supported: effective_websocket_supported(state, &channel),
-            chat_dialect: channel
-                .chat_dialect
+            chat_dialect: selected_override
+                .map_or(channel.chat_dialect, |entry| entry.chat_dialect)
                 .unwrap_or(urp::encode::openai_chat::ChatDialect::Generic),
             client_session_id: None,
             derived_session_affinity: None,

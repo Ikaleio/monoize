@@ -175,7 +175,7 @@ The dashboard API is considered a separate subsystem. Its behavior MUST remain c
 
 ### 2.4 Provider presets
 
-PP1. `GET /api/dashboard/presets/providers` MUST include at least these provider preset IDs:
+PP1. `GET /api/presets/providers` MUST include at least these provider preset IDs:
 
 - `openai_official`
 - `anthropic_claude`
@@ -1074,7 +1074,13 @@ PR8a. Monoize MUST decode Responses `custom_tool_call` items into `ToolCall(tool
 
 PC1. Monoize MUST call the upstream path `POST /v1/chat/completions`.
 
-PC0. Chat dialect. For every upstream attempt whose effective API type is `chat_completion`, the Chat dialect `D` MUST equal the selected Channel's stored `chat_dialect` (`channel-management.spec.md` CP-INV-16). `D` is exactly one of `openai`, `deepseek`, `openrouter`, `vercel`, and `generic`. If the stored value is NULL, `D = generic`. This case covers a `chat_completion` Channel row with NULL and a Channel of another `provider_type` whose attempt reaches `chat_completion` through `api_type_overrides`.
+PC0. Chat dialect. For every upstream attempt whose effective API type is `chat_completion`, the Chat dialect `D` MUST be resolved as follows (`monoize-upstream-routing.spec.md` AT-3a):
+
+1. If an `api_type_overrides` entry selected the effective API type (AT-1), `D` is that entry's `chat_dialect` (`channel-management.spec.md` CP-INV-17).
+2. Otherwise `D` is the selected Channel's stored `chat_dialect` (`channel-management.spec.md` CP-INV-16).
+3. If the value from step 1 or step 2 is NULL or absent, `D = generic`.
+
+`D` is exactly one of `openai`, `deepseek`, `openrouter`, `vercel`, and `generic`.
 
 No code path, migration, or preset MAY derive `D` from the Channel `base_url`, any host, any URL, or any model identifier. An attempt that does not target `chat_completion` MUST ignore `D`.
 

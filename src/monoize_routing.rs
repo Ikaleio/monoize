@@ -156,6 +156,18 @@ fn extra_headers_contain(headers: Option<&BTreeMap<String, String>>, name: &str)
 pub struct ApiTypeOverride {
     pub pattern: String,
     pub api_type: MonoizeProviderType,
+    /// CP-INV-17: present exactly on `chat_completion` entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_dialect: Option<ChatDialect>,
+}
+
+/// CP-INV-17a: keeps the dialect as raw text so an unknown value reports through `param`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiTypeOverrideInput {
+    pub pattern: String,
+    pub api_type: MonoizeProviderType,
+    #[serde(default)]
+    pub chat_dialect: Option<String>,
 }
 
 fn serialize_sorted_models<S: serde::Serializer>(
@@ -350,7 +362,7 @@ pub struct CreateMonoizeProviderInput {
     pub transforms: Vec<TransformRuleConfig>,
     pub active_probe_enabled_override: Option<bool>,
     #[serde(default)]
-    pub api_type_overrides: Vec<ApiTypeOverride>,
+    pub api_type_overrides: Vec<ApiTypeOverrideInput>,
     pub active_probe_interval_seconds_override: Option<u64>,
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
@@ -382,7 +394,7 @@ pub struct UpdateMonoizeProviderInput {
     pub per_model_circuit_break: Option<bool>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub active_probe_enabled_override: Option<Option<bool>>,
-    pub api_type_overrides: Option<Vec<ApiTypeOverride>>,
+    pub api_type_overrides: Option<Vec<ApiTypeOverrideInput>>,
     pub active_probe_interval_seconds_override: Option<Option<u64>>,
     pub active_probe_success_threshold_override: Option<Option<u32>>,
     pub active_probe_model_override: Option<Option<String>>,
@@ -910,13 +922,39 @@ fn validate_channel_extra_headers(
 pub fn channel_chat_dialect(
     input: &CreateMonoizeChannelInput,
 ) -> Result<Option<ChatDialect>, String> {
-    let requested = input.chat_dialect.as_deref();
-    if input.provider_type != MonoizeProviderType::ChatCompletion {
+    stored_chat_dialect(
+        format_args!("channel '{}'", input.name),
+        input.provider_type,
+        input.chat_dialect.as_deref(),
+    )
+}
+
+/// CP-INV-17a: maps one override input to its stored entry, or the rejection message.
+pub fn api_type_override_from_input(
+    index: usize,
+    input: &ApiTypeOverrideInput,
+) -> Result<ApiTypeOverride, String> {
+    Ok(ApiTypeOverride {
+        pattern: input.pattern.clone(),
+        api_type: input.api_type,
+        chat_dialect: stored_chat_dialect(
+            format_args!("api_type_overrides[{index}]"),
+            input.api_type,
+            input.chat_dialect.as_deref(),
+        )?,
+    })
+}
+
+fn stored_chat_dialect(
+    owner: std::fmt::Arguments<'_>,
+    api_type: MonoizeProviderType,
+    requested: Option<&str>,
+) -> Result<Option<ChatDialect>, String> {
+    if api_type != MonoizeProviderType::ChatCompletion {
         return match requested {
             None => Ok(None),
             Some(_) => Err(format!(
-                "channel '{}' chat_dialect is only valid when provider_type is chat_completion",
-                input.name
+                "{owner} chat_dialect is only valid for type chat_completion"
             )),
         };
     }
@@ -925,8 +963,7 @@ pub fn channel_chat_dialect(
     };
     ChatDialect::from_str(requested).map(Some).ok_or_else(|| {
         format!(
-            "channel '{}' has invalid chat_dialect '{requested}'; expected openai, deepseek, openrouter, vercel, or generic",
-            input.name
+            "{owner} has invalid chat_dialect '{requested}'; expected openai, deepseek, openrouter, vercel, or generic"
         )
     })
 }
@@ -1877,7 +1914,8 @@ impl MonoizeRoutingStore {
         canonicalize_transform_rules(&mut transforms);
         let transforms_json = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
         let api_type_overrides_json =
-            serde_json::to_string(&input.api_type_overrides).map_err(|e| e.to_string())?;
+            serde_json::to_string(&stored_api_type_overrides(&input.api_type_overrides)?)
+                .map_err(|e| e.to_string())?;
         let extra_fields_whitelist_json: Option<String> = input
             .extra_fields_whitelist
             .as_ref()
@@ -2024,7 +2062,7 @@ impl MonoizeRoutingStore {
         if let Some(value) = &input.api_type_overrides {
             push_value(
                 "api_type_overrides",
-                serde_json::to_string(value)
+                serde_json::to_string(&stored_api_type_overrides(value)?)
                     .map_err(|e| e.to_string())?
                     .into(),
             );
@@ -2628,7 +2666,7 @@ fn validate_channels(
 fn validate_provider_input(
     name: &str,
     channels: &[CreateMonoizeChannelInput],
-    api_type_overrides: &[ApiTypeOverride],
+    api_type_overrides: &[ApiTypeOverrideInput],
 ) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("provider name must not be empty".to_string());
@@ -2638,7 +2676,17 @@ fn validate_provider_input(
     Ok(())
 }
 
-fn validate_api_type_overrides(overrides: &[ApiTypeOverride]) -> Result<(), String> {
+fn stored_api_type_overrides(
+    overrides: &[ApiTypeOverrideInput],
+) -> Result<Vec<ApiTypeOverride>, String> {
+    overrides
+        .iter()
+        .enumerate()
+        .map(|(index, input)| api_type_override_from_input(index, input))
+        .collect()
+}
+
+fn validate_api_type_overrides(overrides: &[ApiTypeOverrideInput]) -> Result<(), String> {
     for (idx, entry) in overrides.iter().enumerate() {
         if entry.pattern.trim().is_empty() {
             return Err(format!(
@@ -2693,12 +2741,17 @@ pub fn resolve_effective_api_type(
     default_type: MonoizeProviderType,
     model: &str,
 ) -> MonoizeProviderType {
-    for entry in overrides {
-        if glob_match(&entry.pattern, model) {
-            return entry.api_type;
-        }
-    }
-    default_type
+    matching_api_type_override(overrides, model).map_or(default_type, |entry| entry.api_type)
+}
+
+/// AT-1: the first entry whose pattern matches the model, in array order.
+pub fn matching_api_type_override<'a>(
+    overrides: &'a [ApiTypeOverride],
+    model: &str,
+) -> Option<&'a ApiTypeOverride> {
+    overrides
+        .iter()
+        .find(|entry| glob_match(&entry.pattern, model))
 }
 
 fn glob_match(pattern: &str, value: &str) -> bool {

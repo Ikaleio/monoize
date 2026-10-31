@@ -73,7 +73,7 @@ Chat 流以 `data: [DONE]` 结束。只有请求将 `stream_options.include_usag
 
 - 在 Channel 编辑器中设置方言。参见 [Provider 与 Channel](/zh/docs/dashboard/providers-and-channels)。
 - 重试到其他 Channel 时，使用该 Channel 的方言。
-- 其他类型的 Channel 通过协议覆盖规则转到 Chat 时，使用 `generic`。
+- 选择 `chat_completion` 的协议覆盖规则有自己的方言。对匹配该规则的模型，此值取代 Channel 方言。
 - `generic` 采用 OpenRouter 兼容行为。严格的中转站可能拒绝其扩展字段。请为该 Channel 选择其他方言。
 - Chat 客户端保留自己使用的输出 Token 字段名，`deepseek` 除外。表格适用于其他客户端。
 - 推理力度使用 `reasoning_effort`，包括 `none`。请求同时带两个字段时，`reasoning.effort` 优先于 `reasoning_effort`。

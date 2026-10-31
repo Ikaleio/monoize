@@ -81,7 +81,7 @@ Implementation-specific extension:
 - Each channel MUST contain `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions")`; this value determines the channel default upstream request shape.
 - Each Channel MUST contain `models: Record<string, ModelEntry>`.
 - Provider MUST NOT contain a `models` field.
-- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
+- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions"), chat_dialect?: enum("openai","deepseek","openrouter","vercel","generic") }` where `chat_dialect` is present exactly on `chat_completion` entries (`channel-management.spec.md` CP-INV-17) and `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
 
 ### 2.4 API Type Resolution
 
@@ -95,6 +95,8 @@ AT-1. For a given request model and selected channel, the effective API type MUS
 AT-2. Glob matching MUST use the same semantics as transform model filtering: `*` matches zero or more characters, `?` matches exactly one character, matching is anchored (full string).
 
 AT-3. The effective API type determines the upstream endpoint path and request encoding for that specific request.
+
+AT-3a. The effective Chat dialect of an attempt whose effective API type is `chat_completion` MUST be the `chat_dialect` of the entry selected in AT-1 step 3 when an entry matched. It MUST otherwise be the selected Channel's `chat_dialect` (`unified_responses_proxy.spec.md` PC0). A matching entry's value MUST take precedence over a `chat_completion` Channel's value.
 
 AT-4. `system_one` and `openai_decisions` are decision API types. A decision endpoint MUST consider only Channels whose effective API type is a decision API type. Every other forwarding endpoint MUST consider only Channels whose effective API type is not a decision API type. Both filters MUST run before the Provider attempt limit (`decision-api.spec.md` DR-R2, DR-R3).
 

@@ -693,6 +693,7 @@ export type AffinityFailbackMode = "sticky" | "prefer_higher_priority";
 export interface ApiTypeOverride {
   pattern: string;
   api_type: ProviderType;
+  chat_dialect?: ChatDialect | null;
 }
 export interface Provider {
   id: string;

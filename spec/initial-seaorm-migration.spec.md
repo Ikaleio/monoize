@@ -313,7 +313,7 @@ ISM4.12n. Migration `m20260901_000049_model_prices_cutover` MUST, on SQLite and 
 
 ISM4.12o. Migration `m20260914_000054_channel_websocket_supported` MUST add nullable INTEGER column `websocket_supported` to `monoize_channels` on SQLite and PostgreSQL; existing rows MUST read as NULL (unknown) (`channel-management.spec.md` Channel Responses WebSocket memory; `unified_responses_proxy.spec.md` WS2e). The down migration MUST drop the column.
 
-ISM4.12p. Migration `m20261031_000059_channel_chat_dialect` MUST add nullable TEXT column `chat_dialect` to `monoize_channels` on SQLite and PostgreSQL. It MUST set `generic` on every row with `provider_type = 'chat_completion'` and NULL on every other row. It MUST NOT read `base_url` or any model identifier (`channel-management.spec.md` CP-INV-16c). The down migration MUST drop the column.
+ISM4.12p. Migration `m20261031_000059_channel_chat_dialect` MUST add nullable TEXT column `chat_dialect` to `monoize_channels` on SQLite and PostgreSQL. It MUST set `generic` on every row with `provider_type = 'chat_completion'` and NULL on every other row. It MUST add `chat_dialect: "generic"` to every `api_type_overrides` entry whose `api_type` is `chat_completion`. It MUST NOT read `base_url` or any model identifier (`channel-management.spec.md` CP-INV-16c, CP-INV-17b). The down migration MUST drop the column and remove `chat_dialect` from every override entry.
 
 ISM4.12j. Migration `m20260823_000037_billing_plan_cron_schedule` MUST replace `billing_plans.period_seconds` with `billing_plans.schedule` (`billing-plan-subscriptions.spec.md` BP-D5). Existing `users.next_grant_at` values MUST be left unchanged. The down migration MUST restore `period_seconds`.
 

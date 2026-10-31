@@ -511,6 +511,20 @@ fn validate_channel_chat_dialects(
     Ok(())
 }
 
+/// CP-INV-17a: reports the first offending override entry through `param`.
+#[allow(clippy::result_large_err)]
+fn validate_override_chat_dialects(
+    overrides: &[crate::monoize_routing::ApiTypeOverrideInput],
+) -> AppResult<()> {
+    for (index, entry) in overrides.iter().enumerate() {
+        crate::monoize_routing::api_type_override_from_input(index, entry).map_err(|message| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+                .with_param(format!("api_type_overrides[{index}].chat_dialect"))
+        })?;
+    }
+    Ok(())
+}
+
 pub async fn create_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -519,6 +533,7 @@ pub async fn create_provider(
     require_admin(&headers, &state).await?;
     validate_channel_proxy_urls(body.channels.iter())?;
     validate_channel_chat_dialects(&body.channels)?;
+    validate_override_chat_dialects(&body.api_type_overrides)?;
 
     let provider = state
         .monoize_store
@@ -544,6 +559,9 @@ pub async fn update_provider(
     if let Some(channels) = body.channels.as_ref() {
         validate_channel_proxy_urls(channels.iter())?;
         validate_channel_chat_dialects(channels)?;
+    }
+    if let Some(overrides) = body.api_type_overrides.as_ref() {
+        validate_override_chat_dialects(overrides)?;
     }
 
     let prev_provider = state
