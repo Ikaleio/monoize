@@ -89,7 +89,7 @@ fn input_details(details: &OpenAiChatInputDetails) -> Option<InputDetails> {
         || details.tool_prompt_tokens > 0
         || modality_breakdown.is_some()
         || cache_read_modality_breakdown.is_some();
-    reported.then(|| InputDetails {
+    reported.then_some(InputDetails {
         tool_prompt_modality_breakdown: None,
         standard_tokens: 0,
         cache_read_tokens: details.cached_tokens,
@@ -110,7 +110,7 @@ fn output_details(details: &OpenAiChatOutputDetails) -> Option<OutputDetails> {
         || details.accepted_prediction_tokens > 0
         || details.rejected_prediction_tokens > 0
         || modality_breakdown.is_some();
-    reported.then(|| OutputDetails {
+    reported.then_some(OutputDetails {
         standard_tokens: 0,
         reasoning_tokens: details.reasoning_tokens,
         accepted_prediction_tokens: details.accepted_prediction_tokens,

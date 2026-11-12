@@ -1,11 +1,5 @@
 pub mod anthropic;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no downstream route speaks Gemini; conformance tests drive this encoder"
-    )
-)]
+#[cfg(test)]
 pub mod gemini;
 pub mod openai_chat;
 pub mod openai_responses;

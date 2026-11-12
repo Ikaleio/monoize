@@ -436,13 +436,12 @@ pub async fn apply_transforms<'a>(
         if !rule.enabled || rule.phase != phase {
             continue;
         }
-        if let Some(patterns) = &rule.models {
-            if !patterns
+        if let Some(patterns) = &rule.models
+            && !patterns
                 .iter()
                 .any(|pattern| model_glob_match(pattern, current_model))
-            {
-                continue;
-            }
+        {
+            continue;
         }
         match resolver.resolve(rule.transform.as_str())? {
             ResolvedTransform::SkippedCustom => continue,
@@ -499,13 +498,12 @@ pub async fn apply_stream_transforms<'a>(
         if !rule.enabled || rule.phase != phase {
             continue;
         }
-        if let Some(patterns) = &rule.models {
-            if !patterns
+        if let Some(patterns) = &rule.models
+            && !patterns
                 .iter()
                 .any(|pattern| model_glob_match(pattern, current_model))
-            {
-                continue;
-            }
+        {
+            continue;
         }
         enum StreamStep {
             Builtin(Arc<dyn Transform>, Box<dyn TransformConfig>),
@@ -583,10 +581,10 @@ pub fn move_system_to_developer_nodes(nodes: &mut [Node]) {
             | Node::Image { role, .. }
             | Node::Audio { role, .. }
             | Node::File { role, .. }
-            | Node::ProviderItem { role, .. } => {
-                if *role == OrdinaryRole::System {
-                    *role = OrdinaryRole::Developer;
-                }
+            | Node::ProviderItem { role, .. }
+                if *role == OrdinaryRole::System =>
+            {
+                *role = OrdinaryRole::Developer;
             }
             _ => {}
         }
@@ -600,10 +598,10 @@ pub fn move_developer_to_system_nodes(nodes: &mut [Node]) {
             | Node::Image { role, .. }
             | Node::Audio { role, .. }
             | Node::File { role, .. }
-            | Node::ProviderItem { role, .. } => {
-                if *role == OrdinaryRole::Developer {
-                    *role = OrdinaryRole::System;
-                }
+            | Node::ProviderItem { role, .. }
+                if *role == OrdinaryRole::Developer =>
+            {
+                *role = OrdinaryRole::System;
             }
             _ => {}
         }

@@ -193,24 +193,23 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
     }
 
     if tool_type == "custom" {
-        if let Some(custom_obj) = obj.get("custom").and_then(|v| v.as_object()) {
-            if let Some(custom) =
+        if let Some(custom_obj) = obj.get("custom").and_then(|v| v.as_object())
+            && let Some(custom) =
                 parse_custom_tool_definition(custom_obj, &["name", "description", "format"])
-            {
-                return Some(ToolDefinition {
-                    namespace: string_field(obj, "namespace"),
-                    tools: None,
-                    origin_protocol: None,
-                    config: None,
-                    tool_type,
-                    name: None,
-                    description: None,
-                    function: None,
-                    custom: Some(custom),
-                    extra_body: split_extra(obj, &["type", "custom", "namespace"]),
-                    cache_breakpoint: None,
-                });
-            }
+        {
+            return Some(ToolDefinition {
+                namespace: string_field(obj, "namespace"),
+                tools: None,
+                origin_protocol: None,
+                config: None,
+                tool_type,
+                name: None,
+                description: None,
+                function: None,
+                custom: Some(custom),
+                extra_body: split_extra(obj, &["type", "custom", "namespace"]),
+                cache_breakpoint: None,
+            });
         }
 
         if let Some(custom) = parse_custom_tool_definition(
@@ -250,25 +249,6 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
         }
         tool
     })
-}
-
-#[cfg(test)]
-mod canonical_tool_definition_tests {
-    use super::*;
-
-    #[test]
-    fn flat_custom_namespace_has_one_owner() {
-        let tool = parse_tool_definition(&serde_json::json!({
-            "type":"custom", "name":"patch", "namespace":"functions",
-            "format":{"type":"text"}, "future":true
-        }))
-        .unwrap();
-        assert_eq!(tool.namespace.as_deref(), Some("functions"));
-        assert!(!tool.extra_body.contains_key("namespace"));
-        let custom = tool.custom.unwrap();
-        assert!(!custom.extra_body.contains_key("namespace"));
-        assert_eq!(custom.extra_body.get("future"), Some(&Value::Bool(true)));
-    }
 }
 
 pub fn parse_tool_call_arguments_value(obj: &Map<String, Value>) -> Option<Value> {
@@ -378,13 +358,13 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
 
 pub fn parse_image_source_from_obj(obj: &Map<String, Value>) -> Option<ImageSource> {
     let source = parse_image_source_raw(obj)?;
-    if let ImageSource::Url { url, .. } = &source {
-        if let Some((mime, data)) = crate::urp::media::parse_data_url(url) {
-            return Some(ImageSource::Base64 {
-                media_type: mime.into(),
-                data: data.into(),
-            });
-        }
+    if let ImageSource::Url { url, .. } = &source
+        && let Some((mime, data)) = crate::urp::media::parse_data_url(url)
+    {
+        return Some(ImageSource::Base64 {
+            media_type: mime.into(),
+            data: data.into(),
+        });
     }
     Some(source)
 }
@@ -917,4 +897,23 @@ pub fn value_to_text(v: &Value) -> String {
         return out;
     }
     serde_json::to_string(v).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod canonical_tool_definition_tests {
+    use super::*;
+
+    #[test]
+    fn flat_custom_namespace_has_one_owner() {
+        let tool = parse_tool_definition(&serde_json::json!({
+            "type":"custom", "name":"patch", "namespace":"functions",
+            "format":{"type":"text"}, "future":true
+        }))
+        .unwrap();
+        assert_eq!(tool.namespace.as_deref(), Some("functions"));
+        assert!(!tool.extra_body.contains_key("namespace"));
+        let custom = tool.custom.unwrap();
+        assert!(!custom.extra_body.contains_key("namespace"));
+        assert_eq!(custom.extra_body.get("future"), Some(&Value::Bool(true)));
+    }
 }

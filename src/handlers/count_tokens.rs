@@ -18,7 +18,12 @@ pub async fn count_messages_tokens(
     response
 }
 
-fn messages_error_body(status: StatusCode, error_type: &str, message: &str, request_id: &str) -> Response {
+fn messages_error_body(
+    status: StatusCode,
+    error_type: &str,
+    message: &str,
+    request_id: &str,
+) -> Response {
     let body = json!({
         "type": "error",
         "error": { "type": error_type, "message": message },
@@ -37,7 +42,11 @@ async fn count_messages_tokens_inner(
     let mut logical_model = body
         .as_object()
         .ok_or_else(|| {
-            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "body must be object")
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "body must be object",
+            )
         })?
         .get("model")
         .and_then(Value::as_str)

@@ -981,12 +981,11 @@ fn coerce_text_to_json_value(text: &str) -> Value {
     if let Ok(n) = text.parse::<i64>() {
         return Value::Number(n.into());
     }
-    if let Ok(n) = text.parse::<f64>() {
-        if n.is_finite() {
-            if let Some(num) = serde_json::Number::from_f64(n) {
-                return Value::Number(num);
-            }
-        }
+    if let Ok(n) = text.parse::<f64>()
+        && n.is_finite()
+        && let Some(num) = serde_json::Number::from_f64(n)
+    {
+        return Value::Number(num);
     }
     match text {
         "true" => Value::Bool(true),
@@ -2376,7 +2375,7 @@ fn image_upstream_error(
     let status = status
         .filter(|v| (400..=599).contains(v))
         .and_then(|v| StatusCode::from_u16(v as u16).ok())
-        .unwrap_or_else(|| match (code, kind) {
+        .unwrap_or(match (code, kind) {
             (
                 "invalid_value"
                 | "invalid_request_error"

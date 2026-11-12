@@ -19,36 +19,36 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let input = obj.get("input").and_then(|v| v.as_object());
 
     if let Some(input_obj) = input {
-        if let Some(system_prompt) = input_obj.get("system_prompt").and_then(|v| v.as_str()) {
-            if !system_prompt.is_empty() {
-                input_nodes.push(Node::Text {
-                    logprobs: None,
-                    signature: None,
-                    citations: Vec::new(),
-                    id: None,
-                    role: OrdinaryRole::System,
-                    content: system_prompt.to_string(),
-                    phase: None,
-                    extra_body: HashMap::new(),
-                    cache_breakpoint: None,
-                });
-            }
+        if let Some(system_prompt) = input_obj.get("system_prompt").and_then(|v| v.as_str())
+            && !system_prompt.is_empty()
+        {
+            input_nodes.push(Node::Text {
+                logprobs: None,
+                signature: None,
+                citations: Vec::new(),
+                id: None,
+                role: OrdinaryRole::System,
+                content: system_prompt.to_string(),
+                phase: None,
+                extra_body: HashMap::new(),
+                cache_breakpoint: None,
+            });
         }
 
-        if let Some(prompt) = input_obj.get("prompt").and_then(|v| v.as_str()) {
-            if !prompt.is_empty() {
-                input_nodes.push(Node::Text {
-                    logprobs: None,
-                    signature: None,
-                    citations: Vec::new(),
-                    id: None,
-                    role: OrdinaryRole::User,
-                    content: prompt.to_string(),
-                    phase: None,
-                    extra_body: HashMap::new(),
-                    cache_breakpoint: None,
-                });
-            }
+        if let Some(prompt) = input_obj.get("prompt").and_then(|v| v.as_str())
+            && !prompt.is_empty()
+        {
+            input_nodes.push(Node::Text {
+                logprobs: None,
+                signature: None,
+                citations: Vec::new(),
+                id: None,
+                role: OrdinaryRole::User,
+                content: prompt.to_string(),
+                phase: None,
+                extra_body: HashMap::new(),
+                cache_breakpoint: None,
+            });
         }
 
         if let Some(image_url) = input_obj.get("image").and_then(|v| v.as_str()) {
@@ -132,15 +132,16 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         parse_output_into_nodes(output, &mut output_nodes);
     }
 
-    if let Some(error) = obj.get("error").and_then(|v| v.as_str()) {
-        if !error.is_empty() && output_nodes.is_empty() {
-            output_nodes.push(Node::Refusal {
-                logprobs: None,
-                id: None,
-                content: error.to_string(),
-                extra_body: HashMap::new(),
-            });
-        }
+    if let Some(error) = obj.get("error").and_then(|v| v.as_str())
+        && !error.is_empty()
+        && output_nodes.is_empty()
+    {
+        output_nodes.push(Node::Refusal {
+            logprobs: None,
+            id: None,
+            content: error.to_string(),
+            extra_body: HashMap::new(),
+        });
     }
 
     let usage = parse_replicate_usage(obj);

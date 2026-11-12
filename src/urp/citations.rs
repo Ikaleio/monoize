@@ -140,25 +140,25 @@ impl Citation {
                 range,
                 file_id: string("file_id"),
             })
-        } else if let Some(file_id) = string("file_id").filter(|_| {
-            matches!(
-                kind,
-                "file_citation" | "container_file_citation" | "file_path"
-            )
-        }) {
-            Some(CitationSource::File {
-                citation_type: match kind {
-                    "container_file_citation" => FileCitationType::ContainerFileCitation,
-                    "file_path" => FileCitationType::FilePath,
-                    _ => FileCitationType::FileCitation,
-                },
-                file_id,
-                filename: string("filename"),
-                index: number("index"),
-                container_id: string("container_id"),
-            })
         } else {
-            None
+            string("file_id")
+                .filter(|_| {
+                    matches!(
+                        kind,
+                        "file_citation" | "container_file_citation" | "file_path"
+                    )
+                })
+                .map(|file_id| CitationSource::File {
+                    citation_type: match kind {
+                        "container_file_citation" => FileCitationType::ContainerFileCitation,
+                        "file_path" => FileCitationType::FilePath,
+                        _ => FileCitationType::FileCitation,
+                    },
+                    file_id,
+                    filename: string("filename"),
+                    index: number("index"),
+                    container_id: string("container_id"),
+                })
         };
         let Some(source) = source else {
             let answer_range = if protocol == ProviderProtocol::Gemini {
@@ -170,11 +170,11 @@ impl Citation {
                 None
             };
             let mut body = value;
-            if protocol == ProviderProtocol::Gemini {
-                if let Some(object) = body.as_object_mut() {
-                    object.remove("startIndex");
-                    object.remove("endIndex");
-                }
+            if protocol == ProviderProtocol::Gemini
+                && let Some(object) = body.as_object_mut()
+            {
+                object.remove("startIndex");
+                object.remove("endIndex");
             }
             return Self {
                 source: CitationSource::ProviderNative { body },
@@ -227,18 +227,17 @@ impl Citation {
                     return None;
                 }
                 let mut body = super::encode::sanitize_provider_item_wire_body(body);
-                if protocol == ProviderProtocol::Gemini {
-                    if let Some(object) = body.as_object_mut() {
-                        object.remove("startIndex");
-                        object.remove("endIndex");
-                        if let Some(range) = &self.answer_range {
-                            object.insert(
-                                "startIndex".into(),
-                                json!(range.start.saturating_add(offset)),
-                            );
-                            object
-                                .insert("endIndex".into(), json!(range.end.saturating_add(offset)));
-                        }
+                if protocol == ProviderProtocol::Gemini
+                    && let Some(object) = body.as_object_mut()
+                {
+                    object.remove("startIndex");
+                    object.remove("endIndex");
+                    if let Some(range) = &self.answer_range {
+                        object.insert(
+                            "startIndex".into(),
+                            json!(range.start.saturating_add(offset)),
+                        );
+                        object.insert("endIndex".into(), json!(range.end.saturating_add(offset)));
                     }
                 }
                 return Some(body);
@@ -350,17 +349,15 @@ impl Citation {
                 body
             }
         };
-        if let Some(text) = &self.cited_text {
-            if protocol == ProviderProtocol::Messages {
-                body["cited_text"] = json!(text);
-            }
+        if let Some(text) = &self.cited_text
+            && protocol == ProviderProtocol::Messages
+        {
+            body["cited_text"] = json!(text);
         }
-        if same {
-            if let Some(obj) = body.as_object_mut() {
-                for (key, value) in &self.extra_body {
-                    if !OWNED_FIELDS.contains(&key.as_str()) && !is_internal_key(key) {
-                        obj.entry(key.clone()).or_insert_with(|| value.clone());
-                    }
+        if same && let Some(obj) = body.as_object_mut() {
+            for (key, value) in &self.extra_body {
+                if !OWNED_FIELDS.contains(&key.as_str()) && !is_internal_key(key) {
+                    obj.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
         }
@@ -595,10 +592,10 @@ pub fn encode_gemini(nodes: &[super::Node]) -> Vec<Value> {
                     end: end as u64,
                 });
             }
-            if let Some(value) = citation.encode(ProviderProtocol::Gemini, offset) {
-                if !sources.contains(&value) {
-                    sources.push(value);
-                }
+            if let Some(value) = citation.encode(ProviderProtocol::Gemini, offset)
+                && !sources.contains(&value)
+            {
+                sources.push(value);
             }
         }
         offset += content.len() as u64;

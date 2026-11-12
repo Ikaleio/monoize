@@ -447,10 +447,10 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<imp
 /// Redact credentials from a DSN string.
 /// e.g. postgres://user:password@host/db → postgres://***@host/db
 fn redact_dsn(dsn: &str) -> String {
-    if let Some(at_pos) = dsn.find('@') {
-        if let Some(scheme_end) = dsn.find("://") {
-            return format!("{}://***@{}", &dsn[..scheme_end], &dsn[at_pos + 1..]);
-        }
+    if let Some(at_pos) = dsn.find('@')
+        && let Some(scheme_end) = dsn.find("://")
+    {
+        return format!("{}://***@{}", &dsn[..scheme_end], &dsn[at_pos + 1..]);
     }
     if dsn.starts_with("sqlite") {
         return dsn.to_string();

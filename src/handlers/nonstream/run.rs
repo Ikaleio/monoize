@@ -86,7 +86,7 @@ impl<'a> NonstreamRun<'a> {
                 .try_channel(&mut attempt, channel_attempt + 1, final_slot, accept)
                 .await?;
             let retry_same_channel = match outcome {
-                TryOutcome::Served(served) => return Ok(Some(served)),
+                TryOutcome::Served(served) => return Ok(Some(*served)),
                 TryOutcome::Failed { retry_same_channel } => retry_same_channel,
             };
             if !retry_same_channel {

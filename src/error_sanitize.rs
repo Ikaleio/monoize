@@ -218,7 +218,7 @@ pub fn mask_sensitive_text(text: &str) -> String {
     });
     let masked = mask_configured_hosts(masked);
     let masked = DOMAIN_PATTERN.replace_all(&masked, |captures: &regex::Captures<'_>| {
-        if is_host(&captures[0]) && !already_masked(&captures, &masked) {
+        if is_host(&captures[0]) && !already_masked(captures, &masked) {
             mask_host_for_plain_domain(&captures[0])
         } else {
             captures[0].to_string()
@@ -256,10 +256,10 @@ fn mask_configured_hosts(text: Cow<'_, str>) -> Cow<'_, str> {
             text = Cow::Owned(replaced);
         }
     }
-    if let Some(pattern) = &configured.single_label {
-        if let Cow::Owned(replaced) = pattern.replace_all(&text, "***${1}") {
-            text = Cow::Owned(replaced);
-        }
+    if let Some(pattern) = &configured.single_label
+        && let Cow::Owned(replaced) = pattern.replace_all(&text, "***${1}")
+    {
+        text = Cow::Owned(replaced);
     }
     text
 }

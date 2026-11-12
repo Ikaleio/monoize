@@ -56,7 +56,6 @@ pub use count_tokens::count_messages_tokens;
 pub use decisions::{create_decisions, create_system_one};
 pub use responses_websocket::responses_websocket;
 
-#[allow(clippy::result_large_err)]
 fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {
     if !auth.model_limits_enabled || auth.model_limits.is_empty() {
         return Ok(());
@@ -252,7 +251,6 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
 }
 
 /// SE1e: a body rejected before decoding uses the endpoint's native envelope.
-#[allow(clippy::result_large_err)]
 fn native_json_body(body: Result<Json<Value>, JsonRejection>) -> AppResult<Value> {
     body.map(|Json(body)| body).map_err(|rejection| {
         let status = rejection.status();
@@ -649,6 +647,7 @@ fn anthropic_error_response(err: AppError, request_id: Option<&str>) -> Response
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let body = anthropic_error_json(&err, &request_id);
+    let err = err.into_inner();
     let mut response = (err.status, Json(body)).into_response();
     crate::error::append_forwarded_headers(&mut response, err.forwarded_headers);
     if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
@@ -1435,7 +1434,6 @@ async fn ensure_balance_before_forward_for_attempts(
 /// M7: effective-balance preflight for replicas. Mirrors the primary's
 /// `ensure_user_can_spend` / `ensure_sub_account_can_spend` semantics while
 /// subtracting charges that are still queued for shipment to the primary.
-#[allow(clippy::result_large_err)]
 async fn ensure_replica_can_spend(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -1489,7 +1487,6 @@ async fn ensure_replica_can_spend(
     ensure_replica_user_can_spend(state, user_id, outstanding_for).await
 }
 
-#[allow(clippy::result_large_err)]
 async fn ensure_replica_user_can_spend(
     state: &AppState,
     user_id: &str,
@@ -1515,7 +1512,6 @@ async fn ensure_replica_user_can_spend(
     Ok(())
 }
 
-#[allow(clippy::result_large_err)]
 fn split_body(value: Value, known_keys: &[&str]) -> AppResult<(Value, Map<String, Value>)> {
     let known: HashSet<&str> = known_keys.iter().copied().collect();
     let obj = value.as_object().ok_or_else(|| {

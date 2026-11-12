@@ -155,8 +155,10 @@ impl Transform for ImageMarkdownToOutputTransform {
                 let mut rewritten = Vec::with_capacity(resp.output.len());
                 for node in resp.output.drain(..) {
                     match split_assistant_markdown_images(node) {
-                        Ok((text, images)) => rewritten.extend(text.into_iter().chain(images)),
-                        Err(node) => rewritten.push(node),
+                        MarkdownImageSplit::Split(text, images) => {
+                            rewritten.extend(text.into_iter().chain(images))
+                        }
+                        MarkdownImageSplit::Unchanged(node) => rewritten.push(node),
                     }
                 }
                 resp.output = rewritten;
@@ -173,9 +175,14 @@ impl Transform for ImageMarkdownToOutputTransform {
     }
 }
 
-/// Splits an assistant text node into its cleaned text (absent when empty) and the image nodes
-/// of its Markdown images, in that order. Any other node is returned unchanged as `Err`.
-fn split_assistant_markdown_images(node: Node) -> Result<(Option<Node>, Vec<Node>), Node> {
+enum MarkdownImageSplit {
+    Unchanged(Node),
+    Split(Option<Node>, Vec<Node>),
+}
+
+/// Splits an assistant text node into its cleaned text (absent when empty) and image nodes.
+/// Returns other nodes unchanged.
+fn split_assistant_markdown_images(node: Node) -> MarkdownImageSplit {
     let Node::Text {
         logprobs: _,
         signature: _,
@@ -188,7 +195,7 @@ fn split_assistant_markdown_images(node: Node) -> Result<(Option<Node>, Vec<Node
         cache_breakpoint,
     } = node
     else {
-        return Err(node);
+        return MarkdownImageSplit::Unchanged(node);
     };
     let (cleaned, images, spans) = extract_markdown_images_from_text(&content);
     let text = (!cleaned.is_empty()).then(|| {
@@ -208,7 +215,7 @@ fn split_assistant_markdown_images(node: Node) -> Result<(Option<Node>, Vec<Node
         }
     });
     let images = images.into_iter().map(assistant_image_node).collect();
-    Ok((text, images))
+    MarkdownImageSplit::Split(text, images)
 }
 
 fn assistant_image_node(source: ImageSource) -> Node {
@@ -228,8 +235,8 @@ fn rewrite_terminal_output(output: &mut Vec<TerminalNode>, state: &StreamState) 
     let mut rewritten = Vec::with_capacity(output.len());
     for TerminalNode { node_index, node } in output.drain(..) {
         let (text, images) = match split_assistant_markdown_images(node) {
-            Ok(split) => split,
-            Err(node) => {
+            MarkdownImageSplit::Split(text, images) => (text, images),
+            MarkdownImageSplit::Unchanged(node) => {
                 rewritten.push(TerminalNode { node_index, node });
                 continue;
             }

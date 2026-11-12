@@ -40,8 +40,8 @@ struct ContentBlockSlot {
 enum BlockPhase {
     /// A start block that decodes to no node; later events for it are lifecycle errors.
     Skipped,
-    Active(ActiveBlock),
-    Done(Node),
+    Active(Box<ActiveBlock>),
+    Done(Box<Node>),
 }
 
 pub(super) struct AnthropicMessagesStreamState<'a> {
@@ -294,7 +294,7 @@ impl<'a> AnthropicMessagesStreamState<'a> {
                 for event in block.start_events(node_index) {
                     self.send(event).await;
                 }
-                BlockPhase::Active(block)
+                BlockPhase::Active(Box::new(block))
             }
             None => BlockPhase::Skipped,
         };
@@ -345,7 +345,7 @@ impl<'a> AnthropicMessagesStreamState<'a> {
                     .await;
             }
         };
-        self.blocks[position].phase = BlockPhase::Done(node.clone());
+        self.blocks[position].phase = BlockPhase::Done(Box::new(node.clone()));
         self.send(UrpStreamEvent::NodeDone {
             node_index,
             node,
@@ -421,9 +421,10 @@ impl<'a> AnthropicMessagesStreamState<'a> {
             .blocks
             .iter()
             .filter_map(|slot| match &slot.phase {
-                BlockPhase::Done(node) => {
-                    Some(TerminalNode::streamed(slot.node_index, node.clone()))
-                }
+                BlockPhase::Done(node) => Some(TerminalNode::streamed(
+                    slot.node_index,
+                    node.as_ref().clone(),
+                )),
                 _ => None,
             })
             .collect();
@@ -463,11 +464,14 @@ impl<'a> AnthropicMessagesStreamState<'a> {
     /// `max_tokens` is accepted.
     fn has_invalid_tool_input(&self) -> bool {
         self.blocks.iter().any(|slot| {
-            let BlockPhase::Done(Node::ToolCall {
+            let BlockPhase::Done(node) = &slot.phase else {
+                return false;
+            };
+            let Node::ToolCall {
                 tool_type: ToolCallType::Function,
                 arguments,
                 ..
-            }) = &slot.phase
+            } = node.as_ref()
             else {
                 return false;
             };

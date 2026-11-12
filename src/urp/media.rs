@@ -132,10 +132,10 @@ pub fn protocol_matches(source: ProviderProtocol, target: ProviderProtocol) -> b
 }
 
 fn check_resource(metadata: &MediaMetadata, target: ProviderProtocol) -> Result<(), String> {
-    if let Some(resource) = &metadata.resource {
-        if !protocol_matches(resource.protocol, target) {
-            return Err("The file reference belongs to another provider protocol. Supply file bytes or a public URL.".into());
-        }
+    if let Some(resource) = &metadata.resource
+        && !protocol_matches(resource.protocol, target)
+    {
+        return Err("The file reference belongs to another provider protocol. Supply file bytes or a public URL.".into());
     }
     Ok(())
 }
@@ -165,16 +165,16 @@ fn image(
     target: ProviderProtocol,
     nested: bool,
 ) -> Result<(), String> {
-    if let ImageSource::Url { url, detail } = source {
-        if url.starts_with("data:") {
-            let (mime, data) = parse_data_url(url)
-                .ok_or("Image data URL must contain a MIME type and Base64 bytes.")?;
-            metadata.detail = detail.take().or(metadata.detail.take());
-            *source = ImageSource::Base64 {
-                media_type: mime.into(),
-                data: data.into(),
-            };
-        }
+    if let ImageSource::Url { url, detail } = source
+        && url.starts_with("data:")
+    {
+        let (mime, data) = parse_data_url(url)
+            .ok_or("Image data URL must contain a MIME type and Base64 bytes.")?;
+        metadata.detail = detail.take().or(metadata.detail.take());
+        *source = ImageSource::Base64 {
+            media_type: mime.into(),
+            data: data.into(),
+        };
     }
     if matches!(source, ImageSource::Base64 { .. }) {
         metadata.resource = None;
@@ -459,21 +459,20 @@ fn bound_document_parts(
         if let ToolResultContent::Image {
             metadata: child, ..
         } = part
+            && let Some(resource) = &mut child.resource
         {
-            if let Some(resource) = &mut child.resource {
-                let parent = metadata
-                    .resource
-                    .as_ref()
-                    .ok_or("Compound document has no source provenance for its private media.")?;
-                if !protocol_matches(resource.protocol, parent.protocol) {
-                    return Err(
-                        "Compound document media belongs to a different source protocol.".into(),
-                    );
-                }
-                resource.provider_id = parent.provider_id.clone();
-                resource.channel_id = parent.channel_id.clone();
-                resource.credential_scope = parent.credential_scope.clone();
+            let parent = metadata
+                .resource
+                .as_ref()
+                .ok_or("Compound document has no source provenance for its private media.")?;
+            if !protocol_matches(resource.protocol, parent.protocol) {
+                return Err(
+                    "Compound document media belongs to a different source protocol.".into(),
+                );
             }
+            resource.provider_id = parent.provider_id.clone();
+            resource.channel_id = parent.channel_id.clone();
+            resource.credential_scope = parent.credential_scope.clone();
         }
     }
     Ok(parts)

@@ -108,7 +108,7 @@ impl From<OpenAiResponsesUsage> for Usage {
                 (details.cached_tokens > 0
                     || cache_creation_tokens > 0
                     || details.tool_prompt_tokens > 0)
-                    .then(|| InputDetails {
+                    .then_some(InputDetails {
                         tool_prompt_modality_breakdown: None,
                         standard_tokens: 0,
                         cache_read_tokens: details.cached_tokens,
@@ -128,7 +128,7 @@ impl From<OpenAiResponsesUsage> for Usage {
                 (details.reasoning_tokens > 0
                     || details.accepted_prediction_tokens > 0
                     || details.rejected_prediction_tokens > 0)
-                    .then(|| OutputDetails {
+                    .then_some(OutputDetails {
                         standard_tokens: 0,
                         reasoning_tokens: details.reasoning_tokens,
                         accepted_prediction_tokens: details.accepted_prediction_tokens,

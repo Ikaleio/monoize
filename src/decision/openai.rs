@@ -74,7 +74,10 @@ fn decode_part(path: &str, part: &Value) -> Result<InputPart, String> {
         Some("input_text") => Ok(InputPart::Text(string_field("text")?)),
         Some("input_image") => Ok(InputPart::Image {
             image_url: string_field("image_url")?,
-            detail: part.get("detail").and_then(Value::as_str).map(str::to_string),
+            detail: part
+                .get("detail")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         }),
         _ => Err(format!("{path}.type must be input_text or input_image")),
     }
@@ -233,7 +236,10 @@ fn encode_question(question: &Question) -> Value {
     Value::Object(out)
 }
 
-pub(super) fn decode_answers(request: &DecisionRequest, body: &Value) -> Result<Vec<Answer>, String> {
+pub(super) fn decode_answers(
+    request: &DecisionRequest,
+    body: &Value,
+) -> Result<Vec<Answer>, String> {
     let answers = body
         .get("answers")
         .and_then(Value::as_array)
@@ -260,7 +266,11 @@ pub(super) fn decode_answers(request: &DecisionRequest, body: &Value) -> Result<
         .collect()
 }
 
-fn decode_answer(path: &str, question: &Question, answer: &Map<String, Value>) -> Result<Answer, String> {
+fn decode_answer(
+    path: &str,
+    question: &Question,
+    answer: &Map<String, Value>,
+) -> Result<Answer, String> {
     let answer_type = answer.get("type").and_then(Value::as_str);
     if answer_type == Some("refusal") {
         return Ok(Answer::Refusal);

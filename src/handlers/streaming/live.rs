@@ -130,7 +130,7 @@ impl StreamRequest {
                 turn.state
                     .set_upstream_kind(crate::upstream_websocket::UPSTREAM_KIND_WEBSOCKET);
                 Ok(Some(StreamUpstreamSource::ResponsesWebSocket {
-                    source,
+                    source: Box::new(source),
                     turn: turn.clone(),
                 }))
             }
@@ -399,7 +399,7 @@ impl StreamForward {
         )
         .await;
         mark_channel_success(&self.request.state, attempt).await;
-        Ok(SlotOutcome::Live(LiveStream {
+        Ok(SlotOutcome::Live(Box::new(LiveStream {
             committed,
             runtime_metrics,
             namespace_aliases,
@@ -407,7 +407,7 @@ impl StreamForward {
             estimated_input_tokens,
             mask_sensitive_info,
             capture,
-        }))
+        })))
     }
 
     /// STRM-2b: a stream that failed before its first output event fails the
@@ -492,7 +492,7 @@ impl StreamDecoder {
                 StreamUpstreamSource::ResponsesWebSocket { source, turn } => {
                     let (frame_tx, frame_rx) = mpsc::channel(32);
                     crate::upstream_websocket::spawn_turn_feeder(
-                        source,
+                        *source,
                         turn,
                         frame_tx,
                         idle_timeout_ms,

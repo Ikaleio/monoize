@@ -8,7 +8,6 @@ pub(crate) fn now_ts() -> i64 {
 
 /// PX6/PX7: effective outbound client for one attempt's Channel (custom proxy wins,
 /// then node-global, else direct). Construction failure fails closed.
-#[allow(clippy::result_large_err)]
 pub(super) fn client_http_for_attempt(
     state: &AppState,
     attempt: &MonoizeAttempt,
@@ -127,30 +126,30 @@ pub(super) async fn resolve_model_suffix(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    settings_entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    settings_entries.sort_by_key(|entry| std::cmp::Reverse(entry.0.len()));
 
     for (suffix, effort) in settings_entries
         .iter()
         .chain(BUILTIN_REASONING_EFFORT_SUFFIXES.iter())
     {
-        if let Some(base) = requested_model.strip_suffix(suffix) {
-            if !base.is_empty() {
-                match req.reasoning.as_mut() {
-                    Some(r) => {
-                        if r.effort.is_none() {
-                            r.effort = Some(effort.to_string());
-                        }
-                    }
-                    None => {
-                        req.reasoning = Some(urp::ReasoningConfig {
-                            effort: Some(effort.to_string()),
-                            extra_body: std::collections::HashMap::new(),
-                            ..Default::default()
-                        });
+        if let Some(base) = requested_model.strip_suffix(suffix)
+            && !base.is_empty()
+        {
+            match req.reasoning.as_mut() {
+                Some(r) => {
+                    if r.effort.is_none() {
+                        r.effort = Some(effort.to_string());
                     }
                 }
-                return Ok(normalized);
+                None => {
+                    req.reasoning = Some(urp::ReasoningConfig {
+                        effort: Some(effort.to_string()),
+                        extra_body: std::collections::HashMap::new(),
+                        ..Default::default()
+                    });
+                }
             }
+            return Ok(normalized);
         }
     }
     Ok(normalized)
@@ -167,17 +166,18 @@ async fn normalized_logical_model_for_matching_with_map(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    settings_entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    settings_entries.sort_by_key(|entry| std::cmp::Reverse(entry.0.len()));
 
     let mut candidates = vec![requested_model.to_string()];
     for (suffix, _effort) in settings_entries
         .iter()
         .chain(BUILTIN_REASONING_EFFORT_SUFFIXES.iter())
     {
-        if let Some(base) = requested_model.strip_suffix(suffix) {
-            if !base.is_empty() && !candidates.iter().any(|candidate| candidate == base) {
-                candidates.push(base.to_string());
-            }
+        if let Some(base) = requested_model.strip_suffix(suffix)
+            && !base.is_empty()
+            && !candidates.iter().any(|candidate| candidate == base)
+        {
+            candidates.push(base.to_string());
         }
     }
     let available = state
@@ -982,7 +982,11 @@ pub(super) fn anthropic_client_headers(headers: &HeaderMap) -> urp::AnthropicCli
         let Ok(value) = value.to_str() else {
             continue;
         };
-        for token in value.split(',').map(str::trim).filter(|token| !token.is_empty()) {
+        for token in value
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
             if !beta.iter().any(|existing| existing == token) {
                 beta.push(token.to_string());
             }
@@ -1825,7 +1829,7 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
         "upstream status {status}: {}",
         crate::error_sanitize::truncate_error_detail(&err.message)
     );
-    let forwarded_headers = err.forwarded_headers;
+    let forwarded_headers = err.forwarded_headers.into_vec();
     let mut app_err = AppError::new(status, "upstream_error", client_message)
         .with_internal_message(internal_message)
         .with_upstream_error(

@@ -192,9 +192,9 @@ pub fn write_modality(value: &mut Value, modality: &Option<ModalityBreakdown>) {
     ] {
         object.remove(key);
     }
-    if let Some(modality) = modality {
-        if let Ok(Value::Object(fields)) = serde_json::to_value(modality) {
-            object.extend(fields);
-        }
+    if let Some(modality) = modality
+        && let Ok(Value::Object(fields)) = serde_json::to_value(modality)
+    {
+        object.extend(fields);
     }
 }

@@ -109,12 +109,10 @@ fn forwarded_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
     {
         let mut addresses = Vec::new();
         for element in value.split(',') {
-            let Some(raw) = element.split(';').find_map(|part| {
+            let raw = element.split(';').find_map(|part| {
                 let (name, value) = part.trim().split_once('=')?;
                 name.eq_ignore_ascii_case("for").then_some(value.trim())
-            }) else {
-                return None;
-            };
+            })?;
             addresses.push(parse_forwarded_address(raw)?);
         }
         return (!addresses.is_empty()).then_some(addresses);

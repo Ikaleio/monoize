@@ -102,24 +102,23 @@ impl Transform for PromptAppendEmptyUserTransform {
             .as_any()
             .downcast_ref::<Config>()
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
-        if let UrpData::Request(req) = data {
-            if req
+        if let UrpData::Request(req) = data
+            && req
                 .input
                 .last()
                 .is_some_and(|node| node.role() == Some(OrdinaryRole::Assistant))
-            {
-                req.input.push(Node::Text {
-                    logprobs: None,
-                    signature: None,
-                    citations: Vec::new(),
-                    id: None,
-                    role: OrdinaryRole::User,
-                    content: cfg.content.clone(),
-                    phase: None,
-                    extra_body: std::collections::HashMap::new(),
-                    cache_breakpoint: None,
-                });
-            }
+        {
+            req.input.push(Node::Text {
+                logprobs: None,
+                signature: None,
+                citations: Vec::new(),
+                id: None,
+                role: OrdinaryRole::User,
+                content: cfg.content.clone(),
+                phase: None,
+                extra_body: std::collections::HashMap::new(),
+                cache_breakpoint: None,
+            });
         }
         Ok(())
     }

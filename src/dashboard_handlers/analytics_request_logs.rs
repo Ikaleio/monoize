@@ -325,13 +325,15 @@ pub async fn get_dashboard_analytics(
                     "analytics token count overflow",
                 )
             })?;
-            *cache_read = cache_read.checked_add(row.cache_read_tokens).ok_or_else(|| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "analytics token count overflow",
-                )
-            })?;
+            *cache_read = cache_read
+                .checked_add(row.cache_read_tokens)
+                .ok_or_else(|| {
+                    AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "analytics token count overflow",
+                    )
+                })?;
         }
         let cost = cost_by_model_buckets[idx]
             .entry(row.model.clone())
@@ -492,7 +494,7 @@ pub async fn stream_request_logs(
         .filter(|entry| is_admin || entry.value().user_id == user_id)
         .map(|entry| entry.value().clone())
         .collect();
-    initial_pending.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    initial_pending.sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
     let initial_event = if initial_pending.is_empty() {
         Event::default().comment("ready")
     } else {

@@ -901,13 +901,12 @@ pub(crate) fn pick_best_variant<'a>(
     model_id: &str,
     variants: &'a [SyncProviderVariant],
 ) -> &'a SyncProviderVariant {
-    if let Some(official) = official_provider_for_model(model_id) {
-        if let Some(v) = variants
+    if let Some(official) = official_provider_for_model(model_id)
+        && let Some(v) = variants
             .iter()
             .find(|v| v.provider_id == official && positive_cost_input(v).is_some())
-        {
-            return v;
-        }
+    {
+        return v;
     }
 
     variants
@@ -1055,20 +1054,18 @@ pub fn normalize_model_id(raw: &str, provider_hint: Option<&str>) -> String {
         }
     }
 
-    if let Some((prefix, _)) = segment.split_once("--") {
-        if is_known_provider_prefix(prefix) {
-            if let Some(rest) = strip_provider_prefix_once(&segment, prefix) {
-                segment = rest.to_string();
-            }
-        }
+    if let Some((prefix, _)) = segment.split_once("--")
+        && is_known_provider_prefix(prefix)
+        && let Some(rest) = strip_provider_prefix_once(&segment, prefix)
+    {
+        segment = rest.to_string();
     }
 
-    if let Some((prefix, _)) = segment.split_once('.') {
-        if is_known_provider_prefix(prefix) {
-            if let Some(rest) = strip_provider_prefix_once(&segment, prefix) {
-                segment = rest.to_string();
-            }
-        }
+    if let Some((prefix, _)) = segment.split_once('.')
+        && is_known_provider_prefix(prefix)
+        && let Some(rest) = strip_provider_prefix_once(&segment, prefix)
+    {
+        segment = rest.to_string();
     }
 
     segment

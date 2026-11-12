@@ -109,10 +109,7 @@ impl Transform for ReasoningContentToSummaryTransform {
 fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState) {
     match event {
         UrpStreamEvent::NodeDelta {
-            node_index,
-            delta,
-            extra_body: _,
-            ..
+            node_index, delta, ..
         } => {
             let NodeDelta::Reasoning {
                 content,
@@ -135,10 +132,10 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
         UrpStreamEvent::NodeDone {
             node_index, node, ..
         } => {
-            if let Node::Reasoning { encrypted, .. } = node {
-                if encrypted.is_some() {
-                    state.encrypted_nodes.insert(*node_index);
-                }
+            if let Node::Reasoning { encrypted, .. } = node
+                && encrypted.is_some()
+            {
+                state.encrypted_nodes.insert(*node_index);
             }
             rewrite_reasoning_node(node);
         }

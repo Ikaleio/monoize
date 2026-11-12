@@ -102,8 +102,8 @@ impl ReasoningSummaryLifecycle {
         if let Some(open) = self.open {
             self.close_part(wire, target, open, None).await?;
         }
-        if !self.parts.contains_key(&index) {
-            self.parts.insert(index, SummaryPart::default());
+        if let std::collections::btree_map::Entry::Vacant(e) = self.parts.entry(index) {
+            e.insert(SummaryPart::default());
             let part = added_part
                 .cloned()
                 .unwrap_or_else(|| json!({ "type": "summary_text", "text": "" }));

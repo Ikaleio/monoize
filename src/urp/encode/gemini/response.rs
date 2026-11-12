@@ -32,13 +32,7 @@ pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Resul
 
 /// The Parts of one streamed node. A single node has no adjacent Part to bind, so its signature
 /// carriers stay standalone.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used only by the Gemini stream encoder, which has no downstream route"
-    )
-)]
+#[cfg(test)]
 pub(crate) fn encode_response_node_parts(node: &Node) -> Result<Vec<Value>, String> {
     let mut parts: Vec<Value> = prepare_response_nodes(std::slice::from_ref(node))?
         .iter()

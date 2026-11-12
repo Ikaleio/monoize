@@ -196,10 +196,9 @@ pub(crate) fn parse_image_usage(usage_value: &Value) -> Option<Usage> {
         if let Some(od) = usage_obj
             .get("output_tokens_details")
             .and_then(|v| v.as_object())
+            && let Some(mb) = parse_modality_breakdown(od)
         {
-            if let Some(mb) = parse_modality_breakdown(od) {
-                details.modality_breakdown = Some(mb);
-            }
+            details.modality_breakdown = Some(mb);
         }
         Some(details)
     };

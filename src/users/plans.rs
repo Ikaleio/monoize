@@ -479,7 +479,7 @@ impl UserStore {
         let mut plans = Vec::with_capacity(rows.len());
         for row in rows {
             let id: String = row.try_get("", "id").map_err(sql_err)?;
-            let prices = self.load_plan_prices_on(&*self.db.read(), &id).await?;
+            let prices = self.load_plan_prices_on(self.db.read(), &id).await?;
             plans.push(row_to_plan(&row, prices)?);
         }
         Ok(plans)
@@ -505,7 +505,7 @@ impl UserStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let prices = self.load_plan_prices_on(&*read, id).await?;
+        let prices = self.load_plan_prices_on(read, id).await?;
         Ok(Some(row_to_plan(&row, prices)?))
     }
 
@@ -892,7 +892,7 @@ impl UserStore {
     ) -> Result<Option<Vec<String>>, String> {
         let read = self.db.read();
         let Some(subscription) = self
-            .active_subscription_on(&*read, user_id, Utc::now(), false)
+            .active_subscription_on(read, user_id, Utc::now(), false)
             .await?
         else {
             return Ok(None);
@@ -938,12 +938,12 @@ impl UserStore {
         let now = Utc::now();
         let read = self.db.read();
         let Some(subscription) = self
-            .active_subscription_on(&*read, user_id, now, false)
+            .active_subscription_on(read, user_id, now, false)
             .await?
         else {
             return Ok(None);
         };
-        self.subscription_response_on(&*read, subscription, now)
+        self.subscription_response_on(read, subscription, now)
             .await
             .map(Some)
     }
@@ -1227,7 +1227,7 @@ impl UserStore {
         let now = Utc::now();
         let read = self.db.read();
         let Some(subscription) = self
-            .active_subscription_on(&*read, user_id, now, false)
+            .active_subscription_on(read, user_id, now, false)
             .await?
         else {
             return Ok(false);
@@ -1238,7 +1238,7 @@ impl UserStore {
         {
             return Ok(false);
         }
-        let usage = self.usage_snapshot_on(&*read, &subscription, now).await?;
+        let usage = self.usage_snapshot_on(read, &subscription, now).await?;
         let remaining = Self::remaining_capacity(&subscription, usage.sums)?;
         let pending = subscription
             .multiplier

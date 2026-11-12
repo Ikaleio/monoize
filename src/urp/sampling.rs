@@ -73,10 +73,9 @@ pub fn encode_request(
     if matches!(
         protocol,
         ProviderProtocol::ChatCompletion | ProviderProtocol::Messages
-    ) {
-        if let Some(value) = config.top_k {
-            body.insert("top_k".into(), Value::from(value));
-        }
+    ) && let Some(value) = config.top_k
+    {
+        body.insert("top_k".into(), Value::from(value));
     }
     if protocol == ProviderProtocol::ChatCompletion {
         if let Some(value) = config.seed {

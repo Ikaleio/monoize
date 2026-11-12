@@ -17,7 +17,9 @@ pub(super) fn validate_shape(body: &Map<String, Value>) -> Result<(), String> {
 pub(super) fn decode_request(body: &Map<String, Value>) -> Result<DecisionRequest, String> {
     let input = match body.get("state") {
         Some(Value::String(text)) => DecisionInput::Text(text.clone()),
-        Some(value @ (Value::Object(_) | Value::Array(_))) => DecisionInput::Structured(value.clone()),
+        Some(value @ (Value::Object(_) | Value::Array(_))) => {
+            DecisionInput::Structured(value.clone())
+        }
         _ => return Err("state must be a string, object, or array".to_string()),
     };
     let Some(Value::Object(entries)) = body.get("questions") else {
@@ -166,7 +168,10 @@ fn encode_question(question: &Question) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
-pub(super) fn decode_answers(request: &DecisionRequest, body: &Value) -> Result<Vec<Answer>, String> {
+pub(super) fn decode_answers(
+    request: &DecisionRequest,
+    body: &Value,
+) -> Result<Vec<Answer>, String> {
     let answers = body
         .get("answers")
         .and_then(Value::as_object)
@@ -185,7 +190,11 @@ pub(super) fn decode_answers(request: &DecisionRequest, body: &Value) -> Result<
         .collect()
 }
 
-fn decode_answer(path: &str, question: &Question, answer: &Map<String, Value>) -> Result<Answer, String> {
+fn decode_answer(
+    path: &str,
+    question: &Question,
+    answer: &Map<String, Value>,
+) -> Result<Answer, String> {
     let answer_type = answer.get("type").and_then(Value::as_str);
     if answer_type == Some("refusal") {
         return Ok(Answer::Refusal);
@@ -268,7 +277,10 @@ fn encode_answer(question: &Question, answer: &Answer) -> Value {
             QuestionKind::Choice(options),
         ) => {
             out.insert("type".to_string(), Value::from("choice"));
-            out.insert("choice".to_string(), Value::from(options[*index].value.key()));
+            out.insert(
+                "choice".to_string(),
+                Value::from(options[*index].value.key()),
+            );
             let probabilities = options
                 .iter()
                 .zip(probabilities)

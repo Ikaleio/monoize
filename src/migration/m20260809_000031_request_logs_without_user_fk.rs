@@ -493,12 +493,11 @@ async fn request_log_columns(
         }
         _ => return Ok(BTreeSet::new()),
     };
-    Ok(tx
-        .query_all(Statement::from_string(backend, sql.to_string()))
+    tx.query_all(Statement::from_string(backend, sql.to_string()))
         .await?
         .into_iter()
         .map(|row| row.try_get::<String>("", "name"))
-        .collect::<Result<_, _>>()?)
+        .collect::<Result<_, _>>()
 }
 
 async fn execute_statements(

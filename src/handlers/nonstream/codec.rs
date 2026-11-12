@@ -27,7 +27,6 @@ fn has_responses_state_reference(req: &urp::UrpRequest) -> bool {
         })
 }
 
-#[allow(clippy::result_large_err)]
 pub(in crate::handlers) fn encode_request_for_provider(
     req: &mut urp::UrpRequest,
     attempt: &MonoizeAttempt,
@@ -136,7 +135,6 @@ pub(in crate::handlers) fn encode_request_for_provider(
     Ok(value)
 }
 
-#[allow(clippy::result_large_err)]
 pub(in crate::handlers) fn decode_response_from_provider(
     provider_type: ProviderType,
     value: &Value,
@@ -180,24 +178,22 @@ pub(in crate::handlers) fn decode_response_from_provider(
     if matches!(provider_type, ProviderType::Messages | ProviderType::Gemini) {
         restore_messages_custom_tool_calls(request, &mut decoded);
     }
-    if provider_type == ProviderType::ChatCompletion {
-        if let Some(mime) = request
+    if provider_type == ProviderType::ChatCompletion
+        && let Some(mime) = request
             .extra_body
             .get("audio")
             .and_then(|v| v.get("format"))
             .and_then(Value::as_str)
             .and_then(urp::media::audio_mime_for_format)
-        {
-            for node in &mut decoded.output {
-                if let urp::Node::Audio {
-                    source: urp::AudioSource::Base64 { media_type, .. },
-                    ..
-                } = node
-                {
-                    if media_type == "audio/unknown" {
-                        *media_type = mime.into();
-                    }
-                }
+    {
+        for node in &mut decoded.output {
+            if let urp::Node::Audio {
+                source: urp::AudioSource::Base64 { media_type, .. },
+                ..
+            } = node
+                && media_type == "audio/unknown"
+            {
+                *media_type = mime.into();
             }
         }
     }

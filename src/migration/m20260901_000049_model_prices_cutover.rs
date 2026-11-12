@@ -77,10 +77,10 @@ fn nano_per_token_to_usd_per_1m(raw: &str) -> Option<String> {
 fn normalize_model_key(model_id: &str, suffixes: &[String]) -> String {
     let trimmed = model_id.trim();
     for suffix in suffixes {
-        if let Some(base) = trimmed.strip_suffix(suffix.as_str()) {
-            if !base.is_empty() {
-                return base.to_string();
-            }
+        if let Some(base) = trimmed.strip_suffix(suffix.as_str())
+            && !base.is_empty()
+        {
+            return base.to_string();
         }
     }
     trimmed.to_string()

@@ -969,10 +969,8 @@ impl RequestLogBatcher {
             .clone()
             .ok_or(RequestLogAdmissionError::InvalidReservation)?;
         let entry = SpoolRequestLog::from_log(stable_id, &fallback_log);
-        let encoded = encode_reserved_spool_entry(
-            &entry,
-            reservation.inner.bytes.load(Ordering::Acquire),
-        )?;
+        let encoded =
+            encode_reserved_spool_entry(&entry, reservation.inner.bytes.load(Ordering::Acquire))?;
         let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
         reservation.begin_arm(&self.admitted_bytes)?;
         let tmp = self.new_spool_admission_temp_path();
@@ -1932,10 +1930,7 @@ struct SnapshotCacheInner<T> {
 
 impl<T> SnapshotCacheInner<T> {
     fn fresh(&self) -> Option<Arc<T>> {
-        let published = self
-            .published
-            .read()
-            .unwrap_or_else(|err| err.into_inner());
+        let published = self.published.read().unwrap_or_else(|err| err.into_inner());
         let snapshot = published.as_ref()?;
         (snapshot.generation == self.generation.load(Ordering::Acquire)
             && snapshot.load_started_at.elapsed() <= self.ttl)
@@ -2271,8 +2266,7 @@ fn write_synced_then_rename(
             .create_new(true)
             .open(tmp)
             .map_err(|error| error.to_string())?;
-        file.write_all(encoded)
-            .map_err(|error| error.to_string())?;
+        file.write_all(encoded).map_err(|error| error.to_string())?;
         file.sync_all().map_err(|error| error.to_string())?;
         std::fs::rename(tmp, path).map_err(|error| error.to_string())
     })();

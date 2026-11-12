@@ -73,17 +73,17 @@ pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) {
             continue;
         };
         consumed.push(index);
-        if let Some(indices) = calls.get(&call_id).filter(|indices| indices.len() == 1) {
-            if let Some(signature) = encrypted.take() {
-                signatures.push((indices[0], signature));
-            }
+        if let Some(indices) = calls.get(&call_id).filter(|indices| indices.len() == 1)
+            && let Some(signature) = encrypted.take()
+        {
+            signatures.push((indices[0], signature));
         }
     }
     for (index, payload) in signatures {
-        if let Node::ToolCall { signature, .. } = &mut nodes[index] {
-            if signature.is_none() {
-                *signature = Some(payload);
-            }
+        if let Node::ToolCall { signature, .. } = &mut nodes[index]
+            && signature.is_none()
+        {
+            *signature = Some(payload);
         }
     }
     let mut index = 0;
@@ -895,10 +895,9 @@ mod tests {
                 if let UrpStreamEvent::NodeStart { node_index, .. }
                 | UrpStreamEvent::NodeDelta { node_index, .. }
                 | UrpStreamEvent::NodeDone { node_index, .. } = event
+                    && !first_indices.contains(&node_index)
                 {
-                    if !first_indices.contains(&node_index) {
-                        first_indices.push(node_index);
-                    }
+                    first_indices.push(node_index);
                 }
             }
             assert_eq!(first_indices, vec![0, 1, 2], "{mode}");

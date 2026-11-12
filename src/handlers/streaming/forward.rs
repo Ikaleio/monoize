@@ -107,14 +107,14 @@ pub(super) enum SlotOutcome {
     Retry,
     /// The slot failed and the attempt is over.
     NextAttempt,
-    Synthetic(SyntheticStream),
-    Live(LiveStream),
+    Synthetic(Box<SyntheticStream>),
+    Live(Box<LiveStream>),
 }
 
 enum AttemptOutcome {
     Exhausted,
-    Synthetic(MonoizeAttempt, AttemptPlan, SyntheticStream),
-    Live(MonoizeAttempt, AttemptPlan, LiveStream),
+    Synthetic(MonoizeAttempt, AttemptPlan, Box<SyntheticStream>),
+    Live(MonoizeAttempt, AttemptPlan, Box<LiveStream>),
 }
 
 /// RCD-D6: one attempt's capture dump. Callers build it only while a capture
@@ -227,10 +227,10 @@ pub(in crate::handlers) async fn forward_stream_typed(
         match forward.run_attempt(attempt, final_attempt).await? {
             AttemptOutcome::Exhausted => {}
             AttemptOutcome::Synthetic(attempt, plan, stream) => {
-                return Ok(forward.spawn_synthetic(attempt, plan, stream));
+                return Ok(forward.spawn_synthetic(attempt, plan, *stream));
             }
             AttemptOutcome::Live(attempt, plan, stream) => {
-                return Ok(forward.spawn_live(attempt, plan, stream));
+                return Ok(forward.spawn_live(attempt, plan, *stream));
             }
         }
     }

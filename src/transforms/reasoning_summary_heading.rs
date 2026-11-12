@@ -281,7 +281,7 @@ fn apply_heading_to_summary(summary: &mut Option<String>, cfg: &Config, keep_liv
     let title = if keep_live_heading || !cfg.derive_title {
         cfg.default_title.clone()
     } else {
-        sanitize_title(&derive_title_candidate(text), cfg.max_title_chars)
+        sanitize_title(derive_title_candidate(text), cfg.max_title_chars)
     };
     *text = prefix_heading(&title, text);
 }

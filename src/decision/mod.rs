@@ -197,7 +197,9 @@ impl DecisionUsage {
             input_tokens: count(usage.and_then(|usage| usage.get("input_tokens"))),
             output_tokens: count(usage.and_then(|usage| usage.get("output_tokens"))),
             cached_tokens: count(details.and_then(|details| details.get("cached_tokens"))),
-            cache_write_tokens: count(details.and_then(|details| details.get("cache_write_tokens"))),
+            cache_write_tokens: count(
+                details.and_then(|details| details.get("cache_write_tokens")),
+            ),
         }
     }
 }
@@ -213,7 +215,10 @@ fn text(value: &Value) -> String {
 /// DR-B11: System One question keys for `questions`, in question order.
 fn system_one_keys(questions: &[Question]) -> Result<Vec<String>, String> {
     let mut used = std::collections::HashSet::new();
-    for name in questions.iter().filter_map(|question| question.name.as_deref()) {
+    for name in questions
+        .iter()
+        .filter_map(|question| question.name.as_deref())
+    {
         if !used.insert(name.to_string()) {
             return Err(format!("duplicate question name: {name}"));
         }

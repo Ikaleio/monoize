@@ -252,7 +252,7 @@ struct Served<T> {
 
 /// How one upstream try ended when it did not end the request.
 enum TryOutcome<T> {
-    Served(Served<T>),
+    Served(Box<Served<T>>),
     /// The failure is recorded; `retry_same_channel` allows another try on
     /// the same Channel (RTA-4/RTA-5).
     Failed {

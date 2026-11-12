@@ -42,7 +42,7 @@ impl NonstreamRun<'_> {
             mismatched_upstream_response_model(&call.req.model, &observed_response_model);
         self.settle(attempt, call, resp, upstream_response_model, accept)
             .await
-            .map(TryOutcome::Served)
+            .map(|served| TryOutcome::Served(Box::new(served)))
     }
 
     /// The decoded response and the model the upstream reported for it.

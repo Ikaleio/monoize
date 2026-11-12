@@ -320,8 +320,7 @@ impl PartialJsonInput {
         if !self.saw_delta {
             return body;
         }
-        let input =
-            serde_json::from_str(&self.assembled).unwrap_or_else(|_| Value::String(self.assembled));
+        let input = serde_json::from_str(&self.assembled).unwrap_or(Value::String(self.assembled));
         if let Some(object) = body.as_object_mut() {
             object.insert("input".to_string(), input);
         }

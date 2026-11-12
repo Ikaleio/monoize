@@ -265,7 +265,7 @@ pub(crate) async fn increment_estimated_output_tokens(
         return;
     };
     let mut guard = runtime_metrics.lock().await;
-    guard.estimated_output_tokens += (chars + 3) / 4;
+    guard.estimated_output_tokens += chars.div_ceil(4);
 }
 
 pub(crate) async fn record_visible_output_delta(

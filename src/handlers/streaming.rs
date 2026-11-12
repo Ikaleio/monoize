@@ -25,7 +25,7 @@ use synthetic::*;
 enum StreamUpstreamSource {
     Http(reqwest::Response),
     ResponsesWebSocket {
-        source: crate::upstream_websocket::ResponsesWsTurnSource,
+        source: Box<crate::upstream_websocket::ResponsesWsTurnSource>,
         turn: crate::upstream_websocket::ResponsesWsTurn,
     },
     /// WS2c/WS6: synthetic Responses frames for a warmup without an upstream.

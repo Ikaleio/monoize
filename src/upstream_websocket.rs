@@ -624,7 +624,9 @@ impl ResponsesWsLane {
     }
 
     pub(crate) fn has_successor(&self) -> bool {
-        self.successor.lock().is_ok_and(|successor| successor.is_some())
+        self.successor
+            .lock()
+            .is_ok_and(|successor| successor.is_some())
     }
 
     async fn lock_slot(&self) -> OwnedMutexGuard<ResponsesWsSlot> {
@@ -659,11 +661,11 @@ impl ResponsesWsLane {
 
 /// WS2h item 6: reads a pinned session between turns so late notifications
 /// reach the client attributed to their own response.
-async fn watch_idle_session(mut slot: OwnedMutexGuard<ResponsesWsSlot>, lane: Arc<ResponsesWsLane>) {
-    loop {
-        let Some(session) = slot.session.as_mut() else {
-            break;
-        };
+async fn watch_idle_session(
+    mut slot: OwnedMutexGuard<ResponsesWsSlot>,
+    lane: Arc<ResponsesWsLane>,
+) {
+    while let Some(session) = slot.session.as_mut() {
         tokio::select! {
             biased;
             _ = lane.wake.notified() => break,
@@ -701,7 +703,10 @@ fn relay_idle_frame(slot: &mut ResponsesWsSlot, lane: &ResponsesWsLane, text: &s
     }
     capture_turn_state(slot, &value);
     map_known_response_ids(&mut value, &slot.public_ids);
-    let _ = lane.relay.send(ResponsesWsRelay { value, post_terminal: true });
+    let _ = lane.relay.send(ResponsesWsRelay {
+        value,
+        post_terminal: true,
+    });
     true
 }
 
@@ -859,7 +864,10 @@ pub(crate) struct UpstreamWsTarget {
 
 pub(crate) enum TurnOpenError {
     /// WS2c: no `101`; the untouched encoded body is returned for HTTP fallback.
-    Handshake { error: HandshakeError, body: Value },
+    Handshake {
+        error: HandshakeError,
+        body: Value,
+    },
     Send(String),
 }
 
@@ -1067,7 +1075,10 @@ fn incremental_create(
     // items, proven by item id; anything else needs the full create.
     for ((kind, id), item) in slot.last_output.iter().zip(&full_input[basis..replayed]) {
         let id = id.as_deref()?;
-        let item_kind = item.get("type").and_then(Value::as_str).unwrap_or("message");
+        let item_kind = item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("message");
         if item_kind != kind || item.get("id").and_then(Value::as_str) != Some(id) {
             return None;
         }
@@ -1235,7 +1246,8 @@ async fn recv_steer(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> Option<V
 impl TurnFeeder {
     async fn run(mut self) {
         let mut steer_rx = self.turn.steer.lock().ok().and_then(|mut rx| rx.take());
-        if self.turn.is_disconnected() || *self.turn.control.borrow() != ResponsesWsControl::Running {
+        if self.turn.is_disconnected() || *self.turn.control.borrow() != ResponsesWsControl::Running
+        {
             self.interrupt_requested = true;
         }
         let keep = 'feed: {
@@ -1396,7 +1408,8 @@ impl TurnFeeder {
         match kind.as_str() {
             "response.interrupt.accepted" | "response.interrupt.failed" => {
                 if kind == "response.interrupt.failed"
-                    && value.get("response_id").and_then(Value::as_str) == self.upstream_id.as_deref()
+                    && value.get("response_id").and_then(Value::as_str)
+                        == self.upstream_id.as_deref()
                 {
                     self.signal_discard_requested(false).await;
                 }
@@ -1470,13 +1483,18 @@ impl TurnFeeder {
             && !self.sent_steers.is_empty()
             && matches!(
                 value.pointer("/error/code").and_then(Value::as_str),
-                Some("invalid_request_type" | "unsupported_request_type" | "unsupported_event_type")
+                Some(
+                    "invalid_request_type" | "unsupported_request_type" | "unsupported_event_type"
+                )
             )
         {
             // WS2i: an upstream without steering rejects the event type while its
             // response keeps streaming; this error belongs to the steer.
             let input = self.sent_steers.pop_front().unwrap_or(Value::Null);
-            self.turn.state.steer_rejected.store(true, Ordering::Release);
+            self.turn
+                .state
+                .steer_rejected
+                .store(true, Ordering::Release);
             if let Ok(mut channels) = STEERING_REJECTING_CHANNELS.lock() {
                 channels.insert(self.source.target.channel_id.clone());
             }
@@ -1671,20 +1689,19 @@ impl TurnFeeder {
         }
         self.source.slot.last_upstream_id = None;
         let turn_state = self.source.slot.turn_state.clone();
-        let mut session = match connect_with_turn_state(&self.source.target, turn_state.as_deref())
-            .await
-        {
-            Ok(session) => session,
-            Err(error) => {
-                self.fail(
-                    StatusCode::BAD_GATEWAY,
-                    "upstream_websocket_handshake_failed",
-                    error.message,
-                )
-                .await;
-                return false;
-            }
-        };
+        let mut session =
+            match connect_with_turn_state(&self.source.target, turn_state.as_deref()).await {
+                Ok(session) => session,
+                Err(error) => {
+                    self.fail(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_websocket_handshake_failed",
+                        error.message,
+                    )
+                    .await;
+                    return false;
+                }
+            };
         if let Some(turn_state) = session.handshake_turn_state() {
             self.source.slot.turn_state = Some(turn_state);
         }

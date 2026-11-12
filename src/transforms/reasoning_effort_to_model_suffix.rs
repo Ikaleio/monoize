@@ -123,7 +123,7 @@ impl Transform for ReasoningEffortToModelSuffixTransform {
         };
         for rule in &cfg.rules {
             if model_glob_match(&rule.pattern, &req.model) {
-                let suffix = rule.suffix.replace("{effort}", &effort);
+                let suffix = rule.suffix.replace("{effort}", effort);
                 req.model.push_str(&suffix);
                 return Ok(());
             }

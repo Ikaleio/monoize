@@ -1095,7 +1095,9 @@ pub fn store_preview(
     let expires_at = Utc::now()
         + chrono::Duration::from_std(PREVIEW_TTL).unwrap_or(chrono::Duration::minutes(10));
     let body = preview_response(source, &plan, &preview_id, expires_at);
-    let mut stored = previews().lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut stored = previews()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     stored.retain(|_, preview| preview.created.elapsed() < PREVIEW_TTL);
     while stored.len() >= MAX_STORED_PREVIEWS {
         let Some(oldest) = stored
@@ -1121,7 +1123,9 @@ pub fn store_preview(
 
 /// MP-A7: removes and returns an unexpired preview of `source`.
 pub fn take_preview(preview_id: &str, source: SyncSource) -> Option<StoredPreview> {
-    let mut stored = previews().lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut stored = previews()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let preview = stored.remove(preview_id)?;
     (preview.source == source && preview.created.elapsed() < PREVIEW_TTL).then_some(preview)
 }
@@ -1206,14 +1210,14 @@ pub async fn apply_sync_run(
     registry: &crate::model_registry_store::ModelRegistryStore,
     source: SyncSource,
     new_api_config: (&str, &str),
-) -> Result<PriceSyncRun, (PriceSyncRun, String)> {
+) -> Result<PriceSyncRun, (Box<PriceSyncRun>, String)> {
     let _apply_guard = apply_lock().lock().await;
     let run = store
         .insert_sync_run(source.as_str())
         .await
         .map_err(|error| {
             (
-                PriceSyncRun {
+                Box::new(PriceSyncRun {
                     id: String::new(),
                     source: source.as_str().to_string(),
                     status: "failed".to_string(),
@@ -1225,7 +1229,7 @@ pub async fn apply_sync_run(
                     deleted: 0,
                     error: Some(error.clone()),
                     detail_json: json!({}),
-                },
+                }),
                 error,
             )
         })?;
@@ -1253,7 +1257,7 @@ pub async fn apply_sync_run(
                 .finalize_sync_run(&run.id, "failed", 0, 0, 0, 0, Some(&error), &json!({}))
                 .await
                 .unwrap_or(run);
-            Err((finalized, error))
+            Err((Box::new(finalized), error))
         }
     }
 }

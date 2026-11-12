@@ -19,9 +19,7 @@ impl MigrationTrait for Migration {
         match backend {
             DbBackend::Sqlite => {
                 for sql in [
-                    format!(
-                        "CREATE TABLE billing_plans_new (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, grant_amount_nano_usd TEXT NOT NULL, schedule TEXT NOT NULL, allowed_groups TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
-                    ),
+                    "CREATE TABLE billing_plans_new (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, grant_amount_nano_usd TEXT NOT NULL, schedule TEXT NOT NULL, allowed_groups TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)".to_string(),
                     format!(
                         "INSERT INTO billing_plans_new (id, name, grant_amount_nano_usd, schedule, allowed_groups, enabled, created_at, updated_at) SELECT id, name, grant_amount_nano_usd, {SQLITE_SCHEDULE_CASE}, allowed_groups, enabled, created_at, updated_at FROM billing_plans"
                     ),

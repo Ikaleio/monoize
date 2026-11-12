@@ -1,6 +1,7 @@
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use std::ops::{Deref, DerefMut};
 
 /// SE1d `FWD`: upstream retry and rate-limit response headers.
 pub type ForwardedHeaders = Vec<(HeaderName, HeaderValue)>;
@@ -12,8 +13,11 @@ pub fn append_forwarded_headers(response: &mut Response, headers: ForwardedHeade
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AppError {
+#[derive(Clone)]
+pub struct AppError(Box<AppErrorBody>);
+
+#[derive(Clone)]
+pub struct AppErrorBody {
     pub status: StatusCode,
     pub code: String,
     pub message: String,
@@ -32,6 +36,43 @@ pub struct AppError {
     pub forwarded_headers: ForwardedHeaders,
     /// RTA-8b: original status and code of a masked Channel credential failure.
     pub credential_failure: Option<CredentialFailure>,
+}
+
+impl std::fmt::Debug for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppError")
+            .field("status", &self.status)
+            .field("code", &self.code)
+            .field("message", &self.message)
+            .field("error_type", &self.error_type)
+            .field("param", &self.param)
+            .field("upstream_status", &self.upstream_status)
+            .field("upstream_code", &self.upstream_code)
+            .field("upstream_type", &self.upstream_type)
+            .field("upstream_param", &self.upstream_param)
+            .field("internal_message", &self.internal_message)
+            .field(
+                "downstream_stream_terminal_sent",
+                &self.downstream_stream_terminal_sent,
+            )
+            .field("forwarded_headers", &self.forwarded_headers)
+            .field("credential_failure", &self.credential_failure)
+            .finish()
+    }
+}
+
+impl Deref for AppError {
+    type Target = AppErrorBody;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for AppError {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 /// RTA-8b body diagnostics. Kept apart from `upstream_status` and
@@ -58,7 +99,7 @@ impl CredentialFailure {
 
 impl AppError {
     pub fn new(status: StatusCode, code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
+        Self(Box::new(AppErrorBody {
             status,
             code: code.into(),
             message: message.into(),
@@ -72,7 +113,11 @@ impl AppError {
             downstream_stream_terminal_sent: false,
             forwarded_headers: Vec::new(),
             credential_failure: None,
-        }
+        }))
+    }
+
+    pub(crate) fn into_inner(self) -> AppErrorBody {
+        *self.0
     }
 
     pub fn with_internal_message(mut self, msg: impl Into<String>) -> Self {
@@ -129,22 +174,23 @@ struct ErrorBody {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (upstream_status, upstream_code) = match self.credential_failure {
+        let error = self.into_inner();
+        let (upstream_status, upstream_code) = match error.credential_failure {
             Some(failure) => (Some(failure.upstream_status), failure.upstream_code),
             None => (None, None),
         };
         let body = ErrorEnvelope {
             error: ErrorBody {
-                message: self.message,
-                error_type: self.error_type,
-                param: self.param,
-                code: self.code,
+                message: error.message,
+                error_type: error.error_type,
+                param: error.param,
+                code: error.code,
                 upstream_status,
                 upstream_code,
             },
         };
-        let mut response = (self.status, axum::Json(body)).into_response();
-        append_forwarded_headers(&mut response, self.forwarded_headers);
+        let mut response = (error.status, axum::Json(body)).into_response();
+        append_forwarded_headers(&mut response, error.forwarded_headers);
         response
     }
 }

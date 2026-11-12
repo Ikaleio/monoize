@@ -81,13 +81,12 @@ impl Transform for FieldRemoveTransform {
         match data {
             UrpData::Request(req) => {
                 if let Some(path) = cfg.path.strip_prefix("reasoning.") {
-                    if let Some(reasoning) = req.reasoning.as_mut() {
-                        if !reasoning
+                    if let Some(reasoning) = req.reasoning.as_mut()
+                        && !reasoning
                             .set_control(path, None)
                             .map_err(TransformError::Apply)?
-                        {
-                            remove_extra_path(&mut reasoning.extra_body, path);
-                        }
+                    {
+                        remove_extra_path(&mut reasoning.extra_body, path);
                     }
                 } else {
                     remove_extra_path(&mut req.extra_body, &cfg.path);

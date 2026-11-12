@@ -509,13 +509,13 @@ fn host_fetch(
             builder = builder.header(name, value);
         }
     }
-    if let Some(body) = options.get("body") {
-        if !body.is_null() {
-            let body = body
-                .as_str()
-                .ok_or_else(|| "fetch body must be a string".to_string())?;
-            builder = builder.body(body.to_string());
-        }
+    if let Some(body) = options.get("body")
+        && !body.is_null()
+    {
+        let body = body
+            .as_str()
+            .ok_or_else(|| "fetch body must be a string".to_string())?;
+        builder = builder.body(body.to_string());
     }
 
     let response = handle.block_on(async move {

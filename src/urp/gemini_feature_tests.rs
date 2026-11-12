@@ -97,7 +97,7 @@ async fn gemini_compatible_audio_aliases_use_typed_nodes_and_nested_files() {
         ),
     ] {
         let native = response(vec![part.clone()]);
-        let streamed = terminal(&stream_decode(&[native.clone()]).await.unwrap());
+        let streamed = terminal(&stream_decode(std::slice::from_ref(&native)).await.unwrap());
         for canonical in [decode::gemini::decode_response(&native).unwrap(), streamed] {
             let Node::Audio { source: actual, .. } = &canonical.output[0] else {
                 panic!("audio must be typed")
@@ -801,7 +801,7 @@ async fn gemini_function_parent_signature_has_typed_ownership_and_deletion_wins(
         "parts":[{"inlineData":{"mimeType":"image/png","data":"aW1hZ2U="}}]},
         "thoughtSignature":"cGFyZW50", "partMetadata":{"vendor":"value"}}),
     ]);
-    let events = stream_decode(&[native.clone()]).await.unwrap();
+    let events = stream_decode(std::slice::from_ref(&native)).await.unwrap();
     assert!(events.iter().any(|event| matches!(event,
         UrpStreamEvent::NodeStart { header: NodeHeader::ToolResult { signature: Some(value), .. }, .. }
         if value == &json!("cGFyZW50"))));
@@ -1363,7 +1363,8 @@ async fn assert_stream_part(part: Value) {
 /// decoding write the same Parts, and both decode back to them.
 async fn assert_stream_part_as(part: Value, expected: Vec<Value>) {
     let native = response(vec![part]);
-    let (live, live_frames) = encode_live(stream_decode(&[native.clone()]).await.unwrap()).await;
+    let (live, live_frames) =
+        encode_live(stream_decode(std::slice::from_ref(&native)).await.unwrap()).await;
     live.unwrap();
     let (replay, replay_frames) =
         encode_replay(decode::gemini::decode_response(&native).unwrap()).await;
@@ -1996,7 +1997,7 @@ fn gemini_native_schema_types_map_to_canonical_json_schema() {
 #[tokio::test]
 async fn gemini_prompt_refusal_stream_roundtrip_does_not_duplicate_text() {
     let blocked = json!({"responseId":"blocked","promptFeedback":{"blockReason":"SAFETY"}});
-    let events = stream_decode(&[blocked.clone()]).await.unwrap();
+    let events = stream_decode(std::slice::from_ref(&blocked)).await.unwrap();
     let canonical = terminal(&events);
     let encoded = encode::gemini::encode_response(&canonical, "gemini-test");
     assert_eq!(

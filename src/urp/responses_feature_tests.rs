@@ -1095,7 +1095,7 @@ fn namespace_definitions_and_selectors_are_owned_by_urp() {
                 {"type":"custom","name":"patch","format":{"type":"grammar","syntax":"lark","definition":"start: /.+/"}}]}],
             "tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"lookup","namespace":"functions"},{"type":"custom","name":"patch","namespace":"functions"}]}})).unwrap();
         let wrapper = &mut request.tools.as_mut().unwrap()[0];
-        assert!(wrapper.extra_body.get("tools").is_none());
+        assert!(!wrapper.extra_body.contains_key("tools"));
         assert_eq!(wrapper.tools.as_ref().unwrap().len(), 2);
         wrapper.tools.as_mut().unwrap()[0]
             .function

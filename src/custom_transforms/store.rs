@@ -569,17 +569,17 @@ async fn validate_source_for_save(
         )));
     }
     let meta = parse_frontmatter(source).map_err(CustomTransformError::Invalid)?;
-    if let Some(expected_id) = expected_id {
-        if meta.id != expected_id {
-            return Err(CustomTransformError::Invalid(at_line(
-                meta.id_line,
-                format!(
-                    "frontmatter id '{}' must equal the path id '{expected_id}'; \
+    if let Some(expected_id) = expected_id
+        && meta.id != expected_id
+    {
+        return Err(CustomTransformError::Invalid(at_line(
+            meta.id_line,
+            format!(
+                "frontmatter id '{}' must equal the path id '{expected_id}'; \
                      renaming requires delete plus create",
-                    meta.id
-                ),
-            )));
-        }
+                meta.id
+            ),
+        )));
     }
     let schema = sandbox::validate_source(source.to_string(), SandboxLimits::from_env())
         .await

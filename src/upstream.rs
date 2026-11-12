@@ -36,7 +36,7 @@ pub struct UpstreamCallError {
     pub param: Option<String>,
     pub message: String,
     pub source: UpstreamErrorSource,
-    pub forwarded_headers: ForwardedHeaders,
+    pub forwarded_headers: Box<[(axum::http::HeaderName, axum::http::HeaderValue)]>,
 }
 
 impl UpstreamCallError {
@@ -57,7 +57,7 @@ impl UpstreamCallError {
             param: None,
             message,
             source,
-            forwarded_headers: Vec::new(),
+            forwarded_headers: Box::default(),
         }
     }
 
@@ -175,7 +175,7 @@ pub async fn call_upstream_json_with_response_headers(
         match read_json_body(resp).await {
             Ok(value) => Ok((value, forwarded)),
             Err(mut err) => {
-                err.forwarded_headers = forwarded;
+                err.forwarded_headers = forwarded.into_boxed_slice();
                 Err(err)
             }
         }
@@ -288,8 +288,9 @@ fn authorize(
     let auth = provider.auth.as_ref().ok_or_else(|| {
         UpstreamCallError::new(UpstreamErrorKind::Http, None, "missing auth".to_string())
     })?;
-    let mut req = apply_auth(req, auth, auth_value)
-        .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Http, None, err.message))?;
+    let mut req = apply_auth(req, auth, auth_value).map_err(|err| {
+        UpstreamCallError::new(UpstreamErrorKind::Http, None, err.into_inner().message)
+    })?;
     for (k, v) in extra_headers {
         req = req.header(k, v);
     }
@@ -362,11 +363,10 @@ async fn non_success_upstream_error(
     let mut err = UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
         .with_error_info(info)
         .with_source(source);
-    err.forwarded_headers = forwarded_headers;
+    err.forwarded_headers = forwarded_headers.into_boxed_slice();
     err
 }
 
-#[allow(clippy::result_large_err)]
 fn apply_auth(
     req: reqwest::RequestBuilder,
     auth: &ProviderAuthConfig,

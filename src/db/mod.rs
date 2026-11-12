@@ -257,11 +257,11 @@ fn ensure_sqlite_file(dsn: &str) -> Result<(), String> {
         return Ok(());
     }
     let path = std::path::PathBuf::from(path_part);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("sqlite_dir_create_failed: {err}"))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("sqlite_dir_create_failed: {err}"))?;
     }
     if !path.exists() {
         std::fs::File::create(&path).map_err(|err| format!("sqlite_file_create_failed: {err}"))?;

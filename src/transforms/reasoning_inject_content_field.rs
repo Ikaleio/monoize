@@ -102,15 +102,15 @@ impl Transform for ReasoningInjectContentFieldTransform {
 }
 
 fn extract_reasoning_content(content: &Option<String>, summary: &Option<String>) -> Option<String> {
-    if let Some(content) = content {
-        if !content.is_empty() {
-            return Some(content.clone());
-        }
+    if let Some(content) = content
+        && !content.is_empty()
+    {
+        return Some(content.clone());
     }
-    if let Some(sum) = summary {
-        if !sum.is_empty() {
-            return Some(sum.clone());
-        }
+    if let Some(sum) = summary
+        && !sum.is_empty()
+    {
+        return Some(sum.clone());
     }
     None
 }
@@ -122,10 +122,9 @@ fn mark_node(node: &mut Node) {
         metadata,
         ..
     } = node
+        && extract_reasoning_content(content, summary).is_some()
     {
-        if extract_reasoning_content(content, summary).is_some() {
-            metadata.chat_content = true;
-        }
+        metadata.chat_content = true;
     }
 }
 

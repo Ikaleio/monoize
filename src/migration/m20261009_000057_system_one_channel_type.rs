@@ -11,7 +11,9 @@ async fn rename_type(manager: &SchemaManager<'_>, from: &str, to: &str) -> Resul
     let conn = manager.get_connection();
     conn.execute(Statement::from_string(
         backend,
-        format!("UPDATE monoize_channels SET provider_type = '{to}' WHERE provider_type = '{from}'"),
+        format!(
+            "UPDATE monoize_channels SET provider_type = '{to}' WHERE provider_type = '{from}'"
+        ),
     ))
     .await?;
     // `api_type_overrides` is compact serde JSON, so the field/value pair has

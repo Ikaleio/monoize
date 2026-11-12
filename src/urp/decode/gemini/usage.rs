@@ -115,7 +115,7 @@ impl TryFrom<GeminiUsage> for Usage {
             || input_modality.is_some()
             || cache_modality.is_some()
             || tool_prompt_modality.is_some())
-        .then(|| InputDetails {
+        .then_some(InputDetails {
             standard_tokens: 0,
             cache_read_tokens: value.cached_content_token_count,
             cache_read_modality_breakdown: cache_modality,
@@ -130,7 +130,7 @@ impl TryFrom<GeminiUsage> for Usage {
             || value.accepted_prediction_token_count > 0
             || value.rejected_prediction_token_count > 0
             || output_modality.is_some())
-        .then(|| OutputDetails {
+        .then_some(OutputDetails {
             standard_tokens: 0,
             reasoning_tokens: value.thoughts_token_count,
             accepted_prediction_tokens: value.accepted_prediction_token_count,

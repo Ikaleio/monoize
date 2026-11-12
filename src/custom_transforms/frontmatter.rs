@@ -141,7 +141,10 @@ pub fn parse_frontmatter(source: &str) -> Result<CustomTransformMeta, String> {
             _ => &mut visibility_raw,
         };
         if slot.is_some() {
-            return Err(at_line(line_no, format!("duplicated frontmatter key '{key}'")));
+            return Err(at_line(
+                line_no,
+                format!("duplicated frontmatter key '{key}'"),
+            ));
         }
         *slot = Some((value.to_string(), line_no));
     }
@@ -187,7 +190,10 @@ pub fn parse_frontmatter(source: &str) -> Result<CustomTransformMeta, String> {
     let visibility = match visibility_raw {
         None => CustomTransformVisibility::Admin,
         Some((raw, line_no)) => CustomTransformVisibility::parse(&raw).ok_or_else(|| {
-            at_line(line_no, format!("visibility '{raw}' must be one of admin, user"))
+            at_line(
+                line_no,
+                format!("visibility '{raw}' must be one of admin, user"),
+            )
         })?,
     };
 
@@ -218,10 +224,7 @@ fn normalize_frontmatter_line(line: &str) -> Option<&str> {
     if line.is_empty() { None } else { Some(line) }
 }
 
-fn require_value(
-    key: &str,
-    value: Option<(String, usize)>,
-) -> Result<(String, usize), String> {
+fn require_value(key: &str, value: Option<(String, usize)>) -> Result<(String, usize), String> {
     match value {
         Some((value, line_no)) if !value.is_empty() => Ok((value, line_no)),
         Some((_, line_no)) => Err(at_line(

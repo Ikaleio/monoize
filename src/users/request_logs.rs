@@ -103,19 +103,17 @@ pub(super) fn enrich_tried_providers_names(
         let Some(obj) = item.as_object_mut() else {
             continue;
         };
-        if !json_nonempty_str(obj.get("provider_name")) {
-            if let Some(id) = obj.get("provider_id").and_then(Value::as_str) {
-                if let Some(name) = provider_names.get(id) {
-                    obj.insert("provider_name".into(), Value::String(name.clone()));
-                }
-            }
+        if !json_nonempty_str(obj.get("provider_name"))
+            && let Some(id) = obj.get("provider_id").and_then(Value::as_str)
+            && let Some(name) = provider_names.get(id)
+        {
+            obj.insert("provider_name".into(), Value::String(name.clone()));
         }
-        if !json_nonempty_str(obj.get("channel_name")) {
-            if let Some(id) = obj.get("channel_id").and_then(Value::as_str) {
-                if let Some(name) = channel_names.get(id) {
-                    obj.insert("channel_name".into(), Value::String(name.clone()));
-                }
-            }
+        if !json_nonempty_str(obj.get("channel_name"))
+            && let Some(id) = obj.get("channel_id").and_then(Value::as_str)
+            && let Some(name) = channel_names.get(id)
+        {
+            obj.insert("channel_name".into(), Value::String(name.clone()));
         }
     }
 }

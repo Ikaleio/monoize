@@ -115,7 +115,7 @@ enum PlainKind {
 
 enum NodeMode {
     /// `NodeStart` withheld until the first delta decides the mode (TXO-3).
-    Pending(UrpStreamEvent),
+    Pending(Box<UrpStreamEvent>),
     Converted {
         kind: PlainKind,
         text: String,
@@ -441,7 +441,8 @@ impl StreamState {
                 }
                 *node_index = self.output_index(source);
                 if is_reasoning {
-                    self.nodes.insert(source, NodeMode::Pending(event.clone()));
+                    self.nodes
+                        .insert(source, NodeMode::Pending(Box::new(event.clone())));
                     self.replacement = Some(Vec::new());
                 }
             }
@@ -462,7 +463,7 @@ impl StreamState {
                         if let Some((kind, plain)) =
                             plain_text(content.as_deref(), summary.as_deref())
                         {
-                            let id = match &start {
+                            let id = match start.as_ref() {
                                 UrpStreamEvent::NodeStart {
                                     header: NodeHeader::Reasoning { id, .. },
                                     ..
@@ -473,7 +474,7 @@ impl StreamState {
                                 Some(self.open_segment(source, out, kind, plain, id, tag));
                         } else {
                             self.passed_through.insert(source);
-                            self.replacement = Some(vec![start, event.clone()]);
+                            self.replacement = Some(vec![*start, event.clone()]);
                             self.nodes.insert(source, NodeMode::PassThrough);
                         }
                     }
@@ -571,7 +572,7 @@ impl StreamState {
                         }
                         None => {
                             self.passed_through.insert(source);
-                            self.replacement = Some(vec![start, event.clone()]);
+                            self.replacement = Some(vec![*start, event.clone()]);
                         }
                     },
                     Some(NodeMode::PassThrough) | None => {}

@@ -79,8 +79,7 @@ pub async fn get_admin_overview(
         .sse_connections
         .iter()
         .map(|entry| entry.value().load(std::sync::atomic::Ordering::Relaxed))
-        .sum::<usize>()
-        .min(usize::MAX);
+        .sum::<usize>();
 
     let spend_time_to = now;
     let spend_time_from = now - chrono::Duration::hours(window_hours);
@@ -144,7 +143,8 @@ pub async fn get_admin_overview(
                         continue;
                     };
                     healthy &= entry.healthy;
-                    if entry.cooldown_until.is_some_and(|until| until > now_secs) || !entry.healthy {
+                    if entry.cooldown_until.is_some_and(|until| until > now_secs) || !entry.healthy
+                    {
                         unhealthy_models.push(model.clone());
                     }
                     cooldown_until = match (cooldown_until, entry.cooldown_until) {

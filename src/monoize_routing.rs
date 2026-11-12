@@ -92,7 +92,7 @@ impl AffinityFailbackMode {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         match value {
             "sticky" => Some(Self::Sticky),
             "prefer_higher_priority" => Some(Self::PreferHigherPriority),
@@ -670,10 +670,10 @@ impl ChannelHealthState {
         if self.healthy {
             return "healthy";
         }
-        if let Some(until) = self.cooldown_until {
-            if now_ts < until {
-                return "unhealthy";
-            }
+        if let Some(until) = self.cooldown_until
+            && now_ts < until
+        {
+            return "unhealthy";
         }
         "probing"
     }
@@ -1129,7 +1129,7 @@ fn decode_channel_row(
             .try_get::<Option<String>>("", "affinity_failback_mode_override")
             .map_err(|e| e.to_string())?
             .map(|value| {
-                AffinityFailbackMode::from_str(&value).ok_or_else(|| {
+                AffinityFailbackMode::parse(&value).ok_or_else(|| {
                     format!("channel {id} invalid affinity_failback_mode_override: {value}")
                 })
             })
@@ -1352,9 +1352,9 @@ impl MonoizeRoutingStore {
     async fn routing_catalog(&self) -> Result<Arc<RoutingCatalog>, String> {
         let store = self.clone();
         self.catalog
-            .get_or_load(move || async move {
-                Ok(RoutingCatalog::build(store.list_providers().await?))
-            })
+            .get_or_load(
+                move || async move { Ok(RoutingCatalog::build(store.list_providers().await?)) },
+            )
             .await
     }
 
@@ -1840,28 +1840,26 @@ impl MonoizeRoutingStore {
         input: CreateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
         validate_provider_input(&input.name, &input.channels, &input.api_type_overrides)?;
-        if let Some(v) = input.active_probe_interval_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "active_probe_interval_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(v) = input.active_probe_interval_seconds_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err(
+                "active_probe_interval_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = input.active_probe_success_threshold_override {
-            if !(1..=i32::MAX as u32).contains(&v) {
-                return Err(
-                    "active_probe_success_threshold_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(v) = input.active_probe_success_threshold_override
+            && !(1..=i32::MAX as u32).contains(&v)
+        {
+            return Err(
+                "active_probe_success_threshold_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = input.request_timeout_ms_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "request_timeout_ms_override must be between 1 and 2147483647".to_string(),
-                );
-            }
+        if let Some(v) = input.request_timeout_ms_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err("request_timeout_ms_override must be between 1 and 2147483647".to_string());
         }
         if input.channel_retry_interval_ms < 0 {
             return Err("channel_retry_interval_ms must be >= 0".to_string());
@@ -1986,33 +1984,31 @@ impl MonoizeRoutingStore {
         if let Some(channels) = &input.channels {
             validate_channels(channels, false)?;
         }
-        if let Some(Some(v)) = input.active_probe_interval_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "active_probe_interval_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(Some(v)) = input.active_probe_interval_seconds_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err(
+                "active_probe_interval_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(Some(v)) = input.active_probe_success_threshold_override {
-            if !(1..=i32::MAX as u32).contains(&v) {
-                return Err(
-                    "active_probe_success_threshold_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(Some(v)) = input.active_probe_success_threshold_override
+            && !(1..=i32::MAX as u32).contains(&v)
+        {
+            return Err(
+                "active_probe_success_threshold_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(Some(v)) = input.request_timeout_ms_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "request_timeout_ms_override must be between 1 and 2147483647".to_string(),
-                );
-            }
+        if let Some(Some(v)) = input.request_timeout_ms_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err("request_timeout_ms_override must be between 1 and 2147483647".to_string());
         }
-        if let Some(v) = input.channel_retry_interval_ms {
-            if v < 0 {
-                return Err("channel_retry_interval_ms must be >= 0".to_string());
-            }
+        if let Some(v) = input.channel_retry_interval_ms
+            && v < 0
+        {
+            return Err("channel_retry_interval_ms must be >= 0".to_string());
         }
 
         if let Some(api_type_overrides) = &input.api_type_overrides {
@@ -2128,7 +2124,6 @@ impl MonoizeRoutingStore {
             push_value("priority", SeaValue::Int(Some(value)));
         }
         push_value("updated_at", Utc::now().to_rfc3339().into());
-        drop(push_value);
 
         let id_index = values.len() + 1;
         values.push(id.into());
@@ -2580,65 +2575,68 @@ fn validate_channels(
         if let Some(headers) = &c.extra_headers {
             validate_channel_extra_headers(&c.name, headers)?;
         }
-        if let Some(v) = c.passive_failure_count_threshold_override {
-            if !(1..=i32::MAX as u32).contains(&v) {
-                return Err(
-                    "channel passive_failure_count_threshold_override must be between 1 and 2147483647".to_string(),
-                );
-            }
+        if let Some(v) = c.passive_failure_count_threshold_override
+            && !(1..=i32::MAX as u32).contains(&v)
+        {
+            return Err(
+                "channel passive_failure_count_threshold_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.passive_cooldown_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel passive_cooldown_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(v) = c.passive_cooldown_seconds_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err(
+                "channel passive_cooldown_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.passive_window_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel passive_window_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(v) = c.passive_window_seconds_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err(
+                "channel passive_window_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.passive_rate_limit_cooldown_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
+        if let Some(v) = c.passive_rate_limit_cooldown_seconds_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err(
                     "channel passive_rate_limit_cooldown_seconds_override must be between 1 and 2147483647".to_string(),
                 );
-            }
         }
-        if let Some(v) = c.active_probe_interval_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel active_probe_interval_seconds_override must be between 1 and 2147483647".to_string(),
-                );
-            }
+        if let Some(v) = c.active_probe_interval_seconds_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err(
+                "channel active_probe_interval_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.active_probe_success_threshold_override {
-            if !(1..=i32::MAX as u32).contains(&v) {
-                return Err(
-                    "channel active_probe_success_threshold_override must be between 1 and 2147483647".to_string(),
-                );
-            }
+        if let Some(v) = c.active_probe_success_threshold_override
+            && !(1..=i32::MAX as u32).contains(&v)
+        {
+            return Err(
+                "channel active_probe_success_threshold_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.affinity_idle_ttl_seconds_override {
-            if !(1..=i32::MAX as u64).contains(&v) {
-                return Err(
-                    "channel affinity_idle_ttl_seconds_override must be between 1 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(v) = c.affinity_idle_ttl_seconds_override
+            && !(1..=i32::MAX as u64).contains(&v)
+        {
+            return Err(
+                "channel affinity_idle_ttl_seconds_override must be between 1 and 2147483647"
+                    .to_string(),
+            );
         }
-        if let Some(v) = c.affinity_failback_delay_seconds_override {
-            if v > i32::MAX as u64 {
-                return Err(
-                    "channel affinity_failback_delay_seconds_override must be between 0 and 2147483647"
-                        .to_string(),
-                );
-            }
+        if let Some(v) = c.affinity_failback_delay_seconds_override
+            && v > i32::MAX as u64
+        {
+            return Err(
+                "channel affinity_failback_delay_seconds_override must be between 0 and 2147483647"
+                    .to_string(),
+            );
         }
         validate_models(&c.models)?;
         let mut model_seen = HashSet::new();
@@ -2654,10 +2652,10 @@ fn validate_channels(
                 ));
             }
         }
-        if let Some(id) = &c.id {
-            if !ids.insert(id.clone()) {
-                return Err("duplicate channel id".to_string());
-            }
+        if let Some(id) = &c.id
+            && !ids.insert(id.clone())
+        {
+            return Err("duplicate channel id".to_string());
         }
     }
     Ok(())
@@ -3164,8 +3162,7 @@ fn build_probe_request(
             } else {
                 "generateContent"
             };
-            let url =
-                crate::upstream::join_url(base, &format!("/v1beta/models/{model}:{method}"));
+            let url = crate::upstream::join_url(base, &format!("/v1beta/models/{model}:{method}"));
             let body = serde_json::json!({
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
                 "generationConfig": {"maxOutputTokens": 16}

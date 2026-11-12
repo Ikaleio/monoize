@@ -132,10 +132,10 @@ pub fn normalize_pricing_model_key(
     suffixes.dedup();
 
     for suffix in suffixes {
-        if let Some(base) = trimmed.strip_suffix(suffix) {
-            if !base.is_empty() {
-                return base.to_string();
-            }
+        if let Some(base) = trimmed.strip_suffix(suffix)
+            && !base.is_empty()
+        {
+            return base.to_string();
         }
     }
 
@@ -831,7 +831,7 @@ impl SettingsStore {
                 }
                 "monoize_affinity_failback_mode" => {
                     settings.monoize_affinity_failback_mode =
-                        AffinityFailbackMode::from_str(&row.value).unwrap_or_default();
+                        AffinityFailbackMode::parse(&row.value).unwrap_or_default();
                 }
                 "monoize_affinity_failback_delay_seconds" => {
                     settings.monoize_affinity_failback_delay_seconds =

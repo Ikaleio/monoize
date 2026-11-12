@@ -9,7 +9,10 @@ fn main() {
     // `args_os`: `args()` panics on non-UTF-8 argv, which would make an ignored
     // argument (or a non-UTF-8 install path) abort startup.
     let first = std::env::args_os().nth(1);
-    if matches!(first.as_deref().and_then(|arg| arg.to_str()), Some("--version" | "-V")) {
+    if matches!(
+        first.as_deref().and_then(|arg| arg.to_str()),
+        Some("--version" | "-V")
+    ) {
         println!("monoize {}", env!("CARGO_PKG_VERSION"));
         return;
     }

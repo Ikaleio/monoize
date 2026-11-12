@@ -67,56 +67,57 @@ impl AuthState {
         token: &str,
         user_store: Option<&UserStore>,
     ) -> Option<AuthResult> {
-        if token.starts_with("sk-") && token.len() >= 12 {
-            if let Some(store) = user_store {
-                match store.validate_api_key(token).await {
-                    Ok(Some((api_key, user))) => {
-                        // Read the ceiling outside the key cache so subscription
-                        // changes and expiry apply to every authenticated request.
-                        let plan_group_ids = match store
-                            .get_active_billing_plan_group_ids(&user.id)
-                            .await
-                        {
-                            Ok(groups) => groups,
-                            Err(error) => {
-                                tracing::error!(user_id = %user.id, error = %error, "API key subscription lookup failed");
-                                return None;
-                            }
-                        };
-                        // GR-I4: API-key auth always yields a concrete ordered list;
-                        // `None` is reserved for internal system traffic.
-                        let effective_groups = Some(resolve_effective_groups(
-                            &user.group_id,
-                            api_key.use_user_group,
-                            &api_key.group_ids,
-                            plan_group_ids.as_deref(),
-                        ));
-                        return Some(AuthResult {
-                            tenant_id: user.id.clone(),
-                            user_id: Some(user.id),
-                            username: Some(user.username.clone()),
-                            user_role: user.role,
-                            api_key_id: Some(api_key.id),
-                            api_key_name: Some(api_key.name),
-                            internal_source: None,
-                            max_multiplier: api_key.max_multiplier,
-                            transforms: api_key.transforms,
-                            model_redirects: api_key.compiled_model_redirects,
-                            effective_groups,
-                            model_limits_enabled: api_key.model_limits_enabled,
-                            model_limits: api_key.model_limits,
-                            ip_whitelist: api_key.ip_whitelist,
-                            sub_account_enabled: api_key.sub_account_enabled,
-                            sub_account_balance_nano: api_key.sub_account_balance_nano,
-                            reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
-                            request_capture_mode: api_key.request_capture_mode,
-                            request_capture_retention: api_key.request_capture_retention,
-                        });
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::error!(token_prefix = &token[..token.len().min(8)], error = %e, "API key validation failed due to internal error");
-                    }
+        if token.starts_with("sk-")
+            && token.len() >= 12
+            && let Some(store) = user_store
+        {
+            match store.validate_api_key(token).await {
+                Ok(Some((api_key, user))) => {
+                    // Read the ceiling outside the key cache so subscription
+                    // changes and expiry apply to every authenticated request.
+                    let plan_group_ids = match store
+                        .get_active_billing_plan_group_ids(&user.id)
+                        .await
+                    {
+                        Ok(groups) => groups,
+                        Err(error) => {
+                            tracing::error!(user_id = %user.id, error = %error, "API key subscription lookup failed");
+                            return None;
+                        }
+                    };
+                    // GR-I4: API-key auth always yields a concrete ordered list;
+                    // `None` is reserved for internal system traffic.
+                    let effective_groups = Some(resolve_effective_groups(
+                        &user.group_id,
+                        api_key.use_user_group,
+                        &api_key.group_ids,
+                        plan_group_ids.as_deref(),
+                    ));
+                    return Some(AuthResult {
+                        tenant_id: user.id.clone(),
+                        user_id: Some(user.id),
+                        username: Some(user.username.clone()),
+                        user_role: user.role,
+                        api_key_id: Some(api_key.id),
+                        api_key_name: Some(api_key.name),
+                        internal_source: None,
+                        max_multiplier: api_key.max_multiplier,
+                        transforms: api_key.transforms,
+                        model_redirects: api_key.compiled_model_redirects,
+                        effective_groups,
+                        model_limits_enabled: api_key.model_limits_enabled,
+                        model_limits: api_key.model_limits,
+                        ip_whitelist: api_key.ip_whitelist,
+                        sub_account_enabled: api_key.sub_account_enabled,
+                        sub_account_balance_nano: api_key.sub_account_balance_nano,
+                        reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
+                        request_capture_mode: api_key.request_capture_mode,
+                        request_capture_retention: api_key.request_capture_retention,
+                    });
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(token_prefix = &token[..token.len().min(8)], error = %e, "API key validation failed due to internal error");
                 }
             }
         }

@@ -189,7 +189,7 @@ impl<'a> GeminiStreamState<'a> {
                 .into_iter()
                 .flatten()
                 .filter_map(Value::as_object)
-                .find(|candidate| index_of(*candidate) == selected),
+                .find(|candidate| index_of(candidate) == selected),
             None => {
                 let candidate = selected_candidate(frame)?;
                 self.candidate_index = Some(index_of(candidate));

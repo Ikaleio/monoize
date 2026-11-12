@@ -58,11 +58,11 @@ async fn parse_discovery_json_response(response: reqwest::Response) -> AppResult
     })
 }
 
-fn reset_channel_health_after_successful_test<'a>(
+fn reset_channel_health_after_successful_test(
     health: &mut HashMap<String, ChannelHealthState>,
     channel_id: &str,
     per_model_circuit_break: bool,
-    model_id: &'a str,
+    model_id: &str,
     now: i64,
     max_entries: usize,
 ) {
@@ -78,7 +78,7 @@ fn reset_channel_health_after_successful_test<'a>(
     if !health.contains_key(&key) && health.len() >= max_entries {
         return;
     }
-    let entry = health.entry(key).or_insert_with(ChannelHealthState::new);
+    let entry = health.entry(key).or_default();
     reset(entry, now);
 }
 
@@ -475,7 +475,6 @@ pub async fn get_provider(
 }
 
 /// CP-INV-14: non-empty channel `proxy_url` must be an absolute http(s) URL.
-#[allow(clippy::result_large_err)]
 fn validate_channel_proxy_urls<'a>(
     channels: impl IntoIterator<Item = &'a crate::monoize_routing::CreateMonoizeChannelInput>,
 ) -> AppResult<()> {
@@ -498,7 +497,6 @@ fn validate_channel_proxy_urls<'a>(
 }
 
 /// CP-INV-16a: reports the first offending Channel through `param`.
-#[allow(clippy::result_large_err)]
 fn validate_channel_chat_dialects(
     channels: &[crate::monoize_routing::CreateMonoizeChannelInput],
 ) -> AppResult<()> {
@@ -512,7 +510,6 @@ fn validate_channel_chat_dialects(
 }
 
 /// CP-INV-17a: reports the first offending override entry through `param`.
-#[allow(clippy::result_large_err)]
 fn validate_override_chat_dialects(
     overrides: &[crate::monoize_routing::ApiTypeOverrideInput],
 ) -> AppResult<()> {

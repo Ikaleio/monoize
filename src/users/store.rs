@@ -1,7 +1,7 @@
 use super::utils::parse_nano_usd;
 use super::{
-    AdminUpdateUserInput, ApiKey, BalanceMutationError, BillingError, BillingErrorKind, CreateApiKeyInput,
-    CreateApiKeyWithLimitError, ModelRedirectRule, PlanChargeAllocation,
+    AdminUpdateUserInput, ApiKey, BalanceMutationError, BillingError, BillingErrorKind,
+    CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, PlanChargeAllocation,
     RESERVED_INTERNAL_USER_PREFIX, RegisterUserError, RequestCaptureMode, RequestCaptureRetention,
     Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore, canonicalize_group_ids,
     compile_model_redirects, validate_model_redirects,
@@ -421,9 +421,7 @@ impl UserStore {
             ),
             api_key_cache: crate::db_cache::ApiKeyCache::new(Duration::from_secs(60)),
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
-            sub_account_balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(
-                30,
-            )),
+            sub_account_balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
             group_ratio_cache: crate::db_cache::SnapshotCache::new(
                 crate::db_cache::REQUEST_PATH_CACHE_TTL,
             ),
@@ -2368,7 +2366,9 @@ impl UserStore {
             .map(|entries| canonicalize_ip_whitelist(entries))
             .transpose()?;
         if input.sub_account_balance_nano_usd.is_some() && !is_admin {
-            return Err("only admins may set a sub-account balance".to_string().into());
+            return Err("only admins may set a sub-account balance"
+                .to_string()
+                .into());
         }
         if input.sub_account_enabled == Some(false) && input.sub_account_balance_nano_usd.is_some()
         {
@@ -3072,20 +3072,18 @@ impl UserStore {
             Err(error) if error.kind == BillingErrorKind::NotFound => None,
             Err(error) => return Err(error),
         };
-        if key.as_ref().is_none_or(|key| !key.sub_account_enabled) {
-            if user.unlimited {
-                tx.commit()
-                    .await
-                    .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
-                return Ok(PlanChargeAllocation {
-                    adjusted_charge_nano_usd: amount_nano_usd,
-                    plan_covered_nano_usd: 0,
-                    fallback_nano_usd: 0,
-                    subscription_id: None,
-                    plan_id: None,
-                    multiplier: None,
-                });
-            }
+        if key.as_ref().is_none_or(|key| !key.sub_account_enabled) && user.unlimited {
+            tx.commit()
+                .await
+                .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+            return Ok(PlanChargeAllocation {
+                adjusted_charge_nano_usd: amount_nano_usd,
+                plan_covered_nano_usd: 0,
+                fallback_nano_usd: 0,
+                subscription_id: None,
+                plan_id: None,
+                multiplier: None,
+            });
         }
         let request_id = meta
             .get("request_id")

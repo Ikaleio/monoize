@@ -104,10 +104,9 @@ fn gemini_scores(nodes: &[super::Node]) -> Option<Vec<&TokenLogprob>> {
         if let super::Node::Text {
             content, logprobs, ..
         } = node
+            && !content.is_empty()
         {
-            if !content.is_empty() {
-                result.extend(valid(logprobs, content)?);
-            }
+            result.extend(valid(logprobs, content)?);
         }
     }
     (!result.is_empty()).then_some(result)
@@ -242,11 +241,13 @@ pub fn encode_request(
     if let Some(config) = config {
         if protocol == super::ProviderProtocol::ChatCompletion {
             obj.insert("logprobs".into(), Value::Bool(config.enabled));
-        } else if config.enabled {
-            obj.entry("include")
+        } else if config.enabled
+            && let Some(v) = obj
+                .entry("include")
                 .or_insert_with(|| Value::Array(vec![]))
                 .as_array_mut()
-                .map(|v| v.push(Value::String("message.output_text.logprobs".into())));
+        {
+            v.push(Value::String("message.output_text.logprobs".into()))
         }
         if let Some(top_k) = config.top_k {
             obj.insert("top_logprobs".into(), Value::from(top_k));

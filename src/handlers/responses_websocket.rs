@@ -25,7 +25,8 @@ const MAX_NAMED_LANES: usize = 32;
 const MAX_STREAM_ID_LEN: usize = 256;
 /// WS15a: bound on each downstream write and on the final close.
 const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
-const FIRST_EVENT_MESSAGE: &str = "Expected a 'response.create' message as the first websocket event.";
+const FIRST_EVENT_MESSAGE: &str =
+    "Expected a 'response.create' message as the first websocket event.";
 
 #[derive(Clone, Copy, Debug)]
 struct ResponsesWebsocketLimits {
@@ -179,7 +180,9 @@ impl WsError {
         Self::new(
             400,
             "websocket_connection_limit_reached",
-            format!("Responses websocket connection limit reached ({quota}). Create a new websocket connection to continue."),
+            format!(
+                "Responses websocket connection limit reached ({quota}). Create a new websocket connection to continue."
+            ),
             None,
         )
     }
@@ -210,7 +213,10 @@ impl WsError {
                 .upstream_type
                 .clone()
                 .unwrap_or_else(|| err.error_type.clone()),
-            code: err.upstream_code.clone().unwrap_or_else(|| err.code.clone()),
+            code: err
+                .upstream_code
+                .clone()
+                .unwrap_or_else(|| err.code.clone()),
             message: err.message.clone(),
             param: err.upstream_param.clone().or_else(|| err.param.clone()),
         }
@@ -225,8 +231,18 @@ impl WsError {
         let text = |key: &str| error.get(key).and_then(Value::as_str).map(str::to_string);
         let error_type = text("type").filter(|kind| kind != "error");
         let status = http_status
-            .or_else(|| value.get("status").and_then(Value::as_u64).map(|s| s as u16))
-            .or_else(|| error.get("status").and_then(Value::as_u64).map(|s| s as u16))
+            .or_else(|| {
+                value
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .map(|s| s as u16)
+            })
+            .or_else(|| {
+                error
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .map(|s| s as u16)
+            })
             .unwrap_or_else(|| status_for_error_type(error_type.as_deref()));
         Self {
             status,
@@ -303,7 +319,10 @@ impl Connection {
         let Ok(mut entries) = self.entries.lock() else {
             return;
         };
-        match entries.iter_mut().find(|current| current.lane == entry.lane) {
+        match entries
+            .iter_mut()
+            .find(|current| current.lane == entry.lane)
+        {
             Some(current) => *current = entry,
             None => entries.push(entry),
         }
@@ -340,7 +359,11 @@ impl Connection {
         let Ok(entries) = self.entries.lock() else {
             return;
         };
-        let order = self.lane_order.lock().map(|order| order.clone()).unwrap_or_default();
+        let order = self
+            .lane_order
+            .lock()
+            .map(|order| order.clone())
+            .unwrap_or_default();
         let mut ordered: Vec<&CacheEntry> = entries.iter().collect();
         ordered.sort_by_key(|entry| {
             (
@@ -519,7 +542,12 @@ async fn serve_responses_websocket(
                 let _ = conn
                     .send_error(
                         &None,
-                        WsError::new(400, "invalid_websocket_event", FIRST_EVENT_MESSAGE, Some("type")),
+                        WsError::new(
+                            400,
+                            "invalid_websocket_event",
+                            FIRST_EVENT_MESSAGE,
+                            Some("type"),
+                        ),
                     )
                     .await;
                 break;
@@ -622,7 +650,10 @@ async fn serve_responses_websocket(
     let _ = tokio::time::timeout(WRITE_DEADLINE, conn.outbound.send(Message::Close(None))).await;
     drop(conn);
     let mut writer = writer;
-    if tokio::time::timeout(WRITE_DEADLINE, &mut writer).await.is_err() {
+    if tokio::time::timeout(WRITE_DEADLINE, &mut writer)
+        .await
+        .is_err()
+    {
         writer.abort();
     }
 }
@@ -660,7 +691,10 @@ async fn forward_relay(
     mut value: Value,
     sequences: &mut HashMap<String, i64>,
 ) -> bool {
-    let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if (kind.starts_with("response.interrupt.") || kind.starts_with("response.steer."))
         && value.is_object()
     {
@@ -696,13 +730,16 @@ struct PreparedTurn {
 }
 
 struct PrepareError {
-    error: WsError,
+    error: Box<WsError>,
     evict: Option<String>,
 }
 
 impl From<WsError> for PrepareError {
     fn from(error: WsError) -> Self {
-        Self { error, evict: None }
+        Self {
+            error: Box::new(error),
+            evict: None,
+        }
     }
 }
 
@@ -780,7 +817,7 @@ async fn run_lane(
                 if let Some(previous) = failure.evict {
                     conn.remove_entry(&key, Some(&previous));
                 }
-                let _ = conn.send_error(&key, failure.error).await;
+                let _ = conn.send_error(&key, *failure.error).await;
                 continue;
             }
         };
@@ -884,7 +921,11 @@ fn finish_request(
     Ok(controls)
 }
 
-fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<PreparedTurn, PrepareError> {
+fn prepare_job(
+    conn: &Connection,
+    key: &LaneKey,
+    job: LaneJob,
+) -> Result<PreparedTurn, PrepareError> {
     let limits = &conn.limits;
     let mut event = job.event;
     if job.append {
@@ -906,7 +947,7 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
         };
         let previous = entry.public_id.clone();
         let evict = |error: WsError| PrepareError {
-            error,
+            error: Box::new(error),
             evict: Some(previous.clone()),
         };
         let full_input = concat_history(limits, entry, incoming).map_err(evict)?;
@@ -942,7 +983,7 @@ fn prepare_job(conn: &Connection, key: &LaneKey, job: LaneJob) -> Result<Prepare
     };
     // WS7: any rejection of a same-lane continuation evicts the referenced entry.
     prepare_create(conn, key, event, previous.clone()).map_err(|error| PrepareError {
-        error,
+        error: Box::new(error),
         evict: previous.filter(|previous| conn.entry_lane(previous).as_ref() == Some(key)),
     })
 }
@@ -954,7 +995,11 @@ fn prepare_create(
     previous: Option<String>,
 ) -> Result<PreparedTurn, WsError> {
     let limits = &conn.limits;
-    if previous.is_some() && event.get("conversation").is_some_and(|value| !value.is_null()) {
+    if previous.is_some()
+        && event
+            .get("conversation")
+            .is_some_and(|value| !value.is_null())
+    {
         return Err(WsError::invalid_request(
             "conversation and previous_response_id are mutually exclusive",
             "previous_response_id",
@@ -1172,7 +1217,9 @@ async fn run_turn(
         sequences.insert(public_id.clone(), sequence);
     }
     if let Ok(mut active) = conn.active.lock()
-        && active.get(key).is_some_and(|turn| turn.public_id == public_id)
+        && active
+            .get(key)
+            .is_some_and(|turn| turn.public_id == public_id)
     {
         active.remove(key);
     }
@@ -1188,7 +1235,10 @@ async fn run_turn(
                 controls.remove("stream");
                 let fits = !prepared.oversized
                     && conn.limits.fits(
-                        prepared.full_input.len().saturating_add(outcome.output.len()),
+                        prepared
+                            .full_input
+                            .len()
+                            .saturating_add(outcome.output.len()),
                         input_bytes.saturating_add(serialized_len(&outcome.output)),
                     );
                 if fits {
@@ -1209,7 +1259,11 @@ async fn run_turn(
                 Some(FinishedTurn {
                     public_id: public_id.clone(),
                     controls,
-                    full_input: if fits { prepared.full_input } else { Vec::new() },
+                    full_input: if fits {
+                        prepared.full_input
+                    } else {
+                        Vec::new()
+                    },
                     output: if fits { outcome.output } else { Vec::new() },
                     pending_steers: Vec::new(),
                     strip_encrypted: prepared.strip_encrypted,
@@ -1302,15 +1356,16 @@ async fn send_local_warmup(
     response.insert("completed_at".to_string(), Value::Null);
     response.insert(
         "model".to_string(),
-        prepared.request.get("model").cloned().unwrap_or(Value::Null),
+        prepared
+            .request
+            .get("model")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
     response.insert("output".to_string(), json!([]));
     response.insert("error".to_string(), Value::Null);
     response.insert("incomplete_details".to_string(), Value::Null);
-    response.insert(
-        "previous_response_id".to_string(),
-        json!(prepared.previous),
-    );
+    response.insert("previous_response_id".to_string(), json!(prepared.previous));
     response.insert("usage".to_string(), Value::Null);
     for field in [
         "instructions",
@@ -1455,7 +1510,12 @@ impl TurnBridge {
                             .conn
                             .send_error(
                                 &self.key,
-                                WsError::new(502, "server_error", "upstream SSE body read failed", None),
+                                WsError::new(
+                                    502,
+                                    "server_error",
+                                    "upstream SSE body read failed",
+                                    None,
+                                ),
                             )
                             .await;
                     }
@@ -1466,7 +1526,10 @@ impl TurnBridge {
                 }
             };
             if buffer.len().saturating_add(chunk.len()) > limits.sse_buffer_max_bytes {
-                let _ = self.conn.send_error(&self.key, WsError::parser_limit()).await;
+                let _ = self
+                    .conn
+                    .send_error(&self.key, WsError::parser_limit())
+                    .await;
                 return TurnOutcome::default();
             }
             buffer.extend_from_slice(&chunk);
@@ -1479,10 +1542,16 @@ impl TurnBridge {
             };
             for data in frames {
                 if let BridgeFlow::Disconnected = self.forward_event(data, &mut tracker).await {
-                    return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
+                    return TurnOutcome {
+                        disconnected: true,
+                        ..TurnOutcome::default()
+                    };
                 }
                 if !self.release_relays(&mut tracker, false).await {
-                    return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
+                    return TurnOutcome {
+                        disconnected: true,
+                        ..TurnOutcome::default()
+                    };
                 }
                 if interrupt_pending
                     && tracker.created.is_some()
@@ -1497,7 +1566,10 @@ impl TurnBridge {
             Ok(frames) => {
                 for data in frames {
                     if let BridgeFlow::Disconnected = self.forward_event(data, &mut tracker).await {
-                        return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
+                        return TurnOutcome {
+                            disconnected: true,
+                            ..TurnOutcome::default()
+                        };
                     }
                 }
             }
@@ -1507,7 +1579,10 @@ impl TurnBridge {
             }
         }
         if !self.release_relays(&mut tracker, true).await {
-            return TurnOutcome { disconnected: true, ..TurnOutcome::default() };
+            return TurnOutcome {
+                disconnected: true,
+                ..TurnOutcome::default()
+            };
         }
         if tracker.failed {
             tracker.outcome.status = None;
@@ -1519,9 +1594,9 @@ impl TurnBridge {
     fn retainable(&self, output: &[Value]) -> bool {
         !self.oversized
             && self.conn.limits.fits(
-            self.input_items.saturating_add(output.len()),
-            self.input_bytes.saturating_add(serialized_len(output)),
-        )
+                self.input_items.saturating_add(output.len()),
+                self.input_bytes.saturating_add(serialized_len(output)),
+            )
     }
 
     /// WS4b: orders a relay into the egress of the response it names. This
@@ -1577,7 +1652,10 @@ impl TurnBridge {
 
     /// Interleaves a relayed acknowledgement into this response's sequence.
     async fn forward_relay(&self, mut value: Value, tracker: &mut BridgeTracker) -> bool {
-        let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
+        let kind = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if (kind.starts_with("response.interrupt.") || kind.starts_with("response.steer."))
             && let Some(object) = value.as_object_mut()
         {
@@ -1634,7 +1712,10 @@ impl TurnBridge {
                     tracker.done_items.insert(index, item.clone());
                 }
             }
-            "response.completed" | "response.incomplete" | "response.cancelled" | "response.failed" => {
+            "response.completed"
+            | "response.incomplete"
+            | "response.cancelled"
+            | "response.failed" => {
                 let response = event.get("response");
                 let status = response
                     .and_then(|response| response.get("status"))
@@ -1852,7 +1933,10 @@ async fn handle_steer(conn: &Connection, event: &Map<String, Value>) {
             })
     });
     let (lane, code) = match (valid, target) {
-        (false, target) => (target.map(|(lane, ..)| lane).unwrap_or(None), "invalid_input"),
+        (false, target) => (
+            target.map(|(lane, ..)| lane).unwrap_or(None),
+            "invalid_input",
+        ),
         (true, Some((lane, true, steer))) => {
             if steer.send(input.clone()).is_ok() {
                 return;

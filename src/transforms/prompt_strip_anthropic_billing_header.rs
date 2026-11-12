@@ -92,11 +92,10 @@ impl Transform for PromptStripAnthropicBillingHeaderTransform {
 
         req.input.retain_mut(|node| match node {
             Node::Text {
-                logprobs,
-                role,
+                role: OrdinaryRole::System | OrdinaryRole::Developer,
                 content,
                 ..
-            } if matches!(role, OrdinaryRole::System | OrdinaryRole::Developer) => {
+            } => {
                 strip_header_lines(content);
                 !content.is_empty()
             }

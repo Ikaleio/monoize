@@ -1,11 +1,11 @@
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
-use crate::users::Group;
 use crate::model_registry_store::{
     CreateModelInput, DbModelMetadataRecord, ModelMetadataSyncResult, UpdateModelInput,
     UpsertModelMetadataInput,
 };
+use crate::users::Group;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -230,7 +230,8 @@ pub async fn list_marketplace_models(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
-    let internal = |e: String| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e);
+    let internal =
+        |e: String| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e);
     let is_admin = user.role.can_manage_users();
 
     let metadata = state
@@ -251,7 +252,9 @@ pub async fn list_marketplace_models(
         .or_else(|| groups.iter().find(|group| group.is_default));
     let reachable: HashSet<&str> = groups
         .iter()
-        .filter(|group| group.user_selectable || Some(group.id.as_str()) == own_group.map(|g| g.id.as_str()))
+        .filter(|group| {
+            group.user_selectable || Some(group.id.as_str()) == own_group.map(|g| g.id.as_str())
+        })
         .map(|group| group.id.as_str())
         .collect();
     // MM-D4: the ratio of the group that would bill this row (MP-G1), not a
@@ -292,18 +295,32 @@ pub async fn list_marketplace_models(
                     .filter(|group| serving.contains(group.id.as_str()))
                     .or_else(|| {
                         groups.iter().find(|group| {
-                            serving.contains(group.id.as_str()) && reachable.contains(group.id.as_str())
+                            serving.contains(group.id.as_str())
+                                && reachable.contains(group.id.as_str())
                         })
                     }),
             )
         };
         let price = price_by_id.get(record.model_id.as_str()).copied();
         let mut value = serde_json::to_value(&record).unwrap_or_else(|_| json!({}));
-        value["input_usd_per_1m"] = json!(scale_price(price.and_then(|p| p.input_usd_per_1m.as_deref()), ratio));
-        value["output_usd_per_1m"] = json!(scale_price(price.and_then(|p| p.output_usd_per_1m.as_deref()), ratio));
-        value["per_request_usd"] = json!(scale_price(price.and_then(|p| p.per_request_usd.as_deref()), ratio));
+        value["input_usd_per_1m"] = json!(scale_price(
+            price.and_then(|p| p.input_usd_per_1m.as_deref()),
+            ratio
+        ));
+        value["output_usd_per_1m"] = json!(scale_price(
+            price.and_then(|p| p.output_usd_per_1m.as_deref()),
+            ratio
+        ));
+        value["per_request_usd"] = json!(scale_price(
+            price.and_then(|p| p.per_request_usd.as_deref()),
+            ratio
+        ));
         value["billing_mode"] = json!(price.map(|p| p.billing_mode.as_str()));
-        value["billing_expr"] = json!(price.and_then(|p| p.billing_expr.as_ref()).map(|expr| scale_billing_expr(expr, ratio)));
+        value["billing_expr"] = json!(
+            price
+                .and_then(|p| p.billing_expr.as_ref())
+                .map(|expr| scale_billing_expr(expr, ratio))
+        );
         value["groups"] = json!(model_groups);
         value["price_ratio"] = json!(ratio.normalize().to_string());
         rows.push(value);

@@ -41,9 +41,7 @@ async fn create_decision(
         .to_string();
     apply_configured_model_redirects_to_model(&state, &mut logical_model, &auth).await;
     ensure_model_allowed(&auth, &logical_model)?;
-    downstream
-        .validate_shape(object)
-        .map_err(invalid_request)?;
+    downstream.validate_shape(object).map_err(invalid_request)?;
 
     let max_multiplier = resolve_max_multiplier_for_embeddings(&body, &headers, &auth);
     let started_at = Instant::now();
@@ -77,7 +75,6 @@ struct DecisionForward<'a> {
 impl<'a> DecisionForward<'a> {
     /// DR-V7, DR-R5: computes the upstream body for every routed format and
     /// drops attempts whose format cannot carry the request.
-    #[allow(clippy::result_large_err)]
     fn plan(
         downstream: DecisionFormat,
         body: &Map<String, Value>,
@@ -92,7 +89,10 @@ impl<'a> DecisionForward<'a> {
         let mut request = None;
         let mut bodies = Vec::new();
         let mut first_error = None;
-        for format in DecisionFormat::ALL.into_iter().filter(|format| routed(*format)) {
+        for format in DecisionFormat::ALL
+            .into_iter()
+            .filter(|format| routed(*format))
+        {
             if format == downstream {
                 let mut same_format = body.clone();
                 same_format.remove("max_multiplier");
@@ -134,7 +134,6 @@ impl<'a> DecisionForward<'a> {
         })
     }
 
-    #[allow(clippy::result_large_err)]
     fn upstream_format(attempt: &MonoizeAttempt) -> AppResult<DecisionFormat> {
         attempt.provider_type.decision_format().ok_or_else(|| {
             AppError::new(
@@ -188,7 +187,10 @@ impl JsonForwardEndpoint for DecisionForward<'_> {
             AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "upstream_decode_error",
-                format!("cannot convert {} response: {message}", upstream_format.upstream_path()),
+                format!(
+                    "cannot convert {} response: {message}",
+                    upstream_format.upstream_path()
+                ),
             )
         };
         let request = self

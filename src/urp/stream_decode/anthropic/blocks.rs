@@ -11,6 +11,8 @@ use crate::urp::{
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
+type BlockDelta = (NodeDelta, HashMap<String, Value>);
+
 #[derive(Debug, Clone)]
 pub(super) struct ActiveBlock {
     kind: BlockKind,
@@ -20,7 +22,7 @@ pub(super) struct ActiveBlock {
 #[derive(Debug, Clone)]
 enum BlockKind {
     /// A block whose start event already carries the complete node (media, tool results).
-    Complete(Node),
+    Complete(Box<Node>),
     Text {
         citations: Vec<Citation>,
         content: String,
@@ -174,7 +176,7 @@ impl ActiveBlock {
             )?
             .map(|mut node| Self {
                 extra_body: node.extra_body_mut().clone(),
-                kind: BlockKind::Complete(node),
+                kind: BlockKind::Complete(Box::new(node)),
             }),
             _ => Some(Self {
                 kind: BlockKind::ProviderItem {
@@ -206,8 +208,8 @@ impl ActiveBlock {
         let mut events = Vec::with_capacity(2);
         match &self.kind {
             BlockKind::Complete(node) => {
-                events.push(start(NodeHeader::from(node)));
-                let media = match node {
+                events.push(start(NodeHeader::from(node.as_ref())));
+                let media = match node.as_ref() {
                     Node::Image { source, .. } => Some(NodeDelta::Image {
                         source: source.clone(),
                     }),
@@ -243,10 +245,7 @@ impl ActiveBlock {
 
     /// Accumulates one `content_block_delta.delta` and returns the URP delta with its
     /// unknown members, or `None` when the delta carries nothing to forward.
-    pub(super) fn apply_delta(
-        &mut self,
-        delta: &Value,
-    ) -> Result<Option<(NodeDelta, HashMap<String, Value>)>, String> {
+    pub(super) fn apply_delta(&mut self, delta: &Value) -> Result<Option<BlockDelta>, String> {
         let delta_type = delta.get("type").and_then(Value::as_str).unwrap_or("");
         let payload_key = match delta_type {
             "text_delta" => Some("text"),
@@ -415,7 +414,7 @@ impl ActiveBlock {
     fn into_node(self) -> Node {
         let extra_body = self.extra_body;
         match self.kind {
-            BlockKind::Complete(node) => node,
+            BlockKind::Complete(node) => *node,
             BlockKind::Text {
                 citations,
                 content,

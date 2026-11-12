@@ -77,10 +77,10 @@ fn should_convert(cfg: &Config, name: &str) -> bool {
 
 fn wrap_input(raw: &str) -> String {
     let trimmed = raw.trim();
-    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(trimmed) {
-        if map.contains_key("input") {
-            return raw.to_string();
-        }
+    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(trimmed)
+        && map.contains_key("input")
+    {
+        return raw.to_string();
     }
     json!({ "input": raw }).to_string()
 }
@@ -90,10 +90,10 @@ fn unwrap_input(raw: &str) -> String {
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
         if let Value::Object(map) = value {
             for key in INPUT_KEYS {
-                if let Some(Value::String(s)) = map.get(*key) {
-                    if *key == "input" || s.contains("Begin Patch") {
-                        return s.clone();
-                    }
+                if let Some(Value::String(s)) = map.get(*key)
+                    && (*key == "input" || s.contains("Begin Patch"))
+                {
+                    return s.clone();
                 }
             }
         } else if let Value::String(s) = value {
@@ -355,12 +355,11 @@ fn rewrite_tool_choice_request(value: &mut Value, cfg: &Config) {
         Value::Object(obj) => {
             let type_is_custom = obj.get("type").and_then(Value::as_str) == Some("custom");
             let name = obj.get("name").and_then(Value::as_str).map(str::to_string);
-            if type_is_custom {
-                if let Some(name) = name.as_deref() {
-                    if should_convert(cfg, name) {
-                        obj.insert("type".to_string(), Value::String("function".to_string()));
-                    }
-                }
+            if type_is_custom
+                && let Some(name) = name.as_deref()
+                && should_convert(cfg, name)
+            {
+                obj.insert("type".to_string(), Value::String("function".to_string()));
             }
             for nested in obj.values_mut() {
                 rewrite_tool_choice_request(nested, cfg);
@@ -398,12 +397,13 @@ fn apply_response(resp: &mut UrpResponse, cfg: &Config) {
 fn apply_stream(event: &mut UrpStreamEvent, cfg: &Config) {
     match event {
         UrpStreamEvent::NodeStart { header, .. } => convert_header_response(header, cfg),
-        UrpStreamEvent::NodeDelta { delta, .. } => {
-            if let crate::urp::NodeDelta::ToolCallArguments { arguments } = delta {
-                let unwrapped = normalize_apply_patch(&unwrap_input(arguments));
-                if unwrapped != *arguments {
-                    *arguments = unwrapped;
-                }
+        UrpStreamEvent::NodeDelta {
+            delta: crate::urp::NodeDelta::ToolCallArguments { arguments },
+            ..
+        } => {
+            let unwrapped = normalize_apply_patch(&unwrap_input(arguments));
+            if unwrapped != *arguments {
+                *arguments = unwrapped;
             }
         }
         UrpStreamEvent::NodeDone { node, .. } => convert_node_response(node, cfg),

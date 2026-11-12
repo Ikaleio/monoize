@@ -243,14 +243,14 @@ pub async fn update_user(
     }
 
     let new_role = body.role.as_ref().and_then(|r| UserRole::from_str(r));
-    if let Some(role) = new_role {
-        if !current_user.role.can_assign_role(role) {
-            return Err(AppError::new(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "you cannot assign this role",
-            ));
-        }
+    if let Some(role) = new_role
+        && !current_user.role.can_assign_role(role)
+    {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "you cannot assign this role",
+        ));
     }
 
     if let Some(ref username) = body.username {
@@ -272,15 +272,15 @@ pub async fn update_user(
         }
     }
 
-    if let Some(ref password) = body.password {
-        if password.len() < 8 {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_password",
-                "password must be at least 8 characters",
-            )
-            .with_param("password"));
-        }
+    if let Some(ref password) = body.password
+        && password.len() < 8
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_password",
+            "password must be at least 8 characters",
+        )
+        .with_param("password"));
     }
 
     if body.enabled == Some(false) && current_user.id == user_id {

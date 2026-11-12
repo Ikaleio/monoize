@@ -12,9 +12,11 @@ mod signatures;
 mod tools;
 mod usage;
 
+#[cfg(test)]
 pub(crate) use parts::content_extra;
 pub use request::{encode_request, encode_request_checked};
 pub use response::{encode_response, encode_response_checked};
+#[cfg(test)]
 pub(crate) use response::{encode_response_node_parts, is_prompt_block_response};
 pub use signatures::retain_gemini_signature_provenance;
 pub use tools::{gemini_builtin_tool_key, is_gemini_mappable_tool};

@@ -252,7 +252,8 @@ impl ChatStreamEncoder {
                 }
                 None => {}
             }
-            let (field, patch): (&str, Option<fn(&mut Value, &str)>) = match kind.as_str() {
+            type DetailPatch = fn(&mut Value, &str);
+            let (field, patch): (&str, Option<DetailPatch>) = match kind.as_str() {
                 "reasoning.text" => ("text", Some(patch_detail_text)),
                 "reasoning.summary" => ("summary", Some(patch_detail_summary)),
                 "reasoning.encrypted" => ("data", Some(patch_detail_data)),

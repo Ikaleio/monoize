@@ -99,7 +99,7 @@ impl From<AnthropicUsage> for Usage {
         let input_details = (value.cache_read_input_tokens > 0
             || value.cache_creation_input_tokens > 0
             || value.tool_prompt_tokens > 0)
-            .then(|| InputDetails {
+            .then_some(InputDetails {
                 tool_prompt_modality_breakdown: None,
                 standard_tokens: 0,
                 cache_read_tokens: value.cache_read_input_tokens,
@@ -114,7 +114,7 @@ impl From<AnthropicUsage> for Usage {
         let output_details = (reasoning_tokens > 0
             || value.accepted_prediction_tokens > 0
             || value.rejected_prediction_tokens > 0)
-            .then(|| OutputDetails {
+            .then_some(OutputDetails {
                 standard_tokens: 0,
                 reasoning_tokens,
                 accepted_prediction_tokens: value.accepted_prediction_tokens,

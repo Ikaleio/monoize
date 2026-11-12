@@ -340,7 +340,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
 
     if !is_replica {
         let _write_guard = db.write().await;
-        crate::migration::run_startup_migrations(&*_write_guard)
+        crate::migration::run_startup_migrations(&_write_guard)
             .await
             .map_err(|err| {
                 AppError::new(
@@ -759,20 +759,19 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     .await;
                     let ok = probe_outcome.ok;
                     let usage_snapshot = probe_outcome.usage;
-                    if !ok {
-                        if let Err(error) = probe_user_store
+                    if !ok
+                        && let Err(error) = probe_user_store
                             .cancel_terminal_request_log(&request_log_reservation)
                             .await
-                        {
-                            tracing::error!(
-                                channel_id = %channel.id,
-                                channel_name = %channel.name,
-                                provider = %provider.name,
-                                probe_model = %model_name,
-                                "failed active probe request-log reservation cancellation failed: {error}"
-                            );
-                            continue;
-                        }
+                    {
+                        tracing::error!(
+                            channel_id = %channel.id,
+                            channel_name = %channel.name,
+                            provider = %provider.name,
+                            probe_model = %model_name,
+                            "failed active probe request-log reservation cancellation failed: {error}"
+                        );
+                        continue;
                     }
                     if ok
                         && let Err(error) = persist_active_probe_request_log(
@@ -1004,7 +1003,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     })
 }
 
-#[allow(clippy::result_large_err)]
 fn init_metrics() -> AppResult<PrometheusHandle> {
     METRICS_INIT.call_once(|| {
         match metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder() {

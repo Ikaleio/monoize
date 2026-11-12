@@ -380,11 +380,10 @@ pub(crate) fn sanitize_responses_output_item_for_frame_limit(
             Some("message") => {
                 if let Some(content) = obj.get_mut("content").and_then(Value::as_array_mut) {
                     for part in content {
-                        if let Some(part_obj) = part.as_object_mut() {
-                            if part_obj.get("type").and_then(|v| v.as_str()) == Some("output_text")
-                            {
-                                part_obj.insert("text".to_string(), Value::String(String::new()));
-                            }
+                        if let Some(part_obj) = part.as_object_mut()
+                            && part_obj.get("type").and_then(|v| v.as_str()) == Some("output_text")
+                        {
+                            part_obj.insert("text".to_string(), Value::String(String::new()));
                         }
                     }
                 }
@@ -448,12 +447,11 @@ pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) 
     if let Some(summary) = item.get("summary").and_then(|v| v.as_array()) {
         let mut parts = Vec::new();
         for s in summary {
-            if s.get("type").and_then(|v| v.as_str()) == Some("summary_text") {
-                if let Some(t) = s.get("text").and_then(|v| v.as_str()) {
-                    if !t.is_empty() {
-                        parts.push(t);
-                    }
-                }
+            if s.get("type").and_then(|v| v.as_str()) == Some("summary_text")
+                && let Some(t) = s.get("text").and_then(|v| v.as_str())
+                && !t.is_empty()
+            {
+                parts.push(t);
             }
         }
         if !parts.is_empty() {
@@ -548,14 +546,14 @@ pub(crate) fn extract_chat_reasoning_delta_chunks(
             surface: Some(crate::urp::CHAT_REASONING_SURFACE_REASONING_CONTENT),
         });
     }
-    if let Some(sig) = delta.get("reasoning_opaque").and_then(|v| v.as_str()) {
-        if !sig.is_empty() {
-            sig_parts.push(ChatReasoningDeltaChunk {
-                text: sig.to_string(),
-                format: None,
-                surface: Some(crate::urp::CHAT_REASONING_SURFACE_REASONING_OPAQUE),
-            });
-        }
+    if let Some(sig) = delta.get("reasoning_opaque").and_then(|v| v.as_str())
+        && !sig.is_empty()
+    {
+        sig_parts.push(ChatReasoningDeltaChunk {
+            text: sig.to_string(),
+            format: None,
+            surface: Some(crate::urp::CHAT_REASONING_SURFACE_REASONING_OPAQUE),
+        });
     }
 
     (text_parts, sig_parts)

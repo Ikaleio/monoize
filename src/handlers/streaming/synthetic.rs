@@ -246,14 +246,14 @@ impl StreamForward {
         {
             convert_assistant_images_to_markdown(&mut resp);
         }
-        Ok(SlotOutcome::Synthetic(SyntheticStream {
+        Ok(SlotOutcome::Synthetic(Box::new(SyntheticStream {
             resp,
             forwarded_headers,
             foreign_extras,
             responses_echo,
             upstream_response_model,
             mask_sensitive_info,
-        }))
+        })))
     }
 
     /// A buffered reply that cannot be replayed ends the request. The capture

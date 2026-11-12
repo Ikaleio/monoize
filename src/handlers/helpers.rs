@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
 use xxhash_rust::xxh3::Xxh3;
 
-#[allow(clippy::result_large_err)]
 pub(super) fn decode_urp_request(
     protocol: DownstreamProtocol,
     known: Value,
@@ -51,7 +50,6 @@ pub(super) fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Reject the request if the API key has an IP whitelist and the client IP is not in it.
-#[allow(clippy::result_large_err)]
 pub(super) fn check_ip_whitelist(
     auth: &crate::auth::AuthResult,
     headers: &HeaderMap,
@@ -355,7 +353,6 @@ pub(super) async fn transform_urp_stream(
     Ok(())
 }
 
-#[allow(clippy::result_large_err)]
 pub(crate) fn typed_request_to_legacy(
     req: &urp::UrpRequest,
     max_multiplier: Option<Multiplier>,
@@ -1628,10 +1625,10 @@ pub(super) fn filter_extra_body_for_provider(
     downstream: DownstreamProtocol,
     provider_override: &Option<Vec<String>>,
 ) {
-    if let Some(overrides) = provider_override {
-        if overrides.iter().any(|s| s == "*") {
-            return;
-        }
+    if let Some(overrides) = provider_override
+        && overrides.iter().any(|s| s == "*")
+    {
+        return;
     }
 
     let defaults = default_extra_whitelist(provider_type);

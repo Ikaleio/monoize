@@ -495,14 +495,11 @@ async fn compress_image_node(
                 if let ToolResultContent::Image {
                     source, metadata, ..
                 } = item
+                    && !metadata.image_mask
+                    && !metadata.image_markup
+                    && let Some(next_source) = compress_image_source(context, cfg, source).await?
                 {
-                    if !metadata.image_mask && !metadata.image_markup {
-                        if let Some(next_source) =
-                            compress_image_source(context, cfg, source).await?
-                        {
-                            *source = next_source;
-                        }
-                    }
+                    *source = next_source;
                 }
             }
         }
