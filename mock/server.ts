@@ -19,6 +19,21 @@ declare const Bun: {
 };
 
 const port = Number(process.env.PORT ?? 4010);
+const TEXT_USAGE = { input_tokens: 8, output_tokens: 16 };
+const RESPONSES_USAGE = { ...TEXT_USAGE, total_tokens: 24 };
+const CHAT_USAGE = {
+  prompt_tokens: 8,
+  completion_tokens: 16,
+  total_tokens: 24,
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return isObject(value) ? value : {};
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -34,7 +49,8 @@ function sseResponse(chunks: string[], delayMs = 0) {
       async start(controller) {
         for (const chunk of chunks) {
           controller.enqueue(encoder.encode(chunk));
-          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+          if (delayMs > 0)
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
         controller.close();
       },
@@ -50,7 +66,7 @@ function sseResponse(chunks: string[], delayMs = 0) {
   );
 }
 
-function collectResponsesText(input: any): string {
+function collectResponsesText(input: unknown): string {
   if (typeof input === "string") return input;
   if (!Array.isArray(input)) return "";
   let out = "";
@@ -59,28 +75,35 @@ function collectResponsesText(input: any): string {
       out += item;
       continue;
     }
-    if (item?.type === "message" && Array.isArray(item.content)) {
+    if (
+      isObject(item) &&
+      item.type === "message" &&
+      Array.isArray(item.content)
+    ) {
       for (const part of item.content) {
-        if (typeof part?.text === "string") out += part.text;
-        if (typeof part?.input_text === "string") out += part.input_text;
+        if (!isObject(part)) continue;
+        if (typeof part.text === "string") out += part.text;
+        if (typeof part.input_text === "string") out += part.input_text;
       }
     }
   }
   return out;
 }
 
-function collectChatText(messages: any[]): string {
+function collectChatText(messages: unknown[]): string {
   let out = "";
   for (const msg of messages) {
-    if (typeof msg?.content === "string") out += msg.content;
+    if (isObject(msg) && typeof msg.content === "string") out += msg.content;
   }
   return out;
 }
 
-function collectToolMessages(messages: any[]): Array<{ toolCallId: string; content: string }> {
+function collectToolMessages(
+  messages: unknown[],
+): Array<{ toolCallId: string; content: string }> {
   const toolMessages: Array<{ toolCallId: string; content: string }> = [];
   for (const msg of messages) {
-    if (msg?.role !== "tool") {
+    if (!isObject(msg) || msg.role !== "tool") {
       continue;
     }
     toolMessages.push({
@@ -102,77 +125,11 @@ function chatToolCall(id: string, name: string, args: Record<string, unknown>) {
   };
 }
 
-function toolAwareChatResponse(model: string, messages: any[], body: any) {
-  const toolMessages = collectToolMessages(messages);
-  const toolNames = Array.isArray(body.tools)
-    ? body.tools
-        .map((tool: any) => tool?.function?.name)
-        .filter((name: unknown): name is string => typeof name === "string")
-    : [];
-
-  if (toolNames.includes("weather") && toolNames.includes("websearch")) {
-    if (toolMessages.length === 0) {
-      return {
-        id: `chatcmpl_mock_${Date.now()}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "",
-              tool_calls: [chatToolCall("call_weather_1", "weather", { city: "Taipei" })],
-            },
-            finish_reason: "tool_calls",
-          },
-        ],
-      };
-    }
-
-    if (toolMessages.length === 1) {
-      return {
-        id: `chatcmpl_mock_${Date.now()}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "",
-              tool_calls: [chatToolCall("call_websearch_1", "websearch", { query: "Monoize" })],
-            },
-            finish_reason: "tool_calls",
-          },
-        ],
-      };
-    }
-
-    const weatherResult = toolMessages.find((message) => message.toolCallId === "call_weather_1")?.content ?? "missing-weather";
-    const websearchResult = toolMessages.find((message) => message.toolCallId === "call_websearch_1")?.content ?? "missing-websearch";
-
-    return {
-      id: `chatcmpl_mock_${Date.now()}`,
-      object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model,
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: "assistant",
-            content: `PASS weather=${weatherResult}; websearch=${websearchResult}`,
-          },
-          finish_reason: "stop",
-        },
-      ],
-    };
-  }
-
-  const text = `${collectChatText(messages)}${echoSuffix(body)}`;
+function chatCompletion(
+  model: string,
+  message: Record<string, unknown>,
+  finishReason = "stop",
+) {
   return {
     id: `chatcmpl_mock_${Date.now()}`,
     object: "chat.completion",
@@ -181,30 +138,102 @@ function toolAwareChatResponse(model: string, messages: any[], body: any) {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: text },
-        finish_reason: "stop",
+        message: { role: "assistant", ...message },
+        finish_reason: finishReason,
       },
     ],
+    usage: CHAT_USAGE,
   };
 }
 
-function collectAnthropicText(messages: any[]): string {
-  let out = "";
-  for (const msg of messages) {
-    const content = msg?.content;
-    if (!Array.isArray(content)) continue;
-    for (const block of content) {
-      if (block?.type === "text" && typeof block?.text === "string") out += block.text;
+function toolAwareChatResponse(
+  model: string,
+  messages: unknown[],
+  body: Record<string, unknown>,
+) {
+  const toolMessages = collectToolMessages(messages);
+  const toolNames = Array.isArray(body.tools)
+    ? body.tools
+        .map((tool: unknown) => object(object(tool).function).name)
+        .filter((name: unknown): name is string => typeof name === "string")
+    : [];
+
+  if (toolNames.includes("weather") && toolNames.includes("websearch")) {
+    if (toolMessages.length === 0) {
+      return chatCompletion(
+        model,
+        {
+          content: "",
+          tool_calls: [
+            chatToolCall("call_weather_1", "weather", { city: "Taipei" }),
+          ],
+        },
+        "tool_calls",
+      );
     }
+
+    if (toolMessages.length === 1) {
+      return chatCompletion(
+        model,
+        {
+          content: "",
+          tool_calls: [
+            chatToolCall("call_websearch_1", "websearch", { query: "Monoize" }),
+          ],
+        },
+        "tool_calls",
+      );
+    }
+
+    const weatherResult =
+      toolMessages.find((message) => message.toolCallId === "call_weather_1")
+        ?.content ?? "missing-weather";
+    const websearchResult =
+      toolMessages.find((message) => message.toolCallId === "call_websearch_1")
+        ?.content ?? "missing-websearch";
+
+    return chatCompletion(model, {
+      content: `PASS weather=${weatherResult}; websearch=${websearchResult}`,
+    });
   }
-  return out;
+
+  const text = `${collectChatText(messages)}${echoSuffix(body)}`;
+  return chatCompletion(model, { content: text });
 }
 
-function echoSuffix(body: any): string {
-  if (body && typeof body.extra_echo === "string" && body.extra_echo.length > 0) {
+function collectAnthropicContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (block: unknown): block is { type: "text"; text: string } =>
+        isObject(block) &&
+        block.type === "text" &&
+        typeof block.text === "string",
+    )
+    .map((block) => block.text)
+    .join("");
+}
+
+function collectAnthropicText(messages: unknown[]): string {
+  return messages
+    .map((message) => collectAnthropicContent(object(message).content))
+    .join("");
+}
+
+function echoSuffix(body: Record<string, unknown>): string {
+  if (
+    body &&
+    typeof body.extra_echo === "string" &&
+    body.extra_echo.length > 0
+  ) {
     return `|extra_echo=${body.extra_echo}`;
   }
-  if (body && typeof body.unparsed_field === "string" && body.unparsed_field.length > 0) {
+  if (
+    body &&
+    typeof body.unparsed_field === "string" &&
+    body.unparsed_field.length > 0
+  ) {
     return `|unparsed_field=${body.unparsed_field}`;
   }
   return "";
@@ -240,7 +269,11 @@ function imageResponse(prompt: string, b64: string) {
 
 // MU14a/MU15a: partial frames per requested partial_images (capped at 3),
 // then one completed frame carrying the PNG and the MU14 usage object.
-function imageStreamChunks(family: "image_generation" | "image_edit", b64: string, partialImages: number): string[] {
+function imageStreamChunks(
+  family: "image_generation" | "image_edit",
+  b64: string,
+  partialImages: number,
+): string[] {
   const createdAt = Math.floor(Date.now() / 1000);
   const partials = Math.max(0, Math.min(3, Math.trunc(partialImages)));
   const chunks: string[] = [];
@@ -271,30 +304,19 @@ function imageStreamChunks(family: "image_generation" | "image_edit", b64: strin
 // MU5: model ids containing "reasoning" activate reasoning output on the
 // streaming endpoints so downstream reasoning pipelines can be exercised
 // without a real reasoning upstream.
-function hasReasoningTrigger(body: any): boolean {
+function hasReasoningTrigger(body: Record<string, unknown>): boolean {
   return String(body?.model ?? "").includes("reasoning");
 }
 
 function tokenize(text: string): string[] {
-  return text.match(/\S+\s*/g) ?? [];
+  return text.match(/\s*\S+\s*|\s+/g) ?? [];
 }
 
-function responsesEventFrame(type: string, data: Record<string, unknown>): string {
+function responsesEventFrame(
+  type: string,
+  data: Record<string, unknown>,
+): string {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
-}
-
-function jsonFromSseFrames(frames: string[]): Record<string, unknown>[] {
-  const events: Record<string, unknown>[] = [];
-  for (const frame of frames) {
-    const data = frame
-      .split("\n")
-      .filter((line) => line.startsWith("data: "))
-      .map((line) => line.slice(6))
-      .join("\n");
-    if (!data || data === "[DONE]") continue;
-    events.push(JSON.parse(data) as Record<string, unknown>);
-  }
-  return events;
 }
 
 function warmupResponsesEvents(model: string): Record<string, unknown>[] {
@@ -309,152 +331,205 @@ function warmupResponsesEvents(model: string): Record<string, unknown>[] {
     output: [],
   };
   return [
-    { type: "response.created", response: { ...response, status: "in_progress" } },
+    {
+      type: "response.created",
+      response: { ...response, status: "in_progress" },
+    },
     { type: "response.completed", response },
   ];
 }
 
-function simpleResponsesWsEvents(model: string, text: string): Record<string, unknown>[] {
-  // MU9c: MU8 JSON object, then response.completed as the WS terminal (no [DONE]).
-  const id = `resp_mock_${Date.now()}`;
-  const createdAt = Math.floor(Date.now() / 1000);
-  const response = {
-    id,
-    object: "response",
-    created_at: createdAt,
-    model,
-    status: "completed",
-    output: [
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text }],
-      },
-    ],
-    usage: { input_tokens: 8, output_tokens: 16, total_tokens: 24 },
-  };
-  return [
-    { type: "response.output_text.delta", text },
-    { type: "response.completed", response },
-  ];
-}
+type MockEvent = { type: string; [key: string]: unknown };
 
-// MU9: full OpenAI Responses lifecycle with a reasoning-summary item followed
-// by a message item, so Monoize's upstream decoder reconstructs a Reasoning
-// node with summary text.
-function reasoningResponsesStream(model: string, text: string): string[] {
-  const responseId = `resp_mock_${Date.now()}`;
-  const createdAt = Math.floor(Date.now() / 1000);
+function reasoningResponsesEvents(text: string): MockEvent[] {
   const summaryText = `Mock summary of: ${text}`;
-  const reasoningItemDone = {
-    type: "reasoning",
-    id: "rs_mock_1",
-    summary: [{ type: "summary_text", text: summaryText }],
+  const location = { item_id: "rs_mock_1", output_index: 0, summary_index: 0 };
+  return [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "reasoning", id: "rs_mock_1", summary: [] },
+    },
+    {
+      type: "response.reasoning_summary_part.added",
+      ...location,
+      part: { type: "summary_text", text: "" },
+    },
+    ...tokenize(summaryText).map((delta) => ({
+      type: "response.reasoning_summary_text.delta",
+      ...location,
+      delta,
+    })),
+    {
+      type: "response.reasoning_summary_text.done",
+      ...location,
+      text: summaryText,
+    },
+    {
+      type: "response.reasoning_summary_part.done",
+      ...location,
+      part: { type: "summary_text", text: summaryText },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "reasoning",
+        id: "rs_mock_1",
+        summary: [{ type: "summary_text", text: summaryText }],
+      },
+    },
+  ];
+}
+
+function messageResponsesEvents(
+  text: string,
+  outputIndex: number,
+): MockEvent[] {
+  const location = {
+    item_id: "msg_mock_1",
+    output_index: outputIndex,
+    content_index: 0,
   };
-  const messageItemDone = {
+  const item = {
     type: "message",
     id: "msg_mock_1",
     role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
+    status: "in_progress",
+    content: [],
   };
+  const part = { type: "output_text", text, annotations: [] };
   return [
-    responsesEventFrame("response.created", {
-      response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress", output: [] },
-    }),
-    responsesEventFrame("response.output_item.added", {
-      output_index: 0,
-      item: { type: "reasoning", id: "rs_mock_1", summary: [] },
-    }),
-    responsesEventFrame("response.reasoning_summary_part.added", {
-      item_id: "rs_mock_1",
-      output_index: 0,
-      summary_index: 0,
-      part: { type: "summary_text", text: "" },
-    }),
-    ...tokenize(summaryText).map((token) =>
-      responsesEventFrame("response.reasoning_summary_text.delta", {
-        item_id: "rs_mock_1",
-        output_index: 0,
-        summary_index: 0,
-        delta: token,
-      }),
-    ),
-    responsesEventFrame("response.reasoning_summary_text.done", {
-      item_id: "rs_mock_1",
-      output_index: 0,
-      summary_index: 0,
-      text: summaryText,
-    }),
-    responsesEventFrame("response.reasoning_summary_part.done", {
-      item_id: "rs_mock_1",
-      output_index: 0,
-      summary_index: 0,
-      part: { type: "summary_text", text: summaryText },
-    }),
-    responsesEventFrame("response.output_item.done", {
-      output_index: 0,
-      item: reasoningItemDone,
-    }),
-    responsesEventFrame("response.output_item.added", {
-      output_index: 1,
-      item: { type: "message", id: "msg_mock_1", role: "assistant", status: "in_progress", content: [] },
-    }),
-    responsesEventFrame("response.content_part.added", {
-      item_id: "msg_mock_1",
-      output_index: 1,
-      content_index: 0,
-      part: { type: "output_text", text: "", annotations: [] },
-    }),
-    ...tokenize(text).map((token) =>
-      responsesEventFrame("response.output_text.delta", {
-        item_id: "msg_mock_1",
-        output_index: 1,
-        content_index: 0,
-        delta: token,
-      }),
-    ),
-    responsesEventFrame("response.output_text.done", {
-      item_id: "msg_mock_1",
-      output_index: 1,
-      content_index: 0,
-      text,
-    }),
-    responsesEventFrame("response.content_part.done", {
-      item_id: "msg_mock_1",
-      output_index: 1,
-      content_index: 0,
-      part: { type: "output_text", text, annotations: [] },
-    }),
-    responsesEventFrame("response.output_item.done", {
-      output_index: 1,
-      item: messageItemDone,
-    }),
-    responsesEventFrame("response.completed", {
-      response: {
-        id: responseId,
-        object: "response",
-        created_at: createdAt,
-        model,
-        status: "completed",
-        output: [reasoningItemDone, messageItemDone],
-        usage: { input_tokens: 8, output_tokens: 16, total_tokens: 24 },
-      },
-    }),
-    `data: [DONE]\n\n`,
+    { type: "response.output_item.added", output_index: outputIndex, item },
+    {
+      type: "response.content_part.added",
+      ...location,
+      part: { ...part, text: "" },
+    },
+    ...tokenize(text).map((delta) => ({
+      type: "response.output_text.delta",
+      ...location,
+      delta,
+    })),
+    { type: "response.output_text.done", ...location, text },
+    { type: "response.content_part.done", ...location, part },
+    {
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item: { ...item, status: "completed", content: [part] },
+    },
   ];
 }
 
-function systemOneAnswer(question: any): Record<string, unknown> {
-  const type = typeof question?.type === "string" ? question.type : "";
+function responsesEvents(
+  model: string,
+  text: string,
+  reasoning: boolean,
+): MockEvent[] {
+  const response = {
+    id: `resp_mock_${Date.now()}`,
+    object: "response",
+    created_at: Math.floor(Date.now() / 1000),
+    model,
+  };
+  const items = [
+    ...(reasoning ? reasoningResponsesEvents(text) : []),
+    ...messageResponsesEvents(text, reasoning ? 1 : 0),
+  ];
+  return [
+    {
+      type: "response.created",
+      response: { ...response, status: "in_progress", output: [] },
+    },
+    ...items,
+    {
+      type: "response.completed",
+      response: {
+        ...response,
+        status: "completed",
+        usage: RESPONSES_USAGE,
+        output: items
+          .filter((event) => event.type === "response.output_item.done")
+          .map((event) => event.item),
+      },
+    },
+  ].map((event, sequence_number) => ({ ...event, sequence_number }));
+}
+
+function messagesBlockEvents(
+  index: number,
+  text: string,
+  thinking: boolean,
+): MockEvent[] {
+  const contentBlock = thinking
+    ? { type: "thinking", thinking: "" }
+    : { type: "text", text: "" };
+  const deltas = tokenize(text).map((token) => ({
+    type: "content_block_delta",
+    index,
+    delta: thinking
+      ? { type: "thinking_delta", thinking: token }
+      : { type: "text_delta", text: token },
+  }));
+  return [
+    { type: "content_block_start", index, content_block: contentBlock },
+    ...deltas,
+    ...(thinking
+      ? [
+          {
+            type: "content_block_delta",
+            index,
+            delta: {
+              type: "signature_delta",
+              signature: "mock-thinking-signature",
+            },
+          },
+        ]
+      : []),
+    { type: "content_block_stop", index },
+  ];
+}
+
+function messagesStream(
+  model: string,
+  input: string,
+  text: string,
+  reasoning: boolean,
+): string[] {
+  const events: MockEvent[] = [
+    {
+      type: "message_start",
+      message: {
+        id: `msg_mock_${Date.now()}`,
+        type: "message",
+        role: "assistant",
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 8, output_tokens: 0 },
+      },
+    },
+    ...(reasoning
+      ? messagesBlockEvents(0, `Mock reasoning about: ${input}`, true)
+      : []),
+    ...messagesBlockEvents(reasoning ? 1 : 0, text, false),
+    {
+      type: "message_delta",
+      delta: { stop_reason: "end_turn", stop_sequence: null },
+      usage: TEXT_USAGE,
+    },
+    { type: "message_stop" },
+  ];
+  return events.map((event) => responsesEventFrame(event.type, event));
+}
+
+function systemOneAnswer(value: unknown): Record<string, unknown> {
+  const question = object(value);
+  const type = typeof question.type === "string" ? question.type : "";
   if (type === "noul") return { type, noul: 0.5 };
   if (type === "choice") {
-    const criteria =
-      question?.criteria &&
-      typeof question.criteria === "object" &&
-      !Array.isArray(question.criteria)
-        ? question.criteria
-        : {};
+    const criteria = isObject(question.criteria) ? question.criteria : {};
     const keys = Object.keys(criteria);
     const n = Math.max(keys.length, 1);
     const share = 1 / n;
@@ -493,12 +568,12 @@ function systemOneAnswer(question: any): Record<string, unknown> {
   return { type };
 }
 
-function systemOneResponse(body: any): Response {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
+function systemOneResponse(body: unknown): Response {
+  if (!isObject(body)) {
     return jsonResponse({ error: "body must be object" }, 400);
   }
   const questions = body.questions;
-  if (!questions || typeof questions !== "object" || Array.isArray(questions)) {
+  if (!isObject(questions)) {
     return jsonResponse({ error: "questions must be an object" }, 400);
   }
   const answers: Record<string, unknown> = {};
@@ -535,23 +610,125 @@ function responsesObject(model: string, text: string) {
         content: [{ type: "output_text", text }],
       },
     ],
+    usage: RESPONSES_USAGE,
   };
+}
+
+function chatStream(
+  model: string,
+  messages: unknown[],
+  body: Record<string, unknown>,
+): string[] {
+  const text = `${collectChatText(messages)}${echoSuffix(body)}`;
+  const base = {
+    id: `chatcmpl_mock_${Date.now()}`,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model,
+  };
+  const reasoningWords = hasReasoningTrigger(body)
+    ? tokenize(`Mock reasoning about: ${collectChatText(messages)}`)
+    : [];
+  return [
+    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] })}\n\n`,
+    ...reasoningWords.map(
+      (word) =>
+        `data: ${JSON.stringify({
+          ...base,
+          choices: [
+            {
+              index: 0,
+              delta: { reasoning_content: word },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+    ),
+    ...tokenize(text).map(
+      (word) =>
+        `data: ${JSON.stringify({
+          ...base,
+          choices: [
+            { index: 0, delta: { content: word }, finish_reason: null },
+          ],
+        })}\n\n`,
+    ),
+    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: CHAT_USAGE })}\n\n`,
+    `data: [DONE]\n\n`,
+  ];
+}
+
+function messagesResponse(body: Record<string, unknown>): Response {
+  const model = String(body.model ?? "mock-messages-model");
+  const input = collectAnthropicText(
+    Array.isArray(body.messages) ? body.messages : [],
+  );
+  const text = `${input}${echoSuffix(body)}`;
+  if (body.stream === true) {
+    return sseResponse(
+      messagesStream(model, input, text, hasReasoningTrigger(body)),
+    );
+  }
+  return jsonResponse({
+    id: `msg_mock_${Date.now()}`,
+    type: "message",
+    role: "assistant",
+    model,
+    content: [{ type: "text", text }],
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    usage: TEXT_USAGE,
+  });
+}
+
+async function imageEditResponse(req: Request): Promise<Response> {
+  const form = await req.formData();
+  const prompt = String(form.get("prompt") ?? "");
+  const image = form.get("image") ?? form.get("image[]");
+  if (!image || typeof image === "string") {
+    return jsonResponse(
+      { error: { message: "image file field required" } },
+      400,
+    );
+  }
+  if (String(form.get("stream") ?? "") === "true") {
+    const partialImages = Number(form.get("partial_images") ?? 0);
+    return sseResponse(
+      imageStreamChunks(
+        "image_edit",
+        EDIT_PNG_B64,
+        Number.isFinite(partialImages) ? partialImages : 0,
+      ),
+      45,
+    );
+  }
+  return jsonResponse(imageResponse(prompt, EDIT_PNG_B64));
 }
 
 Bun.serve({
   port,
   websocket: {
     message(ws, message) {
-      const raw = typeof message === "string" ? message : new TextDecoder().decode(message);
-      let event: any;
+      const raw =
+        typeof message === "string"
+          ? message
+          : new TextDecoder().decode(message);
+      let event: Record<string, unknown>;
       try {
-        event = JSON.parse(raw);
+        event = object(JSON.parse(raw));
       } catch {
-        ws.send(JSON.stringify({ type: "error", error: { message: "invalid JSON" } }));
+        ws.send(
+          JSON.stringify({ type: "error", error: { message: "invalid JSON" } }),
+        );
         return;
       }
       if (event?.type !== "response.create") {
-        ws.send(JSON.stringify({ type: "error", error: { message: "unsupported event" } }));
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            error: { message: "unsupported event" },
+          }),
+        );
         return;
       }
       const model = String(event.model ?? "mock-model");
@@ -562,9 +739,7 @@ Bun.serve({
         return;
       }
       const text = `${collectResponsesText(event.input)}${echoSuffix(event)}`;
-      const frames = hasReasoningTrigger(event)
-        ? jsonFromSseFrames(reasoningResponsesStream(model, text))
-        : simpleResponsesWsEvents(model, text);
+      const frames = responsesEvents(model, text, hasReasoningTrigger(event));
       for (const frame of frames) {
         ws.send(JSON.stringify(frame));
       }
@@ -577,91 +752,51 @@ Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/v1/responses") {
       if (server.upgrade(req)) return;
-      return jsonResponse({ error: { message: "WebSocket upgrade failed" } }, 400);
+      return jsonResponse(
+        { error: { message: "WebSocket upgrade failed" } },
+        400,
+      );
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const body = await req.json();
+      const body = object(await req.json());
       const model = String(body.model ?? "mock-model");
       const text = `${collectResponsesText(body.input)}${echoSuffix(body)}`;
 
       if (body.stream === true) {
-        if (hasReasoningTrigger(body)) {
-          return sseResponse(reasoningResponsesStream(model, text), 30);
-        }
-        const chunks = [
-          `event: response.output_text.delta\n` +
-            `data: ${JSON.stringify({ text })}\n\n`,
-          `data: [DONE]\n\n`,
-        ];
-        return sseResponse(chunks);
+        const events = responsesEvents(model, text, hasReasoningTrigger(body));
+        const chunks = events.map((event) =>
+          responsesEventFrame(event.type, event),
+        );
+        return sseResponse([...chunks, `data: [DONE]\n\n`], 30);
       }
 
       return jsonResponse(responsesObject(model, text));
     }
 
     if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-      const body = await req.json();
+      const body = object(await req.json());
       const model = String(body.model ?? "mock-chat-model");
       const messages = Array.isArray(body.messages) ? body.messages : [];
 
       if (body.stream === true) {
-        const text = `${collectChatText(messages)}${echoSuffix(body)}`;
-        const base = {
-          id: `chatcmpl_mock_${Date.now()}`,
-          object: "chat.completion.chunk",
-          created: Math.floor(Date.now() / 1000),
-          model,
-        };
-        // Word-level deltas plus a terminal finish_reason chunk: Monoize
-        // rejects streams that hit [DONE] without a terminal finish_reason.
-        const words = text.match(/\S+\s*/g) ?? [];
-        // MU12: reasoning-trigger models stream raw CoT via reasoning_content
-        // before any content delta, mimicking open-source reasoning upstreams.
-        const reasoningWords = hasReasoningTrigger(body)
-          ? tokenize(`Mock reasoning about: ${collectChatText(messages)}`)
-          : [];
-        const chunks = [
-          `data: ${JSON.stringify({
-            ...base,
-            choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
-          })}\n\n`,
-          ...reasoningWords.map(
-            (word) =>
-              `data: ${JSON.stringify({
-                ...base,
-                choices: [
-                  { index: 0, delta: { reasoning_content: word }, finish_reason: null },
-                ],
-              })}\n\n`,
-          ),
-          ...words.map(
-            (word) =>
-              `data: ${JSON.stringify({
-                ...base,
-                choices: [{ index: 0, delta: { content: word }, finish_reason: null }],
-              })}\n\n`,
-          ),
-          `data: ${JSON.stringify({
-            ...base,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: { prompt_tokens: 8, completion_tokens: 16, total_tokens: 24 },
-          })}\n\n`,
-          `data: [DONE]\n\n`,
-        ];
-        return sseResponse(chunks, 45);
+        return sseResponse(chatStream(model, messages, body), 45);
       }
 
       return jsonResponse(toolAwareChatResponse(model, messages, body));
     }
 
     if (req.method === "POST" && url.pathname === "/v1/images/generations") {
-      const body = await req.json();
+      const body = object(await req.json());
       const prompt = String(body.prompt ?? "");
       if (body.stream === true) {
         const partialImages = Number(body.partial_images ?? 0);
         return sseResponse(
-          imageStreamChunks("image_generation", GENERATION_PNG_B64, Number.isFinite(partialImages) ? partialImages : 0),
+          imageStreamChunks(
+            "image_generation",
+            GENERATION_PNG_B64,
+            Number.isFinite(partialImages) ? partialImages : 0,
+          ),
           45,
         );
       }
@@ -669,62 +804,20 @@ Bun.serve({
     }
 
     if (req.method === "POST" && url.pathname === "/v1/images/edits") {
-      const form = await req.formData();
-      const prompt = String(form.get("prompt") ?? "");
-      const image = form.get("image") ?? form.get("image[]");
-      if (!image || typeof image === "string") {
-        return jsonResponse(
-          { error: { message: "image file field required" } },
-          400,
-        );
-      }
-      if (String(form.get("stream") ?? "") === "true") {
-        const partialImages = Number(form.get("partial_images") ?? 0);
-        return sseResponse(
-          imageStreamChunks("image_edit", EDIT_PNG_B64, Number.isFinite(partialImages) ? partialImages : 0),
-          45,
-        );
-      }
-      return jsonResponse(imageResponse(prompt, EDIT_PNG_B64));
+      return imageEditResponse(req);
     }
 
     if (req.method === "POST" && url.pathname === "/v1/messages") {
-      const body = await req.json();
-      const model = String(body.model ?? "mock-messages-model");
+      return messagesResponse(object(await req.json()));
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/messages/count_tokens") {
+      const body = object(await req.json());
       const messages = Array.isArray(body.messages) ? body.messages : [];
-      const text = `${collectAnthropicText(messages)}${echoSuffix(body)}`;
-
-      if (body.stream === true) {
-        const start = {
-          type: "message_start",
-          message: { id: `msg_mock_${Date.now()}`, type: "message", role: "assistant", model, content: [] },
-        };
-        const blockStart = {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" },
-        };
-        const delta = {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text },
-        };
-        const stop = { type: "message_stop" };
-        const chunks = [
-          `data: ${JSON.stringify(start)}\n\n`,
-          `data: ${JSON.stringify(blockStart)}\n\n`,
-          `data: ${JSON.stringify(delta)}\n\n`,
-          `data: ${JSON.stringify(stop)}\n\n`,
-        ];
-        return sseResponse(chunks);
-      }
-
+      const text =
+        collectAnthropicContent(body.system) + collectAnthropicText(messages);
       return jsonResponse({
-        id: `msg_mock_${Date.now()}`,
-        type: "message",
-        role: "assistant",
-        model,
-        content: [{ type: "text", text }],
+        input_tokens: Math.ceil(new TextEncoder().encode(text).length / 4),
       });
     }
 

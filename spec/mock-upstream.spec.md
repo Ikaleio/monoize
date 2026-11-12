@@ -3,9 +3,9 @@
 ## 0. Status
 
 - **Purpose:** Define the behavior of the development mock upstream at `mock/server.ts`.
-- **Scope:** The mock stands in for provider upstreams during local development, SDK
-  verification (`sdk-live-responses-contract.spec.md`), and Playground verification
-  (`playground.spec.md`). It is not part of the release artifact.
+- **Scope:** The mock stands in for provider upstreams during local development,
+  Playground verification (`playground.spec.md`), and differential smoke runs
+  (`differential-smoke.spec.md`). It is not part of the release artifact.
 
 ## 1. Runtime
 
@@ -23,8 +23,17 @@ MU4. Define `echo(text, body)` as `text` plus the suffix `|extra_echo=<v>` when
 `body.extra_echo` is a non-empty string, else plus `|unparsed_field=<v>` when
 `body.unparsed_field` is a non-empty string, else plus nothing.
 
-MU5. Define the *reasoning trigger*: a request body activates reasoning output iff its
+MU5. Define the _reasoning trigger_: a request body activates reasoning output iff its
 `model` string contains the substring `reasoning`.
+
+MU5a. Text tokenization MUST preserve whitespace. Concatenating token deltas MUST
+reproduce the complete source text, including leading and trailing whitespace.
+Generated Responses and Messages text replies MUST report `input_tokens = 8` and
+`output_tokens = 16`. Responses replies MUST also report `total_tokens = 24`.
+Chat replies MUST report `prompt_tokens = 8`, `completion_tokens = 16`, and
+`total_tokens = 24`. A Messages stream starts with `output_tokens = 0` and
+reports the final cumulative `output_tokens = 16` in `message_delta`.
+These counts are deterministic fixtures, not measured token counts.
 
 ## 3. `POST /v1/responses`
 
@@ -34,11 +43,25 @@ item content parts, in source order.
 
 MU7. Without `stream: true`, the endpoint MUST return HTTP 200 with a completed
 `response` object whose `output` is one assistant `message` item containing one
-`output_text` part with `echo(input text, body)`.
+`output_text` part with `echo(input text, body)` and whose `usage` follows MU5a.
 
 MU8. With `stream: true` and the reasoning trigger inactive, the endpoint MUST emit
-exactly one `response.output_text.delta` frame carrying `echo(input text, body)`,
-then `data: [DONE]`.
+the following lifecycle, then `data: [DONE]`:
+
+1. `response.created` with `status: "in_progress"` and empty `output`.
+2. `response.output_item.added` with an in-progress assistant message
+   (`id = "msg_mock_1"`, `output_index = 0`, empty `content`).
+3. `response.content_part.added` with an empty `output_text` part
+   (`content_index = 0`).
+4. One `response.output_text.delta` per token of `echo(input text, body)`.
+5. `response.output_text.done` and `response.content_part.done` with the full text.
+6. `response.output_item.done` with the completed message.
+7. `response.completed` with `status: "completed"`, the completed message in
+   `response.output`, and MU5a usage in `response.usage`.
+
+Each content event MUST carry the same `item_id`, `output_index`, and
+`content_index` as its corresponding start event. Every JSON event MUST contain
+a monotonically increasing `sequence_number`, starting at `0`.
 
 MU9. With `stream: true` and the reasoning trigger active, the endpoint MUST emit an
 OpenAI Responses lifecycle in this order, then `data: [DONE]`:
@@ -60,8 +83,10 @@ OpenAI Responses lifecycle in this order, then `data: [DONE]`:
 10. `response.completed` whose `response.output` contains the completed reasoning and
     message items and whose `response.usage` carries non-zero token counts
 
-Every frame in MU9 MUST carry the event name in both the `event:` line and the `data:`
-JSON `type` field.
+MU8 and MU9 MUST use the same message lifecycle and MU5a usage. The reasoning
+item occupies `output_index = 0`, so the MU9 message occupies `output_index = 1`.
+Every frame in MU8 and MU9 MUST carry the event name in both the `event:` line and
+the `data:` JSON `type` field. MU9 sequence numbers follow MU8's rule.
 
 ## 3a. `GET /v1/responses` WebSocket
 
@@ -75,15 +100,15 @@ model. The mock MUST NOT require `stream`.
 
 MU9c. Any other `response.create` MUST emit the same Responses JSON objects as the
 matching `POST /v1/responses` SSE lifecycle (MU8 or MU9), each as one text frame,
-without SSE `event:` wrapping and without a `[DONE]` frame. Because WS2d requires a
-protocol terminal and MU8 terminates HTTP SSE with `[DONE]`, a non-reasoning WS
-stream MUST then send one `response.completed` text frame after the MU8 JSON object.
+without SSE `event:` wrapping and without a `[DONE]` frame. Exactly one
+`response.completed` MUST terminate each generated response.
 
 ## 4. `POST /v1/chat/completions`
 
 MU10. Without `stream: true`, the endpoint MUST return the tool-loop responses defined
 by the `weather`/`websearch` fixture when both tool names are declared, else one
 assistant message whose content is `echo(concatenated string message contents, body)`.
+Every response, including every tool-loop turn, MUST carry MU5a usage.
 
 MU11. With `stream: true`, the endpoint MUST emit a role chunk, one content delta per
 whitespace-delimited token of `echo(...)`, a terminal chunk with
@@ -94,10 +119,40 @@ between the role chunk and the first content delta, one
 `delta: { "reasoning_content": <token> }` chunk per whitespace-delimited token of
 `Mock reasoning about: <concatenated string message contents>`.
 
-## 5. `POST /v1/messages`, `POST /v1/images/generations`, `POST /v1/images/edits`
+## 5. Messages and images
 
-MU13. `/v1/messages` MUST echo concatenated `text` blocks (stream and non-stream) in
-Anthropic Messages format.
+MU13. `POST /v1/messages` MUST echo concatenated message text in Anthropic
+Messages format. A string `message.content` contributes that string. An array
+contributes each `type: "text"` block's string `text`, in source order.
+The endpoint MUST apply MU4 to that text. A non-stream reply MUST contain one
+assistant text block, `stop_reason: "end_turn"`, `stop_sequence: null`, and MU5a usage.
+
+MU13a. A streaming Messages reply MUST emit this sequence:
+
+1. `message_start` with an empty assistant message, `stop_reason: null`,
+   `stop_sequence: null`, and initial MU5a usage.
+2. `content_block_start` with an empty text block at index `0`.
+3. One `content_block_delta` with `delta.type: "text_delta"` per token of MU13 text.
+4. `content_block_stop` for the text block.
+5. `message_delta` with `delta: { stop_reason: "end_turn", stop_sequence: null }`
+   and final cumulative MU5a usage.
+6. `message_stop`.
+
+Every frame MUST carry the event name in both `event:` and the JSON `type` field.
+The stream MUST NOT append `[DONE]`.
+
+MU13b. With the reasoning trigger, the Messages stream MUST emit a thinking block
+before the text block. The thinking block occupies index `0`; the text block
+occupies index `1`. The thinking block MUST start with empty `thinking`, emit one
+`thinking_delta` per token of `Mock reasoning about: <concatenated message text>`,
+then emit `signature_delta` with `signature: "mock-thinking-signature"` and
+`content_block_stop`. Non-stream Messages replies remain text-only.
+
+MU13c. `POST /v1/messages/count_tokens` MUST return HTTP 200 with exactly
+`{ "input_tokens": ceil(utf8_byte_length(text) / 4) }`. Concatenate system text
+first, then all message text, without separators. Each text input follows MU13's
+string-or-text-block rule. Missing text contributes an empty string.
+The endpoint MUST NOT count models, tools, image blocks, or JSON syntax.
 
 MU14. `/v1/images/generations` without `stream: true` MUST return one fixed orange
 256x256 PNG as `b64_json` with `revised_prompt = "mock render of: <prompt>"` and
