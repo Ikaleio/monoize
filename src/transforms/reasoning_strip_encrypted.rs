@@ -180,10 +180,7 @@ fn strip_encrypted_in_stream_event(event: &mut UrpStreamEvent) {
     }
 }
 
-/// Mirror of `urp::extra_body_is_reasoning_item`: detect whether a control-node
-/// envelope-extra carries reasoning-item state (encrypted_content present, or
-/// `type = "reasoning"`). Kept local to avoid widening the public surface of
-/// `urp::mod`.
+/// Whether a control-node envelope extra carries reasoning-item state.
 fn envelope_is_reasoning(extra_body: &HashMap<String, Value>) -> bool {
     extra_body.contains_key("encrypted_content")
         || extra_body.get("type").and_then(Value::as_str) == Some("reasoning")

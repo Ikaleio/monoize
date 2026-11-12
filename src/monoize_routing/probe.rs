@@ -1,10 +1,13 @@
-use super::affinity::*;
+use super::affinity::{SESSION_CACHE_HEADER_NAMES, is_direct_opencode_zen_url};
 use super::types::*;
 use super::validation::resolve_effective_api_type;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::time::Duration;
+
+const OPENCODE_PROBE_SESSION_VALUE: &str = "mono-probe";
 
 pub fn apply_provider_api_key(
     request: reqwest::RequestBuilder,
@@ -42,6 +45,7 @@ pub async fn probe_channel_list_models(
         Err(_) => false,
     }
 }
+
 pub struct ChannelProbeOutcome {
     pub ok: bool,
     pub usage: Option<Value>,
@@ -240,12 +244,51 @@ async fn read_probe_stream(
             };
         }
 
-        if probe_stream_terminal(
-            effective_type,
-            &event.event,
-            &value,
-            &mut chat_terminal_chunk_seen,
-        ) {
+        let event_type = value.get("type").and_then(Value::as_str);
+        let terminal = match effective_type {
+            MonoizeProviderType::Responses => {
+                matches!(
+                    event.event.as_str(),
+                    "response.completed" | "response.incomplete"
+                ) || matches!(
+                    event_type,
+                    Some("response.completed" | "response.incomplete")
+                )
+            }
+            MonoizeProviderType::ChatCompletion => {
+                // Chat streams end with [DONE]; a finish_reason chunk only arms it.
+                chat_terminal_chunk_seen |= value
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .is_some_and(|choices| {
+                        choices.iter().any(|choice| {
+                            choice
+                                .get("finish_reason")
+                                .is_some_and(|reason| !reason.is_null())
+                        })
+                    });
+                false
+            }
+            MonoizeProviderType::Messages => {
+                event.event == "message_stop" || event_type == Some("message_stop")
+            }
+            MonoizeProviderType::Gemini => value
+                .get("candidates")
+                .and_then(Value::as_array)
+                .is_some_and(|candidates| {
+                    candidates.iter().any(|candidate| {
+                        candidate
+                            .get("finishReason")
+                            .is_some_and(|reason| !reason.is_null())
+                    })
+                }),
+            MonoizeProviderType::OpenaiImage
+            | MonoizeProviderType::OpenrouterImage
+            | MonoizeProviderType::Replicate
+            | MonoizeProviderType::SystemOne
+            | MonoizeProviderType::OpenaiDecisions => false,
+        };
+        if terminal {
             return ChannelProbeOutcome {
                 ok: true,
                 usage,
@@ -267,55 +310,6 @@ async fn read_probe_stream(
             "upstream {} stream ended without a terminal event",
             effective_type.as_str()
         )),
-    }
-}
-
-fn probe_stream_terminal(
-    effective_type: MonoizeProviderType,
-    sse_event: &str,
-    value: &Value,
-    chat_terminal_chunk_seen: &mut bool,
-) -> bool {
-    let event_type = value.get("type").and_then(Value::as_str);
-    match effective_type {
-        MonoizeProviderType::Responses => {
-            matches!(sse_event, "response.completed" | "response.incomplete")
-                || matches!(
-                    event_type,
-                    Some("response.completed" | "response.incomplete")
-                )
-        }
-        MonoizeProviderType::ChatCompletion => {
-            *chat_terminal_chunk_seen |= value
-                .get("choices")
-                .and_then(Value::as_array)
-                .is_some_and(|choices| {
-                    choices.iter().any(|choice| {
-                        choice
-                            .get("finish_reason")
-                            .is_some_and(|reason| !reason.is_null())
-                    })
-                });
-            false
-        }
-        MonoizeProviderType::Messages => {
-            sse_event == "message_stop" || event_type == Some("message_stop")
-        }
-        MonoizeProviderType::Gemini => value
-            .get("candidates")
-            .and_then(Value::as_array)
-            .is_some_and(|candidates| {
-                candidates.iter().any(|candidate| {
-                    candidate
-                        .get("finishReason")
-                        .is_some_and(|reason| !reason.is_null())
-                })
-            }),
-        MonoizeProviderType::OpenaiImage
-        | MonoizeProviderType::OpenrouterImage
-        | MonoizeProviderType::Replicate
-        | MonoizeProviderType::SystemOne
-        | MonoizeProviderType::OpenaiDecisions => false,
     }
 }
 
@@ -395,6 +389,10 @@ pub async fn probe_channel_completion(
             )),
         },
     }
+}
+
+fn extra_headers_contain(headers: Option<&BTreeMap<String, String>>, name: &str) -> bool {
+    headers.is_some_and(|headers| headers.keys().any(|key| key.eq_ignore_ascii_case(name)))
 }
 
 fn build_probe_request(

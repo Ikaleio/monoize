@@ -308,13 +308,71 @@ pub async fn get_dashboard_analytics(
         bucket_labels.push(label);
     }
 
-    let AnalyticsSeries {
-        cost_by_model_buckets,
-        calls_by_model_buckets,
-        tokens_by_model_buckets,
-        mut calls_by_provider_buckets,
-        cache_by_model,
-    } = aggregate_model_buckets(&raw, buckets)?;
+    let mut cost_by_model_buckets: Vec<BTreeMap<String, i128>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut calls_by_model_buckets: Vec<BTreeMap<String, i64>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut tokens_by_model_buckets: Vec<BTreeMap<String, i64>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    let mut calls_by_provider_buckets: Vec<BTreeMap<String, i64>> =
+        (0..buckets).map(|_| BTreeMap::new()).collect();
+    // (input_tokens, cache_read_tokens) over the whole window.
+    let mut cache_by_model: BTreeMap<String, (i64, i64)> = BTreeMap::new();
+
+    for row in &raw.model_buckets {
+        let idx = row.bucket_idx.clamp(0, buckets - 1) as usize;
+        if row.input_tokens != 0 || row.cache_read_tokens != 0 {
+            let (input, cache_read) = cache_by_model.entry(row.model.clone()).or_insert((0, 0));
+            *input = input.checked_add(row.input_tokens).ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "analytics token count overflow",
+                )
+            })?;
+            *cache_read = cache_read
+                .checked_add(row.cache_read_tokens)
+                .ok_or_else(|| {
+                    AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "analytics token count overflow",
+                    )
+                })?;
+        }
+        let cost = cost_by_model_buckets[idx]
+            .entry(row.model.clone())
+            .or_insert(0);
+        *cost = cost.checked_add(row.cost_nano).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "analytics cost aggregate overflow",
+            )
+        })?;
+        let calls = calls_by_model_buckets[idx]
+            .entry(row.model.clone())
+            .or_insert(0);
+        *calls = calls.checked_add(row.call_count).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "analytics call count overflow",
+            )
+        })?;
+        if row.token_count != 0 {
+            let tokens = tokens_by_model_buckets[idx]
+                .entry(row.model.clone())
+                .or_insert(0);
+            *tokens = tokens.checked_add(row.token_count).ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "analytics token count overflow",
+                )
+            })?;
+        }
+    }
 
     for row in &raw.provider_buckets {
         let idx = row.bucket_idx.clamp(0, buckets - 1) as usize;
@@ -387,6 +445,36 @@ impl Drop for SseConnectionGuard {
     }
 }
 
+impl SseConnectionGuard {
+    /// Enforces the per-user SSE connection limit.
+    fn admit(state: &AppState, user_id: &str) -> AppResult<Self> {
+        let entry = state
+            .sse_connections
+            .entry(user_id.to_string())
+            .or_insert_with(|| Arc::new(AtomicUsize::new(0)));
+        let counter = entry.value().clone();
+        let current = counter.fetch_add(1, Ordering::AcqRel);
+        drop(entry);
+        if current >= max_sse_connections_per_user() {
+            if counter.fetch_sub(1, Ordering::AcqRel) == 1 {
+                state.sse_connections.remove_if(user_id, |_, current| {
+                    Arc::ptr_eq(current, &counter) && current.load(Ordering::Acquire) == 0
+                });
+            }
+            return Err(AppError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_sse_connections",
+                "Too many concurrent SSE connections",
+            ));
+        }
+        Ok(Self {
+            user_id: user_id.to_string(),
+            connections: state.sse_connections.clone(),
+            counter,
+        })
+    }
+}
+
 fn max_sse_connections_per_user() -> usize {
     std::env::var("MONOIZE_REQUEST_LOG_SSE_MAX_CONNECTIONS_PER_USER")
         .ok()
@@ -403,14 +491,28 @@ pub async fn stream_request_logs(
     let is_admin = user.role.can_manage_users();
     let user_id = user.id;
 
-    let guard = admit_sse_connection(&state, &user_id)?;
+    let guard = SseConnectionGuard::admit(&state, &user_id)?;
 
     let receiver = state.log_broadcast.subscribe();
     let capture_receiver = state.request_capture.subscribe_ready();
     let capture_user_id = user_id.clone();
     let runtime = state.monoize_runtime.clone();
 
-    let initial_event = initial_pending_event(&state, &user_id, is_admin).await;
+    let mut initial_pending: Vec<_> = state
+        .pending_request_logs
+        .iter()
+        .filter(|entry| is_admin || entry.value().user_id == user_id)
+        .map(|entry| entry.value().clone())
+        .collect();
+    initial_pending.sort_by_key(|log| std::cmp::Reverse(log.created_at));
+    let initial_event = if initial_pending.is_empty() {
+        Event::default().comment("ready")
+    } else {
+        // RL-API14 / SAN-14: non-admin SSE rows carry masked detail unless
+        // masking is disabled (SAN-CFG5 item 5).
+        let mask_batch = !is_admin && runtime.read().await.mask_sensitive_info;
+        log_batch_event(initial_pending, is_admin, mask_batch)
+    };
 
     let live_stream = stream::unfold(
         (receiver, is_admin, user_id, guard, runtime),
@@ -433,23 +535,7 @@ pub async fn stream_request_logs(
                         // re-read per batch so a settings change applies to
                         // subsequent frames of an open connection.
                         let mask_batch = !is_admin && runtime.read().await.mask_sensitive_info;
-                        let enriched_batch: Vec<_> = filtered
-                            .into_iter()
-                            .map(|log| {
-                                let mut row = log.to_request_log_row();
-                                if !is_admin {
-                                    row.hide_upstream_response_model();
-                                }
-                                if mask_batch {
-                                    row.mask_error_detail_for_non_admin();
-                                }
-                                row
-                            })
-                            .collect();
-                        let event = match serde_json::to_string(&enriched_batch) {
-                            Ok(payload) => Event::default().event("log_batch").data(payload),
-                            Err(_) => Event::default().event("resync").data("{}"),
-                        };
+                        let event = log_batch_event(filtered, is_admin, mask_batch);
                         return Some((
                             Ok::<Event, Infallible>(event),
                             (receiver, is_admin, user_id, guard, runtime),
@@ -494,153 +580,26 @@ pub async fn stream_request_logs(
         .into_response())
 }
 
-struct AnalyticsSeries {
-    cost_by_model_buckets: Vec<BTreeMap<String, i128>>,
-    calls_by_model_buckets: Vec<BTreeMap<String, i64>>,
-    tokens_by_model_buckets: Vec<BTreeMap<String, i64>>,
-    calls_by_provider_buckets: Vec<BTreeMap<String, i64>>,
-    cache_by_model: BTreeMap<String, (i64, i64)>,
-}
-
-fn aggregate_model_buckets(
-    raw: &crate::users::DashboardAnalyticsRaw,
-    buckets: i64,
-) -> AppResult<AnalyticsSeries> {
-    let mut cost_by_model_buckets: Vec<BTreeMap<String, i128>> =
-        (0..buckets).map(|_| BTreeMap::new()).collect();
-    let mut calls_by_model_buckets: Vec<BTreeMap<String, i64>> =
-        (0..buckets).map(|_| BTreeMap::new()).collect();
-    let mut tokens_by_model_buckets: Vec<BTreeMap<String, i64>> =
-        (0..buckets).map(|_| BTreeMap::new()).collect();
-    let calls_by_provider_buckets: Vec<BTreeMap<String, i64>> =
-        (0..buckets).map(|_| BTreeMap::new()).collect();
-    // (input_tokens, cache_read_tokens) over the whole window.
-    let mut cache_by_model: BTreeMap<String, (i64, i64)> = BTreeMap::new();
-
-    for row in &raw.model_buckets {
-        let idx = row.bucket_idx.clamp(0, buckets - 1) as usize;
-        if row.input_tokens != 0 || row.cache_read_tokens != 0 {
-            let (input, cache_read) = cache_by_model.entry(row.model.clone()).or_insert((0, 0));
-            *input = input.checked_add(row.input_tokens).ok_or_else(|| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "analytics token count overflow",
-                )
-            })?;
-            *cache_read = cache_read
-                .checked_add(row.cache_read_tokens)
-                .ok_or_else(|| {
-                    AppError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        "analytics token count overflow",
-                    )
-                })?;
-        }
-        let cost = cost_by_model_buckets[idx]
-            .entry(row.model.clone())
-            .or_insert(0);
-        *cost = cost.checked_add(row.cost_nano).ok_or_else(|| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "analytics cost aggregate overflow",
-            )
-        })?;
-        let calls = calls_by_model_buckets[idx]
-            .entry(row.model.clone())
-            .or_insert(0);
-        *calls = calls.checked_add(row.call_count).ok_or_else(|| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "analytics call count overflow",
-            )
-        })?;
-        if row.token_count != 0 {
-            let tokens = tokens_by_model_buckets[idx]
-                .entry(row.model.clone())
-                .or_insert(0);
-            *tokens = tokens.checked_add(row.token_count).ok_or_else(|| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "analytics token count overflow",
-                )
-            })?;
-        }
-    }
-
-    Ok(AnalyticsSeries {
-        cost_by_model_buckets,
-        calls_by_model_buckets,
-        tokens_by_model_buckets,
-        calls_by_provider_buckets,
-        cache_by_model,
-    })
-}
-
-async fn initial_pending_event(state: &AppState, user_id: &str, is_admin: bool) -> Event {
-    let runtime = &state.monoize_runtime;
-    let mut initial_pending: Vec<_> = state
-        .pending_request_logs
-        .iter()
-        .filter(|entry| is_admin || entry.value().user_id == user_id)
-        .map(|entry| entry.value().clone())
+fn log_batch_event(
+    logs: Vec<crate::users::InsertRequestLog>,
+    is_admin: bool,
+    mask_batch: bool,
+) -> Event {
+    let rows: Vec<_> = logs
+        .into_iter()
+        .map(|log| {
+            let mut row = log.to_request_log_row();
+            if !is_admin {
+                row.hide_upstream_response_model();
+            }
+            if mask_batch {
+                row.mask_error_detail_for_non_admin();
+            }
+            row
+        })
         .collect();
-    initial_pending.sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
-    if initial_pending.is_empty() {
-        Event::default().comment("ready")
-    } else {
-        // RL-API14 / SAN-14: non-admin SSE rows carry masked detail unless
-        // masking is disabled (SAN-CFG5 item 5).
-        let mask_batch = !is_admin && runtime.read().await.mask_sensitive_info;
-        let enriched_batch: Vec<_> = initial_pending
-            .into_iter()
-            .map(|log| {
-                let mut row = log.to_request_log_row();
-                if !is_admin {
-                    row.hide_upstream_response_model();
-                }
-                if mask_batch {
-                    row.mask_error_detail_for_non_admin();
-                }
-                row
-            })
-            .collect();
-        match serde_json::to_string(&enriched_batch) {
-            Ok(payload) => Event::default().event("log_batch").data(payload),
-            Err(_) => Event::default().event("resync").data("{}"),
-        }
+    match serde_json::to_string(&rows) {
+        Ok(payload) => Event::default().event("log_batch").data(payload),
+        Err(_) => Event::default().event("resync").data("{}"),
     }
-}
-
-fn admit_sse_connection(state: &AppState, user_id: &str) -> AppResult<SseConnectionGuard> {
-    // Enforce per-user SSE connection limit
-    let entry = state
-        .sse_connections
-        .entry(user_id.to_string())
-        .or_insert_with(|| Arc::new(AtomicUsize::new(0)));
-    let counter = entry.value().clone();
-    let current = counter.fetch_add(1, Ordering::AcqRel);
-    drop(entry);
-    if current >= max_sse_connections_per_user() {
-        if counter.fetch_sub(1, Ordering::AcqRel) == 1 {
-            state.sse_connections.remove_if(user_id, |_, current| {
-                Arc::ptr_eq(current, &counter) && current.load(Ordering::Acquire) == 0
-            });
-        }
-        return Err(AppError::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too_many_sse_connections",
-            "Too many concurrent SSE connections",
-        ));
-    }
-
-    Ok(SseConnectionGuard {
-        user_id: user_id.to_string(),
-        connections: state.sse_connections.clone(),
-        counter,
-    })
 }

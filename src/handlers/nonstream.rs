@@ -11,6 +11,7 @@ pub(super) use codec::{
     decode_response_from_provider, encode_request_for_provider, encode_response_for_downstream,
     responses_request_echo_for_attempt,
 };
+pub(super) use prepare::shape_request_for_attempt;
 
 pub(super) struct AdmittedRequestTaskState {
     started_at: std::time::Instant,

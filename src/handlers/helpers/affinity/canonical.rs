@@ -259,7 +259,13 @@ pub(super) fn canonical_affinity_node(node: &urp::Node) -> impl Serialize + '_ {
             source,
             extra_body,
             ..
-        } => canonical_image(metadata, id, role, source, extra_body),
+        } => CanonicalAffinityNode::Image {
+            metadata,
+            id,
+            role: *role,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
         urp::Node::Audio {
             metadata,
             id,
@@ -267,7 +273,13 @@ pub(super) fn canonical_affinity_node(node: &urp::Node) -> impl Serialize + '_ {
             source,
             extra_body,
             ..
-        } => canonical_audio(metadata, id, role, source, extra_body),
+        } => CanonicalAffinityNode::Audio {
+            metadata,
+            id,
+            role: *role,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
         urp::Node::File {
             metadata,
             id,
@@ -275,13 +287,23 @@ pub(super) fn canonical_affinity_node(node: &urp::Node) -> impl Serialize + '_ {
             source,
             extra_body,
             ..
-        } => canonical_file(metadata, id, role, source, extra_body),
+        } => CanonicalAffinityNode::File {
+            metadata,
+            id,
+            role: *role,
+            source,
+            extra_body: sorted_extra(extra_body),
+        },
         urp::Node::Refusal {
+            logprobs: _,
             id,
             content,
             extra_body,
-            ..
-        } => canonical_refusal(id, content, extra_body),
+        } => CanonicalAffinityNode::Refusal {
+            id,
+            content,
+            extra_body: sorted_extra(extra_body),
+        },
         urp::Node::Reasoning {
             metadata,
             id,
@@ -291,7 +313,21 @@ pub(super) fn canonical_affinity_node(node: &urp::Node) -> impl Serialize + '_ {
             source,
             extra_body,
         } => CanonicalAffinityNode::Reasoning {
-            metadata: canonical_affinity_reasoning_metadata(metadata),
+            metadata: CanonicalAffinityReasoningMetadata {
+                redacted: metadata.redacted,
+                downstream_only: metadata.downstream_only,
+                chat_content: metadata.chat_content,
+                summary_as_thinking: metadata.summary_as_thinking,
+                item_id: &metadata.item_id,
+                summary_parts: metadata
+                    .summary_parts
+                    .as_deref()
+                    .map(CanonicalAffinityReasoningParts),
+                content_parts: metadata
+                    .content_parts
+                    .as_deref()
+                    .map(CanonicalAffinityReasoningParts),
+            },
             id,
             content,
             encrypted,
@@ -323,12 +359,19 @@ pub(super) fn canonical_affinity_node(node: &urp::Node) -> impl Serialize + '_ {
         },
         urp::Node::ProviderItem {
             id,
-            origin_protocol: protocol,
+            origin_protocol,
             role,
-            item_type: kind,
+            item_type,
             body,
-            extra_body: extra,
-        } => canonical_provider_item(id, protocol, role, kind, body, extra),
+            extra_body,
+        } => CanonicalAffinityNode::ProviderItem {
+            id,
+            origin_protocol: *origin_protocol,
+            role: *role,
+            item_type,
+            body,
+            extra_body: sorted_extra(extra_body),
+        },
         urp::Node::ToolResult {
             signature,
             namespace,
@@ -350,125 +393,17 @@ pub(super) fn canonical_affinity_node(node: &urp::Node) -> impl Serialize + '_ {
             tool_type: *tool_type,
             call_id,
             is_error: *is_error,
-            content: canonical_tool_result_contents(content),
+            content: content
+                .iter()
+                .map(canonical_affinity_tool_result_content)
+                .collect(),
             extra_body: sorted_extra(extra_body),
         },
         urp::Node::NextDownstreamEnvelopeExtra { extra_body } => {
-            canonical_envelope_extra(extra_body)
+            CanonicalAffinityNode::NextDownstreamEnvelopeExtra {
+                extra_body: sorted_extra(extra_body),
+            }
         }
-    }
-}
-
-fn canonical_envelope_extra(extra_body: &HashMap<String, Value>) -> CanonicalAffinityNode<'_> {
-    CanonicalAffinityNode::NextDownstreamEnvelopeExtra {
-        extra_body: sorted_extra(extra_body),
-    }
-}
-
-fn canonical_image<'a>(
-    metadata: &'a urp::MediaMetadata,
-    id: &'a Option<String>,
-    role: &urp::OrdinaryRole,
-    source: &'a ImageSource,
-    extra_body: &'a HashMap<String, Value>,
-) -> CanonicalAffinityNode<'a> {
-    CanonicalAffinityNode::Image {
-        metadata,
-        id,
-        role: *role,
-        source,
-        extra_body: sorted_extra(extra_body),
-    }
-}
-
-fn canonical_audio<'a>(
-    metadata: &'a urp::MediaMetadata,
-    id: &'a Option<String>,
-    role: &urp::OrdinaryRole,
-    source: &'a urp::AudioSource,
-    extra_body: &'a HashMap<String, Value>,
-) -> CanonicalAffinityNode<'a> {
-    CanonicalAffinityNode::Audio {
-        metadata,
-        id,
-        role: *role,
-        source,
-        extra_body: sorted_extra(extra_body),
-    }
-}
-
-fn canonical_file<'a>(
-    metadata: &'a urp::MediaMetadata,
-    id: &'a Option<String>,
-    role: &urp::OrdinaryRole,
-    source: &'a urp::FileSource,
-    extra_body: &'a HashMap<String, Value>,
-) -> CanonicalAffinityNode<'a> {
-    CanonicalAffinityNode::File {
-        metadata,
-        id,
-        role: *role,
-        source,
-        extra_body: sorted_extra(extra_body),
-    }
-}
-
-fn canonical_refusal<'a>(
-    id: &'a Option<String>,
-    content: &'a str,
-    extra_body: &'a HashMap<String, Value>,
-) -> CanonicalAffinityNode<'a> {
-    CanonicalAffinityNode::Refusal {
-        id,
-        content,
-        extra_body: sorted_extra(extra_body),
-    }
-}
-
-fn canonical_provider_item<'a>(
-    id: &'a Option<String>,
-    protocol: &urp::ProviderProtocol,
-    role: &urp::OrdinaryRole,
-    kind: &'a str,
-    body: &'a Value,
-    extra: &'a HashMap<String, Value>,
-) -> CanonicalAffinityNode<'a> {
-    CanonicalAffinityNode::ProviderItem {
-        id,
-        origin_protocol: *protocol,
-        role: *role,
-        item_type: kind,
-        body,
-        extra_body: sorted_extra(extra),
-    }
-}
-
-fn canonical_tool_result_contents(
-    content: &[urp::ToolResultContent],
-) -> Vec<CanonicalAffinityToolResultContent<'_>> {
-    content
-        .iter()
-        .map(canonical_affinity_tool_result_content)
-        .collect()
-}
-
-fn canonical_affinity_reasoning_metadata(
-    metadata: &urp::ReasoningMetadata,
-) -> CanonicalAffinityReasoningMetadata<'_> {
-    CanonicalAffinityReasoningMetadata {
-        redacted: metadata.redacted,
-        downstream_only: metadata.downstream_only,
-        chat_content: metadata.chat_content,
-        summary_as_thinking: metadata.summary_as_thinking,
-        item_id: &metadata.item_id,
-        summary_parts: metadata
-            .summary_parts
-            .as_deref()
-            .map(CanonicalAffinityReasoningParts),
-        content_parts: metadata
-            .content_parts
-            .as_deref()
-            .map(CanonicalAffinityReasoningParts),
     }
 }
 

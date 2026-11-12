@@ -536,98 +536,93 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             state.replacement = Some(emitted);
             true
         }
-        _ => apply_node_done(event, state),
+        UrpStreamEvent::NodeDone {
+            node_index,
+            node:
+                Node::Text {
+                    logprobs: _,
+                    signature: _,
+                    citations,
+                    id,
+                    role: OrdinaryRole::Assistant,
+                    content,
+                    phase,
+                    extra_body: node_extra_body,
+                    cache_breakpoint: _,
+                },
+            usage,
+            extra_body: event_extra_body,
+        } => {
+            let mut node_state =
+                state
+                    .node_text_parts
+                    .remove(node_index)
+                    .unwrap_or_else(|| StreamTextNodeState {
+                        header_id: id.clone(),
+                        header_phase: phase.clone(),
+                        header_extra_body: HashMap::new(),
+                        buffered_tail: String::new(),
+                        cleaned_content: String::new(),
+                        start_emitted: false,
+                        saw_delta: false,
+                        source_chars: 0,
+                        spans: Vec::new(),
+                        citations: Vec::new(),
+                        pending_citations: Vec::new(),
+                        seen_citations: 0,
+                        image_indices: Vec::new(),
+                    });
+            if !node_state.saw_delta {
+                node_state.buffered_tail.push_str(content);
+            }
+            let source = std::mem::take(&mut node_state.buffered_tail);
+            let (segments, tail) = split_stream_segments(&source, true);
+            node_state.buffered_tail = tail;
+            let mut emitted = Vec::new();
+            emit_node_segments(
+                *node_index,
+                state,
+                &mut node_state,
+                &source,
+                segments,
+                &mut emitted,
+                &HashMap::new(),
+            );
+            let seen = node_state.seen_citations.min(citations.len());
+            node_state.pending_citations.extend(citations.drain(seen..));
+            place_citations(*node_index, &mut node_state, true, &mut emitted);
+            state.done_nodes.insert(
+                *node_index,
+                DoneTextNode {
+                    spans: std::mem::take(&mut node_state.spans),
+                    text_announced: node_state.start_emitted,
+                    image_indices: std::mem::take(&mut node_state.image_indices),
+                },
+            );
+            if node_state.start_emitted {
+                emitted.push(UrpStreamEvent::NodeDone {
+                    node_index: *node_index,
+                    node: Node::Text {
+                        logprobs: None,
+                        signature: None,
+                        citations: std::mem::take(&mut node_state.citations),
+                        id: id.clone(),
+                        role: OrdinaryRole::Assistant,
+                        content: std::mem::take(&mut node_state.cleaned_content),
+                        phase: phase.clone(),
+                        extra_body: node_extra_body.clone(),
+                        cache_breakpoint: None,
+                    },
+                    usage: None,
+                    extra_body: event_extra_body.clone(),
+                });
+            }
+            attach_usage_to_last_node_event(&mut emitted, usage.clone());
+            state.replacement = Some(emitted);
+            true
+        }
+        _ => false,
     }
-}
-
-fn apply_node_done(event: &mut UrpStreamEvent, state: &mut StreamState) -> bool {
-    let UrpStreamEvent::NodeDone {
-        node_index,
-        node:
-            Node::Text {
-                logprobs: _,
-                signature: _,
-                citations,
-                id,
-                role: OrdinaryRole::Assistant,
-                content,
-                phase,
-                extra_body: node_extra_body,
-                cache_breakpoint: _,
-            },
-        usage,
-        extra_body: event_extra_body,
-    } = event
-    else {
-        return false;
-    };
-    let mut node_state =
-        state
-            .node_text_parts
-            .remove(node_index)
-            .unwrap_or_else(|| StreamTextNodeState {
-                header_id: id.clone(),
-                header_phase: phase.clone(),
-                header_extra_body: HashMap::new(),
-                buffered_tail: String::new(),
-                cleaned_content: String::new(),
-                start_emitted: false,
-                saw_delta: false,
-                source_chars: 0,
-                spans: Vec::new(),
-                citations: Vec::new(),
-                pending_citations: Vec::new(),
-                seen_citations: 0,
-                image_indices: Vec::new(),
-            });
-    if !node_state.saw_delta {
-        node_state.buffered_tail.push_str(content);
-    }
-    let source = std::mem::take(&mut node_state.buffered_tail);
-    let (segments, tail) = split_stream_segments(&source, true);
-    node_state.buffered_tail = tail;
-    let mut emitted = Vec::new();
-    emit_node_segments(
-        *node_index,
-        state,
-        &mut node_state,
-        &source,
-        segments,
-        &mut emitted,
-        &HashMap::new(),
-    );
-    let seen = node_state.seen_citations.min(citations.len());
-    node_state.pending_citations.extend(citations.drain(seen..));
-    place_citations(*node_index, &mut node_state, true, &mut emitted);
-    state.done_nodes.insert(
-        *node_index,
-        DoneTextNode {
-            spans: std::mem::take(&mut node_state.spans),
-            text_announced: node_state.start_emitted,
-            image_indices: std::mem::take(&mut node_state.image_indices),
-        },
-    );
-    if node_state.start_emitted {
-        emitted.push(UrpStreamEvent::NodeDone {
-            node_index: *node_index,
-            node: Node::Text {
-                logprobs: None,
-                signature: None,
-                citations: std::mem::take(&mut node_state.citations),
-                id: id.clone(),
-                role: OrdinaryRole::Assistant,
-                content: std::mem::take(&mut node_state.cleaned_content),
-                phase: phase.clone(),
-                extra_body: node_extra_body.clone(),
-                cache_breakpoint: None,
-            },
-            usage: None,
-            extra_body: event_extra_body.clone(),
-        });
-    }
-    attach_usage_to_last_node_event(&mut emitted, usage.clone());
-    state.replacement = Some(emitted);
-    true
 }
 
 fn allocate_synthetic_node_index(state: &mut StreamState) -> u32 {

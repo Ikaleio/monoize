@@ -132,25 +132,11 @@ pub fn chat_details(
     encrypted: Option<&Value>,
     id: Option<&str>,
     source: Option<&str>,
-    native: Option<&Map<String, Value>>,
-) -> Vec<Value> {
-    let base = native.map(detail_metadata).unwrap_or_default();
+    native: &Map<String, Value>,
+) -> Vec<Map<String, Value>> {
+    let base = detail_metadata(native);
     let signed_text = base.get("type").and_then(Value::as_str) == Some("reasoning.text");
-    build_details(
-        base,
-        DetailPayload {
-            content,
-            summary,
-            encrypted,
-        },
-        id,
-        source,
-        signed_text,
-        false,
-    )
-    .into_iter()
-    .map(Value::Object)
-    .collect()
+    build_details(base, content, summary, encrypted, id, source, signed_text)
 }
 
 /// Chat details for one reasoning node or delta, native or cross-protocol (DC5).
@@ -169,13 +155,7 @@ pub fn chat_node_details(
         .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
         .and_then(Value::as_object)
     {
-        return chat_details(content, summary, encrypted, id, source, Some(native))
-            .into_iter()
-            .filter_map(|detail| match detail {
-                Value::Object(detail) => Some(detail),
-                _ => None,
-            })
-            .collect();
+        return chat_details(content, summary, encrypted, id, source, native);
     }
     fn non_empty(value: Option<&str>) -> Option<&str> {
         value.filter(|value| !value.is_empty())
@@ -195,44 +175,29 @@ pub fn chat_node_details(
     };
     build_details(
         Map::new(),
-        DetailPayload {
-            content,
-            summary,
-            encrypted,
-        },
+        content,
+        summary,
+        encrypted,
         id,
         source.filter(|source| !source.is_empty()),
         thinking,
-        true,
     )
-}
-
-struct DetailPayload<'a> {
-    content: Option<&'a str>,
-    summary: Option<&'a str>,
-    encrypted: Option<&'a Value>,
 }
 
 fn build_details(
     base: Map<String, Value>,
-    payload: DetailPayload<'_>,
+    content: Option<&str>,
+    summary: Option<&str>,
+    encrypted: Option<&Value>,
     id: Option<&str>,
     source: Option<&str>,
     signed_text: bool,
-    skip_empty: bool,
 ) -> Vec<Map<String, Value>> {
-    let DetailPayload {
-        content,
-        summary,
-        encrypted,
-    } = payload;
     let signature = encrypted
         .filter(|_| signed_text)
         .and_then(Value::as_str)
         .filter(|signature| !signature.is_empty());
-    let content = content
-        .filter(|content| !skip_empty || !content.is_empty())
-        .or(signature.map(|_| ""));
+    let content = content.or(signature.map(|_| ""));
     let mut result = Vec::new();
     for (kind, field, payload) in [
         ("reasoning.summary", "summary", summary.map(|v| json!(v))),

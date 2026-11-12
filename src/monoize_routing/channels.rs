@@ -1,11 +1,10 @@
-use super::store::MonoizeRoutingStore;
+use super::store::{MonoizeRoutingStore, opt_bool_to_value, opt_u64_to_value};
 use super::types::*;
-use super::validation::*;
-use super::values::*;
+use super::validation::channel_chat_dialect;
 use crate::urp::encode::openai_chat::ChatDialect;
 use chrono::Utc;
 use sea_orm::{ConnectionTrait, Value as SeaValue};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 impl MonoizeRoutingStore {
     /// CM-CH-EN-1: flips one Channel's `enabled` flag without touching any other field.
@@ -54,15 +53,10 @@ impl MonoizeRoutingStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut existing_channels: HashMap<String, ExistingChannel> = HashMap::new();
+        let mut existing_api_keys: HashMap<String, String> = HashMap::new();
         for row in &existing_rows {
             let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            existing_channels.insert(
-                id,
-                ExistingChannel {
-                    api_key: row.try_get("", "api_key").map_err(|e| e.to_string())?,
-                },
-            );
+            existing_api_keys.insert(id, row.try_get("", "api_key").map_err(|e| e.to_string())?);
         }
 
         conn.execute(self.db.stmt(
@@ -72,7 +66,30 @@ impl MonoizeRoutingStore {
         .await
         .map_err(|e| e.to_string())?;
 
-        let prepared = prepare_channels(channels, &existing_channels)?;
+        let mut prepared = Vec::with_capacity(channels.len());
+        for input in channels {
+            let id = input
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("mono_ch_{}", uuid::Uuid::new_v4().simple()));
+
+            let api_key = match input.api_key.as_deref() {
+                Some(k) if !k.trim().is_empty() => k.to_string(),
+                _ => existing_api_keys.get(&id).cloned().ok_or_else(|| {
+                    format!(
+                        "channel api_key must not be empty for new channel '{}'",
+                        input.name
+                    )
+                })?,
+            };
+            prepared.push(PreparedChannel {
+                id,
+                api_key,
+                input,
+                models: canonicalize_models(&input.models),
+                chat_dialect: channel_chat_dialect(input)?,
+            });
+        }
         let now = Utc::now().to_rfc3339();
         self.insert_channels_on(conn, provider_id, &prepared, &now)
             .await?;
@@ -226,10 +243,6 @@ impl MonoizeRoutingStore {
     }
 }
 
-struct ExistingChannel {
-    api_key: String,
-}
-
 struct PreparedChannel<'a> {
     id: String,
     api_key: String,
@@ -238,37 +251,48 @@ struct PreparedChannel<'a> {
     chat_dialect: Option<ChatDialect>,
 }
 
-fn prepare_channels<'a>(
-    channels: &'a [CreateMonoizeChannelInput],
-    existing_channels: &HashMap<String, ExistingChannel>,
-) -> Result<Vec<PreparedChannel<'a>>, String> {
-    let mut prepared = Vec::with_capacity(channels.len());
-    for input in channels {
-        let id = input
-            .id
-            .clone()
-            .unwrap_or_else(|| format!("mono_ch_{}", uuid::Uuid::new_v4().simple()));
+/// CP-INV-14: trim and treat empty as NULL (follow-global).
+fn normalized_proxy_url(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
 
-        let api_key = match input.api_key.as_deref() {
-            Some(k) if !k.trim().is_empty() => k.to_string(),
-            _ => existing_channels
-                .get(&id)
-                .map(|c| c.api_key.clone())
-                .ok_or_else(|| {
-                    format!(
-                        "channel api_key must not be empty for new channel '{}'",
-                        input.name
-                    )
-                })?,
-        };
-        prepared.push(PreparedChannel {
-            id,
-            api_key,
-            input,
-            models: canonicalize_models(&input.models),
-            chat_dialect: channel_chat_dialect(input)?,
-        });
+/// CP-INV-15a: trim keys, drop nothing else, canonical JSON with sorted keys;
+/// an empty map persists as NULL.
+fn normalized_extra_headers_json(raw: Option<&BTreeMap<String, String>>) -> Option<String> {
+    let headers = raw?;
+    let mut trimmed: BTreeMap<&str, &String> = BTreeMap::new();
+    for (key, value) in headers {
+        trimmed.insert(key.trim(), value);
     }
+    if trimmed.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&trimmed).ok()
+}
 
-    Ok(prepared)
+fn canonicalize_models(
+    models: &HashMap<String, MonoizeModelEntry>,
+) -> HashMap<String, MonoizeModelEntry> {
+    let mut out = HashMap::new();
+    for (model, entry) in models {
+        let model = model.trim();
+        if model.is_empty() {
+            continue;
+        }
+        out.insert(
+            model.to_string(),
+            MonoizeModelEntry {
+                redirect: entry
+                    .redirect
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                multiplier: entry.multiplier,
+            },
+        );
+    }
+    out
 }

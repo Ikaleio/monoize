@@ -3,9 +3,9 @@ use super::*;
 pub(super) struct ImageStreamExecution<'a> {
     pub(super) context: ImageExecutionContext<'a>,
     pub(super) request: urp::UrpRequest,
-    pub(super) original_request: urp::UrpRequest,
+    original_request: urp::UrpRequest,
     pub(super) logical_model: String,
-    pub(super) transform_match_model: String,
+    transform_match_model: String,
 }
 
 pub(super) struct PreparedImageAttempt {
@@ -107,12 +107,15 @@ pub(super) async fn execute_stream_collected_image_typed(
         }
     }
     let error = build_exhausted_upstream_error(&execution.logical_model, &driver.tried_providers);
-    execution.log_error(
+    spawn_request_log_error(
+        execution.context.state,
+        execution.context.auth,
         driver.last_failed_attempt.as_ref(),
+        execution.log_context(),
         &error,
         driver.tried_providers,
     );
-    execution.persist(None, true).await;
+    execution.context.capture.persist(None, true).await;
     Err(error)
 }
 
@@ -304,7 +307,7 @@ impl ImageStreamExecution<'_> {
         .await
     }
 
-    pub(super) fn log_context(&self) -> RequestLogContext<'_> {
+    fn log_context(&self) -> RequestLogContext<'_> {
         RequestLogContext {
             model: &self.logical_model,
             is_stream: true,
@@ -353,47 +356,22 @@ impl ImageStreamExecution<'_> {
         Ok(())
     }
 
-    pub(super) async fn finish_error(
+    async fn finish_error(
         &self,
         attempt: &MonoizeAttempt,
         error: AppError,
         tried: Vec<TriedProvider>,
     ) -> AppError {
-        self.log_error(Some(attempt), &error, tried);
-        self.persist(None, false).await;
+        spawn_request_log_error(
+            self.context.state,
+            self.context.auth,
+            Some(attempt),
+            self.log_context(),
+            &error,
+            tried,
+        );
+        self.context.capture.persist(None, false).await;
         error
-    }
-
-    fn log_error(
-        &self,
-        attempt: Option<&MonoizeAttempt>,
-        error: &AppError,
-        tried: Vec<TriedProvider>,
-    ) {
-        if let Some(attempt) = attempt {
-            spawn_request_log_error(
-                self.context.state,
-                self.context.auth,
-                attempt,
-                self.log_context(),
-                error,
-                tried,
-            );
-        } else {
-            spawn_request_log_error_no_attempt(
-                self.context.state,
-                self.context.auth,
-                self.log_context(),
-                error,
-                tried,
-            );
-        }
-    }
-
-    async fn persist(&self, usage: Option<&urp::Usage>, failed: bool) {
-        if let Some(session) = self.context.capture.session.as_ref() {
-            session.persist_with_result(usage, failed).await;
-        }
     }
 
     pub(super) async fn push_attempt(
@@ -409,23 +387,34 @@ impl ImageStreamExecution<'_> {
             return;
         };
         let attempt = &slot.attempt;
-        session.push_attempt(crate::request_capture::build_attempt_dump(crate::request_capture::AttemptDumpInput {
-            attempt_number: slot.position.attempt_number,
-            provider_id: &attempt.provider_id,
-            channel_id: Some(&attempt.channel_id),
-            provider_type: attempt.provider_type,
-            logical_model: &self.logical_model,
-            upstream_model: &capture.request.model,
-            upstream_path: capture.path,
-            raw_input: self.context.capture.raw_input.as_ref().clone(),
-            transformed_urp_request: capture.request,
-            upstream_request: body.clone(),
-            downstream_response: None,
-            reconstructed_urp_response: reconstructed,
-            downstream_sse_frames: None,
-            transform_chain: capture.transform_chain.clone(),
-            error: error.map(|err| json!({ "message": err.message, "code": err.code, "status": err.status.as_u16() })),
-        })).await;
+        let error = error.map(|err| {
+            json!({
+                "message": err.message,
+                "code": err.code,
+                "status": err.status.as_u16(),
+            })
+        });
+        session
+            .push_attempt(crate::request_capture::build_attempt_dump(
+                crate::request_capture::AttemptDumpInput {
+                    attempt_number: slot.position.attempt_number,
+                    provider_id: &attempt.provider_id,
+                    channel_id: Some(&attempt.channel_id),
+                    provider_type: attempt.provider_type,
+                    logical_model: &self.logical_model,
+                    upstream_model: &capture.request.model,
+                    upstream_path: capture.path,
+                    raw_input: self.context.capture.raw_input.as_ref().clone(),
+                    transformed_urp_request: capture.request,
+                    upstream_request: body.clone(),
+                    downstream_response: None,
+                    reconstructed_urp_response: reconstructed,
+                    downstream_sse_frames: None,
+                    transform_chain: capture.transform_chain.clone(),
+                    error,
+                },
+            ))
+            .await;
     }
 
     async fn finish_success(
@@ -480,7 +469,10 @@ impl ImageStreamExecution<'_> {
                 upstream_response_model,
             },
         );
-        self.persist(response.usage.as_ref(), false).await;
+        self.context
+            .capture
+            .persist(response.usage.as_ref(), false)
+            .await;
         Ok((response, self.logical_model.clone()))
     }
 }

@@ -1,4 +1,58 @@
-use super::*;
+use super::provider_pricing_model;
+use super::runtime::reset_channel_health_after_successful_test;
+use crate::app::AppState;
+use crate::dashboard_handlers::session_helpers::require_admin;
+use crate::error::{AppError, AppResult};
+use crate::monoize_routing::{MonoizeChannel, MonoizeProvider};
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use futures_util::FutureExt;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::time::timeout;
+
+fn discovery_body_error(error: crate::bounded_response::BoundedResponseError) -> AppError {
+    let code = if error.is_limit_exceeded() {
+        "upstream_discovery_response_too_large"
+    } else {
+        "upstream_fetch_failed"
+    };
+    AppError::new(
+        StatusCode::BAD_GATEWAY,
+        code,
+        crate::error::error_chain(&error),
+    )
+}
+
+async fn parse_discovery_json_response(response: reqwest::Response) -> AppResult<Value> {
+    let status = response.status();
+    let body = crate::bounded_response::read_upstream_discovery_body(response)
+        .await
+        .map_err(discovery_body_error)?;
+    if !status.is_success() {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_fetch_failed",
+            format!(
+                "upstream returned {status}: {}",
+                String::from_utf8_lossy(&body)
+            ),
+        ));
+    }
+
+    serde_json::from_slice(&body).map_err(|error| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_fetch_failed",
+            format!("failed to parse response: {error}"),
+        )
+    })
+}
 
 pub async fn fetch_provider_models(
     State(state): State<AppState>,

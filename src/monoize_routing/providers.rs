@@ -1,9 +1,8 @@
 use super::decode::serialize_provider_group_ids_json;
 use super::runtime::provider_reorder_max_ids;
-use super::store::MonoizeRoutingStore;
+use super::store::{MonoizeRoutingStore, opt_bool_to_value, opt_u64_to_value};
 use super::types::*;
 use super::validation::*;
-use super::values::*;
 use crate::transforms::canonicalize_transform_rules;
 use chrono::Utc;
 use sea_orm::{ConnectionTrait, Value as SeaValue};
@@ -26,7 +25,38 @@ impl MonoizeRoutingStore {
         )?;
         let txn = self.db.begin_write().await.map_err(|e| e.to_string())?;
 
-        let priority = self.next_provider_priority(&*txn, input.priority).await?;
+        let priority = match input.priority {
+            Some(v) => v,
+            None => {
+                if self.db.is_postgres() {
+                    txn.execute_unprepared(
+                        "LOCK TABLE monoize_providers IN SHARE ROW EXCLUSIVE MODE",
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                }
+                let row = txn
+                    .query_one(self.db.stmt(
+                        "SELECT CAST(MAX(priority) AS BIGINT) AS max_p FROM monoize_providers",
+                        vec![],
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let max_priority = row
+                    .map(|row| {
+                        row.try_get::<Option<i64>>("", "max_p")
+                            .map_err(|e| e.to_string())
+                    })
+                    .transpose()?
+                    .flatten();
+                let next_priority = max_priority
+                    .unwrap_or(-1)
+                    .checked_add(1)
+                    .ok_or_else(|| "provider priority overflow".to_string())?;
+                i32::try_from(next_priority)
+                    .map_err(|_| "provider priority exceeds signed 32-bit range".to_string())?
+            }
+        };
 
         let mut transforms = input.transforms.clone();
         canonicalize_transform_rules(&mut transforms);
@@ -103,13 +133,115 @@ impl MonoizeRoutingStore {
     ) -> Result<MonoizeProvider, String> {
         validate_update_provider_input(&input)?;
 
-        let mut update = ProviderUpdate::from_input(&input)?;
-        self.add_provider_overrides(&input, &mut update).await?;
-        update.push("updated_at", Utc::now().to_rfc3339().into());
-        let ProviderUpdate {
-            set_clauses,
-            mut values,
-        } = update;
+        let mut set_clauses = Vec::new();
+        let mut values: Vec<SeaValue> = Vec::new();
+        let mut push_value = |column: &str, value: SeaValue| {
+            let index = values.len() + 1;
+            set_clauses.push(format!("{column} = ${index}"));
+            values.push(value);
+        };
+        if let Some(value) = &input.name {
+            push_value("name", value.clone().into());
+        }
+        if let Some(value) = input.max_retries {
+            push_value("max_retries", SeaValue::Int(Some(value)));
+        }
+        if let Some(value) = input.channel_max_retries {
+            push_value("channel_max_retries", SeaValue::Int(Some(value)));
+        }
+        if let Some(value) = input.channel_retry_interval_ms {
+            push_value("channel_retry_interval_ms", SeaValue::Int(Some(value)));
+        }
+        if let Some(value) = input.circuit_breaker_enabled {
+            push_value(
+                "circuit_breaker_enabled",
+                SeaValue::Int(Some(if value { 1 } else { 0 })),
+            );
+        }
+        if let Some(value) = input.per_model_circuit_break {
+            push_value(
+                "per_model_circuit_break",
+                SeaValue::Int(Some(if value { 1 } else { 0 })),
+            );
+        }
+        if let Some(mut transforms) = input.transforms.clone() {
+            canonicalize_transform_rules(&mut transforms);
+            push_value(
+                "transforms",
+                serde_json::to_string(&transforms)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
+        }
+        if let Some(value) = &input.api_type_overrides {
+            push_value(
+                "api_type_overrides",
+                serde_json::to_string(&stored_api_type_overrides(value)?)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
+        }
+        if let Some(value) = input.active_probe_enabled_override {
+            push_value("active_probe_enabled_override", opt_bool_to_value(value));
+        }
+        if let Some(value) = input.active_probe_interval_seconds_override {
+            push_value(
+                "active_probe_interval_seconds_override",
+                opt_u64_to_value(value),
+            );
+        }
+        if let Some(value) = input.active_probe_success_threshold_override {
+            push_value(
+                "active_probe_success_threshold_override",
+                opt_u64_to_value(value.map(u64::from)),
+            );
+        }
+        if let Some(value) = &input.active_probe_model_override {
+            push_value("active_probe_model_override", value.clone().into());
+        }
+        if let Some(value) = input.request_timeout_ms_override {
+            push_value("request_timeout_ms_override", opt_u64_to_value(value));
+        }
+        if let Some(value) = &input.extra_fields_whitelist {
+            let encoded = value
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            push_value("extra_fields_whitelist", encoded.into());
+        }
+        if let Some(value) = input.strip_cross_protocol_nested_extra {
+            push_value(
+                "strip_cross_protocol_nested_extra",
+                opt_bool_to_value(value),
+            );
+        }
+        if let Some(value) = &input.group_ids {
+            let resolved = self.resolve_provider_group_ids(value).await?;
+            push_value(
+                "group_ids",
+                serialize_provider_group_ids_json(&resolved)?.into(),
+            );
+        }
+        if let Some(value) = input.allow_free_when_unpriced_override {
+            push_value(
+                "allow_free_when_unpriced_override",
+                opt_bool_to_value(value),
+            );
+        }
+        if let Some(value) = input.allow_free_when_missing_usage_override {
+            push_value(
+                "allow_free_when_missing_usage_override",
+                opt_bool_to_value(value),
+            );
+        }
+        if let Some(value) = input.enabled {
+            push_value("enabled", SeaValue::Int(Some(if value { 1 } else { 0 })));
+        }
+        if let Some(value) = input.priority {
+            push_value("priority", SeaValue::Int(Some(value)));
+        }
+        push_value("updated_at", Utc::now().to_rfc3339().into());
 
         let id_index = values.len() + 1;
         values.push(id.into());
@@ -228,171 +360,12 @@ impl MonoizeRoutingStore {
         self.catalog.invalidate();
         Ok(())
     }
-
-    async fn next_provider_priority(
-        &self,
-        txn: &impl ConnectionTrait,
-        requested: Option<i32>,
-    ) -> Result<i32, String> {
-        match requested {
-            Some(v) => Ok(v),
-            None => {
-                if self.db.is_postgres() {
-                    txn.execute_unprepared(
-                        "LOCK TABLE monoize_providers IN SHARE ROW EXCLUSIVE MODE",
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                }
-                let row = txn
-                    .query_one(self.db.stmt(
-                        "SELECT CAST(MAX(priority) AS BIGINT) AS max_p FROM monoize_providers",
-                        vec![],
-                    ))
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let max_priority = row
-                    .map(|row| {
-                        row.try_get::<Option<i64>>("", "max_p")
-                            .map_err(|e| e.to_string())
-                    })
-                    .transpose()?
-                    .flatten();
-                let next_priority = max_priority
-                    .unwrap_or(-1)
-                    .checked_add(1)
-                    .ok_or_else(|| "provider priority overflow".to_string())?;
-                i32::try_from(next_priority)
-                    .map_err(|_| "provider priority exceeds signed 32-bit range".to_string())
-            }
-        }
-    }
-
-    async fn add_provider_overrides(
-        &self,
-        input: &UpdateMonoizeProviderInput,
-        update: &mut ProviderUpdate,
-    ) -> Result<(), String> {
-        if let Some(value) = input.active_probe_enabled_override {
-            update.push("active_probe_enabled_override", opt_bool_to_value(value));
-        }
-        if let Some(value) = input.active_probe_interval_seconds_override {
-            update.push(
-                "active_probe_interval_seconds_override",
-                opt_u64_to_value(value),
-            );
-        }
-        if let Some(value) = input.active_probe_success_threshold_override {
-            update.push(
-                "active_probe_success_threshold_override",
-                opt_u64_to_value(value.map(u64::from)),
-            );
-        }
-        if let Some(value) = &input.active_probe_model_override {
-            update.push("active_probe_model_override", value.clone().into());
-        }
-        if let Some(value) = input.request_timeout_ms_override {
-            update.push("request_timeout_ms_override", opt_u64_to_value(value));
-        }
-        if let Some(value) = &input.extra_fields_whitelist {
-            let encoded = value
-                .as_ref()
-                .map(serde_json::to_string)
-                .transpose()
-                .map_err(|e| e.to_string())?;
-            update.push("extra_fields_whitelist", encoded.into());
-        }
-        if let Some(value) = input.strip_cross_protocol_nested_extra {
-            update.push(
-                "strip_cross_protocol_nested_extra",
-                opt_bool_to_value(value),
-            );
-        }
-        if let Some(value) = &input.group_ids {
-            let resolved = self.resolve_provider_group_ids(value).await?;
-            update.push(
-                "group_ids",
-                serialize_provider_group_ids_json(&resolved)?.into(),
-            );
-        }
-        if let Some(value) = input.allow_free_when_unpriced_override {
-            update.push(
-                "allow_free_when_unpriced_override",
-                opt_bool_to_value(value),
-            );
-        }
-        if let Some(value) = input.allow_free_when_missing_usage_override {
-            update.push(
-                "allow_free_when_missing_usage_override",
-                opt_bool_to_value(value),
-            );
-        }
-        if let Some(value) = input.enabled {
-            update.push("enabled", SeaValue::Int(Some(if value { 1 } else { 0 })));
-        }
-        if let Some(value) = input.priority {
-            update.push("priority", SeaValue::Int(Some(value)));
-        }
-        Ok(())
-    }
 }
 
-#[derive(Default)]
-struct ProviderUpdate {
-    set_clauses: Vec<String>,
-    values: Vec<SeaValue>,
-}
-
-impl ProviderUpdate {
-    fn push(&mut self, column: &str, value: SeaValue) {
-        let index = self.values.len() + 1;
-        self.set_clauses.push(format!("{column} = ${index}"));
-        self.values.push(value);
-    }
-
-    fn from_input(input: &UpdateMonoizeProviderInput) -> Result<Self, String> {
-        let mut update = Self::default();
-        if let Some(value) = &input.name {
-            update.push("name", value.clone().into());
-        }
-        if let Some(value) = input.max_retries {
-            update.push("max_retries", SeaValue::Int(Some(value)));
-        }
-        if let Some(value) = input.channel_max_retries {
-            update.push("channel_max_retries", SeaValue::Int(Some(value)));
-        }
-        if let Some(value) = input.channel_retry_interval_ms {
-            update.push("channel_retry_interval_ms", SeaValue::Int(Some(value)));
-        }
-        if let Some(value) = input.circuit_breaker_enabled {
-            update.push(
-                "circuit_breaker_enabled",
-                SeaValue::Int(Some(if value { 1 } else { 0 })),
-            );
-        }
-        if let Some(value) = input.per_model_circuit_break {
-            update.push(
-                "per_model_circuit_break",
-                SeaValue::Int(Some(if value { 1 } else { 0 })),
-            );
-        }
-        if let Some(mut transforms) = input.transforms.clone() {
-            canonicalize_transform_rules(&mut transforms);
-            update.push(
-                "transforms",
-                serde_json::to_string(&transforms)
-                    .map_err(|e| e.to_string())?
-                    .into(),
-            );
-        }
-        if let Some(value) = &input.api_type_overrides {
-            update.push(
-                "api_type_overrides",
-                serde_json::to_string(&stored_api_type_overrides(value)?)
-                    .map_err(|e| e.to_string())?
-                    .into(),
-            );
-        }
-        Ok(update)
-    }
+fn generate_short_id() -> String {
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let bytes = uuid::Uuid::new_v4().into_bytes();
+    (0..8)
+        .map(|i| CHARSET[bytes[i] as usize % CHARSET.len()] as char)
+        .collect()
 }

@@ -42,10 +42,47 @@ impl UserStore {
         validate_api_key_transforms(&input.transforms, is_admin, &self.custom_transforms.get())?;
         let compiled_model_redirects = compile_model_redirects(&input.model_redirects)?;
         input.ip_whitelist = canonicalize_ip_whitelist(&input.ip_whitelist)?;
-        let initial_sub_account_balance = initial_sub_account_balance(&input, is_admin)?;
-        let group_ids = self
-            .create_api_key_group_ids(user_id, &input, is_admin)
-            .await?;
+        if input.sub_account_balance_nano_usd.is_some() && !is_admin {
+            return Err("only admins may set an initial sub-account balance".to_string());
+        }
+        let initial_sub_account_balance = match input.sub_account_balance_nano_usd.as_deref() {
+            Some(raw) => {
+                let parsed = parse_nano_usd(raw)?;
+                if raw != parsed.to_string() || parsed < 0 {
+                    return Err(
+                        "initial sub-account balance must be a canonical non-negative integer"
+                            .to_string(),
+                    );
+                }
+                parsed
+            }
+            None => 0,
+        };
+        if initial_sub_account_balance != 0 && !input.sub_account_enabled {
+            return Err(
+                "a non-zero sub-account balance requires sub-account billing to be enabled"
+                    .to_string(),
+            );
+        }
+        let owner_group_id = self
+            .get_user_by_id(user_id)
+            .await?
+            .map(|user| user.group_id)
+            .unwrap_or_default();
+        // TM-GRP-4: an inheriting key stores no explicit selection.
+        let group_ids = if input.use_user_group {
+            Vec::new()
+        } else {
+            let group_ids = canonicalize_group_ids(&input.group_ids);
+            if group_ids.is_empty() {
+                return Err(
+                    "group_ids must be non-empty when use_user_group is disabled".to_string(),
+                );
+            }
+            self.validate_api_key_group_selection(&owner_group_id, &group_ids, is_admin)
+                .await?;
+            group_ids
+        };
         let id = uuid::Uuid::new_v4().to_string();
         let key = format!("sk-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let key_prefix = key[..12].to_string();
@@ -503,58 +540,109 @@ impl UserStore {
             .await?;
         Ok(())
     }
-}
 
-fn initial_sub_account_balance(input: &CreateApiKeyInput, is_admin: bool) -> Result<i128, String> {
-    if input.sub_account_balance_nano_usd.is_some() && !is_admin {
-        return Err("only admins may set an initial sub-account balance".to_string());
-    }
-    let initial_sub_account_balance = match input.sub_account_balance_nano_usd.as_deref() {
-        Some(raw) => {
-            let parsed = parse_nano_usd(raw)?;
-            if raw != parsed.to_string() || parsed < 0 {
-                return Err(
-                    "initial sub-account balance must be a canonical non-negative integer"
-                        .to_string(),
-                );
-            }
-            parsed
-        }
-        None => 0,
-    };
-    if initial_sub_account_balance != 0 && !input.sub_account_enabled {
-        return Err(
-            "a non-zero sub-account balance requires sub-account billing to be enabled".to_string(),
-        );
-    }
-    Ok(initial_sub_account_balance)
-}
-impl UserStore {
-    async fn create_api_key_group_ids(
-        &self,
-        user_id: &str,
-        input: &CreateApiKeyInput,
-        is_admin: bool,
-    ) -> Result<Vec<String>, String> {
-        let owner_group_id = self
-            .get_user_by_id(user_id)
-            .await?
-            .map(|user| user.group_id)
-            .unwrap_or_default();
-        // TM-GRP-4: an inheriting key stores no explicit selection.
-        let group_ids = if input.use_user_group {
-            Vec::new()
-        } else {
-            let group_ids = canonicalize_group_ids(&input.group_ids);
-            if group_ids.is_empty() {
-                return Err(
-                    "group_ids must be non-empty when use_user_group is disabled".to_string(),
-                );
-            }
-            self.validate_api_key_group_selection(&owner_group_id, &group_ids, is_admin)
-                .await?;
-            group_ids
-        };
-        Ok(group_ids)
+    pub(crate) async fn row_to_api_key(&self, row: &QueryResult) -> Result<ApiKey, String> {
+        let expires_at: Option<String> =
+            row.try_get("", "expires_at").map_err(|e| e.to_string())?;
+        let expires_at = expires_at
+            .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+
+        let last_used_at: Option<String> =
+            row.try_get("", "last_used_at").map_err(|e| e.to_string())?;
+        let last_used_at = last_used_at
+            .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+
+        let sub_account_enabled = decode_required_bool(row, "sub_account_enabled")?;
+        let sub_account_balance_nano: String = row
+            .try_get("", "sub_account_balance_nano")
+            .map_err(|e| e.to_string())?;
+        parse_nano_usd(&sub_account_balance_nano)
+            .map_err(|e| format!("invalid persisted sub-account balance: {e}"))?;
+        let model_limits_enabled = decode_required_bool(row, "model_limits_enabled")?;
+
+        let model_limits_str: String = row
+            .try_get("", "model_limits")
+            .map_err(|error| format!("invalid persisted model_limits: {error}"))?;
+        let model_limits = parse_persisted_json_array(&model_limits_str, "model_limits")?;
+
+        let ip_whitelist_str: String = row
+            .try_get("", "ip_whitelist")
+            .map_err(|error| format!("invalid persisted ip_whitelist: {error}"))?;
+        let ip_whitelist: Vec<String> =
+            parse_persisted_json_array(&ip_whitelist_str, "ip_whitelist")?;
+        let ip_whitelist = canonicalize_ip_whitelist(&ip_whitelist)
+            .map_err(|error| format!("invalid persisted ip_whitelist: {error}"))?;
+        let use_user_group = decode_required_bool(row, "use_user_group")?;
+        let group_ids_raw = row
+            .try_get::<Option<String>>("", "group_ids")
+            .map_err(|error| format!("invalid persisted api_keys.group_ids: {error}"))?;
+        let group_ids = parse_group_ids_json(group_ids_raw.as_deref(), "api_keys.group_ids")?;
+
+        let max_multiplier = row
+            .try_get::<Option<String>>("", "max_multiplier")
+            .map_err(|e| e.to_string())?
+            .map(|value| value.parse())
+            .transpose()
+            .map_err(|e: String| format!("invalid persisted max_multiplier: {e}"))?;
+        validate_positive_max_multiplier(max_multiplier)
+            .map_err(|error| format!("invalid persisted max_multiplier: {error}"))?;
+        let transforms_str: String = row
+            .try_get("", "transforms")
+            .map_err(|error| format!("invalid persisted transforms: {error}"))?;
+        let model_redirects_str: String = row
+            .try_get("", "model_redirects")
+            .map_err(|error| format!("invalid persisted model_redirects: {error}"))?;
+        let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
+        let owner_role = row
+            .try_get::<String>("", "owner_role")
+            .map_err(|error| format!("invalid persisted owner_role: {error}"))?;
+        let is_admin = UserRole::from_str(&owner_role)
+            .ok_or_else(|| format!("invalid persisted owner_role: {owner_role:?}"))?
+            .can_manage_system();
+        let transforms = parse_persisted_json_array(&transforms_str, "transforms")?;
+        let transforms: Vec<TransformRuleConfig> =
+            sanitize_api_key_transforms(transforms, is_admin, &self.custom_transforms.get());
+        let model_redirects: Vec<ModelRedirectRule> =
+            parse_persisted_json_array(&model_redirects_str, "model_redirects")?;
+        let compiled_model_redirects = compile_model_redirects(&model_redirects)
+            .map_err(|error| format!("invalid persisted model_redirects: {error}"))?;
+        let reasoning_envelope_enabled = decode_required_bool(row, "reasoning_envelope_enabled")?;
+        let request_capture_mode = decode_request_capture_mode(row)?;
+        let request_capture_retention = decode_request_capture_retention(row)?;
+
+        Ok(ApiKey {
+            id: row.try_get("", "id").map_err(|e| e.to_string())?,
+            user_id,
+            name: row.try_get("", "name").map_err(|e| e.to_string())?,
+            key_prefix: row.try_get("", "key_prefix").map_err(|e| e.to_string())?,
+            key: row.try_get("", "key").map_err(|e| e.to_string())?,
+            created_at: DateTime::parse_from_rfc3339(
+                &row.try_get::<String>("", "created_at")
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?
+            .with_timezone(&Utc),
+            expires_at,
+            last_used_at,
+            enabled: decode_required_bool(row, "enabled")?,
+            sub_account_enabled,
+            sub_account_balance_nano,
+            model_limits_enabled,
+            model_limits,
+            ip_whitelist,
+            use_user_group,
+            group_ids,
+            max_multiplier,
+            transforms,
+            model_redirects,
+            compiled_model_redirects,
+            reasoning_envelope_enabled,
+            request_capture_mode,
+            request_capture_retention,
+        })
     }
 }

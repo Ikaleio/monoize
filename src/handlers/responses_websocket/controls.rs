@@ -60,7 +60,7 @@ pub(super) async fn handle_interrupt(
     None
 }
 
-pub(super) fn valid_steer_input(input: &Value) -> bool {
+fn valid_steer_input(input: &Value) -> bool {
     match input {
         Value::String(text) => !text.is_empty(),
         Value::Array(items) => {

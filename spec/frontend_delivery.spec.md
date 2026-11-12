@@ -17,22 +17,19 @@ FD-B4. A production `bun run build` MUST emit an entry JavaScript chunk of at mo
 or below 1,000,000 bytes before compression. Measure file sizes in
 `frontend/dist/assets/`, not gzip transfer sizes.
 
-The route-splitting baseline is 4,973,644 bytes for both the entry chunk and the
-largest chunk. The measured split build emits an 848,857-byte entry chunk, which
-is also its largest chunk. Its shared React runtime is 282,904 bytes and loads
-with the entry; the entry bound does not describe total initial transfer size.
-
 FD-B5. Each route page MUST use a dynamic import. Loading `/login` MUST NOT fetch
-dashboard page modules, Recharts, CodeMirror, or the custom-transform formatter.
-The dashboard shell MAY load eagerly. A page module MUST load only when its route
-renders; revisiting a loaded route MAY reuse the browser module cache.
+dashboard page modules, Recharts, CodeMirror, the custom-transform formatter, or
+the AI SDK. The dashboard shell MAY load eagerly. A page module MUST load only
+when its route renders; revisiting a loaded route MAY reuse the browser module
+cache.
 
 FD-B6. Each pending route import MUST render a route-level skeleton. Dashboard
 skeletons MUST remain inside the existing navigation shell and `PageWrapper`.
-They MUST use shared skeleton primitives and match the page's primary geometry:
-header and toolbar with table rows, card grid, chart panels, settings rows, or
-chat panels. The login skeleton MUST retain the centered authentication card.
-The loading region MUST expose a localized loading status and `aria-busy=true`.
+A dashboard route skeleton MUST be one of the shared page skeletons (table page,
+card grid, settings page, or page header only) or empty; a page whose own
+loading state is one of these MUST use the same one. The login skeleton MUST
+retain the centered authentication card. The loading region MUST expose a localized
+loading status and `aria-busy=true`.
 
 FD-B7. Route splitting MUST preserve paths, title `handle` i18n keys, navigation,
 auth return targets, and admin-only guards. An unauthorized page MUST NOT mount

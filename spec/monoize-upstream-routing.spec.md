@@ -221,8 +221,6 @@ RTA-5. Error policy per attempt:
 - Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, MUST NOT retry the same Channel. They MUST still advance to the next eligible Channel or Provider.
 - A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing. Monoize MUST NOT classify such an error as an upstream attempt failure.
 
-RTA-5c. If the effective Channel proxy cannot construct an HTTP client, Monoize MUST fail that attempt with `upstream_proxy_config_invalid` and record it in `tried_providers`. It MUST advance to the next eligible Channel or Provider, without direct-network fallback, same-Channel retry, or a passive-health failure sample. Exhaustion MUST use RTA-8 and terminal request logging. A local typed-request conversion needed by the upstream stream decoder MUST succeed before Monoize dispatches the upstream request.
-
 RTA-5a. A persistent Channel failure is an upstream failure that satisfies at least one condition below:
 
 1. Its HTTP status is one of `401`, `402`, `403`, `404`, `405`, `407`, `410`, `415`, `426`, or `451`.
@@ -231,6 +229,8 @@ RTA-5a. A persistent Channel failure is an upstream failure that satisfies at le
 A persistent Channel failure MUST NOT authorize a same-Channel retry. HTTP `400`, `409`, and `422` without a listed structured signal are request-specific and MUST NOT be persistent Channel failures.
 
 RTA-5b. A structured upstream `code` or `type` equal to `rate_limit_error`, `rate_limit_exceeded`, or `too_many_requests` MUST have the RateLimited passive-failure class. A structured upstream `code` or `type` equal to `overloaded_error`, `server_error`, `service_unavailable`, or `temporarily_unavailable` MUST have the Transient passive-failure class. Signal comparison uses the normalization in RTA-5a. HTTP `429` MUST take the RateLimited class regardless of structured signals. An RTA-5a persistent HTTP status MUST take the Persistent class regardless of structured signals. For all other statuses, a persistent structured signal takes precedence over a Transient HTTP status or structured signal.
+
+RTA-5c. If the effective Channel proxy cannot construct an HTTP client, Monoize MUST fail that attempt with `upstream_proxy_config_invalid`, record it in `tried_providers`, and advance to the next eligible Channel or Provider. It MUST NOT fall back to a direct connection, retry the same Channel, or record a passive-health failure sample.
 
 RTA-6. On an HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, connection failure, RTA-5a persistent failure, or RTA-5b structured failure, Channel passive health state MUST be updated. A persistent failure MUST mark the relevant health entry unhealthy after its first occurrence. A Transient or RateLimited failure MUST use the threshold in PHS-3.
 

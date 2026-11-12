@@ -10,9 +10,8 @@ bun run scripts/differential-smoke/run.ts --base <bin> --new <bin> [--only <rege
 
 Resolve relative binary, output, and expected-file paths against the caller's working directory.
 Resolve repository assets from the tool's own location, not a machine-specific path.
-Require both binary paths to name executable files.
-Reject unknown arguments, invalid regular expressions, and an empty selected case set.
-Report these failures with exit code `2` before starting servers.
+Reject missing `--base`/`--new`, unknown arguments, invalid regular expressions, and an empty selected case set with exit code `2` before starting servers.
+A binary that cannot be spawned is a setup failure (DS11).
 
 DS2. Store the seed database at `artifacts/smoke/seed/monoize.db` and credentials at adjacent `meta.json`.
 Bootstrap missing seed files with the base binary.
@@ -28,15 +27,14 @@ Change only their channel base URLs to the current loopback mock address.
 Each binary MUST use a separate work directory, spool directory, cache directory, and port.
 Do not build either binary or read the concurrently edited Rust implementation.
 
-DS4. Store all run outputs below ignored `artifacts/smoke/out/`.
-The default directory name MUST be an ISO timestamp with colons and periods replaced by hyphens.
-`--out` MUST select an empty or absent directory below that root.
-Reject the root itself and paths outside that root.
+DS4. By default, store run outputs in a new directory below ignored `artifacts/smoke/out/`
+whose name is an ISO timestamp with colons and periods replaced by hyphens.
+`--out` MUST select the run directory instead.
 
 DS5. `--only` MUST select case names by regular expression.
 `--expected` MUST load a JSON array of `{ "case": <regex>, "where": <regex>, "note"?: <string> }` objects.
 The default file MUST be `scripts/differential-smoke/expected-diffs.json`.
-Reject missing, malformed, or invalid-regex expected files with exit code `2`.
+Reject missing or malformed expected files, entries without string `case` and `where`, and invalid regular expressions with exit code `2`.
 A matching case-and-path pair MUST mark that difference as expected without hiding it.
 
 ## 2. Case matrix
@@ -97,18 +95,14 @@ Report the full usage objects in JSON; Markdown MAY shorten their rendering.
 DS11. Exit `0` when every observed difference matches DS5 or no differences exist.
 Equivalent error responses MAY therefore produce exit `0`; the outcome columns MUST expose those errors.
 Exit `1` when at least one difference is unexpected.
-Exit `2` for invalid input, unsupported isolation, setup failure, or harness failure.
+Exit `2` for invalid input, setup failure, or harness failure.
 
-## 5. Isolation and cleanup
+## 5. Child environment and cleanup
 
-DS12. Require macOS and an executable `/usr/bin/sandbox-exec`.
-Fail with an explicit unsupported-platform or missing-isolation error on other hosts.
-Do not fall back to an unrestricted run.
-Run the mock and both binaries under a sandbox that denies non-loopback outbound networking.
-Allow local Unix sockets and loopback connections, except loopback port `7890`.
-Remove uppercase and lowercase HTTP, HTTPS, and ALL proxy variables from child environments.
+DS12. Remove uppercase and lowercase HTTP, HTTPS, and ALL proxy variables from the
+mock's and both binaries' environments.
 Remove `NODE_USE_ENV_PROXY`; set `NO_PROXY` and `no_proxy` to `*`.
-Do not claim isolation from every possible loopback proxy; only port `7890` is explicitly blocked.
+The tool does not sandbox network access; the seed's channels point only at the loopback mock (DS2, DS3).
 
 DS13. Stop and await all child processes after success, differences, or setup failure.
 On SIGINT or SIGTERM, stop children before exiting with `128 + signal number`.

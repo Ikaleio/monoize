@@ -19,4 +19,4 @@ pub(super) use tools::*;
 pub(super) use transform_rules::*;
 
 use affinity::{affinity_prefix_hash, stable_affinity_field};
-use tools::custom_bridge_names as messages_custom_bridge_names;
+use tools::messages_custom_bridge_names;

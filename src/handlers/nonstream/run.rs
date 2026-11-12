@@ -100,73 +100,51 @@ impl<'a> NonstreamRun<'a> {
         }
     }
 
+    pub(super) fn log_context(&self) -> RequestLogContext<'_> {
+        RequestLogContext {
+            model: &self.logical_model,
+            is_stream: false,
+            started_at: self.started_at,
+            request_id: self.inputs.request_id.as_deref(),
+            request_ip: self.inputs.request_ip.as_deref(),
+            reasoning_effort: self.reasoning_effort.as_deref(),
+        }
+    }
+
     /// Ends the request with `error`: error request log, then capture persist.
     pub(super) async fn fail_request(
         &mut self,
         attempt: &MonoizeAttempt,
         error: AppError,
     ) -> AppError {
+        let tried_providers = std::mem::take(&mut self.attempts.tried_providers);
         spawn_request_log_error(
             self.inputs.state,
             self.inputs.auth,
-            attempt,
-            RequestLogContext {
-                model: &self.logical_model,
-                is_stream: false,
-                started_at: self.started_at,
-                request_id: self.inputs.request_id.as_deref(),
-                request_ip: self.inputs.request_ip.as_deref(),
-                reasoning_effort: self.reasoning_effort.as_deref(),
-            },
+            Some(attempt),
+            self.log_context(),
             &error,
-            std::mem::take(&mut self.attempts.tried_providers),
+            tried_providers,
         );
-        if let Some(session) = self.inputs.capture.session.as_ref() {
-            session.persist_with_result(None, false).await;
-        }
+        self.inputs.capture.persist(None, false).await;
         error
     }
 
     /// RTA-8: every attempt failed or was skipped.
-    pub(super) async fn finish_exhausted(self) -> AppError {
+    pub(super) async fn finish_exhausted(mut self) -> AppError {
         let final_err = self
             .attempts
             .exhausted_error(&self.logical_model, self.inputs.downstream);
-        if let Some(attempt) = self.attempts.last_failed_attempt {
-            spawn_request_log_error(
-                self.inputs.state,
-                self.inputs.auth,
-                &attempt,
-                RequestLogContext {
-                    model: &self.logical_model,
-                    is_stream: false,
-                    started_at: self.started_at,
-                    request_id: (self.inputs.request_id).as_deref(),
-                    request_ip: (self.inputs.request_ip).as_deref(),
-                    reasoning_effort: (self.reasoning_effort).as_deref(),
-                },
-                &final_err,
-                self.attempts.tried_providers,
-            );
-        } else {
-            spawn_request_log_error_no_attempt(
-                self.inputs.state,
-                self.inputs.auth,
-                RequestLogContext {
-                    model: &self.logical_model,
-                    is_stream: false,
-                    started_at: self.started_at,
-                    request_id: (self.inputs.request_id).as_deref(),
-                    request_ip: (self.inputs.request_ip).as_deref(),
-                    reasoning_effort: (self.reasoning_effort).as_deref(),
-                },
-                &final_err,
-                self.attempts.tried_providers,
-            );
-        }
-        if let Some(session) = self.inputs.capture.session.as_ref() {
-            session.persist_with_result(None, true).await;
-        }
+        let tried_providers = std::mem::take(&mut self.attempts.tried_providers);
+        spawn_request_log_error(
+            self.inputs.state,
+            self.inputs.auth,
+            self.attempts.last_failed_attempt.as_ref(),
+            self.log_context(),
+            &final_err,
+            tried_providers,
+        );
+        self.inputs.capture.persist(None, true).await;
         final_err
     }
 }

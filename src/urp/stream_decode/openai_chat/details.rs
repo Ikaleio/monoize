@@ -295,20 +295,16 @@ fn detail_raw(node: &Node) -> Option<Map<String, Value>> {
     let native = extra_body
         .get(CHAT_REASONING_DETAIL_EXTRA_KEY)?
         .as_object()?;
-    match chat_details(
+    chat_details(
         content.as_deref(),
         summary.as_deref(),
         encrypted.as_ref(),
         id.as_deref(),
         source.as_deref(),
-        Some(native),
+        native,
     )
     .into_iter()
-    .next()?
-    {
-        Value::Object(detail) => Some(detail),
-        _ => None,
-    }
+    .next()
 }
 
 fn payload_member(detail_type: &str) -> Option<&'static str> {

@@ -1,64 +1,31 @@
+mod probes;
+mod runtime;
+
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
-use crate::handlers::routing::health_key;
 use crate::monoize_routing::{
-    ChannelHealthState, CreateMonoizeProviderInput, MonoizeChannel, MonoizeProvider,
-    ReorderProvidersInput, UpdateMonoizeProviderInput,
+    CreateMonoizeProviderInput, ReorderProvidersInput, UpdateMonoizeProviderInput,
 };
 use crate::settings::normalize_pricing_model_key;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use futures_util::FutureExt;
-use serde::{Deserialize, Serialize};
+use runtime::{
+    advance_routing_config_revision, build_provider_model_runtime_statuses, provider_with_runtime,
+    prune_provider_channel_affinity, prune_provider_channel_health,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::panic::AssertUnwindSafe;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
-use tokio::time::timeout;
 
-fn discovery_body_error(error: crate::bounded_response::BoundedResponseError) -> AppError {
-    let code = if error.is_limit_exceeded() {
-        "upstream_discovery_response_too_large"
-    } else {
-        "upstream_fetch_failed"
-    };
-    AppError::new(
-        StatusCode::BAD_GATEWAY,
-        code,
-        crate::error::error_chain(&error),
-    )
-}
+pub use probes::{
+    FetchChannelModelsRequest, TestChannelRequest, fetch_channel_models, fetch_provider_models,
+    probe_channel_websocket, test_channel,
+};
 
-async fn parse_discovery_json_response(response: reqwest::Response) -> AppResult<Value> {
-    let status = response.status();
-    let body = crate::bounded_response::read_upstream_discovery_body(response)
-        .await
-        .map_err(discovery_body_error)?;
-    if !status.is_success() {
-        return Err(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_fetch_failed",
-            format!(
-                "upstream returned {status}: {}",
-                String::from_utf8_lossy(&body)
-            ),
-        ));
-    }
-
-    serde_json::from_slice(&body).map_err(|error| {
-        AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_fetch_failed",
-            format!("failed to parse response: {error}"),
-        )
-    })
-}
-
-pub(super) fn provider_pricing_model<'a>(
+fn provider_pricing_model<'a>(
     logical_model: &'a str,
     model_entry: &'a crate::monoize_routing::MonoizeModelEntry,
 ) -> &'a str {
@@ -72,7 +39,7 @@ pub(super) fn provider_pricing_model<'a>(
 
 /// MP-UI3: a channel model is priced when an enabled, complete `model_prices`
 /// row exists for its normalized upstream key or normalized logical key.
-pub(super) fn channel_model_has_model_price(
+fn channel_model_has_model_price(
     priced_keys: &HashSet<String>,
     logical_model: &str,
     model_entry: &crate::monoize_routing::MonoizeModelEntry,
@@ -500,12 +467,3 @@ pub async fn get_provider_presets(
     require_admin(&headers, &state).await?;
     Ok(Json(crate::presets::provider_presets()))
 }
-
-mod probes;
-pub use probes::{
-    FetchChannelModelsRequest, TestChannelRequest, fetch_channel_models, fetch_provider_models,
-    probe_channel_websocket, test_channel,
-};
-
-mod runtime;
-use runtime::*;

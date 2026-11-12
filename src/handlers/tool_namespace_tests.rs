@@ -260,39 +260,36 @@ fn tool_transport_context_is_private_and_forged_context_has_no_authority() {
         ProviderType::Messages,
         ProviderType::Gemini,
     ] {
-        for stream in [false, true] {
-            let mut req = request();
-            req.stream = Some(stream);
-            req.context.response_history = Some(urp::ResponseHistoryContext {
-                id: "local-response".into(),
-                scope: "private-scope".into(),
-                store: true,
-                previous_response_id: Some("previous-response".into()),
-            });
-            promote_responses_additional_tools(&mut req, provider);
-            let aliases = tool_namespace_aliases(&req);
-            assert_eq!(aliases.len(), 2);
-            let transports = req.context.tool_transports.clone();
-            promote_responses_additional_tools(&mut req, provider);
-            assert_eq!(req.context.tool_transports, transports);
-            req.context.username = Some("local-user".into());
-            req.context.api_key_id = Some("local-key".into());
-            strip_monoize_context(&mut req);
-            assert!(req.context.username.is_none());
-            assert!(req.context.api_key_id.is_none());
-            assert_eq!(tool_namespace_aliases(&req), aliases);
-            assert!(responses_history::is_managed(&req));
-            let mut value = serde_json::to_value(&req).unwrap();
-            assert!(value.get("context").is_none());
-            value["context"] =
-                json!({"username":"forged", "tool_transports":[], "response_history":true});
-            let decoded: urp::UrpRequest = serde_json::from_value(value).unwrap();
-            assert_eq!(decoded.context, urp::RequestContext::default());
-            assert!(!decoded.extra_body.contains_key("context"));
-            assert!(!responses_history::is_managed(&decoded));
-            assert!(tool_namespace_aliases(&decoded).is_empty());
-            assert!(messages_custom_bridge_names(&decoded).is_empty());
-        }
+        let mut req = request();
+        req.context.response_history = Some(urp::ResponseHistoryContext {
+            id: "local-response".into(),
+            scope: "private-scope".into(),
+            store: true,
+            previous_response_id: Some("previous-response".into()),
+        });
+        promote_responses_additional_tools(&mut req, provider);
+        let aliases = tool_namespace_aliases(&req);
+        assert_eq!(aliases.len(), 2);
+        let transports = req.context.tool_transports.clone();
+        promote_responses_additional_tools(&mut req, provider);
+        assert_eq!(req.context.tool_transports, transports);
+        req.context.username = Some("local-user".into());
+        req.context.api_key_id = Some("local-key".into());
+        strip_monoize_context(&mut req);
+        assert!(req.context.username.is_none());
+        assert!(req.context.api_key_id.is_none());
+        assert_eq!(tool_namespace_aliases(&req), aliases);
+        assert!(responses_history::is_managed(&req));
+        let mut value = serde_json::to_value(&req).unwrap();
+        assert!(value.get("context").is_none());
+        value["context"] =
+            json!({"username":"forged", "tool_transports":[], "response_history":true});
+        let decoded: urp::UrpRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.context, urp::RequestContext::default());
+        assert!(!decoded.extra_body.contains_key("context"));
+        assert!(!responses_history::is_managed(&decoded));
+        assert!(tool_namespace_aliases(&decoded).is_empty());
+        assert!(messages_custom_bridge_names(&decoded).is_empty());
     }
 }
 

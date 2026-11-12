@@ -71,8 +71,34 @@ impl UserStore {
                 let encoded = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
                 updates.push((id, encoded));
             }
-            self.write_transform_migration_updates(&tx, &updates)
-                .await?;
+            if !updates.is_empty() {
+                let mut values: Vec<SeaValue> = Vec::with_capacity(updates.len() * 3);
+                let mut cases = Vec::with_capacity(updates.len());
+                let mut ids = Vec::with_capacity(updates.len());
+                for (id, transforms) in &updates {
+                    let id_index = values.len() + 1;
+                    values.push(id.clone().into());
+                    let transforms_index = values.len() + 1;
+                    values.push(transforms.clone().into());
+                    cases.push(format!("WHEN ${id_index} THEN ${transforms_index}"));
+                }
+                for (id, _) in &updates {
+                    let id_index = values.len() + 1;
+                    values.push(id.clone().into());
+                    ids.push(format!("${id_index}"));
+                }
+                tx.execute(self.db.stmt(
+                    &format!(
+                        "UPDATE api_keys SET transforms = CASE id {} ELSE transforms END
+                         WHERE id IN ({})",
+                        cases.join(" "),
+                        ids.join(", ")
+                    ),
+                    values,
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            }
             tx.commit().await.map_err(|e| e.to_string())?;
             for (id, _) in updates {
                 self.api_key_cache.invalidate_by_key_id(&id);
@@ -97,43 +123,5 @@ impl UserStore {
         .await
         .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())
-    }
-}
-
-impl UserStore {
-    async fn write_transform_migration_updates(
-        &self,
-        tx: &DatabaseTransaction,
-        updates: &[(String, String)],
-    ) -> Result<(), String> {
-        if !updates.is_empty() {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(updates.len() * 3);
-            let mut cases = Vec::with_capacity(updates.len());
-            let mut ids = Vec::with_capacity(updates.len());
-            for (id, transforms) in updates {
-                let id_index = values.len() + 1;
-                values.push(id.clone().into());
-                let transforms_index = values.len() + 1;
-                values.push(transforms.clone().into());
-                cases.push(format!("WHEN ${id_index} THEN ${transforms_index}"));
-            }
-            for (id, _) in updates {
-                let id_index = values.len() + 1;
-                values.push(id.clone().into());
-                ids.push(format!("${id_index}"));
-            }
-            tx.execute(self.db.stmt(
-                &format!(
-                    "UPDATE api_keys SET transforms = CASE id {} ELSE transforms END
-                         WHERE id IN ({})",
-                    cases.join(" "),
-                    ids.join(", ")
-                ),
-                values,
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(())
     }
 }

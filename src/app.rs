@@ -28,7 +28,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Once, OnceLock};
+use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tower_http::cors::CorsLayer;

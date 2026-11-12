@@ -181,10 +181,7 @@ impl StreamForward {
             &mut upstream_body,
         );
         let responses_echo = responses_request_echo_for_attempt(&req, attempt, downstream);
-        let legacy = match typed_request_to_legacy(&req, self.request.max_multiplier) {
-            Ok(legacy) => legacy,
-            Err(err) => return Err(self.fail_request(attempt, err)),
-        };
+        let legacy = typed_request_to_legacy(&req, self.request.max_multiplier);
         let namespace_aliases = tool_namespace_aliases(&req);
         attempt.session_affinity_value = resolve_session_affinity_value(attempt, &upstream_body);
         let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
@@ -230,11 +227,7 @@ impl StreamForward {
                         || DumpOutcome {
                             error: Some(match &err {
                                 LiveDispatchError::Upstream(err) => call_error_json(err),
-                                LiveDispatchError::Setup(err) => json!({
-                                    "message": err.message,
-                                    "code": err.code,
-                                    "status": err.status.as_u16(),
-                                }),
+                                LiveDispatchError::Setup(err) => app_error_json(err),
                             }),
                             ..DumpOutcome::default()
                         },
@@ -262,6 +255,7 @@ impl StreamForward {
         upstream_body: Value,
         extra_headers: &[(String, String)],
     ) -> AppResult<LiveDispatch> {
+        let capture_active = self.request.capture.session.is_some();
         let mut upstream_body = Some(upstream_body);
         let mut websocket_source = match self
             .request
@@ -272,7 +266,7 @@ impl StreamForward {
             Err(err) => {
                 return Ok(LiveDispatch {
                     path: "/v1/responses".to_string(),
-                    capture_upstream_request: upstream_body,
+                    capture_upstream_request: upstream_body.filter(|_| capture_active),
                     call: Err(LiveDispatchError::Setup(AppError::new(
                         StatusCode::BAD_GATEWAY,
                         "upstream_websocket_send_failed",
@@ -297,13 +291,7 @@ impl StreamForward {
         if let Some(source) = websocket_source {
             return Ok(LiveDispatch {
                 path: "/v1/responses".to_string(),
-                capture_upstream_request: self
-                    .request
-                    .capture
-                    .session
-                    .is_some()
-                    .then_some(upstream_body)
-                    .flatten(),
+                capture_upstream_request: upstream_body.filter(|_| capture_active),
                 call: Ok(source),
             });
         }
@@ -312,13 +300,7 @@ impl StreamForward {
             Err(err) => {
                 return Ok(LiveDispatch {
                     path: upstream_path_for_model(attempt.provider_type, &req.model, true),
-                    capture_upstream_request: self
-                        .request
-                        .capture
-                        .session
-                        .is_some()
-                        .then_some(upstream_body)
-                        .flatten(),
+                    capture_upstream_request: upstream_body.filter(|_| capture_active),
                     call: Err(LiveDispatchError::Setup(err)),
                 });
             }
@@ -333,7 +315,7 @@ impl StreamForward {
                 .expect("the encoded body is present until dispatch"),
             attempt.request_timeout_ms.saturating_mul(10).max(600_000),
             extra_headers,
-            self.request.capture.session.is_some(),
+            capture_active,
         )
         .await
         {
@@ -417,14 +399,7 @@ impl StreamForward {
             &self.request.state,
             &self.request.auth,
             attempt,
-            RequestLogContext {
-                model: &self.request.logical_model,
-                is_stream: true,
-                started_at: self.request.started_at,
-                request_id: self.request.request_id.as_deref(),
-                request_ip: self.request.request_ip.as_deref(),
-                reasoning_effort: None,
-            },
+            self.request.log_context(),
         )
         .await;
         mark_channel_success(&self.request.state, attempt).await;
@@ -462,11 +437,7 @@ impl StreamForward {
                 &self.request.logical_model,
                 None,
                 || DumpOutcome {
-                    error: Some(json!({
-                        "message": failure.error.message,
-                        "code": failure.error.code,
-                        "status": failure.error.status.as_u16(),
-                    })),
+                    error: Some(app_error_json(&failure.error)),
                     ..DumpOutcome::default()
                 },
             )

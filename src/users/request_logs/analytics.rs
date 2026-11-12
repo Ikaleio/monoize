@@ -283,7 +283,6 @@ impl UserStore {
     ) -> Result<Vec<AnalyticsProviderBucketRow>, String> {
         let bucket_expr = analytics_bucket_expr(is_sqlite);
 
-        // 2. Provider bucketed aggregation (calls only)
         let mut prov_sql = format!(
             r#"SELECT
                  {bucket_expr} AS bucket_idx,
@@ -302,14 +301,10 @@ impl UserStore {
             time_from_unix_ms.into(),
             time_to_unix_ms.into(),
         ];
-        let mut prov_idx = 6usize;
-
         if let Some(uid) = user_id {
-            prov_sql.push_str(&format!(" AND rl.user_id = ${prov_idx}"));
+            prov_sql.push_str(" AND rl.user_id = $6");
             prov_values.push(uid.into());
-            prov_idx += 1;
         }
-        let _ = prov_idx;
         prov_sql.push_str(" GROUP BY bucket_idx, provider_label");
 
         let prov_rows = self

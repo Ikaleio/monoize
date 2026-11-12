@@ -117,10 +117,7 @@ impl NonstreamRun<'_> {
             .await
             .stream_idle_timeout_ms
             .max(1);
-        let legacy = match typed_request_to_legacy(&call.req, self.inputs.max_multiplier) {
-            Ok(legacy) => legacy,
-            Err(err) => return Err(self.fail_request(attempt, err).await),
-        };
+        let legacy = typed_request_to_legacy(&call.req, self.inputs.max_multiplier);
         let pending_request_envelope_extra = find_pending_request_envelope_extra(&call.req.input);
         let extra_headers = attempt_extra_headers(attempt, &upstream_body);
         attempt.session_affinity_value = resolve_session_affinity_value(attempt, &upstream_body);

@@ -1,7 +1,7 @@
 use super::*;
 
-pub(super) struct LaneHandle {
-    pub(super) jobs: mpsc::UnboundedSender<LaneJob>,
+struct LaneHandle {
+    jobs: mpsc::UnboundedSender<LaneJob>,
 }
 
 pub(super) struct LaneJob {
@@ -110,51 +110,41 @@ pub(super) async fn serve_responses_websocket(
     }
 }
 
-pub(super) struct ConnectionReader {
-    pub(super) conn: Arc<Connection>,
-    pub(super) v2_header: bool,
-    pub(super) lanes: HashMap<LaneKey, LaneHandle>,
-    pub(super) named_lanes: usize,
-    pub(super) inbound_bytes: usize,
-    pub(super) first_text: bool,
+/// Reader-side state of one connection. Each method returns false when the
+/// connection must close.
+struct ConnectionReader {
+    conn: Arc<Connection>,
+    v2_header: bool,
+    lanes: HashMap<LaneKey, LaneHandle>,
+    named_lanes: usize,
+    inbound_bytes: usize,
+    first_text: bool,
 }
 
 impl ConnectionReader {
-    pub(super) async fn receive_message(&mut self, message: Message) -> bool {
-        let text = match message {
-            Message::Text(text) => text,
+    async fn receive_message(&mut self, message: Message) -> bool {
+        match message {
+            Message::Text(text) => self.receive_text(text.as_str()).await,
             Message::Binary(_) => {
-                if !self
-                    .conn
+                self.conn
                     .send_error(
                         &None,
                         WsError::invalid("binary WebSocket messages are not supported"),
                     )
                     .await
-                {
-                    return false;
-                }
-                return true;
             }
-            Message::Ping(payload) => {
-                if self
-                    .conn
-                    .outbound
-                    .send(Message::Pong(payload))
-                    .await
-                    .is_err()
-                {
-                    return false;
-                }
-                return true;
-            }
-            Message::Pong(_) => return true,
-            Message::Close(_) => return false,
-        };
-        self.receive_text(text.as_str()).await
+            Message::Ping(payload) => self
+                .conn
+                .outbound
+                .send(Message::Pong(payload))
+                .await
+                .is_ok(),
+            Message::Pong(_) => true,
+            Message::Close(_) => false,
+        }
     }
 
-    pub(super) async fn receive_text(&mut self, text: &str) -> bool {
+    async fn receive_text(&mut self, text: &str) -> bool {
         self.inbound_bytes = self.inbound_bytes.saturating_add(text.len());
         if self.inbound_bytes > self.conn.limits.connection_max_bytes {
             let _ = self
@@ -198,61 +188,42 @@ impl ConnectionReader {
                 return false;
             }
         }
-        let event = match event {
-            Ok(event) => event,
-            Err(error) => {
-                if !self.conn.send_error(&None, error).await {
-                    return false;
-                }
-                return true;
-            }
-        };
-        self.dispatch_event(kind.as_deref(), event).await
+        match event {
+            Ok(event) => self.dispatch_event(kind.as_deref(), event).await,
+            Err(error) => self.conn.send_error(&None, error).await,
+        }
     }
 
-    pub(super) async fn dispatch_event(
-        &mut self,
-        kind: Option<&str>,
-        event: Map<String, Value>,
-    ) -> bool {
+    async fn dispatch_event(&mut self, kind: Option<&str>, event: Map<String, Value>) -> bool {
         match kind {
             Some(kind @ ("response.create" | "response.append")) => {
-                return self.enqueue_turn(kind == "response.append", event).await;
+                self.enqueue_turn(kind == "response.append", event).await
             }
-            Some("response.interrupt") => {
-                if let Some(error) = handle_interrupt(&self.conn, &event).await
-                    && !self.conn.send_error(&None, error).await
-                {
-                    return false;
-                }
+            Some("response.interrupt") => match handle_interrupt(&self.conn, &event).await {
+                Some(error) => self.conn.send_error(&None, error).await,
+                None => true,
+            },
+            Some("response.steer") => {
+                handle_steer(&self.conn, &event).await;
+                true
             }
-            Some("response.steer") => handle_steer(&self.conn, &event).await,
             Some(other) => {
-                if !self
-                    .conn
+                self.conn
                     .send_error(
                         &None,
                         WsError::invalid(format!("unsupported WebSocket event type '{other}'")),
                     )
                     .await
-                {
-                    return false;
-                }
             }
             None => {
-                if !self
-                    .conn
+                self.conn
                     .send_error(&None, WsError::invalid("WebSocket event is missing type"))
                     .await
-                {
-                    return false;
-                }
             }
         }
-        true
     }
 
-    pub(super) async fn enqueue_turn(&mut self, append: bool, event: Map<String, Value>) -> bool {
+    async fn enqueue_turn(&mut self, append: bool, event: Map<String, Value>) -> bool {
         if append && !self.v2_header {
             self.conn.v1.store(true, Ordering::Release);
         }
@@ -266,10 +237,7 @@ impl ConnectionReader {
                     "The 'stream_id' field must be a non-empty string with at most 256 characters and may only contain letters, numbers, underscores, hyphens, and periods.",
                     Some("stream_id"),
                 );
-                if !self.conn.send_error(&None, error).await {
-                    return false;
-                }
-                return true;
+                return self.conn.send_error(&None, error).await;
             }
         };
         if lane.is_some() && !self.lanes.contains_key(&lane) && self.named_lanes >= MAX_NAMED_LANES
@@ -280,10 +248,7 @@ impl ConnectionReader {
                 "This WebSocket connection has reached its maximum number of distinct stream IDs (32). Reuse an existing stream_id or open a new WebSocket connection.",
                 Some("stream_id"),
             );
-            if !self.conn.send_error(&lane, error).await {
-                return false;
-            }
-            return true;
+            return self.conn.send_error(&lane, error).await;
         }
         let handle = self.lanes.entry(lane.clone()).or_insert_with(|| {
             if lane.is_some() {
@@ -300,7 +265,7 @@ impl ConnectionReader {
     }
 }
 
-pub(super) fn valid_stream_id(stream_id: &str) -> bool {
+fn valid_stream_id(stream_id: &str) -> bool {
     !stream_id.is_empty()
         && stream_id.len() <= MAX_STREAM_ID_LEN
         && stream_id
@@ -308,7 +273,7 @@ pub(super) fn valid_stream_id(stream_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
-pub(super) fn spawn_lane(conn: Arc<Connection>, key: LaneKey) -> LaneHandle {
+fn spawn_lane(conn: Arc<Connection>, key: LaneKey) -> LaneHandle {
     let (relay_tx, relay_rx) = mpsc::unbounded_channel::<ResponsesWsRelay>();
     let lane = Arc::new(ResponsesWsLane::new(relay_tx));
     let (jobs, jobs_rx) = mpsc::unbounded_channel();

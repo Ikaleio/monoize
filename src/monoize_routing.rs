@@ -9,7 +9,6 @@ mod runtime;
 mod store;
 mod types;
 mod validation;
-mod values;
 
 pub(crate) use affinity::default_session_affinity_auto;
 pub use probe::*;

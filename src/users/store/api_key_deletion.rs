@@ -118,9 +118,7 @@ impl UserStore {
         }
         Ok(deleted_key_ids.len())
     }
-}
 
-impl UserStore {
     async fn lock_delete_user_balances(
         &self,
         tx: &DatabaseTransaction,
@@ -168,9 +166,7 @@ impl UserStore {
 
         Ok(user_balances)
     }
-}
 
-impl UserStore {
     async fn lock_delete_api_keys(
         &self,
         tx: &DatabaseTransaction,
@@ -190,7 +186,7 @@ impl UserStore {
                      FROM api_keys WHERE id IN ({placeholders})
                      ORDER BY user_id, id{lock_suffix}"
                 ),
-                key_values.clone(),
+                key_values,
             ))
             .await
             .map_err(|e| e.to_string())?;
@@ -221,9 +217,7 @@ impl UserStore {
 
         Ok(locked_keys)
     }
-}
 
-impl UserStore {
     async fn write_delete_settlements(
         &self,
         tx: &DatabaseTransaction,

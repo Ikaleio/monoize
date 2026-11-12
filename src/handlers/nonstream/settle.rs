@@ -158,25 +158,19 @@ impl NonstreamRun<'_> {
             Ok(charge) => charge,
             Err(err) => return Err(self.fail_request(attempt, err).await),
         };
+        let tried_providers = std::mem::take(&mut self.attempts.tried_providers);
         spawn_request_log(
             state,
             auth,
             attempt,
-            RequestLogContext {
-                model: &self.logical_model,
-                is_stream: false,
-                started_at: self.started_at,
-                request_id: self.inputs.request_id.as_deref(),
-                request_ip: self.inputs.request_ip.as_deref(),
-                reasoning_effort: self.reasoning_effort.as_deref(),
-            },
+            self.log_context(),
             RequestLogSuccess {
                 usage: resp.usage.clone(),
                 charge_nano_usd: charge.charge_nano_usd,
                 billing_breakdown_json: charge.billing_breakdown,
                 ttfb_ms: None,
                 stream_terminal_diagnostics: None,
-                tried_providers: std::mem::take(&mut self.attempts.tried_providers),
+                tried_providers,
                 client_gone: self
                     .inputs
                     .task_state
@@ -184,11 +178,10 @@ impl NonstreamRun<'_> {
                 upstream_response_model,
             },
         );
-        if let Some(session) = self.inputs.capture.session.as_ref() {
-            session
-                .persist_with_result(resp.usage.as_ref(), false)
-                .await;
-        }
+        self.inputs
+            .capture
+            .persist(resp.usage.as_ref(), false)
+            .await;
         if let Some(history) = history {
             history.retain_response(&resp).await;
         }

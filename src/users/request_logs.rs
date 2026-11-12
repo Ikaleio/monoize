@@ -589,19 +589,6 @@ pub struct RequestLogFilters<'a> {
     pub time_to: Option<&'a str>,
 }
 
-/// Usage fields accepted by the pending-log update API.
-pub struct PendingRequestLogUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: Option<u64>,
-    pub cache_creation_tokens: Option<u64>,
-    pub tool_prompt_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
-    pub accepted_prediction_tokens: Option<u64>,
-    pub rejected_prediction_tokens: Option<u64>,
-    pub usage_breakdown_json: Option<Value>,
-}
-
 mod analytics;
 mod lifecycle;
 mod listing;

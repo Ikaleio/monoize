@@ -15,31 +15,31 @@ pub(super) struct TurnBridge {
 }
 
 #[derive(Default)]
-pub(super) struct BridgeTracker {
-    pub(super) created: Option<Value>,
-    pub(super) done_items: BTreeMap<u64, Value>,
-    pub(super) next_sequence: Option<i64>,
+struct BridgeTracker {
+    created: Option<Value>,
+    done_items: BTreeMap<u64, Value>,
+    next_sequence: Option<i64>,
     /// WS4b: this response's relays waiting for its lifecycle barrier.
-    pub(super) held: Vec<ResponsesWsRelay>,
-    pub(super) outcome: TurnOutcome,
-    pub(super) failed: bool,
+    held: Vec<ResponsesWsRelay>,
+    outcome: TurnOutcome,
+    failed: bool,
 }
 
-pub(super) enum BridgeFlow {
+enum BridgeFlow {
     Continue,
     Disconnected,
 }
 
 #[derive(Default)]
-pub(super) struct BridgeInput {
-    pub(super) buffer: Vec<u8>,
-    pub(super) tracker: BridgeTracker,
-    pub(super) interrupt_pending: bool,
-    pub(super) control_closed: bool,
+struct BridgeInput {
+    buffer: Vec<u8>,
+    tracker: BridgeTracker,
+    interrupt_pending: bool,
+    control_closed: bool,
 }
 
 impl BridgeInput {
-    pub(super) fn should_interrupt(&self) -> bool {
+    fn should_interrupt(&self) -> bool {
         self.interrupt_pending
             && self.tracker.created.is_some()
             && self.tracker.outcome.status.is_none()
@@ -47,7 +47,7 @@ impl BridgeInput {
     }
 }
 
-pub(super) enum BridgeStep {
+enum BridgeStep {
     Continue,
     Interrupt,
     End(TurnOutcome),
@@ -116,7 +116,7 @@ impl TurnBridge {
         self.finish_stream(input).await
     }
 
-    pub(super) async fn read_failure(&self, mut tracker: BridgeTracker) -> TurnOutcome {
+    async fn read_failure(&self, mut tracker: BridgeTracker) -> TurnOutcome {
         if tracker.outcome.status.is_none() && !tracker.failed {
             let _ = self
                 .conn
@@ -132,11 +132,7 @@ impl TurnBridge {
         tracker.outcome
     }
 
-    pub(super) async fn process_chunk(
-        &mut self,
-        chunk: &[u8],
-        input: &mut BridgeInput,
-    ) -> BridgeStep {
+    async fn process_chunk(&mut self, chunk: &[u8], input: &mut BridgeInput) -> BridgeStep {
         let limits = self.conn.limits;
         if input.buffer.len().saturating_add(chunk.len()) > limits.sse_buffer_max_bytes {
             let _ = self
@@ -173,7 +169,7 @@ impl TurnBridge {
         BridgeStep::Continue
     }
 
-    pub(super) async fn finish_stream(&mut self, mut input: BridgeInput) -> TurnOutcome {
+    async fn finish_stream(&mut self, mut input: BridgeInput) -> TurnOutcome {
         match drain_sse_data(
             &mut input.buffer,
             true,
@@ -209,7 +205,7 @@ impl TurnBridge {
         input.tracker.outcome
     }
 
-    pub(super) fn retainable(&self, output: &[Value]) -> bool {
+    fn retainable(&self, output: &[Value]) -> bool {
         !self.oversized
             && self.conn.limits.fits(
                 self.input_items.saturating_add(output.len()),
@@ -220,7 +216,7 @@ impl TurnBridge {
     /// WS4b: orders a relay into the egress of the response it names. This
     /// response's relays wait for their lifecycle barrier; an earlier response's
     /// go out now, numbered from that response's own counter.
-    pub(super) async fn accept_relay(
+    async fn accept_relay(
         &self,
         relay: ResponsesWsRelay,
         tracker: &mut BridgeTracker,
@@ -239,13 +235,13 @@ impl TurnBridge {
         }
     }
 
-    pub(super) fn ended(tracker: &BridgeTracker) -> bool {
+    fn ended(tracker: &BridgeTracker) -> bool {
         tracker.outcome.status.is_some() || tracker.failed
     }
 
     /// WS4b: sends held relays whose barrier passed. At the end of the stream the
     /// rest go out, unless the response never reached the client.
-    pub(super) async fn release_relays(&self, tracker: &mut BridgeTracker, finished: bool) -> bool {
+    async fn release_relays(&self, tracker: &mut BridgeTracker, finished: bool) -> bool {
         if tracker.held.is_empty() {
             return true;
         }
@@ -269,11 +265,7 @@ impl TurnBridge {
     }
 
     /// Interleaves a relayed acknowledgement into this response's sequence.
-    pub(super) async fn forward_relay(
-        &self,
-        mut value: Value,
-        tracker: &mut BridgeTracker,
-    ) -> bool {
+    async fn forward_relay(&self, mut value: Value, tracker: &mut BridgeTracker) -> bool {
         let kind = value
             .get("type")
             .and_then(Value::as_str)
@@ -288,11 +280,7 @@ impl TurnBridge {
         self.conn.send(&self.key, value).await
     }
 
-    pub(super) async fn forward_event(
-        &mut self,
-        data: String,
-        tracker: &mut BridgeTracker,
-    ) -> BridgeFlow {
+    async fn forward_event(&mut self, data: String, tracker: &mut BridgeTracker) -> BridgeFlow {
         if data == "[DONE]" || tracker.failed {
             return BridgeFlow::Continue;
         }
@@ -379,7 +367,7 @@ impl TurnBridge {
     }
 
     /// WS12a emulation for HTTP and non-Responses upstreams (Codex contract).
-    pub(super) async fn emulate_interrupt(
+    async fn emulate_interrupt(
         self,
         mut body: axum::body::BodyDataStream,
         tracker: BridgeTracker,
@@ -420,7 +408,7 @@ impl TurnBridge {
 }
 
 /// WS19: every `response_id` member of a non-response event names the public id.
-pub(super) fn rewrite_response_ids(value: &mut Value, public_id: &str) {
+fn rewrite_response_ids(value: &mut Value, public_id: &str) {
     match value {
         Value::Object(object) => {
             for (key, child) in object.iter_mut() {
@@ -440,7 +428,7 @@ pub(super) fn rewrite_response_ids(value: &mut Value, public_id: &str) {
     }
 }
 
-pub(super) fn strip_item_encrypted(item: &mut Value) {
+fn strip_item_encrypted(item: &mut Value) {
     if item.get("type").and_then(Value::as_str) == Some("reasoning")
         && let Some(object) = item.as_object_mut()
     {
@@ -448,7 +436,7 @@ pub(super) fn strip_item_encrypted(item: &mut Value) {
     }
 }
 
-pub(super) fn strip_encrypted_reasoning(event: &mut Value) {
+fn strip_encrypted_reasoning(event: &mut Value) {
     if let Some(item) = event.get_mut("item") {
         strip_item_encrypted(item);
     }
@@ -461,7 +449,7 @@ pub(super) fn strip_encrypted_reasoning(event: &mut Value) {
     }
 }
 
-pub(super) fn drain_sse_data(
+fn drain_sse_data(
     buffer: &mut Vec<u8>,
     eof: bool,
     max_frame_bytes: usize,
@@ -492,7 +480,7 @@ pub(super) fn drain_sse_data(
     Ok(frames)
 }
 
-pub(super) fn parse_sse_data_frame(frame: &[u8]) -> Option<String> {
+fn parse_sse_data_frame(frame: &[u8]) -> Option<String> {
     let frame = String::from_utf8_lossy(frame);
     let data = frame
         .lines()

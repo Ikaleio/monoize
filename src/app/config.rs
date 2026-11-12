@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) const DEFAULT_HTTP_BODY_MAX_BYTES: usize = 50 * 1024 * 1024;
+const DEFAULT_HTTP_BODY_MAX_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -49,7 +49,7 @@ pub(super) fn http_body_max_bytes() -> usize {
     http_body_max_bytes_from_raw(std::env::var("MONOIZE_HTTP_BODY_MAX_BYTES").ok().as_deref())
 }
 
-pub(super) fn http_body_max_bytes_from_raw(raw: Option<&str>) -> usize {
+fn http_body_max_bytes_from_raw(raw: Option<&str>) -> usize {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(|value| value.parse::<usize>().ok())

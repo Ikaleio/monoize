@@ -14,6 +14,9 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+mod session;
+mod store;
+
 const DEFAULT_MAX_ATTEMPTS: usize = 16;
 const DEFAULT_MAX_FRAMES: usize = 4_096;
 const DEFAULT_MAX_FRAME_BYTES: usize = 256 * 1024;
@@ -700,6 +703,3 @@ fn bounded_attempt_error(attempt: &Value) -> Value {
     }
     Value::Object(bounded)
 }
-
-mod session;
-mod store;

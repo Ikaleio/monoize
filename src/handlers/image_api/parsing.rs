@@ -1,5 +1,5 @@
 use super::*;
-use axum::extract::Multipart;
+use axum::extract::{FromRequest, Multipart, Request};
 use base64::Engine as _;
 
 pub(super) struct ParsedImageEdit {
@@ -29,7 +29,7 @@ pub(super) fn required_image_text(fields: &Map<String, Value>, key: &str) -> App
     Ok(text.to_owned())
 }
 
-pub(super) fn validate_edit_image_count(count: usize) -> AppResult<()> {
+fn validate_edit_image_count(count: usize) -> AppResult<()> {
     if (1..=16).contains(&count) {
         Ok(())
     } else {
@@ -39,10 +39,76 @@ pub(super) fn validate_edit_image_count(count: usize) -> AppResult<()> {
     }
 }
 
-pub(super) fn parse_json_image_edit(
-    body: Value,
+pub(super) async fn parse_edit_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    request: Request,
     capture_eligible: bool,
 ) -> AppResult<ParsedImageEdit> {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if content_type == "application/json"
+        || content_type.starts_with("application/") && content_type.ends_with("+json")
+    {
+        let Json(body) = Json::<Value>::from_request(request, state)
+            .await
+            .map_err(|err| AppError::new(err.status(), "invalid_request", err.body_text()))?;
+        parse_json_image_edit(body, capture_eligible)
+    } else if content_type == "multipart/form-data" {
+        let multipart = Multipart::from_request(request, state)
+            .await
+            .map_err(|err| AppError::new(err.status(), "invalid_request", err.body_text()))?;
+        parse_multipart_image_edit(multipart, capture_eligible).await
+    } else {
+        Err(AppError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_request",
+            "image edits require application/json or multipart/form-data",
+        ))
+    }
+}
+
+pub(super) fn parse_edit_options(
+    edit: &ParsedImageEdit,
+    stream: bool,
+) -> AppResult<ImageRequestOptions> {
+    let options = ImageRequestOptions::parse(build_extra_body(
+        &edit.fields,
+        &[
+            "prompt",
+            "model",
+            "n",
+            "stream",
+            "max_multiplier",
+            "image",
+            "image[]",
+            "images",
+            "mask",
+            "markup",
+        ],
+    ))?;
+    options.validate(true, stream)?;
+    if edit.markup.is_some()
+        && (edit.mask.is_some()
+            || options
+                .extra_body
+                .get("prompt_rewriter")
+                .is_some_and(|v| !v.is_null()))
+    {
+        return Err(
+            image_request_error("markup cannot be combined with mask or prompt_rewriter")
+                .with_param("markup"),
+        );
+    }
+    Ok(options)
+}
+
+fn parse_json_image_edit(body: Value, capture_eligible: bool) -> AppResult<ParsedImageEdit> {
     let fields = body
         .as_object()
         .ok_or_else(|| image_request_error("body must be object"))?;
@@ -74,7 +140,7 @@ pub(super) fn parse_json_image_edit(
     })
 }
 
-pub(super) fn parse_image_reference(value: &Value, field: &str) -> AppResult<urp::Node> {
+fn parse_image_reference(value: &Value, field: &str) -> AppResult<urp::Node> {
     let reference = value
         .as_object()
         .ok_or_else(|| image_request_error("each image reference must be an object"))?;
@@ -156,7 +222,7 @@ pub(super) fn parse_image_reference(value: &Value, field: &str) -> AppResult<urp
     })
 }
 
-pub(super) async fn parse_multipart_image_edit(
+async fn parse_multipart_image_edit(
     mut multipart: Multipart,
     capture_eligible: bool,
 ) -> AppResult<ParsedImageEdit> {
@@ -360,7 +426,7 @@ pub(super) fn resolve_image_max_multiplier(
     }
 }
 
-pub(super) fn infer_media_type_from_filename(filename: Option<&str>) -> String {
+fn infer_media_type_from_filename(filename: Option<&str>) -> String {
     let ext = filename
         .and_then(|f| f.rsplit('.').next())
         .unwrap_or("")
@@ -376,7 +442,7 @@ pub(super) fn infer_media_type_from_filename(filename: Option<&str>) -> String {
     .to_string()
 }
 
-pub(super) fn coerce_text_to_json_value(text: &str) -> Value {
+fn coerce_text_to_json_value(text: &str) -> Value {
     if let Ok(n) = text.parse::<i64>() {
         return Value::Number(n.into());
     }

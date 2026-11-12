@@ -70,14 +70,14 @@ OpenAI Responses lifecycle in this order, then `data: [DONE]`:
 2. `response.output_item.added` with a `reasoning` item (`id = "rs_mock_1"`,
    `summary: []`)
 3. `response.reasoning_summary_part.added` (`summary_index = 0`)
-4. one `response.reasoning_summary_text.delta` per whitespace-delimited token of
+4. one `response.reasoning_summary_text.delta` per MU5a token of
    `Mock summary of: <input text>` (`summary_index = 0`)
 5. `response.reasoning_summary_text.done`, `response.reasoning_summary_part.done`
 6. `response.output_item.done` with the completed reasoning item (one `summary_text`
    entry holding the full summary text)
 7. `response.output_item.added` with a `message` item (`id = "msg_mock_1"`)
 8. `response.content_part.added`, one `response.output_text.delta` per
-   whitespace-delimited token of `echo(input text, body)`,
+   MU5a token of `echo(input text, body)`,
    `response.output_text.done`, `response.content_part.done`
 9. `response.output_item.done` with the completed message item
 10. `response.completed` whose `response.output` contains the completed reasoning and
@@ -111,12 +111,12 @@ assistant message whose content is `echo(concatenated string message contents, b
 Every response, including every tool-loop turn, MUST carry MU5a usage.
 
 MU11. With `stream: true`, the endpoint MUST emit a role chunk, one content delta per
-whitespace-delimited token of `echo(...)`, a terminal chunk with
+MU5a token of `echo(...)`, a terminal chunk with
 `finish_reason: "stop"` and usage, then `data: [DONE]`.
 
 MU12. With `stream: true` and the reasoning trigger active, the endpoint MUST emit,
 between the role chunk and the first content delta, one
-`delta: { "reasoning_content": <token> }` chunk per whitespace-delimited token of
+`delta: { "reasoning_content": <token> }` chunk per MU5a token of
 `Mock reasoning about: <concatenated string message contents>`.
 
 ## 5. Messages and images

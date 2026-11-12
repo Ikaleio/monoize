@@ -185,10 +185,8 @@ impl RequestCaptureSession {
             }
         }))
     }
-}
 
-impl RequestCaptureSession {
-    pub(super) fn encode_bounded_attempts(
+    fn encode_bounded_attempts(
         &self,
         attempts: &mut Vec<Value>,
         truncation: &mut CaptureTruncation,

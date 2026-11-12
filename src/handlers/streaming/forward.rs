@@ -22,6 +22,17 @@ pub(super) struct StreamRequest {
 }
 
 impl StreamRequest {
+    pub(super) fn log_context(&self) -> RequestLogContext<'_> {
+        RequestLogContext {
+            model: &self.logical_model,
+            is_stream: true,
+            started_at: self.started_at,
+            request_id: self.request_id.as_deref(),
+            request_ip: self.request_ip.as_deref(),
+            reasoning_effort: self.reasoning_effort.as_deref(),
+        }
+    }
+
     /// Writes the stream request-log row of an attempt that failed before
     /// its forwarding task started.
     pub(super) fn log_attempt_error(
@@ -34,14 +45,7 @@ impl StreamRequest {
             &self.state,
             &self.auth,
             attempt,
-            RequestLogContext {
-                model: &self.logical_model,
-                is_stream: true,
-                started_at: self.started_at,
-                request_id: self.request_id.as_deref(),
-                request_ip: self.request_ip.as_deref(),
-                reasoning_effort: self.reasoning_effort.as_deref(),
-            },
+            self.log_context(),
             RequestLogStreamError {
                 ttfb_ms: None,
                 terminal_error: stream_terminal_error_from_app(error),
@@ -169,6 +173,15 @@ pub(super) fn call_error_json(err: &UpstreamCallError) -> Value {
     })
 }
 
+/// The capture `error` of an attempt that failed with an `AppError`.
+pub(super) fn app_error_json(err: &AppError) -> Value {
+    json!({
+        "message": err.message,
+        "code": err.code,
+        "status": err.status.as_u16(),
+    })
+}
+
 pub(in crate::handlers) struct StreamForwardRequest {
     pub(in crate::handlers) state: AppState,
     pub(in crate::handlers) auth: crate::auth::AuthResult,
@@ -274,23 +287,7 @@ fn adapt_attempt_request(
     attempt: &MonoizeAttempt,
     request: &StreamRequest,
 ) {
-    let downstream = request.downstream;
-    if matches!(downstream, DownstreamProtocol::Responses)
-        || attempt.provider_type == ProviderType::Gemini
-    {
-        promote_responses_additional_tools(req, attempt.provider_type);
-    }
-    if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
-        urp::retain_provider_items_for_protocol(&mut req.input, target_protocol);
-        if target_protocol == urp::ProviderProtocol::Responses {
-            urp::remove_downstream_only_reasoning_for_responses(&mut req.input);
-        }
-    }
-    if attempt.strip_cross_protocol_nested_extra
-        && !downstream.is_same_family(attempt.provider_type)
-    {
-        urp::strip_nested_extra_body(&mut req.input);
-    }
+    shape_request_for_attempt(req, attempt, &request.auth, request.downstream);
     // WS5a: the appended include is only for Responses attempts.
     if attempt.provider_type != ProviderType::Responses
         && request
@@ -304,16 +301,6 @@ fn adapt_attempt_request(
             req.extra_body.remove("include");
         }
     }
-    inject_monoize_context(&request.auth, req);
-    req.model = attempt.upstream_model.clone();
-    // PIPE-1d: resolve provider/model-bound mz2 reasoning before transforms
-    // can observe or mutate its encrypted replay payload.
-    urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
-        &mut req.input,
-        reasoning_envelope_provider_type(attempt.provider_type),
-        &req.model,
-        request.auth.reasoning_envelope_enabled,
-    );
 }
 
 impl StreamForward {
@@ -468,14 +455,16 @@ impl StreamForward {
             }
         }
         strip_monoize_context(&mut req);
-        let transform_chain = request.capture.session.as_ref().map_or(Value::Null, |_| {
+        let transform_chain = if request.capture.session.is_some() {
             crate::request_capture::build_transform_chain(
                 &attempt.provider_transforms,
                 &plan.global_transforms,
                 &request.auth.transforms,
                 &request.transform_match_model,
             )
-        });
+        } else {
+            Value::Null
+        };
         Ok(ChannelTry {
             slot,
             req,
@@ -513,14 +502,7 @@ impl StreamForward {
                 &request.state,
                 &request.auth,
                 &attempt,
-                RequestLogContext {
-                    model: &request.logical_model,
-                    is_stream: true,
-                    started_at: request.started_at,
-                    request_id: (request.request_id).as_deref(),
-                    request_ip: (request.request_ip).as_deref(),
-                    reasoning_effort: (request.reasoning_effort).as_deref(),
-                },
+                request.log_context(),
                 RequestLogStreamError {
                     ttfb_ms: None,
                     terminal_error: stream_terminal_error_from_app(&final_err),
@@ -529,24 +511,16 @@ impl StreamForward {
                 },
             );
         } else {
-            spawn_request_log_error_no_attempt(
+            spawn_request_log_error(
                 &request.state,
                 &request.auth,
-                RequestLogContext {
-                    model: &request.logical_model,
-                    is_stream: true,
-                    started_at: request.started_at,
-                    request_id: (request.request_id).as_deref(),
-                    request_ip: (request.request_ip).as_deref(),
-                    reasoning_effort: (request.reasoning_effort).as_deref(),
-                },
+                None,
+                request.log_context(),
                 &final_err,
                 self.attempts.tried_providers,
             );
         }
-        if let Some(session) = request.capture.session.as_ref() {
-            session.persist_with_result(None, true).await;
-        }
+        request.capture.persist(None, true).await;
         final_err
     }
 }

@@ -61,7 +61,48 @@ impl MonoizeRoutingStore {
                 .expect("non-empty transform migration batch")
                 .try_get("", "id")
                 .map_err(|e| e.to_string())?;
-            self.migrate_transform_batch(&*tx, rows).await?;
+            let mut updates = Vec::with_capacity(batch_len);
+            for row in rows {
+                let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+                let raw: String = row.try_get("", "transforms").map_err(|e| e.to_string())?;
+                let Ok(mut transforms) = serde_json::from_str::<Vec<TransformRuleConfig>>(&raw)
+                else {
+                    tracing::warn!(provider_id = %id, "skip invalid provider transforms during transform id migration");
+                    continue;
+                };
+                if !canonicalize_transform_rules(&mut transforms) {
+                    continue;
+                }
+                let encoded = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
+                updates.push((id, encoded));
+            }
+
+            if !updates.is_empty() {
+                let mut values: Vec<sea_orm::Value> = Vec::with_capacity(updates.len() * 2);
+                let mut cases = Vec::with_capacity(updates.len());
+                let mut ids = Vec::with_capacity(updates.len());
+                for (id, transforms) in &updates {
+                    let id_index = values.len() + 1;
+                    values.push(id.clone().into());
+                    ids.push(format!("${id_index}"));
+                    let transforms_index = values.len() + 1;
+                    values.push(transforms.clone().into());
+                    cases.push(format!("WHEN ${id_index} THEN ${transforms_index}"));
+                }
+                tx.execute(self.db.stmt(
+                    &format!(
+                        "UPDATE monoize_providers
+                         SET transforms = CASE id {} ELSE transforms END
+                         WHERE id IN ({})",
+                        cases.join(" "),
+                        ids.join(", ")
+                    ),
+                    values,
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+
             tx.commit().await.map_err(|e| e.to_string())?;
             last_id = Some(next_last_id);
             if batch_len < TRANSFORM_MIGRATION_BATCH_SIZE {
@@ -88,53 +129,5 @@ impl MonoizeRoutingStore {
         .await
         .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())
-    }
-
-    async fn migrate_transform_batch(
-        &self,
-        tx: &impl ConnectionTrait,
-        rows: Vec<sea_orm::QueryResult>,
-    ) -> Result<(), String> {
-        let mut updates = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-            let raw: String = row.try_get("", "transforms").map_err(|e| e.to_string())?;
-            let Ok(mut transforms) = serde_json::from_str::<Vec<TransformRuleConfig>>(&raw) else {
-                tracing::warn!(provider_id = %id, "skip invalid provider transforms during transform id migration");
-                continue;
-            };
-            if !canonicalize_transform_rules(&mut transforms) {
-                continue;
-            }
-            let encoded = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
-            updates.push((id, encoded));
-        }
-
-        if !updates.is_empty() {
-            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(updates.len() * 2);
-            let mut cases = Vec::with_capacity(updates.len());
-            let mut ids = Vec::with_capacity(updates.len());
-            for (id, transforms) in &updates {
-                let id_index = values.len() + 1;
-                values.push(id.clone().into());
-                ids.push(format!("${id_index}"));
-                let transforms_index = values.len() + 1;
-                values.push(transforms.clone().into());
-                cases.push(format!("WHEN ${id_index} THEN ${transforms_index}"));
-            }
-            tx.execute(self.db.stmt(
-                &format!(
-                    "UPDATE monoize_providers
-                         SET transforms = CASE id {} ELSE transforms END
-                         WHERE id IN ({})",
-                    cases.join(" "),
-                    ids.join(", ")
-                ),
-                values,
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(())
     }
 }

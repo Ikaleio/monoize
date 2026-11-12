@@ -1,3 +1,6 @@
+use super::*;
+use chrono::{Duration as ChronoDuration, Utc};
+
 const UPSTREAM_RESPONSE_MODEL_MAX_CHARS: usize = 200;
 
 pub(super) fn mismatched_upstream_response_model(sent: &str, observed: &str) -> Option<String> {
@@ -15,9 +18,6 @@ pub(super) fn mismatched_upstream_response_model(sent: &str, observed: &str) -> 
     }
     Some(bounded)
 }
-
-use super::*;
-use chrono::{Duration as ChronoDuration, Utc};
 
 #[must_use]
 pub(super) struct PendingRequestLogGuard {
@@ -255,6 +255,7 @@ pub(super) struct RequestLogContext<'a> {
     pub(super) started_at: std::time::Instant,
     pub(super) request_id: Option<&'a str>,
     pub(super) request_ip: Option<&'a str>,
+    /// Recorded on terminal rows only; pending snapshots never carry it.
     pub(super) reasoning_effort: Option<&'a str>,
 }
 
@@ -390,6 +391,7 @@ fn broadcast_pending_snapshot(
     let mut log = base_request_log(auth, user_id, context);
     log.request_id = Some(request_id.to_string());
     log.status = crate::users::REQUEST_LOG_STATUS_PENDING.to_string();
+    log.reasoning_effort = None;
     if let Some(attempt) = attempt {
         apply_attempt_fields(&mut log, attempt);
     }
@@ -414,37 +416,6 @@ fn spool_admission_error(stage: &str, request_id: &str, error: impl Into<String>
     )
     .with_internal_message(error)
     .with_type("server_error")
-}
-
-async fn arm_request_log_fallback(
-    state: &AppState,
-    request_id: &str,
-    lifecycle: &std::sync::Arc<crate::app::RequestLogLifecycle>,
-    reservation: &crate::db_cache::RequestLogReservation,
-    fallback_log: &InsertRequestLog,
-    started_at: std::time::Instant,
-) -> AppResult<()> {
-    let fallback = aborted_fallback_terminal_log(
-        fallback_log.clone(),
-        request_id,
-        started_at.elapsed().as_millis() as u64,
-    );
-    if let Err(error) = state
-        .user_store
-        .arm_terminal_request_log(fallback, reservation)
-        .await
-    {
-        let error = spool_admission_error("arm", request_id, error);
-        state.pending_request_logs.remove(request_id);
-        state
-            .request_log_admissions
-            .remove_if(request_id, |_, current| {
-                std::sync::Arc::ptr_eq(current, lifecycle)
-            });
-        lifecycle.complete_terminal_task();
-        return Err(error);
-    }
-    Ok(())
 }
 
 pub(super) async fn insert_pending_request_log(
@@ -504,15 +475,26 @@ pub(super) async fn insert_pending_request_log(
         .get(&request_id)
         .map(|entry| entry.value().clone())
         .expect("pending request-log snapshot exists after broadcast");
-    arm_request_log_fallback(
-        state,
+    let durable_fallback = aborted_fallback_terminal_log(
+        fallback_log.clone(),
         &request_id,
-        &lifecycle,
-        &arm_reservation,
-        &fallback_log,
-        started_at,
-    )
-    .await?;
+        started_at.elapsed().as_millis() as u64,
+    );
+    if let Err(error) = state
+        .user_store
+        .arm_terminal_request_log(durable_fallback, &arm_reservation)
+        .await
+    {
+        let error = spool_admission_error("arm", &request_id, error);
+        state.pending_request_logs.remove(&request_id);
+        state
+            .request_log_admissions
+            .remove_if(&request_id, |_, current| {
+                std::sync::Arc::ptr_eq(current, &lifecycle)
+            });
+        lifecycle.complete_terminal_task();
+        return Err(error);
+    }
     Ok(Some(PendingRequestLogGuard {
         request_id,
         lifecycle,
@@ -530,9 +512,6 @@ pub(super) async fn update_pending_channel_info(
     attempt: &MonoizeAttempt,
     context: RequestLogContext<'_>,
 ) {
-    if auth.user_id.is_none() {
-        return;
-    }
     let Some(request_id) = context.request_id.map(str::trim).filter(|v| !v.is_empty()) else {
         return;
     };
@@ -583,7 +562,19 @@ pub(super) fn spawn_request_log(
     submit_terminal_log(state, claim, log);
 }
 
-fn apply_error_fields(log: &mut InsertRequestLog, error: &AppError) {
+/// Terminal `error` row; `attempt` supplies the Provider and Channel fields
+/// when one was selected.
+pub(super) fn spawn_request_log_error(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    attempt: Option<&MonoizeAttempt>,
+    context: RequestLogContext<'_>,
+    error: &AppError,
+    tried_providers: Vec<TriedProvider>,
+) {
+    let Some((claim, mut log)) = terminal_log(state, auth, attempt, context) else {
+        return;
+    };
     log.error_code = Some(error.code.clone());
     log.error_message = Some(
         error
@@ -592,20 +583,6 @@ fn apply_error_fields(log: &mut InsertRequestLog, error: &AppError) {
             .unwrap_or_else(|| error.message.clone()),
     );
     log.error_http_status = Some(error.status.as_u16());
-}
-
-pub(super) fn spawn_request_log_error(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    attempt: &MonoizeAttempt,
-    context: RequestLogContext<'_>,
-    error: &AppError,
-    tried_providers: Vec<TriedProvider>,
-) {
-    let Some((claim, mut log)) = terminal_log(state, auth, Some(attempt), context) else {
-        return;
-    };
-    apply_error_fields(&mut log, error);
     log.tried_providers_json = tried_providers_json(&tried_providers);
     submit_terminal_log(state, claim, log);
 }
@@ -626,22 +603,6 @@ pub(super) fn spawn_request_log_stream_terminal_error(
     log.error_http_status = Some(error.terminal_error.http_status);
     log.ttfb_ms = error.ttfb_ms;
     log.tried_providers_json = tried_providers_json(&error.tried_providers);
-    let usage = error.usage.as_ref().map(urp::Usage::accounting);
-    apply_usage_fields(&mut log, usage.as_deref());
-    submit_terminal_log(state, claim, log);
-}
-
-pub(super) fn spawn_request_log_error_no_attempt(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    context: RequestLogContext<'_>,
-    error: &AppError,
-    tried_providers: Vec<TriedProvider>,
-) {
-    let Some((claim, mut log)) = terminal_log(state, auth, None, context) else {
-        return;
-    };
-    apply_error_fields(&mut log, error);
-    log.tried_providers_json = tried_providers_json(&tried_providers);
+    apply_usage_fields(&mut log, error.usage.as_ref());
     submit_terminal_log(state, claim, log);
 }

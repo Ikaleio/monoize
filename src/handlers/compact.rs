@@ -125,12 +125,15 @@ pub async fn compact_response(
     }
     let error =
         build_exhausted_upstream_error(&execution.request.logical_model, &driver.tried_providers);
-    execution.log_error(
+    spawn_request_log_error(
+        execution.state,
+        &execution.request.auth,
         driver.last_failed_attempt.as_ref(),
+        execution.log_context(),
         &error,
         driver.tried_providers,
     );
-    execution.persist(None, true).await;
+    execution.request.capture.persist(None, true).await;
     Err(error)
 }
 
@@ -323,7 +326,7 @@ impl CompactExecution<'_> {
         attempt: &MonoizeAttempt,
         wire_model: &str,
         value: Value,
-        mut tried: Vec<TriedProvider>,
+        tried: Vec<TriedProvider>,
     ) -> AppResult<Response> {
         let request = &self.request;
         update_pending_channel_info(self.state, &request.auth, attempt, self.log_context()).await;
@@ -359,11 +362,7 @@ impl CompactExecution<'_> {
         .await
         {
             Ok(charge) => charge,
-            Err(error) => {
-                return Err(self
-                    .finish_error(attempt, error, std::mem::take(&mut tried))
-                    .await);
-            }
+            Err(error) => return Err(self.finish_error(attempt, error, tried).await),
         };
         spawn_request_log(
             self.state,
@@ -381,7 +380,7 @@ impl CompactExecution<'_> {
                 upstream_response_model,
             },
         );
-        self.persist(usage.as_ref(), false).await;
+        request.capture.persist(usage.as_ref(), false).await;
         Ok(Json(value).into_response())
     }
 
@@ -391,42 +390,16 @@ impl CompactExecution<'_> {
         error: AppError,
         tried: Vec<TriedProvider>,
     ) -> AppError {
-        self.log_error(Some(attempt), &error, tried);
-        self.persist(None, false).await;
+        spawn_request_log_error(
+            self.state,
+            &self.request.auth,
+            Some(attempt),
+            self.log_context(),
+            &error,
+            tried,
+        );
+        self.request.capture.persist(None, false).await;
         error
-    }
-
-    async fn persist(&self, usage: Option<&urp::Usage>, failed: bool) {
-        if let Some(session) = self.request.capture.session.as_ref() {
-            session.persist_with_result(usage, failed).await;
-        }
-    }
-
-    fn log_error(
-        &self,
-        attempt: Option<&MonoizeAttempt>,
-        error: &AppError,
-        tried: Vec<TriedProvider>,
-    ) {
-        let request = &self.request;
-        if let Some(attempt) = attempt {
-            spawn_request_log_error(
-                self.state,
-                &request.auth,
-                attempt,
-                self.log_context(),
-                error,
-                tried,
-            );
-        } else {
-            spawn_request_log_error_no_attempt(
-                self.state,
-                &request.auth,
-                self.log_context(),
-                error,
-                tried,
-            );
-        }
     }
 
     fn log_context(&self) -> RequestLogContext<'_> {

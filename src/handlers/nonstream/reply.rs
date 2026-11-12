@@ -18,14 +18,7 @@ impl NonstreamRun<'_> {
             self.inputs.state,
             self.inputs.auth,
             attempt,
-            RequestLogContext {
-                model: &self.logical_model,
-                is_stream: false,
-                started_at: self.started_at,
-                request_id: self.inputs.request_id.as_deref(),
-                request_ip: self.inputs.request_ip.as_deref(),
-                reasoning_effort: None,
-            },
+            self.log_context(),
         )
         .await;
         let (resp, observed_response_model) = match self.decode_reply(attempt, &call, reply).await {

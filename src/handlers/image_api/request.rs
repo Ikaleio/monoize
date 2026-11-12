@@ -102,11 +102,7 @@ pub(super) async fn run_image_request(
                     request_ip: request_ip.as_deref(),
                     reasoning_effort: None,
                 };
-                if let Some(attempt) = attempt {
-                    spawn_request_log_error(state, auth, &attempt, log, &error, Vec::new());
-                } else {
-                    spawn_request_log_error_no_attempt(state, auth, log, &error, Vec::new());
-                }
+                spawn_request_log_error(state, auth, attempt.as_ref(), log, &error, Vec::new());
             }
             Err(error)
         }

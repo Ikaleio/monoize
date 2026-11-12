@@ -97,7 +97,7 @@ fn decode_tool_call(obj: &Map<String, Value>, item_type: &str, source: ItemSourc
     }) {
         None => "{}".to_string(),
         Some(Value::String(text)) => text.clone(),
-        Some(value) => serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
+        Some(value) => value.to_string(),
     };
     Node::ToolCall {
         namespace: string_member(obj, "namespace"),

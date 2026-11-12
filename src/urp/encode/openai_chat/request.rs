@@ -87,57 +87,6 @@ fn encode_prepared_request(
     }
 
     encode_tool_controls(obj, req, dialect)?;
-    encode_request_tail(body, req, dialect)
-}
-
-fn encode_tool_controls(
-    obj: &mut Map<String, Value>,
-    req: &UrpRequest,
-    dialect: ChatDialect,
-) -> Result<(), ChatEncodeError> {
-    // Tool controls accompany encoded tools; without a tool list they pass through as given.
-    let mut dropped_tool_names = Vec::new();
-    let mut emit_tool_controls = true;
-    if let Some(tools) = &req.tools {
-        let (modern_tools, dropped) = encode_tools(tools, dialect)?;
-        dropped_tool_names = dropped;
-        let legacy_functions = encode_legacy_functions(tools);
-        if !modern_tools.is_empty() {
-            obj.insert("tools".to_string(), Value::Array(modern_tools));
-        }
-        if !legacy_functions.is_empty() {
-            obj.insert("functions".to_string(), Value::Array(legacy_functions));
-        }
-        emit_tool_controls = obj.contains_key("tools") || obj.contains_key("functions");
-    }
-    if emit_tool_controls {
-        if let Some(tc) = &req.tool_choice {
-            if let Some(raw_legacy_choice) =
-                req.extra_body.get(CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY)
-            {
-                if let Some(choice) = encode_legacy_function_choice(tc, raw_legacy_choice) {
-                    obj.insert("function_call".to_string(), choice);
-                }
-            } else if tool_choice_names_any(tc, &dropped_tool_names) {
-                obj.insert("tool_choice".to_string(), json!("auto"));
-            } else {
-                obj.insert("tool_choice".to_string(), tool_choice_to_chat_value(tc));
-            }
-        }
-        if let Some(parallel) = req.parallel_tool_calls {
-            obj.insert("parallel_tool_calls".to_string(), Value::Bool(parallel));
-        }
-    }
-
-    Ok(())
-}
-
-fn encode_request_tail(
-    mut body: Value,
-    req: &UrpRequest,
-    dialect: ChatDialect,
-) -> Result<Value, ChatEncodeError> {
-    let obj = body.as_object_mut().expect("chat request object");
     if let Some(stop) = &req.stop {
         let value = match stop {
             StopControl::Single(stop) => Value::String(stop.clone()),
@@ -190,6 +139,47 @@ fn encode_request_tail(
         ProviderProtocol::ChatCompletion,
     );
     Ok(body)
+}
+
+/// Tool controls accompany encoded tools; without a tool list they pass through as given.
+fn encode_tool_controls(
+    obj: &mut Map<String, Value>,
+    req: &UrpRequest,
+    dialect: ChatDialect,
+) -> Result<(), ChatEncodeError> {
+    let mut dropped_tool_names = Vec::new();
+    let mut emit_tool_controls = true;
+    if let Some(tools) = &req.tools {
+        let (modern_tools, dropped) = encode_tools(tools, dialect)?;
+        dropped_tool_names = dropped;
+        let legacy_functions = encode_legacy_functions(tools);
+        if !modern_tools.is_empty() {
+            obj.insert("tools".to_string(), Value::Array(modern_tools));
+        }
+        if !legacy_functions.is_empty() {
+            obj.insert("functions".to_string(), Value::Array(legacy_functions));
+        }
+        emit_tool_controls = obj.contains_key("tools") || obj.contains_key("functions");
+    }
+    if emit_tool_controls {
+        if let Some(tc) = &req.tool_choice {
+            if let Some(raw_legacy_choice) =
+                req.extra_body.get(CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY)
+            {
+                if let Some(choice) = encode_legacy_function_choice(tc, raw_legacy_choice) {
+                    obj.insert("function_call".to_string(), choice);
+                }
+            } else if tool_choice_names_any(tc, &dropped_tool_names) {
+                obj.insert("tool_choice".to_string(), json!("auto"));
+            } else {
+                obj.insert("tool_choice".to_string(), tool_choice_to_chat_value(tc));
+            }
+        }
+        if let Some(parallel) = req.parallel_tool_calls {
+            obj.insert("parallel_tool_calls".to_string(), Value::Bool(parallel));
+        }
+    }
+    Ok(())
 }
 
 /// RC4 for Chat targets, by dialect.

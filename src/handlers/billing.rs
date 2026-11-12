@@ -55,10 +55,12 @@ pub(super) fn map_get_u64(map: &Map<String, Value>, key: &str) -> Option<u64> {
     map.get(key).and_then(parse_u64_value)
 }
 
-fn input_cached_tokens(usage: &urp::Usage) -> Option<u64> {
-    usage
-        .input_details
-        .as_ref()
+pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
+    let usage = usage.accounting();
+    let input_details = usage.input_details.as_ref();
+    let output_details = usage.output_details.as_ref();
+
+    let input_cached = input_details
         .map(|d| d.cache_read_tokens)
         .filter(|&v| v > 0)
         .or_else(|| {
@@ -80,14 +82,7 @@ fn input_cached_tokens(usage: &urp::Usage) -> Option<u64> {
                 .get("prompt_tokens_details")
                 .and_then(|v| v.as_object())
                 .and_then(|d| map_get_u64(d, "cached_tokens"))
-        })
-}
-
-pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
-    let usage = usage.accounting();
-    let input_details = usage.input_details.as_ref();
-    let output_details = usage.output_details.as_ref();
-    let input_cached = input_cached_tokens(&usage);
+        });
     let input_cache_creation = input_details
         .map(|d| d.cache_creation_tokens)
         .filter(|&v| v > 0)
@@ -497,18 +492,6 @@ fn balance_charge_error(err: crate::users::BillingError, not_found: &str) -> App
             err.message,
         ),
     }
-}
-
-/// Settle a terminal pass-through stream.
-pub(super) async fn maybe_charge_stream_usage(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    attempt: &MonoizeAttempt,
-    logical_model: &str,
-    request: SettlementRequest<'_>,
-    request_id: Option<&str>,
-) -> AppResult<ChargeComputation> {
-    maybe_charge_settled(state, auth, attempt, logical_model, request, request_id).await
 }
 
 /// Settle a terminal non-stream/buffered response. Callers enforce the

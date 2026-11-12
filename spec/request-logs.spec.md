@@ -129,7 +129,7 @@ RL1h-1. For a streaming request, the terminal request log is scheduled after the
 
 RL1h-2. A downstream disconnect MAY stop upstream WebSocket generation with `response.interrupt` under WS2g, but MUST NOT cancel terminal usage consumption or settlement. A billable interrupted response after disconnect MUST use `client_gone`. A client that sends `response.interrupt` and remains connected MUST NOT be classified as disconnected solely because it requested interruption.
 
-RL1h-3. A handled local or upstream failure MUST schedule its own terminal error row. It MUST NOT rely on the pending-guard fallback below, which marks the request `client_gone`.
+RL1h-3. When an admitted request ends with a local error or with RTA-8 exhaustion, Monoize MUST schedule that failure's terminal `error` row. It MUST NOT leave the row to the RL1k-4 guard fallback, which records `client_gone`.
 
 RL1i. When a provider attempt is selected (upstream call succeeds or streaming begins), the provider metadata (`provider_id`, `channel_id`, `upstream_model`, `provider_multiplier`) MUST be captured in memory and included in the terminal INSERT. No intermediate database write is performed.
 

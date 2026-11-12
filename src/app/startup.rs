@@ -1,12 +1,20 @@
+use super::active_probe::ensure_active_probe_system_user;
 use super::active_probe::scheduler::ActiveProbeScheduler;
-use super::active_probe::*;
 use super::*;
 
 pub async fn load_state() -> AppResult<AppState> {
-    let runtime = RuntimeConfig::from_env().map_err(|(code, detail)| {
-        AppError::new(axum::http::StatusCode::BAD_REQUEST, code, detail)
-    })?;
+    let runtime =
+        RuntimeConfig::from_env().map_err(|(code, detail)| startup_error(code, detail))?;
     load_state_with_runtime(runtime).await
+}
+
+/// Every startup failure is reported as a 400 `AppError` carrying a stable code.
+fn startup_error(code: &str, detail: impl std::fmt::Display) -> AppError {
+    AppError::new(
+        axum::http::StatusCode::BAD_REQUEST,
+        code,
+        detail.to_string(),
+    )
 }
 
 pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppState> {
@@ -15,61 +23,123 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     runtime
         .node
         .validate_for_dsn(&runtime.database_dsn)
-        .map_err(|(code, detail)| {
-            AppError::new(axum::http::StatusCode::BAD_REQUEST, code, detail)
-        })?;
-    let trusted_proxies = TrustedProxyConfig::from_env().map_err(|error| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "trusted_proxy_config_invalid",
-            error,
-        )
-    })?;
-    let cap_verifier = CapVerifier::from_env().map_err(|error| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "cap_config_invalid",
-            error,
-        )
-    })?;
-
-    let http_clients =
-        HttpClients::new(runtime.node.upstream_proxy_url.as_deref()).map_err(|err| {
-            AppError::new(
-                axum::http::StatusCode::BAD_REQUEST,
-                "http_client_init_failed",
-                err,
-            )
-        })?;
+        .map_err(|(code, detail)| startup_error(code, detail))?;
+    let trusted_proxies = TrustedProxyConfig::from_env()
+        .map_err(|err| startup_error("trusted_proxy_config_invalid", err))?;
+    let cap_verifier =
+        CapVerifier::from_env().map_err(|err| startup_error("cap_config_invalid", err))?;
+    let http_clients = HttpClients::new(runtime.node.upstream_proxy_url.as_deref())
+        .map_err(|err| startup_error("http_client_init_failed", err))?;
     let http = http_clients.global_client();
 
     let db = initialize_database(&runtime, is_replica).await?;
-    let stores = initialize_stores(&db, &runtime, is_replica).await?;
-    let StartupCaches {
-        monoize_runtime,
-        channel_health,
-        channel_affinity,
-        response_history,
-        routing_config_revision,
-        settings_update_lock,
-        transform_registry,
-        image_transform_cache,
-        request_log_tasks,
-        background_shutdown,
-        request_capture,
-    } = initialize_caches(&runtime, &db, &stores, &http_clients, is_replica).await?;
-    let StartupStores {
-        log_broadcast,
-        custom_transform_store,
-        pending_request_logs,
-        user_store,
-        settings_store,
-        monoize_store,
-        model_registry_store,
-        model_price_store,
-        metrics,
-        ..
-    } = stores;
+
+    let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(64);
+    let custom_transform_store = CustomTransformStore::new(db.clone())
+        .await
+        .map_err(|err| startup_error("custom_transform_store_init_failed", err))?;
+    let pending_request_logs = Arc::new(DashMap::new());
+    let user_store = UserStore::new_for_role(
+        db.clone(),
+        log_broadcast.clone(),
+        pending_request_logs.clone(),
+        runtime.request_log_spool_dir.clone(),
+        is_replica,
+    )
+    .await
+    .map_err(|err| startup_error("user_store_init_failed", err))?
+    .with_custom_transforms(custom_transform_store.snapshot_handle());
+    let settings_store = if is_replica {
+        SettingsStore::new_read_only(db.clone()).await
+    } else {
+        SettingsStore::new(db.clone()).await
+    }
+    .map_err(|err| startup_error("settings_store_init_failed", err))?;
+    let monoize_store = if is_replica {
+        MonoizeRoutingStore::new_read_only(db.clone()).await
+    } else {
+        MonoizeRoutingStore::new(db.clone()).await
+    }
+    .map_err(|err| startup_error("monoize_store_init_failed", err))?;
+    let model_registry_store = ModelRegistryStore::new(db.clone())
+        .await
+        .map_err(|err| startup_error("model_registry_store_init_failed", err))?;
+    let model_price_store = crate::model_price_store::ModelPriceStore::new(db.clone());
+
+    let metrics = METRICS.clone()?;
+
+    let settings_snapshot = settings_store
+        .get_all()
+        .await
+        .map_err(|err| startup_error("settings_store_init_failed", err))?;
+
+    let monoize_runtime = runtime_config_from_settings(&settings_snapshot);
+    let channel_health = Arc::new(Mutex::new(HashMap::<String, ChannelHealthState>::new()));
+    let channel_affinity = Arc::new(Mutex::new(HashMap::new()));
+    let response_history = Arc::new(Mutex::new(
+        crate::handlers::responses_history::ResponseHistoryStore::default(),
+    ));
+    register_upstream_hosts(&runtime, &monoize_store).await;
+    let routing_config_revision = Arc::new(AtomicU64::new(0));
+    let settings_update_lock = Arc::new(Mutex::new(()));
+    let transform_registry = Arc::new(crate::transforms::registry());
+    let image_transform_cache = Arc::new(
+        ImageTransformCache::from_env()
+            .await
+            .map_err(|err| startup_error("image_transform_cache_init_failed", err))?,
+    );
+    image_transform_cache
+        .as_ref()
+        .clone()
+        .spawn_cleanup_task(ImageTransformCache::default_cleanup_interval());
+    let active_probe_user_id = if !is_replica {
+        Some(ensure_active_probe_system_user(&user_store).await?)
+    } else {
+        None
+    };
+    let request_log_tasks = RequestLogTaskTracker::default();
+    let background_shutdown = Arc::new(AtomicBool::new(false));
+    spawn_affinity_cleanup(
+        channel_affinity.clone(),
+        response_history.clone(),
+        background_shutdown.clone(),
+    );
+    if !is_replica {
+        spawn_recharge_expiry_sweeper(user_store.clone(), background_shutdown.clone());
+    }
+
+    let monoize_runtime = Arc::new(tokio::sync::RwLock::new(monoize_runtime));
+    if is_replica {
+        // E3: fixed-interval, single-row epoch poll driving snapshot rebuilds.
+        crate::replica::poll::spawn_config_epoch_poller(
+            db.clone(),
+            settings_store.clone(),
+            monoize_runtime.clone(),
+            custom_transform_store.clone(),
+            runtime.node.config_poll_interval,
+        );
+    }
+    let request_capture = RequestCaptureStore::new(&runtime.database_dsn)
+        .with_db(db.clone())
+        .with_runtime(monoize_runtime.clone());
+    request_capture.spawn_cleanup_task();
+    // PRP11: replicas never run the active-probe scheduler.
+    if let Some(user_id) = active_probe_user_id {
+        ActiveProbeScheduler {
+            store: monoize_store.clone(),
+            http_clients: http_clients.clone(),
+            runtime: monoize_runtime.clone(),
+            health: channel_health.clone(),
+            routing_config_revision: routing_config_revision.clone(),
+            user_store: user_store.clone(),
+            model_price_store: model_price_store.clone(),
+            user_id,
+            shutdown: background_shutdown.clone(),
+            _task_registration: RequestLogTaskRegistration::new(request_log_tasks.clone()),
+        }
+        .spawn();
+    }
+
     let node = Arc::new(runtime.node.clone());
     let started_at = chrono::Utc::now();
     let metering = initialize_metering(&runtime, &db, &user_store, started_at, is_replica).await?;
@@ -91,7 +161,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         http,
         http_clients,
         node,
-        db_pool: db.clone(),
+        db_pool: db,
         metering,
         metering_token_digest,
         replica_heartbeats: Arc::new(DashMap::new()),
@@ -123,162 +193,24 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     })
 }
 
-static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
-static METRICS_ERROR: OnceLock<AppError> = OnceLock::new();
-static METRICS_INIT: Once = Once::new();
-
-fn init_metrics() -> AppResult<PrometheusHandle> {
-    METRICS_INIT.call_once(|| {
-        match metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder() {
-            Ok(handle) => {
-                let _ = METRICS_HANDLE.set(handle);
-            }
-            Err(err) => {
-                let _ = METRICS_ERROR.set(AppError::new(
-                    axum::http::StatusCode::BAD_REQUEST,
-                    "metrics_init_failed",
-                    err.to_string(),
-                ));
-            }
-        }
-    });
-
-    if let Some(err) = METRICS_ERROR.get() {
-        return Err(err.clone());
-    }
-    METRICS_HANDLE.get().cloned().ok_or_else(|| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "metrics_init_failed",
-            "metrics recorder not available",
-        )
-    })
-}
-
-struct StartupStores {
-    log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
-    custom_transform_store: CustomTransformStore,
-    pending_request_logs: Arc<DashMap<String, InsertRequestLog>>,
-    user_store: UserStore,
-    settings_store: SettingsStore,
-    monoize_store: MonoizeRoutingStore,
-    model_registry_store: ModelRegistryStore,
-    model_price_store: crate::model_price_store::ModelPriceStore,
-    metrics: PrometheusHandle,
-    settings_snapshot: crate::settings::SystemSettings,
-}
-
-async fn initialize_stores(
-    db: &DbPool,
-    runtime: &RuntimeConfig,
-    is_replica: bool,
-) -> AppResult<StartupStores> {
-    let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(64);
-
-    let custom_transform_store = CustomTransformStore::new(db.clone()).await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "custom_transform_store_init_failed",
-            err,
-        )
-    })?;
-
-    let pending_request_logs = Arc::new(DashMap::new());
-    let user_store = UserStore::new_for_role(
-        db.clone(),
-        log_broadcast.clone(),
-        pending_request_logs.clone(),
-        runtime.request_log_spool_dir.clone(),
-        is_replica,
-    )
-    .await
-    .map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "user_store_init_failed",
-            err,
-        )
-    })?
-    .with_custom_transforms(custom_transform_store.snapshot_handle());
-    let settings_store = if is_replica {
-        SettingsStore::new_read_only(db.clone()).await
-    } else {
-        SettingsStore::new(db.clone()).await
-    }
-    .map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "settings_store_init_failed",
-            err,
-        )
-    })?;
-    let monoize_store = if is_replica {
-        MonoizeRoutingStore::new_read_only(db.clone()).await
-    } else {
-        MonoizeRoutingStore::new(db.clone()).await
-    }
-    .map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "monoize_store_init_failed",
-            err,
-        )
-    })?;
-    let model_registry_store = ModelRegistryStore::new(db.clone()).await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "model_registry_store_init_failed",
-            err,
-        )
-    })?;
-    let model_price_store = crate::model_price_store::ModelPriceStore::new(db.clone());
-
-    let metrics = init_metrics()?;
-
-    let settings_snapshot = settings_store.get_all().await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "settings_store_init_failed",
-            err,
-        )
-    })?;
-
-    Ok(StartupStores {
-        log_broadcast,
-        custom_transform_store,
-        pending_request_logs,
-        user_store,
-        settings_store,
-        monoize_store,
-        model_registry_store,
-        model_price_store,
-        metrics,
-        settings_snapshot,
-    })
-}
+/// A process can install only one global recorder, so every `load_state_with_runtime`
+/// call shares the first install outcome.
+static METRICS: LazyLock<AppResult<PrometheusHandle>> = LazyLock::new(|| {
+    metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .map_err(|err| startup_error("metrics_init_failed", err))
+});
 
 async fn initialize_database(runtime: &RuntimeConfig, is_replica: bool) -> AppResult<DbPool> {
     let db = DbPool::connect(&runtime.database_dsn)
         .await
-        .map_err(|err| {
-            AppError::new(
-                axum::http::StatusCode::BAD_REQUEST,
-                "database_init_failed",
-                err.to_string(),
-            )
-        })?;
+        .map_err(|err| startup_error("database_init_failed", err))?;
 
     if !is_replica {
-        let _write_guard = db.write().await;
-        crate::migration::run_startup_migrations(&_write_guard)
+        let write_guard = db.write().await;
+        crate::migration::run_startup_migrations(&write_guard)
             .await
-            .map_err(|err| {
-                AppError::new(
-                    axum::http::StatusCode::BAD_REQUEST,
-                    "database_migration_failed",
-                    err.to_string(),
-                )
-            })?;
+            .map_err(|err| startup_error("database_migration_failed", err))?;
     } else {
         // PRP10: replicas verify schema currency without writing.
         crate::migration::verify_schema_current(db.read())
@@ -289,260 +221,11 @@ async fn initialize_database(runtime: &RuntimeConfig, is_replica: bool) -> AppRe
                 } else {
                     "database_migration_failed"
                 };
-                AppError::new(axum::http::StatusCode::BAD_REQUEST, code, err.to_string())
+                startup_error(code, err)
             })?;
     }
 
     Ok(db)
-}
-
-async fn initialize_metering(
-    runtime: &RuntimeConfig,
-    db: &DbPool,
-    user_store: &UserStore,
-    started_at: chrono::DateTime<chrono::Utc>,
-    is_replica: bool,
-) -> AppResult<Option<Arc<crate::replica::metering::ReplicaMetering>>> {
-    let metering = if is_replica {
-        let hostname = std::env::var("HOSTNAME")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "unknown".to_string());
-        let metering = crate::replica::metering::ReplicaMetering::new(
-            runtime.node.metering_spool_dir.clone(),
-            runtime.node.metering_spool_max_bytes,
-            runtime.node.replica_primary_url.as_deref().unwrap_or(""),
-            runtime.node.replica_token.as_deref().unwrap_or(""),
-            runtime.node.metering_ship_batch_max_entries,
-        )
-        .and_then(|metering| {
-            // M9: the identity persists in the spool directory, so a restarted replica
-            // keeps its heartbeat map entry on the primary instead of adding a new one.
-            let replica_id = crate::replica::metering::resolve_replica_identity(
-                runtime.node.replica_id.as_deref(),
-                &runtime.node.metering_spool_dir,
-            )?;
-            Ok(
-                metering.with_heartbeat_source(crate::replica::metering::ReplicaHeartbeatSource {
-                    id: replica_id,
-                    hostname,
-                    listen: runtime.listen.clone(),
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    started_at: started_at.to_rfc3339(),
-                }),
-            )
-        })
-        .map_err(|err| {
-            let code = [
-                "metering_spool_unwritable",
-                "replica_id_invalid",
-                "replica_identity_unwritable",
-            ]
-            .into_iter()
-            .find(|prefix| err.starts_with(prefix))
-            .unwrap_or("metering_init_failed");
-            AppError::new(axum::http::StatusCode::BAD_REQUEST, code, err)
-        })?;
-        let metering = Arc::new(metering);
-        metering.spawn_ship_loop(
-            user_store.request_log_batcher_clone(),
-            user_store.last_used_batcher_clone(),
-            runtime.node.metering_ship_interval,
-        );
-        Some(metering)
-    } else {
-        // PRP9: a promoted node drains leftover delta spool entries before serving.
-        if runtime.node.metering_spool_dir.exists() {
-            let spool = crate::replica::metering::DeltaSpool::new(
-                runtime.node.metering_spool_dir.clone(),
-                runtime.node.metering_spool_max_bytes,
-            )
-            .map_err(|err| {
-                AppError::new(
-                    axum::http::StatusCode::BAD_REQUEST,
-                    "metering_drain_failed",
-                    err,
-                )
-            })?;
-            crate::replica::metering::drain_delta_spool_to_local_db(db, user_store, &spool)
-                .await
-                .map_err(|err| {
-                    AppError::new(
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "metering_drain_failed",
-                        err,
-                    )
-                })?;
-        }
-        None
-    };
-    Ok(metering)
-}
-
-struct StartupCaches {
-    monoize_runtime: Arc<tokio::sync::RwLock<MonoizeRuntimeConfig>>,
-    channel_health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
-    channel_affinity: Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
-    response_history: Arc<Mutex<crate::handlers::responses_history::ResponseHistoryStore>>,
-    routing_config_revision: Arc<AtomicU64>,
-    settings_update_lock: Arc<Mutex<()>>,
-    transform_registry: Arc<TransformRegistry>,
-    image_transform_cache: Arc<ImageTransformCache>,
-    request_log_tasks: RequestLogTaskTracker,
-    background_shutdown: Arc<AtomicBool>,
-    request_capture: RequestCaptureStore,
-}
-
-async fn initialize_caches(
-    runtime: &RuntimeConfig,
-    db: &DbPool,
-    stores: &StartupStores,
-    http_clients: &HttpClients,
-    is_replica: bool,
-) -> AppResult<StartupCaches> {
-    let StartupStores {
-        settings_snapshot,
-        monoize_store,
-        user_store,
-        settings_store,
-        custom_transform_store,
-        model_price_store,
-        ..
-    } = stores;
-    let monoize_runtime = runtime_config_from_settings(settings_snapshot);
-    let channel_health = Arc::new(Mutex::new(HashMap::<String, ChannelHealthState>::new()));
-    let channel_affinity = Arc::new(Mutex::new(HashMap::new()));
-    let response_history = Arc::new(Mutex::new(
-        crate::handlers::responses_history::ResponseHistoryStore::default(),
-    ));
-    register_upstream_hosts(runtime, monoize_store).await;
-    let routing_config_revision = Arc::new(AtomicU64::new(0));
-    let settings_update_lock = Arc::new(Mutex::new(()));
-    let transform_registry = Arc::new(crate::transforms::registry());
-    let image_transform_cache = Arc::new(ImageTransformCache::from_env().await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "image_transform_cache_init_failed",
-            err,
-        )
-    })?);
-    image_transform_cache
-        .as_ref()
-        .clone()
-        .spawn_cleanup_task(ImageTransformCache::default_cleanup_interval());
-    let active_probe_user_id = if !is_replica {
-        Some(ensure_active_probe_system_user(user_store).await?)
-    } else {
-        None
-    };
-    let request_log_tasks = RequestLogTaskTracker::default();
-    let background_shutdown = Arc::new(AtomicBool::new(false));
-    spawn_maintenance(
-        &channel_affinity,
-        &response_history,
-        &background_shutdown,
-        &stores.user_store,
-        is_replica,
-    );
-    let probe_store = monoize_store.clone();
-    let probe_http_clients = http_clients.clone();
-    let monoize_runtime = Arc::new(tokio::sync::RwLock::new(monoize_runtime));
-    if is_replica {
-        // E3: fixed-interval, single-row epoch poll driving snapshot rebuilds.
-        crate::replica::poll::spawn_config_epoch_poller(
-            db.clone(),
-            settings_store.clone(),
-            monoize_runtime.clone(),
-            custom_transform_store.clone(),
-            runtime.node.config_poll_interval,
-        );
-    }
-    let request_capture = RequestCaptureStore::new(&runtime.database_dsn)
-        .with_db(db.clone())
-        .with_runtime(monoize_runtime.clone());
-    request_capture.spawn_cleanup_task();
-    let probe_runtime = monoize_runtime.clone();
-    let probe_health = channel_health.clone();
-    let probe_routing_config_revision = routing_config_revision.clone();
-    let probe_user_store = user_store.clone();
-    let probe_model_price_store = model_price_store.clone();
-    let probe_user_id = active_probe_user_id;
-    let probe_shutdown = background_shutdown.clone();
-    let probe_task_registration = RequestLogTaskRegistration::new(request_log_tasks.clone());
-    ActiveProbeScheduler {
-        probe_runtime,
-        probe_health,
-        probe_routing_config_revision,
-        probe_user_store,
-        probe_model_price_store,
-        probe_user_id,
-        probe_shutdown,
-        probe_task_registration,
-        probe_store,
-        probe_http_clients,
-    }
-    .spawn();
-
-    Ok(StartupCaches {
-        monoize_runtime,
-        channel_health,
-        channel_affinity,
-        response_history,
-        routing_config_revision,
-        settings_update_lock,
-        transform_registry,
-        image_transform_cache,
-        request_log_tasks,
-        background_shutdown,
-        request_capture,
-    })
-}
-
-fn spawn_maintenance(
-    channel_affinity: &Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
-    response_history: &Arc<Mutex<crate::handlers::responses_history::ResponseHistoryStore>>,
-    background_shutdown: &Arc<AtomicBool>,
-    user_store: &UserStore,
-    is_replica: bool,
-) {
-    {
-        let affinity = channel_affinity.clone();
-        let history = response_history.clone();
-        let shutdown = background_shutdown.clone();
-        tokio::spawn(async move {
-            let interval = crate::monoize_routing::channel_affinity_cleanup_interval();
-            loop {
-                sleep(interval).await;
-                if shutdown.load(Ordering::Acquire) {
-                    break;
-                }
-                let now = chrono::Utc::now().timestamp();
-                let mut guard = affinity.lock().await;
-                crate::monoize_routing::cleanup_channel_affinity(&mut guard, now);
-                drop(guard);
-                history.lock().await.cleanup();
-            }
-        });
-    }
-    if !is_replica {
-        // RC-X1/RC-X2 (`recharge-system.spec.md`): primary-only expiry sweeper;
-        // the first tick runs when background tasks start.
-        let sweeper_store = user_store.clone();
-        let shutdown = background_shutdown.clone();
-        tokio::spawn(async move {
-            let interval = std::time::Duration::from_secs(crate::recharge::tick_interval_secs());
-            loop {
-                if shutdown.load(Ordering::Acquire) {
-                    break;
-                }
-                if let Err(error) = sweeper_store.expire_due_recharge_orders().await {
-                    tracing::warn!(error, "recharge expiry sweep failed");
-                }
-                sleep(interval).await;
-            }
-        });
-    }
 }
 
 async fn register_upstream_hosts(runtime: &RuntimeConfig, monoize_store: &MonoizeRoutingStore) {
@@ -561,4 +244,115 @@ async fn register_upstream_hosts(runtime: &RuntimeConfig, monoize_store: &Monoiz
         }
         Err(err) => tracing::warn!(error = %err, "failed to load configured upstream hosts"),
     }
+}
+
+fn spawn_affinity_cleanup(
+    affinity: Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
+    history: Arc<Mutex<crate::handlers::responses_history::ResponseHistoryStore>>,
+    shutdown: Arc<AtomicBool>,
+) {
+    tokio::spawn(async move {
+        let interval = crate::monoize_routing::channel_affinity_cleanup_interval();
+        loop {
+            sleep(interval).await;
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
+            let now = chrono::Utc::now().timestamp();
+            let mut guard = affinity.lock().await;
+            crate::monoize_routing::cleanup_channel_affinity(&mut guard, now);
+            drop(guard);
+            history.lock().await.cleanup();
+        }
+    });
+}
+
+/// RC-X1/RC-X2 (`recharge-system.spec.md`): primary-only expiry sweeper; the first
+/// tick runs when background tasks start.
+fn spawn_recharge_expiry_sweeper(user_store: UserStore, shutdown: Arc<AtomicBool>) {
+    tokio::spawn(async move {
+        let interval = std::time::Duration::from_secs(crate::recharge::tick_interval_secs());
+        loop {
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
+            if let Err(error) = user_store.expire_due_recharge_orders().await {
+                tracing::warn!(error, "recharge expiry sweep failed");
+            }
+            sleep(interval).await;
+        }
+    });
+}
+
+/// Replicas build the metering shipment pipeline; primaries drain any delta spool
+/// left behind from a previous life as a replica.
+async fn initialize_metering(
+    runtime: &RuntimeConfig,
+    db: &DbPool,
+    user_store: &UserStore,
+    started_at: chrono::DateTime<chrono::Utc>,
+    is_replica: bool,
+) -> AppResult<Option<Arc<crate::replica::metering::ReplicaMetering>>> {
+    if !is_replica {
+        // PRP9: a promoted node drains leftover delta spool entries before serving.
+        if runtime.node.metering_spool_dir.exists() {
+            let spool = crate::replica::metering::DeltaSpool::new(
+                runtime.node.metering_spool_dir.clone(),
+                runtime.node.metering_spool_max_bytes,
+            )
+            .map_err(|err| startup_error("metering_drain_failed", err))?;
+            crate::replica::metering::drain_delta_spool_to_local_db(db, user_store, &spool)
+                .await
+                .map_err(|err| startup_error("metering_drain_failed", err))?;
+        }
+        return Ok(None);
+    }
+
+    let hostname = std::env::var("HOSTNAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    let metering = crate::replica::metering::ReplicaMetering::new(
+        runtime.node.metering_spool_dir.clone(),
+        runtime.node.metering_spool_max_bytes,
+        runtime.node.replica_primary_url.as_deref().unwrap_or(""),
+        runtime.node.replica_token.as_deref().unwrap_or(""),
+        runtime.node.metering_ship_batch_max_entries,
+    )
+    .and_then(|metering| {
+        // M9: the identity persists in the spool directory, so a restarted replica
+        // keeps its heartbeat map entry on the primary instead of adding a new one.
+        let replica_id = crate::replica::metering::resolve_replica_identity(
+            runtime.node.replica_id.as_deref(),
+            &runtime.node.metering_spool_dir,
+        )?;
+        Ok(
+            metering.with_heartbeat_source(crate::replica::metering::ReplicaHeartbeatSource {
+                id: replica_id,
+                hostname,
+                listen: runtime.listen.clone(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                started_at: started_at.to_rfc3339(),
+            }),
+        )
+    })
+    .map_err(|err| {
+        let code = [
+            "metering_spool_unwritable",
+            "replica_id_invalid",
+            "replica_identity_unwritable",
+        ]
+        .into_iter()
+        .find(|prefix| err.starts_with(prefix))
+        .unwrap_or("metering_init_failed");
+        startup_error(code, err)
+    })?;
+    let metering = Arc::new(metering);
+    metering.spawn_ship_loop(
+        user_store.request_log_batcher_clone(),
+        user_store.last_used_batcher_clone(),
+        runtime.node.metering_ship_interval,
+    );
+    Ok(Some(metering))
 }

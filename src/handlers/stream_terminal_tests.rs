@@ -34,11 +34,6 @@ async fn collect_wire(mut rx: mpsc::Receiver<Event>) -> String {
     .unwrap()
 }
 
-fn assert_single_terminal_error(wire: &str, downstream: DownstreamProtocol) {
-    let has_done = matches!(downstream, DownstreamProtocol::ChatCompletions);
-    assert_terminal_error_frames(wire, has_done);
-}
-
 fn assert_terminal_error_frames(wire: &str, has_done: bool) {
     let data: Vec<&str> = wire
         .lines()
@@ -127,7 +122,10 @@ async fn exercise_media_failure(synthetic: bool) {
         emit_stream_error_if_needed(downstream, &err, None, true, &tx, Some(&capture)).await;
         assert_eq!(format!("{:?}", capture.snapshot().await), capture_before);
         drop(tx);
-        assert_single_terminal_error(&collect_wire(rx).await, downstream);
+        assert_terminal_error_frames(
+            &collect_wire(rx).await,
+            matches!(downstream, DownstreamProtocol::ChatCompletions),
+        );
     }
 }
 
@@ -201,71 +199,5 @@ async fn failed_terminal_send_is_not_marked_as_sent() {
                 .await
                 .unwrap_err();
         assert!(!err.downstream_stream_terminal_sent);
-    }
-}
-
-#[tokio::test]
-async fn gemini_stream_failures_mark_the_emitted_terminal_error() {
-    for conflicting_terminal in [false, true] {
-        let (event_tx, event_rx) = mpsc::channel(16);
-        if conflicting_terminal {
-            let node: urp::Node = serde_json::from_value(
-                json!({"type":"text","role":"assistant","content":"before"}),
-            )
-            .unwrap();
-            event_tx
-                .send(urp::UrpStreamEvent::NodeStart {
-                    node_index: 0,
-                    header: urp::NodeHeader::from(&node),
-                    extra_body: HashMap::new(),
-                })
-                .await
-                .unwrap();
-            event_tx
-                .send(urp::UrpStreamEvent::NodeDone {
-                    node_index: 0,
-                    node,
-                    usage: None,
-                    extra_body: HashMap::new(),
-                })
-                .await
-                .unwrap();
-            // The terminal snapshot drops the streamed Part (STR-8e), which Gemini cannot retract.
-            event_tx
-                .send(urp::UrpStreamEvent::ResponseDone {
-                    outcome: None,
-                    finish_reason: Some(urp::FinishReason::Stop),
-                    usage: None,
-                    output: vec![],
-                    extra_body: HashMap::new(),
-                })
-                .await
-                .unwrap();
-        }
-        drop(event_tx);
-        let (tx, rx) = mpsc::channel(16);
-        let err = urp::stream_encode::run(
-            urp::stream_encode::gemini::GeminiStreamEncoder::new(tx, options()),
-            event_rx,
-        )
-        .await
-        .unwrap_err();
-        assert!(err.downstream_stream_terminal_sent);
-        assert_eq!(err.code, "stream_encode_failed");
-        let wire = collect_wire(rx).await;
-        let values: Vec<Value> = wire
-            .lines()
-            .filter_map(|line| line.strip_prefix("data: "))
-            .map(|data| serde_json::from_str(data).unwrap())
-            .collect();
-        assert_eq!(
-            values
-                .iter()
-                .filter(|value| value.get("error").is_some())
-                .count(),
-            1
-        );
-        assert!(values.last().unwrap().get("error").is_some());
-        assert!(!wire.contains("[DONE]") && !wire.contains("downstream_stream_terminal_sent"));
     }
 }

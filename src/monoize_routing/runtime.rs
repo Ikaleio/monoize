@@ -116,6 +116,7 @@ pub const DEFAULT_CHANNEL_AFFINITY_CLEANUP_INTERVAL_SECONDS: u64 = 60;
 pub const DEFAULT_CHANNEL_HEALTH_MAX_ENTRIES: usize = 10_000;
 pub const DEFAULT_CHANNEL_PASSIVE_FAILURE_SAMPLE_MAX_ENTRIES: usize = 1024;
 pub const DEFAULT_PROVIDER_REORDER_MAX_IDS: usize = 199;
+
 fn parse_positive_entry_limit(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)

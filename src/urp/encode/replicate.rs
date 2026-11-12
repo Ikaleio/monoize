@@ -5,11 +5,13 @@ use crate::urp::{
 };
 use serde_json::{Map, Value};
 
-fn collect_input_nodes(req: &UrpRequest, input: &mut Map<String, Value>) {
+/// The Replicate `input` members that carry the conversation: prompts and media.
+fn encode_conversation(conversation: &[Node]) -> Map<String, Value> {
+    let mut input = Map::new();
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut images: Vec<Value> = Vec::new();
 
-    for envelope in envelopes(&req.input) {
+    for envelope in envelopes(conversation) {
         match envelope {
             Envelope::Message { role, nodes, .. } => match role {
                 OrdinaryRole::System | OrdinaryRole::Developer => {
@@ -105,11 +107,11 @@ fn collect_input_nodes(req: &UrpRequest, input: &mut Map<String, Value>) {
             .entry("reference_images".to_string())
             .or_insert_with(|| arr);
     }
+    input
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    let mut input = Map::new();
-    collect_input_nodes(req, &mut input);
+    let mut input = encode_conversation(&req.input);
     if let Some(max_tokens) = req.max_output_tokens {
         input.insert("max_tokens".to_string(), Value::from(max_tokens));
         input.insert("max_new_tokens".to_string(), Value::from(max_tokens));

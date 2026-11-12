@@ -163,7 +163,20 @@ pub fn parse_frontmatter(source: &str) -> Result<CustomTransformMeta, String> {
     let description = require_bounded("description", description, 500)?;
     let author = require_bounded("author", author, 100)?;
 
-    let phases = parse_phases(phase_raw)?;
+    let phases = match phase_raw {
+        None => vec![Phase::Request, Phase::Response],
+        Some((raw, line_no)) => match raw.as_str() {
+            "both" => vec![Phase::Request, Phase::Response],
+            "request" => vec![Phase::Request],
+            "response" => vec![Phase::Response],
+            other => {
+                return Err(at_line(
+                    line_no,
+                    format!("phase '{other}' must be one of request, response, both"),
+                ));
+            }
+        },
+    };
 
     let scopes = match scopes_raw {
         None => vec![
@@ -262,21 +275,4 @@ fn parse_scopes(raw: &str) -> Result<Vec<TransformScope>, String> {
         return Err("scopes must not be empty".to_string());
     }
     Ok(scopes)
-}
-
-fn parse_phases(phase_raw: Option<(String, usize)>) -> Result<Vec<Phase>, String> {
-    Ok(match phase_raw {
-        None => vec![Phase::Request, Phase::Response],
-        Some((raw, line_no)) => match raw.as_str() {
-            "both" => vec![Phase::Request, Phase::Response],
-            "request" => vec![Phase::Request],
-            "response" => vec![Phase::Response],
-            other => {
-                return Err(at_line(
-                    line_no,
-                    format!("phase '{other}' must be one of request, response, both"),
-                ));
-            }
-        },
-    })
 }

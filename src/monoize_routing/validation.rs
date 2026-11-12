@@ -1,21 +1,6 @@
 use super::types::*;
 use crate::urp::encode::openai_chat::ChatDialect;
-use std::collections::{BTreeMap, HashMap, HashSet};
-
-pub(super) fn generate_short_id() -> String {
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let bytes = uuid::Uuid::new_v4().into_bytes();
-    (0..8)
-        .map(|i| CHARSET[bytes[i] as usize % CHARSET.len()] as char)
-        .collect()
-}
-
-/// CP-INV-14: trim and treat empty as NULL (follow-global).
-pub(super) fn normalized_proxy_url(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
+use std::collections::{BTreeMap, HashSet};
 
 /// CP-INV-15: reserved header names that must not be overridden by Channel extras.
 const EXTRA_HEADERS_RESERVED: &[&str] = &[
@@ -145,57 +130,7 @@ fn stored_chat_dialect(
     })
 }
 
-/// CP-INV-15a: trim keys, drop nothing else, canonical JSON with sorted keys;
-/// an empty map persists as NULL.
-pub(super) fn normalized_extra_headers_json(
-    raw: Option<&BTreeMap<String, String>>,
-) -> Option<String> {
-    let headers = raw?;
-    let mut trimmed: BTreeMap<&str, &String> = BTreeMap::new();
-    for (key, value) in headers {
-        trimmed.insert(key.trim(), value);
-    }
-    if trimmed.is_empty() {
-        return None;
-    }
-    serde_json::to_string(&trimmed).ok()
-}
-
-pub(super) fn canonicalize_models(
-    models: &HashMap<String, MonoizeModelEntry>,
-) -> HashMap<String, MonoizeModelEntry> {
-    let mut out = HashMap::new();
-    for (model, entry) in models {
-        let model = model.trim();
-        if model.is_empty() {
-            continue;
-        }
-        out.insert(
-            model.to_string(),
-            MonoizeModelEntry {
-                redirect: entry
-                    .redirect
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-                multiplier: entry.multiplier,
-            },
-        );
-    }
-    out
-}
-
-fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), String> {
-    for model in models.keys() {
-        if model.trim().is_empty() {
-            return Err("model key must not be empty".to_string());
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn validate_channels(
+fn validate_channels(
     channels: &[CreateMonoizeChannelInput],
     require_api_key: bool,
 ) -> Result<(), String> {
@@ -288,14 +223,13 @@ pub(super) fn validate_channels(
                     .to_string(),
             );
         }
-        validate_models(&c.models)?;
+        if c.models.keys().any(|model| model.trim().is_empty()) {
+            return Err("model key must not be empty".to_string());
+        }
         let mut model_seen = HashSet::new();
         for model in c.models.keys() {
             let model = model.trim();
-            if model.is_empty() {
-                return Err("channel model keys must not be empty".to_string());
-            }
-            if !model_seen.insert(model.to_string()) {
+            if !model_seen.insert(model) {
                 return Err(format!(
                     "channel '{}' has duplicate model '{}'",
                     c.name, model
@@ -311,19 +245,6 @@ pub(super) fn validate_channels(
     Ok(())
 }
 
-pub(super) fn validate_provider_input(
-    name: &str,
-    channels: &[CreateMonoizeChannelInput],
-    api_type_overrides: &[ApiTypeOverrideInput],
-) -> Result<(), String> {
-    if name.trim().is_empty() {
-        return Err("provider name must not be empty".to_string());
-    }
-    validate_channels(channels, true)?;
-    validate_api_type_overrides(api_type_overrides)?;
-    Ok(())
-}
-
 pub(super) fn stored_api_type_overrides(
     overrides: &[ApiTypeOverrideInput],
 ) -> Result<Vec<ApiTypeOverride>, String> {
@@ -334,9 +255,7 @@ pub(super) fn stored_api_type_overrides(
         .collect()
 }
 
-pub(super) fn validate_api_type_overrides(
-    overrides: &[ApiTypeOverrideInput],
-) -> Result<(), String> {
+fn validate_api_type_overrides(overrides: &[ApiTypeOverrideInput]) -> Result<(), String> {
     for (idx, entry) in overrides.iter().enumerate() {
         if entry.pattern.trim().is_empty() {
             return Err(format!(
@@ -364,17 +283,17 @@ pub fn matching_api_type_override<'a>(
 ) -> Option<&'a ApiTypeOverride> {
     overrides
         .iter()
-        .find(|entry| glob_match(&entry.pattern, model))
-}
-
-fn glob_match(pattern: &str, value: &str) -> bool {
-    crate::glob::case_sensitive_glob_match(pattern, value)
+        .find(|entry| crate::glob::case_sensitive_glob_match(&entry.pattern, model))
 }
 
 pub(super) fn validate_create_provider_input(
     input: &CreateMonoizeProviderInput,
 ) -> Result<(), String> {
-    validate_provider_input(&input.name, &input.channels, &input.api_type_overrides)?;
+    if input.name.trim().is_empty() {
+        return Err("provider name must not be empty".to_string());
+    }
+    validate_channels(&input.channels, true)?;
+    validate_api_type_overrides(&input.api_type_overrides)?;
     if let Some(v) = input.active_probe_interval_seconds_override
         && !(1..=i32::MAX as u64).contains(&v)
     {

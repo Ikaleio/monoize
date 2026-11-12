@@ -57,10 +57,7 @@ fn integerize_tool_call_arguments_json(raw: &str) -> Cow<'_, str> {
     if !integerize_json_floats(&mut value) {
         return Cow::Borrowed(raw);
     }
-    match serde_json::to_string(&value) {
-        Ok(encoded) => Cow::Owned(encoded),
-        Err(_) => Cow::Borrowed(raw),
-    }
+    Cow::Owned(value.to_string())
 }
 
 /// Owned wire form of tool-call arguments after integer-valued float rewrite.

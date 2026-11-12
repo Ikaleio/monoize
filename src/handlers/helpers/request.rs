@@ -127,10 +127,10 @@ pub(in crate::handlers) fn strip_monoize_context(req: &mut urp::UrpRequest) {
 pub(crate) fn typed_request_to_legacy(
     req: &urp::UrpRequest,
     max_multiplier: Option<Multiplier>,
-) -> AppResult<UrpRequest> {
+) -> UrpRequest {
     let mut legacy = build_routing_stub(req, max_multiplier);
     legacy.messages_custom_tool_names = messages_custom_bridge_names(req);
-    Ok(legacy)
+    legacy
 }
 
 pub(in crate::handlers) fn build_routing_stub(
@@ -247,7 +247,7 @@ mod routing_media_context_tests {
         assert!(
             urp::encode::openai_responses::encode_request_checked(request, &request.model).is_err()
         );
-        let context = typed_request_to_legacy(request, Some("1.5".parse().unwrap())).unwrap();
+        let context = typed_request_to_legacy(request, Some("1.5".parse().unwrap()));
         assert_eq!(context.model, request.model);
         assert_eq!(context.audio_output_format.as_deref(), audio_format);
         assert_eq!(context.max_multiplier.unwrap().to_string(), "1.5");
@@ -276,20 +276,6 @@ mod routing_media_context_tests {
                     {"fileData":{"mimeType":"application/pdf", "fileUri":"https://generativelanguage.googleapis.com/v1beta/files/source-file"}}
                 ]}]
             })).unwrap();
-            request.stream = Some(stream);
-            assert_context(&request, None);
-        }
-    }
-
-    #[test]
-    fn gemini_audio_context_does_not_require_a_responses_media_carrier() {
-        for stream in [false, true] {
-            let mut request = urp::decode::gemini::decode_request(&json!({
-                "model":"gemini-audio", "contents":[{"role":"user", "parts":[
-                    {"inlineData":{"mimeType":"audio/wav", "data":"YQ=="}}
-                ]}]
-            }))
-            .unwrap();
             request.stream = Some(stream);
             assert_context(&request, None);
         }

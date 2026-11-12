@@ -377,7 +377,7 @@ pub(in crate::handlers) fn filter_tools_for_provider(
 }
 
 #[cfg(test)]
-mod canonical_field_regressions {
+mod tests {
     use super::*;
 
     #[test]

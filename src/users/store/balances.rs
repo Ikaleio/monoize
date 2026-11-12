@@ -244,7 +244,7 @@ impl UserStore {
         let allocation = self
             .allocate_plan_charge_tx(
                 &tx,
-                crate::users::plans::PlanChargeRequest {
+                PlanChargeRequest {
                     user_id,
                     api_key_id,
                     billing_group_id,

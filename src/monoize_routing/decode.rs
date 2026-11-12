@@ -302,6 +302,7 @@ pub(super) fn decode_provider_row(
         updated_at,
     })
 }
+
 fn decode_positive_u32(provider_id: &str, field: &str, value: i64) -> Result<u32, String> {
     u32::try_from(value)
         .ok()

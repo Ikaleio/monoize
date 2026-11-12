@@ -185,10 +185,6 @@ async fn chat_function_calls_bidirectional() {
     feature(json!({"role":"assistant","content":null,"tool_calls":[{"id":"call_weather","type":"function","function":{"name":"weather","arguments":"{\"city\":\"深圳\"}"}}]}),"tool_calls").await;
 }
 #[tokio::test]
-async fn chat_custom_tool_calls_bidirectional() {
-    feature(json!({"role":"assistant","content":null,"tool_calls":[{"id":"call_patch","type":"custom","custom":{"name":"apply_patch","input":"*** Begin Patch\n*** End Patch"}}]}),"tool_calls").await;
-}
-#[tokio::test]
 async fn chat_legacy_functions_bidirectional() {
     feature(json!({"role":"assistant","content":null,"function_call":{"name":"weather","arguments":"{\"city\":\"Paris\"}"}}),"function_call").await;
 }

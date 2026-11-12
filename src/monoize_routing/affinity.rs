@@ -1,6 +1,3 @@
-use std::collections::BTreeMap;
-
-pub(super) const OPENCODE_PROBE_SESSION_VALUE: &str = "mono-probe";
 pub(super) const SESSION_CACHE_HEADER_NAMES: &[&str] =
     &["x-session-affinity", "x-opencode-session"];
 
@@ -46,11 +43,4 @@ pub(super) fn is_direct_opencode_zen_url(base_url: &str) -> bool {
     }
     let path = url.path().strip_suffix('/').unwrap_or(url.path());
     path == "/zen" || path.starts_with("/zen/")
-}
-
-pub(super) fn extra_headers_contain(
-    headers: Option<&BTreeMap<String, String>>,
-    name: &str,
-) -> bool {
-    headers.is_some_and(|headers| headers.keys().any(|key| key.eq_ignore_ascii_case(name)))
 }

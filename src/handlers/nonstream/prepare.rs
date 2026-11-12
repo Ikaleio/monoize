@@ -16,19 +16,16 @@ impl NonstreamRun<'_> {
         shape_request_for_attempt(&mut req, attempt, auth, downstream);
         let global_transforms = self.apply_request_transforms(attempt, &mut req).await?;
         strip_monoize_context(&mut req);
-        let capture_transform_chain =
-            self.inputs
-                .capture
-                .session
-                .as_ref()
-                .map_or(Value::Null, |_| {
-                    crate::request_capture::build_transform_chain(
-                        &attempt.provider_transforms,
-                        &global_transforms,
-                        &auth.transforms,
-                        &self.transform_match_model,
-                    )
-                });
+        let capture_transform_chain = if self.inputs.capture.session.is_some() {
+            crate::request_capture::build_transform_chain(
+                &attempt.provider_transforms,
+                &global_transforms,
+                &auth.transforms,
+                &self.transform_match_model,
+            )
+        } else {
+            Value::Null
+        };
         let upstream_body = match encode_request_for_provider(&mut req, attempt, downstream) {
             Ok(body) => body,
             Err(err) => return Err(self.fail_request(attempt, err).await),
@@ -92,7 +89,7 @@ impl NonstreamRun<'_> {
 /// Shaping that precedes every request-phase transform: Responses tool
 /// promotion, provider-item retention, the cross-family nested-extra strip,
 /// Monoize context, the upstream model, and mz2 envelope unwrapping.
-fn shape_request_for_attempt(
+pub(in crate::handlers) fn shape_request_for_attempt(
     req: &mut urp::UrpRequest,
     attempt: &MonoizeAttempt,
     auth: &crate::auth::AuthResult,

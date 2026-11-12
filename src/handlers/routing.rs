@@ -575,44 +575,22 @@ pub(super) async fn collect_provider_attempts(
         .unwrap_or(ordered.len())
         .min(ordered.len());
     let runtime = state.monoize_runtime.read().await;
-    let context = ProviderAttemptContext {
-        state,
-        urp,
-        effective_groups,
-        provider,
-        runtime: &runtime,
-        routing_config_revision,
-        provider_attempt_limit,
-    };
-    out.extend(
-        ordered
-            .into_iter()
-            .take(max_attempts)
-            .map(|channel| context.channel_attempt(channel)),
+    let selected_override = crate::monoize_routing::matching_api_type_override(
+        &provider.api_type_overrides,
+        &urp.model,
     );
-}
-
-struct ProviderAttemptContext<'a> {
-    state: &'a AppState,
-    urp: &'a UrpRequest,
-    effective_groups: &'a Option<Vec<String>>,
-    provider: &'a crate::monoize_routing::MonoizeProvider,
-    runtime: &'a crate::monoize_routing::MonoizeRuntimeConfig,
-    routing_config_revision: u64,
-    provider_attempt_limit: Option<usize>,
-}
-
-impl ProviderAttemptContext<'_> {
-    fn channel_attempt(&self, channel: crate::monoize_routing::MonoizeChannel) -> MonoizeAttempt {
-        let Self {
-            state,
-            urp,
-            effective_groups,
-            provider,
-            runtime,
-            routing_config_revision,
-            provider_attempt_limit,
-        } = *self;
+    // MP-G1: the billing group is the group actually used for routing.
+    // The provider is group-eligible here, so the rank indexes into
+    // `effective_groups`.
+    let billing_group_id = effective_groups.as_ref().and_then(|groups| {
+        groups
+            .get(crate::users::provider_group_rank(
+                &provider.group_ids,
+                effective_groups,
+            ))
+            .cloned()
+    });
+    for channel in ordered.into_iter().take(max_attempts) {
         let origin_key = channel_origin_key(&channel.base_url);
         let origin_peer_channel_ids = origin_key
             .as_deref()
@@ -622,26 +600,9 @@ impl ProviderAttemptContext<'_> {
             .models
             .get(&urp.model)
             .expect("eligible channel must retain its model entry");
-        let upstream_model = resolve_upstream_model(&urp.model, model_entry);
-        let selected_override = crate::monoize_routing::matching_api_type_override(
-            &provider.api_type_overrides,
-            &urp.model,
-        );
         let effective_provider_type =
             selected_override.map_or(channel.provider_type, |entry| entry.api_type);
-        let policy = ChannelAttemptPolicy::resolve(runtime, &channel, provider);
-        // MP-G1: the billing group is the group actually used for routing.
-        // The provider is group-eligible here, so the rank indexes into
-        // `effective_groups`.
-        let billing_group_id = effective_groups.as_ref().and_then(|groups| {
-            groups
-                .get(crate::users::provider_group_rank(
-                    &provider.group_ids,
-                    effective_groups,
-                ))
-                .cloned()
-        });
-        MonoizeAttempt {
+        out.push(MonoizeAttempt {
             provider_id: provider.id.clone(),
             provider_name: provider.name.clone(),
             provider_type: effective_provider_type.to_config_type(),
@@ -650,20 +611,35 @@ impl ProviderAttemptContext<'_> {
             base_url: channel.base_url.clone(),
             api_key: channel.api_key.clone(),
             logical_model: urp.model.clone(),
-            upstream_model,
+            upstream_model: resolve_upstream_model(&urp.model, model_entry),
             model_multiplier: model_entry.multiplier,
             server_tool_usage_classes: urp.server_tool_usage_classes.clone(),
             provider_transforms: provider.transforms.clone(),
-            passive_failure_count_threshold: policy.passive_failure_count_threshold,
-            passive_cooldown_seconds: policy.passive_cooldown_seconds,
-            passive_window_seconds: policy.passive_window_seconds,
-            passive_rate_limit_cooldown_seconds: policy.passive_rate_limit_cooldown_seconds,
+            passive_failure_count_threshold: channel
+                .passive_failure_count_threshold_override
+                .unwrap_or(runtime.passive_failure_count_threshold)
+                .max(1),
+            passive_cooldown_seconds: channel
+                .passive_cooldown_seconds_override
+                .unwrap_or(runtime.passive_cooldown_seconds)
+                .max(1),
+            passive_window_seconds: channel
+                .passive_window_seconds_override
+                .unwrap_or(runtime.passive_window_seconds)
+                .max(1),
+            passive_rate_limit_cooldown_seconds: channel
+                .passive_rate_limit_cooldown_seconds_override
+                .unwrap_or(runtime.passive_rate_limit_cooldown_seconds)
+                .max(1),
             channel_max_retries: provider.channel_max_retries,
             channel_retry_interval_ms: provider.channel_retry_interval_ms.max(0) as u64,
             circuit_breaker_enabled: provider.circuit_breaker_enabled,
             per_model_circuit_break: provider.per_model_circuit_break,
             provider_attempt_limit,
-            request_timeout_ms: policy.request_timeout_ms,
+            request_timeout_ms: provider
+                .request_timeout_ms_override
+                .unwrap_or(runtime.request_timeout_ms)
+                .max(1),
             extra_fields_whitelist: merge_extra_fields_whitelist(
                 &runtime.extra_fields_whitelist,
                 &provider.extra_fields_whitelist,
@@ -680,16 +656,25 @@ impl ProviderAttemptContext<'_> {
             allow_free_when_missing_usage: provider
                 .allow_free_when_missing_usage_override
                 .unwrap_or(runtime.allow_free_when_missing_usage),
-            billing_group_id,
+            billing_group_id: billing_group_id.clone(),
             group_billing_ratio: Multiplier::ONE,
             affinity_key: None,
             affinity_key_hash: None,
             affinity_hit: None,
             affinity_target: None,
-            affinity_enabled: policy.affinity_enabled,
-            affinity_idle_ttl_seconds: policy.affinity_idle_ttl_seconds,
-            affinity_failback_mode: policy.affinity_failback_mode,
-            affinity_failback_delay_seconds: policy.affinity_failback_delay_seconds,
+            affinity_enabled: channel
+                .affinity_enabled_override
+                .unwrap_or(runtime.affinity_enabled),
+            affinity_idle_ttl_seconds: channel
+                .affinity_idle_ttl_seconds_override
+                .unwrap_or(runtime.affinity_idle_ttl_seconds)
+                .max(1),
+            affinity_failback_mode: channel
+                .affinity_failback_mode_override
+                .unwrap_or(runtime.affinity_failback_mode),
+            affinity_failback_delay_seconds: channel
+                .affinity_failback_delay_seconds_override
+                .unwrap_or(runtime.affinity_failback_delay_seconds),
             routing_config_revision,
             proxy_url: {
                 crate::error_sanitize::register_configured_url(&channel.base_url);
@@ -713,72 +698,7 @@ impl ProviderAttemptContext<'_> {
             client_anthropic_headers: Default::default(),
             origin_key,
             origin_peer_channel_ids,
-        }
-    }
-}
-
-struct ChannelAttemptPolicy {
-    passive_failure_count_threshold: u32,
-    passive_cooldown_seconds: u64,
-    passive_window_seconds: u64,
-    passive_rate_limit_cooldown_seconds: u64,
-    request_timeout_ms: u64,
-    affinity_enabled: bool,
-    affinity_idle_ttl_seconds: u64,
-    affinity_failback_mode: crate::monoize_routing::AffinityFailbackMode,
-    affinity_failback_delay_seconds: u64,
-}
-
-impl ChannelAttemptPolicy {
-    fn resolve(
-        runtime: &crate::monoize_routing::MonoizeRuntimeConfig,
-        channel: &crate::monoize_routing::MonoizeChannel,
-        provider: &crate::monoize_routing::MonoizeProvider,
-    ) -> Self {
-        let passive_failure_count_threshold = channel
-            .passive_failure_count_threshold_override
-            .unwrap_or(runtime.passive_failure_count_threshold)
-            .max(1);
-        let passive_cooldown_seconds = channel
-            .passive_cooldown_seconds_override
-            .unwrap_or(runtime.passive_cooldown_seconds)
-            .max(1);
-        let passive_window_seconds = channel
-            .passive_window_seconds_override
-            .unwrap_or(runtime.passive_window_seconds)
-            .max(1);
-        let passive_rate_limit_cooldown_seconds = channel
-            .passive_rate_limit_cooldown_seconds_override
-            .unwrap_or(runtime.passive_rate_limit_cooldown_seconds)
-            .max(1);
-        let request_timeout_ms = provider
-            .request_timeout_ms_override
-            .unwrap_or(runtime.request_timeout_ms)
-            .max(1);
-        let affinity_enabled = channel
-            .affinity_enabled_override
-            .unwrap_or(runtime.affinity_enabled);
-        let affinity_idle_ttl_seconds = channel
-            .affinity_idle_ttl_seconds_override
-            .unwrap_or(runtime.affinity_idle_ttl_seconds)
-            .max(1);
-        let affinity_failback_mode = channel
-            .affinity_failback_mode_override
-            .unwrap_or(runtime.affinity_failback_mode);
-        let affinity_failback_delay_seconds = channel
-            .affinity_failback_delay_seconds_override
-            .unwrap_or(runtime.affinity_failback_delay_seconds);
-        Self {
-            passive_failure_count_threshold,
-            passive_cooldown_seconds,
-            passive_window_seconds,
-            passive_rate_limit_cooldown_seconds,
-            request_timeout_ms,
-            affinity_enabled,
-            affinity_idle_ttl_seconds,
-            affinity_failback_mode,
-            affinity_failback_delay_seconds,
-        }
+        });
     }
 }
 
@@ -1465,23 +1385,6 @@ pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider
     err
 }
 
-/// RTA-8 plus SE1d: same-family routes also forward the final attempt's retry
-/// and rate-limit headers.
-pub(super) fn build_exhausted_error_for_downstream(
-    model: &str,
-    tried: &[TriedProvider],
-    last_failed_attempt: Option<&MonoizeAttempt>,
-    downstream: DownstreamProtocol,
-) -> AppError {
-    let mut err = build_exhausted_upstream_error(model, tried);
-    if last_failed_attempt.is_some_and(|attempt| downstream.is_same_family(attempt.provider_type))
-        && let Some(last) = tried.last()
-    {
-        err.forwarded_headers = last.forwarded_headers.clone();
-    }
-    err
-}
-
 fn status_allows_same_channel_retry(status: StatusCode) -> bool {
     status == StatusCode::REQUEST_TIMEOUT
         || status == StatusCode::TOO_MANY_REQUESTS
@@ -1601,38 +1504,28 @@ pub(super) fn classify_channel_health_failure(
     None
 }
 
-pub(super) async fn record_upstream_attempt_failure(
+/// RTA-6/AFF-9: applies one failed upstream attempt to Channel health and the
+/// affinity binding. Returns whether the failure is an RTA-6c shared-origin
+/// blast, which also marks the origin's peer Channels.
+pub(super) async fn record_channel_failure(
     state: &AppState,
     attempt: &MonoizeAttempt,
-    attempt_number: u32,
     app_err: &AppError,
     passive_failure_class: Option<RetryableFailureClass>,
-    tried_providers: &mut Vec<TriedProvider>,
-    execution_state: &mut AttemptExecutionState,
-) {
-    let mask_sensitive_info = state.monoize_runtime.read().await.mask_sensitive_info;
-    tried_providers.push(TriedProvider::from_app_error(
-        attempt_number,
-        attempt,
-        app_err,
-        execution_state.last_attempt_duration_ms(),
-        mask_sensitive_info,
-    ));
+) -> bool {
     let Some(failure_class) = classify_channel_health_failure(
         app_err.upstream_status,
         app_err.upstream_code.as_deref(),
         app_err.upstream_type.as_deref(),
     )
     .or(passive_failure_class) else {
-        return;
+        return false;
     };
     let shared_origin_blast = failure_class == RetryableFailureClass::Transient
         && is_shared_origin_status(app_err.upstream_status);
     mark_channel_retryable_failure(state, attempt, failure_class).await;
-    // AFF-9: clear the binding only when the failed attempt is the bound
-    // target itself, the failure is not a shared-origin blast, and this
-    // failure tripped the breaker. Sub-threshold transient failures keep the
-    // binding so prompt-cache locality survives one-off faults.
+    // Sub-threshold transient failures keep the binding so prompt-cache
+    // locality survives one-off faults.
     if attempt.affinity_hit == Some(true)
         && !shared_origin_blast
         && !is_attempt_channel_healthy(state, attempt).await
@@ -1640,9 +1533,9 @@ pub(super) async fn record_upstream_attempt_failure(
         clear_channel_affinity(state, attempt).await;
     }
     if shared_origin_blast {
-        execution_state.mark_shared_origin_skip(attempt);
         mark_shared_origin_peer_failures(state, attempt, failure_class).await;
     }
+    shared_origin_blast
 }
 
 /// STRM-4 + STRM-4a: apply one breaker-relevant terminal failure that occurs
@@ -1676,51 +1569,6 @@ pub(super) fn midstream_terminal_failure_class(
 /// penalize the Channel.
 pub(super) fn is_upstream_adapter_failure(err: &AppError) -> bool {
     err.code.starts_with("upstream_")
-}
-
-/// RTA-4/RTA-4a: per-Channel loop-slot count. The affinity-hit target
-/// reserves one extra slot beyond `channel_max_retries + 1`;
-/// `allow_same_channel_retry` decides whether that slot is usable.
-pub(super) fn same_channel_attempt_slots(attempt: &MonoizeAttempt) -> usize {
-    let base = (attempt.channel_max_retries + 1).max(1) as usize;
-    if attempt.affinity_hit == Some(true) {
-        base + 1
-    } else {
-        base
-    }
-}
-
-/// RTA-4/RTA-4a/RTA-5: decide whether the same Channel may serve one more
-/// attempt after a failure. `attempts_used` counts attempts already executed
-/// on this Channel for this request, including the failed one.
-/// `failure_class` is `None` when the failure is not same-Channel retryable.
-/// The affinity-hit target earns one attempt beyond `channel_max_retries + 1`
-/// for a Transient (non-429) failure so a single transient fault on the bound
-/// Channel does not force a switch that discards prompt-cache locality.
-pub(super) async fn allow_same_channel_retry(
-    state: &AppState,
-    attempt: &MonoizeAttempt,
-    execution_state: &AttemptExecutionState,
-    attempts_used: usize,
-    failure_class: Option<RetryableFailureClass>,
-) -> bool {
-    let Some(failure_class) = failure_class else {
-        return false;
-    };
-    if failure_class == RetryableFailureClass::Persistent {
-        return false;
-    }
-    let base_limit = (attempt.channel_max_retries + 1).max(1) as usize;
-    let limit = if attempt.affinity_hit == Some(true)
-        && failure_class == RetryableFailureClass::Transient
-    {
-        base_limit + 1
-    } else {
-        base_limit
-    };
-    attempts_used < limit
-        && !execution_state.should_skip(attempt)
-        && is_attempt_channel_healthy(state, attempt).await
 }
 
 pub(super) fn prune_passive_failure_timestamps(

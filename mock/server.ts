@@ -107,8 +107,8 @@ function collectToolMessages(
       continue;
     }
     toolMessages.push({
-      toolCallId: typeof msg?.tool_call_id === "string" ? msg.tool_call_id : "",
-      content: typeof msg?.content === "string" ? msg.content : "",
+      toolCallId: typeof msg.tool_call_id === "string" ? msg.tool_call_id : "",
+      content: typeof msg.content === "string" ? msg.content : "",
     });
   }
   return toolMessages;
@@ -222,15 +222,10 @@ function collectAnthropicText(messages: unknown[]): string {
 }
 
 function echoSuffix(body: Record<string, unknown>): string {
-  if (
-    body &&
-    typeof body.extra_echo === "string" &&
-    body.extra_echo.length > 0
-  ) {
+  if (typeof body.extra_echo === "string" && body.extra_echo.length > 0) {
     return `|extra_echo=${body.extra_echo}`;
   }
   if (
-    body &&
     typeof body.unparsed_field === "string" &&
     body.unparsed_field.length > 0
   ) {
@@ -305,7 +300,7 @@ function imageStreamChunks(
 // streaming endpoints so downstream reasoning pipelines can be exercised
 // without a real reasoning upstream.
 function hasReasoningTrigger(body: Record<string, unknown>): boolean {
-  return String(body?.model ?? "").includes("reasoning");
+  return String(body.model ?? "").includes("reasoning");
 }
 
 function tokenize(text: string): string[] {
@@ -543,10 +538,10 @@ function systemOneAnswer(value: unknown): Record<string, unknown> {
     };
   }
   if (type === "score") {
-    const legend = question?.legend;
+    const legend = question.legend;
     let keys: string[] = [];
     let legendOut: unknown = {};
-    if (legend && typeof legend === "object" && !Array.isArray(legend)) {
+    if (isObject(legend)) {
       keys = Object.keys(legend);
       legendOut = legend;
     } else if (Array.isArray(legend)) {
@@ -722,7 +717,7 @@ Bun.serve({
         );
         return;
       }
-      if (event?.type !== "response.create") {
+      if (event.type !== "response.create") {
         ws.send(
           JSON.stringify({
             type: "error",

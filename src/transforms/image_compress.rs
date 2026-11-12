@@ -158,34 +158,7 @@ impl Transform for ImageCompressInputTransform {
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config = serde_json::from_value(raw)
-            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
-        if cfg.max_edge_px == Some(0) {
-            return Err(TransformError::InvalidConfig(
-                "max_edge_px must be >= 1".to_string(),
-            ));
-        }
-        if !(1..=100).contains(&cfg.jpeg_quality) {
-            return Err(TransformError::InvalidConfig(
-                "jpeg_quality must be between 1 and 100".to_string(),
-            ));
-        }
-        if !(1..=99).contains(&cfg.jpegxl_quality) {
-            return Err(TransformError::InvalidConfig(
-                "jpegxl_quality must be between 1 and 99".to_string(),
-            ));
-        }
-        if !(1..=10).contains(&cfg.jpegxl_effort) {
-            return Err(TransformError::InvalidConfig(
-                "jpegxl_effort must be between 1 and 10".to_string(),
-            ));
-        }
-        if !(1..=100).contains(&cfg.webp_quality) {
-            return Err(TransformError::InvalidConfig(
-                "webp_quality must be between 1 and 100".to_string(),
-            ));
-        }
-        Ok(Box::new(cfg))
+        parse_image_compression_config(raw)
     }
 
     fn init_state(&self) -> Box<dyn TransformState> {
@@ -446,17 +419,17 @@ fn parse_image_compression_config(raw: Value) -> Result<Box<dyn TransformConfig>
     Ok(Box::new(cfg))
 }
 
-fn split_image_data_url(url: &str) -> Option<(String, String)> {
+fn split_image_data_url(url: &str) -> Option<(&str, &str)> {
     let payload = url.strip_prefix("data:")?;
     let (meta, data) = payload.split_once(',')?;
     if !meta.ends_with(";base64") {
         return None;
     }
     let media_type = meta.trim_end_matches(";base64");
-    if !media_type.starts_with("image/") || media_type.is_empty() || data.is_empty() {
+    if !media_type.starts_with("image/") || data.is_empty() {
         return None;
     }
-    Some((media_type.to_string(), data.to_string()))
+    Some((media_type, data))
 }
 
 async fn compress_image_nodes(
@@ -536,14 +509,13 @@ async fn compress_image_source(
 ) -> Result<Option<ImageSource>, TransformError> {
     match source {
         ImageSource::Base64 { media_type, data } => {
-            compress_base64_image(context, cfg.clone(), media_type.clone(), data.clone()).await
+            compress_base64_image(context, cfg, media_type, data).await
         }
         ImageSource::Url { url, detail } => {
             let Some((media_type, data)) = split_image_data_url(url.as_str()) else {
                 return Ok(None);
             };
-            let Some(next_source) =
-                compress_base64_image(context, cfg.clone(), media_type, data).await?
+            let Some(next_source) = compress_base64_image(context, cfg, media_type, data).await?
             else {
                 return Ok(None);
             };
@@ -591,13 +563,8 @@ async fn compress_tool_call_arguments(
                         source.get("media_type").and_then(Value::as_str),
                         source.get("data").and_then(Value::as_str),
                     )
-                    && let Some(ImageSource::Base64 { media_type, data }) = compress_base64_image(
-                        context,
-                        cfg.clone(),
-                        media_type.to_owned(),
-                        data.to_owned(),
-                    )
-                    .await?
+                    && let Some(ImageSource::Base64 { media_type, data }) =
+                        compress_base64_image(context, cfg, media_type, data).await?
                 {
                     source.insert("media_type".into(), Value::String(media_type));
                     source.insert("data".into(), Value::String(data));
@@ -609,8 +576,7 @@ async fn compress_tool_call_arguments(
         }
     }
     if changed {
-        *arguments = serde_json::to_string(&value)
-            .map_err(|err| TransformError::Apply(format!("serialize tool arguments: {err}")))?;
+        *arguments = value.to_string();
     }
     Ok(())
 }
@@ -690,11 +656,11 @@ fn preserve_url_detail(source: ImageSource, detail: Option<String>) -> ImageSour
 
 async fn compress_base64_image(
     context: &TransformRuntimeContext,
-    cfg: Config,
-    media_type: String,
-    base64_data: String,
+    cfg: &Config,
+    media_type: &str,
+    base64_data: &str,
 ) -> Result<Option<ImageSource>, TransformError> {
-    if !is_supported_media_type(&media_type) {
+    if !is_supported_media_type(media_type) {
         return Ok(None);
     }
     let limits = context.image_transform_cache.limits();
@@ -713,14 +679,14 @@ async fn compress_base64_image(
     if original.len() > limits.max_encoded_bytes {
         return Ok(None);
     }
-    let source_media_type = detected_media_type(&original).unwrap_or(media_type.as_str());
+    let source_media_type = detected_media_type(&original).unwrap_or(media_type);
     let corrected_source = || {
         (source_media_type != media_type).then(|| ImageSource::Base64 {
             media_type: source_media_type.to_string(),
-            data: base64_data.clone(),
+            data: base64_data.to_string(),
         })
     };
-    let cache_key = build_cache_key(source_media_type, &cfg, &original);
+    let cache_key = build_cache_key(source_media_type, cfg, &original);
     if let Some(hit) = context
         .image_transform_cache
         .read_if_fresh(&cache_key)
@@ -741,15 +707,9 @@ async fn compress_base64_image(
         .map_err(TransformError::Apply)?;
     let media_type_for_task = source_media_type.to_string();
     let cfg_for_task = cfg.clone();
-    let original_for_task = original.clone();
     let max_pixels = limits.max_pixels;
     let transformed = tokio::task::spawn_blocking(move || {
-        compress_image_bytes_with_limit(
-            &media_type_for_task,
-            &original_for_task,
-            &cfg_for_task,
-            max_pixels,
-        )
+        compress_image_bytes_with_limit(&media_type_for_task, &original, &cfg_for_task, max_pixels)
     })
     .await
     .map_err(|err| TransformError::Apply(format!("image compression task join failed: {err}")))??;
@@ -832,7 +792,7 @@ fn compress_image_bytes_with_limit(
         Ok(dimensions) => dimensions,
         Err(_) => return Ok(None),
     };
-    if u64::from(dimensions.0).saturating_mul(u64::from(dimensions.1)) > max_pixels {
+    if u64::from(dimensions.0) * u64::from(dimensions.1) > max_pixels {
         return Ok(None);
     }
     let decoded = match image::load_from_memory(original) {
@@ -883,7 +843,7 @@ fn compress_image_bytes_with_limit(
 
 fn digest_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
+    let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         output.push(char::from(HEX[usize::from(byte >> 4)]));
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
@@ -1017,6 +977,17 @@ impl Drop for LibJxlParallelRunner {
 }
 
 impl LibJxlEncoder {
+    fn new() -> Result<Self, TransformError> {
+        // SAFETY: a null memory manager requests libjxl's default allocator.
+        let handle = unsafe { jxl_sys::JxlEncoderCreate(std::ptr::null()) };
+        if handle.is_null() {
+            return Err(TransformError::Apply(
+                "create libjxl encoder: out of memory".to_string(),
+            ));
+        }
+        Ok(Self(handle))
+    }
+
     fn check(
         &self,
         status: jxl_sys::JxlEncoderStatus,
@@ -1030,6 +1001,39 @@ impl LibJxlEncoder {
         Err(TransformError::Apply(format!(
             "{operation}: libjxl status {status:?}, error {detail:?}"
         )))
+    }
+
+    /// Collects the encoded bytes once all input is closed.
+    fn process_output(&self) -> Result<Vec<u8>, TransformError> {
+        const INITIAL_CHUNK: usize = 65_536;
+        const MAX_CHUNK: usize = 67_108_864;
+        let mut output = Vec::new();
+        let mut chunk = INITIAL_CHUNK;
+        loop {
+            let offset = output.len();
+            output.resize(offset + chunk, 0);
+            // SAFETY: resize established a writable region of chunk bytes starting at offset.
+            let mut next_out = unsafe { output.as_mut_ptr().add(offset) };
+            let mut available = chunk;
+            // SAFETY: the encoder is live and the output pointers describe the writable region
+            // above.
+            let status =
+                unsafe { jxl_sys::JxlEncoderProcessOutput(self.0, &mut next_out, &mut available) };
+            output.truncate(offset + chunk - available);
+            match status {
+                jxl_sys::JxlEncoderStatus::JXL_ENC_SUCCESS => return Ok(output),
+                jxl_sys::JxlEncoderStatus::JXL_ENC_NEED_MORE_OUTPUT => {
+                    chunk = (chunk * 2).min(MAX_CHUNK);
+                }
+                _ => {
+                    // SAFETY: the encoder is still live and owns the detailed error state.
+                    let detail = unsafe { jxl_sys::JxlEncoderGetError(self.0) };
+                    return Err(TransformError::Apply(format!(
+                        "encode jpeg xl: libjxl status {status:?}, error {detail:?}"
+                    )));
+                }
+            }
+        }
     }
 }
 
@@ -1055,8 +1059,7 @@ fn encode_image_as_jpegxl(
     let (width, height) = image.dimensions();
 
     let runner = LibJxlParallelRunner::new()?;
-
-    let encoder = create_jpegxl_encoder()?;
+    let encoder = LibJxlEncoder::new()?;
 
     // SAFETY: encoder and runner are live. The runner is declared before the encoder, so it
     // outlives the encoder and all encoding work.
@@ -1154,49 +1157,7 @@ fn encode_image_as_jpegxl(
     // SAFETY: no more input will be added to this live encoder.
     unsafe { jxl_sys::JxlEncoderCloseInput(encoder.0) };
 
-    drain_jpegxl_output(&encoder)
-}
-
-fn create_jpegxl_encoder() -> Result<LibJxlEncoder, TransformError> {
-    // SAFETY: a null memory manager requests libjxl's default allocator.
-    let handle = unsafe { jxl_sys::JxlEncoderCreate(std::ptr::null()) };
-    if handle.is_null() {
-        return Err(TransformError::Apply(
-            "create libjxl encoder: out of memory".to_string(),
-        ));
-    }
-    Ok(LibJxlEncoder(handle))
-}
-
-fn drain_jpegxl_output(encoder: &LibJxlEncoder) -> Result<Vec<u8>, TransformError> {
-    const INITIAL_CHUNK: usize = 65_536;
-    const MAX_CHUNK: usize = 67_108_864;
-    let mut output = Vec::new();
-    let mut chunk = INITIAL_CHUNK;
-    loop {
-        let offset = output.len();
-        output.resize(offset + chunk, 0);
-        // SAFETY: resize established a writable region of chunk bytes starting at offset.
-        let mut next_out = unsafe { output.as_mut_ptr().add(offset) };
-        let mut available = chunk;
-        // SAFETY: encoder is live and the output pointers describe the writable region above.
-        let status =
-            unsafe { jxl_sys::JxlEncoderProcessOutput(encoder.0, &mut next_out, &mut available) };
-        output.truncate(offset + chunk - available);
-        match status {
-            jxl_sys::JxlEncoderStatus::JXL_ENC_SUCCESS => return Ok(output),
-            jxl_sys::JxlEncoderStatus::JXL_ENC_NEED_MORE_OUTPUT => {
-                chunk = chunk.saturating_mul(2).min(MAX_CHUNK);
-            }
-            _ => {
-                // SAFETY: encoder is still live and owns the detailed error state.
-                let detail = unsafe { jxl_sys::JxlEncoderGetError(encoder.0) };
-                return Err(TransformError::Apply(format!(
-                    "encode jpeg xl: libjxl status {status:?}, error {detail:?}"
-                )));
-            }
-        }
-    }
+    encoder.process_output()
 }
 
 fn encode_jpeg_with_mozjpeg(

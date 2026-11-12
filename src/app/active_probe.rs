@@ -1,7 +1,10 @@
 use super::*;
 
+pub(super) mod scheduler;
+
 const ACTIVE_PROBE_CONNECTIVITY_KIND: &str = "active_probe_connectivity";
 const ACTIVE_PROBE_SYSTEM_USER: &str = "_monoize_active_probe";
+
 pub(super) async fn ensure_active_probe_system_user(user_store: &UserStore) -> AppResult<String> {
     let existing = user_store
         .get_user_by_username(ACTIVE_PROBE_SYSTEM_USER)
@@ -56,7 +59,7 @@ fn active_probe_user_init_error(error: String) -> AppError {
 /// `model_prices` with MP-R1 key normalization. Applicable rows for every
 /// candidate pricing key are loaded by one set-based query (MP-R8).
 #[derive(Debug, Clone, Default)]
-pub(super) struct ActiveProbePricingSnapshot {
+struct ActiveProbePricingSnapshot {
     reasoning_suffix_map: HashMap<String, String>,
     rows: HashMap<String, crate::model_price_store::ModelPriceRecord>,
 }
@@ -64,7 +67,7 @@ pub(super) struct ActiveProbePricingSnapshot {
 impl ActiveProbePricingSnapshot {
     /// MP-R1: normalized upstream key first, then the normalized logical key
     /// for redirected models. Returns the pricing key plus the applicable row.
-    pub(super) fn resolve(
+    fn resolve(
         &self,
         upstream_model: &str,
         logical_model: &str,
@@ -83,7 +86,7 @@ impl ActiveProbePricingSnapshot {
     }
 }
 
-pub(super) async fn build_active_probe_pricing_snapshot(
+async fn build_active_probe_pricing_snapshot(
     model_price_store: &crate::model_price_store::ModelPriceStore,
     providers: &[crate::monoize_routing::MonoizeProvider],
     runtime: &MonoizeRuntimeConfig,
@@ -163,24 +166,23 @@ fn build_probe_usage_breakdown(prompt_tokens: u64, completion_tokens: u64) -> Va
     })
 }
 
+/// Identity of one probe attempt, shared by its armed fallback log and its success log.
 #[derive(Clone, Copy)]
-pub(super) struct ActiveProbeLogContext<'a> {
-    pub(super) request_id: &'a str,
-    pub(super) user_id: &'a str,
-    pub(super) provider_id: &'a str,
-    pub(super) provider_name: &'a str,
-    pub(super) provider_type: crate::monoize_routing::MonoizeProviderType,
-    pub(super) channel_multiplier: Option<Multiplier>,
-    pub(super) channel_id: &'a str,
-    pub(super) channel_name: &'a str,
-    pub(super) logical_model: &'a str,
-    pub(super) upstream_model: &'a str,
-    pub(super) created_at: chrono::DateTime<chrono::Utc>,
+struct ActiveProbeLogContext<'a> {
+    request_id: &'a str,
+    user_id: &'a str,
+    provider_id: &'a str,
+    provider_name: &'a str,
+    provider_type: crate::monoize_routing::MonoizeProviderType,
+    channel_multiplier: Option<Multiplier>,
+    channel_id: &'a str,
+    channel_name: &'a str,
+    logical_model: &'a str,
+    upstream_model: &'a str,
+    created_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub(super) fn build_active_probe_interrupted_log(
-    context: ActiveProbeLogContext<'_>,
-) -> InsertRequestLog {
+fn build_active_probe_interrupted_log(context: ActiveProbeLogContext<'_>) -> InsertRequestLog {
     let ActiveProbeLogContext {
         request_id,
         user_id,
@@ -243,7 +245,7 @@ pub(super) fn build_active_probe_interrupted_log(
     }
 }
 
-pub(super) async fn persist_active_probe_request_log(
+async fn persist_active_probe_request_log(
     user_store: &UserStore,
     context: ActiveProbeLogContext<'_>,
     pricing: (String, Option<crate::model_price_store::ModelPriceRecord>),
@@ -265,8 +267,56 @@ pub(super) async fn persist_active_probe_request_log(
         created_at,
     } = context;
     let channel_multiplier = channel_multiplier.unwrap_or(Multiplier::ONE);
-    let (usage_tokens, charge_nano_usd, billing_breakdown_json) =
-        settle_active_probe(context, pricing, usage_snapshot);
+    let (pricing_model_key, model_price) = pricing;
+    let parsed_prompt_tokens = usage_snapshot
+        .as_ref()
+        .and_then(|v| v.get("prompt_tokens"))
+        .and_then(|v| v.as_u64());
+    let parsed_completion_tokens = usage_snapshot
+        .as_ref()
+        .and_then(|v| v.get("completion_tokens"))
+        .and_then(|v| v.as_u64());
+    let usage_tokens = parsed_prompt_tokens.zip(parsed_completion_tokens);
+    let (charge_nano_usd, billing_breakdown_json) = if let Some(price) = model_price.as_ref()
+        && let Some((prompt_tokens, completion_tokens)) = usage_tokens
+    {
+        let usage = crate::urp::Usage {
+            iterations: None,
+            input_tokens: prompt_tokens,
+            output_tokens: completion_tokens,
+            input_details: None,
+            output_details: None,
+            extra_body: HashMap::new(),
+        };
+        // The probe settles at group ratio 1 and the channel multiplier; the
+        // probe user has no group memberships.
+        let inputs = crate::settlement::SettlementInputs {
+            usage: crate::settlement::SettledUsage::Reported(&usage),
+            output: None,
+            price: Some(price),
+            pricing_model_key: &pricing_model_key,
+            tool_prices: &Value::Object(serde_json::Map::new()),
+            requested_tool_classes: &[],
+            service_tier: None,
+            billing_group_id: None,
+            group_billing_ratio: Multiplier::ONE,
+            channel_multiplier,
+        };
+        match crate::settlement::settle(&inputs) {
+            Ok(outcome) => (Some(outcome.final_charge_nano), Some(outcome.breakdown)),
+            Err(err) => {
+                tracing::warn!(
+                    logical_model,
+                    upstream_model,
+                    error = %err,
+                    "active probe charge calculation failed"
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
 
     let usage_breakdown_json = usage_tokens.map(|(prompt_tokens, completion_tokens)| {
         build_probe_usage_breakdown(prompt_tokens, completion_tokens)
@@ -323,78 +373,10 @@ pub(super) async fn persist_active_probe_request_log(
         .await
 }
 
-pub(super) fn clear_channel_health_state(state: &mut ChannelHealthState, now: i64) {
+fn clear_channel_health_state(state: &mut ChannelHealthState, now: i64) {
     state.healthy = true;
     state.cooldown_until = None;
     state.last_success_at = Some(now);
     state.probe_success_count = 0;
     state.last_probe_at = None;
-}
-
-pub(super) mod scheduler;
-
-fn settle_active_probe(
-    context: ActiveProbeLogContext<'_>,
-    pricing: (String, Option<crate::model_price_store::ModelPriceRecord>),
-    usage_snapshot: Option<Value>,
-) -> (Option<(u64, u64)>, Option<i128>, Option<Value>) {
-    let ActiveProbeLogContext {
-        logical_model,
-        upstream_model,
-        channel_multiplier,
-        ..
-    } = context;
-    let channel_multiplier = channel_multiplier.unwrap_or(Multiplier::ONE);
-    let (pricing_model_key, model_price) = pricing;
-    let parsed_prompt_tokens = usage_snapshot
-        .as_ref()
-        .and_then(|v| v.get("prompt_tokens"))
-        .and_then(|v| v.as_u64());
-    let parsed_completion_tokens = usage_snapshot
-        .as_ref()
-        .and_then(|v| v.get("completion_tokens"))
-        .and_then(|v| v.as_u64());
-    let usage_tokens = parsed_prompt_tokens.zip(parsed_completion_tokens);
-    let (charge_nano_usd, billing_breakdown_json) = if let Some(price) = model_price.as_ref()
-        && let Some((prompt_tokens, completion_tokens)) = usage_tokens
-    {
-        let usage = crate::urp::Usage {
-            iterations: None,
-            input_tokens: prompt_tokens,
-            output_tokens: completion_tokens,
-            input_details: None,
-            output_details: None,
-            extra_body: HashMap::new(),
-        };
-        // The probe settles at group ratio 1 and the channel multiplier; the
-        // probe user has no group memberships.
-        let inputs = crate::settlement::SettlementInputs {
-            usage: crate::settlement::SettledUsage::Reported(&usage),
-            output: None,
-            price: Some(price),
-            pricing_model_key: &pricing_model_key,
-            tool_prices: &Value::Object(serde_json::Map::new()),
-            requested_tool_classes: &[],
-            service_tier: None,
-            billing_group_id: None,
-            group_billing_ratio: Multiplier::ONE,
-            channel_multiplier,
-        };
-        match crate::settlement::settle(&inputs) {
-            Ok(outcome) => (Some(outcome.final_charge_nano), Some(outcome.breakdown)),
-            Err(err) => {
-                tracing::warn!(
-                    logical_model,
-                    upstream_model,
-                    error = %err,
-                    "active probe charge calculation failed"
-                );
-                (None, None)
-            }
-        }
-    } else {
-        (None, None)
-    };
-
-    (usage_tokens, charge_nano_usd, billing_breakdown_json)
 }

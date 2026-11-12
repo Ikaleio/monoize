@@ -30,7 +30,7 @@ pub(super) async fn dispatch_image_attempt(
             body.remove("partial_images");
         }
         let legacy =
-            typed_request_to_legacy(&prepared.request, execution.context.meta.max_multiplier)?;
+            typed_request_to_legacy(&prepared.request, execution.context.meta.max_multiplier);
         let extra_headers = attempt_extra_headers(&slot.attempt, &upstream_body);
         // Inline edits use multipart; reference edits use JSON.
         let call = call_streaming_image_capable_upstream(
@@ -95,4 +95,34 @@ fn disable_image_streaming(request: &mut urp::UrpRequest) {
             }
         }
     }
+}
+
+fn upstream_rejects_image_streaming(error: &upstream::UpstreamCallError) -> bool {
+    if !matches!(error.status.map(|status| status.as_u16()), Some(400 | 422)) {
+        return false;
+    }
+    if matches!(
+        error.code.as_deref(),
+        Some("streaming_not_supported" | "unsupported_streaming")
+    ) {
+        return true;
+    }
+    let message = error.message.to_ascii_lowercase();
+    let unsupported_parameter = error.param.as_deref() == Some("stream")
+        && (message.contains("not support")
+            || message.contains("unsupported")
+            || message.contains("unknown parameter")
+            || message.contains("unrecognized"));
+    unsupported_parameter
+        || [
+            "streaming is not supported",
+            "stream is not supported",
+            "streaming not supported",
+            "does not support streaming",
+            "streaming is unsupported",
+            "unsupported parameter: 'stream'",
+            "unknown parameter: 'stream'",
+        ]
+        .iter()
+        .any(|signal| message.contains(signal))
 }

@@ -9,9 +9,8 @@ pub mod replicate;
 use crate::urp::decode::remove_untrusted_internal_keys;
 use crate::urp::{
     InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage, is_internal_key,
-    tool_call_arguments_for_wire,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
@@ -211,66 +210,4 @@ pub fn text_from_nodes(nodes: &[Node]) -> String {
         }
     }
     out
-}
-
-pub fn extract_tool_calls_from_nodes(nodes: &[Node]) -> Vec<Value> {
-    let mut out = Vec::new();
-    for n in nodes {
-        if let Node::ToolCall {
-            call_id,
-            name,
-            arguments,
-            ..
-        } = n
-        {
-            out.push(json!({
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": tool_call_arguments_for_wire(arguments)
-                }
-            }));
-        }
-    }
-    out
-}
-
-pub fn has_encrypted_reasoning_in_nodes(nodes: &[Node]) -> bool {
-    nodes.iter().any(|n| {
-        matches!(
-            n,
-            Node::Reasoning {
-                encrypted: Some(_),
-                ..
-            }
-        )
-    })
-}
-
-pub fn extract_reasoning_plain_from_nodes(nodes: &[Node]) -> String {
-    let mut out = String::new();
-    for n in nodes {
-        if let Node::Reasoning {
-            content, summary, ..
-        } = n
-        {
-            if let Some(content) = content.as_deref().filter(|text| !text.is_empty()) {
-                out.push_str(content);
-            } else if let Some(summary) = summary.as_deref().filter(|text| !text.is_empty()) {
-                out.push_str(summary);
-            }
-        }
-    }
-    out
-}
-
-pub fn extract_reasoning_encrypted_from_nodes(nodes: &[Node]) -> Option<Value> {
-    nodes.iter().find_map(|n| match n {
-        Node::Reasoning {
-            encrypted: Some(data),
-            ..
-        } => Some(data.clone()),
-        _ => None,
-    })
 }

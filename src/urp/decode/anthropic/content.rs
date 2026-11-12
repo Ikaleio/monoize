@@ -67,8 +67,7 @@ pub(crate) fn decode_content_block(
             tool_type: ToolCallType::Function,
             call_id: string_member(obj, "id").unwrap_or_default(),
             name: string_member(obj, "name").unwrap_or_default(),
-            arguments: serde_json::to_string(obj.get("input").unwrap_or(&Value::Null))
-                .unwrap_or_else(|_| "{}".into()),
+            arguments: obj.get("input").unwrap_or(&Value::Null).to_string(),
             extra_body: split_extra(obj, &["type", "id", "name", "input", "toolset_name"]),
             cache_breakpoint: None,
         }),

@@ -187,62 +187,14 @@ fn encode_response_validated(resp: &UrpResponse, logical_model: &str) -> Value {
     result
 }
 
-#[derive(Default)]
-struct AssistantContent<'a> {
-    parts: Vec<Value>,
-    text_offset: u64,
-    text_phases: Vec<Option<&'a String>>,
-}
-
-impl<'a> AssistantContent<'a> {
-    fn push_text(
-        &mut self,
-        message: &mut Map<String, Value>,
-        content: &str,
-        citations: &[crate::urp::Citation],
-        phase: Option<&'a String>,
-        extra_body: &HashMap<String, Value>,
-    ) {
-        if !citations.is_empty() {
-            message
-                .entry("annotations".to_string())
-                .or_insert_with(|| json!([]))
-                .as_array_mut()
-                .expect("generated annotations array")
-                .extend(crate::urp::citations::encode(
-                    citations,
-                    ProviderProtocol::ChatCompletion,
-                    self.text_offset,
-                ));
-        }
-        let mut block = Map::from_iter([
-            ("type".to_string(), json!("text")),
-            ("text".to_string(), json!(content)),
-        ]);
-        merge_chat_wire_extra(&mut block, extra_body);
-        self.text_phases.push(phase);
-        self.text_offset += content.chars().count() as u64;
-        self.parts.push(Value::Object(block));
-    }
-
-    fn insert_phase(&self, message_extra: &mut HashMap<String, Value>) {
-        // DC4a: `phase` describes the whole message only when every text node agrees.
-        if let Some(Some(first)) = self.text_phases.first()
-            && self.text_phases.iter().all(|phase| *phase == Some(*first))
-        {
-            message_extra
-                .entry("phase".to_string())
-                .or_insert_with(|| Value::String((*first).clone()));
-        }
-    }
-}
-
 /// DC4: the assistant `message` of a Chat completion from the response output nodes.
 pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value> {
     let mut message = Map::new();
     message.insert("role".to_string(), Value::String("assistant".to_string()));
 
-    let mut content = AssistantContent::default();
+    let mut content_parts = Vec::new();
+    let mut text_offset = 0u64;
+    let mut text_phases: Vec<Option<&String>> = Vec::new();
     let mut tool_calls = Vec::new();
     let mut refusal: Option<String> = None;
     let mut reasoning = Vec::new();
@@ -252,17 +204,42 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
     for node in nodes {
         match node {
             Node::NextDownstreamEnvelopeExtra { extra_body } => {
-                merge_message_extra(&mut message_extra, extra_body);
+                for (key, value) in extra_body {
+                    if !is_internal_key(key) {
+                        message_extra
+                            .entry(key.clone())
+                            .or_insert_with(|| value.clone());
+                    }
+                }
             }
             Node::Text {
                 role: OrdinaryRole::Assistant,
-                content: text,
+                content,
                 citations,
                 phase,
                 extra_body,
                 ..
             } => {
-                content.push_text(&mut message, text, citations, phase.as_ref(), extra_body);
+                if !citations.is_empty() {
+                    message
+                        .entry("annotations".to_string())
+                        .or_insert_with(|| json!([]))
+                        .as_array_mut()
+                        .expect("generated annotations array")
+                        .extend(crate::urp::citations::encode(
+                            citations,
+                            ProviderProtocol::ChatCompletion,
+                            text_offset,
+                        ));
+                }
+                let mut block = Map::from_iter([
+                    ("type".to_string(), json!("text")),
+                    ("text".to_string(), json!(content)),
+                ]);
+                merge_chat_wire_extra(&mut block, extra_body);
+                text_phases.push(phase.as_ref());
+                text_offset += content.chars().count() as u64;
+                content_parts.push(Value::Object(block));
             }
             Node::Audio {
                 metadata,
@@ -321,16 +298,23 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
                     body,
                     extra_body,
                 ) {
-                    content.parts.push(part);
+                    content_parts.push(part);
                 }
             }
             _ => {}
         }
     }
 
-    content.insert_phase(&mut message_extra);
-    let had_content_parts = !content.parts.is_empty();
-    message.insert("content".to_string(), response_content(content.parts));
+    // DC4a: `phase` describes the whole message only when every text node agrees.
+    if let Some(Some(first)) = text_phases.first()
+        && text_phases.iter().all(|phase| *phase == Some(*first))
+    {
+        message_extra
+            .entry("phase".to_string())
+            .or_insert_with(|| Value::String((*first).clone()));
+    }
+    let had_content_parts = !content_parts.is_empty();
+    message.insert("content".to_string(), response_content(content_parts));
     if let Some(refusal) = refusal {
         message.insert("refusal".to_string(), Value::String(refusal));
     }
@@ -351,14 +335,6 @@ pub(crate) fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<St
         message.insert("content".to_string(), Value::Null);
     }
     message
-}
-
-fn merge_message_extra(target: &mut HashMap<String, Value>, extra: &HashMap<String, Value>) {
-    for (key, value) in extra {
-        if !is_internal_key(key) {
-            target.entry(key.clone()).or_insert_with(|| value.clone());
-        }
-    }
 }
 
 /// DC4: text-only content concatenates to one string; any other part keeps the array form.

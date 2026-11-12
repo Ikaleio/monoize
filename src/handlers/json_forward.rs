@@ -87,8 +87,11 @@ pub(super) async fn forward_json_attempts(
         }
     }
     let error = build_exhausted_upstream_error(ctx.logical_model, &driver.tried_providers);
-    execution.log_error(
+    spawn_request_log_error(
+        ctx.state,
+        ctx.auth,
         driver.last_failed_attempt.as_ref(),
+        execution.log_context(),
         &error,
         driver.tried_providers,
     );
@@ -156,7 +159,14 @@ impl JsonForwardExecution<'_> {
         let usage = endpoint.parse_usage(&value);
         if usage.is_none() && missing_usage_rejects(ctx.auth, attempt) {
             let error = missing_usage_error();
-            self.log_error(Some(attempt), &error, std::mem::take(tried));
+            spawn_request_log_error(
+                ctx.state,
+                ctx.auth,
+                Some(attempt),
+                self.log_context(),
+                &error,
+                std::mem::take(tried),
+            );
             return Err(error);
         }
         let upstream_response_model = mismatched_upstream_response_model(
@@ -189,7 +199,14 @@ impl JsonForwardExecution<'_> {
         {
             Ok(charge) => charge,
             Err(error) => {
-                self.log_error(Some(attempt), &error, std::mem::take(tried));
+                spawn_request_log_error(
+                    ctx.state,
+                    ctx.auth,
+                    Some(attempt),
+                    self.log_context(),
+                    &error,
+                    std::mem::take(tried),
+                );
                 return Err(error);
             }
         };
@@ -210,32 +227,5 @@ impl JsonForwardExecution<'_> {
             },
         );
         Ok(JsonAttemptResponse::Delivered(Json(body).into_response()))
-    }
-
-    fn log_error(
-        &self,
-        attempt: Option<&MonoizeAttempt>,
-        error: &AppError,
-        tried: Vec<TriedProvider>,
-    ) {
-        let ctx = &self.context;
-        if let Some(attempt) = attempt {
-            spawn_request_log_error(
-                ctx.state,
-                ctx.auth,
-                attempt,
-                self.log_context(),
-                error,
-                tried,
-            );
-        } else {
-            spawn_request_log_error_no_attempt(
-                ctx.state,
-                ctx.auth,
-                self.log_context(),
-                error,
-                tried,
-            );
-        }
     }
 }

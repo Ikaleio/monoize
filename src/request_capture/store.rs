@@ -107,7 +107,7 @@ impl RequestCaptureStore {
     }
 
     /// RCD-R2 step ordering; RCD-R4: one failed step never stops the next.
-    pub(super) async fn run_cleanup_pass(&self) {
+    async fn run_cleanup_pass(&self) {
         if let Err(err) = self.cleanup_ttl_expired().await {
             tracing::warn!("request capture TTL cleanup failed: {err}");
         }
@@ -121,7 +121,7 @@ impl RequestCaptureStore {
 
     /// RCD-R3: delete every dump whose metadata row has expired, file first,
     /// then the rows, in batches of `CLEANUP_BATCH_SIZE`.
-    pub(super) async fn cleanup_ttl_expired(&self) -> Result<(), String> {
+    async fn cleanup_ttl_expired(&self) -> Result<(), String> {
         let Some(db) = self.db.as_ref() else {
             return Ok(());
         };
@@ -160,7 +160,7 @@ impl RequestCaptureStore {
     /// RCD-R5a: delete direct regular files older than the 24-hour horizon
     /// that have no metadata row. Skipped without a database pool because
     /// row existence cannot be evaluated.
-    pub(super) async fn cleanup_orphan_files(&self) -> Result<(), String> {
+    async fn cleanup_orphan_files(&self) -> Result<(), String> {
         let Some(db) = self.db.as_ref() else {
             return Ok(());
         };
@@ -269,7 +269,7 @@ impl RequestCaptureStore {
 
     /// Best-effort file removal: a missing file is not an error (RCD-R3),
     /// other failures are logged and skipped (RCD-R4).
-    pub(super) async fn remove_dump_files(&self, file_names: Vec<String>) {
+    async fn remove_dump_files(&self, file_names: Vec<String>) {
         if file_names.is_empty() {
             return;
         }
@@ -290,10 +290,7 @@ impl RequestCaptureStore {
         }
     }
 
-    pub(super) async fn delete_records_by_file_names(
-        &self,
-        file_names: &[String],
-    ) -> Result<(), String> {
+    async fn delete_records_by_file_names(&self, file_names: &[String]) -> Result<(), String> {
         let Some(db) = self.db.as_ref() else {
             return Ok(());
         };
@@ -449,9 +446,7 @@ impl RequestCaptureStore {
         });
         Ok(())
     }
-}
 
-impl RequestCaptureStore {
     /// RCD-Z1/RCD-Z4/RCD-S11: compress, then write via temporary file plus
     /// atomic rename; compression failure falls back to the raw `.json`
     /// shape. Returns the final file name and its on-disk byte length

@@ -18,12 +18,6 @@ pub fn retain_wire_extra_fields(extra: &mut HashMap<String, Value>) {
     extra.retain(|key, _| !is_internal_key(key));
 }
 
-pub fn remove_untrusted_internal_object_keys(value: &mut Value) {
-    if let Some(obj) = value.as_object_mut() {
-        obj.retain(|key, _| !is_internal_key(key));
-    }
-}
-
 pub fn split_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, Value> {
     let mut extra = HashMap::new();
     for (k, v) in obj {
@@ -311,13 +305,9 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
         .unwrap_or("")
         .to_string();
     let arguments = parse_tool_call_arguments_value(obj)
-        .map(|value| {
-            value
-                .as_str()
-                .map(|text| text.to_string())
-                .unwrap_or_else(|| {
-                    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
-                })
+        .map(|value| match value {
+            Value::String(text) => text,
+            value => value.to_string(),
         })
         .unwrap_or_else(|| "{}".to_string());
 
@@ -896,7 +886,7 @@ pub fn value_to_text(v: &Value) -> String {
         }
         return out;
     }
-    serde_json::to_string(v).unwrap_or_default()
+    v.to_string()
 }
 
 #[cfg(test)]

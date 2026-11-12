@@ -2,107 +2,6 @@ use super::*;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-fn prepare_metadata_writes(
-    grouped: &[(String, Vec<SyncProviderVariant>)],
-    manual_ids: &std::collections::HashSet<String>,
-) -> (Vec<ModelsDevMetadataWrite>, usize) {
-    let mut metadata_writes = Vec::new();
-    let mut skipped = 0usize;
-    for (model_name, variants) in grouped {
-        if !has_positive_input_variant(variants) {
-            continue;
-        }
-        if manual_ids.contains(model_name) {
-            skipped += 1;
-            continue;
-        }
-
-        let winner = pick_best_variant(model_name, variants);
-        let mode = if variants
-            .iter()
-            .any(|v| is_embedding_family(v.family.as_deref()))
-        {
-            "embedding"
-        } else {
-            "chat"
-        };
-
-        let mut providers_map = serde_json::Map::new();
-        for v in variants {
-            providers_map.insert(v.provider_id.clone(), v.raw.clone());
-        }
-        metadata_writes.push(ModelsDevMetadataWrite {
-            model_name: model_name.clone(),
-            provider_id: winner.provider_id.clone(),
-            mode,
-            max_input_tokens: winner.max_input_tokens,
-            max_output_tokens: winner.max_output_tokens,
-            max_tokens: winner.max_tokens,
-            raw_json: serde_json::json!({ "providers": providers_map }).to_string(),
-        });
-    }
-
-    (metadata_writes, skipped)
-}
-
-impl ModelRegistryStore {
-    async fn write_models_dev_metadata(
-        &self,
-        txn: &sea_orm::DatabaseTransaction,
-        metadata_writes: &[ModelsDevMetadataWrite],
-        fetched_at: &str,
-    ) -> Result<(), String> {
-        const METADATA_SYNC_CHUNK_SIZE: usize = 100;
-        for chunk in metadata_writes.chunks(METADATA_SYNC_CHUNK_SIZE) {
-            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 8);
-            let mut rows = Vec::with_capacity(chunk.len());
-            for row in chunk {
-                let start = values.len() + 1;
-                values.extend([
-                    row.model_name.clone().into(),
-                    row.provider_id.clone().into(),
-                    row.mode.into(),
-                    row.max_input_tokens.into(),
-                    row.max_output_tokens.into(),
-                    row.max_tokens.into(),
-                    row.raw_json.clone().into(),
-                    fetched_at.to_string().into(),
-                ]);
-                let mut placeholders = (start..start + 7)
-                    .map(|index| format!("${index}"))
-                    .collect::<Vec<_>>();
-                placeholders.push("'models_dev'".to_string());
-                placeholders.push(format!("${}", start + 7));
-                // Placeholder order: 7 data columns, literal source, updated_at.
-                rows.push(format!("({})", placeholders.join(", ")));
-            }
-            txn.execute(self.db.stmt(
-                &format!(
-                    "INSERT INTO model_metadata_records
-                     (model_id, models_dev_provider, mode, max_input_tokens,
-                      max_output_tokens, max_tokens, raw_json, source, updated_at)
-                     VALUES {}
-                     ON CONFLICT(model_id) DO UPDATE SET
-                       models_dev_provider=excluded.models_dev_provider,
-                       mode=excluded.mode,
-                       max_input_tokens=excluded.max_input_tokens,
-                       max_output_tokens=excluded.max_output_tokens,
-                       max_tokens=excluded.max_tokens,
-                       raw_json=excluded.raw_json,
-                       source=excluded.source,
-                       updated_at=excluded.updated_at",
-                    rows.join(", ")
-                ),
-                values,
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-
-        Ok(())
-    }
-}
-
 impl ModelRegistryStore {
     /// Fetch models.dev and upsert metadata rows (MP-Y10). Metadata rows no
     /// longer carry prices; `model_prices` is written only by the price sync
@@ -167,6 +66,105 @@ impl ModelRegistryStore {
             fetched_at,
         })
     }
+
+    async fn write_models_dev_metadata(
+        &self,
+        txn: &sea_orm::DatabaseTransaction,
+        metadata_writes: &[ModelsDevMetadataWrite],
+        fetched_at: &str,
+    ) -> Result<(), String> {
+        const METADATA_SYNC_CHUNK_SIZE: usize = 100;
+        for chunk in metadata_writes.chunks(METADATA_SYNC_CHUNK_SIZE) {
+            let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 8);
+            let mut rows = Vec::with_capacity(chunk.len());
+            for row in chunk {
+                let start = values.len() + 1;
+                values.extend([
+                    row.model_name.clone().into(),
+                    row.provider_id.clone().into(),
+                    row.mode.into(),
+                    row.max_input_tokens.into(),
+                    row.max_output_tokens.into(),
+                    row.max_tokens.into(),
+                    row.raw_json.clone().into(),
+                    fetched_at.to_string().into(),
+                ]);
+                let mut placeholders = (start..start + 7)
+                    .map(|index| format!("${index}"))
+                    .collect::<Vec<_>>();
+                placeholders.push("'models_dev'".to_string());
+                placeholders.push(format!("${}", start + 7));
+                // Placeholder order: 7 data columns, literal source, updated_at.
+                rows.push(format!("({})", placeholders.join(", ")));
+            }
+            txn.execute(self.db.stmt(
+                &format!(
+                    "INSERT INTO model_metadata_records
+                     (model_id, models_dev_provider, mode, max_input_tokens,
+                      max_output_tokens, max_tokens, raw_json, source, updated_at)
+                     VALUES {}
+                     ON CONFLICT(model_id) DO UPDATE SET
+                       models_dev_provider=excluded.models_dev_provider,
+                       mode=excluded.mode,
+                       max_input_tokens=excluded.max_input_tokens,
+                       max_output_tokens=excluded.max_output_tokens,
+                       max_tokens=excluded.max_tokens,
+                       raw_json=excluded.raw_json,
+                       source=excluded.source,
+                       updated_at=excluded.updated_at",
+                    rows.join(", ")
+                ),
+                values,
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
+    }
+}
+
+fn prepare_metadata_writes(
+    grouped: &[(String, Vec<SyncProviderVariant>)],
+    manual_ids: &std::collections::HashSet<String>,
+) -> (Vec<ModelsDevMetadataWrite>, usize) {
+    let mut metadata_writes = Vec::new();
+    let mut skipped = 0usize;
+    for (model_name, variants) in grouped {
+        if !has_positive_input_variant(variants) {
+            continue;
+        }
+        if manual_ids.contains(model_name) {
+            skipped += 1;
+            continue;
+        }
+
+        let winner = pick_best_variant(model_name, variants);
+        let mode = if variants
+            .iter()
+            .any(|v| is_embedding_family(v.family.as_deref()))
+        {
+            "embedding"
+        } else {
+            "chat"
+        };
+
+        let mut providers_map = serde_json::Map::new();
+        for v in variants {
+            providers_map.insert(v.provider_id.clone(), v.raw.clone());
+        }
+        metadata_writes.push(ModelsDevMetadataWrite {
+            model_name: model_name.clone(),
+            provider_id: winner.provider_id.clone(),
+            mode,
+            max_input_tokens: winner.max_input_tokens,
+            max_output_tokens: winner.max_output_tokens,
+            max_tokens: winner.max_tokens,
+            raw_json: serde_json::json!({ "providers": providers_map }).to_string(),
+        });
+    }
+
+    (metadata_writes, skipped)
 }
 
 /// One models.dev provider variant of a canonical model, with cost values

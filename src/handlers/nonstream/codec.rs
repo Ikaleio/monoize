@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashSet;
 
 fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
     let answered: HashSet<String> = req
@@ -10,9 +9,8 @@ fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
             _ => None,
         })
         .collect();
-    req.input.retain_mut(|node| match node {
-        urp::Node::ToolCall { call_id, .. } => answered.contains(&*call_id),
-        urp::Node::NextDownstreamEnvelopeExtra { .. } => true,
+    req.input.retain(|node| match node {
+        urp::Node::ToolCall { call_id, .. } => answered.contains(call_id),
         _ => true,
     });
 }

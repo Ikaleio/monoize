@@ -296,12 +296,43 @@ impl UserStore {
         let Some(price_row) = price_row else {
             return Ok(Err("plan_not_available".to_string()));
         };
-        let (price, duration_seconds, expires_at) = plan_purchase_price(&price_row, now)?;
-        let Some((new_balance, unlimited)) = self
-            .debit_plan_purchase_tx(&tx, user_id, &user_row, price, &now_raw)
-            .await?
-        else {
-            return Ok(Err("insufficient_balance".to_string()));
+        let price = parse_nano_usd(
+            &price_row
+                .try_get::<String>("", "price_nano_usd")
+                .map_err(sql_err)?,
+        )
+        .map_err(sql_err)?;
+        let duration_seconds: i64 = price_row.try_get("", "duration_seconds").map_err(sql_err)?;
+        let expires_at = now
+            .checked_add_signed(Duration::seconds(duration_seconds))
+            .ok_or_else(|| "plan expiry overflow".to_string())?;
+        let unlimited = crate::users::store::decode_required_bool(&user_row, "balance_unlimited")?;
+        let old_balance = parse_nano_usd(
+            &user_row
+                .try_get::<String>("", "balance_nano_usd")
+                .map_err(sql_err)?,
+        )
+        .map_err(sql_err)?;
+        let new_balance = if unlimited {
+            old_balance
+        } else {
+            let value = old_balance
+                .checked_sub(price)
+                .ok_or_else(|| "prepaid balance subtraction overflow".to_string())?;
+            if value < 0 {
+                return Ok(Err("insufficient_balance".to_string()));
+            }
+            tx.execute(self.db.stmt(
+                "UPDATE users SET balance_nano_usd = $1, updated_at = $2 WHERE id = $3",
+                vec![
+                    value.to_string().into(),
+                    now_raw.clone().into(),
+                    user_id.into(),
+                ],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+            value
         };
         let subscription_id = uuid::Uuid::new_v4().to_string();
         let plan_name: String = plan_row.try_get("", "name").map_err(sql_err)?;
@@ -479,56 +510,4 @@ impl UserStore {
         tx.commit().await.map_err(|error| error.to_string())?;
         Ok(Ok(()))
     }
-
-    async fn debit_plan_purchase_tx(
-        &self,
-        tx: &DatabaseTransaction,
-        user_id: &str,
-        user_row: &QueryResult,
-        price: i128,
-        now_raw: &str,
-    ) -> Result<Option<(i128, bool)>, String> {
-        let unlimited = crate::users::store::decode_required_bool(user_row, "balance_unlimited")?;
-        let old_balance = parse_nano_usd(
-            &user_row
-                .try_get::<String>("", "balance_nano_usd")
-                .map_err(sql_err)?,
-        )
-        .map_err(sql_err)?;
-        let new_balance = if unlimited {
-            old_balance
-        } else {
-            let value = old_balance
-                .checked_sub(price)
-                .ok_or_else(|| "prepaid balance subtraction overflow".to_string())?;
-            if value < 0 {
-                return Ok(None);
-            }
-            tx.execute(self.db.stmt(
-                "UPDATE users SET balance_nano_usd = $1, updated_at = $2 WHERE id = $3",
-                vec![value.to_string().into(), now_raw.into(), user_id.into()],
-            ))
-            .await
-            .map_err(|error| error.to_string())?;
-            value
-        };
-        Ok(Some((new_balance, unlimited)))
-    }
-}
-
-fn plan_purchase_price(
-    price_row: &QueryResult,
-    now: DateTime<Utc>,
-) -> Result<(i128, i64, DateTime<Utc>), String> {
-    let price = parse_nano_usd(
-        &price_row
-            .try_get::<String>("", "price_nano_usd")
-            .map_err(sql_err)?,
-    )
-    .map_err(sql_err)?;
-    let duration_seconds: i64 = price_row.try_get("", "duration_seconds").map_err(sql_err)?;
-    let expires_at = now
-        .checked_add_signed(Duration::seconds(duration_seconds))
-        .ok_or_else(|| "plan expiry overflow".to_string())?;
-    Ok((price, duration_seconds, expires_at))
 }

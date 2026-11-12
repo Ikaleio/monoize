@@ -1,4 +1,5 @@
 use super::*;
+use futures_util::StreamExt as _;
 
 pub(super) struct ImageStreamInput {
     pub(super) response: reqwest::Response,
@@ -298,4 +299,73 @@ impl ImageCollectedEvents {
             .map_err(|error| ImageCollectionFailure { error, retry: true })?;
         Ok(response)
     }
+}
+
+async fn decode_image_json_as_stream(
+    provider_type: ProviderType,
+    upstream_response: reqwest::Response,
+    request: &urp::UrpRequest,
+    mask_sensitive_info: bool,
+    tx: mpsc::Sender<urp::UrpStreamEvent>,
+    idle_timeout_ms: u64,
+) -> AppResult<()> {
+    let invalid_json = |detail: String| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "invalid_upstream_response",
+            format!("invalid upstream image JSON: {detail}"),
+        )
+    };
+    // CFG-6a item 3: the dispatch sets no total body deadline, so each chunk
+    // wait is bounded by the stream idle timeout instead.
+    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
+    let mut body = Vec::new();
+    let mut chunks = upstream_response.bytes_stream();
+    while let Some(chunk) = tokio::time::timeout(idle_timeout, chunks.next())
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "upstream_idle_timeout",
+                format!("upstream image body idle for {idle_timeout_ms}ms without data"),
+            )
+        })?
+    {
+        let chunk = chunk.map_err(|error| invalid_json(crate::error::error_chain(&error)))?;
+        body.extend_from_slice(&chunk);
+    }
+    let value: Value =
+        serde_json::from_slice(&body).map_err(|error| invalid_json(error.to_string()))?;
+    let response = decode_response_from_provider(
+        provider_type,
+        &value,
+        &request.model,
+        mask_sensitive_info,
+        request,
+    )?;
+    let mut extra_body = response.extra_body;
+    extra_body.insert("id".to_string(), Value::String(response.id));
+    extra_body.insert("model".to_string(), Value::String(response.model));
+    if let Some(created_at) = response.created_at {
+        extra_body.insert("created_at".to_string(), Value::from(created_at));
+    }
+    tx.send(urp::UrpStreamEvent::ResponseDone {
+        outcome: response.outcome,
+        finish_reason: response.finish_reason,
+        usage: response.usage,
+        output: response
+            .output
+            .into_iter()
+            .map(urp::TerminalNode::unannounced)
+            .collect(),
+        extra_body,
+    })
+    .await
+    .map_err(|error| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "stream_send_failed",
+            error.to_string(),
+        )
+    })
 }

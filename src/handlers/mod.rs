@@ -85,35 +85,17 @@ fn apply_first_model_redirect(
     false
 }
 
-fn apply_model_redirects_to_model(
-    model: &mut String,
-    api_key_rules: &[crate::users::CompiledModelRedirectRule],
-    global_rules: &[crate::users::CompiledModelRedirectRule],
-) {
-    if !apply_first_model_redirect(model, api_key_rules) {
-        apply_first_model_redirect(model, global_rules);
-    }
-}
-
+/// The first matching API-key rule wins; global rules apply only when no
+/// API-key rule matched.
 async fn apply_configured_model_redirects_to_model(
     state: &AppState,
     model: &mut String,
     auth: &crate::auth::AuthResult,
 ) {
-    let runtime = state.monoize_runtime.read().await;
-    apply_model_redirects_to_model(
-        model,
-        &auth.model_redirects,
-        &runtime.compiled_global_model_redirects,
-    );
-}
-
-async fn apply_model_redirects(
-    state: &AppState,
-    req: &mut urp::UrpRequest,
-    auth: &crate::auth::AuthResult,
-) {
-    apply_configured_model_redirects_to_model(state, &mut req.model, auth).await;
+    if !apply_first_model_redirect(model, &auth.model_redirects) {
+        let runtime = state.monoize_runtime.read().await;
+        apply_first_model_redirect(model, &runtime.compiled_global_model_redirects);
+    }
 }
 
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
@@ -352,7 +334,7 @@ async fn create_response_inner(
     });
     let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
-    apply_model_redirects(&state, &mut req, &auth).await;
+    apply_configured_model_redirects_to_model(&state, &mut req.model, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
@@ -456,7 +438,7 @@ pub async fn create_chat_completions(
     });
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
-    apply_model_redirects(&state, &mut req, &auth).await;
+    apply_configured_model_redirects_to_model(&state, &mut req.model, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
@@ -592,7 +574,7 @@ async fn create_messages_inner(
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     req.context.anthropic_client_headers = anthropic_client_headers(&headers);
-    apply_model_redirects(&state, &mut req, &auth).await;
+    apply_configured_model_redirects_to_model(&state, &mut req.model, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_ip = extract_client_ip(&headers);
@@ -920,16 +902,6 @@ fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str
     }
 }
 
-async fn maybe_sleep_before_channel_retry(attempt: &MonoizeAttempt) {
-    if attempt.channel_retry_interval_ms == 0 {
-        return;
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(
-        attempt.channel_retry_interval_ms,
-    ))
-    .await;
-}
-
 #[derive(Clone, Debug, serde::Serialize)]
 struct TriedProvider {
     attempt_number: u32,
@@ -1006,74 +978,22 @@ impl TriedProvider {
     }
 }
 
-fn shared_origin_skip_token(provider_id: &str, origin_key: &str) -> String {
-    format!("{provider_id}\0{origin_key}")
-}
-
-#[derive(Default)]
-struct AttemptExecutionState {
-    provider_attempts_used: HashMap<String, usize>,
-    next_attempt_number: u32,
-    shared_origin_skips: HashSet<String>,
-    current_attempt_started: Option<Instant>,
-}
-
-impl AttemptExecutionState {
-    fn provider_budget_remaining(&self, attempt: &MonoizeAttempt) -> bool {
-        attempt
-            .provider_attempt_limit
-            .map(|limit| {
-                self.provider_attempts_used
-                    .get(&attempt.provider_id)
-                    .copied()
-                    .unwrap_or(0)
-                    < limit
-            })
-            .unwrap_or(true)
-    }
-
-    fn skip_shared_origin(&self, attempt: &MonoizeAttempt) -> bool {
-        let Some(origin_key) = attempt.origin_key.as_ref() else {
-            return false;
-        };
-        self.shared_origin_skips
-            .contains(&shared_origin_skip_token(&attempt.provider_id, origin_key))
-    }
-
-    fn mark_shared_origin_skip(&mut self, attempt: &MonoizeAttempt) {
-        let Some(origin_key) = attempt.origin_key.as_ref() else {
-            return;
-        };
-        self.shared_origin_skips
-            .insert(shared_origin_skip_token(&attempt.provider_id, origin_key));
-    }
-
-    fn should_skip(&self, attempt: &MonoizeAttempt) -> bool {
-        !self.provider_budget_remaining(attempt) || self.skip_shared_origin(attempt)
-    }
-
-    fn record_upstream_attempt(&mut self, attempt: &MonoizeAttempt) -> u32 {
-        self.current_attempt_started = Some(Instant::now());
-        let used = self
-            .provider_attempts_used
-            .entry(attempt.provider_id.clone())
-            .or_default();
-        *used = used.saturating_add(1);
-        self.next_attempt_number = self.next_attempt_number.saturating_add(1);
-        self.next_attempt_number
-    }
-
-    fn last_attempt_duration_ms(&self) -> Option<u64> {
-        self.current_attempt_started
-            .map(|started| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX))
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum DownstreamProtocol {
     Responses,
     ChatCompletions,
     AnthropicMessages,
+}
+
+impl DownstreamProtocol {
+    pub(crate) fn is_same_family(self, upstream: ProviderType) -> bool {
+        matches!(
+            (self, upstream),
+            (Self::Responses, ProviderType::Responses)
+                | (Self::ChatCompletions, ProviderType::ChatCompletion)
+                | (Self::AnthropicMessages, ProviderType::Messages)
+        )
+    }
 }
 
 /// Capture context for one downstream request. `raw_input` holds the parsed
@@ -1086,14 +1006,15 @@ pub(crate) struct RequestCaptureContext {
     session: Option<RequestCaptureSession>,
 }
 
-impl DownstreamProtocol {
-    pub(crate) fn is_same_family(self, upstream: ProviderType) -> bool {
-        matches!(
-            (self, upstream),
-            (Self::Responses, ProviderType::Responses)
-                | (Self::ChatCompletions, ProviderType::ChatCompletion)
-                | (Self::AnthropicMessages, ProviderType::Messages)
-        )
+impl RequestCaptureContext {
+    /// Persists the active capture session, if any, with the final upstream
+    /// usage and whether an upstream error was seen.
+    async fn persist(&self, upstream_usage: Option<&urp::Usage>, upstream_error_seen: bool) {
+        if let Some(session) = &self.session {
+            session
+                .persist_with_result(upstream_usage, upstream_error_seen)
+                .await;
+        }
     }
 }
 
@@ -1527,26 +1448,23 @@ async fn ensure_replica_user_can_spend(
 }
 
 fn split_body(value: Value, known_keys: &[&str]) -> AppResult<(Value, Map<String, Value>)> {
-    let known: HashSet<&str> = known_keys.iter().copied().collect();
-    let obj = value.as_object().ok_or_else(|| {
-        AppError::new(
+    let Value::Object(obj) = value else {
+        return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_request",
             "body must be object",
-        )
-    })?;
-
-    let mut known_obj = Map::new();
+        ));
+    };
+    let mut known = Map::new();
     let mut extra = Map::new();
-    for (k, v) in obj.iter() {
-        if known.contains(k.as_str()) {
-            known_obj.insert(k.clone(), v.clone());
+    for (key, value) in obj {
+        if known_keys.contains(&key.as_str()) {
+            known.insert(key, value);
         } else {
-            extra.insert(k.clone(), v.clone());
+            extra.insert(key, value);
         }
     }
-
-    Ok((Value::Object(known_obj), extra))
+    Ok((Value::Object(known), extra))
 }
 
 fn parse_positive_multiplier(value: &str) -> Option<Multiplier> {

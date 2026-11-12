@@ -87,39 +87,6 @@ impl UserStore {
         Ok(result.rows_affected())
     }
 
-    pub async fn insert_request_log_pending(
-        &self,
-        _request_id: &str,
-        _user_id: &str,
-        _api_key_id: Option<&str>,
-        _model: &str,
-        _is_stream: bool,
-        _request_ip: Option<&str>,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-
-    pub async fn update_pending_request_log_channel(
-        &self,
-        _user_id: &str,
-        _request_id: &str,
-        _provider_id: &str,
-        _channel_id: &str,
-        _upstream_model: &str,
-        _provider_multiplier: crate::exact_decimal::Multiplier,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-
-    pub async fn update_pending_request_log_usage(
-        &self,
-        _user_id: &str,
-        _request_id: &str,
-        _usage: PendingRequestLogUsage,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-
     pub async fn finalize_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
         self.request_log_batcher
             .push(log)

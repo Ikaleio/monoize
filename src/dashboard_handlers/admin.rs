@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
+use crate::dashboard_handlers::settings::redact_dsn;
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
 use axum::Json;
@@ -68,10 +69,7 @@ pub async fn get_admin_overview(
     let role = state.node.role.as_str();
 
     let (spool_pending_count, spool_pending_bytes) = match (role, state.metering.as_ref()) {
-        ("replica", Some(metering)) => {
-            let (count, bytes) = metering.delta_spool().pending_stats();
-            (count, bytes)
-        }
+        ("replica", Some(metering)) => metering.delta_spool().pending_stats(),
         _ => (0usize, 0u64),
     };
 
@@ -160,18 +158,6 @@ pub async fn get_admin_overview(
     })))
 }
 
-fn redact_dsn(dsn: &str) -> String {
-    if let Some(at_pos) = dsn.find('@')
-        && let Some(scheme_end) = dsn.find("://")
-    {
-        return format!("{}://***@{}", &dsn[..scheme_end], &dsn[at_pos + 1..]);
-    }
-    if dsn.starts_with("sqlite") {
-        return dsn.to_string();
-    }
-    "***".to_string()
-}
-
 async fn overview_channel_health(
     state: &AppState,
     channel_window: &HashMap<String, crate::users::ChannelWindowUsage>,
@@ -206,21 +192,9 @@ async fn overview_channel_health(
                     {
                         unhealthy_models.push(model.clone());
                     }
-                    cooldown_until = match (cooldown_until, entry.cooldown_until) {
-                        (Some(left), Some(right)) => Some(left.max(right)),
-                        (Some(value), None) | (None, Some(value)) => Some(value),
-                        (None, None) => None,
-                    };
-                    last_success_at = match (last_success_at, entry.last_success_at) {
-                        (Some(left), Some(right)) => Some(left.max(right)),
-                        (Some(value), None) | (None, Some(value)) => Some(value),
-                        (None, None) => None,
-                    };
-                    last_probe_at = match (last_probe_at, entry.last_probe_at) {
-                        (Some(left), Some(right)) => Some(left.max(right)),
-                        (Some(value), None) | (None, Some(value)) => Some(value),
-                        (None, None) => None,
-                    };
+                    cooldown_until = cooldown_until.max(entry.cooldown_until);
+                    last_success_at = last_success_at.max(entry.last_success_at);
+                    last_probe_at = last_probe_at.max(entry.last_probe_at);
                     probe_success_count = probe_success_count.max(entry.probe_success_count);
                 }
                 unhealthy_models.sort();
@@ -248,8 +222,6 @@ async fn overview_channel_health(
             }));
         }
     }
-    drop(health);
-
     Ok(channel_health)
 }
 

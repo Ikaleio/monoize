@@ -15,96 +15,29 @@ import { ThemeProvider } from "@/hooks/use-theme";
 import { Toaster } from "@/components/ui/sonner";
 import { RouteErrorBoundary } from "@/components/ui/error-boundary";
 import { NoPermissionState } from "@/components/ui/no-permission";
-import {
-  RouteSkeleton,
-  type RouteSkeletonKind,
-} from "@/components/ui/route-skeleton";
+import { RouteSkeleton, type RouteSkeletonKind } from "@/components/ui/route-skeleton";
 import { usePublicSettings } from "@/lib/swr";
 import { DashboardLayout } from "@/pages/layout";
 import "@/i18n";
 
-const LoginPage = lazy(() =>
-  import("@/pages/login").then((module) => ({ default: module.LoginPage })),
-);
-const DashboardPage = lazy(() =>
-  import("@/pages/dashboard").then((module) => ({
-    default: module.DashboardPage,
-  })),
-);
-const AdminDashboardPage = lazy(() =>
-  import("@/pages/admin-dashboard").then((module) => ({
-    default: module.AdminDashboardPage,
-  })),
-);
-const ProvidersPage = lazy(() =>
-  import("@/pages/providers").then((module) => ({
-    default: module.ProvidersPage,
-  })),
-);
-const ApiKeysPage = lazy(() =>
-  import("@/pages/api-keys").then((module) => ({
-    default: module.ApiKeysPage,
-  })),
-);
-const UsersPage = lazy(() =>
-  import("@/pages/users").then((module) => ({ default: module.UsersPage })),
-);
-const GroupsPage = lazy(() =>
-  import("@/pages/groups").then((module) => ({ default: module.GroupsPage })),
-);
-const BillingPlansPage = lazy(() =>
-  import("@/pages/billing-plans").then((module) => ({
-    default: module.BillingPlansPage,
-  })),
-);
-const SettingsPage = lazy(() =>
-  import("@/pages/settings").then((module) => ({
-    default: module.SettingsPage,
-  })),
-);
-const UserSettingsPage = lazy(() =>
-  import("@/pages/user-settings").then((module) => ({
-    default: module.UserSettingsPage,
-  })),
-);
-const PlaygroundPage = lazy(() =>
-  import("@/pages/playground").then((module) => ({
-    default: module.PlaygroundPage,
-  })),
-);
-const RequestLogsPage = lazy(() =>
-  import("@/pages/request-logs").then((module) => ({
-    default: module.RequestLogsPage,
-  })),
-);
-const ModelPricingPage = lazy(() =>
-  import("@/pages/model-pricing").then((module) => ({
-    default: module.ModelPricingPage,
-  })),
-);
-const ModelMarketplacePage = lazy(() =>
-  import("@/pages/model-marketplace").then((module) => ({
-    default: module.ModelMarketplacePage,
-  })),
-);
-const CustomTransformsPage = lazy(() =>
-  import("@/pages/custom-transforms").then((module) => ({
-    default: module.CustomTransformsPage,
-  })),
-);
-const WalletPage = lazy(() =>
-  import("@/pages/wallet").then((module) => ({ default: module.WalletPage })),
-);
-const PaymentsPage = lazy(() =>
-  import("@/pages/payments").then((module) => ({
-    default: module.PaymentsPage,
-  })),
-);
-const NotFoundPage = lazy(() =>
-  import("@/pages/not-found").then((module) => ({
-    default: module.NotFoundPage,
-  })),
-);
+const LoginPage = lazy(() => import("@/pages/login").then((m) => ({ default: m.LoginPage })));
+const DashboardPage = lazy(() => import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage })));
+const AdminDashboardPage = lazy(() => import("@/pages/admin-dashboard").then((m) => ({ default: m.AdminDashboardPage })));
+const ProvidersPage = lazy(() => import("@/pages/providers").then((m) => ({ default: m.ProvidersPage })));
+const ApiKeysPage = lazy(() => import("@/pages/api-keys").then((m) => ({ default: m.ApiKeysPage })));
+const UsersPage = lazy(() => import("@/pages/users").then((m) => ({ default: m.UsersPage })));
+const GroupsPage = lazy(() => import("@/pages/groups").then((m) => ({ default: m.GroupsPage })));
+const BillingPlansPage = lazy(() => import("@/pages/billing-plans").then((m) => ({ default: m.BillingPlansPage })));
+const SettingsPage = lazy(() => import("@/pages/settings").then((m) => ({ default: m.SettingsPage })));
+const UserSettingsPage = lazy(() => import("@/pages/user-settings").then((m) => ({ default: m.UserSettingsPage })));
+const PlaygroundPage = lazy(() => import("@/pages/playground").then((m) => ({ default: m.PlaygroundPage })));
+const RequestLogsPage = lazy(() => import("@/pages/request-logs").then((m) => ({ default: m.RequestLogsPage })));
+const ModelPricingPage = lazy(() => import("@/pages/model-pricing").then((m) => ({ default: m.ModelPricingPage })));
+const ModelMarketplacePage = lazy(() => import("@/pages/model-marketplace").then((m) => ({ default: m.ModelMarketplacePage })));
+const CustomTransformsPage = lazy(() => import("@/pages/custom-transforms").then((m) => ({ default: m.CustomTransformsPage })));
+const WalletPage = lazy(() => import("@/pages/wallet").then((m) => ({ default: m.WalletPage })));
+const PaymentsPage = lazy(() => import("@/pages/payments").then((m) => ({ default: m.PaymentsPage })));
+const NotFoundPage = lazy(() => import("@/pages/not-found").then((m) => ({ default: m.NotFoundPage })));
 
 /** Route `handle`: the i18n key of the page title, shared by the nav label and `document.title`. */
 interface RouteHandle {
@@ -173,14 +106,12 @@ function RequireAdmin() {
   return <NoPermissionState title={titleKey ? t(titleKey) : undefined} />;
 }
 
-const page = (
-  titleKey: string,
-  element: ReactNode,
-  kind: RouteSkeletonKind = "table",
-) => ({
+// The Suspense key is per route: without it, navigating to a page that is still
+// downloading keeps the previous page on screen instead of showing the skeleton.
+const page = (titleKey: string, element: ReactNode, skeleton: RouteSkeletonKind = "table") => ({
   handle: { titleKey } satisfies RouteHandle,
   element: (
-    <Suspense key={titleKey} fallback={<RouteSkeleton kind={kind} />}>
+    <Suspense key={titleKey} fallback={<RouteSkeleton kind={skeleton} />}>
       {element}
     </Suspense>
   ),
@@ -204,85 +135,39 @@ export const router = createBrowserRouter([
               {
                 path: "dashboard",
                 children: [
-                  {
-                    index: true,
-                    ...page("nav.dashboard", <DashboardPage />, "dashboard"),
-                  },
+                  { index: true, ...page("nav.dashboard", <DashboardPage />, "header") },
                   { path: "tokens", ...page("nav.apiKeys", <ApiKeysPage />) },
-                  {
-                    path: "wallet",
-                    ...page("nav.wallet", <WalletPage />, "wallet"),
-                  },
+                  { path: "wallet", ...page("nav.wallet", <WalletPage />, "header") },
                   { path: "logs", ...page("nav.logs", <RequestLogsPage />) },
-                  {
-                    path: "playground",
-                    ...page("nav.playground", <PlaygroundPage />, "playground"),
-                  },
-                  {
-                    path: "marketplace",
-                    ...page("nav.marketplace", <ModelMarketplacePage />),
-                  },
+                  { path: "playground", ...page("nav.playground", <PlaygroundPage />, "none") },
+                  { path: "marketplace", ...page("nav.marketplace", <ModelMarketplacePage />) },
                   {
                     element: <RequireAdmin />,
                     children: [
                       {
                         path: "admin",
-                        ...page(
-                          "nav.adminDashboard",
-                          <AdminDashboardPage />,
-                          "admin",
-                        ),
+                        ...page("nav.adminDashboard", <AdminDashboardPage />, "header"),
                       },
-                      {
-                        path: "providers",
-                        ...page(
-                          "nav.providers",
-                          <ProvidersPage />,
-                          "providers",
-                        ),
-                      },
+                      { path: "providers", ...page("nav.providers", <ProvidersPage />, "cards") },
                       { path: "groups", ...page("nav.groups", <GroupsPage />) },
                       {
                         path: "custom-transforms",
-                        ...page(
-                          "nav.customTransforms",
-                          <CustomTransformsPage />,
-                          "cards",
-                        ),
+                        ...page("nav.customTransforms", <CustomTransformsPage />, "cards"),
                       },
-                      {
-                        path: "models",
-                        ...page("nav.models", <ModelPricingPage />),
-                      },
-                      {
-                        path: "plans",
-                        ...page("nav.billingPlans", <BillingPlansPage />),
-                      },
-                      {
-                        path: "payments",
-                        ...page("nav.payments", <PaymentsPage />),
-                      },
+                      { path: "models", ...page("nav.models", <ModelPricingPage />) },
+                      { path: "plans", ...page("nav.billingPlans", <BillingPlansPage />) },
+                      { path: "payments", ...page("nav.payments", <PaymentsPage />) },
                       { path: "users", ...page("nav.users", <UsersPage />) },
                       {
                         path: "admin-settings",
-                        ...page(
-                          "nav.systemSettings",
-                          <SettingsPage />,
-                          "settings",
-                        ),
+                        ...page("nav.systemSettings", <SettingsPage />, "settings"),
                       },
                     ],
                   },
                 ],
               },
-              {
-                path: "settings",
-                ...page("nav.accountSettings", <UserSettingsPage />, "account"),
-              },
-              {
-                path: "*",
-                ...page("errors.notFoundTitle", <NotFoundPage />, "not-found"),
-              },
+              { path: "settings", ...page("nav.accountSettings", <UserSettingsPage />, "header") },
+              { path: "*", ...page("errors.notFoundTitle", <NotFoundPage />, "none") },
             ],
           },
         ],

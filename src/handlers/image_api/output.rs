@@ -1,7 +1,6 @@
 use super::*;
 
-/// Represents one extracted image from a URP response.
-pub(super) fn collect_response_text(resp: &urp::UrpResponse) -> String {
+fn collect_response_text(resp: &urp::UrpResponse) -> String {
     let mut parts = Vec::new();
     for item in &resp.output {
         match item {
@@ -19,6 +18,7 @@ pub(super) fn collect_response_text(resp: &urp::UrpResponse) -> String {
     parts.join("\n")
 }
 
+/// One extracted image from a URP response.
 pub(super) struct ExtractedImage {
     pub(super) b64_json: Option<String>,
     pub(super) url: Option<String>,
@@ -27,10 +27,7 @@ pub(super) struct ExtractedImage {
     pub(super) generation: urp::ImageGenerationMetadata,
 }
 
-pub(super) fn image_item_mime(
-    source: &urp::ImageSource,
-    metadata: &urp::MediaMetadata,
-) -> Option<String> {
+fn image_item_mime(source: &urp::ImageSource, metadata: &urp::MediaMetadata) -> Option<String> {
     match source {
         urp::ImageSource::Base64 { media_type, .. } if !media_type.trim().is_empty() => {
             Some(media_type.clone())

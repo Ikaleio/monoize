@@ -55,9 +55,9 @@ pub(super) struct PreparedTurn {
     pub(super) oversized: bool,
 }
 
-pub(super) struct PrepareError {
-    pub(super) error: Box<WsError>,
-    pub(super) evict: Option<String>,
+struct PrepareError {
+    error: Box<WsError>,
+    evict: Option<String>,
 }
 
 impl From<WsError> for PrepareError {
@@ -162,7 +162,7 @@ pub(super) async fn run_lane(
     lane.close().await;
 }
 
-pub(super) fn input_items(input: Option<&Value>) -> Result<Vec<Value>, WsError> {
+fn input_items(input: Option<&Value>) -> Result<Vec<Value>, WsError> {
     match input {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(items)) => Ok(items.clone()),
@@ -174,7 +174,7 @@ pub(super) fn input_items(input: Option<&Value>) -> Result<Vec<Value>, WsError> 
     }
 }
 
-pub(super) fn concat_history(
+fn concat_history(
     limits: &ResponsesWebsocketLimits,
     entry: &CacheEntry,
     incoming: Vec<Value>,
@@ -200,7 +200,7 @@ pub(super) fn concat_history(
 }
 
 /// WS5: `include` is absent or an array of strings; null means absent.
-pub(super) fn normalize_include(request: &mut Map<String, Value>) -> Result<(), WsError> {
+fn normalize_include(request: &mut Map<String, Value>) -> Result<(), WsError> {
     match request.get("include") {
         None => Ok(()),
         Some(Value::Null) => {
@@ -217,7 +217,7 @@ pub(super) fn normalize_include(request: &mut Map<String, Value>) -> Result<(), 
 
 /// WS5a: request encrypted reasoning for replay; true when the client did not
 /// ask for it, so it must be stripped downstream. `include` is normalized.
-pub(super) fn ensure_encrypted_reasoning(request: &mut Map<String, Value>) -> bool {
+fn ensure_encrypted_reasoning(request: &mut Map<String, Value>) -> bool {
     let include = request
         .entry("include")
         .or_insert_with(|| Value::Array(Vec::new()));
@@ -234,7 +234,7 @@ pub(super) fn ensure_encrypted_reasoning(request: &mut Map<String, Value>) -> bo
     true
 }
 
-pub(super) fn finish_request(
+fn finish_request(
     limits: &ResponsesWebsocketLimits,
     mut controls: Map<String, Value>,
     full_input: &[Value],
@@ -247,7 +247,7 @@ pub(super) fn finish_request(
     Ok(controls)
 }
 
-pub(super) fn prepare_job(
+fn prepare_job(
     conn: &Connection,
     key: &LaneKey,
     job: LaneJob,
@@ -314,7 +314,7 @@ pub(super) fn prepare_job(
     })
 }
 
-pub(super) fn prepare_create(
+fn prepare_create(
     conn: &Connection,
     key: &LaneKey,
     mut event: Map<String, Value>,
@@ -387,7 +387,7 @@ pub(super) fn steer_items(input: Value) -> Vec<Value> {
 /// WS18: the request of an automatic steering successor. The upstream already
 /// generates it, so history limits decide retention (WS17), never admission; an
 /// oversized history is not materialized.
-pub(super) fn prepare_successor(
+fn prepare_successor(
     limits: &ResponsesWebsocketLimits,
     steered: FinishedTurn,
     successor: crate::upstream_websocket::ResponsesWsSuccessor,

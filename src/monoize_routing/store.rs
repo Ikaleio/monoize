@@ -1,12 +1,11 @@
 use super::catalog::RoutingCatalog;
 use super::decode::*;
 use super::types::*;
-use super::values::opt_bool_to_value;
 use crate::db::DbPool;
 use crate::db_cache::{REQUEST_PATH_CACHE_TTL, SnapshotCache};
 use crate::users::canonicalize_group_ids;
 use chrono::Utc;
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, Value as SeaValue};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -404,5 +403,19 @@ impl MonoizeRoutingStore {
             &row,
             channels_by_provider.remove(id).unwrap_or_default(),
         )?))
+    }
+}
+
+pub(super) fn opt_bool_to_value(v: Option<bool>) -> SeaValue {
+    match v {
+        Some(b) => SeaValue::Int(Some(if b { 1 } else { 0 })),
+        None => SeaValue::Int(None),
+    }
+}
+
+pub(super) fn opt_u64_to_value(v: Option<u64>) -> SeaValue {
+    match v {
+        Some(n) => SeaValue::Int(Some(n as i32)),
+        None => SeaValue::Int(None),
     }
 }

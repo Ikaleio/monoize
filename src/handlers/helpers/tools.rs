@@ -6,7 +6,7 @@ mod promotion;
 
 use filtering::selector_name;
 use namespace::bridge_namespace_selector;
-use promotion::{active_tool_transports, messages_custom_bridge_names};
+use promotion::active_tool_transports;
 
 pub(in crate::handlers) use filtering::{
     filter_tools_for_provider, map_web_search_tools_for_provider,
@@ -15,7 +15,7 @@ pub(in crate::handlers) use namespace::{
     restore_messages_custom_tool_calls, restore_tool_namespace_event, restore_tool_namespace_node,
     tool_namespace_aliases,
 };
-pub(super) use promotion::messages_custom_bridge_names as custom_bridge_names;
+pub(super) use promotion::messages_custom_bridge_names;
 pub(in crate::handlers) use promotion::promote_responses_additional_tools;
 
 pub(in crate::handlers) fn server_tool_usage_classes(

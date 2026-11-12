@@ -26,21 +26,13 @@ struct OpenAiChatUsage {
 
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiChatInputDetails {
-    #[serde(
-        default,
-        deserialize_with = "deserialize_u64ish_default",
-        alias = "cache_read_tokens"
-    )]
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     cached_tokens: u64,
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     cache_write_tokens: u64,
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     cache_creation_tokens: u64,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_u64ish_default",
-        alias = "tool_prompt_input_tokens"
-    )]
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     tool_prompt_tokens: u64,
     #[serde(flatten)]
     extra: HashMap<String, Value>,
@@ -50,17 +42,9 @@ struct OpenAiChatInputDetails {
 struct OpenAiChatOutputDetails {
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     reasoning_tokens: u64,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_u64ish_default",
-        alias = "accepted_prediction_output_tokens"
-    )]
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     accepted_prediction_tokens: u64,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_u64ish_default",
-        alias = "rejected_prediction_output_tokens"
-    )]
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     rejected_prediction_tokens: u64,
     #[serde(flatten)]
     extra: HashMap<String, Value>,
@@ -258,8 +242,8 @@ const OUTPUT_DETAIL_ALIASES: &[(&str, &str)] = &[
     ),
 ];
 
-/// PC9a: an alias next to its canonical field is a serde duplicate-field error, which must not
-/// discard the rest of the usage. The larger counter wins.
+/// PC9a: folds each alias into its canonical field. When both are present, the larger counter
+/// wins.
 fn canonicalize_usage_detail_aliases(details: &mut Map<String, Value>, aliases: &[(&str, &str)]) {
     for (alias, canonical) in aliases {
         let Some(alias_value) = details.remove(*alias) else {

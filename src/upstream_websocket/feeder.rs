@@ -1,9 +1,9 @@
 use super::*;
 
-pub(super) type FrameSender = mpsc::Sender<Result<(String, String), AppError>>;
+type FrameSender = mpsc::Sender<Result<(String, String), AppError>>;
 
 /// WS12b shape of a steer that the routed upstream cannot apply.
-pub(super) fn steering_not_supported(public_response_id: &str, input: Value) -> Value {
+fn steering_not_supported(public_response_id: &str, input: Value) -> Value {
     json!({
         "type": "response.steer.failed",
         "steer": {
@@ -19,14 +19,14 @@ pub(super) fn steering_not_supported(public_response_id: &str, input: Value) -> 
     })
 }
 
-pub(super) enum FeedFlow {
+enum FeedFlow {
     Continue,
     Finish,
     Replay,
 }
 
 #[derive(Default)]
-pub(super) struct FeederSteering {
+struct FeederSteering {
     pending_steer_parts: usize,
     pending_steers: VecDeque<Value>,
     sent_steers: VecDeque<Value>,
@@ -36,25 +36,25 @@ pub(super) struct FeederSteering {
 
 /// Reads one turn's upstream frames into the stream decoder (WS2d) and handles
 /// interruption (WS2g), session reuse fallback (WS2h), and steering (WS2i).
-pub(super) struct TurnFeeder {
-    pub(super) steering: FeederSteering,
-    pub(super) source: ResponsesWsTurnSource,
-    pub(super) turn: ResponsesWsTurn,
-    pub(super) frames: FrameSender,
-    pub(super) idle: Duration,
-    pub(super) upstream_id: Option<String>,
-    pub(super) terminal_id: Option<String>,
-    pub(super) terminal_output: Vec<(String, Option<String>)>,
-    pub(super) terminal: bool,
-    pub(super) got_frame: bool,
-    pub(super) decided: bool,
-    pub(super) replayed: bool,
-    pub(super) buffered: Vec<(String, String)>,
-    pub(super) interrupt_requested: bool,
-    pub(super) interrupt_sent: bool,
-    pub(super) control_closed: bool,
-    pub(super) connection_seen: bool,
-    pub(super) decoder_gone: bool,
+struct TurnFeeder {
+    steering: FeederSteering,
+    source: ResponsesWsTurnSource,
+    turn: ResponsesWsTurn,
+    frames: FrameSender,
+    idle: Duration,
+    upstream_id: Option<String>,
+    terminal_id: Option<String>,
+    terminal_output: Vec<(String, Option<String>)>,
+    terminal: bool,
+    got_frame: bool,
+    decided: bool,
+    replayed: bool,
+    buffered: Vec<(String, String)>,
+    interrupt_requested: bool,
+    interrupt_sent: bool,
+    control_closed: bool,
+    connection_seen: bool,
+    decoder_gone: bool,
 }
 
 pub(crate) fn spawn_turn_feeder(
@@ -87,7 +87,7 @@ pub(crate) fn spawn_turn_feeder(
     tokio::spawn(feeder.run());
 }
 
-pub(super) async fn recv_steer(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> Option<Value> {
+async fn recv_steer(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> Option<Value> {
     match rx {
         Some(rx) => rx.recv().await,
         None => std::future::pending().await,
@@ -95,7 +95,7 @@ pub(super) async fn recv_steer(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) 
 }
 
 impl TurnFeeder {
-    pub(super) async fn run(mut self) {
+    async fn run(mut self) {
         let mut steer_rx = self.turn.steer.lock().ok().and_then(|mut rx| rx.take());
         if self.turn.is_disconnected() || *self.turn.control.borrow() != ResponsesWsControl::Running
         {
@@ -118,10 +118,7 @@ impl TurnFeeder {
         state.feeder_finished();
     }
 
-    pub(super) async fn read_frames(
-        &mut self,
-        steer_rx: &mut Option<mpsc::UnboundedReceiver<Value>>,
-    ) -> bool {
+    async fn read_frames(&mut self, steer_rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> bool {
         'feed: {
             for text in std::mem::take(&mut self.source.slot.stashed) {
                 match self.feed_frame(text).await {
@@ -219,25 +216,25 @@ impl TurnFeeder {
         }
     }
 
-    pub(super) async fn fail(&mut self, status: StatusCode, code: &str, message: String) {
+    async fn fail(&mut self, status: StatusCode, code: &str, message: String) {
         let _ = self
             .frames
             .send(Err(AppError::new(status, code.to_string(), message)))
             .await;
     }
 
-    pub(super) fn public_id_for(&self, upstream_id: &str) -> Option<String> {
+    fn public_id_for(&self, upstream_id: &str) -> Option<String> {
         self.source.slot.public_ids.get(upstream_id).cloned()
     }
 
-    pub(super) fn relay(&self, value: Value) {
+    fn relay(&self, value: Value) {
         let _ = self.turn.lane.relay.send(ResponsesWsRelay {
             value,
             post_terminal: self.terminal,
         });
     }
 
-    pub(super) async fn feed_frame(&mut self, mut text: String) -> FeedFlow {
+    async fn feed_frame(&mut self, text: String) -> FeedFlow {
         self.got_frame = true;
         let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
             if !self.terminal {
@@ -245,7 +242,7 @@ impl TurnFeeder {
             }
             return FeedFlow::Continue;
         };
-        let mut kind = value
+        let kind = value
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default()
@@ -279,8 +276,22 @@ impl TurnFeeder {
         if self.terminal {
             return self.post_terminal_frame(&kind, value, text);
         }
-        if let Some(flow) = self.decide_reuse(&mut kind, &value, &mut text).await {
-            return flow;
+        if !self.decided && self.source.reused && !self.replayed {
+            let incremental_miss = kind == "error"
+                && self.source.incremental
+                && value.pointer("/error/code").and_then(Value::as_str)
+                    == Some("previous_response_not_found");
+            if incremental_miss {
+                return FeedFlow::Replay;
+            }
+            if !kind.starts_with("response.") && kind != "error" {
+                self.buffered.push((kind, text));
+                return FeedFlow::Continue;
+            }
+            self.decided = true;
+            for (kind, text) in std::mem::take(&mut self.buffered) {
+                self.forward(kind, text).await;
+            }
         }
         if kind == "response.created"
             && let Some(id) = value.pointer("/response/id").and_then(Value::as_str)
@@ -299,7 +310,7 @@ impl TurnFeeder {
         self.after_frame()
     }
 
-    pub(super) async fn interrupt_acknowledgement(&mut self, kind: &str, mut value: Value) {
+    async fn interrupt_acknowledgement(&mut self, kind: &str, mut value: Value) {
         if kind == "response.interrupt.failed"
             && value.get("response_id").and_then(Value::as_str) == self.upstream_id.as_deref()
         {
@@ -317,7 +328,7 @@ impl TurnFeeder {
         }
     }
 
-    pub(super) fn steer_acknowledgement(&mut self, kind: &str, mut value: Value) -> FeedFlow {
+    fn steer_acknowledgement(&mut self, kind: &str, mut value: Value) -> FeedFlow {
         let steer_id = value
             .pointer("/steer/id")
             .and_then(Value::as_str)
@@ -374,7 +385,7 @@ impl TurnFeeder {
         }
     }
 
-    pub(super) fn reject_unsupported_steer(&mut self, kind: &str, value: &Value) -> bool {
+    fn reject_unsupported_steer(&mut self, kind: &str, value: &Value) -> bool {
         if kind == "error"
             && value.get("response").is_none()
             && !self.steering.sent_steers.is_empty()
@@ -401,12 +412,7 @@ impl TurnFeeder {
         false
     }
 
-    pub(super) fn post_terminal_frame(
-        &mut self,
-        kind: &str,
-        mut value: Value,
-        text: String,
-    ) -> FeedFlow {
+    fn post_terminal_frame(&mut self, kind: &str, mut value: Value, text: String) -> FeedFlow {
         if kind == "response.created" && !self.steering.accepted_steers.is_empty() {
             self.source.slot.stashed.push(text);
             self.steering.successor = true;
@@ -419,34 +425,7 @@ impl TurnFeeder {
         FeedFlow::Continue
     }
 
-    pub(super) async fn decide_reuse(
-        &mut self,
-        kind: &mut String,
-        value: &Value,
-        text: &mut String,
-    ) -> Option<FeedFlow> {
-        if !self.decided && self.source.reused && !self.replayed {
-            let incremental_miss = kind.as_str() == "error"
-                && self.source.incremental
-                && value.pointer("/error/code").and_then(Value::as_str)
-                    == Some("previous_response_not_found");
-            if incremental_miss {
-                return Some(FeedFlow::Replay);
-            }
-            if !kind.starts_with("response.") && kind.as_str() != "error" {
-                self.buffered
-                    .push((std::mem::take(kind), std::mem::take(text)));
-                return Some(FeedFlow::Continue);
-            }
-            self.decided = true;
-            for (kind, text) in std::mem::take(&mut self.buffered) {
-                self.forward(kind, text).await;
-            }
-        }
-        None
-    }
-
-    pub(super) fn capture_terminal(&mut self, kind: &str, value: &Value) {
+    fn capture_terminal(&mut self, kind: &str, value: &Value) {
         let terminal = matches!(
             kind,
             "response.completed"
@@ -483,7 +462,7 @@ impl TurnFeeder {
         }
     }
 
-    pub(super) fn after_frame(&self) -> FeedFlow {
+    fn after_frame(&self) -> FeedFlow {
         if self.terminal && self.steers_resolved() {
             FeedFlow::Finish
         } else {
@@ -491,11 +470,11 @@ impl TurnFeeder {
         }
     }
 
-    pub(super) fn steers_resolved(&self) -> bool {
+    fn steers_resolved(&self) -> bool {
         self.steering.accepted_steers.is_empty() && self.steering.sent_steers.is_empty()
     }
 
-    pub(super) async fn forward(&mut self, kind: String, text: String) {
+    async fn forward(&mut self, kind: String, text: String) {
         if self.decoder_gone {
             return;
         }
@@ -508,7 +487,7 @@ impl TurnFeeder {
         }
     }
 
-    pub(super) async fn send_interrupt_if_ready(&mut self) {
+    async fn send_interrupt_if_ready(&mut self) {
         if !self.interrupt_requested || self.interrupt_sent || self.terminal {
             return;
         }
@@ -535,7 +514,7 @@ impl TurnFeeder {
     /// WS2g: while true, the decoder treats the terminal `output` as authoritative
     /// (partial items discarded upstream). Sent on interrupt send, not on
     /// acknowledgement, because some upstreams never acknowledge.
-    pub(super) async fn signal_discard_requested(&mut self, requested: bool) {
+    async fn signal_discard_requested(&mut self, requested: bool) {
         if self.decoder_gone {
             return;
         }
@@ -548,7 +527,7 @@ impl TurnFeeder {
             .await;
     }
 
-    pub(super) async fn send_steers_if_ready(&mut self) {
+    async fn send_steers_if_ready(&mut self) {
         let (Some(upstream_id), Some(session)) =
             (self.upstream_id.clone(), self.source.session.as_mut())
         else {
@@ -585,7 +564,7 @@ impl TurnFeeder {
     }
 
     /// WS2h item 3: replace the reused session and resend the full create once.
-    pub(super) async fn replay(&mut self) -> bool {
+    async fn replay(&mut self) -> bool {
         self.replayed = true;
         if let Some(mut session) = self.source.session.take() {
             session.close().await;
@@ -627,7 +606,7 @@ impl TurnFeeder {
         true
     }
 
-    pub(super) async fn finish(&mut self, keep: bool) {
+    async fn finish(&mut self, keep: bool) {
         let slot = &mut self.source.slot;
         if keep && !self.turn.is_disconnected() {
             slot.session = self.source.session.take();

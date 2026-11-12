@@ -138,12 +138,9 @@ pub async fn update_settings(
         settings.monoize_active_probe_model.clone(),
     );
 
-    let mut body = body;
-    apply_general_updates(&mut settings, &mut body)?;
-    apply_runtime_updates(&mut settings, &mut body)?;
-    apply_billing_updates(&mut settings, &mut body)?;
+    apply_settings_update(&mut settings, body)?;
 
-    let updated = settings_store
+    let mut updated = settings_store
         .update_all(&settings)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
@@ -178,7 +175,6 @@ pub async fn update_settings(
         state.channel_health.lock().await.clear();
     }
 
-    let mut updated = updated;
     mask_price_sync_token(&mut updated);
     Ok(Json(updated))
 }
@@ -262,7 +258,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<imp
 
 /// Redact credentials from a DSN string.
 /// e.g. postgres://user:password@host/db → postgres://***@host/db
-fn redact_dsn(dsn: &str) -> String {
+pub(super) fn redact_dsn(dsn: &str) -> String {
     if let Some(at_pos) = dsn.find('@')
         && let Some(scheme_end) = dsn.find("://")
     {
@@ -274,17 +270,17 @@ fn redact_dsn(dsn: &str) -> String {
     "***".to_string()
 }
 
-fn apply_general_updates(
+fn apply_settings_update(
     settings: &mut crate::settings::SystemSettings,
-    body: &mut UpdateSettingsRequest,
+    body: UpdateSettingsRequest,
 ) -> AppResult<()> {
-    if let Some(v) = body.registration_enabled.take() {
+    if let Some(v) = body.registration_enabled {
         settings.registration_enabled = v;
     }
-    if let Some(v) = body.captcha_enabled.take() {
+    if let Some(v) = body.captcha_enabled {
         settings.captcha_enabled = v;
     }
-    if let Some(v) = body.session_ttl_days.take() {
+    if let Some(v) = body.session_ttl_days {
         if v <= 0 {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -295,7 +291,7 @@ fn apply_general_updates(
         }
         settings.session_ttl_days = v;
     }
-    if let Some(v) = body.api_key_max_per_user.take() {
+    if let Some(v) = body.api_key_max_per_user {
         if v <= 0 {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -306,51 +302,44 @@ fn apply_general_updates(
         }
         settings.api_key_max_per_user = v;
     }
-    if let Some(v) = body.site_name.take() {
+    if let Some(v) = body.site_name {
         settings.site_name = v;
     }
-    if let Some(v) = body.site_description.take() {
+    if let Some(v) = body.site_description {
         settings.site_description = v;
     }
-    if let Some(v) = body.api_base_url.take() {
+    if let Some(v) = body.api_base_url {
         settings.api_base_url = v;
     }
-    if let Some(v) = body.global_transforms.take() {
+    if let Some(v) = body.global_transforms {
         settings.global_transforms = v;
     }
-    if let Some(v) = body.global_model_redirects.take() {
+    if let Some(v) = body.global_model_redirects {
         validate_global_model_redirects(&v)?;
         settings.global_model_redirects = v;
     }
-    if let Some(v) = body.reasoning_suffix_map.take() {
+    if let Some(v) = body.reasoning_suffix_map {
         settings.reasoning_suffix_map = v;
     }
-    if let Some(v) = body.codex_model_ids.take() {
+    if let Some(v) = body.codex_model_ids {
         settings.codex_model_ids = v;
     }
-    if let Some(v) = body.dashboard_performance_group_ids.take() {
+    if let Some(v) = body.dashboard_performance_group_ids {
         settings.dashboard_performance_group_ids = v;
     }
-    if let Some(v) = body.dashboard_performance_model_ids.take() {
+    if let Some(v) = body.dashboard_performance_model_ids {
         settings.dashboard_performance_model_ids = v;
     }
-    Ok(())
-}
-
-fn apply_runtime_updates(
-    settings: &mut crate::settings::SystemSettings,
-    body: &mut UpdateSettingsRequest,
-) -> AppResult<()> {
-    if let Some(v) = body.monoize_active_probe_enabled.take() {
+    if let Some(v) = body.monoize_active_probe_enabled {
         settings.monoize_active_probe_enabled = v;
     }
-    if let Some(v) = body.monoize_active_probe_interval_seconds.take() {
+    if let Some(v) = body.monoize_active_probe_interval_seconds {
         settings.monoize_active_probe_interval_seconds = v.max(1);
     }
-    if let Some(v) = body.monoize_active_probe_success_threshold.take() {
+    if let Some(v) = body.monoize_active_probe_success_threshold {
         settings.monoize_active_probe_success_threshold = v.max(1);
     }
-    if let Some(v) = body.monoize_active_probe_model.take() {
+    if let Some(v) = body.monoize_active_probe_model {
         settings.monoize_active_probe_model = v.and_then(|s| {
             let trimmed = s.trim();
             if trimmed.is_empty() {
@@ -360,88 +349,81 @@ fn apply_runtime_updates(
             }
         });
     }
-    if let Some(v) = body.monoize_passive_failure_threshold.take() {
+    if let Some(v) = body.monoize_passive_failure_threshold {
         settings.monoize_passive_failure_threshold = v.max(1);
     }
-    if let Some(v) = body.monoize_passive_cooldown_seconds.take() {
+    if let Some(v) = body.monoize_passive_cooldown_seconds {
         settings.monoize_passive_cooldown_seconds = v.max(1);
     }
-    if let Some(v) = body.monoize_passive_window_seconds.take() {
+    if let Some(v) = body.monoize_passive_window_seconds {
         settings.monoize_passive_window_seconds = v.max(1);
     }
-    if let Some(v) = body.monoize_passive_rate_limit_cooldown_seconds.take() {
+    if let Some(v) = body.monoize_passive_rate_limit_cooldown_seconds {
         settings.monoize_passive_rate_limit_cooldown_seconds = v.max(1);
     }
-    if let Some(v) = body.monoize_request_timeout_ms.take() {
+    if let Some(v) = body.monoize_request_timeout_ms {
         settings.monoize_request_timeout_ms = v.max(1);
     }
-    if let Some(v) = body.monoize_stream_idle_timeout_ms.take() {
+    if let Some(v) = body.monoize_stream_idle_timeout_ms {
         settings.monoize_stream_idle_timeout_ms = v.max(1);
     }
-    if let Some(v) = body.monoize_enable_estimated_billing.take() {
+    if let Some(v) = body.monoize_enable_estimated_billing {
         settings.monoize_enable_estimated_billing = v;
     }
-    if let Some(v) = body.monoize_extra_fields_whitelist.take() {
+    if let Some(v) = body.monoize_extra_fields_whitelist {
         settings.monoize_extra_fields_whitelist = v;
     }
-    if let Some(v) = body.monoize_strip_cross_protocol_nested_extra.take() {
+    if let Some(v) = body.monoize_strip_cross_protocol_nested_extra {
         settings.monoize_strip_cross_protocol_nested_extra = v;
     }
-    if let Some(v) = body.monoize_request_capture_enabled.take() {
+    if let Some(v) = body.monoize_request_capture_enabled {
         settings.monoize_request_capture_enabled = v;
     }
-    if let Some(v) = body.monoize_request_capture_max_total_bytes.take() {
+    if let Some(v) = body.monoize_request_capture_max_total_bytes {
         settings.monoize_request_capture_max_total_bytes =
             crate::settings::clamp_request_capture_max_total_bytes(v);
     }
-    if let Some(v) = body.monoize_mask_sensitive_info.take() {
+    if let Some(v) = body.monoize_mask_sensitive_info {
         settings.monoize_mask_sensitive_info = v;
     }
-    if let Some(v) = body.monoize_affinity_enabled.take() {
+    if let Some(v) = body.monoize_affinity_enabled {
         settings.monoize_affinity_enabled = v;
     }
-    if let Some(v) = body.monoize_affinity_idle_ttl_seconds.take() {
+    if let Some(v) = body.monoize_affinity_idle_ttl_seconds {
         settings.monoize_affinity_idle_ttl_seconds = v.max(1);
     }
-    if let Some(v) = body.monoize_affinity_failback_mode.take() {
+    if let Some(v) = body.monoize_affinity_failback_mode {
         settings.monoize_affinity_failback_mode = v;
     }
-    if let Some(v) = body.monoize_affinity_failback_delay_seconds.take() {
+    if let Some(v) = body.monoize_affinity_failback_delay_seconds {
         settings.monoize_affinity_failback_delay_seconds = v;
     }
-    Ok(())
-}
-
-fn apply_billing_updates(
-    settings: &mut crate::settings::SystemSettings,
-    body: &mut UpdateSettingsRequest,
-) -> AppResult<()> {
-    if let Some(v) = body.allow_free_when_unpriced.take() {
+    if let Some(v) = body.allow_free_when_unpriced {
         settings.allow_free_when_unpriced = v;
     }
-    if let Some(v) = body.allow_free_when_missing_usage.take() {
+    if let Some(v) = body.allow_free_when_missing_usage {
         settings.allow_free_when_missing_usage = v;
     }
-    if let Some(v) = body.tool_prices.take() {
+    if let Some(v) = body.tool_prices {
         crate::settings::validate_tool_prices(&v).map_err(|message| {
             AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
                 .with_param("tool_prices")
         })?;
         settings.tool_prices = v;
     }
-    if let Some(v) = body.price_sync_auto_enabled.take() {
+    if let Some(v) = body.price_sync_auto_enabled {
         settings.price_sync_auto_enabled = v;
     }
-    if let Some(v) = body.price_sync_new_api_base_url.take() {
+    if let Some(v) = body.price_sync_new_api_base_url {
         settings.price_sync_new_api_base_url = v.trim().to_string();
     }
     // MP-Y2a: "__set__" keeps the stored token, "" clears it, else replace.
-    if let Some(v) = body.price_sync_new_api_token.take()
+    if let Some(v) = body.price_sync_new_api_token
         && v != "__set__"
     {
         settings.price_sync_new_api_token = v;
     }
-    if let Some(v) = body.recharge_public_origin.take() {
+    if let Some(v) = body.recharge_public_origin {
         let trimmed = v.trim().to_string();
         crate::settings::validate_recharge_public_origin(&trimmed).map_err(|message| {
             AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
@@ -449,41 +431,38 @@ fn apply_billing_updates(
         })?;
         settings.recharge_public_origin = trimmed;
     }
-
     Ok(())
 }
 
 async fn publish_runtime_settings(state: &AppState, updated: &crate::settings::SystemSettings) {
-    {
-        let mut rt = state.monoize_runtime.write().await;
-        rt.request_timeout_ms = updated.monoize_request_timeout_ms.max(1);
-        rt.stream_idle_timeout_ms = updated.monoize_stream_idle_timeout_ms.max(1);
-        rt.enable_estimated_billing = updated.monoize_enable_estimated_billing;
-        rt.passive_failure_count_threshold = updated.monoize_passive_failure_threshold.max(1);
-        rt.passive_cooldown_seconds = updated.monoize_passive_cooldown_seconds.max(1);
-        rt.passive_window_seconds = updated.monoize_passive_window_seconds.max(1);
-        rt.passive_rate_limit_cooldown_seconds =
-            updated.monoize_passive_rate_limit_cooldown_seconds.max(1);
-        rt.active_enabled = updated.monoize_active_probe_enabled;
-        rt.active_interval_seconds = updated.monoize_active_probe_interval_seconds.max(1);
-        rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
-        rt.active_probe_model = updated.monoize_active_probe_model.clone();
-        rt.global_transforms = updated.global_transforms.clone();
-        rt.set_global_model_redirects(updated.global_model_redirects.clone())
-            .expect("validated global model redirects compile");
-        rt.reasoning_suffix_map = updated.reasoning_suffix_map.clone();
-        rt.codex_model_ids = updated.codex_model_ids.clone();
-        rt.allow_free_when_unpriced = updated.allow_free_when_unpriced;
-        rt.allow_free_when_missing_usage = updated.allow_free_when_missing_usage;
-        rt.tool_prices = updated.tool_prices.clone();
-        rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
-        rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
-        rt.request_capture_enabled = updated.monoize_request_capture_enabled;
-        rt.request_capture_max_total_bytes = updated.monoize_request_capture_max_total_bytes;
-        rt.mask_sensitive_info = updated.monoize_mask_sensitive_info;
-        rt.affinity_enabled = updated.monoize_affinity_enabled;
-        rt.affinity_idle_ttl_seconds = updated.monoize_affinity_idle_ttl_seconds.max(1);
-        rt.affinity_failback_mode = updated.monoize_affinity_failback_mode;
-        rt.affinity_failback_delay_seconds = updated.monoize_affinity_failback_delay_seconds;
-    }
+    let mut rt = state.monoize_runtime.write().await;
+    rt.request_timeout_ms = updated.monoize_request_timeout_ms.max(1);
+    rt.stream_idle_timeout_ms = updated.monoize_stream_idle_timeout_ms.max(1);
+    rt.enable_estimated_billing = updated.monoize_enable_estimated_billing;
+    rt.passive_failure_count_threshold = updated.monoize_passive_failure_threshold.max(1);
+    rt.passive_cooldown_seconds = updated.monoize_passive_cooldown_seconds.max(1);
+    rt.passive_window_seconds = updated.monoize_passive_window_seconds.max(1);
+    rt.passive_rate_limit_cooldown_seconds =
+        updated.monoize_passive_rate_limit_cooldown_seconds.max(1);
+    rt.active_enabled = updated.monoize_active_probe_enabled;
+    rt.active_interval_seconds = updated.monoize_active_probe_interval_seconds.max(1);
+    rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
+    rt.active_probe_model = updated.monoize_active_probe_model.clone();
+    rt.global_transforms = updated.global_transforms.clone();
+    rt.set_global_model_redirects(updated.global_model_redirects.clone())
+        .expect("validated global model redirects compile");
+    rt.reasoning_suffix_map = updated.reasoning_suffix_map.clone();
+    rt.codex_model_ids = updated.codex_model_ids.clone();
+    rt.allow_free_when_unpriced = updated.allow_free_when_unpriced;
+    rt.allow_free_when_missing_usage = updated.allow_free_when_missing_usage;
+    rt.tool_prices = updated.tool_prices.clone();
+    rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
+    rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
+    rt.request_capture_enabled = updated.monoize_request_capture_enabled;
+    rt.request_capture_max_total_bytes = updated.monoize_request_capture_max_total_bytes;
+    rt.mask_sensitive_info = updated.monoize_mask_sensitive_info;
+    rt.affinity_enabled = updated.monoize_affinity_enabled;
+    rt.affinity_idle_ttl_seconds = updated.monoize_affinity_idle_ttl_seconds.max(1);
+    rt.affinity_failback_mode = updated.monoize_affinity_failback_mode;
+    rt.affinity_failback_delay_seconds = updated.monoize_affinity_failback_delay_seconds;
 }

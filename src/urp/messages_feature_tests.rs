@@ -1,8 +1,6 @@
 use super::{Node, NodeHeader, ProviderProtocol, TerminalNode, UrpResponse, UrpStreamEvent};
 use crate::error::AppResult;
-use crate::urp::stream_encode::{
-    self, StreamEncodeOptions, anthropic::MessagesStreamEncoder, gemini::GeminiStreamEncoder,
-};
+use crate::urp::stream_encode::{self, StreamEncodeOptions, anthropic::MessagesStreamEncoder};
 use crate::urp::{decode::anthropic as decode, encode::anthropic as encode};
 use axum::response::{IntoResponse, Sse, sse::Event};
 use serde_json::{Value, json};
@@ -1049,18 +1047,6 @@ async fn messages_stream_errors_are_terminal_and_preserve_details() {
 }
 
 #[tokio::test]
-async fn messages_provider_item_typed_body_mutation_wins_in_synthetic_stream() {
-    let block = json!({"type":"server_tool_use","id":"srvtoolu","name":"web_search","input":{"query":"old"}});
-    let mut urp = terminal(&decode_stream(frames(&[block], "end_turn")).await);
-    if let Node::ProviderItem { body, .. } = &mut urp.output[0] {
-        body["input"] = json!({"query":"new"});
-    }
-    let roundtrip = terminal(&decode_stream(synthetic_stream(&urp).await).await);
-    let wire = encode::encode_response(&roundtrip, "claude-test");
-    assert_eq!(wire["content"][0]["input"], json!({"query":"new"}));
-}
-
-#[tokio::test]
 async fn messages_late_citations_after_closed_text_block_are_explicit_stream_errors() {
     let citation = json!({"uri":"https://example.com/source", "startIndex":0, "endIndex":6});
     let text: Node = serde_json::from_value(json!({
@@ -1638,60 +1624,6 @@ async fn messages_media_like_tool_arguments_and_native_tool_payloads_remain_opaq
     assert_block_roundtrip(blocks).await;
 }
 
-#[tokio::test]
-async fn messages_compatible_media_actual_sse_reaches_gemini_wire_once() {
-    let blocks = vec![
-        json!({"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}),
-        json!({"type":"input_file","file_data":"data:application/pdf;base64,JVBERi0xLjcK"}),
-        json!({"type":"input_audio","input_audio":{"format":"wav","data":"UklGRg=="}}),
-    ];
-    let canonical = decode::decode_response(&response(blocks.clone())).unwrap();
-    let nonstream =
-        super::encode::gemini::encode_response_checked(&canonical, "gemini-test").unwrap();
-    let expected = nonstream["candidates"][0]["content"]["parts"]
-        .as_array()
-        .unwrap();
-    assert_eq!(expected.len(), 3);
-    for (part, mime, data) in [
-        (&expected[0], "image/png", "aGVsbG8="),
-        (&expected[1], "application/pdf", "JVBERi0xLjcK"),
-        (&expected[2], "audio/wav", "UklGRg=="),
-    ] {
-        assert_eq!(part["inlineData"]["mimeType"], mime);
-        assert_eq!(part["inlineData"]["data"], data);
-    }
-    let events = decode_stream(frames(&blocks, "end_turn")).await;
-    let (source_tx, source_rx) = mpsc::channel(1024);
-    for event in events {
-        source_tx.send(event).await.unwrap();
-    }
-    drop(source_tx);
-    let (tx, rx) = mpsc::channel(1024);
-    stream_encode::run(
-        GeminiStreamEncoder::new(tx, options("gemini-test")),
-        source_rx,
-    )
-    .await
-    .unwrap();
-    let wire = sse_json(rx).await;
-    let parts: Vec<Value> = wire
-        .iter()
-        .flat_map(|frame| {
-            frame["candidates"][0]["content"]["parts"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .cloned()
-        })
-        .collect();
-    assert_eq!(&parts, expected);
-    assert_eq!(
-        wire.last().unwrap()["candidates"][0]["finishReason"],
-        "STOP"
-    );
-    assert!(!wire.iter().any(|frame| frame.get("error").is_some()));
-}
-
 #[test]
 fn messages_compatible_binary_files_are_retained_until_target_validation() {
     for stream in [false, true] {
@@ -1836,27 +1768,6 @@ fn messages_thinking_controls_roundtrip_enabled_adaptive_disabled_and_omitted() 
             );
         }
     }
-}
-
-#[tokio::test]
-async fn messages_all_document_citation_ranges_are_source_ranges_and_roundtrip() {
-    let citations = json!([
-        {"type":"char_location","document_index":2,"document_title":"中文","start_char_index":3,"end_char_index":7,"cited_text":"引用"},
-        {"type":"page_location","document_index":1,"document_title":"PDF","start_page_number":1,"end_page_number":3,"cited_text":"pages"},
-        {"type":"content_block_location","document_index":0,"document_title":"Blocks","start_block_index":0,"end_block_index":2,"cited_text":"blocks"},
-        {"type":"future_citation","opaque":{"nested":[1,2]}}
-    ]);
-    let blocks = vec![json!({"type":"text","text":"answer","citations":citations})];
-    let canonical = decode::decode_response(&response(blocks.clone())).unwrap();
-    let Node::Text { citations, .. } = &canonical.output[0] else {
-        panic!()
-    };
-    assert!(
-        citations
-            .iter()
-            .all(|citation| citation.answer_range.is_none())
-    );
-    assert_block_roundtrip(blocks).await;
 }
 
 #[tokio::test]

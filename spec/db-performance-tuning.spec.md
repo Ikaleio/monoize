@@ -258,7 +258,7 @@ DPT-US5. `validate_api_key(key)` MUST follow this execution path:
 
 ### 6.4 Request Log Integration
 
-DPT-US6. `insert_request_log_pending()`, `update_pending_request_log_channel()`, and `update_pending_request_log_usage()` MUST be no-op stubs (return `Ok(())` immediately with no DB interaction).
+DPT-US6. The request path MUST NOT write a `status = "pending"` row to `request_logs`. In-flight request state stays in memory (`request-logs.spec.md` RL1a-2); the only request-log rows are the terminal rows of DPT-US7.
 
 DPT-US7. `finalize_request_log(log)` and `insert_request_log(log)` MUST push the `InsertRequestLog` to `RequestLogBatcher` instead of performing direct DB writes.
 

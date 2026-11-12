@@ -82,6 +82,16 @@ impl UserStore {
         let api_key_id = normalize_request_log_filter(api_key_id);
         let channel_id = normalize_request_log_filter(channel_id);
         let search = normalize_request_log_filter(search);
+        let filters = RequestLogFilters {
+            model: model.as_deref(),
+            status: status.as_deref(),
+            api_key_id: api_key_id.as_deref(),
+            channel_id: channel_id.as_deref(),
+            username: None,
+            search: search.as_deref(),
+            time_from,
+            time_to,
+        };
         let txn = self
             .db
             .read()
@@ -103,16 +113,7 @@ impl UserStore {
             &mut aggregates_values,
             &mut aggregates_idx,
             is_postgres,
-            RequestLogFilters {
-                model: model.as_deref(),
-                status: status.as_deref(),
-                api_key_id: api_key_id.as_deref(),
-                channel_id: channel_id.as_deref(),
-                username: None,
-                search: search.as_deref(),
-                time_from,
-                time_to,
-            },
+            filters,
         )?;
         let aggregates_row = txn
             .query_one(self.db.stmt(&aggregates_sql, aggregates_values))
@@ -132,16 +133,7 @@ impl UserStore {
             &mut rows_values,
             &mut rows_idx,
             is_postgres,
-            RequestLogFilters {
-                model: model.as_deref(),
-                status: status.as_deref(),
-                api_key_id: api_key_id.as_deref(),
-                channel_id: channel_id.as_deref(),
-                username: None,
-                search: search.as_deref(),
-                time_from,
-                time_to,
-            },
+            filters,
         )?;
         let rows_sql = enrich_request_log_page_sql(&rows_sql, is_postgres, rows_idx);
         rows_values.push(SeaValue::BigInt(Some(limit)));
@@ -187,6 +179,16 @@ impl UserStore {
         let channel_id = normalize_request_log_filter(channel_id);
         let username = normalize_request_log_filter(username);
         let search = normalize_request_log_filter(search);
+        let filters = RequestLogFilters {
+            model: model.as_deref(),
+            status: status.as_deref(),
+            api_key_id: api_key_id.as_deref(),
+            channel_id: channel_id.as_deref(),
+            username: username.as_deref(),
+            search: search.as_deref(),
+            time_from,
+            time_to,
+        };
         let txn = self
             .db
             .read()
@@ -208,16 +210,7 @@ impl UserStore {
             &mut aggregates_values,
             &mut aggregates_idx,
             is_postgres,
-            RequestLogFilters {
-                model: model.as_deref(),
-                status: status.as_deref(),
-                api_key_id: api_key_id.as_deref(),
-                channel_id: channel_id.as_deref(),
-                username: username.as_deref(),
-                search: search.as_deref(),
-                time_from,
-                time_to,
-            },
+            filters,
         )?;
         let aggregates_row = txn
             .query_one(self.db.stmt(&aggregates_sql, aggregates_values))
@@ -237,16 +230,7 @@ impl UserStore {
             &mut rows_values,
             &mut rows_idx,
             is_postgres,
-            RequestLogFilters {
-                model: model.as_deref(),
-                status: status.as_deref(),
-                api_key_id: api_key_id.as_deref(),
-                channel_id: channel_id.as_deref(),
-                username: username.as_deref(),
-                search: search.as_deref(),
-                time_from,
-                time_to,
-            },
+            filters,
         )?;
         let rows_sql = enrich_request_log_page_sql(&rows_sql, is_postgres, rows_idx);
         rows_values.push(SeaValue::BigInt(Some(limit)));

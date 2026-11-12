@@ -118,14 +118,7 @@ impl LiveFinish {
             &request.state,
             &request.auth,
             &attempt,
-            RequestLogContext {
-                model: &request.logical_model,
-                is_stream: true,
-                started_at: request.started_at,
-                request_id: (request.request_id).as_deref(),
-                request_ip: (request.request_ip).as_deref(),
-                reasoning_effort: (request.reasoning_effort).as_deref(),
-            },
+            request.log_context(),
             RequestLogStreamError {
                 ttfb_ms: metrics.ttfb_ms,
                 terminal_error,
@@ -184,14 +177,7 @@ impl LiveFinish {
             &request.state,
             &request.auth,
             &attempt,
-            RequestLogContext {
-                model: &request.logical_model,
-                is_stream: true,
-                started_at: request.started_at,
-                request_id: (request.request_id).as_deref(),
-                request_ip: (request.request_ip).as_deref(),
-                reasoning_effort: (request.reasoning_effort).as_deref(),
-            },
+            request.log_context(),
             RequestLogStreamError {
                 ttfb_ms: metrics.ttfb_ms,
                 terminal_error: stream_terminal_error_from_app(err),
@@ -201,11 +187,7 @@ impl LiveFinish {
         );
         let outcome = || DumpOutcome {
             reconstructed,
-            error: Some(json!({
-                "message": err.message,
-                "code": err.code,
-                "status": err.status.as_u16(),
-            })),
+            error: Some(app_error_json(err)),
             ..DumpOutcome::default()
         };
         if let Some(session) = capture
@@ -243,7 +225,7 @@ impl LiveFinish {
             Some(usage) => crate::settlement::SettledUsage::Reported(usage),
             None => crate::settlement::SettledUsage::MissingFree,
         };
-        let charge = match maybe_charge_stream_usage(
+        let charge = match maybe_charge_settled(
             &request.state,
             &request.auth,
             &attempt,
@@ -268,14 +250,7 @@ impl LiveFinish {
                     &request.state,
                     &request.auth,
                     &attempt,
-                    RequestLogContext {
-                        model: &request.logical_model,
-                        is_stream: true,
-                        started_at: request.started_at,
-                        request_id: (request.request_id).as_deref(),
-                        request_ip: (request.request_ip).as_deref(),
-                        reasoning_effort: (request.reasoning_effort).as_deref(),
-                    },
+                    request.log_context(),
                     RequestLogStreamError {
                         ttfb_ms: metrics.ttfb_ms,
                         terminal_error: billing_settlement_error(&err),
@@ -283,11 +258,7 @@ impl LiveFinish {
                         usage: metrics.usage.clone(),
                     },
                 );
-                if let Some(session) = request.capture.session.as_ref() {
-                    session
-                        .persist_with_result(metrics.usage.as_ref(), true)
-                        .await;
-                }
+                request.capture.persist(metrics.usage.as_ref(), true).await;
                 return;
             }
         };
@@ -300,14 +271,7 @@ impl LiveFinish {
             &request.state,
             &request.auth,
             &attempt,
-            RequestLogContext {
-                model: &request.logical_model,
-                is_stream: true,
-                started_at: request.started_at,
-                request_id: (request.request_id).as_deref(),
-                request_ip: (request.request_ip).as_deref(),
-                reasoning_effort: (request.reasoning_effort).as_deref(),
-            },
+            request.log_context(),
             RequestLogSuccess {
                 usage: metrics.usage,
                 charge_nano_usd: charge.charge_nano_usd,

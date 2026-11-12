@@ -55,12 +55,12 @@ pub(crate) struct ResponsesWsSuccessor {
 }
 
 pub(crate) struct ResponsesWsLane {
-    pub(super) slot: Arc<AsyncMutex<ResponsesWsSlot>>,
+    slot: Arc<AsyncMutex<ResponsesWsSlot>>,
     pub(super) relay: mpsc::UnboundedSender<ResponsesWsRelay>,
     pub(super) successor: std::sync::Mutex<Option<ResponsesWsSuccessor>>,
     /// WS2h item 6: an idle watcher holds the slot between turns until woken.
     pub(super) watching: AtomicBool,
-    pub(super) wake: tokio::sync::Notify,
+    wake: tokio::sync::Notify,
 }
 
 impl ResponsesWsLane {
@@ -144,11 +144,7 @@ pub(super) async fn watch_idle_session(
 }
 
 /// Returns false when the frame shows the session is no longer idle-consistent.
-pub(super) fn relay_idle_frame(
-    slot: &mut ResponsesWsSlot,
-    lane: &ResponsesWsLane,
-    text: &str,
-) -> bool {
+fn relay_idle_frame(slot: &mut ResponsesWsSlot, lane: &ResponsesWsLane, text: &str) -> bool {
     let Ok(mut value) = serde_json::from_str::<Value>(text) else {
         return false;
     };
@@ -217,11 +213,11 @@ pub(crate) fn find_response_id(value: &Value) -> Option<&str> {
 
 #[derive(Default)]
 pub(crate) struct ResponsesWsTurnState {
-    pub(super) upstream_kind: AtomicU8,
-    pub(super) local_warmup: AtomicBool,
+    upstream_kind: AtomicU8,
+    local_warmup: AtomicBool,
     pub(super) steer_rejected: AtomicBool,
     pub(super) feeders: std::sync::atomic::AtomicUsize,
-    pub(super) feeder_done: tokio::sync::Notify,
+    feeder_done: tokio::sync::Notify,
     /// Inputs of accepted steers answered with `response.steer.pending`.
     pub(super) pending_steers: std::sync::Mutex<Vec<Value>>,
 }

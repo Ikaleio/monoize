@@ -1,4 +1,9 @@
-use super::*;
+use crate::app::AppState;
+use crate::handlers::routing::health_key;
+use crate::monoize_routing::{ChannelHealthState, MonoizeChannel, MonoizeProvider};
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 
 pub(super) fn reset_channel_health_after_successful_test(
     health: &mut HashMap<String, ChannelHealthState>,
@@ -8,28 +13,26 @@ pub(super) fn reset_channel_health_after_successful_test(
     now: i64,
     max_entries: usize,
 ) {
-    fn reset(entry: &mut ChannelHealthState, now: i64) {
-        entry.healthy = true;
-        entry.cooldown_until = None;
-        entry.last_success_at = Some(now);
-        entry.probe_success_count = 0;
-        entry.last_probe_at = None;
-    }
-
     let key = health_key(channel_id, per_model_circuit_break.then_some(model_id));
     if !health.contains_key(&key) && health.len() >= max_entries {
         return;
     }
+    // Every field except the passive-failure samples is overwritten, so the
+    // `Default` (unhealthy) starting state never leaks out.
     let entry = health.entry(key).or_default();
-    reset(entry, now);
+    entry.healthy = true;
+    entry.cooldown_until = None;
+    entry.last_success_at = Some(now);
+    entry.probe_success_count = 0;
+    entry.last_probe_at = None;
 }
 
-pub(super) fn health_timestamp(ts: Option<i64>) -> Option<String> {
+fn health_timestamp(ts: Option<i64>) -> Option<String> {
     ts.and_then(|value| chrono::DateTime::<chrono::Utc>::from_timestamp(value, 0))
         .map(|value| value.to_rfc3339())
 }
 
-pub(super) fn apply_channel_runtime(
+fn apply_channel_runtime(
     channel: &mut MonoizeChannel,
     health: &ChannelHealthState,
     unhealthy_models: Vec<String>,
@@ -118,7 +121,7 @@ pub(super) async fn provider_with_runtime(
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct ModelRuntimeChannel {
+struct ModelRuntimeChannel {
     channel_id: String,
     channel_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,7 +139,7 @@ pub(super) struct ProviderModelRuntimeStatus {
     unpriced_channels: Vec<ModelRuntimeChannel>,
 }
 
-pub(super) fn sort_runtime_channels(channels: &mut [ModelRuntimeChannel]) {
+fn sort_runtime_channels(channels: &mut [ModelRuntimeChannel]) {
     channels.sort_by(|left, right| {
         left.channel_name
             .cmp(&right.channel_name)
@@ -238,7 +241,7 @@ pub(super) async fn prune_provider_channel_health(state: &AppState, channel_ids:
     if channel_ids.is_empty() {
         return;
     }
-    let ids: std::collections::HashSet<&str> = channel_ids.iter().map(String::as_str).collect();
+    let ids: HashSet<&str> = channel_ids.iter().map(String::as_str).collect();
     let mut health = state.channel_health.lock().await;
     health.retain(|channel_key, _| {
         let channel_id = channel_key

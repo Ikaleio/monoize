@@ -43,7 +43,7 @@ impl UserStore {
             user_id,
             api_key_id,
             billing_group_id,
-            request_id: _,
+            request_id,
             settled_charge_nano_usd,
             now,
         } = request;
@@ -118,54 +118,19 @@ impl UserStore {
             BillingError::new(BillingErrorKind::Overflow, "plan allocation overflow")
         })?;
         if covered > 0 {
-            self.write_plan_charge_usage_tx(
-                tx,
-                &subscription,
-                &request,
-                api_key_id,
-                group_id,
-                covered,
-            )
-            .await?;
-        }
-        Ok(PlanChargeAllocation {
-            adjusted_charge_nano_usd: adjusted,
-            plan_covered_nano_usd: covered,
-            fallback_nano_usd: fallback,
-            subscription_id: Some(subscription.id),
-            plan_id: Some(subscription.plan_id),
-            multiplier: Some(subscription.multiplier.canonical()),
-        })
-    }
-
-    async fn write_plan_charge_usage_tx(
-        &self,
-        tx: &DatabaseTransaction,
-        subscription: &SubscriptionSnapshot,
-        request: &PlanChargeRequest<'_>,
-        api_key_id: &str,
-        group_id: &str,
-        covered: i128,
-    ) -> Result<(), BillingError> {
-        let PlanChargeRequest {
-            user_id,
-            request_id,
-            now,
-            ..
-        } = *request;
-        let internal = |error: String| BillingError::new(BillingErrorKind::Internal, error);
-        let cumulative_overflow =
-            || BillingError::new(BillingErrorKind::Overflow, "plan usage cumulative overflow");
-        let usage_id = uuid::Uuid::new_v4().to_string();
-        let created_at = now.to_rfc3339();
-        let order_key = || -> Vec<SeaValue> {
-            vec![
-                subscription.id.clone().into(),
-                created_at.clone().into(),
-                usage_id.clone().into(),
-            ]
-        };
-        let preceding = tx
+            let internal = |error: String| BillingError::new(BillingErrorKind::Internal, error);
+            let cumulative_overflow =
+                || BillingError::new(BillingErrorKind::Overflow, "plan usage cumulative overflow");
+            let usage_id = uuid::Uuid::new_v4().to_string();
+            let created_at = now.to_rfc3339();
+            let order_key = || -> Vec<SeaValue> {
+                vec![
+                    subscription.id.clone().into(),
+                    created_at.clone().into(),
+                    usage_id.clone().into(),
+                ]
+            };
+            let preceding = tx
                 .query_one(self.db.stmt(
                     "SELECT cumulative_nano_usd FROM billing_plan_usage WHERE subscription_id = $1 AND (created_at, id) < ($2, $3) ORDER BY created_at DESC, id DESC LIMIT 1",
                     order_key(),
@@ -177,12 +142,12 @@ impl UserStore {
                 .transpose()
                 .map_err(internal)?
                 .unwrap_or(0);
-        let cumulative = preceding
-            .checked_add(covered)
-            .ok_or_else(cumulative_overflow)?;
-        // BP-D11: empty unless the clock stepped back or `created_at` tied with a
-        // greater id; those later rows already count in their own prefix sums.
-        let successors = tx
+            let cumulative = preceding
+                .checked_add(covered)
+                .ok_or_else(cumulative_overflow)?;
+            // BP-D11: empty unless the clock stepped back or `created_at` tied with a
+            // greater id; those later rows already count in their own prefix sums.
+            let successors = tx
                 .query_all(self.db.stmt(
                     "SELECT id, cumulative_nano_usd FROM billing_plan_usage WHERE subscription_id = $1 AND (created_at, id) > ($2, $3)",
                     order_key(),
@@ -199,7 +164,7 @@ impl UserStore {
                     Ok((id, shifted))
                 })
                 .collect::<Result<Vec<_>, BillingError>>()?;
-        tx.execute(self.db.stmt(
+            tx.execute(self.db.stmt(
                 "INSERT INTO billing_plan_usage (id, subscription_id, user_id, api_key_id, request_id, group_id, amount_nano_usd, cumulative_nano_usd, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                 vec![
                     usage_id.into(),
@@ -215,14 +180,22 @@ impl UserStore {
             ))
             .await
             .map_err(|error| internal(error.to_string()))?;
-        for (id, shifted) in successors {
-            tx.execute(self.db.stmt(
-                "UPDATE billing_plan_usage SET cumulative_nano_usd = $1 WHERE id = $2",
-                vec![shifted.to_string().into(), id.into()],
-            ))
-            .await
-            .map_err(|error| internal(error.to_string()))?;
+            for (id, shifted) in successors {
+                tx.execute(self.db.stmt(
+                    "UPDATE billing_plan_usage SET cumulative_nano_usd = $1 WHERE id = $2",
+                    vec![shifted.to_string().into(), id.into()],
+                ))
+                .await
+                .map_err(|error| internal(error.to_string()))?;
+            }
         }
-        Ok(())
+        Ok(PlanChargeAllocation {
+            adjusted_charge_nano_usd: adjusted,
+            plan_covered_nano_usd: covered,
+            fallback_nano_usd: fallback,
+            subscription_id: Some(subscription.id),
+            plan_id: Some(subscription.plan_id),
+            multiplier: Some(subscription.multiplier.canonical()),
+        })
     }
 }

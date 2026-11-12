@@ -223,7 +223,43 @@ impl Citation {
                 return Some(body);
             }
             CitationSource::Url { url, title } => {
-                self.encode_url(url, title.as_deref(), protocol, offset)?
+                let mut body = Map::new();
+                match protocol {
+                    ProviderProtocol::Messages => {
+                        if !same {
+                            return None;
+                        }
+                        body.insert("type".into(), json!("web_search_result_location"));
+                        body.insert("url".into(), json!(url));
+                    }
+                    ProviderProtocol::Gemini => {
+                        body.insert("uri".into(), json!(url));
+                    }
+                    ProviderProtocol::Responses | ProviderProtocol::ChatCompletion => {
+                        if self.answer_range.is_none() && !same {
+                            return None;
+                        }
+                        body.insert("type".into(), json!("url_citation"));
+                        body.insert("url".into(), json!(url));
+                    }
+                    _ => return None,
+                }
+                if let Some(title) = title {
+                    body.insert("title".into(), json!(title));
+                } else if protocol == ProviderProtocol::Messages {
+                    // web_search_result_location.title is required-nullable (SEM-1).
+                    body.insert("title".into(), Value::Null);
+                }
+                if let Some(range) = &self.answer_range {
+                    let (start, end) = if protocol == ProviderProtocol::Gemini {
+                        ("startIndex", "endIndex")
+                    } else {
+                        ("start_index", "end_index")
+                    };
+                    body.insert(start.into(), json!(range.start.saturating_add(offset)));
+                    body.insert(end.into(), json!(range.end.saturating_add(offset)));
+                }
+                Value::Object(body)
             }
             CitationSource::Document {
                 index,
@@ -315,53 +351,6 @@ impl Citation {
             }
         }
         Some(body)
-    }
-
-    fn encode_url(
-        &self,
-        url: &str,
-        title: Option<&str>,
-        protocol: ProviderProtocol,
-        offset: u64,
-    ) -> Option<Value> {
-        let same = self.origin_protocol == protocol;
-        let mut body = Map::new();
-        match protocol {
-            ProviderProtocol::Messages => {
-                if !same {
-                    return None;
-                }
-                body.insert("type".into(), json!("web_search_result_location"));
-                body.insert("url".into(), json!(url));
-            }
-            ProviderProtocol::Gemini => {
-                body.insert("uri".into(), json!(url));
-            }
-            ProviderProtocol::Responses | ProviderProtocol::ChatCompletion => {
-                if self.answer_range.is_none() && !same {
-                    return None;
-                }
-                body.insert("type".into(), json!("url_citation"));
-                body.insert("url".into(), json!(url));
-            }
-            _ => return None,
-        }
-        if let Some(title) = title {
-            body.insert("title".into(), json!(title));
-        } else if protocol == ProviderProtocol::Messages {
-            // web_search_result_location.title is required-nullable (SEM-1).
-            body.insert("title".into(), Value::Null);
-        }
-        if let Some(range) = &self.answer_range {
-            let (start, end) = if protocol == ProviderProtocol::Gemini {
-                ("startIndex", "endIndex")
-            } else {
-                ("start_index", "end_index")
-            };
-            body.insert(start.into(), json!(range.start.saturating_add(offset)));
-            body.insert(end.into(), json!(range.end.saturating_add(offset)));
-        }
-        Some(Value::Object(body))
     }
 }
 

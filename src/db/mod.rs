@@ -22,8 +22,7 @@ impl Deref for WriteGuard<'_> {
 
 pub struct WriteTransaction {
     txn: Option<DatabaseTransaction>,
-    #[allow(dead_code)]
-    _guard: Option<Box<tokio::sync::OwnedMutexGuard<()>>>,
+    _guard: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 impl WriteTransaction {
@@ -197,7 +196,7 @@ impl DbPool {
     /// Acquire write connection and begin an explicit transaction.
     pub async fn begin_write(&self) -> Result<WriteTransaction, DbErr> {
         let guard = if self.backend == DbBackend::Sqlite {
-            Some(Box::new(self.write_lock.clone().lock_owned().await))
+            Some(self.write_lock.clone().lock_owned().await)
         } else {
             None
         };

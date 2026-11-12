@@ -2,9 +2,9 @@ use super::utils::parse_nano_usd;
 use super::{
     AdminUpdateUserInput, ApiKey, BalanceMutationError, BillingError, BillingErrorKind,
     CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, PlanChargeAllocation,
-    RESERVED_INTERNAL_USER_PREFIX, RegisterUserError, RequestCaptureMode, RequestCaptureRetention,
-    Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore, canonicalize_group_ids,
-    compile_model_redirects, validate_model_redirects,
+    PlanChargeRequest, RESERVED_INTERNAL_USER_PREFIX, RegisterUserError, RequestCaptureMode,
+    RequestCaptureRetention, Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore,
+    canonicalize_group_ids, compile_model_redirects, validate_model_redirects,
 };
 use crate::exact_decimal::Multiplier;
 use crate::transforms::{
@@ -354,9 +354,7 @@ impl UserStore {
     }
 }
 
-mod admin;
 mod api_key_deletion;
-mod api_key_rows;
 mod api_key_update;
 mod api_keys;
 mod balances;

@@ -198,16 +198,7 @@ fn build_balance_compatibility_router() -> Router<AppState> {
 }
 
 fn build_dashboard_api_router() -> Router<AppState> {
-    let router = Router::new();
-    let router = dashboard_account_routes(router);
-    let router = dashboard_configuration_routes(router);
-    let router = dashboard_model_routes(router);
-    let router = dashboard_operations_routes(router);
-    dashboard_payment_routes(router)
-}
-
-fn dashboard_account_routes(router: Router<AppState>) -> Router<AppState> {
-    router
+    Router::new()
         .route(
             "/dashboard/auth/register",
             post(crate::dashboard_handlers::register),
@@ -280,10 +271,6 @@ fn dashboard_account_routes(router: Router<AppState>) -> Router<AppState> {
             "/dashboard/billing-plan-subscription",
             get(crate::dashboard_handlers::get_billing_plan_subscription),
         )
-}
-
-fn dashboard_configuration_routes(router: Router<AppState>) -> Router<AppState> {
-    router
         .route(
             "/dashboard/billing-plans/{plan_id}",
             put(crate::dashboard_handlers::update_billing_plan)
@@ -357,10 +344,6 @@ fn dashboard_configuration_routes(router: Router<AppState>) -> Router<AppState> 
             "/dashboard/groups/{group_id}",
             put(crate::dashboard_handlers::update_group),
         )
-}
-
-fn dashboard_model_routes(router: Router<AppState>) -> Router<AppState> {
-    router
         .route(
             "/dashboard/groups/{group_id}",
             axum::routing::delete(crate::dashboard_handlers::delete_group),
@@ -436,10 +419,6 @@ fn dashboard_model_routes(router: Router<AppState>) -> Router<AppState> {
             "/dashboard/marketplace/models",
             get(crate::dashboard_handlers::list_marketplace_models),
         )
-}
-
-fn dashboard_operations_routes(router: Router<AppState>) -> Router<AppState> {
-    router
         .route(
             "/dashboard/model-metadata/sync/models-dev",
             post(crate::dashboard_handlers::sync_model_metadata_models_dev),
@@ -515,10 +494,6 @@ fn dashboard_operations_routes(router: Router<AppState>) -> Router<AppState> {
             "/dashboard/me/live-usage",
             get(crate::dashboard_handlers::get_my_live_usage),
         )
-}
-
-fn dashboard_payment_routes(router: Router<AppState>) -> Router<AppState> {
-    router
         .route(
             "/dashboard/admin/overview",
             get(crate::dashboard_handlers::get_admin_overview),

@@ -1,7 +1,6 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::json;
-use std::collections::HashMap;
 
 pub fn error_body(message: &str) -> Value {
     json!({"error":{"type":"invalid_request_error","code":"unsupported_media","message":message}})
@@ -342,7 +341,7 @@ fn file(
             }
         }
         FileSource::Content { .. } if target == ProviderProtocol::Messages => {
-            *source = prepare_messages_document(source, metadata, target)?;
+            *source = messages_document_content(source, metadata)?;
         }
         FileSource::Content { .. } => {
             bound_document_parts(source, metadata)?;
@@ -352,12 +351,15 @@ fn file(
     Ok(())
 }
 
-fn prepare_messages_document(
+/// A compound document re-encoded as native Messages document `content` blocks.
+fn messages_document_content(
     source: &FileSource,
     metadata: &MediaMetadata,
-    target: ProviderProtocol,
 ) -> Result<FileSource, String> {
-    let parts = prepare_tool_result_content(&bound_document_parts(source, metadata)?, target)?;
+    let parts = prepare_tool_result_content(
+        &bound_document_parts(source, metadata)?,
+        ProviderProtocol::Messages,
+    )?;
     let content = parts
         .into_iter()
         .map(|part| match part {
@@ -587,7 +589,18 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 role,
                 ..
             } => {
-                prepare_image(source, metadata, *role, target)?;
+                if target == ProviderProtocol::Messages
+                    && matches!(role, OrdinaryRole::System | OrdinaryRole::Developer)
+                {
+                    return Err(
+                        "Messages system content supports text only; images cannot be discarded."
+                            .into(),
+                    );
+                }
+                if target == ProviderProtocol::ChatCompletion && *role != OrdinaryRole::User {
+                    return Err("Chat image content is supported only in user messages.".into());
+                }
+                image(source, metadata, target, false)?;
             }
             Node::File {
                 source,
@@ -677,7 +690,56 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 extra_body,
                 ..
             } => {
-                prepare_audio(source, metadata, *role, extra_body, target)?;
+                if matches!(source, AudioSource::Base64 { .. }) {
+                    metadata.resource = None;
+                }
+                check_resource(metadata, target)?;
+                if target == ProviderProtocol::ChatCompletion && *role != OrdinaryRole::User {
+                    if *role == OrdinaryRole::Assistant
+                        && metadata.reference_id.is_some()
+                        && extra_body.contains_key(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+                    {
+                        result.push(node);
+                        continue;
+                    }
+                    return Err(
+                        "Chat audio requires a user input or a native assistant audio reference."
+                            .into(),
+                    );
+                }
+                if matches!(
+                    target,
+                    ProviderProtocol::Messages | ProviderProtocol::Responses
+                ) {
+                    return Err("This target has no supported audio input carrier.".into());
+                }
+                match source {
+                    AudioSource::Url { url } => {
+                        check_url(url, metadata, target)?;
+                        if target == ProviderProtocol::ChatCompletion {
+                            return Err("Chat audio input requires inline WAV or MP3 bytes.".into());
+                        }
+                    }
+                    AudioSource::Base64 { media_type, data } => {
+                        decode_bytes(data)?;
+                        if media_type == "audio/unknown" || !is_audio_mime(media_type) {
+                            return Err("Audio format is unknown. Supply the actual format before conversion.".into());
+                        }
+                        if target == ProviderProtocol::ChatCompletion {
+                            *media_type = match mime_essence(media_type).as_str() {
+                                "audio/wav" | "audio/x-wav" | "video/audio/wav" => {
+                                    "audio/wav".into()
+                                }
+                                "audio/mpeg" | "audio/mp3" => "audio/mpeg".into(),
+                                _ => {
+                                    return Err(
+                                        "Chat audio input supports WAV or MP3 bytes.".into()
+                                    );
+                                }
+                            };
+                        }
+                    }
+                }
             }
             Node::ToolResult { content, .. } => {
                 *content = prepare_tool_result_content(content, target)?
@@ -687,81 +749,6 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
         result.push(node);
     }
     Ok(result)
-}
-
-fn prepare_image(
-    source: &mut ImageSource,
-    metadata: &mut MediaMetadata,
-    role: OrdinaryRole,
-    target: ProviderProtocol,
-) -> Result<(), String> {
-    if target == ProviderProtocol::Messages
-        && matches!(role, OrdinaryRole::System | OrdinaryRole::Developer)
-    {
-        return Err(
-            "Messages system content supports text only; images cannot be discarded.".into(),
-        );
-    }
-    if target == ProviderProtocol::ChatCompletion && role != OrdinaryRole::User {
-        return Err("Chat image content is supported only in user messages.".into());
-    }
-    image(source, metadata, target, false)
-}
-
-fn prepare_audio(
-    source: &mut AudioSource,
-    metadata: &mut MediaMetadata,
-    role: OrdinaryRole,
-    extra_body: &HashMap<String, Value>,
-    target: ProviderProtocol,
-) -> Result<(), String> {
-    if matches!(source, AudioSource::Base64 { .. }) {
-        metadata.resource = None;
-    }
-    check_resource(metadata, target)?;
-    if target == ProviderProtocol::ChatCompletion && role != OrdinaryRole::User {
-        if role == OrdinaryRole::Assistant
-            && metadata.reference_id.is_some()
-            && extra_body.contains_key(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
-        {
-            return Ok(());
-        }
-        return Err(
-            "Chat audio requires a user input or a native assistant audio reference.".into(),
-        );
-    }
-    if matches!(
-        target,
-        ProviderProtocol::Messages | ProviderProtocol::Responses
-    ) {
-        return Err("This target has no supported audio input carrier.".into());
-    }
-    match source {
-        AudioSource::Url { url } => {
-            check_url(url, metadata, target)?;
-            if target == ProviderProtocol::ChatCompletion {
-                return Err("Chat audio input requires inline WAV or MP3 bytes.".into());
-            }
-        }
-        AudioSource::Base64 { media_type, data } => {
-            decode_bytes(data)?;
-            if media_type == "audio/unknown" || !is_audio_mime(media_type) {
-                return Err(
-                    "Audio format is unknown. Supply the actual format before conversion.".into(),
-                );
-            }
-            if target == ProviderProtocol::ChatCompletion {
-                *media_type = match mime_essence(media_type).as_str() {
-                    "audio/wav" | "audio/x-wav" | "video/audio/wav" => "audio/wav".into(),
-                    "audio/mpeg" | "audio/mp3" => "audio/mpeg".into(),
-                    _ => {
-                        return Err("Chat audio input supports WAV or MP3 bytes.".into());
-                    }
-                };
-            }
-        }
-    }
-    Ok(())
 }
 
 pub fn prepare_request(

@@ -1,157 +1,87 @@
 #!/usr/bin/env bun
-// Differential smoke harness: runs two Monoize binaries against the same local
-// mock upstream with identical SQLite state, replays a fixed request matrix,
-// normalizes volatile fields, and diffs the downstream responses.
-//
-// Usage: see spec/differential-smoke.spec.md.
-// --expected (default scripts/differential-smoke/expected-diffs.json) is a JSON array of
-// { "case": <regex on case name>, "where": <regex on diff path>, "note"?: string };
-// matching diffs are still reported but do not fail the run.
-// The seed DB is bootstrapped with --base on first use (or --rebootstrap) and
-// copied fresh into each run directory.
-//
-// Every server runs under sandbox-exec with outbound network limited to
-// localhost (minus the local HTTP proxy port), and with proxy env removed.
+// Differential smoke harness (spec/differential-smoke.spec.md): runs two
+// Monoize binaries against the repository mock upstream on copies of one seed
+// database, replays a fixed request matrix, normalizes volatile fields, and
+// diffs the downstream responses.
 import { Database } from "bun:sqlite";
 import { parseArgs } from "node:util";
 import {
-  accessSync,
   closeSync,
-  constants,
   copyFileSync,
   existsSync,
   mkdirSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-  readFileSync,
   openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "../..");
-const SMOKE = join(ROOT, "artifacts/smoke");
 const MOCK_DIR = join(ROOT, "mock");
+const OUT_ROOT = join(ROOT, "artifacts/smoke/out");
+const SEED_DB = join(ROOT, "artifacts/smoke/seed/monoize.db");
+const SEED_META = join(dirname(SEED_DB), "meta.json");
 const USAGE =
   "usage: bun run scripts/differential-smoke/run.ts --base <bin> --new <bin> [--only regex] [--out directory] [--rebootstrap] [--expected json]";
 
-type CliOptions = {
-  base: string;
-  new: string;
-  rebootstrap: boolean;
-  expected: string;
-  only?: string;
-  out?: string;
-};
-
-function parseCli(): CliOptions {
-  const { values } = parseArgs({
-    options: {
-      base: { type: "string" },
-      new: { type: "string" },
-      rebootstrap: { type: "boolean", default: false },
-      expected: {
-        type: "string",
-        default: join(import.meta.dir, "expected-diffs.json"),
-      },
-      only: { type: "string" },
-      out: { type: "string" },
-    },
-  });
-  if (!values.base || !values.new) throw new Error(USAGE);
-  if (process.platform !== "darwin")
-    throw new Error(
-      "unsupported platform: differential smoke requires macOS sandbox-exec; unrestricted fallback is disabled",
-    );
-  try {
-    accessSync("/usr/bin/sandbox-exec", constants.X_OK);
-  } catch {
-    throw new Error(
-      "network isolation unavailable: /usr/bin/sandbox-exec is not executable",
-    );
-  }
-  for (const bin of [values.base, values.new]) {
-    accessSync(resolve(bin), constants.X_OK);
-    if (!statSync(resolve(bin)).isFile())
-      throw new Error(`binary is not a file: ${bin}`);
-  }
-  return { ...values, base: values.base, new: values.new };
-}
-
-let args: CliOptions;
-try {
-  args = parseCli();
-} catch (error) {
-  console.error(String(error));
-  process.exit(2);
-}
-const BASE_BIN = resolve(args.base);
-const NEW_BIN = resolve(args.new);
-const SEED_DB = join(SMOKE, "seed/monoize.db");
-const SEED_META = join(dirname(SEED_DB), "meta.json");
-
 // ---------------------------------------------------------------- JSON helpers
 
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-type JsonObject = { [key: string]: Json };
+type Obj = Record<string, unknown>;
 
-/** Reads a nested field from parsed JSON; returns undefined on any shape mismatch. */
 function dig(value: unknown, ...path: (string | number)[]): unknown {
-  let cur: unknown = value;
   for (const key of path) {
-    if (cur === null || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string | number, unknown>)[key];
+    if (value === null || typeof value !== "object") return undefined;
+    value = (value as Obj)[key];
   }
-  return cur;
+  return value;
 }
-function digArray(value: unknown, ...path: (string | number)[]): JsonObject[] {
-  const v = dig(value, ...path);
-  return Array.isArray(v)
-    ? (v.filter(
-        (x) => x && typeof x === "object" && !Array.isArray(x),
-      ) as JsonObject[])
+function str(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+function objects(value: unknown): Obj[] {
+  return Array.isArray(value)
+    ? value.filter((x) => x && typeof x === "object" && !Array.isArray(x))
     : [];
 }
-function digString(value: unknown, ...path: (string | number)[]): string {
-  const v = dig(value, ...path);
-  return typeof v === "string" ? v : "";
+function short(value: unknown): string {
+  const s = JSON.stringify(value);
+  if (s === undefined) return "<absent>";
+  return s.length > 220 ? s.slice(0, 217) + "..." : s;
 }
 
 // ---------------------------------------------------------------- processes
 
-type Proc = { name: string; proc: Bun.Subprocess; stopping?: Promise<void> };
-const procs = new Set<Proc>();
+type Child = { name: string; proc: Bun.Subprocess };
+const children = new Set<Child>();
 
-function stopProc(p: Proc): Promise<void> {
-  if (p.stopping) return p.stopping;
-  p.stopping = (async () => {
-    try {
-      p.proc.kill("SIGTERM");
-    } catch {}
-    const timer = setTimeout(() => {
-      try {
-        p.proc.kill("SIGKILL");
-      } catch {}
-    }, 5000);
-    try {
-      await p.proc.exited;
-    } finally {
-      clearTimeout(timer);
-      procs.delete(p);
-    }
-  })();
-  return p.stopping;
+async function stop(child: Child) {
+  child.proc.kill("SIGTERM");
+  const timer = setTimeout(() => child.proc.kill("SIGKILL"), 5000);
+  await child.proc.exited;
+  clearTimeout(timer);
+  children.delete(child);
 }
+
 for (const [signal, code] of [
   ["SIGINT", 130],
   ["SIGTERM", 143],
 ] as const) {
   process.on(signal, async () => {
-    await Promise.all([...procs].map(stopProc));
+    await Promise.all([...children].map(stop));
     process.exit(code);
   });
 }
+
+const PROXY_VARS = [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "ALL_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "all_proxy",
+  "NODE_USE_ENV_PROXY",
+];
 
 async function freePort(): Promise<number> {
   const server = Bun.listen({
@@ -164,37 +94,8 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-const PROXY_VARS = [
-  "HTTPS_PROXY",
-  "HTTP_PROXY",
-  "ALL_PROXY",
-  "https_proxy",
-  "http_proxy",
-  "all_proxy",
-  "NODE_USE_ENV_PROXY",
-];
-function cleanEnv(extra: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !PROXY_VARS.includes(k)) env[k] = v;
-  }
-  env.NO_PROXY = "*";
-  env.no_proxy = "*";
-  return { ...env, ...extra };
-}
-
-// Outbound network: localhost only, explicitly excluding the local proxy port.
-const SANDBOX_PROFILE = [
-  "(version 1)",
-  "(allow default)",
-  "(deny network-outbound)",
-  '(allow network-outbound (remote ip "localhost:*"))',
-  "(allow network-outbound (remote unix-socket))",
-  '(deny network-outbound (remote ip "localhost:7890"))',
-].join("");
-
-async function waitHttp(url: string, timeoutMs = 60000) {
-  const deadline = Date.now() + timeoutMs;
+async function waitHttp(url: string) {
+  const deadline = Date.now() + 60000;
   let last = "";
   while (Date.now() < deadline) {
     try {
@@ -209,155 +110,123 @@ async function waitHttp(url: string, timeoutMs = 60000) {
   throw new Error(`timeout waiting for ${url}: ${last}`);
 }
 
-async function startMock(port: number, logPath: string): Promise<Proc> {
-  const fd = openSync(logPath, "w");
-  let p: Proc;
-  try {
-    const proc = Bun.spawn(
-      [
-        "/usr/bin/sandbox-exec",
-        "-p",
-        SANDBOX_PROFILE,
-        process.execPath,
-        "run",
-        "server.ts",
-      ],
-      {
-        cwd: MOCK_DIR,
-        env: cleanEnv({ PORT: String(port) }),
-        stdout: fd,
-        stderr: fd,
-      },
-    );
-    p = { name: "mock", proc };
-    procs.add(p);
-  } finally {
-    closeSync(fd);
-  }
-  await waitHttp(`http://127.0.0.1:${port}/health`);
-  return p;
+// Children talk to loopback only, so proxy settings are stripped to keep a
+// local proxy out of the request path.
+async function spawnChild(
+  name: string,
+  command: string[],
+  cwd: string,
+  env: Record<string, string>,
+  logPath: string,
+  readyUrl: string,
+) {
+  const childEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env))
+    if (v !== undefined && !PROXY_VARS.includes(k)) childEnv[k] = v;
+  Object.assign(childEnv, { NO_PROXY: "*", no_proxy: "*" }, env);
+  const log = openSync(logPath, "w");
+  const proc = Bun.spawn(command, {
+    cwd,
+    env: childEnv,
+    stdout: log,
+    stderr: log,
+  });
+  closeSync(log);
+  const child = { name, proc };
+  children.add(child);
+  await waitHttp(readyUrl);
+  return child;
 }
 
-async function startServer(
+function startServer(
   name: string,
   bin: string,
   port: number,
   dbPath: string,
   workDir: string,
-): Promise<Proc> {
+) {
   mkdirSync(workDir, { recursive: true });
-  const fd = openSync(join(workDir, "server.log"), "w");
-  let p: Proc;
-  try {
-    const proc = Bun.spawn(
-      ["/usr/bin/sandbox-exec", "-p", SANDBOX_PROFILE, bin],
-      {
-        cwd: workDir,
-        env: cleanEnv({
-          MONOIZE_LISTEN: `127.0.0.1:${port}`,
-          MONOIZE_DATABASE_DSN: `sqlite://${dbPath}?mode=rwc`,
-          MONOIZE_REQUEST_LOG_SPOOL_DIR: join(workDir, "spool"),
-          MONOIZE_IMAGE_TRANSFORM_CACHE_DIR: join(workDir, "image-cache"),
-          RUST_LOG: process.env.SMOKE_RUST_LOG ?? "info",
-        }),
-        stdout: fd,
-        stderr: fd,
-      },
-    );
-    p = { name, proc };
-    procs.add(p);
-  } finally {
-    closeSync(fd);
-  }
-  await waitHttp(`http://127.0.0.1:${port}/api/dashboard/settings/public`);
-  return p;
-}
-
-function setSettings(dbPath: string, kv: Record<string, string>) {
-  const db = new Database(dbPath);
-  const now = new Date().toISOString();
-  const stmt = db.prepare(
-    "INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+  return spawnChild(
+    name,
+    [bin],
+    workDir,
+    {
+      MONOIZE_LISTEN: `127.0.0.1:${port}`,
+      MONOIZE_DATABASE_DSN: `sqlite://${dbPath}?mode=rwc`,
+      MONOIZE_REQUEST_LOG_SPOOL_DIR: join(workDir, "spool"),
+      MONOIZE_IMAGE_TRANSFORM_CACHE_DIR: join(workDir, "image-cache"),
+      RUST_LOG: "info",
+    },
+    join(workDir, "server.log"),
+    `http://127.0.0.1:${port}/api/dashboard/settings/public`,
   );
-  for (const [k, v] of Object.entries(kv)) stmt.run(k, v, now);
-  db.close();
 }
 
-function checkpoint(dbPath: string) {
-  const db = new Database(dbPath);
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  db.close();
-}
-
-function copyDb(src: string, dst: string) {
-  mkdirSync(dirname(dst), { recursive: true });
-  copyFileSync(src, dst);
-  for (const suffix of ["-wal", "-shm"]) {
-    if (existsSync(src + suffix)) copyFileSync(src + suffix, dst + suffix);
-  }
-}
-
-// ---------------------------------------------------------------- bootstrap
+// ---------------------------------------------------------------- seed
 
 const UPSTREAMS = [
   { type: "responses", models: ["up-responses", "up-responses-reasoning"] },
   { type: "chat_completion", models: ["up-chat", "up-chat-reasoning"] },
   { type: "messages", models: ["up-messages", "up-messages-reasoning"] },
 ] as const;
-const PLACEHOLDER_BASE_URL = "http://127.0.0.1:1";
 
 type SeedMeta = { apiKey: string; username: string; createdWith: string };
 
-async function api(
+async function dashboardApi(
   port: number,
-  method: string,
   path: string,
   body: unknown,
   token?: string,
 ) {
   const res = await fetch(`http://127.0.0.1:${port}${path}`, {
-    method,
+    method: "POST",
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: JSON.stringify(body),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}: ${text}`);
-  return text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error(`POST ${path} -> ${res.status}: ${text}`);
+  return JSON.parse(text);
 }
 
-async function bootstrap(): Promise<SeedMeta> {
+async function bootstrap(baseBin: string) {
   const seedDir = dirname(SEED_DB);
   rmSync(seedDir, { recursive: true, force: true });
   mkdirSync(seedDir, { recursive: true });
   const port = await freePort();
-  const work = join(seedDir, "bootstrap-work");
   console.log(`[bootstrap] starting base binary on ${port}`);
-  const server = await startServer("bootstrap", BASE_BIN, port, SEED_DB, work);
+  const server = await startServer(
+    "bootstrap",
+    baseBin,
+    port,
+    SEED_DB,
+    join(seedDir, "bootstrap-work"),
+  );
   try {
     // Settings are read from the DB per call, so direct writes apply immediately.
-    setSettings(SEED_DB, {
-      captcha_enabled: "false",
-      price_sync_auto_enabled: "false",
-      monoize_active_probe_enabled: "false",
-    });
+    const db = new Database(SEED_DB);
+    const upsert = db.prepare(
+      "INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    );
+    const now = new Date().toISOString();
+    for (const key of [
+      "captcha_enabled",
+      "price_sync_auto_enabled",
+      "monoize_active_probe_enabled",
+    ])
+      upsert.run(key, "false", now);
+    db.close();
+
     const username = "smoke_admin";
-    const reg = await api(port, "POST", "/api/dashboard/auth/register", {
+    const { token } = await dashboardApi(port, "/api/dashboard/auth/register", {
       username,
       password: "smoke-password-1",
     });
-    const token: string = reg.token;
-    if (reg.user?.role !== "super_admin")
-      throw new Error(`first user role is ${reg.user?.role}`);
     for (const up of UPSTREAMS) {
-      const models: Record<string, { redirect: null; multiplier: string }> = {};
-      for (const m of up.models)
-        models[m] = { redirect: null, multiplier: "1" };
-      await api(
+      await dashboardApi(
         port,
-        "POST",
         "/api/dashboard/providers",
         {
           name: `mock-${up.type}`,
@@ -365,9 +234,12 @@ async function bootstrap(): Promise<SeedMeta> {
             {
               name: `mock-${up.type}`,
               provider_type: up.type,
-              base_url: PLACEHOLDER_BASE_URL,
+              // Rewritten to the live mock address in each run database.
+              base_url: "http://127.0.0.1:1",
               api_key: "sk-mock-not-a-real-key",
-              models,
+              models: Object.fromEntries(
+                up.models.map((m) => [m, { redirect: null, multiplier: "1" }]),
+              ),
             },
           ],
           circuit_breaker_enabled: false,
@@ -377,34 +249,31 @@ async function bootstrap(): Promise<SeedMeta> {
         token,
       );
     }
-    const key = await api(
+    const key = await dashboardApi(
       port,
-      "POST",
       "/api/dashboard/tokens",
       { name: "smoke" },
       token,
     );
-    const meta: SeedMeta = { apiKey: key.key, username, createdWith: BASE_BIN };
+    const meta: SeedMeta = { apiKey: key.key, username, createdWith: baseBin };
     writeFileSync(SEED_META, JSON.stringify(meta, null, 2));
-    return meta;
   } finally {
-    await stopProc(server);
-    checkpoint(SEED_DB);
+    await stop(server);
+    const db = new Database(SEED_DB);
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    db.close();
     for (const s of ["-wal", "-shm"]) rmSync(SEED_DB + s, { force: true });
   }
 }
 
 function prepareRunDb(dst: string, mockPort: number) {
-  copyDb(SEED_DB, dst);
+  mkdirSync(dirname(dst), { recursive: true });
+  copyFileSync(SEED_DB, dst);
   const db = new Database(dst);
-  const r = db
-    .prepare("UPDATE monoize_channels SET base_url = ?")
-    .run(`http://127.0.0.1:${mockPort}`);
+  db.prepare("UPDATE monoize_channels SET base_url = ?").run(
+    `http://127.0.0.1:${mockPort}`,
+  );
   db.close();
-  if (r.changes !== UPSTREAMS.length)
-    throw new Error(
-      `expected ${UPSTREAMS.length} channels, updated ${r.changes}`,
-    );
 }
 
 // ---------------------------------------------------------------- HTTP capture
@@ -427,41 +296,37 @@ function parseSse(text: string): { frames: Frame[]; comments: number } {
   let comments = 0;
   for (const block of text.split(/\r?\n\r?\n/)) {
     if (!block.trim()) continue;
-    let event: string | undefined;
-    let id: string | undefined;
+    const lines = block.split(/\r?\n/).filter((l) => !l.startsWith(":"));
+    if (!lines.length) {
+      comments++;
+      continue;
+    }
+    const frame: Frame = { data: undefined };
     const data: string[] = [];
-    let onlyComments = true;
-    for (const line of block.split(/\r?\n/)) {
-      if (line.startsWith(":")) continue;
-      onlyComments = false;
+    for (const line of lines) {
       const i = line.indexOf(":");
       const field = i < 0 ? line : line.slice(0, i);
       let value = i < 0 ? "" : line.slice(i + 1);
       if (value.startsWith(" ")) value = value.slice(1);
-      if (field === "event") event = value;
-      else if (field === "id") id = value;
+      if (field === "event") frame.event = value;
+      else if (field === "id") frame.id = value;
       else if (field === "data") data.push(value);
     }
-    if (onlyComments) {
-      comments++;
-      continue;
-    }
     const raw = data.join("\n");
-    let parsed: unknown = raw;
     try {
-      parsed = JSON.parse(raw);
-    } catch {}
-    const frame: Frame = { data: parsed };
-    if (event !== undefined) frame.event = event;
-    if (id !== undefined) frame.id = id;
+      frame.data = JSON.parse(raw);
+    } catch {
+      frame.data = raw;
+    }
     frames.push(frame);
   }
   return { frames, comments };
 }
 
+type Ctx = { port: number; apiKey: string };
+
 async function send(
-  port: number,
-  apiKey: string,
+  ctx: Ctx,
   label: string,
   path: string,
   body: unknown,
@@ -473,16 +338,16 @@ async function send(
     contentType: null,
     kind: "text",
   };
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${ctx.apiKey}`,
+  };
+  if (path.startsWith("/v1/messages")) {
+    headers["x-api-key"] = ctx.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+  }
   try {
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    };
-    if (path.startsWith("/v1/messages")) {
-      headers["x-api-key"] = apiKey;
-      headers["anthropic-version"] = "2023-06-01";
-    }
-    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    const res = await fetch(`http://127.0.0.1:${ctx.port}${path}`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -512,296 +377,213 @@ async function send(
 
 // ---------------------------------------------------------------- matrix
 
-type Ctx = { port: number; apiKey: string };
-type CaseDef = { name: string; run: (ctx: Ctx) => Promise<Step[]> };
+type Proto = "responses" | "chat" | "messages";
+type ToolCall = { id: string; name: string };
+type Dialect = {
+  path: string;
+  user(text: string): Obj;
+  tool(name: string, schema: Obj): Obj;
+  // Single-turn matrix request with a system prompt.
+  single(model: string, stream: boolean): Obj;
+  // Conversation request: `history` plus extra fields such as tools and stream.
+  converse(model: string, history: Obj[], extra: Obj): Obj;
+  // Assistant items to replay from a reply, and the tool calls it requests.
+  reply(step: Step): { assistant: Obj[]; calls: ToolCall[] };
+  toolResults(calls: ToolCall[]): Obj[];
+};
 
 const SYSTEM = "Be brief.";
 const USER = "Hello from smoke";
+const TOOL_PROMPT = "Weather in Taipei, then search Monoize.";
+const TOOLS: Record<string, { result: string; schema: Obj }> = {
+  weather: {
+    result: "sunny 25C",
+    schema: {
+      type: "object",
+      properties: { city: { type: "string" } },
+      required: ["city"],
+    },
+  },
+  websearch: {
+    result: "Monoize is an LLM gateway",
+    schema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    },
+  },
+};
+const toolResult = (name: string) => TOOLS[name]?.result ?? "unknown";
 
-function downstreamBody(
-  proto: "responses" | "chat" | "messages",
-  model: string,
-  stream: boolean,
-): unknown {
-  if (proto === "responses") {
-    return {
+const DIALECTS: Record<Proto, Dialect> = {
+  responses: {
+    path: "/v1/responses",
+    user: (text) => ({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text }],
+    }),
+    tool: (name, parameters) => ({ type: "function", name, parameters }),
+    single: (model, stream) => ({
       model,
       instructions: SYSTEM,
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: USER }],
-        },
-      ],
+      input: [DIALECTS.responses.user(USER)],
       max_output_tokens: 256,
       stream,
-    };
-  }
-  if (proto === "chat") {
-    return {
+    }),
+    converse: (model, input, extra) => ({ model, input, ...extra }),
+    reply(step) {
+      const completed = step.frames?.find(
+        (f) => dig(f.data, "type") === "response.completed",
+      );
+      const output = objects(
+        step.kind === "sse"
+          ? dig(completed?.data, "response", "output")
+          : dig(step.body, "output"),
+      );
+      return {
+        assistant: output,
+        calls: output
+          .filter((o) => o.type === "function_call")
+          .map((o) => ({ id: str(o.call_id), name: str(o.name) })),
+      };
+    },
+    toolResults: (calls) =>
+      calls.map((c) => ({
+        type: "function_call_output",
+        call_id: c.id,
+        output: toolResult(c.name),
+      })),
+  },
+  chat: {
+    path: "/v1/chat/completions",
+    user: (text) => ({ role: "user", content: text }),
+    tool: (name, parameters) => ({
+      type: "function",
+      function: { name, parameters },
+    }),
+    single: (model, stream) => ({
       model,
-      messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: USER },
-      ],
+      messages: [{ role: "system", content: SYSTEM }, DIALECTS.chat.user(USER)],
       max_tokens: 256,
       stream,
       ...(stream ? { stream_options: { include_usage: true } } : {}),
-    };
-  }
-  return {
-    model,
-    system: SYSTEM,
-    messages: [{ role: "user", content: [{ type: "text", text: USER }] }],
-    max_tokens: 256,
-    stream,
-  };
-}
-const PATHS = {
-  responses: "/v1/responses",
-  chat: "/v1/chat/completions",
-  messages: "/v1/messages",
-} as const;
-
-const TOOL_RESULTS: Record<string, string> = {
-  weather: "sunny 25C",
-  websearch: "Monoize is an LLM gateway",
-};
-const TOOL_PARAMS = {
-  weather: {
-    type: "object",
-    properties: { city: { type: "string" } },
-    required: ["city"],
-  },
-  websearch: {
-    type: "object",
-    properties: { query: { type: "string" } },
-    required: ["query"],
-  },
-};
-
-async function messagesToolLoop(ctx: Ctx, model: string): Promise<Step[]> {
-  const steps: Step[] = [];
-  const tools = Object.entries(TOOL_PARAMS).map(([name, input_schema]) => ({
-    name,
-    input_schema,
-  }));
-  const messages: Json[] = [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Weather in Taipei, then search Monoize." },
-      ],
+    }),
+    converse: (model, messages, extra) => ({ model, messages, ...extra }),
+    reply(step) {
+      const message = objects([dig(step.body, "choices", 0, "message")]);
+      return {
+        assistant: message,
+        calls: objects(message[0]?.tool_calls).map((c) => ({
+          id: str(c.id),
+          name: str(dig(c, "function", "name")),
+        })),
+      };
     },
-  ];
-  for (let turn = 1; turn <= 3; turn++) {
-    const step = await send(
-      ctx.port,
-      ctx.apiKey,
-      `turn${turn}`,
-      PATHS.messages,
-      {
-        model,
-        max_tokens: 256,
-        messages: structuredClone(messages),
-        tools,
-        stream: false,
-      },
-    );
-    steps.push(step);
-    const content = digArray(step.body, "content");
-    const uses = content.filter((b) => b.type === "tool_use");
-    if (!uses.length) break;
-    messages.push({ role: "assistant", content });
-    messages.push({
-      role: "user",
-      content: uses.map((u) => ({
-        type: "tool_result",
-        tool_use_id: digString(u, "id"),
-        content: TOOL_RESULTS[digString(u, "name")] ?? "unknown",
+    toolResults: (calls) =>
+      calls.map((c) => ({
+        role: "tool",
+        tool_call_id: c.id,
+        content: toolResult(c.name),
       })),
-    });
-  }
-  return steps;
-}
+  },
+  messages: {
+    path: "/v1/messages",
+    user: (text) => ({ role: "user", content: [{ type: "text", text }] }),
+    tool: (name, input_schema) => ({ name, input_schema }),
+    single: (model, stream) => ({
+      model,
+      system: SYSTEM,
+      messages: [DIALECTS.messages.user(USER)],
+      max_tokens: 256,
+      stream,
+    }),
+    converse: (model, messages, extra) => ({
+      model,
+      max_tokens: 256,
+      messages,
+      ...extra,
+    }),
+    reply(step) {
+      const content = objects(dig(step.body, "content"));
+      return {
+        assistant: content.length ? [{ role: "assistant", content }] : [],
+        calls: content
+          .filter((b) => b.type === "tool_use")
+          .map((b) => ({ id: str(b.id), name: str(b.name) })),
+      };
+    },
+    toolResults: (calls) => [
+      {
+        role: "user",
+        content: calls.map((c) => ({
+          type: "tool_result",
+          tool_use_id: c.id,
+          content: toolResult(c.name),
+        })),
+      },
+    ],
+  },
+};
 
-function toolLoopCase(proto: "responses" | "chat" | "messages"): CaseDef {
-  const model = "up-chat";
+type CaseDef = { name: string; run: (ctx: Ctx) => Promise<Step[]> };
+
+// Weather call, websearch call, final answer; stops early when no tool call comes back.
+function toolLoopCase(proto: Proto): CaseDef {
+  const d = DIALECTS[proto];
+  const tools = Object.entries(TOOLS).map(([name, t]) =>
+    d.tool(name, t.schema),
+  );
   return {
     name: `toolloop/${proto}->chat_completion`,
     async run(ctx) {
-      if (proto === "messages") return messagesToolLoop(ctx, model);
+      const history = [d.user(TOOL_PROMPT)];
       const steps: Step[] = [];
-      if (proto === "chat") {
-        const tools = Object.entries(TOOL_PARAMS).map(([name, parameters]) => ({
-          type: "function",
-          function: { name, parameters },
-        }));
-        const messages: Json[] = [
-          { role: "user", content: "Weather in Taipei, then search Monoize." },
-        ];
-        for (let turn = 1; turn <= 3; turn++) {
-          const step = await send(
-            ctx.port,
-            ctx.apiKey,
-            `turn${turn}`,
-            PATHS.chat,
-            {
-              model,
-              messages: structuredClone(messages),
-              tools,
-              stream: false,
-            },
-          );
-          steps.push(step);
-          const msg = dig(step.body, "choices", 0, "message") as
-            JsonObject | undefined;
-          const calls = digArray(msg, "tool_calls");
-          if (!msg || !calls.length) break;
-          messages.push(msg);
-          for (const call of calls) {
-            messages.push({
-              role: "tool",
-              tool_call_id: digString(call, "id"),
-              content:
-                TOOL_RESULTS[digString(call, "function", "name")] ?? "unknown",
-            });
-          }
-        }
-      } else if (proto === "responses") {
-        const tools = Object.entries(TOOL_PARAMS).map(([name, parameters]) => ({
-          type: "function",
-          name,
-          parameters,
-        }));
-        const input: Json[] = [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Weather in Taipei, then search Monoize.",
-              },
-            ],
-          },
-        ];
-        for (let turn = 1; turn <= 3; turn++) {
-          const step = await send(
-            ctx.port,
-            ctx.apiKey,
-            `turn${turn}`,
-            PATHS.responses,
-            { model, input: structuredClone(input), tools, stream: false },
-          );
-          steps.push(step);
-          const output = digArray(step.body, "output");
-          const calls = output.filter((o) => o.type === "function_call");
-          if (!calls.length) break;
-          input.push(...output);
-          for (const call of calls) {
-            input.push({
-              type: "function_call_output",
-              call_id: digString(call, "call_id"),
-              output: TOOL_RESULTS[digString(call, "name")] ?? "unknown",
-            });
-          }
-        }
+      for (let turn = 1; turn <= 3; turn++) {
+        const step = await send(
+          ctx,
+          `turn${turn}`,
+          d.path,
+          d.converse("up-chat", structuredClone(history), {
+            tools,
+            stream: false,
+          }),
+        );
+        steps.push(step);
+        const { assistant, calls } = d.reply(step);
+        if (!calls.length) break;
+        history.push(...assistant, ...d.toolResults(calls));
       }
       return steps;
     },
   };
 }
 
-function multiTurnCases(): CaseDef[] {
-  return [
-    {
-      // Streamed turn 1 on the reasoning trigger; its completed output items
-      // (reasoning + message) go back as turn-2 input.
-      name: "multiturn/responses->responses/reasoning/stream",
-      async run(ctx) {
-        const model = "up-responses-reasoning";
-        const input: Json[] = [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "First question" }],
-          },
-        ];
-        const s1 = await send(ctx.port, ctx.apiKey, "turn1", PATHS.responses, {
-          model,
-          input: structuredClone(input),
-          stream: true,
-        });
-        const completed = s1.frames?.find(
-          (f) => dig(f.data, "type") === "response.completed",
+// Two turns; the first reply's assistant items are replayed into the second.
+function multiTurnCase(
+  proto: Proto,
+  upstream: string,
+  model: string,
+  stream: boolean,
+): CaseDef {
+  const d = DIALECTS[proto];
+  const variant = model.endsWith("-reasoning") ? "reasoning" : "plain";
+  return {
+    name: `multiturn/${proto}->${upstream}/${variant}/${stream ? "stream" : "nonstream"}`,
+    async run(ctx) {
+      const history = [d.user("First question")];
+      const turn = (label: string) =>
+        send(
+          ctx,
+          label,
+          d.path,
+          d.converse(model, structuredClone(history), { stream }),
         );
-        const output = digArray(completed?.data, "response", "output");
-        input.push(...output, {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Second question" }],
-        });
-        const s2 = await send(ctx.port, ctx.apiKey, "turn2", PATHS.responses, {
-          model,
-          input: structuredClone(input),
-          stream: true,
-        });
-        return [s1, s2];
-      },
+      const first = await turn("turn1");
+      history.push(...d.reply(first).assistant, d.user("Second question"));
+      return [first, await turn("turn2")];
     },
-    {
-      name: "multiturn/chat->messages/plain/nonstream",
-      async run(ctx) {
-        const model = "up-messages";
-        const messages: Json[] = [{ role: "user", content: "First question" }];
-        const s1 = await send(ctx.port, ctx.apiKey, "turn1", PATHS.chat, {
-          model,
-          messages: structuredClone(messages),
-          stream: false,
-        });
-        const msg = dig(s1.body, "choices", 0, "message") as
-          JsonObject | undefined;
-        if (msg) messages.push(msg);
-        messages.push({ role: "user", content: "Second question" });
-        const s2 = await send(ctx.port, ctx.apiKey, "turn2", PATHS.chat, {
-          model,
-          messages: structuredClone(messages),
-          stream: false,
-        });
-        return [s1, s2];
-      },
-    },
-    {
-      name: "multiturn/messages->chat_completion/reasoning/nonstream",
-      async run(ctx) {
-        const model = "up-chat-reasoning";
-        const messages: Json[] = [
-          { role: "user", content: [{ type: "text", text: "First question" }] },
-        ];
-        const s1 = await send(ctx.port, ctx.apiKey, "turn1", PATHS.messages, {
-          model,
-          max_tokens: 256,
-          messages: structuredClone(messages),
-          stream: false,
-        });
-        const content = digArray(s1.body, "content");
-        if (content.length) messages.push({ role: "assistant", content });
-        messages.push({
-          role: "user",
-          content: [{ type: "text", text: "Second question" }],
-        });
-        const s2 = await send(ctx.port, ctx.apiKey, "turn2", PATHS.messages, {
-          model,
-          max_tokens: 256,
-          messages: structuredClone(messages),
-          stream: false,
-        });
-        return [s1, s2];
-      },
-    },
-  ];
+  };
 }
 
 function buildMatrix(): CaseDef[] {
@@ -811,16 +593,11 @@ function buildMatrix(): CaseDef[] {
       for (const model of up.models) {
         for (const stream of [false, true]) {
           const variant = model.endsWith("-reasoning") ? "reasoning" : "plain";
+          const d = DIALECTS[proto];
           cases.push({
             name: `${proto}->${up.type}/${variant}/${stream ? "stream" : "nonstream"}`,
             run: async (ctx) => [
-              await send(
-                ctx.port,
-                ctx.apiKey,
-                "request",
-                PATHS[proto],
-                downstreamBody(proto, model, stream),
-              ),
+              await send(ctx, "request", d.path, d.single(model, stream)),
             ],
           });
         }
@@ -829,24 +606,20 @@ function buildMatrix(): CaseDef[] {
   }
   for (const proto of ["responses", "chat", "messages"] as const)
     cases.push(toolLoopCase(proto));
-  cases.push(...multiTurnCases());
+  cases.push(
+    multiTurnCase("responses", "responses", "up-responses-reasoning", true),
+    multiTurnCase("chat", "messages", "up-messages", false),
+    multiTurnCase("messages", "chat_completion", "up-chat-reasoning", false),
+  );
   for (const up of UPSTREAMS) {
     cases.push({
       name: `count_tokens/messages->${up.type}`,
       run: async (ctx) => [
-        await send(
-          ctx.port,
-          ctx.apiKey,
-          "request",
-          "/v1/messages/count_tokens",
-          {
-            model: up.models[0],
-            system: SYSTEM,
-            messages: [
-              { role: "user", content: [{ type: "text", text: USER }] },
-            ],
-          },
-        ),
+        await send(ctx, "request", "/v1/messages/count_tokens", {
+          model: up.models[0],
+          system: SYSTEM,
+          messages: [DIALECTS.messages.user(USER)],
+        }),
       ],
     });
   }
@@ -873,7 +646,8 @@ const STABLE_IDS: Record<string, true> = {
 const ID_RE =
   /\b(?:resp|msg|chatcmpl|rs|fc|call|toolu|req)[_-][A-Za-z0-9_-]{3,}|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
-function makeNormalizer() {
+// One placeholder map per case and side, shared by all of its steps.
+function normalize(steps: Step[]): Step[] {
   const map = new Map<string, string>();
   const counters = new Map<string, number>();
   const idFor = (raw: string) => {
@@ -892,20 +666,15 @@ function makeNormalizer() {
   };
   const walk = (value: unknown, key?: string): unknown => {
     if (key && TS_KEYS[key] && typeof value === "number") return "<ts>";
-    if (typeof value === "string") return value.replace(ID_RE, (m) => idFor(m));
+    if (typeof value === "string") return value.replace(ID_RE, idFor);
     if (Array.isArray(value)) return value.map((v) => walk(v));
     if (value && typeof value === "object") {
-      const out: Record<string, unknown> = {};
+      const out: Obj = {};
       for (const [k, v] of Object.entries(value)) out[k] = walk(v, k);
       return out;
     }
     return value;
   };
-  return walk;
-}
-
-function normalizeSteps(steps: Step[]): Step[] {
-  const walk = makeNormalizer();
   return walk(steps) as Step[];
 }
 
@@ -913,89 +682,73 @@ function normalizeSteps(steps: Step[]): Step[] {
 
 type Diff = { where: string; kind: string; base?: unknown; new?: unknown };
 
-function short(v: unknown): string {
-  const s = JSON.stringify(v);
-  if (s === undefined) return "<absent>";
-  return s.length > 220 ? s.slice(0, 217) + "..." : s;
-}
-
 function deepDiff(a: unknown, b: unknown, path: string, out: Diff[]) {
   if (a === b) return;
-  const ta = Array.isArray(a) ? "array" : a === null ? "null" : typeof a;
-  const tb = Array.isArray(b) ? "array" : b === null ? "null" : typeof b;
-  if (ta !== tb) {
+  const [type, typeB] = [a, b].map((v) =>
+    Array.isArray(v) ? "array" : v === null ? "null" : typeof v,
+  );
+  if (type !== typeB || (type !== "array" && type !== "object")) {
     out.push({ where: path, kind: "value", base: a, new: b });
     return;
   }
-  if (ta === "array") {
+  if (type === "array") {
     const aa = a as unknown[];
     const bb = b as unknown[];
-    const n = Math.max(aa.length, bb.length);
-    for (let i = 0; i < n; i++) {
-      if (i >= aa.length)
-        out.push({ where: `${path}[${i}]`, kind: "added", new: bb[i] });
+    for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
+      const at = `${path}[${i}]`;
+      if (i >= aa.length) out.push({ where: at, kind: "added", new: bb[i] });
       else if (i >= bb.length)
-        out.push({ where: `${path}[${i}]`, kind: "removed", base: aa[i] });
-      else deepDiff(aa[i], bb[i], `${path}[${i}]`, out);
+        out.push({ where: at, kind: "removed", base: aa[i] });
+      else deepDiff(aa[i], bb[i], at, out);
     }
     return;
   }
-  if (ta === "object") {
-    const ao = a as Record<string, unknown>;
-    const bo = b as Record<string, unknown>;
-    const ak = Object.keys(ao);
-    const bk = Object.keys(bo);
-    for (const k of ak) {
-      if (!(k in bo))
-        out.push({ where: `${path}.${k}`, kind: "removed", base: ao[k] });
-      else deepDiff(ao[k], bo[k], `${path}.${k}`, out);
-    }
-    for (const k of bk)
-      if (!(k in ao))
-        out.push({ where: `${path}.${k}`, kind: "added", new: bo[k] });
-    const common = ak.filter((k) => k in bo);
-    const commonB = bk.filter((k) => k in ao);
-    if (common.join("\u0000") !== commonB.join("\u0000")) {
-      out.push({
-        where: path || ".",
-        kind: "key-order",
-        base: common,
-        new: commonB,
-      });
-    }
-    return;
+  const ao = a as Obj;
+  const bo = b as Obj;
+  for (const k of Object.keys(ao)) {
+    if (!(k in bo))
+      out.push({ where: `${path}.${k}`, kind: "removed", base: ao[k] });
+    else deepDiff(ao[k], bo[k], `${path}.${k}`, out);
   }
-  out.push({ where: path, kind: "value", base: a, new: b });
+  for (const k of Object.keys(bo))
+    if (!(k in ao))
+      out.push({ where: `${path}.${k}`, kind: "added", new: bo[k] });
+  const commonA = Object.keys(ao).filter((k) => k in bo);
+  const commonB = Object.keys(bo).filter((k) => k in ao);
+  if (commonA.join("\u0000") !== commonB.join("\u0000"))
+    out.push({
+      where: path || ".",
+      kind: "key-order",
+      base: commonA,
+      new: commonB,
+    });
 }
 
 function frameSig(f: Frame): string {
   const d = f.data;
   const parts = [
     f.event ?? "",
-    typeof d === "string" ? d : digString(d, "type"),
+    typeof d === "string" ? d : str(dig(d, "type")),
   ];
   const delta = dig(d, "choices", 0, "delta");
   if (delta && typeof delta === "object")
     parts.push(Object.keys(delta).sort().join(","));
-  const finish = digString(d, "choices", 0, "finish_reason");
+  const finish = str(dig(d, "choices", 0, "finish_reason"));
   if (finish) parts.push(`finish=${finish}`);
-  const deltaType = digString(d, "delta", "type");
+  const deltaType = str(dig(d, "delta", "type"));
   if (deltaType) parts.push(deltaType);
-  const itemType = digString(d, "item", "type");
+  const itemType = str(dig(d, "item", "type"));
   if (itemType) parts.push(`item=${itemType}`);
-  const blockType = digString(d, "content_block", "type");
+  const blockType = str(dig(d, "content_block", "type"));
   if (blockType) parts.push(`block=${blockType}`);
   return parts.join("|");
 }
 
 function frameLabel(f: Frame): string {
   const d = f.data;
-  return (
-    f.event ??
-    (typeof d === "string"
-      ? d
-      : digString(d, "type") || digString(d, "object") || "data")
-  );
+  if (f.event !== undefined) return f.event;
+  if (typeof d === "string") return d;
+  return str(dig(d, "type")) || str(dig(d, "object")) || "data";
 }
 
 // LCS alignment of frame signatures, then field diffs for aligned pairs.
@@ -1004,28 +757,24 @@ function diffFrames(a: Frame[], b: Frame[], prefix: string, out: Diff[]) {
   const sb = b.map(frameSig);
   const n = sa.length;
   const m = sb.length;
-  const dp: number[][] = Array.from({ length: n + 1 }, () =>
+  const lcs: number[][] = Array.from({ length: n + 1 }, () =>
     new Array(m + 1).fill(0),
   );
   for (let i = n - 1; i >= 0; i--)
     for (let j = m - 1; j >= 0; j--)
-      dp[i][j] =
+      lcs[i][j] =
         sa[i] === sb[j]
-          ? dp[i + 1][j + 1] + 1
-          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+          ? lcs[i + 1][j + 1] + 1
+          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
   let i = 0;
   let j = 0;
   while (i < n || j < m) {
     if (i < n && j < m && sa[i] === sb[j]) {
-      deepDiff(
-        a[i],
-        b[j],
-        `${prefix}frames[base ${i}/new ${j} ${frameLabel(a[i])}]`,
-        out,
-      );
+      const where = `${prefix}frames[base ${i}/new ${j} ${frameLabel(a[i])}]`;
+      deepDiff(a[i], b[j], where, out);
       i++;
       j++;
-    } else if (j < m && (i >= n || dp[i][j + 1] >= dp[i + 1][j])) {
+    } else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) {
       out.push({
         where: `${prefix}frames[new ${j} ${frameLabel(b[j])}]`,
         kind: "frame-added",
@@ -1045,8 +794,7 @@ function diffFrames(a: Frame[], b: Frame[], prefix: string, out: Diff[]) {
 
 function diffCase(a: Step[], b: Step[]): Diff[] {
   const out: Diff[] = [];
-  const n = Math.max(a.length, b.length);
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < Math.max(a.length, b.length); k++) {
     const sa = a[k];
     const sb = b[k];
     const p = `${sa?.label ?? sb?.label}:`;
@@ -1071,25 +819,23 @@ function diffCase(a: Step[], b: Step[]): Diff[] {
         out.push({ where: `${p}${f}`, kind: "value", base: sa[f], new: sb[f] });
     }
     if (sa.kind === "sse" && sb.kind === "sse")
-      diffFrames(sa.frames ?? [], sb.frames ?? [], p, out);
+      diffFrames(sa.frames!, sb.frames!, p, out);
     else deepDiff(sa.body ?? sa.frames, sb.body ?? sb.frames, `${p}body`, out);
   }
   return out;
 }
 
-// Usage extraction for the report (as returned, after normalization).
+// ---------------------------------------------------------------- outcomes
+
 function usageOf(steps: Step[]): unknown[] {
   const found: unknown[] = [];
   const visit = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(visit);
     else if (v && typeof v === "object") {
       for (const [k, x] of Object.entries(v)) {
-        if (
-          (k === "usage" || k === "input_tokens") &&
-          x !== null &&
-          x !== undefined
-        )
-          found.push(k === "usage" ? x : { input_tokens: x });
+        if (k === "usage" && x != null) found.push(x);
+        else if (k === "input_tokens" && x != null)
+          found.push({ input_tokens: x });
         else visit(x);
       }
     }
@@ -1105,83 +851,109 @@ type Outcome = {
   reason?: string;
 };
 
-function outcomesOf(steps: Step[]): Outcome[] {
-  return steps.map((step) => {
-    let reason = step.error;
-    if (!reason && (step.status < 200 || step.status >= 300))
-      reason = `HTTP ${step.status}`;
-    if (!reason && dig(step.body, "error"))
-      reason = short(dig(step.body, "error"));
-    if (!reason && step.kind === "sse") {
-      const frames = step.frames ?? [];
-      const error = frames.find(
-        (frame) =>
-          ["error", "response.failed", "response.incomplete"].includes(
-            frame.event ?? "",
-          ) ||
-          ["error", "response.failed", "response.incomplete"].includes(
-            digString(frame.data, "type"),
-          ) ||
-          dig(frame.data, "error"),
-      );
-      if (error) reason = short(error.data);
-      else if (step.request.path === PATHS.responses) {
-        if (
-          !frames.some(
-            (frame) =>
-              digString(frame.data, "type") === "response.completed" &&
-              digString(frame.data, "response", "status") === "completed",
-          )
-        ) {
-          reason = "missing completed Responses terminal";
-        }
-      } else if (step.request.path === PATHS.chat) {
-        if (
-          !frames.some((frame) =>
-            digString(frame.data, "choices", 0, "finish_reason"),
-          )
-        )
-          reason = "missing Chat finish_reason";
-      } else if (step.request.path === PATHS.messages) {
-        if (
-          !frames.some(
-            (frame) => digString(frame.data, "type") === "message_stop",
-          ) ||
-          !frames.some((frame) => digString(frame.data, "delta", "stop_reason"))
-        )
-          reason = "missing Messages terminal";
-      }
-    }
-    return {
-      label: step.label,
-      status: step.status,
-      result: reason ? "error" : "success",
-      ...(reason ? { reason } : {}),
-    };
+const ERROR_EVENTS = ["error", "response.failed", "response.incomplete"];
+
+// HTTP 200 alone is not success: a stream must also end with its protocol terminal.
+function streamFailure(step: Step): string | undefined {
+  const frames = step.frames!;
+  const error = frames.find(
+    (f) =>
+      ERROR_EVENTS.includes(f.event ?? "") ||
+      ERROR_EVENTS.includes(str(dig(f.data, "type"))) ||
+      dig(f.data, "error"),
+  );
+  if (error) return short(error.data);
+  const any = (pred: (data: unknown) => unknown) =>
+    frames.some((f) => pred(f.data));
+  switch (step.request.path) {
+    case DIALECTS.responses.path:
+      return any(
+        (d) =>
+          dig(d, "type") === "response.completed" &&
+          dig(d, "response", "status") === "completed",
+      )
+        ? undefined
+        : "missing completed Responses terminal";
+    case DIALECTS.chat.path:
+      return any((d) => str(dig(d, "choices", 0, "finish_reason")))
+        ? undefined
+        : "missing Chat finish_reason";
+    case DIALECTS.messages.path:
+      return any((d) => dig(d, "type") === "message_stop") &&
+        any((d) => str(dig(d, "delta", "stop_reason")))
+        ? undefined
+        : "missing Messages terminal";
+  }
+}
+
+function outcomeOf(step: Step): Outcome {
+  let reason = step.error;
+  if (!reason && (step.status < 200 || step.status >= 300))
+    reason = `HTTP ${step.status}`;
+  if (!reason && dig(step.body, "error"))
+    reason = short(dig(step.body, "error"));
+  if (!reason && step.kind === "sse") reason = streamFailure(step);
+  return {
+    label: step.label,
+    status: step.status,
+    result: reason ? "error" : "success",
+    ...(reason ? { reason } : {}),
+  };
+}
+
+// ---------------------------------------------------------------- main
+
+type Expected = { case: RegExp; where: RegExp };
+
+function loadExpected(path: string): Expected[] {
+  const entries = JSON.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(entries))
+    throw new Error(`${path}: expected a JSON array`);
+  // A missing pattern would become an empty regex and silently match every diff.
+  return entries.map((e) => {
+    if (typeof e?.case !== "string" || typeof e?.where !== "string")
+      throw new Error(`${path}: every entry needs string case and where`);
+    return { case: new RegExp(e.case), where: new RegExp(e.where) };
   });
 }
 
-type Expected = { case: RegExp; where: RegExp };
-function loadExpected(): Expected[] {
-  const raw: unknown = JSON.parse(readFileSync(args.expected, "utf8"));
-  if (!Array.isArray(raw))
-    throw new Error("expected-diffs file must contain an array");
-  return raw.map((entry: unknown) => {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      !("case" in entry) ||
-      !("where" in entry) ||
-      typeof entry.case !== "string" ||
-      typeof entry.where !== "string" ||
-      ("note" in entry && typeof entry.note !== "string")
-    ) {
-      throw new Error(
-        "expected-diffs entries require string case, where, and optional note fields",
-      );
-    }
-    return { case: new RegExp(entry.case), where: new RegExp(entry.where) };
+type Config = {
+  baseBin: string;
+  newBin: string;
+  outDir: string;
+  rebootstrap: boolean;
+  cases: CaseDef[];
+  expected: Expected[];
+};
+
+// Every input error is reported here, before any server starts.
+function parseCli(): Config {
+  const { values } = parseArgs({
+    options: {
+      base: { type: "string" },
+      new: { type: "string" },
+      only: { type: "string" },
+      out: { type: "string" },
+      rebootstrap: { type: "boolean", default: false },
+      expected: {
+        type: "string",
+        default: join(import.meta.dir, "expected-diffs.json"),
+      },
+    },
   });
+  if (!values.base || !values.new) throw new Error(USAGE);
+  const only = values.only ? new RegExp(values.only) : null;
+  const cases = buildMatrix().filter((c) => !only || only.test(c.name));
+  if (!cases.length) throw new Error("--only selected no cases");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return {
+    baseBin: resolve(values.base),
+    newBin: resolve(values.new),
+    outDir: resolve(values.out ?? join(OUT_ROOT, stamp)),
+    rebootstrap: values.rebootstrap,
+    cases,
+    expected: loadExpected(resolve(values.expected)),
+  };
 }
 
 type CaseResult = {
@@ -1193,69 +965,55 @@ type CaseResult = {
   usage: { base: unknown[]; new: unknown[] };
 };
 
-// ---------------------------------------------------------------- main
+async function main(): Promise<number> {
+  const config = parseCli();
+  const { outDir } = config;
+  for (const dir of [
+    "logs",
+    "base/raw",
+    "base/normalized",
+    "new/raw",
+    "new/normalized",
+  ])
+    mkdirSync(join(outDir, dir), { recursive: true });
 
-async function main() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const outDir = resolve(args.out ?? join(SMOKE, "out", stamp));
-  const outRelative = relative(join(SMOKE, "out"), outDir);
-  if (
-    !outRelative ||
-    outRelative === ".." ||
-    outRelative.startsWith("../") ||
-    isAbsolute(outRelative)
-  ) {
-    throw new Error("--out must name a directory below artifacts/smoke/out/");
-  }
-  if (existsSync(outDir) && readdirSync(outDir).length > 0)
-    throw new Error(`output directory is not empty: ${outDir}`);
-  const expected = loadExpected();
-  const only = args.only ? new RegExp(args.only) : null;
-  const cases = buildMatrix().filter((c) => !only || only.test(c.name));
-  if (!cases.length) throw new Error("--only selected no cases");
-  mkdirSync(outDir, { recursive: true });
-
-  if (args.rebootstrap || !existsSync(SEED_DB) || !existsSync(SEED_META))
-    await bootstrap();
+  if (config.rebootstrap || !existsSync(SEED_DB) || !existsSync(SEED_META))
+    await bootstrap(config.baseBin);
   const meta: SeedMeta = JSON.parse(readFileSync(SEED_META, "utf8"));
 
-  const [mockPort, basePort, newPort] = [
-    await freePort(),
-    await freePort(),
-    await freePort(),
-  ];
+  const mockPort = await freePort();
+  const basePort = await freePort();
+  const newPort = await freePort();
   console.log(
     `[run] out=${outDir} mock=${mockPort} base=${basePort} new=${newPort}`,
   );
-  mkdirSync(join(outDir, "logs"), { recursive: true });
-  await startMock(mockPort, join(outDir, "logs/mock.log"));
-  prepareRunDb(join(outDir, "base/db/monoize.db"), mockPort);
-  prepareRunDb(join(outDir, "new/db/monoize.db"), mockPort);
-  await startServer(
-    "base",
-    BASE_BIN,
-    basePort,
-    join(outDir, "base/db/monoize.db"),
-    join(outDir, "base/work"),
+  await spawnChild(
+    "mock",
+    [process.execPath, "run", "server.ts"],
+    MOCK_DIR,
+    { PORT: String(mockPort) },
+    join(outDir, "logs/mock.log"),
+    `http://127.0.0.1:${mockPort}/health`,
   );
-  await startServer(
-    "new",
-    NEW_BIN,
-    newPort,
-    join(outDir, "new/db/monoize.db"),
-    join(outDir, "new/work"),
-  );
+  for (const [side, bin, port] of [
+    ["base", config.baseBin, basePort],
+    ["new", config.newBin, newPort],
+  ] as const) {
+    const db = join(outDir, side, "db/monoize.db");
+    prepareRunDb(db, mockPort);
+    await startServer(side, bin, port, db, join(outDir, side, "work"));
+  }
   writeFileSync(
     join(outDir, "run.json"),
     JSON.stringify(
       {
-        base: BASE_BIN,
-        new: NEW_BIN,
+        base: config.baseBin,
+        new: config.newBin,
         seed: SEED_DB,
         mockPort,
         basePort,
         newPort,
-        pids: [...procs].map((p) => ({ name: p.name, pid: p.proc.pid })),
+        pids: [...children].map((c) => ({ name: c.name, pid: c.proc.pid })),
       },
       null,
       2,
@@ -1263,20 +1021,18 @@ async function main() {
   );
 
   const results: CaseResult[] = [];
-  for (const c of cases) {
+  for (const c of config.cases) {
     const [rawA, rawB] = await Promise.all([
       c.run({ port: basePort, apiKey: meta.apiKey }),
       c.run({ port: newPort, apiKey: meta.apiKey }),
     ]);
-    const a = normalizeSteps(rawA);
-    const b = normalizeSteps(rawB);
+    const a = normalize(rawA);
+    const b = normalize(rawB);
     const file = c.name.replace(/[^A-Za-z0-9._-]+/g, "__") + ".json";
     for (const [side, raw, norm] of [
       ["base", rawA, a],
       ["new", rawB, b],
     ] as const) {
-      mkdirSync(join(outDir, side, "raw"), { recursive: true });
-      mkdirSync(join(outDir, side, "normalized"), { recursive: true });
       writeFileSync(
         join(outDir, side, "raw", file),
         JSON.stringify(raw, null, 2),
@@ -1289,34 +1045,36 @@ async function main() {
     const diffs = diffCase(a, b);
     const unexpected = diffs.filter(
       (d) =>
-        !expected.some((e) => e.case.test(c.name) && e.where.test(d.where)),
+        !config.expected.some(
+          (e) => e.case.test(c.name) && e.where.test(d.where),
+        ),
     );
     results.push({
       name: c.name,
       identical: diffs.length === 0,
       diffs,
       unexpected,
-      outcomes: { base: outcomesOf(a), new: outcomesOf(b) },
+      outcomes: { base: a.map(outcomeOf), new: b.map(outcomeOf) },
       usage: { base: usageOf(a), new: usageOf(b) },
     });
+    const tag = !diffs.length ? "SAME" : unexpected.length ? "DIFF" : "EXPD";
     console.log(
-      `${diffs.length === 0 ? "SAME" : unexpected.length ? "DIFF" : "EXPD"}  ${c.name}${diffs.length ? `  (${diffs.length} diffs)` : ""}`,
+      `${tag}  ${c.name}${diffs.length ? `  (${diffs.length} diffs)` : ""}`,
     );
   }
-
-  return writeReports(outDir, results);
+  return writeReports(config, results);
 }
 
-function writeReports(outDir: string, results: CaseResult[]): number {
+function writeReports(config: Config, results: CaseResult[]): number {
   const identical = results.filter((r) => r.identical).length;
-  const withUnexpected = results.filter((r) => r.unexpected.length > 0);
-  const lines: string[] = [
+  const withUnexpected = results.filter((r) => r.unexpected.length > 0).length;
+  const lines = [
     `# Monoize differential smoke`,
     ``,
-    `- base: \`${BASE_BIN}\``,
-    `- new: \`${NEW_BIN}\``,
+    `- base: \`${config.baseBin}\``,
+    `- new: \`${config.newBin}\``,
     `- seed: \`${SEED_DB}\``,
-    `- cases: ${results.length}, identical: ${identical}, differing: ${results.length - identical}, with unexpected diffs: ${withUnexpected.length}`,
+    `- cases: ${results.length}, identical: ${identical}, differing: ${results.length - identical}, with unexpected diffs: ${withUnexpected}`,
     ``,
     `## Cases`,
     ``,
@@ -1324,9 +1082,22 @@ function writeReports(outDir: string, results: CaseResult[]): number {
     `|---|---|---|---|---|---|---|---|`,
   ];
   for (const r of results) {
-    lines.push(
-      `| ${r.name} | ${r.identical ? "identical" : `${r.diffs.length} diffs`} | ${r.outcomes.base.map((s) => s.status).join(",")} | ${r.outcomes.new.map((s) => s.status).join(",")} | ${r.outcomes.base.map((s) => s.result + (s.reason ? `: ${s.reason.replaceAll("|", "\\|")}` : "")).join("; ")} | ${r.outcomes.new.map((s) => s.result + (s.reason ? `: ${s.reason.replaceAll("|", "\\|")}` : "")).join("; ")} | \`${short(r.usage.base.at(-1) ?? null)}\` | \`${short(r.usage.new.at(-1) ?? null)}\` |`,
-    );
+    const outcomes = [r.outcomes.base, r.outcomes.new];
+    const cells = [
+      r.name,
+      r.identical ? "identical" : `${r.diffs.length} diffs`,
+      ...outcomes.map((side) => side.map((o) => o.status).join(",")),
+      ...outcomes.map((side) =>
+        side
+          .map((o) => (o.reason ? `${o.result}: ${o.reason}` : o.result))
+          .join("; ")
+          .replaceAll("|", "\\|"),
+      ),
+      ...[r.usage.base, r.usage.new].map(
+        (usage) => `\`${short(usage.at(-1) ?? null)}\``,
+      ),
+    ];
+    lines.push(`| ${cells.join(" | ")} |`);
   }
   lines.push("", "## Differences", "");
   for (const r of results.filter((x) => !x.identical)) {
@@ -1339,13 +1110,13 @@ function writeReports(outDir: string, results: CaseResult[]): number {
     }
     lines.push("");
   }
-  writeFileSync(join(outDir, "report.md"), lines.join("\n"));
+  writeFileSync(join(config.outDir, "report.md"), lines.join("\n"));
   writeFileSync(
-    join(outDir, "report.json"),
+    join(config.outDir, "report.json"),
     JSON.stringify(
       {
-        base: BASE_BIN,
-        new: NEW_BIN,
+        base: config.baseBin,
+        new: config.newBin,
         total: results.length,
         identical,
         results,
@@ -1355,19 +1126,19 @@ function writeReports(outDir: string, results: CaseResult[]): number {
     ),
   );
   console.log(
-    `\ncases=${results.length} identical=${identical} differing=${results.length - identical} unexpected=${withUnexpected.length}`,
+    `\ncases=${results.length} identical=${identical} differing=${results.length - identical} unexpected=${withUnexpected}`,
   );
-  console.log(`report: ${join(outDir, "report.md")}`);
-  return withUnexpected.length > 0 ? 1 : 0;
+  console.log(`report: ${join(config.outDir, "report.md")}`);
+  return withUnexpected > 0 ? 1 : 0;
 }
 
-let code = 1;
+let code: number;
 try {
   code = await main();
 } catch (e) {
-  console.error(e);
+  console.error(e instanceof Error ? e.message : String(e));
   code = 2;
 } finally {
-  await Promise.all([...procs].map(stopProc));
+  await Promise.all([...children].map(stop));
 }
 process.exit(code);

@@ -1,5 +1,5 @@
 use super::*;
-use axum::extract::{FromRequest, Multipart, Request};
+use axum::extract::Request;
 
 pub async fn create_image_generation(
     State(state): State<AppState>,
@@ -112,72 +112,6 @@ pub async fn create_image_edit(
     .await
 }
 
-async fn parse_edit_request(
-    state: &AppState,
-    headers: &HeaderMap,
-    request: Request,
-    capture_eligible: bool,
-) -> AppResult<ParsedImageEdit> {
-    let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if content_type == "application/json"
-        || content_type.starts_with("application/") && content_type.ends_with("+json")
-    {
-        let Json(body) = Json::<Value>::from_request(request, state)
-            .await
-            .map_err(|err| AppError::new(err.status(), "invalid_request", err.body_text()))?;
-        parse_json_image_edit(body, capture_eligible)
-    } else if content_type == "multipart/form-data" {
-        let multipart = Multipart::from_request(request, state)
-            .await
-            .map_err(|err| AppError::new(err.status(), "invalid_request", err.body_text()))?;
-        parse_multipart_image_edit(multipart, capture_eligible).await
-    } else {
-        Err(AppError::new(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "invalid_request",
-            "image edits require application/json or multipart/form-data",
-        ))
-    }
-}
-
-fn parse_edit_options(edit: &ParsedImageEdit, stream: bool) -> AppResult<ImageRequestOptions> {
-    let options = ImageRequestOptions::parse(build_extra_body(
-        &edit.fields,
-        &[
-            "prompt",
-            "model",
-            "n",
-            "stream",
-            "max_multiplier",
-            "image",
-            "image[]",
-            "images",
-            "mask",
-            "markup",
-        ],
-    ))?;
-    options.validate(true, stream)?;
-    if edit.markup.is_some()
-        && (edit.mask.is_some()
-            || options
-                .extra_body
-                .get("prompt_rewriter")
-                .is_some_and(|v| !v.is_null()))
-    {
-        return Err(
-            image_request_error("markup cannot be combined with mask or prompt_rewriter")
-                .with_param("markup"),
-        );
-    }
-    Ok(options)
-}
-
 fn image_prompt_node(prompt: String) -> urp::Node {
     urp::Node::Text {
         logprobs: None,
@@ -199,8 +133,7 @@ fn image_input_size(inputs: &[urp::Node]) -> (usize, usize) {
         if let urp::Node::Image { source, .. } = node {
             match source {
                 urp::ImageSource::Base64 { data, .. } => {
-                    inline_bytes_estimate =
-                        inline_bytes_estimate.saturating_add(data.len() / 4 * 3);
+                    inline_bytes_estimate += data.len() / 4 * 3
                 }
                 _ => reference_count += 1,
             }

@@ -199,8 +199,7 @@ fn decode_function_call(obj: &Map<String, Value>, call: &Map<String, Value>, nam
         tool_type: ToolCallType::Function,
         call_id,
         name: name.to_string(),
-        arguments: serde_json::to_string(call.get("args").unwrap_or(&json!({})))
-            .unwrap_or_default(),
+        arguments: call.get("args").unwrap_or(&json!({})).to_string(),
         cache_breakpoint: None,
         extra_body,
     }
@@ -339,7 +338,7 @@ fn decode_function_response(
     let id = response.get("id").and_then(Value::as_str);
     let response_value = response.get("response").cloned().unwrap_or(Value::Null);
     let mut content = vec![ToolResultContent::Text {
-        text: serde_json::to_string(&response_value).unwrap_or_default(),
+        text: response_value.to_string(),
         extra_body: HashMap::new(),
         cache_breakpoint: None,
     }];

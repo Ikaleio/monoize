@@ -12,7 +12,7 @@ pub use plans::{
     BillingPlanSubscription, BillingPlanUsageWindows, PlanChargeAllocation, PlanWindowUsage,
 };
 pub use request_log_types::*;
-pub use request_logs::{PendingRequestLogUsage, RequestLogFilters};
+pub use request_logs::RequestLogFilters;
 pub use store::UpdateUserInput;
 pub(crate) use store::plan_charge_meta;
 

@@ -11,9 +11,11 @@ fn rename(obj: &mut Map<String, Value>, names: &[(&str, &str)]) {
         }
     }
 }
+
 fn object<'a>(obj: &'a mut Map<String, Value>, key: &str) -> Option<&'a mut Map<String, Value>> {
     obj.get_mut(key).and_then(Value::as_object_mut)
 }
+
 fn part(value: &mut Value) {
     let Some(obj) = value.as_object_mut() else {
         return;
@@ -61,6 +63,7 @@ fn part(value: &mut Value) {
         }
     }
 }
+
 fn content(content: &mut Value) {
     match content.get_mut("parts") {
         Some(Value::Array(parts)) => parts.iter_mut().for_each(part),
@@ -134,11 +137,6 @@ pub(super) fn normalize_proto_json_names(value: &Value) -> Value {
             );
         }
     }
-    normalize_tools(obj);
-    value
-}
-
-fn normalize_tools(obj: &mut Map<String, Value>) {
     if let Some(tools) = obj.get_mut("tools").and_then(Value::as_array_mut) {
         for tool in tools.iter_mut().filter_map(Value::as_object_mut) {
             rename(
@@ -186,4 +184,5 @@ fn normalize_tools(obj: &mut Map<String, Value>) {
             );
         }
     }
+    value
 }

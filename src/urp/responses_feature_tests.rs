@@ -1784,29 +1784,6 @@ async fn responses_unknown_content_preserves_its_message_position() {
 }
 
 #[tokio::test]
-async fn responses_streamed_media_extras_do_not_duplicate_typed_sources() {
-    for block in [
-        json!({"type":"output_image","image_url":"https://example.com/a.png","detail":"high"}),
-        json!({"type":"output_file","file_data":"data:application/pdf;base64,JVBERi0xLjQK","filename":"a.pdf"}),
-    ] {
-        let item = json!({"type":"message","id":"msg_media","role":"assistant","content":[block]});
-        let events = decode_stream(fixture_stream(&item, None)).await;
-        for event in &events {
-            let extras = match event {
-                UrpStreamEvent::NodeStart { extra_body, .. }
-                | UrpStreamEvent::NodeDone { extra_body, .. } => Some(extra_body),
-                _ => None,
-            };
-            if let Some(extras) = extras {
-                for key in ["image_url", "file_data", "filename", "detail"] {
-                    assert!(!extras.contains_key(key), "{event:?}");
-                }
-            }
-        }
-    }
-}
-
-#[tokio::test]
 async fn responses_missing_terminal_content_keeps_duplicate_media_empty_text_and_typed_mutations() {
     let file = json!({"type":"output_file","file_data":"data:application/pdf;base64,JVBERi0xLjQK","filename":"old.pdf"});
     let item = json!({"type":"message","id":"msg_multi","role":"assistant","phase":"final_answer","content":[

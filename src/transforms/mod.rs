@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 mod anthropic_cache;
@@ -679,17 +679,4 @@ pub fn remove_extra_path(extra: &mut HashMap<String, Value>, path: &str) {
     if let Some(last) = keys.last() {
         obj.remove(*last);
     }
-}
-
-pub fn state_set_insert(state: &mut dyn TransformState, key: u32) {
-    if let Some(set) = state.as_any_mut().downcast_mut::<HashSet<u32>>() {
-        set.insert(key);
-    }
-}
-
-pub fn state_set_contains(state: &mut dyn TransformState, key: u32) -> bool {
-    if let Some(set) = state.as_any_mut().downcast_mut::<HashSet<u32>>() {
-        return set.contains(&key);
-    }
-    false
 }

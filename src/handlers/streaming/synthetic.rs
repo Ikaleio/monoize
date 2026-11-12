@@ -36,30 +36,6 @@ impl<'a> BufferedDump<'a> {
             transform_chain: self.transform_chain,
         }
     }
-
-    async fn push_error(
-        self,
-        attempt: &'a MonoizeAttempt,
-        request: &'a StreamRequest,
-        req: &'a urp::UrpRequest,
-        upstream_body: Value,
-        error: &AppError,
-    ) {
-        let Some(session) = request.capture.session.as_ref() else {
-            return;
-        };
-        let outcome = DumpOutcome {
-            error: Some(json!({
-                "message": error.message,
-                "code": error.code,
-                "status": error.status.as_u16(),
-            })),
-            ..DumpOutcome::default()
-        };
-        self.attempt_dump(attempt, request, req, upstream_body)
-            .push(session, &request.capture.raw_input, outcome)
-            .await;
-    }
 }
 
 /// The upstream reply of a buffered slot and the request that produced it.
@@ -112,14 +88,15 @@ impl StreamForward {
         let http = match client_http_for_attempt(&self.request.state, attempt) {
             Ok(http) => http,
             Err(error) => {
-                dump.push_error(
-                    attempt,
-                    &self.request,
-                    &nonstream_req,
-                    upstream_body,
-                    &error,
-                )
-                .await;
+                if let Some(session) = self.request.capture.session.as_ref() {
+                    let outcome = DumpOutcome {
+                        error: Some(app_error_json(&error)),
+                        ..DumpOutcome::default()
+                    };
+                    dump.attempt_dump(attempt, &self.request, &nonstream_req, upstream_body)
+                        .push(session, &self.request.capture.raw_input, outcome)
+                        .await;
+                }
                 return Ok(SlotOutcome::Failed {
                     error,
                     failure_class: None,
@@ -203,19 +180,9 @@ impl StreamForward {
             &self.request.state,
             &self.request.auth,
             attempt,
-            RequestLogContext {
-                model: &self.request.logical_model,
-                is_stream: true,
-                started_at: self.request.started_at,
-                request_id: self.request.request_id.as_deref(),
-                request_ip: self.request.request_ip.as_deref(),
-                reasoning_effort: None,
-            },
+            self.request.log_context(),
         )
         .await;
-        // Read before the match: a read guard in the scrutinee would live
-        // through the failure arm, which reads the same lock again and may
-        // sleep before a retry.
         let mask_sensitive_info = self.request.mask_sensitive_info().await;
         let mut resp = match decode_response_from_provider(
             attempt.provider_type,
@@ -248,7 +215,6 @@ impl StreamForward {
         let downstream = self.request.downstream;
         let foreign_extras = foreign_response_target(downstream, attempt.provider_type)
             .map(|target| urp::strip_foreign_response(&mut resp, target));
-        let mask_sensitive_info = self.request.mask_sensitive_info().await;
         normalize_outcome_error(
             &mut resp.outcome,
             downstream,
@@ -301,9 +267,7 @@ impl StreamForward {
     /// A buffered reply that cannot be replayed ends the request. The capture
     /// persists before the error log.
     async fn fail_buffered_reply(&self, attempt: &MonoizeAttempt, err: AppError) -> AppError {
-        if let Some(session) = self.request.capture.session.as_ref() {
-            session.persist_with_result(None, false).await;
-        }
+        self.request.capture.persist(None, false).await;
         self.fail_request(attempt, err)
     }
 
@@ -440,14 +404,7 @@ impl SyntheticReplay {
                     &request.state,
                     &request.auth,
                     &attempt,
-                    RequestLogContext {
-                        model: &request.logical_model,
-                        is_stream: true,
-                        started_at: request.started_at,
-                        request_id: (request.request_id).as_deref(),
-                        request_ip: (request.request_ip).as_deref(),
-                        reasoning_effort: (request.reasoning_effort).as_deref(),
-                    },
+                    request.log_context(),
                     RequestLogStreamError {
                         ttfb_ms: Some(request.started_at.elapsed().as_millis() as u64),
                         terminal_error: stream_terminal_error_from_app(&err),
@@ -455,9 +412,7 @@ impl SyntheticReplay {
                         usage: None,
                     },
                 );
-                if let Some(session) = request.capture.session.as_ref() {
-                    session.persist_with_result(None, true).await;
-                }
+                request.capture.persist(None, true).await;
             }
         }
     }
@@ -486,14 +441,7 @@ async fn settle_replayed_response(
             &request.state,
             &request.auth,
             attempt,
-            RequestLogContext {
-                model: &request.logical_model,
-                is_stream: true,
-                started_at: request.started_at,
-                request_id: (request.request_id).as_deref(),
-                request_ip: (request.request_ip).as_deref(),
-                reasoning_effort: (request.reasoning_effort).as_deref(),
-            },
+            request.log_context(),
             RequestLogSuccess {
                 usage: resp.usage.clone(),
                 charge_nano_usd: charge.charge_nano_usd,
@@ -515,14 +463,7 @@ async fn settle_replayed_response(
                 &request.state,
                 &request.auth,
                 attempt,
-                RequestLogContext {
-                    model: &request.logical_model,
-                    is_stream: true,
-                    started_at: request.started_at,
-                    request_id: (request.request_id).as_deref(),
-                    request_ip: (request.request_ip).as_deref(),
-                    reasoning_effort: (request.reasoning_effort).as_deref(),
-                },
+                request.log_context(),
                 RequestLogStreamError {
                     ttfb_ms: Some(request.started_at.elapsed().as_millis() as u64),
                     terminal_error: billing_settlement_error(&err),
@@ -532,9 +473,5 @@ async fn settle_replayed_response(
             );
         }
     }
-    if let Some(session) = request.capture.session.as_ref() {
-        session
-            .persist_with_result(resp.usage.as_ref(), false)
-            .await;
-    }
+    request.capture.persist(resp.usage.as_ref(), false).await;
 }

@@ -90,7 +90,7 @@ pub(crate) async fn open_turn_source(
     // A stashed successor belongs to its WS18 turn only; an ordinary turn must
     // never read its frames, so that session is replaced.
     let same_route = same_route && slot.stashed.is_empty();
-    let (session, reused) = match slot.session.take() {
+    let (mut session, reused) = match slot.session.take() {
         Some(session) if same_route => (session, true),
         held => {
             if let Some(mut held) = held {
@@ -107,122 +107,91 @@ pub(crate) async fn open_turn_source(
         slot.turn_state = Some(turn_state);
     }
 
-    let create = TurnCreate::prepare(&slot, turn, body, reused);
-    create.send(slot, session, target, reused).await
-}
-
-pub(super) struct TurnCreate {
-    pub(super) full_text: String,
-    pub(super) full_input: Vec<Value>,
-    pub(super) incremental_text: Option<String>,
-}
-
-impl TurnCreate {
-    pub(super) fn prepare(
-        slot: &ResponsesWsSlot,
-        turn: &ResponsesWsTurn,
-        body: Value,
-        reused: bool,
-    ) -> Self {
-        let mut payload = responses_ws_create_payload(body);
-        if let Some(object) = payload.as_object_mut() {
-            if turn.warmup {
-                object.insert("generate".to_string(), Value::Bool(false));
-            }
-            if !object.contains_key("client_metadata")
-                && let Some(metadata) = turn.client_metadata.clone()
-            {
-                object.insert("client_metadata".to_string(), metadata);
-            }
-            if let Some(turn_state) = slot.turn_state.clone() {
-                let metadata = object
-                    .entry("client_metadata")
-                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
-                if let Some(metadata) = metadata.as_object_mut()
-                    && !metadata.contains_key(TURN_STATE_HEADER)
-                {
-                    metadata.insert(TURN_STATE_HEADER.to_string(), Value::String(turn_state));
-                }
-            }
-        }
-        let full_input = payload
-            .get("input")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let full_text = payload.to_string();
-        let incremental_text = if reused {
-            incremental_create(slot, turn, &payload, &full_input)
-        } else {
-            None
-        };
-        drop(payload);
-        Self {
-            full_text,
+    let payload = create_payload(&slot, turn, body);
+    let full_input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let full_text = payload.to_string();
+    let incremental_text = if reused {
+        incremental_create(&slot, turn, &payload, &full_input)
+    } else {
+        None
+    };
+    drop(payload);
+    let incremental = incremental_text.is_some();
+    // WS2h item 2: the session still queues pending steering, which a full create
+    // already contains, so a full replay must not run on it.
+    let sent = if reused && !incremental && slot.pending_steer_parts > 0 {
+        Err("pending steering needs a fresh session".to_string())
+    } else {
+        session
+            .send_text(incremental_text.unwrap_or_else(|| full_text.clone()))
+            .await
+    };
+    match sent {
+        Ok(()) => Ok(ResponsesWsTurnSource {
+            slot,
+            session: Some(session),
+            target,
+            full_text: if reused { full_text } else { String::new() },
             full_input,
-            incremental_text,
-        }
-    }
-
-    pub(super) async fn send(
-        self,
-        mut slot: OwnedMutexGuard<ResponsesWsSlot>,
-        mut session: Box<dyn ResponsesWsSession>,
-        target: UpstreamWsTarget,
-        reused: bool,
-    ) -> Result<ResponsesWsTurnSource, TurnOpenError> {
-        let Self {
-            full_text,
-            full_input,
-            incremental_text,
-        } = self;
-        let incremental = incremental_text.is_some();
-        // WS2h item 2: the session still queues pending steering, which a full create
-        // already contains, so a full replay must not run on it.
-        let sent = if reused && !incremental && slot.pending_steer_parts > 0 {
-            Err("pending steering needs a fresh session".to_string())
-        } else {
-            session
-                .send_text(incremental_text.unwrap_or_else(|| full_text.clone()))
+            incremental,
+            reused,
+        }),
+        Err(_) if reused => {
+            // WS2h item 3: a stale pinned session is replaced transparently.
+            session.close().await;
+            slot.last_upstream_id = None;
+            let mut session = connect_with_turn_state(&target, slot.turn_state.as_deref())
                 .await
-        };
-        match sent {
-            Ok(()) => Ok(ResponsesWsTurnSource {
+                .map_err(|error| TurnOpenError::Send(error.message))?;
+            session
+                .send_text(full_text)
+                .await
+                .map_err(TurnOpenError::Send)?;
+            Ok(ResponsesWsTurnSource {
                 slot,
                 session: Some(session),
                 target,
-                full_text: if reused { full_text } else { String::new() },
+                full_text: String::new(),
                 full_input,
-                incremental,
-                reused,
-            }),
-            Err(_) if reused => {
-                // WS2h item 3: a stale pinned session is replaced transparently.
-                session.close().await;
-                slot.last_upstream_id = None;
-                let mut session = connect_with_turn_state(&target, slot.turn_state.as_deref())
-                    .await
-                    .map_err(|error| TurnOpenError::Send(error.message))?;
-                session
-                    .send_text(full_text)
-                    .await
-                    .map_err(TurnOpenError::Send)?;
-                Ok(ResponsesWsTurnSource {
-                    slot,
-                    session: Some(session),
-                    target,
-                    full_text: String::new(),
-                    full_input,
-                    incremental: false,
-                    reused: false,
-                })
-            }
-            Err(error) => Err(TurnOpenError::Send(error)),
+                incremental: false,
+                reused: false,
+            })
         }
+        Err(error) => Err(TurnOpenError::Send(error)),
     }
 }
 
-pub(super) fn content_parts(content: &Value) -> usize {
+/// The `response.create` payload of an ordinary turn (WS2h).
+fn create_payload(slot: &ResponsesWsSlot, turn: &ResponsesWsTurn, body: Value) -> Value {
+    let mut payload = responses_ws_create_payload(body);
+    if let Some(object) = payload.as_object_mut() {
+        if turn.warmup {
+            object.insert("generate".to_string(), Value::Bool(false));
+        }
+        if !object.contains_key("client_metadata")
+            && let Some(metadata) = turn.client_metadata.clone()
+        {
+            object.insert("client_metadata".to_string(), metadata);
+        }
+        if let Some(turn_state) = slot.turn_state.clone() {
+            let metadata = object
+                .entry("client_metadata")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(metadata) = metadata.as_object_mut()
+                && !metadata.contains_key(TURN_STATE_HEADER)
+            {
+                metadata.insert(TURN_STATE_HEADER.to_string(), Value::String(turn_state));
+            }
+        }
+    }
+    payload
+}
+
+fn content_parts(content: &Value) -> usize {
     content.as_array().map_or(1, Vec::len)
 }
 
@@ -239,7 +208,7 @@ pub(super) fn steer_content_parts(input: &Value) -> usize {
 
 /// WS2h item 2: the incremental create text, when the encoded input extends the
 /// session basis and the turn continues the session's last public response.
-pub(super) fn incremental_create(
+fn incremental_create(
     slot: &ResponsesWsSlot,
     turn: &ResponsesWsTurn,
     payload: &Value,

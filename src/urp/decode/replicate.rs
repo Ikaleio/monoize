@@ -192,59 +192,41 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
                 });
             }
         }
-        Value::Array(arr) => {
-            let all_strings = arr.iter().all(|v| v.is_string());
-            if all_strings {
-                let all_urls = arr
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .all(|s| looks_like_url(s) && looks_like_media_url(s));
-                if all_urls {
-                    for v in arr {
-                        if let Some(url) = v.as_str() {
-                            nodes.push(Node::Image {
-                                metadata: Default::default(),
+        Value::Array(arr) if arr.iter().all(Value::is_string) => {
+            let all_urls = arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .all(|s| looks_like_url(s) && looks_like_media_url(s));
+            if all_urls {
+                for v in arr {
+                    if let Some(url) = v.as_str() {
+                        nodes.push(Node::Image {
+                            metadata: Default::default(),
 
-                                id: None,
-                                role: OrdinaryRole::Assistant,
-                                source: ImageSource::Url {
-                                    url: url.to_string(),
-                                    detail: None,
-                                },
-                                extra_body: HashMap::new(),
-                            });
-                        }
-                    }
-                } else {
-                    let combined: String = arr
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join("");
-                    if !combined.is_empty() {
-                        nodes.push(Node::Text {
-                            logprobs: None,
-                            signature: None,
-                            citations: Vec::new(),
                             id: None,
                             role: OrdinaryRole::Assistant,
-                            content: combined,
-                            phase: None,
+                            source: ImageSource::Url {
+                                url: url.to_string(),
+                                detail: None,
+                            },
                             extra_body: HashMap::new(),
-                            cache_breakpoint: None,
                         });
                     }
                 }
             } else {
-                let serialized = serde_json::to_string(output).unwrap_or_default();
-                if !serialized.is_empty() {
+                let combined: String = arr
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join("");
+                if !combined.is_empty() {
                     nodes.push(Node::Text {
                         logprobs: None,
                         signature: None,
                         citations: Vec::new(),
                         id: None,
                         role: OrdinaryRole::Assistant,
-                        content: serialized,
+                        content: combined,
                         phase: None,
                         extra_body: HashMap::new(),
                         cache_breakpoint: None,
@@ -254,20 +236,17 @@ fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
         }
         Value::Null => {}
         other => {
-            let serialized = serde_json::to_string(other).unwrap_or_default();
-            if !serialized.is_empty() {
-                nodes.push(Node::Text {
-                    logprobs: None,
-                    signature: None,
-                    citations: Vec::new(),
-                    id: None,
-                    role: OrdinaryRole::Assistant,
-                    content: serialized,
-                    phase: None,
-                    extra_body: HashMap::new(),
-                    cache_breakpoint: None,
-                });
-            }
+            nodes.push(Node::Text {
+                logprobs: None,
+                signature: None,
+                citations: Vec::new(),
+                id: None,
+                role: OrdinaryRole::Assistant,
+                content: other.to_string(),
+                phase: None,
+                extra_body: HashMap::new(),
+                cache_breakpoint: None,
+            });
         }
     }
 }

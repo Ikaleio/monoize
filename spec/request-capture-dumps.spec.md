@@ -217,7 +217,7 @@ RCD-D10c. A stream-collected attempt uses the internal URP stream pipeline witho
 
 RCD-D11. If an upstream call fails before a response body is available, the attempt entry MUST include `error` with at least `message` and `code` when available.
 
-RCD-D11a. A recorded stream-collected attempt that fails after upstream headers MUST still append one attempt entry, including its sent request and the collection or decoding `error`. This entry counts toward RCD-C11 and RCD-C12. An attempt's `upstream_path` MUST be the path used by its transport, including multipart image edits. A failed WebSocket create-frame send MUST append its attempt error when capture is active.
+RCD-D11a. A captured stream-collected attempt (RCD-D10c) that fails after the upstream response headers MUST still append one attempt entry with its sent request and the collection or decoding `error`. This entry counts toward RCD-C11 and RCD-C12. An attempt's `upstream_path` MUST be the path used by its transport, including multipart image edits. A failed WebSocket create-frame send MUST append its attempt error when capture is active.
 
 RCD-D12. Capture MUST NOT redact prompt text, tool arguments, image payloads, or provider response bodies because the feature is explicitly a raw diagnostic dump. Operators MUST keep the feature disabled unless they accept that sensitive payloads are persisted.
 

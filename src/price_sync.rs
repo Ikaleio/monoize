@@ -11,7 +11,8 @@ pub use mapping::{map_models_dev, map_new_api, map_openrouter};
 pub use plan::compute_sync_plan;
 
 use crate::model_price_store::{
-    ModelPriceRecord, ModelPriceStore, PriceSyncRun, is_service_tier_key, validate_billing_expr,
+    ModelPriceRecord, ModelPriceStore, PriceSyncRun, SyncRunOutcome, is_service_tier_key,
+    validate_billing_expr,
 };
 use crate::model_registry_store::{
     group_models_dev_variants, has_positive_input_variant, normalize_model_id, pick_best_variant,
@@ -349,26 +350,29 @@ pub async fn apply_previewed_sync_run(
         preview.snapshot.models_dev_root.as_ref(),
     )
     .await;
-    match outcome {
-        Ok(finalized) => Ok(finalized),
-        Err(error) => {
-            let _ = store
-                .finalize_sync_run(
-                    &run.id,
-                    crate::model_price_store::SyncRunOutcome {
-                        status: "failed",
-                        inserted: 0,
-                        updated: 0,
-                        skipped: 0,
-                        deleted: 0,
-                        error: Some(&error),
-                        detail_json: &json!({}),
-                    },
-                )
-                .await;
-            Err(error)
-        }
+    if let Err(error) = &outcome {
+        record_failed_run(store, &run.id, error).await;
     }
+    outcome
+}
+
+/// MP-Y16: marks a run row failed. The run's own error is what callers
+/// report, so a failure to record it is dropped.
+async fn record_failed_run(store: &ModelPriceStore, run_id: &str, error: &str) {
+    let _ = store
+        .finalize_sync_run(
+            run_id,
+            SyncRunOutcome {
+                status: "failed",
+                inserted: 0,
+                updated: 0,
+                skipped: 0,
+                deleted: 0,
+                error: Some(error),
+                detail_json: &json!({}),
+            },
+        )
+        .await;
 }
 
 async fn write_plan(
@@ -392,7 +396,7 @@ async fn write_plan(
     store
         .finalize_sync_run(
             run_id,
-            crate::model_price_store::SyncRunOutcome {
+            SyncRunOutcome {
                 status: "success",
                 inserted: plan.inserted,
                 updated: plan.updated,
@@ -414,29 +418,9 @@ pub async fn apply_sync_run(
     registry: &crate::model_registry_store::ModelRegistryStore,
     source: SyncSource,
     new_api_config: (&str, &str),
-) -> Result<PriceSyncRun, (Box<PriceSyncRun>, String)> {
+) -> Result<PriceSyncRun, String> {
     let _apply_guard = apply_lock().lock().await;
-    let run = store
-        .insert_sync_run(source.as_str())
-        .await
-        .map_err(|error| {
-            (
-                Box::new(PriceSyncRun {
-                    id: String::new(),
-                    source: source.as_str().to_string(),
-                    status: "failed".to_string(),
-                    started_at: Utc::now(),
-                    finished_at: Some(Utc::now()),
-                    inserted: 0,
-                    updated: 0,
-                    skipped: 0,
-                    deleted: 0,
-                    error: Some(error.clone()),
-                    detail_json: json!({}),
-                }),
-                error,
-            )
-        })?;
+    let run = store.insert_sync_run(source.as_str()).await?;
 
     let outcome: Result<PriceSyncRun, String> = async {
         let snapshot = fetch_source_snapshot(http, source, new_api_config).await?;
@@ -454,27 +438,10 @@ pub async fn apply_sync_run(
     }
     .await;
 
-    match outcome {
-        Ok(finalized) => Ok(finalized),
-        Err(error) => {
-            let finalized = store
-                .finalize_sync_run(
-                    &run.id,
-                    crate::model_price_store::SyncRunOutcome {
-                        status: "failed",
-                        inserted: 0,
-                        updated: 0,
-                        skipped: 0,
-                        deleted: 0,
-                        error: Some(&error),
-                        detail_json: &json!({}),
-                    },
-                )
-                .await
-                .unwrap_or(run);
-            Err((Box::new(finalized), error))
-        }
+    if let Err(error) = &outcome {
+        record_failed_run(store, &run.id, error).await;
     }
+    outcome
 }
 
 fn auto_sync_is_due(
@@ -504,7 +471,7 @@ async fn run_auto_sync_cycle(
                 "automatic price sync completed"
             );
         }
-        Err((_, error)) => {
+        Err(error) => {
             tracing::warn!(
                 source = "models_dev",
                 error = %error,
@@ -525,7 +492,7 @@ async fn run_auto_sync_cycle(
                 "automatic price sync completed"
             );
         }
-        Err((_, error)) => {
+        Err(error) => {
             tracing::warn!(
                 source = "openrouter",
                 error = %error,

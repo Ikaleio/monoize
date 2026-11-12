@@ -1,5 +1,4 @@
 use super::*;
-use futures_util::StreamExt as _;
 
 /// Downstream SSE event family for one streaming Image API request
 /// (`image-api-proxy.spec.md` §1).
@@ -10,14 +9,14 @@ pub(super) enum ImageStreamEventFamily {
 }
 
 impl ImageStreamEventFamily {
-    pub(super) fn partial_event_name(self) -> &'static str {
+    fn partial_event_name(self) -> &'static str {
         match self {
             Self::Generation => "image_generation.partial_image",
             Self::Edit => "image_edit.partial_image",
         }
     }
 
-    pub(super) fn completed_event_name(self) -> &'static str {
+    fn completed_event_name(self) -> &'static str {
         match self {
             Self::Generation => "image_generation.completed",
             Self::Edit => "image_edit.completed",
@@ -46,11 +45,11 @@ impl ImageStreamSink {
     }
 
     /// IS7: true once any partial or completed frame reached the client.
-    pub(super) fn frames_emitted(&self) -> bool {
+    fn frames_emitted(&self) -> bool {
         self.partial_frames_emitted > 0 || self.completed_frames_emitted > 0
     }
 
-    pub(super) async fn send_frame(&self, event_name: &str, payload: Value) {
+    async fn send_frame(&self, event_name: &str, payload: Value) {
         let _ = self
             .tx
             .send(Event::default().event(event_name).data(payload.to_string()))
@@ -153,103 +152,4 @@ impl ImageStreamSink {
 /// executor.
 pub(super) fn sink_frames_emitted(sink: &Option<&mut ImageStreamSink>) -> bool {
     sink.as_ref().is_some_and(|sink| sink.frames_emitted())
-}
-
-pub(super) fn upstream_rejects_image_streaming(error: &upstream::UpstreamCallError) -> bool {
-    if !matches!(error.status.map(|status| status.as_u16()), Some(400 | 422)) {
-        return false;
-    }
-    if matches!(
-        error.code.as_deref(),
-        Some("streaming_not_supported" | "unsupported_streaming")
-    ) {
-        return true;
-    }
-    let message = error.message.to_ascii_lowercase();
-    let unsupported_parameter = error.param.as_deref() == Some("stream")
-        && (message.contains("not support")
-            || message.contains("unsupported")
-            || message.contains("unknown parameter")
-            || message.contains("unrecognized"));
-    unsupported_parameter
-        || [
-            "streaming is not supported",
-            "stream is not supported",
-            "streaming not supported",
-            "does not support streaming",
-            "streaming is unsupported",
-            "unsupported parameter: 'stream'",
-            "unknown parameter: 'stream'",
-        ]
-        .iter()
-        .any(|signal| message.contains(signal))
-}
-
-pub(super) async fn decode_image_json_as_stream(
-    provider_type: ProviderType,
-    upstream_response: reqwest::Response,
-    request: &urp::UrpRequest,
-    mask_sensitive_info: bool,
-    tx: mpsc::Sender<urp::UrpStreamEvent>,
-    idle_timeout_ms: u64,
-) -> AppResult<()> {
-    let invalid_json = |detail: String| {
-        AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "invalid_upstream_response",
-            format!("invalid upstream image JSON: {detail}"),
-        )
-    };
-    // CFG-6a item 3: the dispatch sets no total body deadline, so each chunk
-    // wait is bounded by the stream idle timeout instead.
-    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut body = Vec::new();
-    let mut chunks = upstream_response.bytes_stream();
-    while let Some(chunk) = tokio::time::timeout(idle_timeout, chunks.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream image body idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
-        let chunk = chunk.map_err(|error| invalid_json(crate::error::error_chain(&error)))?;
-        body.extend_from_slice(&chunk);
-    }
-    let value: Value =
-        serde_json::from_slice(&body).map_err(|error| invalid_json(error.to_string()))?;
-    let response = decode_response_from_provider(
-        provider_type,
-        &value,
-        &request.model,
-        mask_sensitive_info,
-        request,
-    )?;
-    let mut extra_body = response.extra_body;
-    extra_body.insert("id".to_string(), Value::String(response.id));
-    extra_body.insert("model".to_string(), Value::String(response.model));
-    if let Some(created_at) = response.created_at {
-        extra_body.insert("created_at".to_string(), Value::from(created_at));
-    }
-    tx.send(urp::UrpStreamEvent::ResponseDone {
-        outcome: response.outcome,
-        finish_reason: response.finish_reason,
-        usage: response.usage,
-        output: response
-            .output
-            .into_iter()
-            .map(urp::TerminalNode::unannounced)
-            .collect(),
-        extra_body,
-    })
-    .await
-    .map_err(|error| {
-        AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "stream_send_failed",
-            error.to_string(),
-        )
-    })
 }

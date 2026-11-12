@@ -1,8 +1,9 @@
 use super::*;
-mod canonical;
 use canonical::canonical_affinity_node;
 use std::io::Write;
 use xxhash_rust::xxh3::Xxh3;
+
+mod canonical;
 
 fn affinity_value_from_json(value: &Value) -> Option<String> {
     value
@@ -82,18 +83,12 @@ pub(super) fn stable_affinity_field(req: &urp::UrpRequest) -> Option<String> {
         "user",
     ];
     for key in KEYS {
-        if *key == "request_id" {
-            continue;
-        }
         if let Some(value) = req.extra_body.get(*key).and_then(affinity_value_from_json) {
             return Some(format!("{key}:{value}"));
         }
     }
     if let Some(metadata) = req.extra_body.get("metadata").and_then(Value::as_object) {
         for key in KEYS {
-            if *key == "request_id" {
-                continue;
-            }
             if let Some(value) = metadata.get(*key).and_then(affinity_value_from_json) {
                 return Some(format!("metadata.{key}:{value}"));
             }
@@ -153,6 +148,7 @@ impl Write for BoundedHashWriter {
         Ok(())
     }
 }
+
 pub(super) fn affinity_prefix_hash(req: &urp::UrpRequest) -> String {
     let mut writer = BoundedHashWriter::new(AFFINITY_PREFIX_BYTE_LIMIT);
     let result = (|| -> std::io::Result<()> {

@@ -86,12 +86,6 @@ pub fn edit_requires_json(req: &UrpRequest) -> bool {
     })
 }
 
-pub fn encode_edit_request(req: &UrpRequest, model: &str) -> Result<Value, String> {
-    let prepared = prepare_request(req)?;
-    validate_edit_images(&prepared)?;
-    Ok(encode_edit_body(&prepared, model))
-}
-
 fn encode_edit_body(req: &UrpRequest, model: &str) -> Value {
     let mut body = request_fields(req, model);
     let mut images = Vec::new();
@@ -295,10 +289,6 @@ pub fn form_from_fields(fields: Vec<MultipartField>) -> Result<reqwest::multipar
         };
     }
     Ok(form)
-}
-
-pub fn multipart_form(req: &UrpRequest, model: &str) -> Result<reqwest::multipart::Form, String> {
-    form_from_fields(multipart_fields(req, model)?)
 }
 
 fn user_prompt(req: &UrpRequest) -> String {
