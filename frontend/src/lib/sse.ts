@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWRSubscription from "swr/subscription";
 import type { SWRSubscriptionOptions } from "swr/subscription";
 import type { RequestLog } from "./api";
@@ -9,12 +9,20 @@ const STALE_STREAM_TIMEOUT_MS = 45_000;
 
 export type RequestLogStreamEvent =
   | { type: "log_batch"; logs: RequestLog[] }
+  | { type: "capture_ready"; request_id: string; user_id: string }
   | { type: "resync" };
 
 const REQUEST_LOG_STREAM_KEY = "/dashboard/request-logs/stream-subscription";
 
-export function useRequestLogSSE(enabled: boolean) {
+export function useRequestLogSSE(
+  enabled: boolean,
+  onEvent: (event: RequestLogStreamEvent) => void,
+) {
   const [connected, setConnected] = useState(false);
+  const onEventRef = useRef(onEvent);
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
 
   const subscribe = (
     _key: string,
@@ -26,6 +34,12 @@ export function useRequestLogSSE(enabled: boolean) {
     let staleTimer: ReturnType<typeof setTimeout> | null = null;
     let controller: AbortController | null = null;
     let reconnectImmediately = false;
+
+    // Deliver every frame before React can coalesce subscription state updates.
+    const publish = (event: RequestLogStreamEvent) => {
+      onEventRef.current(event);
+      next(null, event);
+    };
 
     const clearReconnectTimer = () => {
       if (!reconnectTimer) {
@@ -74,7 +88,7 @@ export function useRequestLogSSE(enabled: boolean) {
         }
 
         reconnectImmediately = true;
-        next(null, { type: "resync" });
+        publish({ type: "resync" });
         controller?.abort();
         if (!controller) {
           scheduleReconnect(0);
@@ -87,7 +101,7 @@ export function useRequestLogSSE(enabled: boolean) {
         return;
       }
 
-      next(null, { type: "resync" });
+      publish({ type: "resync" });
       reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
       reconnectImmediately = true;
       setConnected(false);
@@ -132,7 +146,7 @@ export function useRequestLogSSE(enabled: boolean) {
 
         try {
           const logs = JSON.parse(payload) as RequestLog[];
-          next(null, { type: "log_batch", logs });
+          publish({ type: "log_batch", logs });
         } catch {
           return;
         }
@@ -140,8 +154,31 @@ export function useRequestLogSSE(enabled: boolean) {
         return;
       }
 
+      if (eventName === "capture_ready") {
+        try {
+          const payload: unknown = JSON.parse(dataLines.join("\n"));
+          if (
+            typeof payload === "object" &&
+            payload !== null &&
+            "request_id" in payload &&
+            typeof payload.request_id === "string" &&
+            "user_id" in payload &&
+            typeof payload.user_id === "string"
+          ) {
+            publish({
+              type: "capture_ready",
+              request_id: payload.request_id,
+              user_id: payload.user_id,
+            });
+          }
+        } catch {
+          return;
+        }
+        return;
+      }
+
       if (eventName === "resync") {
-        next(null, { type: "resync" });
+        publish({ type: "resync" });
       }
     };
 
@@ -245,10 +282,10 @@ export function useRequestLogSSE(enabled: boolean) {
     };
   };
 
-  const { data: event, error } = useSWRSubscription<RequestLogStreamEvent, Error>(
+  const { error } = useSWRSubscription<RequestLogStreamEvent, Error>(
     enabled ? REQUEST_LOG_STREAM_KEY : null,
     subscribe,
   );
 
-  return { connected, event, error };
+  return { connected, error };
 }

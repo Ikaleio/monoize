@@ -304,6 +304,8 @@ RCD-M3. Immediately after a dump file write succeeds (RCD-S11), and only when th
 
 RCD-M4. Metadata insert failure MUST be logged and MUST NOT delete the dump file and MUST NOT change the HTTP response returned to the downstream client.
 
+RCD-M4a. Successful metadata persistence MUST publish the process-local capture readiness notification defined by RCV-L3. Publishing MUST NOT wait for a subscriber and MUST NOT change the downstream response.
+
 RCD-M5. `request_capture_records` rows have no foreign keys. Deleting a user, an API key, or a request-log row MUST NOT delete capture metadata rows; only TTL cleanup (RCD-R3), size rotation (RCD-R7/RCD-R8), and stale-record cleanup (`request-capture-viewer.spec.md` RCV-A8) delete them.
 
 ## 6. Migration

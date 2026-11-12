@@ -12,9 +12,11 @@ RCV-L1. Every request-log row returned by `GET /api/dashboard/request-logs` MUST
 
 RCV-L2. `has_capture` MUST be `true` iff at least one `request_capture_records` row exists with `request_id = row.request_id AND user_id = row.user_id`. The list query MUST compute this with an indexed `EXISTS` subquery (or an equivalent indexed lookup) against `request_capture_records` only. The list path MUST NOT open, stat, or read any dump file.
 
-RCV-L3. In-memory SSE snapshots (`request-logs.spec.md` RL1a-1, FL46) are emitted before capture persistence completes, so SSE-delivered rows MUST carry `has_capture: false`.
+RCV-L3. In-memory log SSE snapshots do not wait for capture persistence, so their initial `has_capture` value MUST be `false`. After a metadata insert succeeds, the capture store MUST publish the matching `(request_id, user_id)` through the process-local `capture_ready` SSE notification. A failed insert or a store without a database MUST publish no notification.
 
-RCV-L4. Because of RCV-L3, while SSE is connected the logs page MUST schedule one trailing-debounced newest-page SWR revalidation (debounce interval 1500 ms) whenever at least one SSE-delivered row with a terminal status (`success`, `error`, `client_gone`) arrives. This revalidation refreshes `has_capture` without user interaction. Pending-only SSE batches MUST NOT schedule it.
+RCV-L4. A `capture_ready` notification MUST set `has_capture` on matching loaded or buffered rows without a list or aggregate request. The client MUST retain readiness across pending-to-terminal replacement and across notifications that arrive before their log row. Tooltip and scroll buffering MUST also apply to readiness updates. Readiness state MUST reset when active filters change. The client MUST retain at most 4096 distinct readiness keys; exceeding that bound MUST retain the newest key and request a REST resynchronization. Terminal log events MUST NOT schedule capture-related REST revalidation. Normal manual refresh, reconnect, lag recovery, and disconnected polling remain available.
+
+RCV-L4a. An incoming log SSE row MUST preserve an existing matching row's `has_capture: true`, including when readiness was learned from REST before the SSE subscription started. A full REST response MUST apply retained readiness before replacing displayed rows, so a read snapshot opened before capture persistence cannot erase a later readiness notification. An explicit manual refresh MUST clear previously retained readiness before requesting a new authoritative snapshot.
 
 ## 2. Capture detail API
 

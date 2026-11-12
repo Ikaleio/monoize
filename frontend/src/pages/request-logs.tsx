@@ -32,7 +32,7 @@ import {
 	SelectValue
 } from '@/components/ui/select'
 import { SWR_KEYS, useRequestLogs, useApiKeys, useProviders, useUserApiKeys } from '@/lib/swr'
-import { useRequestLogSSE } from '@/lib/sse'
+import { useRequestLogSSE, type RequestLogStreamEvent } from '@/lib/sse'
 import { useAuth } from '@/hooks/use-auth'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
@@ -176,7 +176,11 @@ export function RequestLogsPage() {
 	const atTopRef = useRef(true)
 	const [captureOpen, setCaptureOpen] = useState(false)
 	const [captureTarget, setCaptureTarget] = useState<RequestLog | null>(null)
-	const captureRevalidateTimerRef = useRef<number | null>(null)
+	const captureReadyRef = useRef<Set<string>>(new Set())
+	const streamEventHandlerRef = useRef<(event: RequestLogStreamEvent) => void>(() => {})
+	const receiveStreamEvent = useCallback((event: RequestLogStreamEvent) => {
+		streamEventHandlerRef.current(event)
+	}, [])
 
 	const handleOpenCapture = useCallback((log: RequestLog) => {
 		if (!log.request_id || !log.user?.id) return
@@ -224,6 +228,7 @@ export function RequestLogsPage() {
 		setTotalCharge('0')
 		pendingPageDataRef.current = null
 		pendingNewestDataRef.current = null
+		captureReadyRef.current.clear()
 		atTopRef.current = true
 	}, [filterKey])
 
@@ -348,6 +353,16 @@ export function RequestLogsPage() {
 		[]
 	)
 
+	const applyCaptureReadiness = useCallback(
+		(logs: RequestLog[]): RequestLog[] =>
+			logs.map(log =>
+				!log.has_capture && captureReadyRef.current.has(JSON.stringify([log.user?.id, log.request_id]))
+					? { ...log, has_capture: true }
+					: log
+			),
+		[]
+	)
+
 	const prependSSELogs = useCallback(
 		(logs: RequestLog[]) => {
 			if (logs.length === 0) return
@@ -358,7 +373,7 @@ export function RequestLogsPage() {
 				const incomingIds = new Set<string>()
 				const handledRequestIds = new Set<string>()
 
-				for (const log of logs) {
+				for (let log of applyCaptureReadiness(logs)) {
 					if (incomingIds.has(log.id)) continue
 					incomingIds.add(log.id)
 					const matchesFilters = matchesActiveFilters(log)
@@ -369,6 +384,12 @@ export function RequestLogsPage() {
 								item => item.request_id === log.request_id
 							)
 							if (duplicateIndex >= 0) {
+								if (
+									next[duplicateIndex].has_capture &&
+									next[duplicateIndex].user?.id === log.user?.id
+								) {
+									log = { ...log, has_capture: true }
+								}
 								if (matchesFilters) next[duplicateIndex] = log
 								else next.splice(duplicateIndex, 1)
 							}
@@ -389,6 +410,12 @@ export function RequestLogsPage() {
 							continue
 						}
 						if (existingIndex >= 0) {
+							if (
+								next[existingIndex].has_capture &&
+								next[existingIndex].user?.id === log.user?.id
+							) {
+								log = { ...log, has_capture: true }
+							}
 							next.splice(existingIndex, 1)
 							if (matchesFilters) next.unshift(log)
 							continue
@@ -403,7 +430,7 @@ export function RequestLogsPage() {
 				return next
 			})
 		},
-		[matchesActiveFilters]
+		[matchesActiveFilters, applyCaptureReadiness]
 	)
 
 	const receiveSSELogs = useCallback(
@@ -424,9 +451,10 @@ export function RequestLogsPage() {
 		setTotalCount(data.total)
 		setTotalCharge(data.total_charge_nano_usd)
 		setLoadedLogs(prev => {
-			if (data.offset === 0) return preservePendingItems(prev, data.data)
+			const rows = applyCaptureReadiness(data.data)
+			if (data.offset === 0) return preservePendingItems(prev, rows)
 			const existingIds = new Set(prev.map(log => log.id))
-			const appended = data.data.filter(log => !existingIds.has(log.id))
+			const appended = rows.filter(log => !existingIds.has(log.id))
 			return appended.length === 0 ? prev : [...prev, ...appended]
 		})
 	}
@@ -435,12 +463,13 @@ export function RequestLogsPage() {
 		setTotalCount(data.total)
 		setTotalCharge(data.total_charge_nano_usd)
 		setLoadedLogs(prev => {
+			const rows = applyCaptureReadiness(data.data)
 			if (prev.length === 0 || requestOffset === 0) {
-				return preservePendingItems(prev, data.data)
+				return preservePendingItems(prev, rows)
 			}
-			const newestIds = new Set(data.data.map(log => log.id))
+			const newestIds = new Set(rows.map(log => log.id))
 			const tail = prev.filter(log => !newestIds.has(log.id))
-			return [...data.data, ...tail].slice(0, data.total)
+			return [...rows, ...tail].slice(0, data.total)
 		})
 	}
 
@@ -499,8 +528,9 @@ export function RequestLogsPage() {
 		return names
 	}, [providers])
 
-	const { connected: sseConnected, event: sseEvent } = useRequestLogSSE(
-		automaticUpdatesEnabled && pageSettled
+	const { connected: sseConnected } = useRequestLogSSE(
+		automaticUpdatesEnabled && pageSettled,
+		receiveStreamEvent
 	)
 
 	const { error: newestError, mutate: mutateNewest } = useRequestLogs(
@@ -527,55 +557,31 @@ export function RequestLogsPage() {
 		void mutateNewest()
 	}, [automaticUpdatesEnabled, mutate, mutateNewest])
 
-	// RCV-L4: SSE rows always carry `has_capture: false`, so one trailing
-	// 1500 ms debounced newest-page revalidation refreshes the capture flag
-	// after terminal rows arrive, without a revalidation per SSE batch.
-	const scheduleCaptureFlagRevalidate = useCallback(() => {
-		if (captureRevalidateTimerRef.current != null) {
-			window.clearTimeout(captureRevalidateTimerRef.current)
-		}
-		captureRevalidateTimerRef.current = window.setTimeout(() => {
-			captureRevalidateTimerRef.current = null
-			void mutateNewest()
-		}, 1500)
-	}, [mutateNewest])
-
-	useEffect(
-		() => () => {
-			if (captureRevalidateTimerRef.current != null) {
-				window.clearTimeout(captureRevalidateTimerRef.current)
-			}
-		},
-		[]
-	)
-
 	useEffect(() => {
-		if (!automaticUpdatesEnabled || !sseEvent) return
+		streamEventHandlerRef.current = sseEvent => {
+			if (!automaticUpdatesEnabled) return
 
-		if (sseEvent.type === 'resync') {
-			void mutate()
-			void mutateNewest()
-			return
+			if (sseEvent.type === 'resync') {
+				void mutate()
+				void mutateNewest()
+				return
+			}
+
+			if (sseEvent.type === 'capture_ready') {
+				const key = JSON.stringify([sseEvent.user_id, sseEvent.request_id])
+				if (!captureReadyRef.current.has(key) && captureReadyRef.current.size >= 4096) {
+					captureReadyRef.current.clear()
+					void mutate()
+					void mutateNewest()
+				}
+				captureReadyRef.current.add(key)
+				flushBuffersRef.current()
+				return
+			}
+
+			receiveSSELogs(sseEvent.logs)
 		}
-
-		const hasTerminalRow = sseEvent.logs.some(
-			log =>
-				log.status === 'success' ||
-				log.status === 'error' ||
-				log.status === 'client_gone'
-		)
-		if (hasTerminalRow) scheduleCaptureFlagRevalidate()
-
-		// eslint-disable-next-line react-hooks/set-state-in-effect -- SSE batches arrive as hook state; hand each one once to the tooltip/scroll-gated row list
-		receiveSSELogs(sseEvent.logs)
-	}, [
-		automaticUpdatesEnabled,
-		sseEvent,
-		mutate,
-		mutateNewest,
-		receiveSSELogs,
-		scheduleCaptureFlagRevalidate
-	])
+	}, [automaticUpdatesEnabled, mutate, mutateNewest, receiveSSELogs])
 
 	const prevConnectedRef = useRef(false)
 	useEffect(() => {
@@ -590,12 +596,6 @@ export function RequestLogsPage() {
 		}
 		prevConnectedRef.current = sseConnected
 	}, [automaticUpdatesEnabled, sseConnected, mutate, mutateNewest])
-
-	useEffect(() => {
-		if (automaticUpdatesEnabled || captureRevalidateTimerRef.current == null) return
-		window.clearTimeout(captureRevalidateTimerRef.current)
-		captureRevalidateTimerRef.current = null
-	}, [automaticUpdatesEnabled])
 
 	// Applies buffered data once no tooltip is open; live rows above the reading
 	// position additionally wait until the table is back at the top (FL37e).
@@ -620,6 +620,9 @@ export function RequestLogsPage() {
 			pendingSSERef.current = []
 			prependSSELogs(bufferedSSE)
 		}
+		if (atTopNow && captureReadyRef.current.size > 0) {
+			setLoadedLogs(applyCaptureReadiness)
+		}
 	}
 	useEffect(() => {
 		flushBuffersRef.current = flushBuffers
@@ -634,7 +637,10 @@ export function RequestLogsPage() {
 	const visibleTotal = pageData?.total ?? totalCount
 	const hasMore = visibleLogs.length < visibleTotal
 	const listError = logsError ?? newestError
-	const retryList = () => Promise.all([mutate(), mutateNewest()])
+	const retryList = () => {
+		captureReadyRef.current.clear()
+		return Promise.all([mutate(), mutateNewest()])
+	}
 
 	const sortedLogs = useMemo(() => {
 		const sorted = [...visibleLogs]

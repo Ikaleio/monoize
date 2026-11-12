@@ -689,7 +689,7 @@ FL45. The server MUST expose a streaming endpoint at `GET /api/dashboard/request
 
 ### 6.2 SSE event types
 
-FL46. The endpoint MUST emit exactly two event types:
+FL46. The endpoint MUST emit exactly three event types:
 
 1. **`log_batch`**: Carries an array of one or more complete `RequestLog` objects (same shape as items in the REST response `data[]` from section 3.1).
    Wire format:
@@ -709,6 +709,10 @@ FL46. The endpoint MUST emit exactly two event types:
 
    ```
    The server MUST emit `resync` when the internal broadcast channel enters a `Lagged` state (i.e., a slow consumer missed messages). The client MUST respond by calling `mutate()` on the request-logs SWR key to trigger a full REST refetch.
+
+3. **`capture_ready`**: Carries `{ "request_id": string, "user_id": string }` after capture metadata persistence succeeds. Visibility MUST follow FL47. A lagged capture-notification receiver MUST emit `resync`. The client MUST update matching rows without reloading the list or aggregates, as defined in RCV-L4.
+
+FL46a. The browser MUST process each decoded event in receive order, including multiple events received before React renders. A capture notification MUST NOT replace or discard an unprocessed log batch.
 
 ### 6.3 Permission model
 

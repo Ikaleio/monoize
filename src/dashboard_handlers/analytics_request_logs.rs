@@ -482,6 +482,8 @@ pub async fn stream_request_logs(
     };
 
     let receiver = state.log_broadcast.subscribe();
+    let capture_receiver = state.request_capture.subscribe_ready();
+    let capture_user_id = user_id.clone();
     let runtime = state.monoize_runtime.clone();
 
     let mut initial_pending: Vec<_> = state
@@ -571,8 +573,27 @@ pub async fn stream_request_logs(
             }
         },
     );
-    let stream =
-        stream::once(async move { Ok::<Event, Infallible>(initial_event) }).chain(live_stream);
+    let capture_stream = stream::unfold(
+        (capture_receiver, capture_user_id),
+        move |(mut receiver, user_id)| async move {
+            loop {
+                let event = match receiver.recv().await {
+                    Ok(ready) if is_admin || ready.user_id == user_id => {
+                        match serde_json::to_string(&ready) {
+                            Ok(payload) => Event::default().event("capture_ready").data(payload),
+                            Err(_) => Event::default().event("resync").data("{}"),
+                        }
+                    }
+                    Ok(_) => continue,
+                    Err(RecvError::Lagged(_)) => Event::default().event("resync").data("{}"),
+                    Err(RecvError::Closed) => return None,
+                };
+                return Some((Ok::<Event, Infallible>(event), (receiver, user_id)));
+            }
+        },
+    );
+    let stream = stream::once(async move { Ok::<Event, Infallible>(initial_event) })
+        .chain(stream::select(live_stream, capture_stream));
 
     Ok(Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))

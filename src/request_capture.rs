@@ -164,6 +164,13 @@ pub struct RequestCaptureStore {
     limits: RequestCaptureLimits,
     db: Option<DbPool>,
     runtime: Option<Arc<RwLock<MonoizeRuntimeConfig>>>,
+    ready: tokio::sync::broadcast::Sender<CaptureReady>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CaptureReady {
+    pub request_id: String,
+    pub user_id: String,
 }
 
 /// One `request_capture_records` row (RCD-M1).
@@ -448,6 +455,7 @@ impl RequestCaptureStore {
             limits: RequestCaptureLimits::from_env(),
             db: None,
             runtime: None,
+            ready: tokio::sync::broadcast::channel(256).0,
         }
     }
 
@@ -468,6 +476,11 @@ impl RequestCaptureStore {
 
     pub fn dump_dir(&self) -> &Path {
         &self.dump_dir
+    }
+
+    /// Subscribe to persisted capture identifiers. Lagged receivers must reload their snapshot.
+    pub fn subscribe_ready(&self) -> tokio::sync::broadcast::Receiver<CaptureReady> {
+        self.ready.subscribe()
     }
 
     /// RCD-C9 pre-check without starting a session. Handlers that must build
@@ -872,6 +885,10 @@ impl RequestCaptureStore {
             ))
             .await
             .map_err(|err| err.to_string())?;
+        let _ = self.ready.send(CaptureReady {
+            request_id: record.request_id.clone(),
+            user_id: record.user_id.clone(),
+        });
         Ok(())
     }
 }
