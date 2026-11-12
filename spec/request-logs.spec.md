@@ -323,6 +323,8 @@ RL-API10. The page rows, `total`, and `total_charge_nano_usd` returned by one re
 
 RL-API10a. `total` and `total_charge_nano_usd` MUST be computed in one aggregate query (`COUNT(*)` plus the charge sum). The list path MUST NOT scan matching rows once for count and again for sum.
 
+RL-API10b. Both global and user-scoped row queries MUST apply all filters, the complete RL-API10 ordering, and pagination before joining display names or checking capture metadata. Display-name joins MUST process at most `limit` rows. Aggregate queries MUST retain the same filters and snapshot as the page query.
+
 RL-API11. Exact charge totals MUST be aggregated in the database into bounded exact integer components or an exact decimal value. The server MUST NOT transfer one `charge_nano_usd` value per matching row solely to calculate a list-page total. Rust MUST reconstruct or parse the database aggregate with checked `i128` arithmetic. A syntactically canonical charge outside the signed `i128` domain, or a total outside that domain, MUST return an explicit internal storage error. Non-canonical stored charge text is ignored.
 
 RL-API12. The effective maximum number of non-empty comma-separated `model` terms MUST be configured by `MONOIZE_REQUEST_LOG_MODEL_FILTER_MAX_TERMS`. The default and hard maximum MUST both be `32`. A trimmed base-10 integer in `[1, 32]` selects that value. An unset, empty, malformed, zero, negative, or greater-than-32 value MUST resolve to `32`. Empty comma-separated entries are discarded; every remaining entry, including a duplicate, counts as one term because it creates one SQL predicate and one bind value.
@@ -351,10 +353,12 @@ RL-S1. Request logs MUST be stored in table `request_logs`.
 
 RL-S2. The table MUST have a persisted sortable time column `created_at_unix_ms` storing the request creation instant as Unix epoch milliseconds.
 
-RL-S2a. The table MUST have indexes on the persisted sortable time column:
-- a composite index on `(user_id, created_at_unix_ms DESC)` for per-user pagination and time-range filtering,
-- an index on `(created_at_unix_ms DESC)` for global pagination, analytics range scans, and retention cleanup.
+RL-S2a. The table MUST have indexes on the complete persisted page ordering:
+- `idx_request_logs_user_page` on `(user_id, created_at_unix_ms DESC NULLS LAST, created_at DESC, id DESC)` for per-user pagination and time-range filtering,
+- `idx_request_logs_page` on `(created_at_unix_ms DESC NULLS LAST, created_at DESC, id DESC)` for global pagination, analytics range scans, and retention cleanup.
 - a partial compatibility index on `(created_at)` where `created_at_unix_ms IS NULL`, so the explicit legacy-null range branch does not force a full-table scan.
+
+RL-S2a-2. SQLite MUST omit `NULLS LAST` from index DDL because descending SQLite indexes already place nulls last. Migration `m20261101_000060_request_log_page_indexes` MUST create both page indexes before dropping the superseded `idx_request_logs_user_created_at` and `idx_request_logs_created_at` indexes. It MUST preserve all rows and unrelated indexes.
 
 RL-S2a-1. The table MUST also have a partial index `idx_request_logs_status_pending` on `(status)` where `status = 'pending'`, so the RL1f/RL3b legacy pending sweeps do not force a full-table scan. Because terminal-only inserts (RL1a) never write `status = 'pending'`, this index contains at most legacy rows.
 

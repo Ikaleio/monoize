@@ -170,6 +170,24 @@ fn row_bool(row: &sea_orm::QueryResult, column: &str) -> Result<bool, String> {
     }
 }
 
+fn enrich_request_log_page_sql(page_sql: &str, is_postgres: bool, next_param: usize) -> String {
+    let nulls_last = if is_postgres { " NULLS LAST" } else { "" };
+    let order = format!("rl.created_at_unix_ms DESC{nulls_last}, rl.created_at DESC, rl.id DESC");
+    // LIMIT inside the derived table bounds enrichment work independently of join planning.
+    format!(
+        "SELECT rl.*, \
+         EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture, \
+         u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name \
+         FROM ({page_sql} ORDER BY {order} LIMIT ${next_param} OFFSET ${offset_param}) rl \
+         LEFT JOIN users u ON u.id = rl.user_id \
+         LEFT JOIN api_keys ak ON ak.id = rl.api_key_id \
+         LEFT JOIN monoize_channels ch ON ch.id = rl.channel_id \
+         LEFT JOIN monoize_providers p ON p.id = rl.provider_id \
+         ORDER BY {order}",
+        offset_param = next_param + 1,
+    )
+}
+
 fn row_optional_i64(row: &sea_orm::QueryResult, column: &str) -> Result<Option<i64>, String> {
     match row.try_get::<Option<i64>>("", column) {
         Ok(value) => Ok(value),
@@ -832,29 +850,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
         let total_charge_nano_usd = decode_charge_aggregate(&aggregates_row, is_postgres)?;
 
-        // Rows query
-        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model, rl.upstream_response_model,
-                      rl.channel_id, rl.is_stream,
-                      rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
-                      rl.tool_prompt_tokens, rl.reasoning_tokens,
-                      rl.accepted_prediction_tokens, rl.rejected_prediction_tokens,
-                      rl.provider_multiplier, rl.charge_nano_usd, rl.status,
-                      rl.usage_breakdown_json, rl.billing_breakdown_json,
-                      rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms,
-                      rl.request_ip, rl.reasoning_effort, rl.tried_providers_json, rl.request_kind,
-                      rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
-                      rl.session_affinity_value,
-                      rl.created_at,
-                      EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture,
-                      u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
-               FROM request_logs rl
-               LEFT JOIN users u ON u.id = rl.user_id
-               LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
-               LEFT JOIN monoize_channels ch ON ch.id = rl.channel_id
-               LEFT JOIN monoize_providers p ON p.id = rl.provider_id
-               WHERE rl.user_id = $1"#
-            .to_string();
+        let mut rows_sql = "SELECT rl.* FROM request_logs rl WHERE rl.user_id = $1".to_string();
         let mut rows_values: Vec<SeaValue> = vec![user_id.into()];
         let mut rows_idx = 2usize;
         append_request_log_filters(
@@ -871,19 +867,7 @@ impl UserStore {
             time_from,
             time_to,
         )?;
-        if is_postgres {
-            rows_sql.push_str(&format!(
-                " ORDER BY rl.created_at_unix_ms DESC NULLS LAST, rl.created_at DESC, rl.id DESC LIMIT ${} OFFSET ${}",
-                rows_idx,
-                rows_idx + 1
-            ));
-        } else {
-            rows_sql.push_str(&format!(
-                " ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC, rl.id DESC LIMIT ${} OFFSET ${}",
-                rows_idx,
-                rows_idx + 1
-            ));
-        }
+        let rows_sql = enrich_request_log_page_sql(&rows_sql, is_postgres, rows_idx);
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
 
@@ -965,29 +949,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
         let total_charge_nano_usd = decode_charge_aggregate(&aggregates_row, is_postgres)?;
 
-        // Rows query
-        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model, rl.upstream_response_model,
-                      rl.channel_id, rl.is_stream,
-                      rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
-                      rl.tool_prompt_tokens, rl.reasoning_tokens,
-                      rl.accepted_prediction_tokens, rl.rejected_prediction_tokens,
-                      rl.provider_multiplier, rl.charge_nano_usd, rl.status,
-                      rl.usage_breakdown_json, rl.billing_breakdown_json,
-                      rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms,
-                      rl.request_ip, rl.reasoning_effort, rl.tried_providers_json, rl.request_kind,
-                      rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
-                      rl.session_affinity_value,
-                      rl.created_at,
-                      EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture,
-                      u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
-               FROM request_logs rl
-               LEFT JOIN users u ON u.id = rl.user_id
-               LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
-               LEFT JOIN monoize_channels ch ON ch.id = rl.channel_id
-               LEFT JOIN monoize_providers p ON p.id = rl.provider_id
-               WHERE 1 = 1"#
-            .to_string();
+        let mut rows_sql = "SELECT rl.* FROM request_logs rl WHERE 1 = 1".to_string();
         let mut rows_values: Vec<SeaValue> = Vec::new();
         let mut rows_idx = 1usize;
         append_request_log_filters(
@@ -1004,19 +966,7 @@ impl UserStore {
             time_from,
             time_to,
         )?;
-        if is_postgres {
-            rows_sql.push_str(&format!(
-                " ORDER BY rl.created_at_unix_ms DESC NULLS LAST, rl.created_at DESC, rl.id DESC LIMIT ${} OFFSET ${}",
-                rows_idx,
-                rows_idx + 1
-            ));
-        } else {
-            rows_sql.push_str(&format!(
-                " ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC, rl.id DESC LIMIT ${} OFFSET ${}",
-                rows_idx,
-                rows_idx + 1
-            ));
-        }
+        let rows_sql = enrich_request_log_page_sql(&rows_sql, is_postgres, rows_idx);
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
 
