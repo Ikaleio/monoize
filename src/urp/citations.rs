@@ -1,4 +1,4 @@
-use super::ProviderProtocol;
+use super::{GEMINI_GROUNDING_EXTRA_KEY, ProviderProtocol, is_internal_key};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -193,7 +193,7 @@ impl Citation {
             .as_object()
             .into_iter()
             .flatten()
-            .filter(|(k, _)| !OWNED_FIELDS.contains(&k.as_str()) && !k.starts_with("_monoize_"))
+            .filter(|(k, _)| !OWNED_FIELDS.contains(&k.as_str()) && !is_internal_key(k))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         Self {
@@ -209,8 +209,7 @@ impl Citation {
                     .into_iter()
                     .flatten()
                     .filter(|(key, _)| {
-                        !matches!(key.as_str(), "type" | "url_citation")
-                            && !key.starts_with("_monoize_")
+                        !matches!(key.as_str(), "type" | "url_citation") && !is_internal_key(key)
                     })
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect()
@@ -359,7 +358,7 @@ impl Citation {
         if same {
             if let Some(obj) = body.as_object_mut() {
                 for (key, value) in &self.extra_body {
-                    if !OWNED_FIELDS.contains(&key.as_str()) && !key.starts_with("_monoize_") {
+                    if !OWNED_FIELDS.contains(&key.as_str()) && !is_internal_key(key) {
                         obj.entry(key.clone()).or_insert_with(|| value.clone());
                     }
                 }
@@ -391,8 +390,6 @@ pub fn encode(values: &[Citation], protocol: ProviderProtocol, offset: u64) -> V
         .filter_map(|v| v.encode(protocol, offset))
         .collect()
 }
-
-const GEMINI_GROUNDING: &str = "_monoize_gemini_grounding";
 
 fn byte_range(text: &str, start: u64, end: u64) -> Option<TextRange> {
     let start = usize::try_from(start).ok()?;
@@ -551,7 +548,7 @@ pub fn attach_gemini(candidate: &Map<String, Value>, nodes: &mut [super::Node]) 
                 .get("confidenceScores")
                 .and_then(Value::as_array)
                 .and_then(|scores| scores.get(position));
-            citation.wrapper_extra.insert(GEMINI_GROUNDING.into(), json!({"kind":kind,"source":source_extra,"support":support_extra,"confidence":confidence}));
+            citation.wrapper_extra.insert(GEMINI_GROUNDING_EXTRA_KEY.into(), json!({"kind":kind,"source":source_extra,"support":support_extra,"confidence":confidence}));
             push_citation(citations, citation);
         }
     }
@@ -623,7 +620,7 @@ pub fn encode_gemini_grounding(nodes: &[super::Node]) -> Option<Value> {
         } = node
         {
             for citation in citations {
-                let Some(shape) = citation.wrapper_extra.get(GEMINI_GROUNDING) else {
+                let Some(shape) = citation.wrapper_extra.get(GEMINI_GROUNDING_EXTRA_KEY) else {
                     continue;
                 };
                 let CitationSource::Url { url, title } = &citation.source else {
@@ -702,8 +699,7 @@ pub fn rebase_citation(citation: &mut Citation, spans: &[TextSpan]) -> Option<u3
         .iter()
         .find(|span| span.source_end > range.start)
         .unwrap_or(last);
-    let start = owner.out_start
-        + range.start.clamp(owner.source_start, owner.source_end)
+    let start = owner.out_start + range.start.clamp(owner.source_start, owner.source_end)
         - owner.source_start;
     let end = spans
         .iter()

@@ -298,7 +298,11 @@ properties:
 CJS-JS-2. `ctx.data` is the exact serde JSON serialization of the URP v2 value:
 `UrpRequest` when `kind = "request"`, `UrpResponse` when `kind = "response"`, and one
 canonical `UrpStreamEvent` when `kind = "stream"`. Transform-visible surfaces are the
-same surfaces defined by `urp-transform-system.spec.md` SURF-1 through SURF-10.
+same surfaces defined by `urp-transform-system.spec.md` SURF-1 through SURF-10. In a
+`response_done` event, each `output[]` entry is a flattened `TerminalNode`: the node
+members plus an optional `node_index`, the index of the `NodeStart` that announced it
+(`urp-v2-flat-structure.spec.md` STR-8). A script that keeps an announced node MUST keep
+its `node_index`. An entry returned without `node_index` is an unannounced node (STR-8b).
 
 CJS-JS-3. The runtime writes the result back by deserializing the resulting JSON into
 the same URP v2 type. A deserialization failure is an apply error (CJS-EX-5).
@@ -327,7 +331,9 @@ CJS-JS-7. Under CJS-JS-6 rules 1 through 4, every emitted object MUST deserializ
 canonical `UrpStreamEvent`; otherwise apply error.
 
 CJS-JS-8. A custom stream transform MUST preserve a valid canonical node lifecycle
-(`urp-transform-system.spec.md` STR-10). The runtime does not validate lifecycle
+(`urp-transform-system.spec.md` STR-10). A script that renumbers, inserts, or removes
+stream nodes MUST keep terminal `node_index` values consistent with its events
+(`urp-v2-flat-structure.spec.md` STR-8c). The runtime does not validate lifecycle
 invariants beyond deserialization; violating them is an authoring defect.
 
 CJS-JS-9. Host network bridge: `Monoize.fetch(url, options?)` performs one blocking HTTP

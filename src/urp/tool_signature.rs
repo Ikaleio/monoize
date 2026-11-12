@@ -1,8 +1,9 @@
-use super::{Node, NodeDelta, NodeHeader, ReasoningMetadata, UrpResponse, UrpStreamEvent};
+use super::{
+    Node, NodeDelta, NodeHeader, ReasoningMetadata, TerminalNode, UrpResponse, UrpStreamEvent,
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
-use tokio::sync::mpsc;
 
 const CALL_SIGNATURE_PREFIX: &str = "rs_gemini_call_";
 
@@ -96,7 +97,7 @@ pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) {
 /// Builds an encoder-local wire view without adding another signature to canonical storage.
 pub fn project_response(response: &UrpResponse) -> UrpResponse {
     let mut projected = response.clone();
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(projected.output.len());
     let mut controls = Vec::new();
     for mut node in std::mem::take(&mut projected.output) {
         if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
@@ -104,7 +105,7 @@ pub fn project_response(response: &UrpResponse) -> UrpResponse {
             continue;
         }
         if let Some((call_id, signature)) = take_call_signature(&mut node) {
-            output.push(transport_node(&call_id, signature));
+            output.push(transport_node(call_id, signature));
         }
         output.append(&mut controls);
         output.push(node);
@@ -114,46 +115,88 @@ pub fn project_response(response: &UrpResponse) -> UrpResponse {
     projected
 }
 
-fn take_call_signature(node: &mut Node) -> Option<(String, Value)> {
-    if let Node::ToolCall {
+fn take_call_signature(node: &mut Node) -> Option<(&str, Value)> {
+    let Node::ToolCall {
         call_id, signature, ..
     } = node
-    {
-        signature
-            .take()
-            .map(|signature| (call_id.clone(), signature))
-    } else {
-        None
-    }
+    else {
+        return None;
+    };
+    Some((call_id.as_str(), signature.take()?))
 }
 
+fn is_control_event(event: &UrpStreamEvent) -> bool {
+    matches!(
+        event,
+        UrpStreamEvent::NodeStart {
+            header: NodeHeader::NextDownstreamEnvelopeExtra,
+            ..
+        } | UrpStreamEvent::NodeDone {
+            node: Node::NextDownstreamEnvelopeExtra { .. },
+            ..
+        }
+    )
+}
+
+/// Stream state of one source node.
 struct NodeMapping {
+    /// The projected `node_index`.
     node: u32,
-    transport: Option<u32>,
-    header: Option<NodeHeader>,
-    completed: Option<Node>,
+    transport: Option<Transport>,
 }
 
-struct SignatureEmission {
-    index: u32,
+/// The bound Reasoning transport of one streamed call signature.
+struct Transport {
+    node_index: u32,
+    /// Ordinary nodes announced before the transport started. Terminal output keeps the
+    /// transport at that stream position (PG5a2).
     preceding_nodes: usize,
     completed: bool,
 }
 
+/// One ordinary terminal entry with the control entries that target its envelope.
+struct TerminalGroup {
+    controls: Vec<TerminalNode>,
+    entry: TerminalNode,
+    /// The announced source index that `entry` claims (STR-8d).
+    source: Option<u32>,
+    /// The unannounced transport of a signed entry that owns no streamed transport. It directly
+    /// precedes `controls` (PG5a2).
+    terminal_only_transport: Option<Node>,
+}
+
+/// Where a streamed transport goes in terminal output: right after the terminal entry of the
+/// last ordinary node announced before it, else before the first one announced after it.
+/// Anchors exclude controls and unannounced nodes, and each insertion lands outside a whole
+/// control/owner group, so it never separates a control from its target.
+fn transport_position(anchors: &[Option<usize>], preceding_nodes: usize, owner: usize) -> usize {
+    anchors[..preceding_nodes]
+        .iter()
+        .rev()
+        .find_map(|anchor| anchor.map(|position| position + 1))
+        .or_else(|| anchors[preceding_nodes..].iter().find_map(|anchor| *anchor))
+        .unwrap_or(owner)
+}
+
 /// Projects canonical stream events at the downstream encoder boundary with dense wire indices.
+/// Each call signature leaves its call and travels in a bound Reasoning transport (PG5a1).
 #[derive(Default)]
 pub struct SignatureProjection {
     defer_transport_start: bool,
     next_index: u32,
+    /// Every ordinary and control source `node_index` seen so far.
     mapping: HashMap<u32, NodeMapping>,
-    ordinary_indices: Vec<u32>,
-    signatures: HashMap<String, SignatureEmission>,
+    /// Source indices of ordinary nodes in announcement order.
+    ordinary: Vec<u32>,
+    /// Control events wait for the next ordinary event: a transport that event starts must
+    /// precede them so that they keep targeting the envelope of that node.
     controls: VecDeque<UrpStreamEvent>,
-    pending: VecDeque<UrpStreamEvent>,
+    ready: VecDeque<UrpStreamEvent>,
 }
 
 impl SignatureProjection {
-    /// Keeps sequential Messages blocks available for tool argument deltas.
+    /// Keeps sequential Messages blocks available for tool argument deltas: a transport starts
+    /// only when its signature is final.
     pub fn for_messages() -> Self {
         Self {
             defer_transport_start: true,
@@ -161,22 +204,54 @@ impl SignatureProjection {
         }
     }
 
-    pub async fn recv(
-        &mut self,
-        rx: &mut mpsc::Receiver<UrpStreamEvent>,
-    ) -> Option<UrpStreamEvent> {
-        loop {
-            if let Some(event) = self.pending.pop_front() {
-                return Some(event);
-            }
-            match rx.recv().await {
-                Some(event) => self.push(event),
-                None => {
-                    self.flush_controls();
-                    return self.pending.pop_front();
-                }
-            }
+    /// Projects one event. Read the projected events with `next_ready`.
+    pub fn push(&mut self, mut event: UrpStreamEvent) {
+        if is_control_event(&event) {
+            self.controls.push_back(event);
+            return;
         }
+        match &mut event {
+            UrpStreamEvent::NodeStart {
+                node_index, header, ..
+            } => {
+                // A start signature is provisional (CTRL-8a): it may open the transport, but
+                // only NodeDone or the terminal snapshot supplies its value.
+                let signed = match header {
+                    NodeHeader::ToolCall {
+                        call_id, signature, ..
+                    } => signature
+                        .take()
+                        .filter(|_| !self.defer_transport_start)
+                        .map(|signature| (call_id.as_str(), signature)),
+                    _ => None,
+                };
+                *node_index = self.prepare_node(*node_index, signed, false);
+            }
+            UrpStreamEvent::NodeDelta { node_index, .. } => {
+                *node_index = self.prepare_node(*node_index, None, false);
+            }
+            UrpStreamEvent::NodeDone {
+                node_index, node, ..
+            } => {
+                let signed = take_call_signature(node);
+                *node_index = self.prepare_node(*node_index, signed, true);
+            }
+            UrpStreamEvent::ResponseDone { output, .. } => {
+                self.flush_controls();
+                *output = self.project_terminal(std::mem::take(output));
+            }
+            _ => self.flush_controls(),
+        }
+        self.ready.push_back(event);
+    }
+
+    pub fn next_ready(&mut self) -> Option<UrpStreamEvent> {
+        self.ready.pop_front()
+    }
+
+    /// Releases control nodes held at end of input.
+    pub fn finish(&mut self) {
+        self.flush_controls();
     }
 
     fn allocate(&mut self) -> u32 {
@@ -185,109 +260,56 @@ impl SignatureProjection {
         index
     }
 
-    fn insert_mapping(&mut self, original: u32, transport: Option<u32>) -> u32 {
+    /// Returns the projected index of `source`. A signature starts the transport of the call
+    /// before held controls are released; `complete` also emits the transport value.
+    fn prepare_node(&mut self, source: u32, signed: Option<(&str, Value)>, complete: bool) -> u32 {
+        let mut transport = self
+            .mapping
+            .get_mut(&source)
+            .and_then(|mapping| mapping.transport.take());
+        if let Some((call_id, signature)) = signed {
+            let started = transport.get_or_insert_with(|| self.start_transport(call_id));
+            if complete {
+                self.complete_transport(started, call_id, signature);
+            }
+        }
+        self.flush_controls();
+        if let Some(mapping) = self.mapping.get_mut(&source) {
+            mapping.transport = transport;
+            return mapping.node;
+        }
+        self.ordinary.push(source);
         let node = self.allocate();
-        self.mapping.insert(
-            original,
-            NodeMapping {
-                node,
-                transport,
-                header: None,
-                completed: None,
-            },
-        );
+        self.mapping.insert(source, NodeMapping { node, transport });
         node
     }
 
-    fn flush_controls(&mut self) {
-        while let Some(mut event) = self.controls.pop_front() {
-            let original = match &event {
-                UrpStreamEvent::NodeStart { node_index, .. }
-                | UrpStreamEvent::NodeDone { node_index, .. } => *node_index,
-                _ => unreachable!(),
-            };
-            let mapped = self
-                .mapping
-                .get(&original)
-                .map(|mapping| mapping.node)
-                .unwrap_or_else(|| self.insert_mapping(original, None));
-            match &mut event {
-                UrpStreamEvent::NodeStart { node_index, .. }
-                | UrpStreamEvent::NodeDone { node_index, .. } => *node_index = mapped,
-                _ => unreachable!(),
-            }
-            self.pending.push_back(event);
-        }
-    }
-
-    fn prepare_node(
-        &mut self,
-        original: u32,
-        signed: Option<(String, Value)>,
-        complete: bool,
-    ) -> u32 {
-        let existing = self
-            .mapping
-            .get(&original)
-            .map(|mapping| (mapping.node, mapping.transport));
-        let transport = if let Some((call_id, signature)) = signed {
-            if let Some((_, Some(transport))) = existing {
-                if complete {
-                    self.complete_transport(transport, &call_id, signature);
-                }
-                Some(transport)
-            } else {
-                let index = self.allocate();
-                self.start_transport(index, &call_id);
-                if complete {
-                    self.complete_transport(index, &call_id, signature);
-                }
-                Some(index)
-            }
-        } else {
-            existing.and_then(|(_, transport)| transport)
-        };
-        self.flush_controls();
-        if let Some((mapped, _)) = existing {
-            self.mapping.get_mut(&original).unwrap().transport = transport;
-            mapped
-        } else {
-            self.ordinary_indices.push(original);
-            self.insert_mapping(original, transport)
-        }
-    }
-
-    fn start_transport(&mut self, index: u32, call_id: &str) {
-        self.signatures.insert(
-            call_id.to_owned(),
-            SignatureEmission {
-                index,
-                preceding_nodes: self.ordinary_indices.len(),
-                completed: false,
-            },
-        );
-        let id = signature_item_id(call_id);
-        self.pending.push_back(UrpStreamEvent::NodeStart {
-            node_index: index,
+    fn start_transport(&mut self, call_id: &str) -> Transport {
+        let node_index = self.allocate();
+        self.ready.push_back(UrpStreamEvent::NodeStart {
+            node_index,
             header: NodeHeader::Reasoning {
-                id: Some(id.clone()),
+                id: Some(signature_item_id(call_id)),
                 metadata: ReasoningMetadata::default(),
             },
             extra_body: HashMap::new(),
         });
+        Transport {
+            node_index,
+            preceding_nodes: self.ordinary.len(),
+            completed: false,
+        }
     }
 
-    fn complete_transport(&mut self, index: u32, call_id: &str, signature: Value) {
-        let emission = self
-            .signatures
-            .get_mut(call_id)
-            .expect("reserved signature transport");
-        if emission.completed {
+    /// Emits the transport value once, from the first completing signature. A different terminal
+    /// value only changes the transport's terminal entry (STR-8e).
+    fn complete_transport(&mut self, transport: &mut Transport, call_id: &str, signature: Value) {
+        if transport.completed {
             return;
         }
-        emission.completed = true;
-        self.pending.push_back(UrpStreamEvent::NodeDelta {
-            node_index: index,
+        transport.completed = true;
+        self.ready.push_back(UrpStreamEvent::NodeDelta {
+            node_index: transport.node_index,
             delta: NodeDelta::Reasoning {
                 metadata: ReasoningMetadata {
                     item_id: Some(signature_item_id(call_id)),
@@ -301,234 +323,134 @@ impl SignatureProjection {
             usage: None,
             extra_body: HashMap::new(),
         });
-        self.pending.push_back(UrpStreamEvent::NodeDone {
-            node_index: index,
+        self.ready.push_back(UrpStreamEvent::NodeDone {
+            node_index: transport.node_index,
             node: transport_node(call_id, signature),
             usage: None,
             extra_body: HashMap::new(),
         });
     }
 
-    fn terminal_projection(&self, output: Vec<Node>) -> Vec<Node> {
-        let mut groups = Vec::<(Vec<Node>, Node, Option<(String, Value)>)>::new();
+    fn flush_controls(&mut self) {
+        while let Some(mut event) = self.controls.pop_front() {
+            if let UrpStreamEvent::NodeStart { node_index, .. }
+            | UrpStreamEvent::NodeDone { node_index, .. } = &mut event
+            {
+                *node_index = self.map_control(*node_index);
+            }
+            self.ready.push_back(event);
+        }
+    }
+
+    fn map_control(&mut self, source: u32) -> u32 {
+        if let Some(mapping) = self.mapping.get(&source) {
+            return mapping.node;
+        }
+        let node = self.allocate();
+        self.mapping.insert(
+            source,
+            NodeMapping {
+                node,
+                transport: None,
+            },
+        );
+        node
+    }
+
+    /// Renumbers the terminal snapshot (STR-8c), completes the transport of each announced call
+    /// whose signature only the snapshot carries, and places every transport. An entry reaches
+    /// stream state through its index only (STR-8d).
+    fn project_terminal(&mut self, output: Vec<TerminalNode>) -> Vec<TerminalNode> {
+        let sources: Vec<Option<u32>> =
+            TerminalNode::resolve(&output, |index| self.mapping.contains_key(&index))
+                .map(|(source, _)| source)
+                .collect();
+        let mut groups = Vec::new();
         let mut controls = Vec::new();
-        for mut node in output {
-            if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
-                controls.push(node);
+        for (mut entry, source) in output.into_iter().zip(sources) {
+            entry.node_index = source.map(|source| self.mapping[&source].node);
+            if matches!(entry.node, Node::NextDownstreamEnvelopeExtra { .. }) {
+                controls.push(entry);
             } else {
-                let signature = take_call_signature(&mut node);
-                groups.push((std::mem::take(&mut controls), node, signature));
-            }
-        }
-        let mut matched_groups = std::collections::HashSet::new();
-        let mut anchors = Vec::new();
-        for original in &self.ordinary_indices {
-            let mapping = &self.mapping[original];
-            let available = |index: &usize| !matched_groups.contains(index);
-            let exact = mapping.completed.as_ref().and_then(|completed| {
-                groups
-                    .iter()
-                    .enumerate()
-                    .position(|(index, (_, node, _))| available(&index) && completed == node)
-            });
-            let matched = exact
-                .or_else(|| {
-                    groups.iter().enumerate().position(|(index, (_, node, _))| {
-                        available(&index)
-                            && mapping.completed.as_ref().is_some_and(|completed| {
-                                super::nodes_semantically_match(completed, node)
-                            })
-                    })
-                })
-                .or_else(|| {
-                    groups.iter().enumerate().position(|(index, (_, node, _))| {
-                        available(&index)
-                            && mapping
-                                .header
-                                .as_ref()
-                                .is_some_and(|header| header_matches_node(header, node))
-                    })
+                groups.push(TerminalGroup {
+                    controls: std::mem::take(&mut controls),
+                    entry,
+                    source,
+                    terminal_only_transport: None,
                 });
-            if let Some(index) = matched {
-                matched_groups.insert(index);
             }
-            anchors.push(matched);
         }
-        let mut boundaries: Vec<Vec<(u32, Node)>> =
-            (0..=groups.len()).map(|_| Vec::new()).collect();
-        for (owner_index, (_, _, signed)) in groups.iter_mut().enumerate() {
-            let Some((call_id, signature)) = signed.as_ref() else {
+        let claimed: HashMap<u32, usize> = groups
+            .iter()
+            .enumerate()
+            .filter_map(|(position, group)| Some((group.source?, position)))
+            .collect();
+        // Terminal positions of the ordinary stream nodes, in announcement order.
+        let anchors: Vec<Option<usize>> = self
+            .ordinary
+            .iter()
+            .map(|source| claimed.get(source).copied())
+            .collect();
+        for (rank, anchor) in anchors.iter().enumerate() {
+            let Some(position) = *anchor else {
                 continue;
             };
-            let Some(emission) = self.signatures.get(call_id) else {
+            // The snapshot completes every transport that no NodeDone completed (CTRL-8a).
+            if let Node::ToolCall {
+                call_id,
+                signature: Some(signature),
+                ..
+            } = &groups[position].entry.node
+            {
+                let signed = Some((call_id.as_str(), signature.clone()));
+                self.prepare_node(self.ordinary[rank], signed, true);
+            }
+        }
+        let mut placed = Vec::new();
+        for (position, group) in groups.iter_mut().enumerate() {
+            // An entry without a signature drops its transport: typed terminal deletion wins.
+            let Some((call_id, signature)) = take_call_signature(&mut group.entry.node) else {
                 continue;
             };
-            // Anchors exclude controls and terminal-only nodes. Each insertion is
-            // outside an entire control/owner group, so it cannot retarget a control.
-            let boundary = anchors[..emission.preceding_nodes]
-                .iter()
-                .rev()
-                .find_map(|index| index.map(|index| index + 1))
-                .or_else(|| {
-                    anchors[emission.preceding_nodes..]
-                        .iter()
-                        .find_map(|index| *index)
-                })
-                .unwrap_or(owner_index);
-            boundaries[boundary].push((emission.index, transport_node(call_id, signature.clone())));
-            *signed = None;
+            let transport = transport_node(call_id, signature);
+            match group
+                .source
+                .and_then(|source| self.mapping[&source].transport.as_ref())
+            {
+                Some(streamed) => placed.push((
+                    transport_position(&anchors, streamed.preceding_nodes, position),
+                    TerminalNode::streamed(streamed.node_index, transport),
+                )),
+                None => group.terminal_only_transport = Some(transport),
+            }
         }
+        placed.sort_by_key(|(position, transport)| (*position, transport.node_index));
+        let mut placed = placed.into_iter().peekable();
         let mut projected = Vec::new();
-        for (index, (mut controls, node, signed)) in groups.into_iter().enumerate() {
-            boundaries[index].sort_by_key(|(index, _)| *index);
-            projected.extend(boundaries[index].drain(..).map(|(_, node)| node));
-            if let Some((call_id, signature)) = signed {
-                projected.push(transport_node(&call_id, signature));
+        for (position, group) in groups.into_iter().enumerate() {
+            while let Some((_, transport)) = placed.next_if(|(at, _)| *at == position) {
+                projected.push(transport);
             }
-            projected.append(&mut controls);
-            projected.push(node);
+            projected.extend(group.terminal_only_transport.map(TerminalNode::unannounced));
+            projected.extend(group.controls);
+            projected.push(group.entry);
         }
-        if let Some(last) = boundaries.last_mut() {
-            last.sort_by_key(|(index, _)| *index);
-            projected.extend(last.drain(..).map(|(_, node)| node));
-        }
-        projected.append(&mut controls);
+        projected.extend(placed.map(|(_, transport)| transport));
+        projected.extend(controls);
         projected
-    }
-
-    fn push(&mut self, mut event: UrpStreamEvent) {
-        if matches!(
-            &event,
-            UrpStreamEvent::NodeStart {
-                header: NodeHeader::NextDownstreamEnvelopeExtra,
-                ..
-            } | UrpStreamEvent::NodeDone {
-                node: Node::NextDownstreamEnvelopeExtra { .. },
-                ..
-            }
-        ) {
-            self.controls.push_back(event);
-            return;
-        }
-        match &mut event {
-            UrpStreamEvent::NodeStart {
-                node_index, header, ..
-            } => {
-                let original = *node_index;
-                let signed = if let NodeHeader::ToolCall {
-                    call_id, signature, ..
-                } = header
-                {
-                    signature
-                        .take()
-                        .map(|signature| (call_id.clone(), signature))
-                } else {
-                    None
-                };
-                *node_index = self.prepare_node(
-                    original,
-                    if self.defer_transport_start {
-                        None
-                    } else {
-                        signed
-                    },
-                    false,
-                );
-                self.mapping.get_mut(&original).unwrap().header = Some(header.clone());
-            }
-            UrpStreamEvent::NodeDelta { node_index, .. } => {
-                *node_index = self.prepare_node(*node_index, None, false);
-            }
-            UrpStreamEvent::NodeDone {
-                node_index, node, ..
-            } => {
-                let original = *node_index;
-                let signed = take_call_signature(node);
-                *node_index = self.prepare_node(original, signed, true);
-                self.mapping.get_mut(&original).unwrap().completed = Some(node.clone());
-            }
-            UrpStreamEvent::ResponseDone { output, .. } => {
-                self.flush_controls();
-                let terminal_signatures: Vec<_> = self
-                    .ordinary_indices
-                    .iter()
-                    .filter_map(|original| {
-                        let mapping = &self.mapping[original];
-                        if mapping.transport.is_some() {
-                            return None;
-                        }
-                        output.iter().find_map(|node| {
-                            let Node::ToolCall {
-                                call_id,
-                                signature: Some(signature),
-                                ..
-                            } = node
-                            else {
-                                return None;
-                            };
-                            mapping
-                                .header
-                                .as_ref()
-                                .is_some_and(|header| header_matches_node(header, node))
-                                .then(|| (*original, call_id.clone(), signature.clone()))
-                        })
-                    })
-                    .collect();
-                for (original, call_id, signature) in terminal_signatures {
-                    self.prepare_node(original, Some((call_id, signature)), true);
-                }
-                let mut unfinished: Vec<_> = self
-                    .signatures
-                    .iter()
-                    .filter(|(_, emission)| !emission.completed)
-                    .map(|(call_id, emission)| (call_id.clone(), emission.index))
-                    .collect();
-                unfinished.sort_by_key(|(_, index)| *index);
-                for (call_id, index) in unfinished {
-                    let signature = output.iter().find_map(|node| match node {
-                        Node::ToolCall {
-                            call_id: id,
-                            signature,
-                            ..
-                        } if id == &call_id => signature.clone(),
-                        _ => None,
-                    });
-                    if let Some(signature) = signature {
-                        self.complete_transport(index, &call_id, signature);
-                    }
-                }
-                *output = self.terminal_projection(std::mem::take(output));
-            }
-            _ => self.flush_controls(),
-        }
-        self.pending.push_back(event);
-    }
-}
-
-fn header_matches_node(header: &NodeHeader, node: &Node) -> bool {
-    match (header, node) {
-        (NodeHeader::ToolCall { call_id: left, .. }, Node::ToolCall { call_id: right, .. })
-        | (NodeHeader::ToolResult { call_id: left, .. }, Node::ToolResult { call_id: right, .. }) => {
-            left == right
-        }
-        (NodeHeader::Text { id: left, .. }, Node::Text { id: right, .. })
-        | (NodeHeader::Image { id: left, .. }, Node::Image { id: right, .. })
-        | (NodeHeader::Audio { id: left, .. }, Node::Audio { id: right, .. })
-        | (NodeHeader::File { id: left, .. }, Node::File { id: right, .. })
-        | (NodeHeader::Refusal { id: left, .. }, Node::Refusal { id: right, .. })
-        | (NodeHeader::Reasoning { id: left, .. }, Node::Reasoning { id: right, .. })
-        | (NodeHeader::ProviderItem { id: left, .. }, Node::ProviderItem { id: right, .. }) => {
-            left == right
-        }
-        _ => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ProviderType;
+    use crate::handlers::DownstreamProtocol;
+    use crate::urp::stream_encode::{self, StreamEncodeOptions};
     use crate::urp::{self, FinishReason, OrdinaryRole};
+    use axum::response::IntoResponse;
     use serde_json::json;
+    use tokio::sync::mpsc;
 
     fn response() -> UrpResponse {
         urp::decode::gemini::decode_response(&json!({"responseId":"resp-test","modelVersion":"gemini-test",
@@ -543,140 +465,150 @@ mod tests {
         }
     }
 
-    fn call_header(node: &Node) -> NodeHeader {
-        let Node::ToolCall {
-            namespace,
-            signature,
-            id,
-            tool_type,
-            call_id,
-            name,
+    /// The NodeStart header of `call`, carrying its signature when `signed`.
+    fn call_header(call: &Node, signed: bool) -> NodeHeader {
+        let mut header = NodeHeader::from(call);
+        if let NodeHeader::ToolCall {
+            signature: provisional,
             ..
-        } = node
-        else {
-            panic!()
-        };
-        NodeHeader::ToolCall {
-            namespace: namespace.clone(),
-            signature: signature.clone(),
-            id: id.clone(),
-            tool_type: *tool_type,
-            call_id: call_id.clone(),
-            name: name.clone(),
+        } = &mut header
+        {
+            *provisional = signature(call).filter(|_| signed);
+        }
+        header
+    }
+
+    fn named_call(name: &str) -> Node {
+        let mut call = response().output.remove(0);
+        if let Node::ToolCall {
+            call_id,
+            name: tool_name,
+            signature,
+            ..
+        } = &mut call
+        {
+            *call_id = name.into();
+            *tool_name = name.into();
+            *signature = Some(json!(format!("signature-{name}")));
+        }
+        call
+    }
+
+    fn unsigned(mut call: Node) -> Node {
+        take_call_signature(&mut call);
+        call
+    }
+
+    fn control_node(probe: &str) -> Node {
+        Node::NextDownstreamEnvelopeExtra {
+            extra_body: HashMap::from([("probe".into(), json!(probe))]),
         }
     }
 
-    #[test]
-    fn nonstream_client_tool_loops_preserve_one_canonical_signature() {
-        for family in ["messages", "responses", "chat"] {
-            for wrapped in [false, true] {
-                let mut original = response();
-                if wrapped {
-                    urp::wrap_reasoning_envelopes_in_response(
-                        &mut original,
-                        "gemini",
-                        "gemini-test",
-                    );
-                }
-                let mut request = match family {
-                    "messages" => {
-                        let wire =
-                            urp::encode::anthropic::encode_response(&original, "client-model");
-                        urp::decode::anthropic::decode_request(&json!({"model":"client-model","max_tokens":100,
-                            "messages":[{"role":"assistant","content":wire["content"]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"native-1","content":"clicked"}]}]})).unwrap()
-                    }
-                    "responses" => {
-                        let wire = urp::encode::openai_responses::encode_response(
-                            &original,
-                            "client-model",
-                        );
-                        let mut input = wire["output"].as_array().unwrap().clone();
-                        input.push(json!({"type":"function_call_output","call_id":"native-1","output":"clicked"}));
-                        urp::decode::openai_responses::decode_request(
-                            &json!({"model":"client-model","input":input}),
-                        )
-                        .unwrap()
-                    }
-                    _ => {
-                        let wire =
-                            urp::encode::openai_chat::encode_response(&original, "client-model");
-                        urp::decode::openai_chat::decode_request(&json!({"model":"client-model","messages":[wire["choices"][0]["message"],{"role":"tool","tool_call_id":"native-1","content":"clicked"}]})).unwrap()
-                    }
-                };
-                assert_eq!(original.output.len(), 1, "canonical mutation for {family}");
-                assert!(
-                    request
-                        .input
-                        .iter()
-                        .all(|node| !matches!(node, Node::Reasoning { .. })),
-                    "lingering transport for {family}"
-                );
-                assert_eq!(
-                    request
-                        .input
-                        .iter()
-                        .filter(|node| matches!(node, Node::ToolCall { .. }))
-                        .count(),
-                    1
-                );
-                urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
-                    &mut request.input,
-                    "gemini",
-                    "gemini-test",
-                    true,
-                );
-                let native = urp::encode::gemini::encode_request(&request, "gemini-test");
-                let part = native["contents"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .flat_map(|content| content["parts"].as_array().unwrap())
-                    .find(|part| part.get("functionCall").is_some())
-                    .unwrap();
-                assert_eq!(
-                    part["thoughtSignature"], "Y2FsbA==",
-                    "{family} wrapped={wrapped}"
-                );
-                assert_eq!(part["functionCall"]["id"], "native-1");
-            }
+    fn control_start(node_index: u32, probe: &str) -> UrpStreamEvent {
+        UrpStreamEvent::NodeStart {
+            node_index,
+            header: NodeHeader::NextDownstreamEnvelopeExtra,
+            extra_body: HashMap::from([("probe".into(), json!(probe))]),
         }
+    }
+
+    fn start(node_index: u32, header: NodeHeader) -> UrpStreamEvent {
+        UrpStreamEvent::NodeStart {
+            node_index,
+            header,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn arguments(node_index: u32, arguments: &str) -> UrpStreamEvent {
+        UrpStreamEvent::NodeDelta {
+            node_index,
+            delta: NodeDelta::ToolCallArguments {
+                arguments: arguments.into(),
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn done(node_index: u32, node: Node) -> UrpStreamEvent {
+        UrpStreamEvent::NodeDone {
+            node_index,
+            node,
+            usage: None,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn response_start() -> UrpStreamEvent {
+        UrpStreamEvent::ResponseStart {
+            usage: None,
+            id: "resp_projection".into(),
+            model: "client-model".into(),
+            created_at: None,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    fn terminal(output: Vec<TerminalNode>) -> UrpStreamEvent {
+        UrpStreamEvent::ResponseDone {
+            outcome: None,
+            finish_reason: Some(FinishReason::ToolCalls),
+            usage: None,
+            output,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    /// Pushes `events` and returns every event they release.
+    fn project(
+        projection: &mut SignatureProjection,
+        events: impl IntoIterator<Item = UrpStreamEvent>,
+    ) -> Vec<UrpStreamEvent> {
+        let mut released = Vec::new();
+        for event in events {
+            projection.push(event);
+            released.extend(std::iter::from_fn(|| projection.next_ready()));
+        }
+        released
+    }
+
+    fn terminal_output(events: Vec<UrpStreamEvent>) -> Vec<TerminalNode> {
+        match events.into_iter().last() {
+            Some(UrpStreamEvent::ResponseDone { output, .. }) => output,
+            other => panic!("ResponseDone must come last: {other:?}"),
+        }
+    }
+
+    fn done_indices(events: &[UrpStreamEvent]) -> Vec<u32> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                UrpStreamEvent::NodeDone { node_index, .. } => Some(*node_index),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
     fn typed_transport_moves_payload_and_typed_signature_wins() {
-        for binding in ["id", "metadata", "legacy_extra", "envelope"] {
-            let mut call = response().output.remove(0);
-            let Node::ToolCall {
-                signature: call_signature,
-                ..
-            } = &mut call
-            else {
-                panic!()
-            };
-            *call_signature = None;
+        for binding in ["id", "metadata", "envelope"] {
+            let call = unsigned(response().output.remove(0));
             let mut transport = transport_node("native-1", json!("legacy"));
             let Node::Reasoning {
                 id,
                 metadata,
                 encrypted,
-                extra_body,
                 ..
             } = &mut transport
             else {
                 panic!()
             };
             match binding {
-                "metadata" => {
-                    metadata.item_id = id.take();
-                }
-                "legacy_extra" => {
-                    extra_body.insert(
-                        "_monoize_reasoning_envelope_item_id".into(),
-                        json!(id.take().unwrap()),
-                    );
-                }
+                "metadata" => metadata.item_id = id.take(),
                 "envelope" => {
-                    let envelope = super::super::ReasoningEnvelope {
+                    let envelope = urp::ReasoningEnvelope {
                         v: 2,
                         provider_type: "gemini".into(),
                         model: "gemini-test".into(),
@@ -692,11 +624,6 @@ mod tests {
             }
             let mut nodes = vec![transport, call];
             restore_request_call_signatures(&mut nodes);
-            if binding == "legacy_extra" {
-                assert_eq!(nodes.len(), 2);
-                assert_eq!(signature(&nodes[1]), None);
-                continue;
-            }
             assert_eq!(nodes.len(), 1, "{binding}");
             urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
                 &mut nodes,
@@ -704,7 +631,7 @@ mod tests {
                 "gemini-test",
                 true,
             );
-            assert_eq!(signature(&nodes[0]), Some(json!("legacy")));
+            assert_eq!(signature(&nodes[0]), Some(json!("legacy")), "{binding}");
         }
         let mut nodes = vec![
             transport_node("native-1", json!("old")),
@@ -736,108 +663,64 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn stream_projection_uses_dense_indices_for_headers_done_and_terminal_only_calls() {
-        let mut first = response().output.remove(0);
-        let mut second = first.clone();
-        let mut third = first.clone();
-        if let Node::ToolCall { call_id, .. } = &mut second {
-            *call_id = "second".into();
-        }
-        if let Node::ToolCall { call_id, .. } = &mut third {
-            *call_id = "third".into();
-        }
-        let text = Node::text(OrdinaryRole::Assistant, "prefix");
-        let control = Node::NextDownstreamEnvelopeExtra {
-            extra_body: HashMap::new(),
-        };
-        let mut start = UrpStreamEvent::NodeStart {
-            node_index: 2,
-            header: call_header(&first),
-            extra_body: HashMap::new(),
-        };
-        urp::wrap_reasoning_envelope_in_stream_event(&mut start, "gemini", "gemini-test");
+    #[test]
+    fn stream_projection_uses_dense_indices_for_headers_done_and_terminal_only_calls() {
         let mut response = response();
+        let call = response.output.remove(0);
+        let renamed = |name: &str| {
+            let mut call = call.clone();
+            if let Node::ToolCall { call_id, .. } = &mut call {
+                *call_id = name.into();
+            }
+            call
+        };
         response.output = vec![
-            text.clone(),
-            control.clone(),
-            first.clone(),
-            second.clone(),
-            third.clone(),
+            Node::text(OrdinaryRole::Assistant, "prefix"),
+            control_node("call"),
+            call.clone(),
+            renamed("second"),
+            renamed("third"),
         ];
         urp::wrap_reasoning_envelopes_in_response(&mut response, "gemini", "gemini-test");
-        first = response.output[2].clone();
-        second = response.output[3].clone();
+        let [text, control, first, second, third] = <[Node; 5]>::try_from(response.output).unwrap();
         let events = vec![
-            UrpStreamEvent::ResponseStart {
-                id: "r".into(),
-                model: "m".into(),
-                usage: None,
-                extra_body: HashMap::new(),
-            },
-            UrpStreamEvent::NodeDone {
-                node_index: 0,
-                node: text,
-                usage: None,
-                extra_body: HashMap::new(),
-            },
-            UrpStreamEvent::NodeDone {
-                node_index: 1,
-                node: control,
-                usage: None,
-                extra_body: HashMap::new(),
-            },
-            start,
-            UrpStreamEvent::NodeDone {
-                node_index: 2,
-                node: first,
-                usage: None,
-                extra_body: HashMap::new(),
-            },
-            UrpStreamEvent::NodeDone {
-                node_index: 3,
-                node: second,
-                usage: None,
-                extra_body: HashMap::new(),
-            },
-            UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: response.output,
-                finish_reason: Some(FinishReason::ToolCalls),
-                usage: None,
-                extra_body: HashMap::new(),
-            },
+            response_start(),
+            done(0, text.clone()),
+            done(1, control.clone()),
+            start(2, call_header(&first, true)),
+            done(2, first.clone()),
+            done(3, second.clone()),
+            terminal(vec![
+                TerminalNode::streamed(0, text),
+                TerminalNode::streamed(1, control),
+                TerminalNode::streamed(2, first),
+                TerminalNode::streamed(3, second),
+                TerminalNode::unannounced(third),
+            ]),
         ];
-        let (tx, mut rx) = mpsc::channel(32);
-        for event in events {
-            tx.send(event).await.unwrap();
-        }
-        drop(tx);
-        let mut projection = SignatureProjection::default();
-        let mut output = Vec::new();
-        while let Some(event) = projection.recv(&mut rx).await {
-            output.push(event);
-        }
-        let done_indices: Vec<_> = output
-            .iter()
-            .filter_map(|event| match event {
-                UrpStreamEvent::NodeDone { node_index, .. } => Some(*node_index),
-                _ => None,
-            })
-            .collect();
-        // CTRL-8: a reserved signature transport (index 1) may finish after the
+        let events = project(&mut SignatureProjection::default(), events);
+        // CTRL-8a: the transport reserved by the signed start (index 1) finishes after the
         // later-indexed control node (index 2).
-        assert_eq!(done_indices, vec![0, 2, 1, 3, 4, 5]);
-        let UrpStreamEvent::ResponseDone {
-            outcome: _,
-            output: mut nodes,
-            ..
-        } = output.pop().unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(nodes.len(), 8);
-        assert!(nodes.iter().filter_map(signature).next().is_none());
+        assert_eq!(done_indices(&events), vec![0, 2, 1, 3, 4, 5]);
+        let output = terminal_output(events);
+        assert_eq!(
+            output
+                .iter()
+                .map(|entry| entry.node_index)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                None,
+                None
+            ]
+        );
+        let mut nodes = TerminalNode::into_nodes(output);
+        assert!(nodes.iter().all(|node| signature(node).is_none()));
         restore_request_call_signatures(&mut nodes);
         urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
             &mut nodes,
@@ -845,82 +728,47 @@ mod tests {
             "gemini-test",
             true,
         );
-        assert_eq!(nodes.iter().filter_map(signature).count(), 3);
-        assert!(
-            nodes
-                .iter()
-                .filter_map(signature)
-                .all(|value| value == json!("Y2FsbA=="))
+        assert_eq!(
+            nodes.iter().filter_map(signature).collect::<Vec<_>>(),
+            vec![json!("Y2FsbA=="); 3]
         );
     }
 
     #[test]
     fn late_signature_precedes_completion_without_delaying_arguments() {
         let call = response().output.remove(0);
-        let mut header = call_header(&call);
-        if let NodeHeader::ToolCall { signature, .. } = &mut header {
-            *signature = None;
-        }
         let mut projection = SignatureProjection::default();
-        projection.push(UrpStreamEvent::NodeStart {
-            node_index: 0,
-            header,
-            extra_body: HashMap::new(),
-        });
+        let released = project(&mut projection, [start(0, call_header(&call, false))]);
         assert!(matches!(
-            projection.pending.pop_front(),
-            Some(UrpStreamEvent::NodeStart {
+            released.as_slice(),
+            [UrpStreamEvent::NodeStart {
                 node_index: 0,
                 header: NodeHeader::ToolCall {
                     signature: None,
                     ..
                 },
                 ..
-            })
+            }]
         ));
-        projection.push(UrpStreamEvent::NodeDelta {
-            node_index: 0,
-            delta: NodeDelta::ToolCallArguments {
-                arguments: "{\"x\":1}".into(),
-            },
-            usage: None,
-            extra_body: HashMap::new(),
-        });
+        let released = project(&mut projection, [arguments(0, "{\"x\":1}")]);
         assert!(matches!(
-            projection.pending.pop_front(),
-            Some(UrpStreamEvent::NodeDelta { node_index: 0, .. })
+            released.as_slice(),
+            [UrpStreamEvent::NodeDelta { node_index: 0, .. }]
         ));
-        projection.push(UrpStreamEvent::NodeDone {
-            node_index: 0,
-            node: call.clone(),
-            usage: None,
-            extra_body: HashMap::new(),
-        });
-        let indices: Vec<_> = projection
-            .pending
-            .drain(..)
-            .filter_map(|event| match event {
-                UrpStreamEvent::NodeDone { node_index, .. } => Some(node_index),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(indices, vec![1, 0]);
-        projection.push(UrpStreamEvent::ResponseDone {
-            outcome: None,
-            output: vec![call],
-            finish_reason: Some(FinishReason::ToolCalls),
-            usage: None,
-            extra_body: HashMap::new(),
-        });
-        let UrpStreamEvent::ResponseDone {
-            outcome: _,
-            output: mut nodes,
-            ..
-        } = projection.pending.pop_front().unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(nodes.len(), 2);
+        let released = project(&mut projection, [done(0, call.clone())]);
+        assert_eq!(done_indices(&released), vec![1, 0]);
+        let output = terminal_output(project(
+            &mut projection,
+            [terminal(vec![TerminalNode::streamed(0, call.clone())])],
+        ));
+        assert_eq!(
+            output,
+            vec![
+                TerminalNode::streamed(0, unsigned(call)),
+                TerminalNode::streamed(1, transport_node("native-1", json!("Y2FsbA=="))),
+            ]
+        );
+        let mut nodes = TerminalNode::into_nodes(output);
         restore_request_call_signatures(&mut nodes);
         assert_eq!(nodes.len(), 1);
         assert_eq!(signature(&nodes[0]), Some(json!("Y2FsbA==")));
@@ -943,114 +791,53 @@ mod tests {
             },
             Node::text(OrdinaryRole::Assistant, "after"),
         ];
-        for indices in [[1, 0, 2, 3], [11, 4, 9, 2]] {
-            let mut projection = SignatureProjection::default();
-            for (index, node) in indices.into_iter().zip(&canonical) {
-                projection.push(UrpStreamEvent::NodeDone {
-                    node_index: index,
-                    node: node.clone(),
-                    usage: None,
-                    extra_body: HashMap::new(),
-                });
-            }
-            projection.pending.clear();
-            projection.push(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: canonical.clone(),
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: HashMap::new(),
-            });
-            let UrpStreamEvent::ResponseDone {
-                outcome: _, output, ..
-            } = projection.pending.pop_front().unwrap()
-            else {
-                panic!()
-            };
-            assert_eq!(
-                serde_json::to_value(output).unwrap(),
-                serde_json::to_value(&canonical).unwrap()
-            );
+        for sources in [[1, 0, 2, 3], [11, 4, 9, 2]] {
+            let mut events: Vec<_> = sources
+                .into_iter()
+                .zip(&canonical)
+                .map(|(index, node)| done(index, node.clone()))
+                .collect();
+            events.push(terminal(
+                sources
+                    .into_iter()
+                    .zip(&canonical)
+                    .map(|(index, node)| TerminalNode::streamed(index, node.clone()))
+                    .collect(),
+            ));
+            let output = terminal_output(project(&mut SignatureProjection::default(), events));
+            let expected: Vec<_> = (0..)
+                .zip(&canonical)
+                .map(|(index, node)| TerminalNode::streamed(index, node.clone()))
+                .collect();
+            assert_eq!(output, expected, "{sources:?}");
         }
     }
 
     #[test]
     fn terminal_projection_does_not_restore_deleted_signature() {
-        for signed_start in [false, true] {
-            let mut call = response().output.remove(0);
+        let call = response().output.remove(0);
+        for mode in ["terminal_only", "signed_start", "deleted_at_done"] {
             let mut projection = SignatureProjection::default();
-            if signed_start {
-                projection.push(UrpStreamEvent::NodeStart {
-                    node_index: 0,
-                    header: call_header(&call),
-                    extra_body: HashMap::new(),
-                });
-                projection.pending.clear();
+            let streamed = mode != "terminal_only";
+            if streamed {
+                // The provisional signature reserves transport 0; the call becomes index 1.
+                project(&mut projection, [start(0, call_header(&call, true))]);
             }
-            if let Node::ToolCall { signature, .. } = &mut call {
-                *signature = None;
+            if mode == "deleted_at_done" {
+                let released = project(&mut projection, [done(0, unsigned(call.clone()))]);
+                assert_eq!(done_indices(&released), vec![1]);
             }
-            projection.push(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: vec![call],
-                finish_reason: Some(FinishReason::ToolCalls),
-                usage: None,
-                extra_body: HashMap::new(),
-            });
-            assert_eq!(projection.pending.len(), 1);
-            let UrpStreamEvent::ResponseDone {
-                outcome: _,
-                output: mut nodes,
-                ..
-            } = projection.pending.pop_front().unwrap()
-            else {
-                panic!()
+            let entry = |node_index| TerminalNode {
+                node_index: streamed.then_some(node_index),
+                node: unsigned(call.clone()),
             };
-            assert_eq!(nodes.len(), 1);
-            assert!(matches!(
-                &nodes[0],
-                Node::ToolCall {
-                    signature: None,
-                    ..
-                }
-            ));
-            restore_request_call_signatures(&mut nodes);
-            assert_eq!(signature(&nodes[0]), None);
-        }
-    }
-
-    fn named_call(name: &str) -> Node {
-        let mut call = response().output.remove(0);
-        if let Node::ToolCall {
-            call_id,
-            name: tool_name,
-            signature,
-            ..
-        } = &mut call
-        {
-            *call_id = name.into();
-            *tool_name = name.into();
-            *signature = Some(json!(format!("signature-{name}")));
-        }
-        call
-    }
-
-    fn done(node_index: u32, node: Node) -> UrpStreamEvent {
-        UrpStreamEvent::NodeDone {
-            node_index,
-            node,
-            usage: None,
-            extra_body: HashMap::new(),
-        }
-    }
-
-    fn terminal(output: Vec<Node>) -> UrpStreamEvent {
-        UrpStreamEvent::ResponseDone {
-            outcome: None,
-            output,
-            finish_reason: Some(FinishReason::ToolCalls),
-            usage: None,
-            extra_body: HashMap::new(),
+            let released = project(&mut projection, [terminal(vec![entry(0)])]);
+            assert_eq!(
+                released.len(),
+                1,
+                "{mode}: a deleted signature emits no value"
+            );
+            assert_eq!(terminal_output(released), vec![entry(1)], "{mode}");
         }
     }
 
@@ -1059,104 +846,82 @@ mod tests {
         for include_control in [false, true] {
             let first = named_call("A");
             let second = named_call("B");
-            let mut header = call_header(&first);
-            if let NodeHeader::ToolCall { signature, .. } = &mut header {
-                *signature = None;
-            }
             let mut projection = SignatureProjection::default();
-            projection.push(UrpStreamEvent::NodeStart {
-                node_index: 9,
-                header,
-                extra_body: HashMap::new(),
-            });
-            projection.push(done(9, first.clone()));
-            projection.pending.clear();
-            let control = Node::NextDownstreamEnvelopeExtra {
-                extra_body: HashMap::from([("probe".into(), json!("B"))]),
-            };
-            let mut canonical = Vec::new();
+            project(
+                &mut projection,
+                [start(9, call_header(&first, false)), done(9, first.clone())],
+            );
+            let mut output = Vec::new();
+            let mut expected = vec![TerminalNode::unannounced(transport_node(
+                "B",
+                json!("signature-B"),
+            ))];
             if include_control {
-                canonical.push(control.clone());
+                output.push(TerminalNode::unannounced(control_node("B")));
+                expected.push(TerminalNode::unannounced(control_node("B")));
             }
-            canonical.extend([second.clone(), first.clone()]);
-            projection.push(terminal(canonical));
-            let UrpStreamEvent::ResponseDone {
-                outcome: _, output, ..
-            } = projection.pending.pop_front().unwrap()
-            else {
-                panic!()
-            };
-            let mut expected = vec![transport_node("B", json!("signature-B"))];
-            if include_control {
-                expected.push(control);
-            }
-            let mut first = first;
-            let mut second = second;
-            take_call_signature(&mut first);
-            take_call_signature(&mut second);
-            expected.extend([second, first, transport_node("A", json!("signature-A"))]);
-            assert_eq!(output, expected);
+            output.extend([
+                TerminalNode::unannounced(second.clone()),
+                TerminalNode::streamed(9, first.clone()),
+            ]);
+            expected.extend([
+                TerminalNode::unannounced(unsigned(second)),
+                TerminalNode::streamed(0, unsigned(first)),
+                TerminalNode::streamed(1, transport_node("A", json!("signature-A"))),
+            ]);
+            assert_eq!(
+                terminal_output(project(&mut projection, [terminal(output)])),
+                expected,
+                "control={include_control}"
+            );
         }
     }
 
     #[test]
     fn signed_controls_keep_dense_indices_with_start_done_or_delta_only_nodes() {
         let call = named_call("A");
-        let control = Node::NextDownstreamEnvelopeExtra {
-            extra_body: HashMap::from([("probe".into(), json!("call"))]),
-        };
+        let control = control_node("call");
         for mode in ["start", "done", "delta"] {
-            let mut projection = SignatureProjection::default();
-            projection.push(UrpStreamEvent::NodeStart {
-                node_index: 42,
-                header: NodeHeader::NextDownstreamEnvelopeExtra,
-                extra_body: HashMap::from([("probe".into(), json!("call"))]),
-            });
-            projection.push(done(42, control.clone()));
+            let mut events = vec![control_start(42, "call"), done(42, control.clone())];
             match mode {
-                "start" => projection.push(UrpStreamEvent::NodeStart {
-                    node_index: 7,
-                    header: call_header(&call),
-                    extra_body: HashMap::new(),
-                }),
-                "delta" => projection.push(UrpStreamEvent::NodeDelta {
-                    node_index: 7,
-                    delta: NodeDelta::ToolCallArguments {
-                        arguments: "{}".into(),
-                    },
-                    usage: None,
-                    extra_body: HashMap::new(),
-                }),
+                "start" => events.push(start(7, call_header(&call, true))),
+                "delta" => events.push(arguments(7, "{}")),
                 _ => {}
             }
-            projection.push(done(7, call.clone()));
+            events.push(done(7, call.clone()));
+            let mut projection = SignatureProjection::default();
             let mut first_indices = Vec::new();
-            for event in projection.pending.drain(..) {
-                let index = match event {
-                    UrpStreamEvent::NodeStart { node_index, .. }
-                    | UrpStreamEvent::NodeDelta { node_index, .. }
-                    | UrpStreamEvent::NodeDone { node_index, .. } => node_index,
-                    _ => continue,
-                };
-                if !first_indices.contains(&index) {
-                    first_indices.push(index);
+            for event in project(&mut projection, events) {
+                if let UrpStreamEvent::NodeStart { node_index, .. }
+                | UrpStreamEvent::NodeDelta { node_index, .. }
+                | UrpStreamEvent::NodeDone { node_index, .. } = event
+                {
+                    if !first_indices.contains(&node_index) {
+                        first_indices.push(node_index);
+                    }
                 }
             }
             assert_eq!(first_indices, vec![0, 1, 2], "{mode}");
-            projection.push(terminal(vec![control.clone(), call.clone()]));
-            let UrpStreamEvent::ResponseDone {
-                outcome: _, output, ..
-            } = projection.pending.pop_front().unwrap()
-            else {
-                panic!()
-            };
-            let mut unsigned = call.clone();
-            take_call_signature(&mut unsigned);
-            let signature = transport_node("A", json!("signature-A"));
+            let output = terminal_output(project(
+                &mut projection,
+                [terminal(vec![
+                    TerminalNode::streamed(42, control.clone()),
+                    TerminalNode::streamed(7, call.clone()),
+                ])],
+            ));
+            let transport = transport_node("A", json!("signature-A"));
             let expected = if mode == "delta" {
-                vec![control.clone(), unsigned, signature]
+                vec![
+                    TerminalNode::streamed(0, control.clone()),
+                    TerminalNode::streamed(1, unsigned(call.clone())),
+                    TerminalNode::streamed(2, transport),
+                ]
             } else {
-                vec![signature, control.clone(), unsigned]
+                vec![
+                    TerminalNode::streamed(0, transport),
+                    TerminalNode::streamed(1, control.clone()),
+                    TerminalNode::streamed(2, unsigned(call.clone())),
+                ]
             };
             assert_eq!(output, expected, "{mode}");
         }
@@ -1166,115 +931,332 @@ mod tests {
         assert!(matches!(&projected.output[0], Node::Reasoning { .. }));
         assert_eq!(projected.output[1], control);
         assert!(signature(&canonical.output[1]).is_some());
-        let mut projection = SignatureProjection::default();
-        projection.push(done(42, control));
-        projection.push(terminal(vec![call]));
+        let released = project(
+            &mut SignatureProjection::default(),
+            [
+                done(42, control),
+                terminal(vec![TerminalNode::unannounced(call)]),
+            ],
+        );
         assert!(matches!(
-            projection.pending.front(),
+            released.first(),
             Some(UrpStreamEvent::NodeDone {
                 node: Node::NextDownstreamEnvelopeExtra { .. },
                 ..
             })
         ));
         assert!(matches!(
-            projection.pending.back(),
+            released.last(),
             Some(UrpStreamEvent::ResponseDone { .. })
         ));
     }
 
+    fn options() -> StreamEncodeOptions {
+        StreamEncodeOptions {
+            logical_model: "client-model".into(),
+            sse_max_frame_length: None,
+            mask_sensitive_info: false,
+            chat_include_usage: true,
+            responses_request_echo: None,
+            started_at: std::time::Instant::now(),
+            replay_reasoning_duration_secs: None,
+        }
+    }
+
+    async fn sse_body(
+        mut wire_rx: mpsc::Receiver<axum::response::sse::Event>,
+    ) -> axum::body::Bytes {
+        let mut frames = Vec::new();
+        while let Some(frame) = wire_rx.recv().await {
+            frames.push(Ok::<_, std::convert::Infallible>(frame));
+        }
+        let body = axum::response::Sse::new(futures_util::stream::iter(frames))
+            .into_response()
+            .into_body();
+        axum::body::to_bytes(body, usize::MAX).await.unwrap()
+    }
+
+    async fn live_wire(
+        downstream: DownstreamProtocol,
+        events: Vec<UrpStreamEvent>,
+    ) -> axum::body::Bytes {
+        let (tx, rx) = mpsc::channel(events.len());
+        for event in events {
+            tx.send(event).await.unwrap();
+        }
+        drop(tx);
+        let (wire_tx, wire_rx) = mpsc::channel(256);
+        stream_encode::encode_urp_stream(downstream, rx, wire_tx, options())
+            .await
+            .unwrap();
+        sse_body(wire_rx).await
+    }
+
+    async fn replay_wire(
+        downstream: DownstreamProtocol,
+        response: UrpResponse,
+    ) -> axum::body::Bytes {
+        let (wire_tx, wire_rx) = mpsc::channel(256);
+        stream_encode::replay_urp_response(downstream, response, wire_tx, options())
+            .await
+            .unwrap();
+        sse_body(wire_rx).await
+    }
+
+    /// Decodes a downstream SSE body as an upstream stream of the same protocol.
+    async fn decode_wire(provider: ProviderType, bytes: axum::body::Bytes) -> UrpResponse {
+        let handler = crate::handlers::UrpRequest {
+            audio_output_format: None,
+            model: "client-model".into(),
+            max_multiplier: None,
+            server_tool_usage_classes: Vec::new(),
+            messages_custom_tool_names: Default::default(),
+            affinity_explicit: None,
+            affinity_prefix_hash: String::new(),
+        };
+        let (tx, mut rx) = mpsc::channel(256);
+        urp::stream_decode::stream_upstream_to_urp_events(
+            &handler,
+            None,
+            provider,
+            reqwest::Response::from(axum::http::Response::new(bytes)),
+            tx,
+            None,
+            None,
+            1000,
+        )
+        .await
+        .unwrap();
+        let mut decoded = None;
+        while let Some(event) = rx.recv().await {
+            match event {
+                UrpStreamEvent::ResponseDone {
+                    outcome,
+                    finish_reason,
+                    usage,
+                    output,
+                    extra_body,
+                } => {
+                    decoded = Some(UrpResponse {
+                        outcome,
+                        id: "resp_projection".into(),
+                        model: "client-model".into(),
+                        created_at: None,
+                        output: TerminalNode::into_nodes(output),
+                        finish_reason,
+                        usage,
+                        extra_body,
+                    });
+                }
+                UrpStreamEvent::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        }
+        decoded.expect("decoded terminal")
+    }
+
+    /// The client's next request: `response` as its assistant turn, followed by the result of
+    /// call `native-1` when `tool_result`.
+    fn client_turn(
+        downstream: DownstreamProtocol,
+        response: &UrpResponse,
+        tool_result: bool,
+    ) -> urp::UrpRequest {
+        match downstream {
+            DownstreamProtocol::AnthropicMessages => {
+                let wire = urp::encode::anthropic::encode_response(response, "client-model");
+                let mut messages = vec![json!({"role":"assistant","content":wire["content"]})];
+                if tool_result {
+                    messages.push(json!({"role":"user","content":[
+                        {"type":"tool_result","tool_use_id":"native-1","content":"clicked"}]}));
+                }
+                urp::decode::anthropic::decode_request(
+                    &json!({"model":"client-model","max_tokens":100,"messages":messages}),
+                )
+                .unwrap()
+            }
+            DownstreamProtocol::Responses => {
+                let wire = urp::encode::openai_responses::encode_response(response, "client-model");
+                let mut input = wire["output"].as_array().unwrap().clone();
+                if tool_result {
+                    input.push(json!({"type":"function_call_output","call_id":"native-1","output":"clicked"}));
+                }
+                urp::decode::openai_responses::decode_request(
+                    &json!({"model":"client-model","input":input}),
+                )
+                .unwrap()
+            }
+            DownstreamProtocol::ChatCompletions => {
+                let wire = urp::encode::openai_chat::encode_response(response, "client-model");
+                let mut messages = vec![wire["choices"][0]["message"].clone()];
+                if tool_result {
+                    messages
+                        .push(json!({"role":"tool","tool_call_id":"native-1","content":"clicked"}));
+                }
+                urp::decode::openai_chat::decode_request(
+                    &json!({"model":"client-model","messages":messages}),
+                )
+                .unwrap()
+            }
+        }
+    }
+
+    /// A live stream of `response = [text, call]` that streams the call arguments.
+    fn live_events(response: &UrpResponse, signed_start: bool) -> Vec<UrpStreamEvent> {
+        let (text, call) = (&response.output[0], &response.output[1]);
+        vec![
+            response_start(),
+            start(0, NodeHeader::from(text)),
+            UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta: NodeDelta::Text {
+                    logprobs: None,
+                    citations: Vec::new(),
+                    signature: None,
+                    content: "Action.".into(),
+                },
+                usage: None,
+                extra_body: HashMap::new(),
+            },
+            done(0, text.clone()),
+            start(1, call_header(call, signed_start)),
+            arguments(1, "{\"x\":1,"),
+            arguments(1, "\"y\":2}"),
+            done(1, call.clone()),
+            terminal(vec![
+                TerminalNode::streamed(0, text.clone()),
+                TerminalNode::streamed(1, call.clone()),
+            ]),
+        ]
+    }
+
+    /// PG5a1: one canonical call signature survives a downstream client tool loop back to Gemini,
+    /// from a non-stream response, a live stream, and a synthetic stream alike.
+    #[tokio::test]
+    async fn client_tool_loops_preserve_one_canonical_signature() {
+        for (family, downstream, provider) in [
+            (
+                "messages",
+                DownstreamProtocol::AnthropicMessages,
+                ProviderType::Messages,
+            ),
+            (
+                "responses",
+                DownstreamProtocol::Responses,
+                ProviderType::Responses,
+            ),
+            (
+                "chat",
+                DownstreamProtocol::ChatCompletions,
+                ProviderType::ChatCompletion,
+            ),
+        ] {
+            for mode in ["raw", "nonstream", "live", "live_late", "replay"] {
+                let mut original = response();
+                original.output.insert(0, Node::assistant_text("Action."));
+                if mode != "raw" {
+                    urp::wrap_reasoning_envelopes_in_response(
+                        &mut original,
+                        "gemini",
+                        "gemini-test",
+                    );
+                }
+                let wire = match mode {
+                    "raw" | "nonstream" => None,
+                    "replay" => Some(replay_wire(downstream, original.clone()).await),
+                    _ => Some(live_wire(downstream, live_events(&original, mode == "live")).await),
+                };
+                let delivered = match wire {
+                    Some(bytes) => {
+                        let text = std::str::from_utf8(&bytes).unwrap();
+                        assert!(
+                            text.contains("mz2."),
+                            "no wire binding {family} {mode}: {text}"
+                        );
+                        decode_wire(provider, bytes).await
+                    }
+                    None => original,
+                };
+                let mut request = client_turn(downstream, &delivered, true);
+                assert!(
+                    request
+                        .input
+                        .iter()
+                        .all(|node| !matches!(node, Node::Reasoning { .. })),
+                    "lingering transport {family} {mode}"
+                );
+                assert_eq!(
+                    request
+                        .input
+                        .iter()
+                        .filter(|node| matches!(node, Node::ToolCall { .. }))
+                        .count(),
+                    1,
+                    "{family} {mode}"
+                );
+                urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
+                    &mut request.input,
+                    "gemini",
+                    "gemini-test",
+                    true,
+                );
+                let native = urp::encode::gemini::encode_request(&request, "gemini-test");
+                let part = native["contents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|content| content["parts"].as_array().unwrap())
+                    .find(|part| part.get("functionCall").is_some())
+                    .unwrap();
+                assert_eq!(part["thoughtSignature"], "Y2FsbA==", "{family} {mode}");
+                assert_eq!(part["functionCall"]["id"], "native-1");
+                assert_eq!(part["functionCall"]["args"], json!({"x":1,"y":2}));
+            }
+        }
+    }
+
+    /// PG5a2: a control keeps its target call, and parallel signatures keep their stream position
+    /// in the downstream terminal.
     #[tokio::test]
     async fn wire_projection_keeps_control_target_and_parallel_late_signatures() {
-        use crate::handlers::DownstreamProtocol;
-        use axum::response::IntoResponse;
-        for downstream in [
-            DownstreamProtocol::Responses,
-            DownstreamProtocol::AnthropicMessages,
+        for (downstream, provider) in [
+            (DownstreamProtocol::Responses, ProviderType::Responses),
+            (
+                DownstreamProtocol::AnthropicMessages,
+                ProviderType::Messages,
+            ),
         ] {
             for late in [false, true] {
                 let first = named_call("A");
                 let second = named_call("B");
-                let control = Node::NextDownstreamEnvelopeExtra {
-                    extra_body: HashMap::from([("probe".into(), json!("call-A"))]),
-                };
+                let control = control_node("call-A");
                 let mut events = vec![
-                    UrpStreamEvent::ResponseStart {
-                        id: "resp_projection".into(),
-                        model: "client-model".into(),
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    },
-                    UrpStreamEvent::NodeStart {
-                        node_index: 99,
-                        header: NodeHeader::NextDownstreamEnvelopeExtra,
-                        extra_body: HashMap::from([("probe".into(), json!("call-A"))]),
-                    },
+                    response_start(),
+                    control_start(99, "call-A"),
                     done(99, control.clone()),
                 ];
                 for (index, call) in [(5, &first), (2, &second)] {
-                    let mut header = call_header(call);
-                    if late {
-                        if let NodeHeader::ToolCall { signature, .. } = &mut header {
-                            *signature = None;
-                        }
-                    }
-                    events.push(UrpStreamEvent::NodeStart {
-                        node_index: index,
-                        header,
-                        extra_body: HashMap::new(),
-                    });
-                    events.push(UrpStreamEvent::NodeDelta {
-                        node_index: index,
-                        delta: NodeDelta::ToolCallArguments {
-                            arguments: "{\"x\":1,\"y\":2}".into(),
-                        },
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    });
+                    events.push(start(index, call_header(call, !late)));
+                    events.push(arguments(index, "{\"x\":1,\"y\":2}"));
                 }
                 events.extend([
                     done(5, first.clone()),
                     done(2, second.clone()),
-                    terminal(vec![control, first, second]),
+                    terminal(vec![
+                        TerminalNode::streamed(99, control),
+                        TerminalNode::streamed(5, first),
+                        TerminalNode::streamed(2, second),
+                    ]),
                 ]);
-                let (tx, rx) = mpsc::channel(64);
-                for event in events {
-                    tx.send(event).await.unwrap();
-                }
-                drop(tx);
-                let (wire_tx, mut wire_rx) = mpsc::channel(256);
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    urp::stream_encode::encode_urp_stream(
-                        downstream,
-                        rx,
-                        wire_tx,
-                        "client-model",
-                        std::time::Instant::now(),
-                        None,
-                        false,
-                        None,
-                        true,
-                    ),
-                )
-                .await
-                .expect("projection stalled")
-                .unwrap();
-                let mut frames = Vec::new();
-                while let Some(event) = wire_rx.recv().await {
-                    frames.push(Ok::<_, std::convert::Infallible>(event));
-                }
-                let body = axum::response::Sse::new(futures_util::stream::iter(frames))
-                    .into_response()
-                    .into_body();
-                let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
-                let wire = std::str::from_utf8(&bytes).unwrap();
+                let bytes = live_wire(downstream, events).await;
+                let wire = std::str::from_utf8(&bytes).unwrap().to_owned();
                 let values: Vec<Value> = wire
                     .lines()
                     .filter_map(|line| line.strip_prefix("data: "))
                     .filter(|line| *line != "[DONE]")
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect();
-                let mut restored = if matches!(downstream, DownstreamProtocol::Responses) {
+                let restored = if matches!(downstream, DownstreamProtocol::Responses) {
                     let starts: Vec<_> = values
                         .iter()
                         .filter(|value| value["type"] == "response.output_item.added")
@@ -1292,15 +1274,15 @@ mod tests {
                             .all(|item| item.get("probe").is_none()),
                         "{wire}"
                     );
-                    let terminal = values
+                    let completed = values
                         .iter()
                         .find(|value| value["type"] == "response.completed")
                         .expect("Responses terminal");
-                    let output = terminal["response"]["output"].as_array().unwrap();
+                    let output = completed["response"]["output"].as_array().unwrap();
                     let expected = if late {
-                        vec!["function_call", "function_call", "reasoning", "reasoning"]
+                        ["function_call", "function_call", "reasoning", "reasoning"]
                     } else {
-                        vec!["reasoning", "function_call", "reasoning", "function_call"]
+                        ["reasoning", "function_call", "reasoning", "function_call"]
                     };
                     assert_eq!(
                         output
@@ -1323,349 +1305,39 @@ mod tests {
                     let blocks: Vec<_> = values
                         .iter()
                         .filter(|value| value["type"] == "content_block_start")
-                        .map(|value| value["content_block"].clone())
+                        .filter_map(|value| value["content_block"]["type"].as_str())
                         .collect();
                     assert_eq!(
-                        blocks
-                            .iter()
-                            .filter(|block| block["type"] == "tool_use")
-                            .count(),
+                        blocks.iter().filter(|kind| **kind == "tool_use").count(),
                         2,
                         "{wire}"
                     );
                     assert_eq!(
                         blocks
                             .iter()
-                            .filter(|block| matches!(
-                                block["type"].as_str(),
-                                Some("thinking" | "redacted_thinking")
-                            ))
+                            .filter(|kind| matches!(**kind, "thinking" | "redacted_thinking"))
                             .count(),
                         2,
                         "{wire}"
                     );
-                    let (decoded_tx, mut decoded_rx) = mpsc::channel(256);
-                    let handler = crate::handlers::UrpRequest {
-                        audio_output_format: None,
-                        model: "client-model".into(),
-                        max_multiplier: None,
-                        server_tool_usage_classes: Vec::new(),
-                        messages_custom_tool_names: Default::default(),
-                        affinity_explicit: None,
-                        affinity_prefix_hash: String::new(),
-                    };
-                    urp::stream_decode::stream_upstream_to_urp_events(
-                        &handler,
-                        None,
-                        crate::config::ProviderType::Messages,
-                        reqwest::Response::from(axum::http::Response::new(bytes.clone())),
-                        decoded_tx,
-                        None,
-                        None,
-                        1000,
-                    )
-                    .await
-                    .unwrap();
-                    let mut output = None;
-                    while let Some(event) = decoded_rx.recv().await {
-                        match event {
-                            UrpStreamEvent::ResponseDone {
-                                outcome: _,
-                                output: nodes,
-                                ..
-                            } => output = Some(nodes),
-                            UrpStreamEvent::Error { message, .. } => panic!("{message}: {wire}"),
-                            _ => {}
-                        }
-                    }
-                    let response = UrpResponse {
-                        outcome: None,
-                        id: "resp_projection".into(),
-                        model: "client-model".into(),
-                        created_at: None,
-                        output: output.expect("Messages decoded terminal"),
-                        finish_reason: Some(FinishReason::ToolCalls),
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    };
-                    let history =
-                        urp::encode::anthropic::encode_response(&response, "client-model");
-                    urp::decode::anthropic::decode_request(&json!({"model":"client-model","max_tokens":100,"messages":[{"role":"assistant","content":history["content"]}]})).unwrap().input
+                    let decoded = decode_wire(provider, bytes).await;
+                    client_turn(DownstreamProtocol::AnthropicMessages, &decoded, false).input
                 };
-                restore_request_call_signatures(&mut restored);
                 let calls: Vec<_> = restored
                     .iter()
-                    .filter_map(|node| {
-                        if let Node::ToolCall {
-                            call_id, signature, ..
-                        } = node
-                        {
-                            Some((call_id, signature))
-                        } else {
-                            None
-                        }
+                    .filter_map(|node| match node {
+                        Node::ToolCall { call_id, .. } => Some((call_id, signature(node))),
+                        _ => None,
                     })
                     .collect();
-                assert_eq!(calls.len(), 2);
-                for (call_id, signature) in calls {
+                assert_eq!(calls.len(), 2, "{wire}");
+                for (call_id, stored) in calls {
                     assert_eq!(
-                        signature.as_ref(),
-                        Some(&json!(format!("signature-{call_id}"))),
+                        stored,
+                        Some(json!(format!("signature-{call_id}"))),
                         "{wire}"
                     );
                 }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn live_and_synthetic_client_tool_loops_preserve_signature() {
-        use crate::config::ProviderType;
-        use crate::handlers::DownstreamProtocol;
-        use axum::response::IntoResponse;
-        use futures_util::StreamExt;
-        for (family, provider, downstream) in [
-            (
-                "messages",
-                ProviderType::Messages,
-                DownstreamProtocol::AnthropicMessages,
-            ),
-            (
-                "responses",
-                ProviderType::Responses,
-                DownstreamProtocol::Responses,
-            ),
-            (
-                "chat",
-                ProviderType::ChatCompletion,
-                DownstreamProtocol::ChatCompletions,
-            ),
-        ] {
-            for (synthetic, signature_at_start) in [(false, true), (false, false), (true, true)] {
-                let mut original = response();
-                original.output.insert(0, Node::assistant_text("Action."));
-                urp::wrap_reasoning_envelopes_in_response(&mut original, "gemini", "gemini-test");
-                let (wire_tx, wire_rx) = mpsc::channel(256);
-                if synthetic {
-                    urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                        downstream,
-                        "client-model",
-                        &original,
-                        None,
-                        None,
-                        wire_tx,
-                        true,
-                    )
-                    .await
-                    .unwrap();
-                } else {
-                    let call = original.output[1].clone();
-                    let mut header = call_header(&call);
-                    if !signature_at_start {
-                        if let NodeHeader::ToolCall { signature, .. } = &mut header {
-                            *signature = None;
-                        }
-                    }
-                    let events = vec![
-                        UrpStreamEvent::ResponseStart {
-                            id: original.id.clone(),
-                            model: "client-model".into(),
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::NodeStart {
-                            node_index: 0,
-                            header: NodeHeader::Text {
-                                signature: None,
-                                citations: Vec::new(),
-                                id: None,
-                                role: OrdinaryRole::Assistant,
-                                phase: None,
-                            },
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::NodeDelta {
-                            node_index: 0,
-                            delta: NodeDelta::Text {
-                                logprobs: None,
-                                signature: None,
-                                citations: Vec::new(),
-                                content: "Action.".into(),
-                            },
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::NodeDone {
-                            node_index: 0,
-                            node: original.output[0].clone(),
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::NodeStart {
-                            node_index: 1,
-                            header,
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::NodeDelta {
-                            node_index: 1,
-                            delta: NodeDelta::ToolCallArguments {
-                                arguments: "{\"x\":1,".into(),
-                            },
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::NodeDelta {
-                            node_index: 1,
-                            delta: NodeDelta::ToolCallArguments {
-                                arguments: "\"y\":2}".into(),
-                            },
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::NodeDone {
-                            node_index: 1,
-                            node: call,
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                        UrpStreamEvent::ResponseDone {
-                            outcome: None,
-                            output: original.output.clone(),
-                            finish_reason: Some(FinishReason::ToolCalls),
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                    ];
-                    let (tx, rx) = mpsc::channel(32);
-                    for event in events {
-                        tx.send(event).await.unwrap();
-                    }
-                    drop(tx);
-                    urp::stream_encode::encode_urp_stream(
-                        downstream,
-                        rx,
-                        wire_tx,
-                        "client-model",
-                        std::time::Instant::now(),
-                        None,
-                        false,
-                        None,
-                        true,
-                    )
-                    .await
-                    .unwrap();
-                }
-                let native = axum::response::sse::Sse::new(
-                    tokio_stream::wrappers::ReceiverStream::new(wire_rx)
-                        .map(Ok::<_, std::convert::Infallible>),
-                )
-                .into_response();
-                let bytes = axum::body::to_bytes(native.into_body(), usize::MAX)
-                    .await
-                    .unwrap();
-                let text = std::str::from_utf8(&bytes).unwrap();
-                assert!(
-                    text.contains("mz2."),
-                    "no wire binding {family} synthetic={synthetic}: {text}"
-                );
-                let (tx, mut rx) = mpsc::channel(256);
-                let handler = crate::handlers::UrpRequest {
-                    audio_output_format: None,
-                    model: "client-model".into(),
-                    max_multiplier: None,
-                    server_tool_usage_classes: Vec::new(),
-                    messages_custom_tool_names: Default::default(),
-                    affinity_explicit: None,
-                    affinity_prefix_hash: String::new(),
-                };
-                urp::stream_decode::stream_upstream_to_urp_events(
-                    &handler,
-                    None,
-                    provider,
-                    reqwest::Response::from(axum::http::Response::new(bytes.clone())),
-                    tx,
-                    None,
-                    None,
-                    1000,
-                )
-                .await
-                .unwrap();
-                let mut decoded = None;
-                while let Some(event) = rx.recv().await {
-                    if let UrpStreamEvent::ResponseDone {
-                        outcome: _,
-                        output,
-                        finish_reason,
-                        usage,
-                        extra_body,
-                    } = event
-                    {
-                        decoded = Some(UrpResponse {
-                            outcome: None,
-                            id: "r".into(),
-                            model: "client-model".into(),
-                            created_at: None,
-                            output,
-                            finish_reason,
-                            usage,
-                            extra_body,
-                        });
-                    }
-                }
-                let decoded = decoded.expect("native terminal");
-                let mut request = match family {
-                    "messages" => {
-                        let wire =
-                            urp::encode::anthropic::encode_response(&decoded, "client-model");
-                        urp::decode::anthropic::decode_request(&json!({"model":"client-model","max_tokens":100,"messages":[{"role":"assistant","content":wire["content"]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"native-1","content":"clicked"}]}]})).unwrap()
-                    }
-                    "responses" => {
-                        let wire = urp::encode::openai_responses::encode_response(
-                            &decoded,
-                            "client-model",
-                        );
-                        let mut input = wire["output"].as_array().unwrap().clone();
-                        input.push(json!({"type":"function_call_output","call_id":"native-1","output":"clicked"}));
-                        urp::decode::openai_responses::decode_request(
-                            &json!({"model":"client-model","input":input}),
-                        )
-                        .unwrap()
-                    }
-                    _ => {
-                        let wire =
-                            urp::encode::openai_chat::encode_response(&decoded, "client-model");
-                        urp::decode::openai_chat::decode_request(&json!({"model":"client-model","messages":[wire["choices"][0]["message"],{"role":"tool","tool_call_id":"native-1","content":"clicked"}]})).unwrap()
-                    }
-                };
-                urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
-                    &mut request.input,
-                    "gemini",
-                    "gemini-test",
-                    true,
-                );
-                let calls: Vec<_> = request.input.iter().filter_map(signature).collect();
-                assert_eq!(
-                    calls,
-                    vec![json!("Y2FsbA==")],
-                    "{family} synthetic={synthetic}: {text}"
-                );
-                assert!(
-                    request
-                        .input
-                        .iter()
-                        .all(|node| !matches!(node, Node::Reasoning { .. })),
-                    "lingering transport {family} synthetic={synthetic}"
-                );
-                let native = urp::encode::gemini::encode_request(&request, "gemini-test");
-                let call = native["contents"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .flat_map(|content| content["parts"].as_array().unwrap())
-                    .find(|part| part.get("functionCall").is_some())
-                    .unwrap();
-                assert_eq!(call["thoughtSignature"], "Y2FsbA==");
-                assert_eq!(call["functionCall"]["args"], json!({"x":1,"y":2}));
             }
         }
     }

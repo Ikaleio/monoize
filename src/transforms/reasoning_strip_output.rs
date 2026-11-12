@@ -93,7 +93,7 @@ impl Transform for ReasoningStripOutputTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                resp.output = strip_reasoning_nodes(&resp.output);
+                strip_reasoning_nodes(&mut resp.output);
             }
             UrpData::Stream(event) => strip_stream_reasoning(event, state),
             UrpData::Request(_) => {}
@@ -159,7 +159,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
             }
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
-            *output = strip_reasoning_nodes(output);
+            output.retain(|entry| !matches!(entry.node, Node::Reasoning { .. }));
         }
         _ => {}
     }

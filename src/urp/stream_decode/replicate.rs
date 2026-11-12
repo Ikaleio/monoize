@@ -4,13 +4,18 @@ use crate::handlers::usage::{
     record_visible_output_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
-use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, TerminalNode, UrpStreamEvent,
+};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+
+/// Replicate streams carry one assistant text node at this index.
+const TEXT_NODE_INDEX: u32 = 0;
 
 pub(crate) async fn stream_replicate_to_urp_events(
     urp: &HandlerUrpRequest,
@@ -20,13 +25,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4());
-    let mut started_response = false;
-    let mut text_started = false;
-    let mut output_text = String::new();
-    let mut had_error = false;
-    let mut finish_reason: Option<FinishReason> = None;
-
+    let mut decoder = ReplicateStreamDecoder::new(tx, urp.model.clone());
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
 
@@ -52,117 +51,147 @@ pub(crate) async fn stream_replicate_to_urp_events(
 
         match ev.event.as_str() {
             "output" => {
-                if !started_response {
-                    let _ = tx
-                        .send(UrpStreamEvent::ResponseStart {
-                            usage: None,
-                            id: response_id.clone(),
-                            model: urp.model.clone(),
-                            extra_body: HashMap::new(),
-                        })
-                        .await;
-                    started_response = true;
-                }
-
-                if !text_started {
-                    let _ = tx
-                        .send(UrpStreamEvent::NodeStart {
-                            node_index: 0,
-                            header: NodeHeader::Text {
-                                signature: None,
-                                citations: Vec::new(),
-                                id: None,
-                                role: OrdinaryRole::Assistant,
-                                phase: None,
-                            },
-                            extra_body: HashMap::new(),
-                        })
-                        .await;
-                    text_started = true;
-                }
-
-                output_text.push_str(&ev.data);
                 record_visible_output_delta(&runtime_metrics, &ev.data).await;
-                let delta = NodeDelta::Text {
-                    logprobs: None,
-                    signature: None,
-                    citations: Vec::new(),
-                    content: ev.data.clone(),
-                };
-                let _ = tx
-                    .send(UrpStreamEvent::NodeDelta {
-                        node_index: 0,
-                        delta,
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    })
-                    .await;
+                decoder.on_output(ev.data).await;
             }
-            "error" => {
-                had_error = true;
-                let _ = tx
-                    .send(UrpStreamEvent::Error {
-                        code: Some("replicate_error".to_string()),
-                        message: ev.data.clone(),
-                        extra_body: HashMap::new(),
-                    })
-                    .await;
-            }
+            "error" => decoder.on_error(ev.data).await,
             "done" => {
                 record_stream_done_sentinel(&runtime_metrics).await;
-                finish_reason = Some(if had_error {
-                    FinishReason::Other
-                } else {
-                    FinishReason::Stop
-                });
+                decoder.on_done();
                 break;
             }
             _ => {}
         }
     }
 
-    let completed_nodes = if text_started {
-        vec![Node::Text {
-            logprobs: None,
-            citations: Vec::new(),
-            signature: None,
+    decoder.finish().await;
+    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
+    Ok(())
+}
 
-            id: None,
-            role: OrdinaryRole::Assistant,
-            content: output_text.clone(),
-            phase: None,
+/// Cross-event state of one Replicate prediction stream. Send failures are ignored: a closed
+/// receiver means the downstream is gone and the remaining events have no consumer.
+struct ReplicateStreamDecoder {
+    tx: mpsc::Sender<UrpStreamEvent>,
+    response_id: String,
+    model: String,
+    started_response: bool,
+    text_started: bool,
+    output_text: String,
+    had_error: bool,
+    finish_reason: Option<FinishReason>,
+}
+
+impl ReplicateStreamDecoder {
+    fn new(tx: mpsc::Sender<UrpStreamEvent>, model: String) -> Self {
+        Self {
+            tx,
+            response_id: format!("resp_{}", uuid::Uuid::new_v4()),
+            model,
+            started_response: false,
+            text_started: false,
+            output_text: String::new(),
+            had_error: false,
+            finish_reason: None,
+        }
+    }
+
+    async fn send(&self, event: UrpStreamEvent) {
+        let _ = self.tx.send(event).await;
+    }
+
+    async fn on_output(&mut self, data: String) {
+        if !self.started_response {
+            self.started_response = true;
+            self.send(UrpStreamEvent::ResponseStart {
+                usage: None,
+                id: self.response_id.clone(),
+                model: self.model.clone(),
+                created_at: None,
+                extra_body: HashMap::new(),
+            })
+            .await;
+        }
+        if !self.text_started {
+            self.text_started = true;
+            self.send(UrpStreamEvent::NodeStart {
+                node_index: TEXT_NODE_INDEX,
+                header: NodeHeader::Text {
+                    signature: None,
+                    citations: Vec::new(),
+                    id: None,
+                    role: OrdinaryRole::Assistant,
+                    phase: None,
+                },
+                extra_body: HashMap::new(),
+            })
+            .await;
+        }
+        self.output_text.push_str(&data);
+        self.send(UrpStreamEvent::NodeDelta {
+            node_index: TEXT_NODE_INDEX,
+            delta: NodeDelta::Text {
+                logprobs: None,
+                signature: None,
+                citations: Vec::new(),
+                content: data,
+            },
+            usage: None,
             extra_body: HashMap::new(),
-            cache_breakpoint: None,
-        }]
-    } else {
-        Vec::new()
-    };
+        })
+        .await;
+    }
 
-    for node in &completed_nodes {
-        let _ = tx
-            .send(UrpStreamEvent::NodeDone {
-                node_index: 0,
+    async fn on_error(&mut self, data: String) {
+        self.had_error = true;
+        self.send(UrpStreamEvent::Error {
+            code: Some("replicate_error".to_string()),
+            message: data,
+            extra_body: HashMap::new(),
+        })
+        .await;
+    }
+
+    fn on_done(&mut self) {
+        self.finish_reason = Some(if self.had_error {
+            FinishReason::Other
+        } else {
+            FinishReason::Stop
+        });
+    }
+
+    async fn finish(mut self) {
+        let mut output = Vec::new();
+        if self.text_started {
+            let node = Node::Text {
+                logprobs: None,
+                citations: Vec::new(),
+                signature: None,
+                id: None,
+                role: OrdinaryRole::Assistant,
+                content: std::mem::take(&mut self.output_text),
+                phase: None,
+                extra_body: HashMap::new(),
+                cache_breakpoint: None,
+            };
+            self.send(UrpStreamEvent::NodeDone {
+                node_index: TEXT_NODE_INDEX,
                 node: node.clone(),
                 usage: None,
                 extra_body: HashMap::new(),
             })
             .await;
-    }
-
-    let outputs = completed_nodes.clone();
-
-    if started_response {
-        let _ = tx
-            .send(UrpStreamEvent::ResponseDone {
+            output.push(TerminalNode::streamed(TEXT_NODE_INDEX, node));
+        }
+        if self.started_response {
+            self.send(UrpStreamEvent::ResponseDone {
                 outcome: None,
-                finish_reason,
+                finish_reason: self.finish_reason,
                 usage: None,
-                output: outputs,
+                output,
                 extra_body: HashMap::new(),
             })
             .await;
+        }
     }
-
-    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
-    Ok(())
 }

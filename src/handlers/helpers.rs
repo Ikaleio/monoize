@@ -706,13 +706,11 @@ fn canonical_affinity_tool_result_content(
             text,
             extra_body,
             cache_breakpoint,
-        } => {
-            CanonicalAffinityToolResultContent::Text {
-                text,
-                cache_breakpoint,
-                extra_body: sorted_extra(extra_body),
-            }
-        }
+        } => CanonicalAffinityToolResultContent::Text {
+            text,
+            cache_breakpoint,
+            extra_body: sorted_extra(extra_body),
+        },
         urp::ToolResultContent::Image {
             source,
             metadata,
@@ -1648,7 +1646,7 @@ pub(super) fn filter_extra_body_for_provider(
     let same_family = downstream.is_same_family(provider_type);
 
     req.extra_body.retain(|k, _| {
-        k.starts_with("_monoize_")
+        urp::is_internal_key(k)
             || override_set.contains(k.as_str())
             || (defaults.contains(&k.as_str())
                 && (same_family
@@ -2155,8 +2153,8 @@ pub(super) fn restore_tool_namespace_event(
         }
         urp::UrpStreamEvent::NodeDone { node, .. } => restore_tool_namespace_node(node, aliases),
         urp::UrpStreamEvent::ResponseDone { output, .. } => {
-            for node in output {
-                restore_tool_namespace_node(node, aliases);
+            for entry in output {
+                restore_tool_namespace_node(&mut entry.node, aliases);
             }
         }
         _ => {}
@@ -2317,7 +2315,10 @@ fn selector_matches_tool(
     match selector.get("type").and_then(Value::as_str) {
         Some("function") => {
             let available = match tool.tool_type.as_str() {
-                "function" => tool.function.as_ref().map(|function| function.name.as_str()),
+                "function" => tool
+                    .function
+                    .as_ref()
+                    .map(|function| function.name.as_str()),
                 // A named selector also addresses a native tool (Messages server tools).
                 "custom" | "namespace" => None,
                 _ => tool.name.as_deref(),
@@ -2446,7 +2447,9 @@ pub(super) fn map_web_search_tools_for_provider(
     };
     if selects_mapped_tool {
         req.tool_choice = Some(urp::ToolChoice::Specific(match provider_type {
-            ProviderType::Messages => json!({ "type": "function", "function": { "name": "web_search" } }),
+            ProviderType::Messages => {
+                json!({ "type": "function", "function": { "name": "web_search" } })
+            }
             _ => json!({ "type": "web_search" }),
         }));
     }

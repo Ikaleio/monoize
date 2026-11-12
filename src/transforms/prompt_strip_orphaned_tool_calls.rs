@@ -25,9 +25,7 @@ pub struct PromptStripOrphanedToolCallsTransform;
 /// or the last assistant turn contains tool calls without follow-up
 /// results, the API rejects with 400. This transform collects all
 /// `tool_result` call_ids in the conversation, then removes any
-/// `Part::ToolCall` whose call_id has no matching result.
-/// If removing all ToolCall parts from an assistant message leaves it
-/// empty, the entire message is dropped.
+/// `ToolCall` node whose call_id has no matching result.
 #[async_trait]
 impl Transform for PromptStripOrphanedToolCallsTransform {
     fn type_id(&self) -> &'static str {

@@ -284,7 +284,8 @@ fn convert_tool_to_function(tool: &mut ToolDefinition, cfg: &Config) {
         return;
     }
     let custom = tool.custom.take();
-    let description = apply_patch_tool_description(name.as_str(), custom.and_then(|c| c.description));
+    let description =
+        apply_patch_tool_description(name.as_str(), custom.and_then(|c| c.description));
     tool.tool_type = "function".to_string();
     tool.name = Some(name.clone());
     tool.function = Some(FunctionDefinition {
@@ -407,8 +408,8 @@ fn apply_stream(event: &mut UrpStreamEvent, cfg: &Config) {
         }
         UrpStreamEvent::NodeDone { node, .. } => convert_node_response(node, cfg),
         UrpStreamEvent::ResponseDone { output, .. } => {
-            for node in output {
-                convert_node_response(node, cfg);
+            for entry in output {
+                convert_node_response(&mut entry.node, cfg);
             }
         }
         _ => {}

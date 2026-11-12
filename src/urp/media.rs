@@ -351,7 +351,7 @@ fn file(
                     } => {
                         let mut obj: serde_json::Map<String, Value> = extra_body
                             .into_iter()
-                            .filter(|(key, _)| !key.starts_with("_monoize_"))
+                            .filter(|(key, _)| !is_internal_key(key))
                             .collect();
                         obj.insert("type".into(), json!("text"));
                         obj.insert("text".into(), json!(text));
@@ -373,7 +373,7 @@ fn file(
                         obj.extend(
                             extra_body
                                 .into_iter()
-                                .filter(|(key, _)| !key.starts_with("_monoize_")),
+                                .filter(|(key, _)| !is_internal_key(key)),
                         );
                         obj.insert("type".into(), json!("image"));
                         obj.insert("source".into(), source);
@@ -609,8 +609,7 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 if target != ProviderProtocol::Messages {
                     if let Some(ToolResultContent::Text {
                         text, extra_body, ..
-                    }) =
-                        document_prefix(metadata)
+                    }) = document_prefix(metadata)
                     {
                         result.push(Node::Text {
                             logprobs: None,

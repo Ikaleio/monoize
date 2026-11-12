@@ -2,7 +2,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{ImageSource, UrpStreamEvent};
+use crate::urp::{ImageSource, Node, TerminalNode, UrpStreamEvent};
 use async_trait::async_trait;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
@@ -104,34 +104,43 @@ impl Transform for ImageOutputToMarkdownTransform {
             .clone();
         match data {
             UrpData::Response(resp) => {
-                append_images_as_markdown_nodes(&mut resp.output, &cfg);
+                append_images_as_markdown(&mut resp.output, |node| node, |node| node, &cfg);
             }
-            UrpData::Stream(event) => match event {
-                UrpStreamEvent::ResponseDone { output, .. } => {
-                    append_images_as_markdown_nodes(output, &cfg);
-                }
-                _ => {}
-            },
+            UrpData::Stream(UrpStreamEvent::ResponseDone { output, .. }) => {
+                // An appended Text exists only in the terminal snapshot, so it is unannounced.
+                append_images_as_markdown(
+                    output,
+                    |entry| &mut entry.node,
+                    TerminalNode::unannounced,
+                    &cfg,
+                );
+            }
+            UrpData::Stream(_) => {}
             UrpData::Request(_) => {}
         }
         Ok(())
     }
 }
 
-fn append_images_as_markdown_nodes(output: &mut Vec<crate::urp::Node>, config: &Config) {
+fn append_images_as_markdown<T>(
+    output: &mut Vec<T>,
+    node_of: fn(&mut T) -> &mut Node,
+    wrap: fn(Node) -> T,
+    config: &Config,
+) {
     let mut pending_appended = String::new();
     let mut last_text_index: Option<usize> = None;
 
-    for (index, node) in output.iter_mut().enumerate() {
-        match node {
-            crate::urp::Node::Image {
+    for (index, entry) in output.iter_mut().enumerate() {
+        match node_of(entry) {
+            Node::Image {
                 role: crate::urp::OrdinaryRole::Assistant,
                 source,
                 ..
             } => {
                 pending_appended.push_str(&format_image_markdown(source, config));
             }
-            crate::urp::Node::Text {
+            Node::Text {
                 role: crate::urp::OrdinaryRole::Assistant,
                 content,
                 ..
@@ -148,11 +157,11 @@ fn append_images_as_markdown_nodes(output: &mut Vec<crate::urp::Node>, config: &
 
     if !pending_appended.is_empty() {
         if let Some(index) = last_text_index {
-            if let Some(crate::urp::Node::Text { content, .. }) = output.get_mut(index) {
+            if let Node::Text { content, .. } = node_of(&mut output[index]) {
                 content.push_str(&pending_appended);
             }
         } else {
-            output.push(crate::urp::Node::Text {
+            output.push(wrap(Node::Text {
                 logprobs: None,
                 signature: None,
                 citations: Vec::new(),
@@ -162,7 +171,7 @@ fn append_images_as_markdown_nodes(output: &mut Vec<crate::urp::Node>, config: &
                 phase: None,
                 extra_body: HashMap::new(),
                 cache_breakpoint: None,
-            });
+            }));
         }
     }
 }

@@ -147,8 +147,8 @@ fn mark_stream(event: &mut UrpStreamEvent) {
         }
         UrpStreamEvent::NodeDone { node, .. } => mark_node(node),
         UrpStreamEvent::ResponseDone { output, .. } => {
-            for node in output {
-                mark_node(node);
+            for entry in output {
+                mark_node(&mut entry.node);
             }
         }
         _ => {}

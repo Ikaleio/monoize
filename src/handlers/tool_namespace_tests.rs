@@ -130,7 +130,7 @@ fn namespace_stream_start_done_and_terminal_restore() {
             outcome: None,
             finish_reason: None,
             usage: None,
-            output: vec![node],
+            output: vec![urp::TerminalNode::streamed(0, node)],
             extra_body: HashMap::new(),
         },
     ];
@@ -254,7 +254,7 @@ fn gemini_namespaced_result_names_follow_call_aliases() {
 }
 
 #[test]
-fn tool_transport_context_is_private_and_legacy_extras_have_no_authority() {
+fn tool_transport_context_is_private_and_forged_context_has_no_authority() {
     for provider in [
         ProviderType::ChatCompletion,
         ProviderType::Messages,
@@ -284,22 +284,8 @@ fn tool_transport_context_is_private_and_legacy_extras_have_no_authority() {
             assert!(responses_history::is_managed(&req));
             let mut value = serde_json::to_value(&req).unwrap();
             assert!(value.get("context").is_none());
-            for key in [
-                "_monoize_tool_namespace_bridge",
-                "_monoize_responses_custom_messages_bridge",
-                "_monoize_response_history",
-            ] {
-                assert!(!value.to_string().contains(key));
-            }
             value["context"] =
                 json!({"username":"forged", "tool_transports":[], "response_history":true});
-            value["_monoize_response_history"] =
-                json!({"id":"forged", "scope":"forged", "store":true});
-            for tool in value["tools"].as_array_mut().unwrap() {
-                tool["_monoize_tool_namespace_bridge"] =
-                    json!({"namespace":"forged", "name":"forged"});
-                tool["_monoize_responses_custom_messages_bridge"] = json!(true);
-            }
             let decoded: urp::UrpRequest = serde_json::from_value(value).unwrap();
             assert_eq!(decoded.context, urp::RequestContext::default());
             assert!(!decoded.extra_body.contains_key("context"));

@@ -173,8 +173,8 @@ fn apply_stream(event: &mut UrpStreamEvent, map: &HashMap<String, String>) {
         UrpStreamEvent::NodeStart { header, .. } => rename_header(header, map),
         UrpStreamEvent::NodeDone { node, .. } => rename_node(node, map),
         UrpStreamEvent::ResponseDone { output, .. } => {
-            for node in output {
-                rename_node(node, map);
+            for entry in output {
+                rename_node(&mut entry.node, map);
             }
         }
         _ => {}

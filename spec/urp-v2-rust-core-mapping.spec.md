@@ -11,10 +11,10 @@
 
 RUSTMAP-1. This file defines the Rust-facing target contract for the flat URP v2 redesign in these implementation surfaces:
 
-1. `src/urp/mod.rs`
+1. `src/urp/mod.rs` and the core type modules it re-exports
 2. `src/urp/encode/*`
 3. `src/urp/decode/*`
-4. `src/urp/greedy.rs`
+4. `src/urp/grouping.rs`, `src/urp/stream_events.rs`, and `src/urp/extra_keys.rs`
 5. `src/urp/stream_helpers.rs`
 6. `src/urp/stream_encode/*`
 7. `src/urp/stream_decode/*`
@@ -337,11 +337,11 @@ RTYPE-9. The Rust core layer MUST define exactly one canonical streaming enum fa
 
 ```text
 UrpStreamEvent =
-  | ResponseStart { id: String, model: String, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
+  | ResponseStart { id: String, model: String, created_at: Option<i64>, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
   | NodeStart { node_index: u32, header: NodeHeader, extra_body: HashMap<String, JsonValue> }
   | NodeDelta { node_index: u32, delta: NodeDelta, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
   | NodeDone { node_index: u32, node: Node, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
-  | ResponseDone { outcome: Option<ResponseOutcome>, finish_reason: Option<FinishReason>, usage: Option<Usage>, output: Vec<Node>, extra_body: HashMap<String, JsonValue> }
+  | ResponseDone { outcome: Option<ResponseOutcome>, finish_reason: Option<FinishReason>, usage: Option<Usage>, output: Vec<TerminalNode>, extra_body: HashMap<String, JsonValue> }
   | ProviderControl { protocol: String, event_name: String, data: JsonValue, extra_body: HashMap<String, JsonValue> }
   | Error { code: Option<String>, message: String, extra_body: HashMap<String, JsonValue> }
 ```
@@ -351,6 +351,22 @@ RTYPE-10. `NodeHeader` and `NodeDelta` MUST mirror the canonical flat event cont
 RTYPE-10a. `ProviderControl` is stream-local same-protocol passthrough. It MUST NOT create a canonical node, mutate `ResponseDone.output`, or cross a protocol-family boundary. A decoder MUST use it for a valid provider event whose event-level wire shape has no typed URP event mapping and whose same-protocol replay is required for lossless forwarding.
 
 RTYPE-11. The Rust core layer MUST NOT retain `Item`, `Part`, `ItemHeader`, `PartHeader`, `PartDelta`, `UrpRequest.inputs`, `UrpResponse.outputs`, `UrpStreamEvent::ItemStart`, `UrpStreamEvent::PartStart`, `UrpStreamEvent::PartDone`, or `UrpStreamEvent::ItemDone` as canonical URP representations.
+
+RTYPE-11a. The crate MUST NOT define a grouped adapter form of nodes, such as `Item`, `Part`, or a role enum with `Tool`. A decoder MUST construct `Node` values directly. An encoder MUST group borrowed `&[Node]` slices through `urp::grouping` (RECON-6) or through the boundary rule of its own protocol. An encoder MUST NOT deep-copy the node sequence only to group it.
+
+RTYPE-9a. The Rust core layer MUST define `TerminalNode { node_index: Option<u32>, node: Node }` with `node` flattened in serialization, under STR-8 through STR-8e. `TerminalNode` MUST appear only in `UrpStreamEvent::ResponseDone.output`.
+
+### 2.3 Module structure
+
+RSTRUCT-1. Rust source MUST NOT be composed with `include!`. Each codec is a module tree in which a file holds one cohesive concern and its name states that concern.
+
+RSTRUCT-2. A stream decoder or stream encoder MUST hold its cross-event state in one struct. Each `UrpStreamEvent` variant or wire event kind MUST be handled by its own method. The driver loop MUST only read the next event and dispatch it.
+
+RSTRUCT-3. Every downstream stream encoder MUST implement `urp::stream_encode::StreamEncoder`. `urp::stream_encode::run` is the only driver loop, for live streams and for STR-14 replays. `urp::stream_events::events_from_response` is the only implementation of STR-14.
+
+RSTRUCT-4. Every internal `_monoize_` extras key and every internal `_monoize.` control name MUST be defined exactly once, in `urp::extra_keys`. Other modules MUST reference those constants and MUST NOT repeat the literal.
+
+RSTRUCT-5. `urp::grouping` is the only implementation of RECON-6. Stream encoders evaluate it per node through `GroupKey`; non-stream encoders evaluate it per sequence through `envelopes`.
 
 ### 2.2 Exact current-to-target concept mapping
 
@@ -426,7 +442,7 @@ NH-1. An ordinary node is one of `Text`, `Image`, `Audio`, `File`, `Refusal`, `R
 
 NH-2. Every ordinary node MUST carry `role` on the node itself.
 
-NH-3. No helper in `src/urp/encode/*`, `src/urp/decode/*`, or `src/urp/greedy.rs` may require a canonical parent message wrapper in order to determine an ordinary node's role, ordering, phase, reasoning fields, tool-call fields, or passthrough fields.
+NH-3. No helper in `src/urp/encode/*`, `src/urp/decode/*`, or `src/urp/grouping.rs` may require a canonical parent message wrapper in order to determine an ordinary node's role, ordering, phase, reasoning fields, tool-call fields, or passthrough fields.
 
 NH-4. Ordinary-node helper code MUST treat source order in `Vec<Node>` as canonical. It MUST NOT infer a hidden grouped-message boundary solely because adjacent nodes have the same role.
 
@@ -434,7 +450,7 @@ NH-5. `Refusal`, `Reasoning`, and `ToolCall` MUST always behave as assistant-rol
 
 NH-6. `Text.phase` is node-local metadata. A helper MAY read it only from `Node::Text` and MUST NOT synthesize a message-level phase cache that becomes canonical state.
 
-NH-6a. `ProviderItem.origin_protocol` is typed node state. Shared helpers MUST preserve it when converting through legacy grouped helper forms and MUST NOT infer it from role, model name, or provider family.
+NH-6a. `ProviderItem.origin_protocol` is typed node state. Shared helpers MUST preserve it and MUST NOT infer it from role, model name, or provider family.
 
 ### 3.2 Top-level `ToolResult`
 
@@ -638,7 +654,7 @@ SHELP-18. A stream transform MAY rewrite canonical node events, but it MUST pres
 
 TASK-1. Task 6 target: `src/urp/mod.rs` MUST expose the flat Rust core type family from RTYPE-1 through RTYPE-11 and MUST remove grouped `Item` and `Part` concepts from canonical URP storage.
 
-TASK-2. Task 7 target: shared encode helpers in `src/urp/encode/*` and `src/urp/greedy.rs` MUST implement grouping and extraction logic against flat `Node` sequences under EGR-1 through EGR-20 rather than against grouped `parts` inside `Message`.
+TASK-2. Task 7 target: shared encode helpers in `src/urp/encode/*` and `src/urp/grouping.rs` MUST implement grouping and extraction logic against flat `Node` sequences under EGR-1 through EGR-20 rather than against grouped `parts` inside `Message`.
 
 TASK-3. Task 8 target: shared decode helpers in `src/urp/decode/*` MUST emit flat `Node` values directly, assign unknown fields by NH-19 through NH-25, and emit `NextDownstreamEnvelopeExtra` only for envelope-local passthrough.
 
@@ -653,7 +669,7 @@ RTYPE-NEW-2. Reasoning nodes, headers, and deltas MUST carry `ReasoningMetadata`
 RTYPE-NEW-3. Optional summary_parts and content_parts describe UTF-8 byte lengths and unknown part members. They MUST NOT retain text copies.
 RTYPE-NEW-4. A text-part encoder MUST use current text. Invalid lengths or UTF-8 boundaries MUST produce one rebuilt part without old text.
 RTYPE-NEW-4a. Typed text is authoritative over part shapes, including absence and deletion. A native part array that contains at least one text part decodes to present typed text, which is the explicit empty string when every part's text is empty; an absent or empty array decodes to absent text. The encoder MUST emit parts from shapes only when the typed text is present: explicit empty text with zero-length shapes reproduces the native part count and part members, and absent text MUST encode as an empty array whatever shapes remain. Explicit empty text is not reasoning text: every consumer that asks whether a reasoning node has text (Gemini thought Parts, Messages thinking blocks, Chat reasoning fields, think-XML, summary transforms, legacy plain-text extraction) MUST test for non-empty text, so explicit empty text never produces an empty thought Part, thinking block, or reasoning field across families. A native identified reasoning item whose text is absent or empty is still `native_empty` (PR2g.1).
-RTYPE-NEW-5. Text nodes, headers, deltas, and temporary bridge parts MUST carry citations and an optional signature.
+RTYPE-NEW-5. Text nodes, headers, and deltas MUST carry citations and an optional signature.
 RTYPE-NEW-6. `ResponseStart.usage` MUST use `Option<Usage>`. No JSON serialization round trip is permitted for internal start usage.
 RTYPE-NEW-7. `UrpRequest.context` MUST hold runtime identities independently of extra_body. Serialization and JavaScript transform round trips MUST NOT expose or replace trusted context.
 
@@ -666,18 +682,18 @@ The discarded value MUST NOT enter flattened `extra_body`. Missing context MUST 
 These fields MUST NOT be recovered from `_monoize_*` extras.
 RTYPE-NEW-8. The typed additions in this section extend the type listings above. Absence remains authoritative at every adapter boundary.
 
-RTYPE-NEW-9. ToolCall nodes, headers, and bridge parts MUST include optional `namespace: String` and `signature: JsonValue` fields.
+RTYPE-NEW-9. ToolCall nodes and headers MUST include optional `namespace: String` and `signature: JsonValue` fields.
 ToolResult nodes and headers MUST include optional `namespace: String` and `name: String` fields.
 RTYPE-NEW-10. ToolDefinition MUST include optional namespace, ordered child tools, origin_protocol, and native config fields under URPV2-S8.
-RTYPE-NEW-11. Media nodes, headers, bridge parts, and ToolResultContent media MUST carry MediaMetadata under media-transport.spec.md. ToolResult nodes and headers MUST retain typed signatures.
-RTYPE-NEW-11a. `src/urp/cache_breakpoint.rs` MUST own the `CacheBreakpoint` type, its request-decode rule, and its per-target wire rule (`urp-v2-flat-structure.spec.md` CB-1 through CB-18). Stream headers and `Part` values do not carry the field, because CB-5 limits it to the request direction and CB-17 writes wire keys to the encoder clone before adapter parts exist.
+RTYPE-NEW-11. Media nodes, headers, and ToolResultContent media MUST carry MediaMetadata under media-transport.spec.md. ToolResult nodes and headers MUST retain typed signatures.
+RTYPE-NEW-11a. `src/urp/cache_breakpoint.rs` MUST own the `CacheBreakpoint` type, its request-decode rule, and its per-target wire rule (`urp-v2-flat-structure.spec.md` CB-1 through CB-18). Stream headers do not carry the field, because CB-5 limits it to the request direction and CB-17 writes wire keys to the encoder-owned clone.
 RTYPE-NEW-12. ProviderItem headers MUST include an optional initial body. Stream helpers MUST preserve that body as canonical initial state.
 
 
 ## Canonical semantic metadata extension
 
 RSEM-1. SEM-1 through SEM-6 in urp-v2-flat-structure.spec.md supersede older JSON citation and terminal-extra shapes in this file.
-Rust citations MUST use Citation values. Text and Refusal nodes, bridge parts, and deltas MUST retain optional TokenLogprob arrays.
+Rust citations MUST use Citation values. Text and Refusal nodes and deltas MUST retain optional TokenLogprob arrays.
 UrpRequest MUST expose optional LogprobConfig. UrpResponse and ResponseDone MUST expose optional ResponseOutcome.
 Usage MUST expose optional ordered UsageIteration values. Constructors that omit these optional semantic fields MUST default to absence during deserialization.
 Existing final audio and reasoning representations remain unchanged.

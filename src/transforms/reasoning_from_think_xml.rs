@@ -3,7 +3,7 @@ use crate::transforms::{
     TransformScope, TransformState, UrpData,
 };
 use crate::urp::citations::{Citation, TextSpan, rebase_citation};
-use crate::urp::{Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{Node, NodeDelta, NodeHeader, OrdinaryRole, TerminalNode, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -150,7 +150,9 @@ impl Transform for ReasoningFromThinkXmlTransform {
                             citations,
                             ..
                         } => {
-                            out.extend(extract_text_and_reasoning(&content, phase, citations, &cfg.tag));
+                            out.extend(extract_text_and_reasoning(
+                                &content, phase, citations, &cfg.tag,
+                            ));
                         }
                         other => out.push(other),
                     }
@@ -267,11 +269,7 @@ impl StreamState {
         index
     }
 
-    fn close_segment(
-        &mut self,
-        source: u32,
-        out: &mut Vec<UrpStreamEvent>,
-    ) {
+    fn close_segment(&mut self, source: u32, out: &mut Vec<UrpStreamEvent>) {
         let Some(split) = self.text_nodes.get_mut(&source) else {
             return;
         };
@@ -369,7 +367,13 @@ impl StreamState {
     }
 
     /// Emits every buffered byte that cannot start the awaited tag (TXI-3).
-    fn drain(&mut self, source: u32, open: &str, close: &str, terminal: bool) -> Vec<UrpStreamEvent> {
+    fn drain(
+        &mut self,
+        source: u32,
+        open: &str,
+        close: &str,
+        terminal: bool,
+    ) -> Vec<UrpStreamEvent> {
         let mut out = Vec::new();
         loop {
             let split = &self.text_nodes[&source];
@@ -473,6 +477,56 @@ impl StreamState {
         }
     }
 
+    /// STR-8c: a split text entry expands into the segments streamed for it, and every other
+    /// streamed entry takes its remapped index. Streamed entries keep output-index order and
+    /// precede the entries the stream never announced, which are split here.
+    fn convert_terminal_output(
+        &mut self,
+        output: Vec<TerminalNode>,
+        tag: &str,
+    ) -> Vec<TerminalNode> {
+        let mut streamed: Vec<(u32, TerminalNode)> = Vec::with_capacity(output.len());
+        let mut unannounced = Vec::new();
+        for TerminalNode { node_index, node } in output {
+            if let Some(source) = node_index {
+                if self.text_nodes.remove(&source).is_some() {
+                    // A streamed text node that produced only empty segments has no entry.
+                    let segments = self.split_done.remove(&source).unwrap_or_default();
+                    streamed.extend(
+                        segments
+                            .into_iter()
+                            .map(|(out, node)| (out, TerminalNode::streamed(out, node))),
+                    );
+                    continue;
+                }
+                if let Some(out) = self.index_map.remove(&source) {
+                    streamed.push((out, TerminalNode::streamed(out, node)));
+                    continue;
+                }
+            }
+            match node {
+                Node::Text {
+                    role: OrdinaryRole::Assistant,
+                    content,
+                    phase,
+                    citations,
+                    ..
+                } => unannounced.extend(
+                    extract_text_and_reasoning(&content, phase, citations, tag)
+                        .into_iter()
+                        .map(TerminalNode::unannounced),
+                ),
+                other => unannounced.push(TerminalNode::unannounced(other)),
+            }
+        }
+        streamed.sort_by_key(|(out, _)| *out);
+        streamed
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .chain(unannounced)
+            .collect()
+    }
+
     fn remap(&mut self, node_index: &mut u32) {
         if let Some(out) = self.index_map.get(node_index) {
             *node_index = *out;
@@ -568,35 +622,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
             }
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
-            let mut rewritten: Vec<(u32, Node)> = Vec::with_capacity(output.len());
-            let mut terminal_only = Vec::new();
-            for (position, node) in output.drain(..).enumerate() {
-                let position = position as u32;
-                if let Some(segments) = state.split_done.remove(&position) {
-                    rewritten.extend(segments);
-                } else if state.text_nodes.contains_key(&position) {
-                    // A streamed text node that produced only empty segments.
-                } else if let Some(out) = state.index_map.get(&position) {
-                    rewritten.push((*out, node));
-                } else {
-                    terminal_only.push(node);
-                }
-            }
-            rewritten.sort_by_key(|(index, _)| *index);
-            let mut final_output: Vec<Node> = rewritten.into_iter().map(|(_, node)| node).collect();
-            for node in terminal_only {
-                match node {
-                    Node::Text {
-                        role: OrdinaryRole::Assistant,
-                        content,
-                        phase,
-                        citations,
-                        ..
-                    } => final_output.extend(extract_text_and_reasoning(&content, phase, citations, tag)),
-                    other => final_output.push(other),
-                }
-            }
-            *output = final_output;
+            *output = state.convert_terminal_output(std::mem::take(output), tag);
         }
         _ => {}
     }

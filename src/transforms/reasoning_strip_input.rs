@@ -79,7 +79,7 @@ impl Transform for ReasoningStripInputTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            req.input = strip_reasoning_nodes(&req.input);
+            strip_reasoning_nodes(&mut req.input);
         }
         Ok(())
     }

@@ -610,12 +610,8 @@ pub fn move_developer_to_system_nodes(nodes: &mut [Node]) {
     }
 }
 
-pub fn strip_reasoning_nodes(nodes: &[Node]) -> Vec<Node> {
-    nodes
-        .iter()
-        .filter(|node| !matches!(node, Node::Reasoning { .. }))
-        .cloned()
-        .collect()
+pub fn strip_reasoning_nodes(nodes: &mut Vec<Node>) {
+    nodes.retain(|node| !matches!(node, Node::Reasoning { .. }));
 }
 
 pub fn set_extra_path(extra: &mut HashMap<String, Value>, path: &str, value: Value) {

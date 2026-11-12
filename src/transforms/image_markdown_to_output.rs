@@ -3,7 +3,9 @@ use crate::transforms::{
     TransformScope, TransformState, UrpData,
 };
 use crate::urp::citations::{Citation, TextSpan, rebase_citation};
-use crate::urp::{ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{
+    ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, TerminalNode, UrpStreamEvent,
+};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -35,13 +37,22 @@ struct StreamTextNodeState {
     citations: Vec<Citation>,
     pending_citations: Vec<Citation>,
     seen_citations: usize,
+    /// Indices of the image nodes emitted from this text node, in emission order.
+    image_indices: Vec<u32>,
+}
+
+/// What the stream announced for one completed source text node.
+struct DoneTextNode {
+    /// Kept runs, for late citations.
+    spans: Vec<TextSpan>,
+    text_announced: bool,
+    image_indices: Vec<u32>,
 }
 
 struct StreamState {
     replacement: Option<Vec<UrpStreamEvent>>,
     node_text_parts: HashMap<u32, StreamTextNodeState>,
-    /// Kept runs of completed text nodes, for late citations.
-    done_spans: HashMap<u32, Vec<TextSpan>>,
+    done_nodes: HashMap<u32, DoneTextNode>,
     next_synthetic_node_index: u32,
 }
 
@@ -50,9 +61,22 @@ impl Default for StreamState {
         Self {
             replacement: None,
             node_text_parts: HashMap::new(),
-            done_spans: HashMap::new(),
+            done_nodes: HashMap::new(),
             next_synthetic_node_index: u32::MAX,
         }
+    }
+}
+
+impl StreamState {
+    /// Whether the source text node `node_index` was announced downstream, and the indices of
+    /// the image nodes emitted from it.
+    fn streamed_text(&self, node_index: u32) -> Option<(bool, &[u32])> {
+        if let Some(done) = self.done_nodes.get(&node_index) {
+            return Some((done.text_announced, &done.image_indices));
+        }
+        self.node_text_parts
+            .get(&node_index)
+            .map(|node| (node.start_emitted, node.image_indices.as_slice()))
     }
 }
 
@@ -128,7 +152,14 @@ impl Transform for ImageMarkdownToOutputTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                rewrite_assistant_markdown_images_nodes(&mut resp.output);
+                let mut rewritten = Vec::with_capacity(resp.output.len());
+                for node in resp.output.drain(..) {
+                    match split_assistant_markdown_images(node) {
+                        Ok((text, images)) => rewritten.extend(text.into_iter().chain(images)),
+                        Err(node) => rewritten.push(node),
+                    }
+                }
+                resp.output = rewritten;
             }
             UrpData::Stream(event) => {
                 let Some(stream_state) = state.as_any_mut().downcast_mut::<StreamState>() else {
@@ -142,54 +173,88 @@ impl Transform for ImageMarkdownToOutputTransform {
     }
 }
 
-fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
-    let mut rewritten = Vec::with_capacity(nodes.len());
-    for node in nodes.drain(..) {
-        match node {
-            Node::Text {
-                logprobs: _,
-                signature: _,
-                citations,
-                id,
-                role: OrdinaryRole::Assistant,
-                content,
-                phase,
-                extra_body,
-                cache_breakpoint,
-            } => {
-                let (cleaned, images, spans) = extract_markdown_images_from_text(&content);
-                if !cleaned.is_empty() {
-                    let mut citations = citations;
-                    for citation in &mut citations {
-                        rebase_citation(citation, &spans);
-                    }
-                    rewritten.push(Node::Text {
-                        logprobs: None,
-                        signature: None,
-                        citations,
-                        id,
-                        role: OrdinaryRole::Assistant,
-                        content: cleaned,
-                        phase,
-                        extra_body,
-                        cache_breakpoint,
-                    });
-                }
-                for source in images {
-                    rewritten.push(Node::Image {
-                        metadata: Default::default(),
-
-                        id: None,
-                        role: OrdinaryRole::Assistant,
-                        source,
-                        extra_body: HashMap::new(),
-                    });
-                }
-            }
-            other => rewritten.push(other),
+/// Splits an assistant text node into its cleaned text (absent when empty) and the image nodes
+/// of its Markdown images, in that order. Any other node is returned unchanged as `Err`.
+fn split_assistant_markdown_images(node: Node) -> Result<(Option<Node>, Vec<Node>), Node> {
+    let Node::Text {
+        logprobs: _,
+        signature: _,
+        mut citations,
+        id,
+        role: OrdinaryRole::Assistant,
+        content,
+        phase,
+        extra_body,
+        cache_breakpoint,
+    } = node
+    else {
+        return Err(node);
+    };
+    let (cleaned, images, spans) = extract_markdown_images_from_text(&content);
+    let text = (!cleaned.is_empty()).then(|| {
+        for citation in &mut citations {
+            rebase_citation(citation, &spans);
         }
+        Node::Text {
+            logprobs: None,
+            signature: None,
+            citations,
+            id,
+            role: OrdinaryRole::Assistant,
+            content: cleaned,
+            phase,
+            extra_body,
+            cache_breakpoint,
+        }
+    });
+    let images = images.into_iter().map(assistant_image_node).collect();
+    Ok((text, images))
+}
+
+fn assistant_image_node(source: ImageSource) -> Node {
+    Node::Image {
+        metadata: Default::default(),
+        id: None,
+        role: OrdinaryRole::Assistant,
+        source,
+        extra_body: HashMap::new(),
     }
-    *nodes = rewritten;
+}
+
+/// STR-8c: a split text entry keeps the index the stream announced for its kept text, and each
+/// image entry takes the index of the image node streamed at the same position. Parts the stream
+/// never announced are unannounced.
+fn rewrite_terminal_output(output: &mut Vec<TerminalNode>, state: &StreamState) {
+    let mut rewritten = Vec::with_capacity(output.len());
+    for TerminalNode { node_index, node } in output.drain(..) {
+        let (text, images) = match split_assistant_markdown_images(node) {
+            Ok(split) => split,
+            Err(node) => {
+                rewritten.push(TerminalNode { node_index, node });
+                continue;
+            }
+        };
+        let (text_index, image_indices) = match node_index
+            .and_then(|index| state.streamed_text(index).map(|streamed| (index, streamed)))
+        {
+            Some((index, (text_announced, image_indices))) => {
+                (text_announced.then_some(index), image_indices)
+            }
+            None => (None, &[][..]),
+        };
+        if let Some(node) = text {
+            rewritten.push(TerminalNode {
+                node_index: text_index,
+                node,
+            });
+        }
+        let mut image_indices = image_indices.iter().copied();
+        rewritten.extend(images.into_iter().map(|node| TerminalNode {
+            node_index: image_indices.next(),
+            node,
+        }));
+    }
+    *output = rewritten;
 }
 
 fn extract_markdown_images_from_text(content: &str) -> (String, Vec<ImageSource>, Vec<TextSpan>) {
@@ -233,7 +298,10 @@ fn kept_span(
 
 #[derive(Debug)]
 enum StreamSegment {
-    Text { content: String, source_start: usize },
+    Text {
+        content: String,
+        source_start: usize,
+    },
     Image(ImageSource),
 }
 
@@ -371,10 +439,10 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState) {
         // AMIO-13: late citations of a completed node follow its kept text.
         if let Some((node_index, mut citations)) =
             crate::urp::citations::parse_chat_annotations_control(event_name, data)
-            && let Some(spans) = state.done_spans.get(&node_index)
+            && let Some(done) = state.done_nodes.get(&node_index)
         {
             for citation in &mut citations {
-                rebase_citation(citation, spans);
+                rebase_citation(citation, &done.spans);
             }
             *event = crate::urp::citations::chat_annotations_control(node_index, &citations);
         }
@@ -384,7 +452,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState) {
         return;
     }
     if let UrpStreamEvent::ResponseDone { output, .. } = event {
-        rewrite_assistant_markdown_images_nodes(output);
+        rewrite_terminal_output(output, state);
         state.node_text_parts.clear();
     }
 }
@@ -418,6 +486,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                     citations: Vec::new(),
                     pending_citations: Vec::new(),
                     seen_citations: 0,
+                    image_indices: Vec::new(),
                 },
             );
             state.replacement = Some(Vec::new());
@@ -494,6 +563,7 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
                         citations: Vec::new(),
                         pending_citations: Vec::new(),
                         seen_citations: 0,
+                        image_indices: Vec::new(),
                     });
             if !node_state.saw_delta {
                 node_state.buffered_tail.push_str(content);
@@ -514,9 +584,14 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             let seen = node_state.seen_citations.min(citations.len());
             node_state.pending_citations.extend(citations.drain(seen..));
             place_citations(*node_index, &mut node_state, true, &mut emitted);
-            state
-                .done_spans
-                .insert(*node_index, std::mem::take(&mut node_state.spans));
+            state.done_nodes.insert(
+                *node_index,
+                DoneTextNode {
+                    spans: std::mem::take(&mut node_state.spans),
+                    text_announced: node_state.start_emitted,
+                    image_indices: std::mem::take(&mut node_state.image_indices),
+                },
+            );
             if node_state.start_emitted {
                 emitted.push(UrpStreamEvent::NodeDone {
                     node_index: *node_index,
@@ -573,10 +648,12 @@ fn ensure_text_node_start(
 
 fn emit_synthetic_image_node(
     state: &mut StreamState,
+    node_state: &mut StreamTextNodeState,
     source: ImageSource,
     emitted: &mut Vec<UrpStreamEvent>,
 ) {
     let node_index = allocate_synthetic_node_index(state);
+    node_state.image_indices.push(node_index);
     emitted.push(UrpStreamEvent::NodeStart {
         node_index,
         header: NodeHeader::Image {
@@ -589,14 +666,7 @@ fn emit_synthetic_image_node(
     });
     emitted.push(UrpStreamEvent::NodeDone {
         node_index,
-        node: Node::Image {
-            metadata: Default::default(),
-
-            id: None,
-            role: OrdinaryRole::Assistant,
-            source,
-            extra_body: HashMap::new(),
-        },
+        node: assistant_image_node(source),
         usage: None,
         extra_body: HashMap::new(),
     });
@@ -612,8 +682,8 @@ fn emit_node_segments(
     delta_extra_body: &HashMap<String, Value>,
 ) {
     let source_base = node_state.source_chars;
-    node_state.source_chars += (source.chars().count()
-        - node_state.buffered_tail.chars().count()) as u64;
+    node_state.source_chars +=
+        (source.chars().count() - node_state.buffered_tail.chars().count()) as u64;
     for segment in segments {
         match segment {
             StreamSegment::Text {
@@ -645,7 +715,9 @@ fn emit_node_segments(
                     extra_body: delta_extra_body.clone(),
                 });
             }
-            StreamSegment::Image(source) => emit_synthetic_image_node(state, source, emitted),
+            StreamSegment::Image(source) => {
+                emit_synthetic_image_node(state, node_state, source, emitted)
+            }
         }
     }
 }

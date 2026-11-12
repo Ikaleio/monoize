@@ -803,7 +803,11 @@ async fn decode_image_json_as_stream(
         outcome: response.outcome,
         finish_reason: response.finish_reason,
         usage: response.usage,
-        output: response.output,
+        output: response
+            .output
+            .into_iter()
+            .map(urp::TerminalNode::unannounced)
+            .collect(),
         extra_body,
     })
     .await
@@ -1693,7 +1697,7 @@ async fn execute_stream_collected_image_typed(
                                     created_at: extra_body
                                         .get("created_at")
                                         .and_then(|value| value.as_i64()),
-                                    output,
+                                    output: urp::TerminalNode::into_nodes(output),
                                     finish_reason,
                                     usage,
                                     extra_body,

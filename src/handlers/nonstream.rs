@@ -1193,7 +1193,7 @@ async fn collect_streamed_upstream_response(
                     created_at: extra_body
                         .get("created_at")
                         .and_then(|value| value.as_i64()),
-                    output,
+                    output: urp::TerminalNode::into_nodes(output),
                     finish_reason,
                     usage,
                     extra_body,

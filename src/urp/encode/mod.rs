@@ -2,13 +2,13 @@ pub mod anthropic;
 pub mod gemini;
 pub mod openai_chat;
 pub mod openai_image;
-pub mod openrouter_image;
 pub mod openai_responses;
+pub mod openrouter_image;
 pub mod replicate;
 
-use crate::urp::internal_legacy_bridge::{Part, Role};
+use crate::urp::decode::remove_untrusted_internal_keys;
 use crate::urp::{
-    InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage,
+    InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage, is_internal_key,
     tool_call_arguments_for_wire,
 };
 use serde_json::{Map, Value, json};
@@ -16,10 +16,7 @@ use std::collections::HashMap;
 
 pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
     for (k, v) in extra {
-        if k.starts_with("_monoize_") {
-            continue;
-        }
-        if !obj.contains_key(k) {
+        if !is_internal_key(k) && !obj.contains_key(k) {
             obj.insert(k.clone(), v.clone());
         }
     }
@@ -27,36 +24,9 @@ pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>)
 
 /// Returns a wire-only clone of an opaque ProviderItem body with internal adapter keys removed.
 pub(crate) fn sanitize_provider_item_wire_body(body: &Value) -> Value {
-    fn sanitize(value: &mut Value) {
-        match value {
-            Value::Object(obj) => {
-                obj.retain(|key, _| !key.starts_with("_monoize_"));
-                for value in obj.values_mut() {
-                    sanitize(value);
-                }
-            }
-            Value::Array(values) => {
-                for value in values {
-                    sanitize(value);
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-        }
-    }
-
     let mut sanitized = body.clone();
-    sanitize(&mut sanitized);
+    remove_untrusted_internal_keys(&mut sanitized);
     sanitized
-}
-
-pub fn role_to_str(role: Role) -> &'static str {
-    match role {
-        Role::System => "system",
-        Role::Developer => "developer",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-    }
 }
 
 pub fn tool_choice_to_value(tc: &ToolChoice) -> Value {
@@ -214,78 +184,6 @@ pub fn tool_choice_to_responses_value(tc: &ToolChoice) -> Value {
         ToolChoice::Specific(Value::Object(obj)) => specific_tool_choice_to_responses_value(obj),
         ToolChoice::Specific(v) => sanitize_provider_item_wire_body(v),
     }
-}
-
-pub fn text_parts(parts: &[Part]) -> String {
-    let mut out = String::new();
-    for p in parts {
-        if let Part::Text { content, .. } = p {
-            out.push_str(content);
-        }
-    }
-    out
-}
-
-pub fn has_encrypted_reasoning(parts: &[Part]) -> bool {
-    parts.iter().any(|p| {
-        matches!(
-            p,
-            Part::Reasoning {
-                encrypted: Some(_),
-                ..
-            }
-        )
-    })
-}
-
-pub fn extract_reasoning_plain(parts: &[Part]) -> String {
-    let mut out = String::new();
-    for p in parts {
-        if let Part::Reasoning {
-            content, summary, ..
-        } = p
-        {
-            if let Some(content) = content.as_deref().filter(|text| !text.is_empty()) {
-                out.push_str(content);
-            } else if let Some(summary) = summary.as_deref().filter(|text| !text.is_empty()) {
-                out.push_str(summary);
-            }
-        }
-    }
-    out
-}
-
-pub fn extract_reasoning_encrypted(parts: &[Part]) -> Option<Value> {
-    parts.iter().find_map(|p| match p {
-        Part::Reasoning {
-            encrypted: Some(data),
-            ..
-        } => Some(data.clone()),
-        _ => None,
-    })
-}
-
-pub fn extract_tool_calls(parts: &[Part]) -> Vec<Value> {
-    let mut out = Vec::new();
-    for p in parts {
-        if let Part::ToolCall {
-            call_id,
-            name,
-            arguments,
-            ..
-        } = p
-        {
-            out.push(json!({
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": tool_call_arguments_for_wire(arguments)
-                }
-            }));
-        }
-    }
-    out
 }
 
 pub fn usage_input_details(usage: &Usage) -> InputDetails {

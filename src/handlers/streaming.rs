@@ -1,7 +1,7 @@
 use super::*;
 use crate::error::ForwardedHeaders;
 use crate::urp::stream_decode::stream_upstream_to_urp_events;
-use crate::urp::stream_encode::encode_urp_stream;
+use crate::urp::stream_encode::{StreamEncodeOptions, encode_urp_stream, replay_urp_response};
 use futures_util::StreamExt;
 
 enum StreamUpstreamSource {
@@ -449,7 +449,9 @@ fn native_stream_error(
             let request_id = request_id
                 .filter(|value| !value.is_empty())
                 .map(super::messages_wire_request_id)
-                .unwrap_or_else(|| super::messages_wire_request_id(&uuid::Uuid::new_v4().to_string()));
+                .unwrap_or_else(|| {
+                    super::messages_wire_request_id(&uuid::Uuid::new_v4().to_string())
+                });
             native.insert("request_id".to_string(), Value::String(request_id));
             None
         }
@@ -606,7 +608,7 @@ async fn retain_decoded_terminal_output(
             mask_sensitive_info,
         );
         if let urp::UrpStreamEvent::ResponseDone { output, .. } = &event {
-            *terminal_output.lock().await = output.clone();
+            *terminal_output.lock().await = output.iter().map(|entry| entry.node.clone()).collect();
         }
         let _ = tx.send(event).await;
     }
@@ -643,7 +645,9 @@ pub(super) async fn retain_reconstructed_urp_response(
             if let Some(usage) = usage {
                 object.insert("usage".to_string(), json!(usage));
             }
-            object.insert("output".to_string(), json!(output));
+            // RCD-D10a: `output` is `Node[]`; the stream-only `node_index` stays out of dumps.
+            let nodes: Vec<&urp::Node> = output.iter().map(|entry| &entry.node).collect();
+            object.insert("output".to_string(), json!(nodes));
             for (key, value) in extra_body {
                 object.insert(key.clone(), value.clone());
             }
@@ -930,7 +934,9 @@ pub(super) async fn forward_stream_typed(
             }
             // WS5a: the appended include is only for Responses attempts.
             if attempt.provider_type != ProviderType::Responses
-                && ws_turn.as_ref().is_some_and(|turn| turn.encrypted_include_added)
+                && ws_turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.encrypted_include_added)
                 && let Some(Value::Array(include)) = req_attempt.extra_body.get_mut("include")
             {
                 include.retain(|value| value.as_str() != Some("reasoning.encrypted_content"));
@@ -1054,7 +1060,11 @@ pub(super) async fn forward_stream_typed(
                             return Err(err);
                         }
                     };
-                enforce_ws_encrypted_include(ws_turn.as_ref(), attempt.provider_type, &mut upstream_body);
+                enforce_ws_encrypted_include(
+                    ws_turn.as_ref(),
+                    attempt.provider_type,
+                    &mut upstream_body,
+                );
                 let responses_echo =
                     responses_request_echo_for_attempt(&nonstream_req, &attempt, downstream);
                 release_encoded_input(&mut nonstream_req, &capture);
@@ -1299,10 +1309,6 @@ pub(super) async fn forward_stream_typed(
                         if let Some(history) = &history_for_stream {
                             history.decorate_response(&mut resp);
                         }
-                        if let Some(echo) = responses_echo {
-                            resp.extra_body
-                                .insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo);
-                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -1323,19 +1329,21 @@ pub(super) async fn forward_stream_typed(
                             let _pending_request_log_guard = pending_request_log_guard_for_stream;
                             let mut resp = resp;
                             let tx_err = tx.clone();
-                            let synthetic_reasoning_duration_secs =
-                                Some(started_at.elapsed().as_secs());
+                            let encode_options = StreamEncodeOptions {
+                                logical_model: logical_model_for_stream.clone(),
+                                sse_max_frame_length,
+                                mask_sensitive_info: mask_sensitive_info_for_stream,
+                                chat_include_usage,
+                                responses_request_echo: responses_echo,
+                                started_at,
+                                replay_reasoning_duration_secs: Some(
+                                    started_at.elapsed().as_secs(),
+                                ),
+                            };
+                            // History retention, settlement and logging still read `resp`.
                             let stream_result =
-                                crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                                    downstream,
-                                    &logical_model_for_stream,
-                                    &resp,
-                                    synthetic_reasoning_duration_secs,
-                                    sse_max_frame_length,
-                                    tx,
-                                    chat_include_usage,
-                                )
-                                .await;
+                                replay_urp_response(downstream, resp.clone(), tx, encode_options)
+                                    .await;
                             if let Err(err) = &stream_result {
                                 emit_stream_error_if_needed(
                                     downstream,
@@ -1537,7 +1545,11 @@ pub(super) async fn forward_stream_typed(
                         return Err(err);
                     }
                 };
-            enforce_ws_encrypted_include(ws_turn.as_ref(), attempt.provider_type, &mut upstream_body);
+            enforce_ws_encrypted_include(
+                ws_turn.as_ref(),
+                attempt.provider_type,
+                &mut upstream_body,
+            );
             let responses_echo =
                 responses_request_echo_for_attempt(&req_attempt, &attempt, downstream);
             attempt.session_affinity_value =
@@ -1581,8 +1593,7 @@ pub(super) async fn forward_stream_typed(
                     upstream_body.take()
                 }
                 .expect("the encoded body is present until dispatch");
-                match crate::upstream_websocket::open_turn_source(turn, target, create_body).await
-                {
+                match crate::upstream_websocket::open_turn_source(turn, target, create_body).await {
                     Ok(source) => {
                         remember_websocket_supported(&state, &mut attempt, true).await;
                         turn.state
@@ -1813,7 +1824,8 @@ pub(super) async fn forward_stream_typed(
                                     .await
                                 }
                                 StreamUpstreamSource::LocalFrames(local_frames) => {
-                                    let (frame_tx, frame_rx) = mpsc::channel(local_frames.len().max(1));
+                                    let (frame_tx, frame_rx) =
+                                        mpsc::channel(local_frames.len().max(1));
                                     for frame in local_frames {
                                         let _ = frame_tx.try_send(Ok((String::new(), frame)));
                                     }
@@ -1928,7 +1940,15 @@ pub(super) async fn forward_stream_typed(
                     let auth_for_log = auth.clone();
                     let attempt_for_log = attempt.clone();
                     let model_for_log = logical_model.clone();
-                    let model_for_encode = logical_model.clone();
+                    let encode_options = StreamEncodeOptions {
+                        logical_model: logical_model.clone(),
+                        sse_max_frame_length,
+                        mask_sensitive_info,
+                        chat_include_usage,
+                        responses_request_echo: responses_echo,
+                        started_at,
+                        replay_reasoning_duration_secs: None,
+                    };
                     let model_for_transform = logical_model.clone();
                     let request_id_for_log = request_id.clone();
                     let request_ip_for_log = request_ip.clone();
@@ -2049,21 +2069,9 @@ pub(super) async fn forward_stream_typed(
                                 } else {
                                     (encode_input_rx, None)
                                 };
-                            let encode_handle =
-                                crate::request_capture::spawn_with_sse_capture(async move {
-                                    encode_urp_stream(
-                                        downstream,
-                                        encode_input_rx,
-                                        tx,
-                                        &model_for_encode,
-                                        started_at,
-                                        sse_max_frame_length,
-                                        mask_sensitive_info,
-                                        responses_echo,
-                                        chat_include_usage,
-                                    )
-                                    .await
-                                });
+                            let encode_handle = crate::request_capture::spawn_with_sse_capture(
+                                encode_urp_stream(downstream, encode_input_rx, tx, encode_options),
+                            );
 
                             let (
                                 decode_result,
@@ -2103,20 +2111,22 @@ pub(super) async fn forward_stream_typed(
                                 }),
                             );
                             // FP6j-1: history retention runs after downstream EOF.
-                            let history_commit = match (&result, history_for_commit, history_response)
-                            {
-                                (Ok(()), Some(history), Some(response)) => Some((history, response)),
-                                _ => None,
-                            };
+                            let history_commit =
+                                match (&result, history_for_commit, history_response) {
+                                    (Ok(()), Some(history), Some(response)) => {
+                                        Some((history, response))
+                                    }
+                                    _ => None,
+                                };
                             (result, history_commit)
                         };
-                        let (stream_result, history_commit) =
-                            if let Some(frames) = capture_frames_for_task.clone() {
-                                crate::request_capture::with_sse_capture(frames, stream_future)
-                                    .await
-                            } else {
-                                stream_future.await
-                            };
+                        let (stream_result, history_commit) = if let Some(frames) =
+                            capture_frames_for_task.clone()
+                        {
+                            crate::request_capture::with_sse_capture(frames, stream_future).await
+                        } else {
+                            stream_future.await
+                        };
                         let settled_output = decoded_terminal_output.lock().await.clone();
                         let terminal_visible_output_bytes =
                             decoded_visible_output_bytes(&settled_output);

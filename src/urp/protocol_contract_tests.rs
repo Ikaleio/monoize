@@ -1,7 +1,10 @@
 use super::*;
+use crate::handlers::DownstreamProtocol;
+use crate::urp::stream_encode::StreamEncodeOptions;
 use axum::response::{IntoResponse, Sse, sse::Event};
 use serde_json::json;
 use std::convert::Infallible;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 fn reasoning(content: Option<&str>, summary: Option<&str>, encrypted: Option<Value>) -> Node {
@@ -110,37 +113,24 @@ async fn synthetic_decode(
     canonical: &UrpResponse,
 ) -> Vec<UrpStreamEvent> {
     let (tx, rx) = mpsc::channel(4096);
-    match protocol {
-        ProviderProtocol::Responses => {
-            stream_encode::openai_responses::emit_synthetic_responses_stream(
-                "model-contract",
-                canonical,
-                None,
-                Some(600),
-                tx,
-            )
-            .await
-            .unwrap()
-        }
-        ProviderProtocol::ChatCompletion => stream_encode::openai_chat::emit_synthetic_chat_stream(
-            "model-contract",
-            canonical,
-            Some(600),
-            true,
-            tx,
-        )
-        .await
-        .unwrap(),
-        ProviderProtocol::Messages => stream_encode::anthropic::emit_synthetic_messages_stream(
-            "model-contract",
-            canonical,
-            Some(600),
-            tx,
-        )
-        .await
-        .unwrap(),
+    let downstream = match protocol {
+        ProviderProtocol::Responses => DownstreamProtocol::Responses,
+        ProviderProtocol::ChatCompletion => DownstreamProtocol::ChatCompletions,
+        ProviderProtocol::Messages => DownstreamProtocol::AnthropicMessages,
         _ => unreachable!(),
-    }
+    };
+    let options = StreamEncodeOptions {
+        logical_model: "model-contract".into(),
+        sse_max_frame_length: Some(600),
+        mask_sensitive_info: false,
+        chat_include_usage: true,
+        responses_request_echo: None,
+        started_at: Instant::now(),
+        replay_reasoning_duration_secs: None,
+    };
+    stream_encode::replay_urp_response(downstream, canonical.clone(), tx, options)
+        .await
+        .unwrap();
     let wire = collect_wire(rx).await;
     let upstream = reqwest::Response::from(
         axum::http::Response::builder()
@@ -271,12 +261,14 @@ async fn opaque_reasoning_synthetic_sse_preserves_summary_and_exact_envelope() {
             let terminals: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
-                    UrpStreamEvent::ResponseDone { output, .. } => Some(output),
+                    UrpStreamEvent::ResponseDone { output, .. } => {
+                        Some(TerminalNode::into_nodes(output.clone()))
+                    }
                     _ => None,
                 })
                 .collect();
             assert_eq!(terminals.len(), 1, "{origin:?} via {downstream:?}");
-            let (raw, summary, encrypted) = reasoning_values(terminals[0]);
+            let (raw, summary, encrypted) = reasoning_values(&terminals[0]);
             assert!(raw.is_empty(), "ciphertext or summary became raw: {raw}");
             assert_eq!(summary, "visible summary");
             assert_eq!(encrypted.len(), 1);
@@ -305,14 +297,16 @@ async fn raw_and_summary_remain_independent_on_chat_and_responses_sse() {
             let canonical = response(vec![reasoning(raw, summary, encrypted.clone())]);
             let events = synthetic_decode(protocol, &canonical).await;
             let output = events
-                .iter()
+                .into_iter()
                 .find_map(|event| match event {
-                    UrpStreamEvent::ResponseDone { output, .. } => Some(output),
+                    UrpStreamEvent::ResponseDone { output, .. } => {
+                        Some(TerminalNode::into_nodes(output))
+                    }
                     _ => None,
                 })
                 .unwrap();
             assert_eq!(
-                reasoning_values(output),
+                reasoning_values(&output),
                 (
                     raw.unwrap_or_default().into(),
                     summary.unwrap_or_default().into(),
@@ -363,9 +357,11 @@ fn reasoning_field_deletions_survive_serialization_and_native_replay() {
             let serialized = serde_json::to_value(&replay).unwrap();
             let replay: UrpRequest = serde_json::from_value(serialized).unwrap();
             let wire = match protocol {
-                ProviderProtocol::ChatCompletion => {
-                    encode::openai_chat::encode_request(&replay, "model-contract", encode::openai_chat::ChatDialect::Generic)
-                }
+                ProviderProtocol::ChatCompletion => encode::openai_chat::encode_request(
+                    &replay,
+                    "model-contract",
+                    encode::openai_chat::ChatDialect::Generic,
+                ),
                 _ => encode::openai_responses::encode_request(&replay, "model-contract"),
             };
             let decoded = match protocol {
@@ -775,7 +771,7 @@ async fn failed_and_cancelled_outcomes_never_synthesize_success_in_any_protocol(
                     terminals[0]
                         .1
                         .iter()
-                        .any(|node| matches!(node,Node::Text {content,..} if content=="partial"))
+                        .any(|terminal| matches!(&terminal.node, Node::Text { content, .. } if content == "partial"))
                 );
             } else {
                 assert_eq!(
@@ -825,7 +821,7 @@ async fn chat_citation_offsets_follow_unicode_output_in_buffered_and_streamed_mo
         .unwrap();
     let texts: Vec<_> = output
         .iter()
-        .filter_map(|node| match node {
+        .filter_map(|terminal| match &terminal.node {
             Node::Text {
                 content, citations, ..
             } => Some((content, citations)),

@@ -664,7 +664,9 @@ async fn compress_stream_event(
             stream_state.node_kinds.remove(&*node_index);
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
-            compress_image_nodes(output, OrdinaryRole::Assistant, context, cfg).await?;
+            for entry in output {
+                compress_image_node(&mut entry.node, OrdinaryRole::Assistant, context, cfg).await?;
+            }
             stream_state.node_kinds.clear();
         }
         _ => {}

@@ -277,7 +277,7 @@ impl HistoryContext {
                         id: self.id.clone(),
                         model: self.model.clone(),
                         created_at: None,
-                        output: output.clone(),
+                        output: output.iter().map(|entry| entry.node.clone()).collect(),
                         finish_reason: *finish_reason,
                         usage: None,
                         extra_body: extra_body.clone(),
@@ -441,20 +441,31 @@ mod media_history_tests {
     async fn live_stream_commits_only_after_successful_encoding() {
         for invalid_early in [false, true] {
             let history = context(vec![file_input()]);
-            let output = vec![urp::Node::assistant_text("done")];
+            let done = urp::Node::assistant_text("done");
             let (tx, rx) = mpsc::channel(8);
             tx.send(urp::UrpStreamEvent::ResponseStart {
                 id: "upstream-id".into(),
                 model: "test-model".into(),
+                created_at: None,
                 usage: None,
                 extra_body: HashMap::new(),
             })
             .await
             .unwrap();
+            // The terminal snapshot omits the failing streamed node (STR-8e), so only the
+            // downstream encoding result decides retention.
             if invalid_early {
+                let node = invalid_audio();
+                tx.send(urp::UrpStreamEvent::NodeStart {
+                    node_index: 0,
+                    header: urp::NodeHeader::from(&node),
+                    extra_body: HashMap::new(),
+                })
+                .await
+                .unwrap();
                 tx.send(urp::UrpStreamEvent::NodeDone {
                     node_index: 0,
-                    node: invalid_audio(),
+                    node,
                     usage: None,
                     extra_body: HashMap::new(),
                 })
@@ -463,7 +474,7 @@ mod media_history_tests {
             }
             tx.send(urp::UrpStreamEvent::ResponseDone {
                 outcome: None,
-                output,
+                output: vec![urp::TerminalNode::unannounced(done)],
                 finish_reason: Some(urp::FinishReason::Stop),
                 usage: None,
                 extra_body: HashMap::new(),
@@ -483,12 +494,15 @@ mod media_history_tests {
                 DownstreamProtocol::Responses,
                 history_rx,
                 wire_tx,
-                "test-model",
-                Instant::now(),
-                None,
-                false,
-                None,
-                true,
+                urp::stream_encode::StreamEncodeOptions {
+                    logical_model: "test-model".into(),
+                    sse_max_frame_length: None,
+                    mask_sensitive_info: false,
+                    chat_include_usage: false,
+                    responses_request_echo: None,
+                    started_at: Instant::now(),
+                    replay_reasoning_duration_secs: None,
+                },
             )
             .await;
             if result.is_ok() {
@@ -496,36 +510,6 @@ mod media_history_tests {
             }
             assert_eq!(result.is_err(), invalid_early);
             assert_eq!(history.cache.lock().await.entries.is_empty(), invalid_early);
-        }
-    }
-
-    #[tokio::test]
-    async fn synthetic_stream_failure_does_not_commit_decorated_output() {
-        for invalid in [false, true] {
-            let history = context(vec![file_input()]);
-            let mut resp = response(vec![if invalid {
-                invalid_audio()
-            } else {
-                urp::Node::assistant_text("done")
-            }]);
-            history.decorate_response(&mut resp);
-            assert!(history.cache.lock().await.entries.is_empty());
-            let (tx, _rx) = mpsc::channel(64);
-            let result = urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                DownstreamProtocol::Responses,
-                "test-model",
-                &resp,
-                None,
-                None,
-                tx,
-                true,
-            )
-            .await;
-            if result.is_ok() {
-                history.retain_response(&resp).await;
-            }
-            assert_eq!(result.is_err(), invalid);
-            assert_eq!(history.cache.lock().await.entries.is_empty(), invalid);
         }
     }
 }

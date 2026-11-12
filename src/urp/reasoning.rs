@@ -1,4 +1,6 @@
-use super::{CHAT_REASONING_DETAIL_EXTRA_KEY, Node, ReasoningMetadata, ReasoningTextPart};
+use super::{
+    CHAT_REASONING_DETAIL_EXTRA_KEY, Node, ReasoningMetadata, ReasoningTextPart, is_internal_key,
+};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
@@ -17,9 +19,7 @@ pub fn text_part_shapes(value: &Value) -> Option<Vec<ReasoningTextPart>> {
                     .as_object()
                     .map(|obj| {
                         obj.iter()
-                            .filter(|(key, _)| {
-                                key.as_str() != "text" && !key.starts_with("_monoize_")
-                            })
+                            .filter(|(key, _)| key.as_str() != "text" && !is_internal_key(key))
                             .map(|(key, value)| (key.clone(), value.clone()))
                             .collect()
                     })
@@ -89,7 +89,7 @@ pub fn detail_metadata(detail: &Map<String, Value>) -> Map<String, Value> {
         .filter(|(key, _)| {
             !matches!(key.as_str(), "text" | "summary" | "data" | "id" | "format")
                 && !(signature_is_typed && key.as_str() == "signature")
-                && !key.starts_with("_monoize_")
+                && !is_internal_key(key)
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
@@ -101,12 +101,7 @@ pub fn chat_reasoning_node_from_detail(detail: &Map<String, Value>) -> Option<No
     if !detail_type.starts_with("reasoning.") {
         return None;
     }
-    let text = |key: &str| {
-        detail
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
+    let text = |key: &str| detail.get(key).and_then(Value::as_str).map(str::to_string);
     let encrypted = match detail_type {
         "reasoning.encrypted" => detail.get("data").filter(|value| !value.is_null()).cloned(),
         "reasoning.text" => promoted_text_signature(detail).map(|sig| Value::String(sig.into())),
@@ -115,7 +110,9 @@ pub fn chat_reasoning_node_from_detail(detail: &Map<String, Value>) -> Option<No
     Some(Node::Reasoning {
         metadata: Default::default(),
         id: text("id").filter(|id| !id.is_empty()),
-        content: (detail_type == "reasoning.text").then(|| text("text")).flatten(),
+        content: (detail_type == "reasoning.text")
+            .then(|| text("text"))
+            .flatten(),
         encrypted,
         summary: (detail_type == "reasoning.summary")
             .then(|| text("summary"))
@@ -140,7 +137,14 @@ pub fn chat_details(
     let base = native.map(detail_metadata).unwrap_or_default();
     let signed_text = base.get("type").and_then(Value::as_str) == Some("reasoning.text");
     build_details(
-        base, content, summary, encrypted, id, source, signed_text, false,
+        base,
+        content,
+        summary,
+        encrypted,
+        id,
+        source,
+        signed_text,
+        false,
     )
     .into_iter()
     .map(Value::Object)

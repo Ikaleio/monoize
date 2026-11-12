@@ -5,33 +5,29 @@ pub mod openai_image;
 pub mod openai_responses;
 pub mod replicate;
 
-use crate::urp::internal_legacy_bridge::Part;
 use crate::urp::{
-    AudioSource, CustomToolDefinition, FileSource, FunctionDefinition, ImageSource, MediaMetadata,
-    MediaResource, Node, OrdinaryRole, ProviderProtocol, ToolDefinition,
+    AudioSource, CustomToolDefinition, DOCUMENT_CONTENT_STRING_EXTRA_KEY, FileSource,
+    FunctionDefinition, ImageSource, MediaMetadata, MediaResource, Node, OrdinaryRole,
+    ProviderProtocol, ToolDefinition, is_internal_key,
 };
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
-pub fn is_internal_extra_key(key: &str) -> bool {
-    key.starts_with("_monoize_")
-}
-
 pub fn retain_wire_extra_fields(extra: &mut HashMap<String, Value>) {
-    extra.retain(|key, _| !is_internal_extra_key(key));
+    extra.retain(|key, _| !is_internal_key(key));
 }
 
 pub fn remove_untrusted_internal_object_keys(value: &mut Value) {
     if let Some(obj) = value.as_object_mut() {
-        obj.retain(|key, _| !is_internal_extra_key(key));
+        obj.retain(|key, _| !is_internal_key(key));
     }
 }
 
 pub fn split_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, Value> {
     let mut extra = HashMap::new();
     for (k, v) in obj {
-        if !is_internal_extra_key(k) && !known.contains(&k.as_str()) {
+        if !is_internal_key(k) && !known.contains(&k.as_str()) {
             extra.insert(k.clone(), v.clone());
         }
     }
@@ -41,7 +37,7 @@ pub fn split_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, 
 pub fn remove_untrusted_internal_keys(value: &mut Value) {
     match value {
         Value::Object(obj) => {
-            obj.retain(|key, _| !key.starts_with("_monoize_"));
+            obj.retain(|key, _| !is_internal_key(key));
             for child in obj.values_mut() {
                 remove_untrusted_internal_keys(child);
             }
@@ -135,7 +131,6 @@ fn native_tool_definition(tool_type: String, obj: &Map<String, Value>) -> ToolDe
         tools: None,
         origin_protocol: None,
         config: None,
-
         tool_type,
         name: string_field(obj, "name"),
         description: string_field(obj, "description"),
@@ -159,7 +154,6 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                 tools: None,
                 origin_protocol: None,
                 config: None,
-
                 tool_type,
                 name: None,
                 description: None,
@@ -177,7 +171,6 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
             tools: None,
             origin_protocol: None,
             config: None,
-
             tool_type,
             name: None,
             description: None,
@@ -209,7 +202,6 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                     tools: None,
                     origin_protocol: None,
                     config: None,
-
                     tool_type,
                     name: None,
                     description: None,
@@ -230,7 +222,6 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                 tools: None,
                 origin_protocol: None,
                 config: None,
-
                 tool_type,
                 name: None,
                 description: None,
@@ -357,7 +348,6 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
     Some(Node::ToolCall {
         namespace: string_field(obj, "namespace").or_else(|| string_field(obj, "toolset_name")),
         signature: None,
-
         id: obj
             .get("id")
             .and_then(|v| v.as_str())
@@ -383,34 +373,6 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
             ],
         ),
         cache_breakpoint: None,
-    })
-}
-
-pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
-    let Node::ToolCall {
-        namespace,
-        signature,
-        id,
-        tool_type,
-        call_id,
-        name,
-        arguments,
-        extra_body,
-        ..
-    } = parse_tool_call_node_from_obj(obj)?
-    else {
-        return None;
-    };
-    Some(Part::ToolCall {
-        namespace,
-        signature,
-
-        id,
-        tool_type,
-        call_id,
-        name,
-        arguments,
-        extra_body,
     })
 }
 
@@ -538,32 +500,8 @@ pub fn parse_image_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -
     let metadata = media_metadata(obj, matches!(source, ImageSource::FileId { .. }), false);
     Some(Node::Image {
         metadata,
-
         id: None,
         role,
-        source,
-        extra_body,
-    })
-}
-
-pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
-    let source = parse_image_source_from_obj(obj)?;
-    let extra_body = split_extra(
-        obj,
-        &[
-            "type",
-            "image_url",
-            "detail",
-            "url",
-            "image_base64",
-            "media_type",
-            "source",
-            "file_id",
-        ],
-    );
-    let metadata = media_metadata(obj, matches!(source, ImageSource::FileId { .. }), false);
-    Some(Part::Image {
-        metadata,
         source,
         extra_body,
     })
@@ -713,7 +651,6 @@ pub fn parse_file_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) ->
     document_shape(obj, &mut extra_body);
     Some(Node::File {
         metadata,
-
         id: None,
         role,
         source,
@@ -721,40 +658,7 @@ pub fn parse_file_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) ->
     })
 }
 
-pub fn parse_file_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
-    let source = parse_file_source_from_obj(obj)?;
-    let mut extra_body = split_extra(
-        obj,
-        &[
-            "type",
-            "url",
-            "file_url",
-            "source",
-            "file_data",
-            "data",
-            "filename",
-            "media_type",
-            "file_id",
-            "file",
-            "detail",
-            "title",
-            "context",
-            "citations",
-        ],
-    );
-    let mut metadata = media_metadata(obj, matches!(source, FileSource::FileId { .. }), true);
-    metadata.resource = metadata
-        .resource
-        .or_else(|| crate::urp::media::document_resource(&source));
-    document_shape(obj, &mut extra_body);
-    Some(Part::File {
-        metadata,
-        source,
-        extra_body,
-    })
-}
-
-pub fn parse_audio_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+pub fn parse_audio_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
     if !matches!(
         obj.get("type").and_then(Value::as_str),
         Some("input_audio" | "audio" | "output_audio")
@@ -849,7 +753,7 @@ pub fn parse_audio_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
         AudioSource::Url { url } => crate::urp::media::resource_for_url(url),
         _ => None,
     };
-    Some(Part::Audio {
+    Some(Node::Audio {
         metadata: MediaMetadata {
             media_type: matches!(source, AudioSource::Url { .. })
                 .then_some(media_type)
@@ -863,6 +767,8 @@ pub fn parse_audio_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
             expires_at: body.get("expires_at").and_then(Value::as_i64),
             ..Default::default()
         },
+        id: None,
+        role,
         source,
         extra_body: split_extra(
             obj,
@@ -885,33 +791,22 @@ pub fn parse_audio_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     })
 }
 
-pub fn parse_audio_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
-    let Part::Audio {
-        source,
-        metadata,
-        extra_body,
-    } = parse_audio_part_from_obj(obj)?
-    else {
-        unreachable!()
-    };
-    Some(Node::Audio {
-        id: None,
-        role,
-        source,
-        metadata,
-        extra_body,
-    })
-}
-
-pub fn parse_compatible_media_part(obj: &Map<String, Value>) -> Result<Option<Part>, String> {
+/// Parses one image, file, or audio content block into a node of `role`. Returns `Ok(None)` for
+/// any other block type and `Err` for a media block type whose payload is malformed.
+pub fn parse_compatible_media_node(
+    obj: &Map<String, Value>,
+    role: OrdinaryRole,
+) -> Result<Option<Node>, String> {
     let kind = obj.get("type").and_then(Value::as_str).unwrap_or("");
-    let part = match kind {
-        "image" | "image_url" | "input_image" | "output_image" => parse_image_part_from_obj(obj),
-        "file" | "document" | "input_file" | "output_file" => parse_file_part_from_obj(obj),
-        "audio" | "input_audio" | "output_audio" => parse_audio_part_from_obj(obj),
+    let node = match kind {
+        "image" | "image_url" | "input_image" | "output_image" => {
+            parse_image_node_from_obj(obj, role)
+        }
+        "file" | "document" | "input_file" | "output_file" => parse_file_node_from_obj(obj, role),
+        "audio" | "input_audio" | "output_audio" => parse_audio_node_from_obj(obj, role),
         _ => return Ok(None),
     };
-    part.map(Some)
+    node.map(Some)
         .ok_or_else(|| format!("Malformed {kind} content block."))
 }
 
@@ -998,7 +893,7 @@ fn document_shape(obj: &Map<String, Value>, extra: &mut HashMap<String, Value>) 
         .and_then(|v| v.get("content"))
         .is_some_and(Value::is_string)
     {
-        extra.insert("_monoize_document_content_string".into(), Value::Bool(true));
+        extra.insert(DOCUMENT_CONTENT_STRING_EXTRA_KEY.into(), Value::Bool(true));
     }
 }
 

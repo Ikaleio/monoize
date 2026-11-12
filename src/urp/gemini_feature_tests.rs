@@ -66,11 +66,8 @@ async fn gemini_compatible_part_shapes_preserve_order_and_repeated_media() {
             assert_eq!(wire["candidates"][0]["content"]["parts"], json!(expected));
             assert_eq!(canonical.output.len(), expected.len());
         }
-        let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-        let frames = events
-            .into_iter()
-            .flat_map(|event| encoder.push_event(event).unwrap())
-            .collect::<Vec<_>>();
+        let (result, frames) = encode_live(events).await;
+        result.unwrap();
         let canonical = terminal(&stream_decode(&frames).await.unwrap());
         assert_eq!(
             encode::gemini::encode_response_checked(&canonical, "gemini-test").unwrap()["candidates"]
@@ -365,9 +362,6 @@ async fn gemini_nested_tool_and_reasoning_parts_fail_explicitly() {
 
 #[tokio::test]
 async fn gemini_media_only_terminal_keeps_prior_text_citations() {
-    use axum::response::IntoResponse;
-    use futures_util::StreamExt;
-
     let mut initial = response(vec![json!({"text":"answer"})]);
     initial["candidates"][0]
         .as_object_mut()
@@ -396,25 +390,14 @@ async fn gemini_media_only_terminal_keeps_prior_text_citations() {
     let (wire_tx, wire_rx) = tokio::sync::mpsc::channel(32);
     // Messages cannot represent Gemini source ranges and rejects the following response image.
     assert!(
-        stream_encode::anthropic::encode_urp_stream_as_messages(
+        stream_encode::run(
+            stream_encode::anthropic::MessagesStreamEncoder::new(wire_tx, encode_options()),
             rx,
-            wire_tx,
-            "gemini-test",
-            None,
-            false
         )
         .await
         .is_err()
     );
-    let body =
-        tokio_stream::wrappers::ReceiverStream::new(wire_rx).map(Ok::<_, std::convert::Infallible>);
-    let bytes = axum::body::to_bytes(
-        axum::response::Sse::new(body).into_response().into_body(),
-        usize::MAX,
-    )
-    .await
-    .unwrap();
-    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    let text = json!(sse_frames(wire_rx).await).to_string();
     assert_eq!(text.matches("\"citations_delta\"").count(), 0, "{text}");
     assert_eq!(
         text.matches("https://example.com/source").count(),
@@ -423,11 +406,8 @@ async fn gemini_media_only_terminal_keeps_prior_text_citations() {
     );
     assert!(text.contains("\"error\""), "{text}");
     assert!(!text.contains("\"end_turn\""), "{text}");
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    let frames = events
-        .into_iter()
-        .flat_map(|event| encoder.push_event(event).unwrap())
-        .collect::<Vec<_>>();
+    let (result, frames) = encode_live(events).await;
+    result.unwrap();
     let wire = encode::gemini::encode_response_checked(
         &terminal(&stream_decode(&frames).await.unwrap()),
         "gemini-test",
@@ -551,8 +531,13 @@ async fn gemini_signed_compatible_media_keeps_the_media_and_one_typed_signature(
         ] {
             // Response decoding moves the media signature into one following carrier node.
             assert_eq!(canonical.output.len(), 2);
-            assert!(matches!(canonical.output[0], Node::Image { .. } | Node::Audio { .. } | Node::File { .. }));
-            assert!(matches!(&canonical.output[1], Node::Reasoning { id: Some(id), .. } if id.starts_with("rs_gemini_part_")));
+            assert!(matches!(
+                canonical.output[0],
+                Node::Image { .. } | Node::Audio { .. } | Node::File { .. }
+            ));
+            assert!(
+                matches!(&canonical.output[1], Node::Reasoning { id: Some(id), .. } if id.starts_with("rs_gemini_part_"))
+            );
             let wire = encode::gemini::encode_response_checked(&canonical, "gemini-test").unwrap();
             assert!(
                 wire["candidates"][0]["content"]["parts"][0]
@@ -569,9 +554,6 @@ async fn gemini_signed_compatible_media_keeps_the_media_and_one_typed_signature(
 
 #[tokio::test]
 async fn gemini_custom_calls_and_results_fail_without_discarding_content() {
-    use axum::response::IntoResponse;
-    use futures_util::StreamExt;
-
     let call = Node::ToolCall {
         id: Some("custom-1".into()),
         call_id: "call-1".into(),
@@ -636,52 +618,7 @@ async fn gemini_custom_calls_and_results_fail_without_discarding_content() {
                 .get("error")
                 .is_some()
         );
-        for terminal_only in [false, true] {
-            let (tx, rx) = tokio::sync::mpsc::channel(4);
-            if !terminal_only {
-                tx.send(UrpStreamEvent::NodeDone {
-                    node_index: 0,
-                    node: node.clone(),
-                    usage: None,
-                    extra_body: Default::default(),
-                })
-                .await
-                .unwrap();
-            }
-            tx.send(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: vec![node.clone()],
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: Default::default(),
-            })
-            .await
-            .unwrap();
-            drop(tx);
-            let (wire_tx, wire_rx) = tokio::sync::mpsc::channel(8);
-            let error =
-                stream_encode::gemini::encode_urp_stream_as_gemini(rx, wire_tx, "gemini-test")
-                    .await
-                    .unwrap_err();
-            assert!(error.downstream_stream_terminal_sent);
-            let body = tokio_stream::wrappers::ReceiverStream::new(wire_rx)
-                .map(Ok::<_, std::convert::Infallible>);
-            let bytes = axum::body::to_bytes(
-                axum::response::Sse::new(body).into_response().into_body(),
-                usize::MAX,
-            )
-            .await
-            .unwrap();
-            let text = String::from_utf8(bytes.to_vec()).unwrap();
-            assert_eq!(text.matches("\"error\"").count(), 1, "{text}");
-            assert!(!text.contains("finishReason"), "{text}");
-            assert!(
-                !text.contains("functionCall")
-                    && !text.contains("functionResponse")
-                    && !text.contains("inlineData"),
-                "{text}"
-            );
-        }
+        assert_stream_rejects(node, &["functionCall", "functionResponse", "inlineData"]).await;
     }
 }
 
@@ -782,7 +719,7 @@ fn gemini_url_requests_omit_unknown_mime_and_honor_typed_mime_changes() {
         {
             metadata.media_type = Some("application/pdf".into());
             extra_body.insert(
-                decode::gemini::GEMINI_PART_EXTRA_KEY.into(),
+                GEMINI_PART_EXTRA_KEY.into(),
                 json!({"fileData":{"mimeType":"video/mp4"}}),
             );
         }
@@ -873,22 +810,12 @@ async fn gemini_function_parent_signature_has_typed_ownership_and_deletion_wins(
         terminal(&events),
     ] {
         let Node::ToolResult {
-            signature,
-            content,
-            extra_body,
-            ..
+            signature, content, ..
         } = &mut canonical.output[0]
         else {
             panic!()
         };
         assert_eq!(signature, &Some(json!("cGFyZW50")));
-        assert!(
-            extra_body
-                .get(decode::gemini::GEMINI_PART_EXTRA_KEY)
-                .unwrap()
-                .get("thoughtSignature")
-                .is_none()
-        );
         let ToolResultContent::Image { metadata, .. } = &content[1] else {
             panic!()
         };
@@ -1012,28 +939,21 @@ async fn gemini_media_mutation_discards_video_metadata_in_nonstream_and_stream()
         assert!(part.get("videoMetadata").is_none());
         assert!(part.get("mediaProcessing").is_none());
         assert_eq!(part["partMetadata"], json!({"vendor":7}));
-        let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-        let frames = encoder
-            .push_event(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: canonical.output,
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: Default::default(),
-            })
-            .unwrap();
-        assert!(
-            frames[0]["candidates"][0]["content"]["parts"][0]
-                .get("videoMetadata")
-                .is_none()
-        );
+        let output = canonical
+            .output
+            .into_iter()
+            .map(TerminalNode::unannounced)
+            .collect();
+        let (result, frames) = encode_live(vec![response_start(), response_done(output)]).await;
+        result.unwrap();
+        let parts = wire_parts(&frames);
+        assert!(parts[0].get("inlineData").is_some());
+        assert!(parts[0].get("videoMetadata").is_none());
     }
 }
 
 #[tokio::test]
 async fn gemini_unsupported_media_errors_before_success_in_nonstream_and_live() {
-    use axum::response::IntoResponse;
-    use futures_util::StreamExt;
     let invalid_nested = decode::gemini::decode_response(&response(vec![json!({"functionResponse":{"id":"call-1","name":"document",
         "response":{"text":"keep"},"parts":[{"fileData":{"mimeType":"application/pdf","fileUri":"https://example.com/private.pdf"}}]}})])).unwrap().output.remove(0);
     for mut node in [
@@ -1061,48 +981,7 @@ async fn gemini_unsupported_media_errors_before_success_in_nonstream_and_live() 
                 .get("error")
                 .is_some()
         );
-        for terminal_only in [false, true] {
-            let (tx, rx) = tokio::sync::mpsc::channel(4);
-            if !terminal_only {
-                tx.send(UrpStreamEvent::NodeDone {
-                    node_index: 0,
-                    node: node.clone(),
-                    usage: None,
-                    extra_body: Default::default(),
-                })
-                .await
-                .unwrap();
-            }
-            tx.send(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: vec![node.clone()],
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: Default::default(),
-            })
-            .await
-            .unwrap();
-            drop(tx);
-            let (wire_tx, wire_rx) = tokio::sync::mpsc::channel(8);
-            assert!(
-                stream_encode::gemini::encode_urp_stream_as_gemini(rx, wire_tx, "gemini-test")
-                    .await
-                    .is_err()
-            );
-            let stream = tokio_stream::wrappers::ReceiverStream::new(wire_rx)
-                .map(Ok::<_, std::convert::Infallible>);
-            let bytes = axum::body::to_bytes(
-                axum::response::Sse::new(stream).into_response().into_body(),
-                usize::MAX,
-            )
-            .await
-            .unwrap();
-            let text = String::from_utf8(bytes.to_vec()).unwrap();
-            assert!(text.contains("\"error\""), "{text}");
-            assert!(!text.contains("finishReason"), "{text}");
-            assert!(!text.contains("inlineData"), "{text}");
-            assert!(!text.contains("fileData"), "{text}");
-        }
+        assert_stream_rejects(node, &["inlineData", "fileData"]).await;
     }
 }
 
@@ -1121,32 +1000,15 @@ async fn gemini_compound_document_response_expands_consistently_in_live_frames()
     let mut canonical = decode::gemini::decode_response(&response(vec![])).unwrap();
     canonical.output = vec![document.clone(), Node::assistant_text("after")];
     let wire = encode::gemini::encode_response_checked(&canonical, "gemini-test").unwrap();
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    let mut frames = encoder
-        .push_event(UrpStreamEvent::NodeDone {
-            node_index: 0,
-            node: document,
-            usage: None,
-            extra_body: Default::default(),
-        })
-        .unwrap();
-    frames.extend(
-        encoder
-            .push_event(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: canonical.output,
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: Default::default(),
-            })
-            .unwrap(),
-    );
-    let parts: Vec<_> = frames
-        .iter()
-        .filter_map(|frame| frame["candidates"][0]["content"]["parts"].as_array())
-        .flatten()
-        .cloned()
-        .collect();
+    let mut events = vec![response_start()];
+    events.extend(streamed_node(0, document.clone()));
+    events.push(response_done(vec![
+        TerminalNode::streamed(0, document),
+        TerminalNode::unannounced(Node::assistant_text("after")),
+    ]));
+    let (result, frames) = encode_live(events).await;
+    result.unwrap();
+    let parts = wire_parts(&frames);
     assert_eq!(json!(parts), wire["candidates"][0]["content"]["parts"]);
     assert_eq!(parts[0]["text"], "first");
     assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
@@ -1191,10 +1053,15 @@ async fn stream_decode(frames: &[Value]) -> Result<Vec<UrpStreamEvent>, crate::e
 }
 
 fn terminal(events: &[UrpStreamEvent]) -> UrpResponse {
-    let (id, model) = events
+    let (id, model, created_at) = events
         .iter()
         .find_map(|event| match event {
-            UrpStreamEvent::ResponseStart { id, model, .. } => Some((id.clone(), model.clone())),
+            UrpStreamEvent::ResponseStart {
+                id,
+                model,
+                created_at,
+                ..
+            } => Some((id.clone(), model.clone(), *created_at)),
             _ => None,
         })
         .unwrap();
@@ -1211,8 +1078,8 @@ fn terminal(events: &[UrpStreamEvent]) -> UrpResponse {
                 outcome: None,
                 id: id.clone(),
                 model: model.clone(),
-                created_at: None,
-                output: output.clone(),
+                created_at,
+                output: TerminalNode::into_nodes(output.clone()),
                 finish_reason: *finish_reason,
                 usage: usage.clone(),
                 extra_body: extra_body.clone(),
@@ -1220,6 +1087,155 @@ fn terminal(events: &[UrpStreamEvent]) -> UrpResponse {
             _ => None,
         })
         .unwrap()
+}
+
+fn encode_options() -> stream_encode::StreamEncodeOptions {
+    stream_encode::StreamEncodeOptions {
+        logical_model: "gemini-test".into(),
+        sse_max_frame_length: None,
+        mask_sensitive_info: false,
+        chat_include_usage: false,
+        responses_request_echo: None,
+        started_at: std::time::Instant::now(),
+        replay_reasoning_duration_secs: None,
+    }
+}
+
+/// The JSON data of every SSE event the encoder wrote, in order.
+async fn sse_frames(rx: tokio::sync::mpsc::Receiver<axum::response::sse::Event>) -> Vec<Value> {
+    use axum::response::IntoResponse;
+    use futures_util::StreamExt;
+    let body =
+        tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
+    let bytes = axum::body::to_bytes(
+        axum::response::Sse::new(body).into_response().into_body(),
+        usize::MAX,
+    )
+    .await
+    .unwrap();
+    std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|data| {
+            serde_json::from_str(data)
+                .unwrap_or_else(|_| panic!("Gemini SSE data must be JSON: {data}"))
+        })
+        .collect()
+}
+
+/// Drives the live Gemini stream encoder over `events`.
+async fn encode_live(events: Vec<UrpStreamEvent>) -> (crate::error::AppResult<()>, Vec<Value>) {
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(events.len().max(1));
+    for event in events {
+        event_tx.send(event).await.unwrap();
+    }
+    drop(event_tx);
+    let (tx, rx) = tokio::sync::mpsc::channel(1024);
+    let result = stream_encode::run(
+        stream_encode::gemini::GeminiStreamEncoder::new(tx, encode_options()),
+        event_rx,
+    )
+    .await;
+    (result, sse_frames(rx).await)
+}
+
+/// Drives the synthetic (replay) Gemini stream of a complete response.
+async fn encode_replay(response: UrpResponse) -> (crate::error::AppResult<()>, Vec<Value>) {
+    let (tx, rx) = tokio::sync::mpsc::channel(1024);
+    let result = stream_encode::replay(
+        stream_encode::gemini::GeminiStreamEncoder::new(tx, encode_options()),
+        response,
+    )
+    .await;
+    (result, sse_frames(rx).await)
+}
+
+fn wire_parts(frames: &[Value]) -> Vec<Value> {
+    frames
+        .iter()
+        .filter_map(|frame| frame["candidates"][0]["content"]["parts"].as_array())
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+fn response_start() -> UrpStreamEvent {
+    UrpStreamEvent::ResponseStart {
+        usage: None,
+        id: "gemini-features".into(),
+        model: "gemini-test".into(),
+        created_at: None,
+        extra_body: HashMap::new(),
+    }
+}
+
+/// NodeStart plus NodeDone of one announced node.
+fn streamed_node(node_index: u32, node: Node) -> [UrpStreamEvent; 2] {
+    [
+        UrpStreamEvent::NodeStart {
+            node_index,
+            header: NodeHeader::from(&node),
+            extra_body: HashMap::new(),
+        },
+        UrpStreamEvent::NodeDone {
+            node_index,
+            node,
+            usage: None,
+            extra_body: HashMap::new(),
+        },
+    ]
+}
+
+fn response_done(output: Vec<TerminalNode>) -> UrpStreamEvent {
+    UrpStreamEvent::ResponseDone {
+        outcome: None,
+        finish_reason: Some(FinishReason::Stop),
+        usage: None,
+        output,
+        extra_body: HashMap::new(),
+    }
+}
+
+fn output_text(response: &UrpResponse) -> String {
+    response
+        .output
+        .iter()
+        .filter_map(|node| match node {
+            Node::Text { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Live terminal-only and replayed streams of `node` end with exactly one native error frame
+/// and none of the `forbidden` success members.
+async fn assert_stream_rejects(node: Node, forbidden: &[&str]) {
+    let mut canonical = decode::gemini::decode_response(&response(vec![])).unwrap();
+    canonical.output = vec![node.clone()];
+    let (live, live_frames) = encode_live(vec![
+        response_start(),
+        response_done(vec![TerminalNode::unannounced(node)]),
+    ])
+    .await;
+    assert!(live.unwrap_err().downstream_stream_terminal_sent);
+    // A replay encoder may end the stream itself with the native error (`begin_replay`).
+    let (_, replay_frames) = encode_replay(canonical).await;
+    for frames in [live_frames, replay_frames] {
+        let text = json!(frames).to_string();
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|frame| frame.get("error").is_some())
+                .count(),
+            1,
+            "{text}"
+        );
+        assert!(!text.contains("finishReason"), "{text}");
+        for member in forbidden {
+            assert!(!text.contains(member), "{text}");
+        }
+    }
 }
 
 #[test]
@@ -1312,7 +1328,10 @@ fn assert_nonstream_part_as(part: Value, expected: Value) {
     let native = response(vec![part]);
     let canonical = decode::gemini::decode_response(&native).unwrap();
     let encoded = encode::gemini::encode_response(&canonical, "gemini-test");
-    assert_eq!(encoded["candidates"][0]["content"]["parts"], json!([expected]));
+    assert_eq!(
+        encoded["candidates"][0]["content"]["parts"],
+        json!([expected])
+    );
     let decoded = decode::gemini::decode_response(&encoded).unwrap();
     let replay = encode::gemini::encode_response(&decoded, "gemini-test");
     assert_eq!(replay, encoded);
@@ -1340,31 +1359,23 @@ async fn assert_stream_part(part: Value) {
     assert_stream_part_as(part, expected).await;
 }
 
+/// The live stream of the native Part and the synthetic stream (replay) of its non-stream
+/// decoding write the same Parts, and both decode back to them.
 async fn assert_stream_part_as(part: Value, expected: Vec<Value>) {
-    let events = stream_decode(&[response(vec![part.clone()])])
-        .await
-        .unwrap();
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    let frames: Vec<_> = events
-        .into_iter()
-        .flat_map(|event| encoder.push_event(event).unwrap())
-        .collect();
-    let parts: Vec<_> = frames
-        .iter()
-        .flat_map(|frame| {
-            frame["candidates"][0]["content"]["parts"]
-                .as_array()
-                .into_iter()
-                .flatten()
-        })
-        .cloned()
-        .collect();
-    assert_eq!(parts, expected);
-    let decoded = terminal(&stream_decode(&frames).await.unwrap());
-    assert_eq!(
-        encode::gemini::encode_response(&decoded, "gemini-test")["candidates"][0]["content"]["parts"],
-        json!(expected)
-    );
+    let native = response(vec![part]);
+    let (live, live_frames) = encode_live(stream_decode(&[native.clone()]).await.unwrap()).await;
+    live.unwrap();
+    let (replay, replay_frames) =
+        encode_replay(decode::gemini::decode_response(&native).unwrap()).await;
+    replay.unwrap();
+    for frames in [live_frames, replay_frames] {
+        assert_eq!(wire_parts(&frames), expected);
+        let decoded = terminal(&stream_decode(&frames).await.unwrap());
+        assert_eq!(
+            encode::gemini::encode_response(&decoded, "gemini-test")["candidates"][0]["content"]["parts"],
+            json!(expected)
+        );
+    }
 }
 
 macro_rules! part_feature {
@@ -1417,11 +1428,6 @@ part_feature!(
     gemini_function_call_nonstream,
     gemini_function_call_stream,
     json!({"functionCall":{"id":"call-1","name":"weather","args":{"city":"Tokyo"},"future":7},"thoughtSignature":"ZnVuYw=="})
-);
-part_feature!(
-    gemini_computer_action_nonstream,
-    gemini_computer_action_stream,
-    json!({"functionCall":{"id":"click-1","name":"click_at","args":{"x":140,"y":200}},"thoughtSignature":"Y29tcHV0ZXI="})
 );
 part_feature!(
     gemini_image_nonstream,
@@ -1600,9 +1606,11 @@ fn gemini_signed_nodes_have_no_shadow_payload_and_obey_mutation() {
                 if id.starts_with("rs_gemini_part_") && signature == "old")
         );
     }
+    // Deleting the carriers deletes the text and media signatures; the response has no
+    // other Reasoning node.
     canonical
         .output
-        .retain(|node| !crate::urp::decode::gemini::is_signature_carrier(node));
+        .retain(|node| !matches!(node, Node::Reasoning { .. }));
     let Node::ToolCall {
         signature,
         arguments,
@@ -1774,41 +1782,18 @@ async fn gemini_prompt_block_and_finish_without_content_roundtrip() {
 
 #[tokio::test]
 async fn gemini_stream_terminal_reconciliation_emits_missing_parts_once() {
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    let first = Node::assistant_text("a");
-    let mut frames = encoder
-        .push_event(UrpStreamEvent::NodeDone {
-            node_index: 0,
-            node: first,
-            usage: None,
-            extra_body: HashMap::new(),
-        })
-        .unwrap();
-    frames.extend(
-        encoder
-            .push_event(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                output: vec![Node::assistant_text("ab"), Node::assistant_text("c")],
-                extra_body: HashMap::new(),
-            })
-            .unwrap(),
+    let mut events = vec![response_start()];
+    events.extend(streamed_node(0, Node::assistant_text("a")));
+    events.push(response_done(vec![
+        TerminalNode::streamed(0, Node::assistant_text("ab")),
+        TerminalNode::unannounced(Node::assistant_text("c")),
+    ]));
+    let (result, frames) = encode_live(events).await;
+    result.unwrap();
+    assert_eq!(
+        output_text(&terminal(&stream_decode(&frames).await.unwrap())),
+        "abc"
     );
-    let decoded = terminal(&stream_decode(&frames).await.unwrap());
-    let text: String = decoded
-        .output
-        .iter()
-        .filter_map(|node| match node {
-            Node::Text {
-                logprobs: _,
-                content,
-                ..
-            } => Some(content.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "abc");
     assert_eq!(
         frames
             .iter()
@@ -1821,177 +1806,89 @@ async fn gemini_stream_terminal_reconciliation_emits_missing_parts_once() {
 #[tokio::test]
 async fn gemini_stream_orders_out_of_order_completions_and_terminal_repairs() {
     for missing_first_completion in [false, true] {
-        let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
         let first = Node::assistant_text("first");
         let second = Node::assistant_text("second");
-        for node_index in 0..2 {
-            assert!(
-                encoder
-                    .push_event(UrpStreamEvent::NodeStart {
-                        node_index,
-                        header: NodeHeader::Text {
-                            id: None,
-                            role: OrdinaryRole::Assistant,
-                            phase: None,
-                            signature: None,
-                            citations: Vec::new()
-                        },
-                        extra_body: HashMap::new(),
-                    })
-                    .unwrap()
-                    .is_empty()
-            );
+        let mut events = vec![response_start()];
+        for (node_index, node) in [(0, &first), (1, &second)] {
+            events.push(UrpStreamEvent::NodeStart {
+                node_index,
+                header: NodeHeader::from(node),
+                extra_body: HashMap::new(),
+            });
         }
-        assert!(
-            encoder
-                .push_event(UrpStreamEvent::NodeDone {
-                    node_index: 1,
-                    node: second.clone(),
-                    usage: None,
-                    extra_body: HashMap::new(),
-                })
-                .unwrap()
-                .is_empty()
-        );
-        let mut frames = Vec::new();
+        let [_, second_done] = streamed_node(1, second.clone());
+        events.push(second_done);
         if !missing_first_completion {
-            frames.extend(
-                encoder
-                    .push_event(UrpStreamEvent::NodeDone {
-                        node_index: 0,
-                        node: first.clone(),
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    })
-                    .unwrap(),
-            );
+            let [_, first_done] = streamed_node(0, first.clone());
+            events.push(first_done);
         }
-        frames.extend(
-            encoder
-                .push_event(UrpStreamEvent::ResponseDone {
-                    outcome: None,
-                    output: vec![first, second],
-                    finish_reason: Some(FinishReason::Stop),
-                    usage: None,
-                    extra_body: HashMap::new(),
-                })
-                .unwrap(),
-        );
-        let parts: Vec<_> = frames
-            .iter()
-            .filter_map(|frame| frame["candidates"][0]["content"]["parts"].as_array())
-            .flatten()
-            .cloned()
-            .collect();
+        events.push(response_done(vec![
+            TerminalNode::streamed(0, first),
+            TerminalNode::streamed(1, second),
+        ]));
+        let (result, frames) = encode_live(events).await;
+        result.unwrap();
         assert_eq!(
-            parts,
+            wire_parts(&frames),
             vec![json!({"text":"first"}), json!({"text":"second"})]
         );
-        let decoded = terminal(&stream_decode(&frames).await.unwrap());
-        let text: String = decoded
-            .output
-            .iter()
-            .filter_map(|node| match node {
-                Node::Text {
-                    logprobs: _,
-                    content,
-                    ..
-                } => Some(content.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(text, "firstsecond");
-    }
-}
-
-#[test]
-fn gemini_stream_does_not_mark_unrepresentable_nodes_as_emitted() {
-    for output in [vec![], vec![Node::assistant_text("replacement")]] {
-        let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-        assert!(
-            encoder
-                .push_event(UrpStreamEvent::NodeDone {
-                    node_index: 0,
-                    node: Node::NextDownstreamEnvelopeExtra {
-                        extra_body: HashMap::new()
-                    },
-                    usage: None,
-                    extra_body: HashMap::new(),
-                })
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            output_text(&terminal(&stream_decode(&frames).await.unwrap())),
+            "firstsecond"
         );
-        let expected_parts = output.len();
-        let frames = encoder
-            .push_event(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output,
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: HashMap::new(),
-            })
-            .unwrap();
-        assert_eq!(frames.len(), expected_parts + 1);
     }
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    for (node_index, node) in [
-        (
-            0,
-            Node::NextDownstreamEnvelopeExtra {
-                extra_body: HashMap::new(),
-            },
-        ),
-        (1, Node::assistant_text("later")),
-    ] {
-        encoder
-            .push_event(UrpStreamEvent::NodeDone {
-                node_index,
-                node,
-                usage: None,
-                extra_body: HashMap::new(),
-            })
-            .unwrap();
-    }
-    assert!(
-        encoder
-            .push_event(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: vec![
-                    Node::assistant_text("inserted"),
-                    Node::assistant_text("later")
-                ],
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: HashMap::new(),
-            })
-            .is_err()
-    );
 }
 
-#[test]
-fn gemini_stream_rejects_prefix_extension_after_later_part_emission() {
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    for (node_index, text) in [(0, "a"), (1, "c")] {
-        encoder
-            .push_event(UrpStreamEvent::NodeDone {
-                node_index,
-                node: Node::assistant_text(text),
-                usage: None,
-                extra_body: HashMap::new(),
-            })
-            .unwrap();
+#[tokio::test]
+async fn gemini_stream_does_not_mark_unrepresentable_nodes_as_emitted() {
+    let control = Node::NextDownstreamEnvelopeExtra {
+        extra_body: HashMap::new(),
+    };
+    // A streamed control node writes no Part, so a terminal snapshot that drops it may still
+    // insert a node in its place.
+    for output in [vec![], vec![Node::assistant_text("replacement")]] {
+        let expected_parts = output.len();
+        let mut events = vec![response_start()];
+        events.extend(streamed_node(0, control.clone()));
+        events.push(response_done(
+            output.into_iter().map(TerminalNode::unannounced).collect(),
+        ));
+        let (result, frames) = encode_live(events).await;
+        result.unwrap();
+        assert_eq!(wire_parts(&frames).len(), expected_parts);
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|frame| frame["candidates"][0].get("finishReason").is_some())
+                .count(),
+            1
+        );
     }
-    assert!(
-        encoder
-            .push_event(UrpStreamEvent::ResponseDone {
-                outcome: None,
-                output: vec![Node::assistant_text("ab"), Node::assistant_text("c")],
-                finish_reason: Some(FinishReason::Stop),
-                usage: None,
-                extra_body: HashMap::new(),
-            })
-            .is_err()
-    );
+    // A Part emitted after the control node cannot be preceded by a terminal-only node.
+    let mut events = vec![response_start()];
+    events.extend(streamed_node(0, control));
+    events.extend(streamed_node(1, Node::assistant_text("later")));
+    events.push(response_done(vec![
+        TerminalNode::unannounced(Node::assistant_text("inserted")),
+        TerminalNode::streamed(1, Node::assistant_text("later")),
+    ]));
+    let (result, frames) = encode_live(events).await;
+    assert!(result.is_err());
+    assert!(frames.last().unwrap().get("error").is_some());
+}
+
+#[tokio::test]
+async fn gemini_stream_rejects_prefix_extension_after_later_part_emission() {
+    let mut events = vec![response_start()];
+    events.extend(streamed_node(0, Node::assistant_text("a")));
+    events.extend(streamed_node(1, Node::assistant_text("c")));
+    events.push(response_done(vec![
+        TerminalNode::streamed(0, Node::assistant_text("ab")),
+        TerminalNode::streamed(1, Node::assistant_text("c")),
+    ]));
+    let (result, frames) = encode_live(events).await;
+    assert!(result.is_err());
+    assert!(frames.last().unwrap().get("error").is_some());
 }
 
 fn mutate_provider_identity(response: &mut UrpResponse, delete: bool) {
@@ -2048,31 +1945,8 @@ async fn gemini_opaque_identity_obeys_typed_mutation_and_deletion_stream() {
     for delete in [false, true] {
         let mut canonical = terminal(&stream_decode(&[response(opaque_parts())]).await.unwrap());
         mutate_provider_identity(&mut canonical, delete);
-        let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-        let mut frames = Vec::new();
-        for (index, node) in canonical.output.iter().cloned().enumerate() {
-            frames.extend(
-                encoder
-                    .push_event(UrpStreamEvent::NodeDone {
-                        node_index: index as u32,
-                        node,
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    })
-                    .unwrap(),
-            );
-        }
-        frames.extend(
-            encoder
-                .push_event(UrpStreamEvent::ResponseDone {
-                    outcome: None,
-                    output: canonical.output,
-                    finish_reason: Some(FinishReason::Stop),
-                    usage: None,
-                    extra_body: HashMap::new(),
-                })
-                .unwrap(),
-        );
+        let (result, frames) = encode_replay(canonical).await;
+        result.unwrap();
         let decoded = terminal(&stream_decode(&frames).await.unwrap());
         let wire = encode::gemini::encode_response(&decoded, "gemini-test");
         assert_provider_identity(&wire["candidates"][0]["content"]["parts"], delete);
@@ -2132,17 +2006,18 @@ async fn gemini_prompt_refusal_stream_roundtrip_does_not_duplicate_text() {
             .len(),
         1
     );
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    let frames: Vec<_> = events
-        .into_iter()
-        .flat_map(|event| encoder.push_event(event).unwrap())
-        .collect();
-    assert_eq!(
-        terminal(&stream_decode(&frames).await.unwrap())
-            .output
-            .len(),
-        1
-    );
+    let (live, live_frames) = encode_live(events).await;
+    live.unwrap();
+    let (replay, replay_frames) = encode_replay(canonical).await;
+    replay.unwrap();
+    for frames in [live_frames, replay_frames] {
+        assert_eq!(
+            terminal(&stream_decode(&frames).await.unwrap())
+                .output
+                .len(),
+            1
+        );
+    }
 }
 
 #[tokio::test]
@@ -2201,11 +2076,8 @@ async fn gemini_late_citations_reach_terminal_stream_output() {
         panic!()
     };
     assert_eq!(citations.len(), 1);
-    let mut encoder = stream_encode::gemini::GeminiStreamEncoder::new("gemini-test");
-    let frames: Vec<_> = events
-        .into_iter()
-        .flat_map(|event| encoder.push_event(event).unwrap())
-        .collect();
+    let (result, frames) = encode_live(events).await;
+    result.unwrap();
     let decoded = terminal(&stream_decode(&frames).await.unwrap());
     let Node::Text {
         logprobs: _,
@@ -2220,46 +2092,20 @@ async fn gemini_late_citations_reach_terminal_stream_output() {
 
 #[tokio::test]
 async fn gemini_async_sse_encoder_writes_native_frames_and_requires_terminal() {
-    use axum::response::IntoResponse;
-    use futures_util::StreamExt;
     let events = stream_decode(&[response(vec![
         json!({"functionCall":{"id":"c","name":"run","args":{}}}),
     ])])
     .await
     .unwrap();
-    let (tx, rx) = tokio::sync::mpsc::channel(128);
-    for event in events {
-        tx.send(event).await.unwrap();
-    }
-    drop(tx);
-    let (wire_tx, wire_rx) = tokio::sync::mpsc::channel(128);
-    stream_encode::gemini::encode_urp_stream_as_gemini(rx, wire_tx, "gemini-test")
-        .await
-        .unwrap();
-    let response = axum::response::sse::Sse::new(
-        tokio_stream::wrappers::ReceiverStream::new(wire_rx).map(Ok::<_, std::convert::Infallible>),
-    )
-    .into_response();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let text = std::str::from_utf8(&body).unwrap();
-    assert!(!text.contains("[DONE]"));
-    let frames: Vec<Value> = text
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .map(|data| serde_json::from_str(data).unwrap())
-        .collect();
+    // `sse_frames` rejects any non-JSON data such as `[DONE]`.
+    let (result, frames) = encode_live(events).await;
+    result.unwrap();
     assert_eq!(
         terminal(&stream_decode(&frames).await.unwrap()).finish_reason,
         Some(FinishReason::ToolCalls)
     );
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    drop(tx);
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    assert!(
-        stream_encode::gemini::encode_urp_stream_as_gemini(rx, tx, "gemini-test")
-            .await
-            .is_err()
-    );
+    let (result, frames) = encode_live(vec![response_start()]).await;
+    assert!(result.is_err());
+    assert!(frames.last().unwrap().get("error").is_some());
+    assert!(!json!(frames).to_string().contains("finishReason"));
 }

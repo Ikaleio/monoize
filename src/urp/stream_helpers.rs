@@ -561,23 +561,6 @@ pub(crate) fn extract_chat_reasoning_delta_chunks(
     (text_parts, sig_parts)
 }
 
-pub(crate) fn extract_responses_message_text(item: &Value) -> String {
-    let mut out = String::new();
-    if item.get("type").and_then(|v| v.as_str()) != Some("message") {
-        return out;
-    }
-    if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
-        for part in content {
-            if part.get("type").and_then(|v| v.as_str()) == Some("output_text") {
-                if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                    out.push_str(text);
-                }
-            }
-        }
-    }
-    out
-}
-
 pub(crate) fn extract_responses_message_phase(item: &Value) -> Option<String> {
     if item.get("type").and_then(|v| v.as_str()) != Some("message") {
         return None;

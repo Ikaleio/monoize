@@ -1,56 +1,22 @@
-use crate::urp::encode::{
-    merge_extra, role_to_str, sanitize_provider_item_wire_body, text_parts,
-    tool_choice_to_responses_value, usage_input_details, usage_output_details,
-};
-use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
-use crate::urp::{
-    FileSource, FinishReason, ImageSource, Node, ProviderProtocol,
-    RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_INSTRUCTION_NODE_EXTRA_KEY,
-    RESPONSES_REQUEST_ECHO_EXTRA_KEY, RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ResponseFormat, ToolCallType, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse,
-};
-use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+//! OpenAI Responses encoder: URP requests and responses to Responses wire objects.
 
-include!("openai_responses/message_items.inc.rs");
-include!("openai_responses/reasoning.inc.rs");
-include!("openai_responses/image_generation.inc.rs");
+mod image_generation;
+mod input_items;
+mod items;
+mod media;
+mod reasoning;
+mod request;
+mod response;
+mod tool_items;
+mod tools;
+mod usage;
 
-fn merge_responses_usage_extra(usage: &mut Value, extra: &HashMap<String, Value>) {
-    let Some(usage_obj) = usage.as_object_mut() else {
-        return;
-    };
-
-    for detail_key in ["input_tokens_details", "output_tokens_details"] {
-        let Some(extra_detail) = extra.get(detail_key).and_then(Value::as_object) else {
-            continue;
-        };
-        let Some(generated_detail) = usage_obj.get_mut(detail_key).and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-        for (key, value) in extra_detail {
-            if !key.starts_with("_monoize_") {
-                generated_detail
-                    .entry(key.clone())
-                    .or_insert_with(|| value.clone());
-            }
-        }
-    }
-
-    for (key, value) in extra {
-        if !key.starts_with("_monoize_")
-            && !matches!(
-                key.as_str(),
-                "input_tokens_details" | "output_tokens_details"
-            )
-        {
-            usage_obj.insert(key.clone(), value.clone());
-        }
-    }
-}
-
-include!("openai_responses/tool_call.inc.rs");
-include!("openai_responses/request_response.inc.rs");
-include!("openai_responses/input_items.inc.rs");
-include!("openai_responses/tools_format.inc.rs");
+pub(crate) use image_generation::encode_image_generation_call_item;
+pub(crate) use items::encode_provider_item_for_responses;
+pub(crate) use reasoning::merge_reasoning_extra;
+pub(crate) use request::response_request_echo;
+pub use request::{encode_request, encode_request_checked};
+pub use response::{encode_response, encode_response_checked};
+pub(crate) use response::{prepare_response_nodes, synthesized_response_controls};
+pub(crate) use tool_items::encode_tool_result_output;
+pub(crate) use usage::encode_usage;

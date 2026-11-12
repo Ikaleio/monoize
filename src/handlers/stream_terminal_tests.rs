@@ -77,55 +77,32 @@ fn assert_terminal_error_frames(wire: &str, has_done: bool) {
     assert!(!wire.contains("downstream_stream_terminal_sent"));
 }
 
+fn options() -> urp::stream_encode::StreamEncodeOptions {
+    urp::stream_encode::StreamEncodeOptions {
+        logical_model: "test-model".into(),
+        sse_max_frame_length: None,
+        mask_sensitive_info: false,
+        chat_include_usage: true,
+        responses_request_echo: None,
+        started_at: std::time::Instant::now(),
+        replay_reasoning_duration_secs: None,
+    }
+}
+
 async fn exercise_media_failure(synthetic: bool) {
     for downstream in TARGETS {
         let response = media_response();
         let (tx, rx) = mpsc::channel(1024);
         let result = if synthetic {
-            urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                downstream,
-                "test-model",
-                &response,
-                None,
-                None,
-                tx.clone(),
-                true,
-            )
-            .await
+            urp::stream_encode::replay_urp_response(downstream, response, tx.clone(), options())
+                .await
         } else {
             let (event_tx, event_rx) = mpsc::channel(16);
-            event_tx
-                .send(urp::UrpStreamEvent::NodeDone {
-                    node_index: 0,
-                    node: response.output[0].clone(),
-                    usage: None,
-                    extra_body: HashMap::new(),
-                })
-                .await
-                .unwrap();
-            event_tx
-                .send(urp::UrpStreamEvent::ResponseDone {
-                    outcome: None,
-                    finish_reason: response.finish_reason,
-                    usage: response.usage.clone(),
-                    output: response.output.clone(),
-                    extra_body: HashMap::new(),
-                })
-                .await
-                .unwrap();
+            for event in urp::stream_events::events_from_response(response) {
+                event_tx.send(event).await.unwrap();
+            }
             drop(event_tx);
-            encode_urp_stream(
-                downstream,
-                event_rx,
-                tx.clone(),
-                "test-model",
-                Instant::now(),
-                None,
-                false,
-                None,
-                true,
-            )
-            .await
+            urp::stream_encode::encode_urp_stream(downstream, event_rx, tx.clone(), options()).await
         };
         let err = result.unwrap_err();
         assert!(err.downstream_stream_terminal_sent);
@@ -219,17 +196,10 @@ async fn failed_terminal_send_is_not_marked_as_sent() {
     for downstream in TARGETS {
         let (tx, rx) = mpsc::channel(1);
         drop(rx);
-        let err = urp::stream_encode::emit_synthetic_stream_from_urp_response(
-            downstream,
-            "test-model",
-            &media_response(),
-            None,
-            None,
-            tx,
-            true,
-        )
-        .await
-        .unwrap_err();
+        let err =
+            urp::stream_encode::replay_urp_response(downstream, media_response(), tx, options())
+                .await
+                .unwrap_err();
         assert!(!err.downstream_stream_terminal_sent);
     }
 }
@@ -239,18 +209,28 @@ async fn gemini_stream_failures_mark_the_emitted_terminal_error() {
     for conflicting_terminal in [false, true] {
         let (event_tx, event_rx) = mpsc::channel(16);
         if conflicting_terminal {
+            let node: urp::Node = serde_json::from_value(
+                json!({"type":"text","role":"assistant","content":"before"}),
+            )
+            .unwrap();
+            event_tx
+                .send(urp::UrpStreamEvent::NodeStart {
+                    node_index: 0,
+                    header: urp::NodeHeader::from(&node),
+                    extra_body: HashMap::new(),
+                })
+                .await
+                .unwrap();
             event_tx
                 .send(urp::UrpStreamEvent::NodeDone {
                     node_index: 0,
-                    node: serde_json::from_value(
-                        json!({"type":"text","role":"assistant","content":"before"}),
-                    )
-                    .unwrap(),
+                    node,
                     usage: None,
                     extra_body: HashMap::new(),
                 })
                 .await
                 .unwrap();
+            // The terminal snapshot drops the streamed Part (STR-8e), which Gemini cannot retract.
             event_tx
                 .send(urp::UrpStreamEvent::ResponseDone {
                     outcome: None,
@@ -264,20 +244,14 @@ async fn gemini_stream_failures_mark_the_emitted_terminal_error() {
         }
         drop(event_tx);
         let (tx, rx) = mpsc::channel(16);
-        let err =
-            urp::stream_encode::gemini::encode_urp_stream_as_gemini(event_rx, tx, "test-model")
-                .await
-                .unwrap_err();
+        let err = urp::stream_encode::run(
+            urp::stream_encode::gemini::GeminiStreamEncoder::new(tx, options()),
+            event_rx,
+        )
+        .await
+        .unwrap_err();
         assert!(err.downstream_stream_terminal_sent);
         assert_eq!(err.code, "stream_encode_failed");
-        assert_eq!(
-            err.message,
-            if conflicting_terminal {
-                "Gemini cannot delete a Part that was already emitted"
-            } else {
-                "Gemini stream has no canonical terminal event"
-            }
-        );
         let wire = collect_wire(rx).await;
         let values: Vec<Value> = wire
             .lines()

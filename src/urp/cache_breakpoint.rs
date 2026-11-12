@@ -1,8 +1,11 @@
 //! Canonical prompt-cache breakpoints (`spec/urp-v2-flat-structure.spec.md` section 4a).
 
 use super::encode::openai_chat::ChatDialect;
-use super::internal_legacy_bridge::{Part, continues_message};
-use super::{Node, OrdinaryRole, ProviderProtocol, ToolDefinition, ToolResultContent, UrpRequest};
+use super::grouping::continues_message;
+use super::{
+    CHAT_MESSAGE_BOUNDARY_EXTRA_KEY, CHAT_MESSAGE_MARKER_EXTRA_KEY, Node, OrdinaryRole,
+    ProviderProtocol, ToolDefinition, ToolResultContent, UrpRequest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -11,11 +14,6 @@ const CACHE_CONTROL_KEY: &str = "cache_control";
 const PROMPT_CACHE_BREAKPOINT_KEY: &str = "prompt_cache_breakpoint";
 const MESSAGES_BREAKPOINT_LIMIT: usize = 4;
 const CACHE_CONTROL_TTLS: &[&str] = &["5m", "1h"];
-/// The source key and value of a Chat message-level marker, held on its node between the Chat
-/// decoder and the decode post-pass.
-const CHAT_MESSAGE_MARKER_EXTRA_KEY: &str = "_monoize_chat_message_cache_marker";
-/// Keeps one Chat message boundary after its marker left the envelope (CB-3a).
-const CHAT_MESSAGE_BOUNDARY_EXTRA_KEY: &str = "_monoize_chat_message_cache_boundary";
 
 /// One marker at the end of a reusable prompt prefix (CB-1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,9 +183,10 @@ fn take_wire_marker(
     })
 }
 
-/// CB-3a: moves a Chat message-level marker from the envelope to the message's last carrier.
+/// CB-3a: moves a Chat message-level marker from the envelope `extra_body` to the last carrier
+/// among `nodes`, the nodes of that one message.
 pub(crate) fn attach_chat_message_marker(
-    parts: &mut [Part],
+    nodes: &mut [Node],
     extra_body: &mut HashMap<String, Value>,
 ) {
     let cache_control = extra_body.remove(CACHE_CONTROL_KEY);
@@ -201,13 +200,17 @@ pub(crate) fn attach_chat_message_marker(
         CHAT_MESSAGE_BOUNDARY_EXTRA_KEY.to_string(),
         Value::Bool(true),
     );
-    let carrier = parts.iter_mut().rev().find_map(|part| match part {
-        Part::Text { extra_body, .. }
-        | Part::Image { extra_body, .. }
-        | Part::Audio { extra_body, .. }
-        | Part::File { extra_body, .. }
-        | Part::ToolCall { extra_body, .. } => Some(extra_body),
-        Part::Reasoning { .. } | Part::Refusal { .. } | Part::ProviderItem { .. } => None,
+    let carrier = nodes.iter_mut().rev().find_map(|node| match node {
+        Node::Text { extra_body, .. }
+        | Node::Image { extra_body, .. }
+        | Node::Audio { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::ToolCall { extra_body, .. } => Some(extra_body),
+        Node::Reasoning { .. }
+        | Node::Refusal { .. }
+        | Node::ProviderItem { .. }
+        | Node::ToolResult { .. }
+        | Node::NextDownstreamEnvelopeExtra { .. } => None,
     });
     if let Some(carrier) = carrier {
         carrier.insert(
@@ -766,17 +769,9 @@ fn materialize_vercel_message_markers(req: &mut UrpRequest) {
     let mut message_start = 0;
     let mut split_next = false;
     for mut node in std::mem::take(&mut req.input) {
-        let ordinary = !matches!(
-            node,
-            Node::NextDownstreamEnvelopeExtra { .. } | Node::ToolResult { .. }
-        );
-        let continues = ordinary
-            && output.last().is_some_and(|previous| {
-                !matches!(
-                    previous,
-                    Node::NextDownstreamEnvelopeExtra { .. } | Node::ToolResult { .. }
-                ) && continues_message(previous, &node)
-            });
+        let continues = output
+            .last()
+            .is_some_and(|previous| continues_message(previous, &node));
         if !continues {
             message_start = output.len();
         } else if split_next {

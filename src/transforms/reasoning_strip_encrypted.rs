@@ -172,8 +172,8 @@ fn strip_encrypted_in_stream_event(event: &mut UrpStreamEvent) {
             strip_encrypted_in_node(node);
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
-            for node in output.iter_mut() {
-                strip_encrypted_in_node(node);
+            for entry in output {
+                strip_encrypted_in_node(&mut entry.node);
             }
         }
         _ => {}

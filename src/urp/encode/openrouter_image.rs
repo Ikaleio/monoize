@@ -1,4 +1,6 @@
-use crate::urp::{ImageGenerationOptions, ImageSource, Node, OrdinaryRole, UrpRequest};
+use crate::urp::{
+    ImageGenerationOptions, ImageSource, Node, OrdinaryRole, UrpRequest, is_internal_key,
+};
 use serde_json::{Map, Value, json};
 
 pub fn encode_request(req: &UrpRequest, model: &str) -> Result<Value, String> {
@@ -9,7 +11,7 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Result<Value, String> {
         crate::urp::media::prepare_request(req, crate::urp::ProviderProtocol::OpenrouterImage)?;
     let mut object = Map::new();
     for (key, value) in &req.extra_body {
-        if key.starts_with("_monoize_")
+        if is_internal_key(key)
             || matches!(
                 key.as_str(),
                 "model"

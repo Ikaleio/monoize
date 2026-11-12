@@ -180,8 +180,8 @@ fn apply_stream(event: &mut UrpStreamEvent, cfg: &Config, state: &mut StreamStat
             injected_delta = inject_nodedone_summary_delta(*node_index, node, cfg, state);
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
-            for node in output {
-                apply_heading_to_reasoning_node(node, cfg, false);
+            for entry in output {
+                apply_heading_to_reasoning_node(&mut entry.node, cfg, false);
             }
         }
         _ => {}
@@ -197,7 +197,10 @@ fn apply_live_summary_delta(
     cfg: &Config,
     state: &mut StreamState,
 ) {
-    let NodeDelta::Reasoning { summary, metadata, .. } = delta else {
+    let NodeDelta::Reasoning {
+        summary, metadata, ..
+    } = delta
+    else {
         return;
     };
     // STR3i.1: native done text predates the rewrite, so the encoder derives the lifecycle.

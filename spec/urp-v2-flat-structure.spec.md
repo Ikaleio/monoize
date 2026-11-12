@@ -85,7 +85,7 @@ Raw reasoning, summary, and encrypted values remain independent under these chan
 
 URPV2-S16. Native shape markers and unknown native fields MAY remain protocol-scoped adapter extras.
 They MUST NOT acquire runtime authority or replace a typed semantic owner.
-Temporary adapter parts are local conversion values, not an alternative canonical request or response.
+Encoder-local wire values are conversion values, not an alternative canonical request or response.
 
 URPV2-1. The canonical internal request object MUST be:
 
@@ -534,6 +534,7 @@ UrpStreamEventV2 =
   | ResponseStart {
       id: String,
       model: String,
+      created_at?: integer,
       usage?: Usage,
       ...extra_body
     }
@@ -558,7 +559,7 @@ UrpStreamEventV2 =
       finish_reason?: FinishReason,
       outcome?: ResponseOutcome,
       usage?: Usage,
-      output: Vec<Node>,
+      output: Vec<TerminalNode>,
       ...extra_body
     }
   | ProviderControl {
@@ -630,7 +631,23 @@ STR-6. `ToolResult` and `NextDownstreamEnvelopeExtra` nodes MUST have zero `Node
 
 STR-7. `NodeDone.node` MUST contain the complete terminal node for that `node_index`.
 
-STR-8. `ResponseDone.output` MUST contain the complete terminal ordered node sequence.
+STR-8. `ResponseDone.output` MUST contain the complete terminal ordered node sequence. Each entry MUST be:
+
+```text
+TerminalNode { node_index?: u32, ...Node }
+```
+
+The members of `Node` are flattened into the entry. `TerminalNode` exists only in `ResponseDone.output`. `UrpResponse.output` and `NodeDone.node` hold plain `Node` values.
+
+STR-8a. `TerminalNode.node_index = i` MUST hold if and only if a `NodeStart` with `node_index = i` occurred earlier in the same stream and the entry is the terminal state of that node. A stage that emits `NodeStart` for a node MUST set `node_index` on the terminal entry of that node. At most one entry may carry a given `node_index`.
+
+STR-8b. An entry without `node_index` is a node that no earlier event announced. A stage that inserts a node only at the terminal boundary MUST leave `node_index` absent. A deserialized entry without `node_index` is such a node.
+
+STR-8c. A stage that renumbers `node_index` values on `NodeStart`, `NodeDelta`, and `NodeDone` MUST apply the same mapping to every terminal entry. A stage that removes a streamed node MUST omit its terminal entry. Entry order is the terminal output order and need not equal `node_index` order.
+
+STR-8d. A consumer MUST associate a terminal entry with earlier stream state by `node_index` only. It MUST NOT match by node content, node `id`, `call_id`, node type, or position. An entry whose `node_index` is absent, unknown to the consumer, or already used by an earlier entry MUST be handled as an unannounced node under STR-8b.
+
+STR-8e. When the terminal entry of an announced node differs from its `NodeDone.node`, the terminal entry wins under STR-9. A streamed node without a terminal entry is not part of the final response.
 
 STR-9. `ResponseDone.output` is the authoritative final streamed response state. Downstream stream reconstruction, synthetic terminal event synthesis, and post-stream transforms MUST use `ResponseDone.output` rather than any ad hoc merged helper state.
 
@@ -641,6 +658,10 @@ STR-11. Downstream stream encoders own logical envelope reconstruction from `Nod
 STR-12. `ProviderControl` is same-protocol stream passthrough for one valid provider event that has no typed URP event mapping. It MUST NOT create a node, consume a `node_index`, mutate `ResponseDone.output`, or cross a protocol-family boundary.
 
 STR-13. A same-protocol stream encoder MAY replay `ProviderControl.data` only when `ProviderControl.protocol` equals the target protocol and `event_name` identifies the source wire event. Before replay, the encoder MUST clone `ProviderControl.data` and recursively remove every object member whose key starts with `_monoize_`, including members below arrays. The encoder MUST preserve all other members and MUST NOT mutate canonical `ProviderControl.data`. A mismatched encoder MUST drop the event without converting it to text or success state.
+
+STR-14. Canonical replay. The replay of a complete response with output nodes `n_0 … n_k` is this event sequence: one `ResponseStart` with the response `id` and `model`; for each `i` in order, `NodeStart { node_index: i, header(n_i) }` followed by `NodeDone { node_index: i, node: n_i }`; then one `ResponseDone` that carries the response `finish_reason`, `outcome`, `usage`, and top-level `extra_body`, with `output = [TerminalNode { node_index: i, n_i }]`. Replay emits zero `NodeDelta` events. `NodeStart.extra_body` holds the internal members (XTRA-10) of `n_i.extra_body`, which a live decoder also places on `NodeStart` to select a native shape; `NodeDone.extra_body` is empty. `ResponseStart.created_at` is the response `created_at`. `ResponseStart.extra_body` and `ResponseDone.extra_body` each hold the response top-level `extra_body`, because each opens or closes its own wire envelope. `header(n)` holds the identity members of `n` and no payload: for `Text`, `id`, `role`, and `phase`; for `Image`, `Audio`, and `File`, `id`, `role`, and `metadata`; for `Refusal`, `id`; for `Reasoning`, `id` and `metadata`; for `ToolCall`, every member except `arguments` and `cache_breakpoint`, because a replay knows the call signature at the start; for `ProviderItem`, every member, with `body` as the initial body; for `ToolResult`, every header member.
+
+STR-15. At `NodeDone`, a stream encoder MUST emit every wire fragment of that node that earlier `NodeDelta` events for the same `node_index` did not carry, under the same suffix rules that the protocol applies at the terminal boundary. A replay under STR-14 therefore yields the same wire lifecycle as a live stream of the same nodes.
 
 ### 5.1 Delta accumulation invariants
 
@@ -687,6 +708,25 @@ RECON-3. A `ToolResult` node is always its own top-level semantic unit. An encod
 RECON-4. A `ProviderItem` node is never eligible for generic message-compatible grouping. A family-specific encoder MAY replay it as a native item, block, or part only under ORD-11.
 
 RECON-5. A control node is not itself emitted downstream. Its only effect is to modify the next consumable envelope under CTL-5 through CTL-8.
+
+RECON-6. Message-compatible boundary. Let `role(n)` be the node role, with `assistant` for `Reasoning`, `ToolCall`, and `Refusal`. Let `zone(n)` be:
+
+- `reasoning` for a `Reasoning` node;
+- `action` for a `ToolCall` node, a `ProviderItem` node, and an `Image` node that carries the Responses image-generation shape marker;
+- `content` for every other ordinary node.
+
+An ordinary node `b` continues the envelope of the immediately preceding ordinary node `a` if and only if all conditions hold:
+
+1. `role(a) = role(b)`;
+2. it is false that `zone(a) = zone(b) = content` and `phase(a) ≠ phase(b)`, where `phase` is `Text.phase` and is absent for other nodes;
+3. it is false that `zone(b) = reasoning` and `zone(a)` is `content` or `action`; and
+4. it is false that `zone(b) = content` and `zone(a) = action`.
+
+A `ToolResult` node and a control node always end the open envelope.
+
+RECON-7. The Chat, Responses, and Replicate encoders MUST use RECON-6 as their message-compatible boundary. The Messages and Gemini encoders use the boundary rules of their own sections. For one node sequence, the stream encoder and the non-stream encoder of a protocol MUST produce the same envelope boundaries, from one shared boundary definition.
+
+RECON-8. A synthetic downstream stream for a non-stream upstream response MUST be the STR-14 replay of that response, encoded by the live stream encoder of the downstream protocol. A protocol MUST NOT implement a second wire lifecycle for synthetic streams. A protocol section MAY define options of the live encoder that apply only to a replay.
 
 ### 6.1 Responses stability and reconstruction
 

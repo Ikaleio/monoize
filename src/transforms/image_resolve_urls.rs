@@ -134,11 +134,13 @@ impl Transform for ImageResolveUrlsTransform {
             .as_any_mut()
             .downcast_mut::<ResolveState>()
             .ok_or_else(|| TransformError::Apply("invalid state type".to_string()))?;
-        let nodes: &mut [Node] = match data {
-            UrpData::Request(req) => &mut req.input,
-            UrpData::Response(resp) => &mut resp.output,
-            UrpData::Stream(UrpStreamEvent::NodeDone { node, .. }) => std::slice::from_mut(node),
-            UrpData::Stream(UrpStreamEvent::ResponseDone { output, .. }) => output,
+        let mut nodes: Vec<&mut Node> = match data {
+            UrpData::Request(req) => req.input.iter_mut().collect(),
+            UrpData::Response(resp) => resp.output.iter_mut().collect(),
+            UrpData::Stream(UrpStreamEvent::NodeDone { node, .. }) => vec![node],
+            UrpData::Stream(UrpStreamEvent::ResponseDone { output, .. }) => {
+                output.iter_mut().map(|entry| &mut entry.node).collect()
+            }
             _ => return Ok(()),
         };
 
@@ -147,6 +149,7 @@ impl Transform for ImageResolveUrlsTransform {
         let mut futures = Vec::new();
 
         for (node_idx, node) in nodes.iter_mut().enumerate() {
+            let node = &mut **node;
             let Some(role) = node.role() else {
                 continue;
             };
@@ -192,7 +195,7 @@ impl Transform for ImageResolveUrlsTransform {
                         data: b64_data,
                     };
                     state.resolved.insert(url, resolved.clone());
-                    if let Some(Node::Image { source, .. }) = nodes.get_mut(node_idx) {
+                    if let Node::Image { source, .. } = &mut *nodes[node_idx] {
                         *source = resolved;
                     }
                 }

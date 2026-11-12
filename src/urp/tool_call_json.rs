@@ -50,7 +50,7 @@ pub fn integerize_json_floats(value: &mut Value) -> bool {
 
 /// Parse tool-call `arguments` JSON and rewrite integer-valued floats.
 /// Non-JSON strings are returned unchanged.
-pub fn integerize_tool_call_arguments_json(raw: &str) -> Cow<'_, str> {
+fn integerize_tool_call_arguments_json(raw: &str) -> Cow<'_, str> {
     let Ok(mut value) = serde_json::from_str::<Value>(raw) else {
         return Cow::Borrowed(raw);
     };
@@ -68,7 +68,7 @@ pub fn tool_call_arguments_for_wire(arguments: impl AsRef<str>) -> String {
     integerize_tool_call_arguments_json(arguments.as_ref()).into_owned()
 }
 
-pub fn integerize_tool_call_node(node: &mut Node) {
+fn integerize_tool_call_node(node: &mut Node) {
     if let Node::ToolCall {
         tool_type: ToolCallType::Function,
         arguments,
@@ -89,7 +89,11 @@ pub fn integerize_tool_call_nodes(nodes: &mut [Node]) {
 pub fn integerize_tool_call_stream_event(event: &mut UrpStreamEvent) {
     match event {
         UrpStreamEvent::NodeDone { node, .. } => integerize_tool_call_node(node),
-        UrpStreamEvent::ResponseDone { output, .. } => integerize_tool_call_nodes(output),
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            for entry in output {
+                integerize_tool_call_node(&mut entry.node);
+            }
+        }
         _ => {}
     }
 }

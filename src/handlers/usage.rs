@@ -343,12 +343,12 @@ fn split_usage_extra(usage: &Map<String, Value>, known_keys: &[&str]) -> HashMap
     usage
         .iter()
         .filter_map(|(k, v)| {
-            if known_keys.contains(&k.as_str()) || urp::decode::is_internal_extra_key(k) {
+            if known_keys.contains(&k.as_str()) || urp::is_internal_key(k) {
                 None
             } else {
                 let mut value = v.clone();
                 if let Some(object) = value.as_object_mut() {
-                    object.retain(|key, _| !urp::decode::is_internal_extra_key(key));
+                    object.retain(|key, _| !urp::is_internal_key(key));
                 }
                 Some((k.clone(), value))
             }
@@ -497,10 +497,15 @@ fn make_output_details(
 /// PC9a: stream chunks share the non-stream Chat usage parser.
 pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
-    ["prompt_tokens", "input_tokens", "completion_tokens", "output_tokens"]
-        .iter()
-        .any(|key| usage.contains_key(*key))
-        .then(|| urp::decode::openai_chat::parse_chat_usage(usage))
+    [
+        "prompt_tokens",
+        "input_tokens",
+        "completion_tokens",
+        "output_tokens",
+    ]
+    .iter()
+    .any(|key| usage.contains_key(*key))
+    .then(|| urp::decode::openai_chat::parse_chat_usage(usage))
 }
 
 pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {

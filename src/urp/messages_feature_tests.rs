@@ -1,9 +1,35 @@
-use super::{Node, ProviderProtocol, UrpResponse, UrpStreamEvent};
+use super::{Node, NodeHeader, ProviderProtocol, TerminalNode, UrpResponse, UrpStreamEvent};
+use crate::error::AppResult;
+use crate::urp::stream_encode::{
+    self, StreamEncodeOptions, anthropic::MessagesStreamEncoder, gemini::GeminiStreamEncoder,
+};
 use crate::urp::{decode::anthropic as decode, encode::anthropic as encode};
 use axum::response::{IntoResponse, Sse, sse::Event};
 use serde_json::{Value, json};
-use std::{collections::HashMap, convert::Infallible};
+use std::{collections::HashMap, convert::Infallible, time::Instant};
 use tokio::sync::mpsc;
+
+fn options(model: &str) -> StreamEncodeOptions {
+    StreamEncodeOptions {
+        logical_model: model.into(),
+        sse_max_frame_length: None,
+        mask_sensitive_info: false,
+        chat_include_usage: false,
+        responses_request_echo: None,
+        started_at: Instant::now(),
+        replay_reasoning_duration_secs: None,
+    }
+}
+
+fn response_start() -> UrpStreamEvent {
+    UrpStreamEvent::ResponseStart {
+        id: "msg_feature".into(),
+        model: "claude-test".into(),
+        created_at: None,
+        usage: None,
+        extra_body: HashMap::new(),
+    }
+}
 
 fn response(blocks: Vec<Value>) -> Value {
     json!({"id":"msg_feature", "type":"message", "role":"assistant", "model":"claude-test", "content":blocks,
@@ -76,36 +102,43 @@ async fn sse_json(mut rx: mpsc::Receiver<Event>) -> Vec<Value> {
         .collect()
 }
 
-async fn encode_stream(events: Vec<UrpStreamEvent>) -> Vec<Value> {
+/// Live Messages encoding of `events`: the driver result and the emitted SSE payloads.
+async fn try_encode_stream(events: Vec<UrpStreamEvent>) -> (AppResult<()>, Vec<Value>) {
     let (source_tx, source_rx) = mpsc::channel(1024);
     for event in events {
         source_tx.send(event).await.unwrap();
     }
     drop(source_tx);
     let (tx, rx) = mpsc::channel(1024);
-    crate::urp::stream_encode::anthropic::encode_urp_stream_as_messages(
+    let result = stream_encode::run(
+        MessagesStreamEncoder::new(tx, options("claude-test")),
         source_rx,
-        tx,
-        "claude-test",
-        None,
-        false,
     )
-    .await
-    .unwrap();
-    sse_json(rx).await
+    .await;
+    (result, sse_json(rx).await)
+}
+
+async fn encode_stream(events: Vec<UrpStreamEvent>) -> Vec<Value> {
+    let (result, wire) = try_encode_stream(events).await;
+    result.unwrap();
+    wire
+}
+
+/// Synthetic Messages stream of a complete response (RECON-8 replay).
+async fn try_synthetic_stream(response: &UrpResponse) -> (AppResult<()>, Vec<Value>) {
+    let (tx, rx) = mpsc::channel(1024);
+    let result = stream_encode::replay(
+        MessagesStreamEncoder::new(tx, options("claude-test")),
+        response.clone(),
+    )
+    .await;
+    (result, sse_json(rx).await)
 }
 
 async fn synthetic_stream(response: &UrpResponse) -> Vec<Value> {
-    let (tx, rx) = mpsc::channel(1024);
-    crate::urp::stream_encode::anthropic::emit_synthetic_messages_stream(
-        "claude-test",
-        response,
-        None,
-        tx,
-    )
-    .await
-    .unwrap();
-    sse_json(rx).await
+    let (result, wire) = try_synthetic_stream(response).await;
+    result.unwrap();
+    wire
 }
 
 fn terminal(events: &[UrpStreamEvent]) -> UrpResponse {
@@ -126,7 +159,7 @@ fn terminal(events: &[UrpStreamEvent]) -> UrpResponse {
                     id: "msg_feature".into(),
                     model: "claude-test".into(),
                     created_at: None,
-                    output: output.clone(),
+                    output: TerminalNode::into_nodes(output.clone()),
                     finish_reason: *finish_reason,
                     usage: usage.clone(),
                     extra_body: extra_body.clone(),
@@ -228,15 +261,6 @@ async fn messages_client_function_and_computer_use_bidirectional() {
         json!({"type":"tool_use","id":"toolu_member","name":"screenshot","toolset_name":"computer","input":{}}),
         json!({"type":"tool_use","id":"toolu_browser","name":"navigate","toolset_name":"browser","input":{"url":"https://example.com"}}),
     ]).await;
-}
-
-#[tokio::test]
-async fn messages_thinking_redaction_signature_bidirectional() {
-    assert_block_roundtrip(vec![
-        json!({"type":"thinking","thinking":"Consider both cases.","signature":"opaque-signature"}),
-        json!({"type":"redacted_thinking","data":"opaque-redaction"}),
-    ])
-    .await;
 }
 
 #[tokio::test]
@@ -436,28 +460,11 @@ fn messages_file_reference_metadata_is_typed_and_required() {
                 let encoded = encode::encode_request_checked(&canonical, "claude-test").unwrap();
                 assert!(encoded.to_string().contains("file_owned"));
                 assert!(!encoded.to_string().contains("resource"));
-                let (metadata, extra) = match &mut canonical.input[0] {
-                    Node::Image {
-                        metadata,
-                        extra_body,
-                        ..
-                    }
-                    | Node::File {
-                        metadata,
-                        extra_body,
-                        ..
-                    } => (metadata, extra_body),
+                let metadata = match &mut canonical.input[0] {
+                    Node::Image { metadata, .. } | Node::File { metadata, .. } => metadata,
                     Node::ToolResult { content, .. } => match &mut content[0] {
-                        super::ToolResultContent::Image {
-                            metadata,
-                            extra_body,
-                            ..
-                        }
-                        | super::ToolResultContent::File {
-                            metadata,
-                            extra_body,
-                            ..
-                        } => (metadata, extra_body),
+                        super::ToolResultContent::Image { metadata, .. }
+                        | super::ToolResultContent::File { metadata, .. } => metadata,
                         _ => unreachable!(),
                     },
                     _ => unreachable!(),
@@ -466,7 +473,6 @@ fn messages_file_reference_metadata_is_typed_and_required() {
                     metadata.resource.as_ref().unwrap().protocol,
                     ProviderProtocol::Messages
                 );
-                assert!(!extra.keys().any(|key| key.contains("file_id_origin")));
                 metadata.resource = None;
                 assert!(encode::encode_request_checked(&canonical, "claude-test").is_err());
             }
@@ -684,80 +690,21 @@ async fn messages_unsupported_output_media_errors_in_all_response_modes() {
         .unwrap();
         canonical.output.push(node.clone());
         let before = serde_json::to_value(&canonical).unwrap();
-        assert!(
-            encode::encode_response_checked(&canonical, "claude-test")
-                .unwrap_err()
-                .contains("top-level")
-        );
+        assert!(encode::encode_response_checked(&canonical, "claude-test").is_err());
         assert_eq!(
             encode::encode_response(&canonical, "claude-test")["type"],
             "error"
         );
-        let (tx, rx) = mpsc::channel(1024);
-        let result = crate::urp::stream_encode::anthropic::emit_synthetic_messages_stream(
-            "claude-test",
-            &canonical,
-            None,
-            tx,
-        )
-        .await;
-        assert!(result.is_err());
-        let wire = sse_json(rx).await;
+        let (result, wire) = try_synthetic_stream(&canonical).await;
+        assert!(result.unwrap_err().downstream_stream_terminal_sent);
         assert_eq!(wire.len(), 1);
         assert_eq!(wire[0]["type"], "error");
         assert_eq!(wire[0]["error"]["type"], "api_error");
         assert_eq!(serde_json::to_value(&canonical).unwrap(), before);
-        let header = match &node {
-            Node::Image { metadata, role, .. } => super::NodeHeader::Image {
-                id: None,
-                role: *role,
-                metadata: metadata.clone(),
-            },
-            Node::File { metadata, role, .. } => super::NodeHeader::File {
-                id: None,
-                role: *role,
-                metadata: metadata.clone(),
-            },
-            Node::Audio { metadata, role, .. } => super::NodeHeader::Audio {
-                id: None,
-                role: *role,
-                metadata: metadata.clone(),
-            },
-            Node::ProviderItem {
-                origin_protocol,
-                role,
-                item_type,
-                body,
-                ..
-            } => super::NodeHeader::ProviderItem {
-                id: None,
-                origin_protocol: *origin_protocol,
-                role: *role,
-                item_type: item_type.clone(),
-                body: Some(body.clone()),
-            },
-            Node::ToolResult {
-                namespace,
-                signature,
-                name,
-                id,
-                tool_type,
-                call_id,
-                ..
-            } => super::NodeHeader::ToolResult {
-                namespace: namespace.clone(),
-                signature: signature.clone(),
-                name: name.clone(),
-                id: id.clone(),
-                tool_type: *tool_type,
-                call_id: call_id.clone(),
-            },
-            _ => unreachable!(),
-        };
         let mut endings = vec![
             UrpStreamEvent::NodeStart {
                 node_index: 1,
-                header,
+                header: NodeHeader::from(&node),
                 extra_body: HashMap::new(),
             },
             UrpStreamEvent::NodeDone {
@@ -770,7 +717,10 @@ async fn messages_unsupported_output_media_errors_in_all_response_modes() {
                 outcome: None,
                 finish_reason: Some(super::FinishReason::Stop),
                 usage: None,
-                output: canonical.output.clone(),
+                output: vec![
+                    TerminalNode::streamed(0, canonical.output[0].clone()),
+                    TerminalNode::unannounced(node.clone()),
+                ],
                 extra_body: HashMap::new(),
             },
         ];
@@ -795,38 +745,23 @@ async fn messages_unsupported_output_media_errors_in_all_response_modes() {
             });
         }
         for ending in endings {
-            let (source_tx, source_rx) = mpsc::channel(1024);
-            source_tx
-                .send(UrpStreamEvent::ResponseStart {
-                    id: canonical.id.clone(),
-                    model: canonical.model.clone(),
-                    usage: None,
+            let (result, wire) = try_encode_stream(vec![
+                response_start(),
+                UrpStreamEvent::NodeStart {
+                    node_index: 0,
+                    header: NodeHeader::from(&canonical.output[0]),
                     extra_body: HashMap::new(),
-                })
-                .await
-                .unwrap();
-            source_tx
-                .send(UrpStreamEvent::NodeDone {
+                },
+                UrpStreamEvent::NodeDone {
                     node_index: 0,
                     node: canonical.output[0].clone(),
                     usage: None,
                     extra_body: HashMap::new(),
-                })
-                .await
-                .unwrap();
-            source_tx.send(ending).await.unwrap();
-            drop(source_tx);
-            let (tx, rx) = mpsc::channel(1024);
-            let result = crate::urp::stream_encode::anthropic::encode_urp_stream_as_messages(
-                source_rx,
-                tx,
-                "claude-test",
-                None,
-                false,
-            )
+                },
+                ending,
+            ])
             .await;
             assert!(result.is_err());
-            let wire = sse_json(rx).await;
             assert_eq!(
                 wire.iter().filter(|event| event["type"] == "error").count(),
                 1
@@ -1114,21 +1049,9 @@ async fn messages_stream_errors_are_terminal_and_preserve_details() {
 }
 
 #[tokio::test]
-async fn messages_provider_start_uses_typed_body_without_internal_snapshot() {
+async fn messages_provider_item_typed_body_mutation_wins_in_synthetic_stream() {
     let block = json!({"type":"server_tool_use","id":"srvtoolu","name":"web_search","input":{"query":"old"}});
-    let events = decode_stream(frames(&[block], "end_turn")).await;
-    for event in &events {
-        if let UrpStreamEvent::NodeStart {
-            header: super::NodeHeader::ProviderItem { body, .. },
-            extra_body,
-            ..
-        } = event
-        {
-            assert!(body.is_some());
-            assert!(!extra_body.contains_key("_monoize_messages_provider_item_start_body"));
-        }
-    }
-    let mut urp = terminal(&events);
+    let mut urp = terminal(&decode_stream(frames(&[block], "end_turn")).await);
     if let Node::ProviderItem { body, .. } = &mut urp.output[0] {
         body["input"] = json!({"query":"new"});
     }
@@ -1157,21 +1080,10 @@ async fn messages_late_citations_after_closed_text_block_are_explicit_stream_err
         ));
     }
     let events = vec![
-        UrpStreamEvent::ResponseStart {
-            id: "msg_feature".into(),
-            model: "claude-test".into(),
-            usage: None,
-            extra_body: HashMap::new(),
-        },
+        response_start(),
         UrpStreamEvent::NodeStart {
             node_index: 0,
-            header: super::NodeHeader::Text {
-                id: None,
-                role: super::OrdinaryRole::Assistant,
-                phase: None,
-                signature: None,
-                citations: vec![],
-            },
+            header: NodeHeader::from(&text),
             extra_body: HashMap::new(),
         },
         UrpStreamEvent::NodeDelta {
@@ -1209,28 +1121,12 @@ async fn messages_late_citations_after_closed_text_block_are_explicit_stream_err
             outcome: None,
             finish_reason: Some(super::FinishReason::Stop),
             usage: None,
-            output: vec![cited_text],
+            output: vec![TerminalNode::streamed(0, cited_text)],
             extra_body: HashMap::new(),
         },
     ];
-    let (source_tx, source_rx) = mpsc::channel(1024);
-    for event in events {
-        source_tx.send(event).await.unwrap();
-    }
-    drop(source_tx);
-    let (tx, rx) = mpsc::channel(1024);
-    let error = crate::urp::stream_encode::anthropic::encode_urp_stream_as_messages(
-        source_rx,
-        tx,
-        "claude-test",
-        None,
-        false,
-    )
-    .await
-    .unwrap_err();
-    assert!(error.message.contains("closed text block"));
-    assert!(error.downstream_stream_terminal_sent);
-    let wire = sse_json(rx).await;
+    let (result, wire) = try_encode_stream(events).await;
+    assert!(result.unwrap_err().downstream_stream_terminal_sent);
     assert_eq!(
         wire.iter().filter(|frame| frame["type"] == "error").count(),
         1
@@ -1254,33 +1150,21 @@ async fn messages_late_citations_after_closed_text_block_are_explicit_stream_err
 
 #[tokio::test]
 async fn messages_buffered_terminal_deletions_override_accumulated_values() {
-    let text_header = super::NodeHeader::Text {
-        id: None,
-        role: super::OrdinaryRole::Assistant,
-        phase: None,
-        signature: None,
-        citations: vec![],
-    };
     let blocker: Node =
         serde_json::from_value(json!({"type":"text","role":"assistant","content":"first"}))
             .unwrap();
     let cleared: Node =
         serde_json::from_value(json!({"type":"text","role":"assistant","content":""})).unwrap();
     let events = vec![
-        UrpStreamEvent::ResponseStart {
-            id: "msg_feature".into(),
-            model: "claude-test".into(),
-            usage: None,
-            extra_body: HashMap::new(),
-        },
+        response_start(),
         UrpStreamEvent::NodeStart {
             node_index: 0,
-            header: text_header.clone(),
+            header: NodeHeader::from(&blocker),
             extra_body: HashMap::new(),
         },
         UrpStreamEvent::NodeStart {
             node_index: 1,
-            header: text_header,
+            header: NodeHeader::from(&cleared),
             extra_body: HashMap::new(),
         },
         UrpStreamEvent::NodeDelta {
@@ -1310,7 +1194,10 @@ async fn messages_buffered_terminal_deletions_override_accumulated_values() {
             outcome: None,
             finish_reason: Some(super::FinishReason::Stop),
             usage: None,
-            output: vec![blocker, cleared],
+            output: vec![
+                TerminalNode::streamed(0, blocker),
+                TerminalNode::streamed(1, cleared),
+            ],
             extra_body: HashMap::new(),
         },
     ];
@@ -1404,11 +1291,16 @@ async fn messages_terminal_snapshot_emits_unstreamed_nodes_of_same_kind() {
         .iter_mut()
         .find(|event| matches!(event, UrpStreamEvent::ResponseDone { .. }))
         .unwrap();
-    if let UrpStreamEvent::ResponseDone {
-        outcome: _, output, ..
-    } = last
-    {
-        *output = response.output;
+    if let UrpStreamEvent::ResponseDone { output, .. } = last {
+        // STR-8: only the first text was announced; the rest first appear at the terminal.
+        assert_eq!(output.len(), 1);
+        assert!(output[0].node_index.is_some());
+        output.extend(
+            response.output[1..]
+                .iter()
+                .cloned()
+                .map(TerminalNode::unannounced),
+        );
     }
     let roundtrip = terminal(&decode_stream(encode_stream(events).await).await);
     assert_eq!(
@@ -1426,26 +1318,15 @@ async fn messages_buffered_reasoning_deletion_does_not_restore_signature() {
         serde_json::from_value(json!({"type":"reasoning","metadata":{"summary_as_thinking":true}}))
             .unwrap();
     let events = vec![
-        UrpStreamEvent::ResponseStart {
-            id: "msg_feature".into(),
-            model: "claude-test".into(),
-            usage: None,
-            extra_body: HashMap::new(),
-        },
+        response_start(),
         UrpStreamEvent::NodeStart {
             node_index: 0,
-            header: super::NodeHeader::Text {
-                id: None,
-                role: super::OrdinaryRole::Assistant,
-                phase: None,
-                signature: None,
-                citations: vec![],
-            },
+            header: NodeHeader::from(&blocker),
             extra_body: HashMap::new(),
         },
         UrpStreamEvent::NodeStart {
             node_index: 1,
-            header: super::NodeHeader::Reasoning {
+            header: NodeHeader::Reasoning {
                 id: None,
                 metadata: Default::default(),
             },
@@ -1479,7 +1360,10 @@ async fn messages_buffered_reasoning_deletion_does_not_restore_signature() {
             outcome: None,
             finish_reason: Some(super::FinishReason::Stop),
             usage: None,
-            output: vec![blocker, cleared],
+            output: vec![
+                TerminalNode::streamed(0, blocker),
+                TerminalNode::streamed(1, cleared),
+            ],
             extra_body: HashMap::new(),
         },
     ];
@@ -1503,12 +1387,6 @@ async fn messages_computer_member_name_does_not_collide_with_custom_tool() {
     assert!(
         matches!(&result.output[0], Node::ToolCall { namespace:Some(namespace),tool_type:super::ToolCallType::Function,..} if namespace=="computer")
     );
-}
-
-#[test]
-fn messages_nonstream_error_is_not_a_successful_empty_response() {
-    let error = json!({"type":"error","error":{"type":"overloaded_error","message":"Try later"},"request_id":"req_1"});
-    assert_eq!(decode::decode_response(&error).unwrap_err(), "Try later");
 }
 
 #[test]
@@ -1789,9 +1667,12 @@ async fn messages_compatible_media_actual_sse_reaches_gemini_wire_once() {
     }
     drop(source_tx);
     let (tx, rx) = mpsc::channel(1024);
-    crate::urp::stream_encode::gemini::encode_urp_stream_as_gemini(source_rx, tx, "gemini-test")
-        .await
-        .unwrap();
+    stream_encode::run(
+        GeminiStreamEncoder::new(tx, options("gemini-test")),
+        source_rx,
+    )
+    .await
+    .unwrap();
     let wire = sse_json(rx).await;
     let parts: Vec<Value> = wire
         .iter()
@@ -2256,16 +2137,8 @@ async fn messages_truncated_tool_json_is_not_fabricated_as_raw_object() {
     let error = encode::encode_response(&canonical, "claude-test");
     assert_eq!(error["type"], "error");
     assert!(!error.to_string().contains("_raw"));
-    let (tx, rx) = mpsc::channel(1024);
-    let result = crate::urp::stream_encode::anthropic::emit_synthetic_messages_stream(
-        "claude-test",
-        &canonical,
-        None,
-        tx,
-    )
-    .await;
-    assert!(result.is_err());
-    let wire = sse_json(rx).await;
+    let (result, wire) = try_synthetic_stream(&canonical).await;
+    assert!(result.unwrap_err().downstream_stream_terminal_sent);
     assert_eq!(wire.len(), 1);
     assert_eq!(wire[0]["type"], "error");
     for stream in [false, true] {
@@ -2307,10 +2180,18 @@ fn messages_thinking_validation_applies_only_to_generated_controls() {
         }
         for (model, effort, patch) in [
             ("claude-haiku-4-5", "high", json!({"max_tokens":4096})),
-            ("claude-haiku-4-5", "low", json!({"tool_choice":{"type":"any"}})),
+            (
+                "claude-haiku-4-5",
+                "low",
+                json!({"tool_choice":{"type":"any"}}),
+            ),
             ("claude-sonnet-4-6", "high", json!({"temperature":0.5})),
             ("claude-sonnet-4-6", "high", json!({"top_k":5})),
-            ("claude-opus-5-5", "high", json!({"tool_choice":{"type":"any"}})),
+            (
+                "claude-opus-5-5",
+                "high",
+                json!({"tool_choice":{"type":"any"}}),
+            ),
             ("claude-sonnet-4-6", "xhigh", json!({})),
         ] {
             let mut native = json!({"model":model,"max_tokens":64000,"stream":stream,

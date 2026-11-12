@@ -4,8 +4,8 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
-    FinishReason, ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol,
-    UrpStreamEvent, Usage,
+    FinishReason, ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, TerminalNode,
+    UrpStreamEvent, Usage, is_internal_key,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -23,15 +23,7 @@ pub(crate) async fn stream_image_to_urp_events(
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
-    let mut started_response = false;
-    let mut output = Vec::new();
-    let mut next_node_index = 0u32;
-    // OIU-S2b: partial frames and the completed node of one generation share
-    // one node index; the completed event consumes the pending index so the
-    // next generation allocates a fresh one.
-    let mut pending_node_index: Option<u32> = None;
-    let mut usage: Option<Usage> = None;
+    let mut decoder = ImageStreamDecoder::new(tx, urp.model.clone());
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
 
@@ -63,127 +55,174 @@ pub(crate) async fn stream_image_to_urp_events(
             "image_generation.partial_image"
             | "image_edit.partial_image"
             | "response.image_generation.partial_image" => {
-                let data_val: Value = serde_json::from_str(&ev.data).map_err(|err| {
-                    AppError::new(
-                        StatusCode::BAD_GATEWAY,
-                        "upstream_stream_decode_failed",
-                        err.to_string(),
-                    )
-                })?;
-                let Some(source) = image_source_from_payload(&data_val) else {
-                    continue;
-                };
-                if !started_response {
-                    tx.send(UrpStreamEvent::ResponseStart {
-                        usage: None,
-                        id: response_id.clone(),
-                        model: urp.model.clone(),
-                        extra_body: HashMap::new(),
-                    })
-                    .await
-                    .map_err(send_failed)?;
-                    started_response = true;
-                }
-                let node_index = *pending_node_index.get_or_insert_with(|| {
-                    let index = next_node_index;
-                    next_node_index = next_node_index.saturating_add(1);
-                    index
-                });
-                tx.send(UrpStreamEvent::NodeDelta {
-                    node_index,
-                    delta: NodeDelta::Image { source },
-                    usage: None,
-                    extra_body: partial_image_extra_body(&event_name, &data_val),
-                })
-                .await
-                .map_err(send_failed)?;
+                decoder
+                    .on_partial_image(&event_name, &parse_payload(&ev.data)?)
+                    .await?;
             }
             "image_generation.completed"
             | "image_edit.completed"
             | "response.image_generation.completed" => {
-                let data_val: Value = serde_json::from_str(&ev.data).map_err(|err| {
-                    AppError::new(
-                        StatusCode::BAD_GATEWAY,
-                        "upstream_stream_decode_failed",
-                        err.to_string(),
-                    )
-                })?;
-                if let Some(parsed) = data_val
-                    .get("usage")
-                    .and_then(crate::urp::decode::openai_image::parse_image_usage)
-                {
-                    usage = Some(parsed);
-                }
-                if let Some(node) = image_node_from_payload(&data_val) {
-                    if !started_response {
-                        tx.send(UrpStreamEvent::ResponseStart {
-                            usage: None,
-                            id: response_id.clone(),
-                            model: urp.model.clone(),
-                            extra_body: HashMap::new(),
-                        })
-                        .await
-                        .map_err(send_failed)?;
-                        started_response = true;
-                    }
-                    let node_index = pending_node_index.take().unwrap_or_else(|| {
-                        let index = next_node_index;
-                        next_node_index = next_node_index.saturating_add(1);
-                        index
-                    });
-                    let extra_body = image_extra_body(&data_val);
-                    tx.send(UrpStreamEvent::NodeStart {
-                        node_index,
-                        header: node_header(&node),
-                        extra_body: extra_body.clone(),
-                    })
-                    .await
-                    .map_err(send_failed)?;
-                    tx.send(UrpStreamEvent::NodeDone {
-                        node_index,
-                        node: node.clone(),
-                        usage: None,
-                        extra_body,
-                    })
-                    .await
-                    .map_err(send_failed)?;
-                    output.push(node);
-                }
+                decoder.on_completed(&parse_payload(&ev.data)?).await?;
             }
             "error" => {
-                let value = serde_json::from_str::<Value>(&ev.data).unwrap_or(Value::Null);
-                let error = value.get("error").unwrap_or(&value);
-                let message = error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or(ev.data);
-                let code = error
-                    .get("code")
-                    .and_then(Value::as_str)
-                    .unwrap_or("upstream_image_error")
-                    .to_string();
-                tx.send(UrpStreamEvent::Error {
-                    code: Some(code),
-                    message,
-                    extra_body: HashMap::new(),
-                })
-                .await
-                .map_err(send_failed)?;
+                decoder.on_error(ev.data).await?;
                 return Ok(());
             }
             _ => {}
         }
     }
 
-    if output.is_empty() {
-        return Err(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_stream_missing_terminal",
-            "upstream image stream ended without a completed image",
-        ));
+    decoder.finish().await?;
+    record_stream_terminal_event(&runtime_metrics, "response.completed", Some("stop")).await;
+    Ok(())
+}
+
+/// Cross-event state of one upstream Images API stream.
+struct ImageStreamDecoder {
+    tx: mpsc::Sender<UrpStreamEvent>,
+    response_id: String,
+    model: String,
+    started_response: bool,
+    output: Vec<TerminalNode>,
+    next_node_index: u32,
+    // OIU-S2b: partial frames and the completed node of one generation share
+    // one node index; the completed event consumes the pending index so the
+    // next generation allocates a fresh one.
+    pending_node_index: Option<u32>,
+    usage: Option<Usage>,
+}
+
+impl ImageStreamDecoder {
+    fn new(tx: mpsc::Sender<UrpStreamEvent>, model: String) -> Self {
+        Self {
+            tx,
+            response_id: format!("resp_{}", uuid::Uuid::new_v4().simple()),
+            model,
+            started_response: false,
+            output: Vec::new(),
+            next_node_index: 0,
+            pending_node_index: None,
+            usage: None,
+        }
     }
-    if started_response {
+
+    async fn send(&self, event: UrpStreamEvent) -> AppResult<()> {
+        self.tx.send(event).await.map_err(send_failed)
+    }
+
+    async fn ensure_started(&mut self, payload: &Value) -> AppResult<()> {
+        if self.started_response {
+            return Ok(());
+        }
+        self.started_response = true;
+        self.send(UrpStreamEvent::ResponseStart {
+            usage: None,
+            id: self.response_id.clone(),
+            model: self.model.clone(),
+            created_at: payload.get("created_at").and_then(Value::as_i64),
+            extra_body: HashMap::new(),
+        })
+        .await
+    }
+
+    fn allocate_node_index(&mut self) -> u32 {
+        let index = self.next_node_index;
+        self.next_node_index = self.next_node_index.saturating_add(1);
+        index
+    }
+
+    async fn on_partial_image(&mut self, event_name: &str, payload: &Value) -> AppResult<()> {
+        let Some(source) = image_source_from_payload(payload) else {
+            return Ok(());
+        };
+        self.ensure_started(payload).await?;
+        let node_index = match self.pending_node_index {
+            Some(index) => index,
+            None => {
+                let index = self.allocate_node_index();
+                self.pending_node_index = Some(index);
+                index
+            }
+        };
+        self.send(UrpStreamEvent::NodeDelta {
+            node_index,
+            delta: NodeDelta::Image { source },
+            usage: None,
+            extra_body: partial_image_extra_body(event_name, payload),
+        })
+        .await
+    }
+
+    async fn on_completed(&mut self, payload: &Value) -> AppResult<()> {
+        if let Some(parsed) = payload
+            .get("usage")
+            .and_then(crate::urp::decode::openai_image::parse_image_usage)
+        {
+            self.usage = Some(parsed);
+        }
+        let Some(node) = image_node_from_payload(payload) else {
+            return Ok(());
+        };
+        self.ensure_started(payload).await?;
+        let node_index = match self.pending_node_index.take() {
+            Some(index) => index,
+            None => self.allocate_node_index(),
+        };
+        let extra_body = image_extra_body(payload);
+        self.send(UrpStreamEvent::NodeStart {
+            node_index,
+            header: NodeHeader::from(&node),
+            extra_body: extra_body.clone(),
+        })
+        .await?;
+        self.send(UrpStreamEvent::NodeDone {
+            node_index,
+            node: node.clone(),
+            usage: None,
+            extra_body,
+        })
+        .await?;
+        self.output.push(TerminalNode::streamed(node_index, node));
+        Ok(())
+    }
+
+    async fn on_error(&self, data: String) -> AppResult<()> {
+        let value = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
+        let error = value.get("error").unwrap_or(&value);
+        let code = error
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("upstream_image_error")
+            .to_string();
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or(data);
+        self.send(UrpStreamEvent::Error {
+            code: Some(code),
+            message,
+            extra_body: HashMap::new(),
+        })
+        .await
+    }
+
+    async fn finish(self) -> AppResult<()> {
+        if self.output.is_empty() {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_missing_terminal",
+                "upstream image stream ended without a completed image",
+            ));
+        }
+        // A completed image always opened the response, so `ResponseStart` precedes this.
+        let Self {
+            tx,
+            response_id,
+            output,
+            usage,
+            ..
+        } = self;
         tx.send(UrpStreamEvent::ResponseDone {
             outcome: None,
             finish_reason: Some(FinishReason::Stop),
@@ -192,10 +231,18 @@ pub(crate) async fn stream_image_to_urp_events(
             extra_body: HashMap::from([("id".to_string(), Value::String(response_id))]),
         })
         .await
-        .map_err(send_failed)?;
+        .map_err(send_failed)
     }
-    record_stream_terminal_event(&runtime_metrics, "response.completed", Some("stop")).await;
-    Ok(())
+}
+
+fn parse_payload(data: &str) -> AppResult<Value> {
+    serde_json::from_str(data).map_err(|err| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_stream_decode_failed",
+            err.to_string(),
+        )
+    })
 }
 
 fn send_failed(err: mpsc::error::SendError<UrpStreamEvent>) -> AppError {
@@ -290,7 +337,7 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
         .map(|obj| {
             obj.iter()
                 .filter(|(key, _)| {
-                    !crate::urp::decode::is_internal_extra_key(key)
+                    !is_internal_key(key)
                         && !known.contains(&key.as_str())
                         && !crate::urp::ImageGenerationMetadata::KEYS.contains(&key.as_str())
                 })
@@ -309,10 +356,7 @@ fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String
         .as_object()
         .map(|obj| {
             obj.iter()
-                .filter(|(key, _)| {
-                    !crate::urp::decode::is_internal_extra_key(key)
-                        && !excluded.contains(&key.as_str())
-                })
+                .filter(|(key, _)| !is_internal_key(key) && !excluded.contains(&key.as_str()))
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect()
         })
@@ -332,24 +376,4 @@ fn partial_image_extra_body(event_name: &str, payload: &Value) -> HashMap<String
         }
     }
     extra_body
-}
-
-fn node_header(node: &Node) -> NodeHeader {
-    match node {
-        Node::Image {
-            id, role, metadata, ..
-        } => NodeHeader::Image {
-            metadata: metadata.clone(),
-            id: id.clone(),
-            role: *role,
-        },
-        _ => NodeHeader::ProviderItem {
-            body: None,
-
-            id: None,
-            origin_protocol: ProviderProtocol::OpenaiImage,
-            role: OrdinaryRole::Assistant,
-            item_type: "image_generation".to_string(),
-        },
-    }
 }

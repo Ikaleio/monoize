@@ -1,4 +1,6 @@
-use crate::urp::{ImageGenerationOptions, ImageSource, Node, OrdinaryRole, UrpRequest};
+use crate::urp::{
+    ImageGenerationOptions, ImageSource, Node, OrdinaryRole, UrpRequest, is_internal_key,
+};
 use base64::Engine as _;
 use serde_json::{Map, Value};
 
@@ -44,7 +46,7 @@ fn prepare_request(req: &UrpRequest) -> Result<UrpRequest, String> {
 fn request_fields(req: &UrpRequest, model: &str) -> Map<String, Value> {
     let mut body = Map::new();
     for (key, value) in &req.extra_body {
-        if key.starts_with("_monoize_")
+        if is_internal_key(key)
             || matches!(
                 key.as_str(),
                 "model" | "prompt" | "stream" | "user" | "image" | "images" | "mask" | "markup"

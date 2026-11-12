@@ -2,7 +2,7 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{Node, NodeDelta, NodeHeader, OrdinaryRole, TerminalNode, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -125,7 +125,10 @@ enum NodeMode {
     /// `C` emitted for the current segment; later plain text resumes the node (TXO-3).
     Closed(PlainKind),
     /// Later plain text, held until no other stream node is open (TXO-3).
-    Resumed { kind: PlainKind, text: String },
+    Resumed {
+        kind: PlainKind,
+        text: String,
+    },
 }
 
 #[derive(Default)]
@@ -347,6 +350,52 @@ impl StreamState {
         out
     }
 
+    /// STR-8c: each entry takes the output index its source node was streamed under. A converted
+    /// source expands into its streamed segments. Streamed entries keep output-index order and
+    /// precede the entries the stream never announced.
+    fn convert_terminal_output(
+        &mut self,
+        output: Vec<TerminalNode>,
+        tag: &str,
+    ) -> Vec<TerminalNode> {
+        let mut streamed: Vec<(u32, TerminalNode)> = Vec::with_capacity(output.len());
+        let mut unannounced = Vec::new();
+        for TerminalNode { node_index, node } in output {
+            let source = node_index
+                .and_then(|source| self.index_map.remove(&source).map(|out| (source, out)));
+            let Some((source, out)) = source else {
+                let node = convert_node(&node, tag).unwrap_or(node);
+                unannounced.push(TerminalNode::unannounced(node));
+                continue;
+            };
+            if let Some(segments) = self.segments.remove(&source) {
+                streamed.extend(
+                    segments
+                        .into_iter()
+                        .map(|(out, node)| (out, TerminalNode::streamed(out, node))),
+                );
+                continue;
+            }
+            let node = if self.passed_through.contains(&source) {
+                node
+            } else {
+                convert_node(&node, tag).unwrap_or(node)
+            };
+            // A reasoning node still pending never had its `NodeStart` forwarded.
+            if matches!(self.nodes.get(&source), Some(NodeMode::Pending(_))) {
+                unannounced.push(TerminalNode::unannounced(node));
+            } else {
+                streamed.push((out, TerminalNode::streamed(out, node)));
+            }
+        }
+        streamed.sort_by_key(|(out, _)| *out);
+        streamed
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .chain(unannounced)
+            .collect()
+    }
+
     fn apply(&mut self, event: &mut UrpStreamEvent, tag: &str) {
         let is_terminal = matches!(event, UrpStreamEvent::ResponseDone { .. });
         let mut closing = match event {
@@ -392,8 +441,7 @@ impl StreamState {
                 }
                 *node_index = self.output_index(source);
                 if is_reasoning {
-                    self.nodes
-                        .insert(source, NodeMode::Pending(event.clone()));
+                    self.nodes.insert(source, NodeMode::Pending(event.clone()));
                     self.replacement = Some(Vec::new());
                 }
             }
@@ -541,28 +589,7 @@ impl StreamState {
                 }
             }
             UrpStreamEvent::ResponseDone { output, .. } => {
-                let mut streamed: Vec<(u32, Node)> = Vec::with_capacity(output.len());
-                let mut terminal_only = Vec::new();
-                for (position, node) in output.drain(..).enumerate() {
-                    let position = position as u32;
-                    if let Some(segments) = self.segments.remove(&position) {
-                        streamed.extend(segments);
-                        continue;
-                    }
-                    let converted = if self.passed_through.contains(&position) {
-                        None
-                    } else {
-                        convert_node(&node, tag)
-                    };
-                    let node = converted.unwrap_or(node);
-                    match self.index_map.get(&position) {
-                        Some(out) => streamed.push((*out, node)),
-                        None => terminal_only.push(node),
-                    }
-                }
-                streamed.sort_by_key(|(index, _)| *index);
-                output.extend(streamed.into_iter().map(|(_, node)| node));
-                output.extend(terminal_only);
+                *output = self.convert_terminal_output(std::mem::take(output), tag);
             }
             _ => {}
         }

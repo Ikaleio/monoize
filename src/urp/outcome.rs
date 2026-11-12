@@ -1,4 +1,4 @@
-use super::FinishReason;
+use super::{FinishReason, is_internal_key};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -53,7 +53,7 @@ impl ResponseOutcome {
             incomplete_extra: details
                 .into_iter()
                 .flatten()
-                .filter(|(k, _)| k.as_str() != "reason" && !k.starts_with("_monoize_"))
+                .filter(|(k, _)| k.as_str() != "reason" && !is_internal_key(k))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
         })

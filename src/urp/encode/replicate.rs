@@ -1,19 +1,20 @@
-use crate::urp::encode::merge_extra;
-use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
-use crate::urp::{FinishReason, ImageSource, ToolResultContent, UrpRequest, UrpResponse};
-use serde_json::{Map, Value, json};
+use crate::urp::grouping::{Envelope, envelopes};
+use crate::urp::{
+    AudioSource, FileSource, ImageSource, Node, OrdinaryRole, ToolResultContent, UrpRequest,
+    is_internal_key,
+};
+use serde_json::{Map, Value};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    let request_items = nodes_to_items(&req.input);
     let mut input = Map::new();
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut images: Vec<Value> = Vec::new();
 
-    for item in &request_items {
-        match item {
-            Item::Message { role, parts, .. } => match role {
-                Role::System | Role::Developer => {
-                    let text = collect_text(parts);
+    for envelope in envelopes(&req.input) {
+        match envelope {
+            Envelope::Message { role, nodes, .. } => match role {
+                OrdinaryRole::System | OrdinaryRole::Developer => {
+                    let text = collect_text(nodes);
                     if !text.is_empty() {
                         input
                             .entry("system_prompt".to_string())
@@ -26,35 +27,33 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                         }
                     }
                 }
-                Role::User => {
-                    for part in parts {
-                        match part {
-                            Part::Text { content, .. } => {
+                OrdinaryRole::User => {
+                    for node in nodes {
+                        match node {
+                            Node::Text { content, .. } => {
                                 prompt_parts.push(content.clone());
                             }
-                            Part::Image { source, .. } => {
+                            Node::Image { source, .. } => {
                                 if let Some(image) = image_source_to_value(source) {
                                     images.push(image);
                                 }
                             }
-                            Part::File { source, .. } => {
+                            Node::File { source, .. } => {
                                 let url = match source {
-                                    crate::urp::FileSource::Url { url } => url.clone(),
-                                    crate::urp::FileSource::Base64 {
+                                    FileSource::Url { url } => url.clone(),
+                                    FileSource::Base64 {
                                         media_type, data, ..
-                                    } => {
-                                        format!("data:{media_type};base64,{data}")
-                                    }
-                                    crate::urp::FileSource::FileId { .. }
-                                    | crate::urp::FileSource::Text { .. }
-                                    | crate::urp::FileSource::Content { .. } => continue,
+                                    } => format!("data:{media_type};base64,{data}"),
+                                    FileSource::FileId { .. }
+                                    | FileSource::Text { .. }
+                                    | FileSource::Content { .. } => continue,
                                 };
                                 input.insert("file".to_string(), Value::String(url));
                             }
-                            Part::Audio { source, .. } => {
+                            Node::Audio { source, .. } => {
                                 let url = match source {
-                                    crate::urp::AudioSource::Url { url } => url.clone(),
-                                    crate::urp::AudioSource::Base64 { media_type, data } => {
+                                    AudioSource::Url { url } => url.clone(),
+                                    AudioSource::Base64 { media_type, data } => {
                                         format!("data:{media_type};base64,{data}")
                                     }
                                 };
@@ -64,18 +63,19 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                         }
                     }
                 }
-                Role::Assistant => {
-                    let text = collect_text(parts);
+                OrdinaryRole::Assistant => {
+                    let text = collect_text(nodes);
                     if !text.is_empty() {
                         prompt_parts.push(text);
                     }
                 }
-                Role::Tool => {}
             },
-            Item::ToolResult { content, .. } => {
-                for c in content {
-                    if let ToolResultContent::Text { text, .. } = c {
-                        prompt_parts.push(text.clone());
+            Envelope::ToolResult { node, .. } => {
+                if let Node::ToolResult { content, .. } = node {
+                    for c in content {
+                        if let ToolResultContent::Text { text, .. } = c {
+                            prompt_parts.push(text.clone());
+                        }
                     }
                 }
             }
@@ -122,7 +122,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     // all other extra_body fields also go into input (Replicate model params are
     // model-specific and live inside the input object).
     for (k, v) in &req.extra_body {
-        if k.starts_with("_monoize_") {
+        if is_internal_key(k) {
             continue;
         }
         match k.as_str() {
@@ -137,7 +137,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             "input" => {
                 if let Some(obj) = v.as_object() {
                     for (ik, iv) in obj {
-                        if !ik.starts_with("_monoize_") {
+                        if !is_internal_key(ik) {
                             input.entry(ik.clone()).or_insert_with(|| iv.clone());
                         }
                     }
@@ -166,7 +166,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 
     // Only merge top-level Replicate fields from extra_body
     for (k, v) in &req.extra_body {
-        if k.starts_with("_monoize_") {
+        if is_internal_key(k) {
             continue;
         }
         match k.as_str() {
@@ -193,75 +193,12 @@ fn image_source_to_value(source: &ImageSource) -> Option<Value> {
     }
 }
 
-fn collect_text(parts: &[Part]) -> String {
+fn collect_text(nodes: &[Node]) -> String {
     let mut out = String::new();
-    for p in parts {
-        if let Part::Text { content, .. } = p {
+    for node in nodes {
+        if let Node::Text { content, .. } = node {
             out.push_str(content);
         }
     }
     out
-}
-
-pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let response_items = nodes_to_items(&resp.output);
-    let mut text_parts: Vec<String> = Vec::new();
-    let mut image_urls: Vec<String> = Vec::new();
-
-    for item in &response_items {
-        if let Item::Message { parts, .. } = item {
-            for part in parts {
-                match part {
-                    Part::Text { content, .. } => text_parts.push(content.clone()),
-                    Part::Image { source, .. } => match source {
-                        ImageSource::Url { url, .. } => image_urls.push(url.clone()),
-                        ImageSource::Base64 { media_type, data } => {
-                            image_urls.push(format!("data:{media_type};base64,{data}"));
-                        }
-                        ImageSource::FileId { .. } => {}
-                    },
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let output: Value = if !image_urls.is_empty() {
-        if image_urls.len() == 1 {
-            Value::String(image_urls.into_iter().next().unwrap())
-        } else {
-            Value::Array(image_urls.into_iter().map(Value::String).collect())
-        }
-    } else {
-        let combined = text_parts.join("");
-        Value::String(combined)
-    };
-
-    let status = match resp.finish_reason {
-        Some(FinishReason::Stop) | None => "succeeded",
-        Some(FinishReason::Length) => "succeeded",
-        Some(FinishReason::ContentFilter) => "failed",
-        _ => "succeeded",
-    };
-
-    let mut body = json!({
-        "id": resp.id,
-        "model": logical_model,
-        "status": status,
-        "output": output,
-    });
-
-    if let Some(usage) = &resp.usage {
-        let usage = usage.accounting();
-        body["metrics"] = json!({
-            "input_token_count": usage.input_tokens,
-            "output_token_count": usage.output_tokens,
-        });
-    }
-
-    if let Some(obj) = body.as_object_mut() {
-        merge_extra(obj, &resp.extra_body);
-    }
-
-    body
 }

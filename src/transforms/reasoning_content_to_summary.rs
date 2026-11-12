@@ -143,8 +143,8 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
             rewrite_reasoning_node(node);
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
-            for node in output {
-                rewrite_reasoning_node(node);
+            for entry in output {
+                rewrite_reasoning_node(&mut entry.node);
             }
         }
         _ => {}

@@ -204,8 +204,10 @@ RCD-D10. For a pass-through streaming response, `downstream_response` MUST be nu
 RCD-D10a. For a pass-through streaming response whose transformed URP stream (post response transforms, pre downstream encoding) emitted a terminal `response_done` event, `reconstructed_urp_response` MUST be that event serialized as one object with the shape:
 
 ```json
-{ "finish_reason": string?, "usage": object?, "output": Node[], ...extra_body }
+{ "outcome": object?, "finish_reason": string?, "usage": object?, "output": Node[], ...extra_body }
 ```
+
+Each `output` element is the `Node` of the matching `ResponseDone.output` entry, in entry order, without the stream-only `node_index` (`urp-v2-flat-structure.spec.md` STR-8).
 
 This is the URP parser's non-stream reconstruction of the streamed result. It reflects the stream after response transforms, so it matches what the downstream client semantically received.
 

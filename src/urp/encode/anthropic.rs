@@ -1,50 +1,25 @@
-use crate::urp::encode::{
-    merge_extra, sanitize_provider_item_wire_body, tool_choice_to_value, usage_input_details,
-    usage_output_details,
-};
-use crate::urp::{
-    CHAT_REASONING_DETAIL_EXTRA_KEY, FileSource, FinishReason, ImageSource,
-    MESSAGES_OUTPUT_CONFIG_EXTRA_KEY, MESSAGES_SYSTEM_ENVELOPE_EXTRA_KEY,
-    MESSAGES_THINKING_CONFIG_EXTRA_KEY, MediaMetadata, Node, OrdinaryRole, ProviderProtocol,
-    REASONING_ENVELOPE_PREFIX, ResponseFormat, StopControl, ToolCallType, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse, Usage, strip_reasoning_signature_sigil,
-    wrap_reasoning_signature_with_item_id,
-};
-use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+//! Anthropic Messages encoder: URP requests and responses to native Messages JSON.
 
-include!("anthropic/reasoning.inc.rs");
-include!("anthropic/thinking_validation.inc.rs");
-include!("anthropic/request_response.inc.rs");
-include!("anthropic/messages_part1.inc.rs");
-include!("anthropic/messages_part2.inc.rs");
-include!("anthropic/tools.inc.rs");
-include!("anthropic/media_config.inc.rs");
+mod blocks;
+mod media;
+mod messages;
+mod model;
+mod reasoning;
+mod request;
+mod response;
+mod system;
+mod thinking;
+mod tools;
+mod usage;
 
-fn encode_messages_provider_block(
-    origin_protocol: ProviderProtocol,
-    id: Option<&Option<String>>,
-    item_type: &str,
-    body: &Value,
-    extra_body: &HashMap<String, Value>,
-) -> Option<Value> {
-    if origin_protocol != ProviderProtocol::Messages {
-        return None;
-    }
-    let sanitized_body = sanitize_provider_item_wire_body(body);
-    let mut block = match sanitized_body {
-        Value::Object(obj) => obj,
-        _ => return None,
-    };
-    block.insert("type".to_string(), Value::String(item_type.to_string()));
-    if block.contains_key("id")
-        && let Some(id) = id
-    {
-        block.remove("id");
-        if let Some(id) = id {
-            block.insert("id".into(), Value::String(id.clone()));
-        }
-    }
-    merge_extra(&mut block, extra_body);
-    Some(Value::Object(block))
-}
+pub(crate) use blocks::validate_complete_tool_inputs;
+pub(crate) use media::{
+    input_only_media_type, messages_media_error_body, validate_response_node,
+    validate_response_nodes,
+};
+pub use request::{encode_request, encode_request_checked};
+pub use response::{encode_response, encode_response_checked};
+pub(crate) use response::{
+    messages_finish_reason, messages_response_id, messages_stop_reason_for_output,
+};
+pub(crate) use usage::anthropic_native_usage_json;
