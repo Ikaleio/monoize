@@ -12,6 +12,33 @@ FD-B2. Build pipeline MUST run frontend install/build before Rust compile when f
 
 FD-B3. If frontend build fails, Rust build MUST fail.
 
+FD-B4. A production `bun run build` MUST emit an entry JavaScript chunk of at most
+900,000 bytes before compression. Every emitted JavaScript chunk MUST remain at
+or below 1,000,000 bytes before compression. Measure file sizes in
+`frontend/dist/assets/`, not gzip transfer sizes.
+
+The route-splitting baseline is 4,973,644 bytes for both the entry chunk and the
+largest chunk. The measured split build emits an 848,857-byte entry chunk, which
+is also its largest chunk. Its shared React runtime is 282,904 bytes and loads
+with the entry; the entry bound does not describe total initial transfer size.
+
+FD-B5. Each route page MUST use a dynamic import. Loading `/login` MUST NOT fetch
+dashboard page modules, Recharts, CodeMirror, or the custom-transform formatter.
+The dashboard shell MAY load eagerly. A page module MUST load only when its route
+renders; revisiting a loaded route MAY reuse the browser module cache.
+
+FD-B6. Each pending route import MUST render a route-level skeleton. Dashboard
+skeletons MUST remain inside the existing navigation shell and `PageWrapper`.
+They MUST use shared skeleton primitives and match the page's primary geometry:
+header and toolbar with table rows, card grid, chart panels, settings rows, or
+chat panels. The login skeleton MUST retain the centered authentication card.
+The loading region MUST expose a localized loading status and `aria-busy=true`.
+
+FD-B7. Route splitting MUST preserve paths, title `handle` i18n keys, navigation,
+auth return targets, and admin-only guards. An unauthorized page MUST NOT mount
+or fetch its page module. A rejected page import MUST reach the existing route
+error boundary without removing the dashboard shell.
+
 ## 3. Runtime Routing
 
 FD-R1. `GET /` MUST return embedded `index.html`.

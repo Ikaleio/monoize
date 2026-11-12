@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import {
   createBrowserRouter,
   Navigate,
@@ -15,27 +15,96 @@ import { ThemeProvider } from "@/hooks/use-theme";
 import { Toaster } from "@/components/ui/sonner";
 import { RouteErrorBoundary } from "@/components/ui/error-boundary";
 import { NoPermissionState } from "@/components/ui/no-permission";
+import {
+  RouteSkeleton,
+  type RouteSkeletonKind,
+} from "@/components/ui/route-skeleton";
 import { usePublicSettings } from "@/lib/swr";
-import { LoginPage } from "@/pages/login";
 import { DashboardLayout } from "@/pages/layout";
-import { DashboardPage } from "@/pages/dashboard";
-import { AdminDashboardPage } from "@/pages/admin-dashboard";
-import { ProvidersPage } from "@/pages/providers";
-import { ApiKeysPage } from "@/pages/api-keys";
-import { UsersPage } from "@/pages/users";
-import { GroupsPage } from "@/pages/groups";
-import { BillingPlansPage } from "@/pages/billing-plans";
-import { SettingsPage } from "@/pages/settings";
-import { UserSettingsPage } from "@/pages/user-settings";
-import { PlaygroundPage } from "@/pages/playground";
-import { RequestLogsPage } from "@/pages/request-logs";
-import { ModelPricingPage } from "@/pages/model-pricing";
-import { ModelMarketplacePage } from "@/pages/model-marketplace";
-import { CustomTransformsPage } from "@/pages/custom-transforms";
-import { WalletPage } from "@/pages/wallet";
-import { PaymentsPage } from "@/pages/payments";
-import { NotFoundPage } from "@/pages/not-found";
 import "@/i18n";
+
+const LoginPage = lazy(() =>
+  import("@/pages/login").then((module) => ({ default: module.LoginPage })),
+);
+const DashboardPage = lazy(() =>
+  import("@/pages/dashboard").then((module) => ({
+    default: module.DashboardPage,
+  })),
+);
+const AdminDashboardPage = lazy(() =>
+  import("@/pages/admin-dashboard").then((module) => ({
+    default: module.AdminDashboardPage,
+  })),
+);
+const ProvidersPage = lazy(() =>
+  import("@/pages/providers").then((module) => ({
+    default: module.ProvidersPage,
+  })),
+);
+const ApiKeysPage = lazy(() =>
+  import("@/pages/api-keys").then((module) => ({
+    default: module.ApiKeysPage,
+  })),
+);
+const UsersPage = lazy(() =>
+  import("@/pages/users").then((module) => ({ default: module.UsersPage })),
+);
+const GroupsPage = lazy(() =>
+  import("@/pages/groups").then((module) => ({ default: module.GroupsPage })),
+);
+const BillingPlansPage = lazy(() =>
+  import("@/pages/billing-plans").then((module) => ({
+    default: module.BillingPlansPage,
+  })),
+);
+const SettingsPage = lazy(() =>
+  import("@/pages/settings").then((module) => ({
+    default: module.SettingsPage,
+  })),
+);
+const UserSettingsPage = lazy(() =>
+  import("@/pages/user-settings").then((module) => ({
+    default: module.UserSettingsPage,
+  })),
+);
+const PlaygroundPage = lazy(() =>
+  import("@/pages/playground").then((module) => ({
+    default: module.PlaygroundPage,
+  })),
+);
+const RequestLogsPage = lazy(() =>
+  import("@/pages/request-logs").then((module) => ({
+    default: module.RequestLogsPage,
+  })),
+);
+const ModelPricingPage = lazy(() =>
+  import("@/pages/model-pricing").then((module) => ({
+    default: module.ModelPricingPage,
+  })),
+);
+const ModelMarketplacePage = lazy(() =>
+  import("@/pages/model-marketplace").then((module) => ({
+    default: module.ModelMarketplacePage,
+  })),
+);
+const CustomTransformsPage = lazy(() =>
+  import("@/pages/custom-transforms").then((module) => ({
+    default: module.CustomTransformsPage,
+  })),
+);
+const WalletPage = lazy(() =>
+  import("@/pages/wallet").then((module) => ({ default: module.WalletPage })),
+);
+const PaymentsPage = lazy(() =>
+  import("@/pages/payments").then((module) => ({
+    default: module.PaymentsPage,
+  })),
+);
+const NotFoundPage = lazy(() =>
+  import("@/pages/not-found").then((module) => ({
+    default: module.NotFoundPage,
+  })),
+);
 
 /** Route `handle`: the i18n key of the page title, shared by the nav label and `document.title`. */
 interface RouteHandle {
@@ -104,7 +173,18 @@ function RequireAdmin() {
   return <NoPermissionState title={titleKey ? t(titleKey) : undefined} />;
 }
 
-const page = (titleKey: string) => ({ handle: { titleKey } satisfies RouteHandle });
+const page = (
+  titleKey: string,
+  element: ReactNode,
+  kind: RouteSkeletonKind = "table",
+) => ({
+  handle: { titleKey } satisfies RouteHandle,
+  element: (
+    <Suspense key={titleKey} fallback={<RouteSkeleton kind={kind} />}>
+      {element}
+    </Suspense>
+  ),
+});
 
 export const router = createBrowserRouter([
   {
@@ -113,7 +193,7 @@ export const router = createBrowserRouter([
     errorElement: <RouteErrorBoundary />,
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
-      { path: "login", element: <LoginPage />, ...page("auth.signIn") },
+      { path: "login", ...page("auth.signIn", <LoginPage />, "login") },
       {
         element: <DashboardLayout />,
         children: [
@@ -124,55 +204,72 @@ export const router = createBrowserRouter([
               {
                 path: "dashboard",
                 children: [
-                  { index: true, element: <DashboardPage />, ...page("nav.dashboard") },
-                  { path: "tokens", element: <ApiKeysPage />, ...page("nav.apiKeys") },
-                  { path: "wallet", element: <WalletPage />, ...page("nav.wallet") },
-                  { path: "logs", element: <RequestLogsPage />, ...page("nav.logs") },
+                  {
+                    index: true,
+                    ...page("nav.dashboard", <DashboardPage />, "dashboard"),
+                  },
+                  { path: "tokens", ...page("nav.apiKeys", <ApiKeysPage />) },
+                  {
+                    path: "wallet",
+                    ...page("nav.wallet", <WalletPage />, "wallet"),
+                  },
+                  { path: "logs", ...page("nav.logs", <RequestLogsPage />) },
                   {
                     path: "playground",
-                    element: <PlaygroundPage />,
-                    ...page("nav.playground"),
+                    ...page("nav.playground", <PlaygroundPage />, "playground"),
                   },
                   {
                     path: "marketplace",
-                    element: <ModelMarketplacePage />,
-                    ...page("nav.marketplace"),
+                    ...page("nav.marketplace", <ModelMarketplacePage />),
                   },
                   {
                     element: <RequireAdmin />,
                     children: [
                       {
                         path: "admin",
-                        element: <AdminDashboardPage />,
-                        ...page("nav.adminDashboard"),
+                        ...page(
+                          "nav.adminDashboard",
+                          <AdminDashboardPage />,
+                          "admin",
+                        ),
                       },
                       {
                         path: "providers",
-                        element: <ProvidersPage />,
-                        ...page("nav.providers"),
+                        ...page(
+                          "nav.providers",
+                          <ProvidersPage />,
+                          "providers",
+                        ),
                       },
-                      { path: "groups", element: <GroupsPage />, ...page("nav.groups") },
+                      { path: "groups", ...page("nav.groups", <GroupsPage />) },
                       {
                         path: "custom-transforms",
-                        element: <CustomTransformsPage />,
-                        ...page("nav.customTransforms"),
+                        ...page(
+                          "nav.customTransforms",
+                          <CustomTransformsPage />,
+                          "cards",
+                        ),
                       },
-                      { path: "models", element: <ModelPricingPage />, ...page("nav.models") },
+                      {
+                        path: "models",
+                        ...page("nav.models", <ModelPricingPage />),
+                      },
                       {
                         path: "plans",
-                        element: <BillingPlansPage />,
-                        ...page("nav.billingPlans"),
+                        ...page("nav.billingPlans", <BillingPlansPage />),
                       },
                       {
                         path: "payments",
-                        element: <PaymentsPage />,
-                        ...page("nav.payments"),
+                        ...page("nav.payments", <PaymentsPage />),
                       },
-                      { path: "users", element: <UsersPage />, ...page("nav.users") },
+                      { path: "users", ...page("nav.users", <UsersPage />) },
                       {
                         path: "admin-settings",
-                        element: <SettingsPage />,
-                        ...page("nav.systemSettings"),
+                        ...page(
+                          "nav.systemSettings",
+                          <SettingsPage />,
+                          "settings",
+                        ),
                       },
                     ],
                   },
@@ -180,10 +277,12 @@ export const router = createBrowserRouter([
               },
               {
                 path: "settings",
-                element: <UserSettingsPage />,
-                ...page("nav.accountSettings"),
+                ...page("nav.accountSettings", <UserSettingsPage />, "account"),
               },
-              { path: "*", element: <NotFoundPage />, ...page("errors.notFoundTitle") },
+              {
+                path: "*",
+                ...page("errors.notFoundTitle", <NotFoundPage />, "not-found"),
+              },
             ],
           },
         ],
