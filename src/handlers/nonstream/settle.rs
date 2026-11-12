@@ -45,7 +45,7 @@ impl NonstreamRun<'_> {
     ) -> AppResult<(T, Option<responses_history::HistoryContext>)> {
         let auth = self.inputs.auth;
         let downstream = self.inputs.downstream;
-        let strip_foreign_response = self.inputs.strip_foreign_response;
+        let strip_foreign_response = self.strip_foreign_response;
         let foreign_extras = foreign_response_target(downstream, attempt.provider_type)
             .filter(|_| strip_foreign_response)
             .map(|target| urp::strip_foreign_response(resp, target));
@@ -162,23 +162,27 @@ impl NonstreamRun<'_> {
             state,
             auth,
             attempt,
-            &self.logical_model,
-            resp.usage.clone(),
-            charge.charge_nano_usd,
-            charge.billing_breakdown,
-            false,
-            self.started_at,
-            self.inputs.request_id.clone(),
-            self.inputs.request_ip.clone(),
-            attempt.channel_id.clone(),
-            None,
-            None,
-            self.reasoning_effort.clone(),
-            std::mem::take(&mut self.tried_providers),
-            self.inputs
-                .task_state
-                .is_some_and(AdmittedRequestTaskState::client_gone),
-            upstream_response_model,
+            RequestLogContext {
+                model: &self.logical_model,
+                is_stream: false,
+                started_at: self.started_at,
+                request_id: self.inputs.request_id.as_deref(),
+                request_ip: self.inputs.request_ip.as_deref(),
+                reasoning_effort: self.reasoning_effort.as_deref(),
+            },
+            RequestLogSuccess {
+                usage: resp.usage.clone(),
+                charge_nano_usd: charge.charge_nano_usd,
+                billing_breakdown_json: charge.billing_breakdown,
+                ttfb_ms: None,
+                stream_terminal_diagnostics: None,
+                tried_providers: std::mem::take(&mut self.attempts.tried_providers),
+                client_gone: self
+                    .inputs
+                    .task_state
+                    .is_some_and(AdmittedRequestTaskState::client_gone),
+                upstream_response_model,
+            },
         );
         if let Some(session) = self.inputs.capture.session.as_ref() {
             session

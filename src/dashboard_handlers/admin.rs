@@ -117,6 +117,65 @@ pub async fn get_admin_overview(
         .map(|row| (row.channel_id.clone(), row))
         .collect();
 
+    let channel_health = overview_channel_health(&state, &channel_window).await?;
+    let replicas = overview_replicas(&state, now);
+
+    Ok(Json(json!({
+        "node": {
+            "role": role,
+            "version": env!("CARGO_PKG_VERSION"),
+            "started_at": started_at.to_rfc3339(),
+            "uptime_seconds": uptime_seconds,
+            "listen": state.runtime.listen,
+            "metrics_path": state.runtime.metrics_path,
+            "database_backend": database_backend,
+            "database_dsn_redacted": dsn_redacted,
+            "upstream_proxy_url": state.node.upstream_proxy_url,
+        },
+        "replica": {
+            "ingest_enabled": state.metering_token_digest.is_some(),
+            "spool_pending_count": spool_pending_count,
+            "spool_pending_bytes": spool_pending_bytes,
+            "replicas": replicas,
+        },
+        "system": {
+            "pending_request_logs": state.pending_request_logs.len(),
+            "sse_connections": sse_connections,
+            "channel_health_entries": state.channel_health.lock().await.len(),
+            "channel_affinity_entries": state.channel_affinity.lock().await.len(),
+            "routing_config_revision": state.routing_config_revision
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .to_string(),
+        },
+        "spend": {
+            "window": spend_window,
+            "window_hours": window_hours,
+            "time_from": spend_time_from_rfc,
+            "time_to": spend_time_to_rfc,
+            "calls": window_calls,
+            "cost_nano_usd": window_cost_nano_usd.to_string(),
+        },
+        "users_ranking": users_ranking,
+        "channel_health": channel_health,
+    })))
+}
+
+fn redact_dsn(dsn: &str) -> String {
+    if let Some(at_pos) = dsn.find('@')
+        && let Some(scheme_end) = dsn.find("://")
+    {
+        return format!("{}://***@{}", &dsn[..scheme_end], &dsn[at_pos + 1..]);
+    }
+    if dsn.starts_with("sqlite") {
+        return dsn.to_string();
+    }
+    "***".to_string()
+}
+
+async fn overview_channel_health(
+    state: &AppState,
+    channel_window: &HashMap<String, crate::users::ChannelWindowUsage>,
+) -> AppResult<Vec<Value>> {
     let providers = state
         .monoize_store
         .list_providers()
@@ -191,6 +250,10 @@ pub async fn get_admin_overview(
     }
     drop(health);
 
+    Ok(channel_health)
+}
+
+fn overview_replicas(state: &AppState, now: chrono::DateTime<chrono::Utc>) -> Vec<Value> {
     let stale_after_ms = (state.node.metering_ship_interval.as_millis() as i64)
         .saturating_mul(crate::replica::metering::HEARTBEAT_STALE_INTERVALS as i64);
     let now_unix_ms = now.timestamp_millis();
@@ -227,54 +290,5 @@ pub async fn get_admin_overview(
         left_host.cmp(right_host)
     });
 
-    Ok(Json(json!({
-        "node": {
-            "role": role,
-            "version": env!("CARGO_PKG_VERSION"),
-            "started_at": started_at.to_rfc3339(),
-            "uptime_seconds": uptime_seconds,
-            "listen": state.runtime.listen,
-            "metrics_path": state.runtime.metrics_path,
-            "database_backend": database_backend,
-            "database_dsn_redacted": dsn_redacted,
-            "upstream_proxy_url": state.node.upstream_proxy_url,
-        },
-        "replica": {
-            "ingest_enabled": state.metering_token_digest.is_some(),
-            "spool_pending_count": spool_pending_count,
-            "spool_pending_bytes": spool_pending_bytes,
-            "replicas": replicas,
-        },
-        "system": {
-            "pending_request_logs": state.pending_request_logs.len(),
-            "sse_connections": sse_connections,
-            "channel_health_entries": state.channel_health.lock().await.len(),
-            "channel_affinity_entries": state.channel_affinity.lock().await.len(),
-            "routing_config_revision": state.routing_config_revision
-                .load(std::sync::atomic::Ordering::Relaxed)
-                .to_string(),
-        },
-        "spend": {
-            "window": spend_window,
-            "window_hours": window_hours,
-            "time_from": spend_time_from_rfc,
-            "time_to": spend_time_to_rfc,
-            "calls": window_calls,
-            "cost_nano_usd": window_cost_nano_usd.to_string(),
-        },
-        "users_ranking": users_ranking,
-        "channel_health": channel_health,
-    })))
-}
-
-fn redact_dsn(dsn: &str) -> String {
-    if let Some(at_pos) = dsn.find('@')
-        && let Some(scheme_end) = dsn.find("://")
-    {
-        return format!("{}://***@{}", &dsn[..scheme_end], &dsn[at_pos + 1..]);
-    }
-    if dsn.starts_with("sqlite") {
-        return dsn.to_string();
-    }
-    "***".to_string()
+    replicas
 }

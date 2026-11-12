@@ -86,6 +86,15 @@ fn encode_prepared_request(
         encode_reasoning_controls(obj, reasoning, dialect);
     }
 
+    encode_tool_controls(obj, req, dialect)?;
+    encode_request_tail(body, req, dialect)
+}
+
+fn encode_tool_controls(
+    obj: &mut Map<String, Value>,
+    req: &UrpRequest,
+    dialect: ChatDialect,
+) -> Result<(), ChatEncodeError> {
     // Tool controls accompany encoded tools; without a tool list they pass through as given.
     let mut dropped_tool_names = Vec::new();
     let mut emit_tool_controls = true;
@@ -120,6 +129,15 @@ fn encode_prepared_request(
         }
     }
 
+    Ok(())
+}
+
+fn encode_request_tail(
+    mut body: Value,
+    req: &UrpRequest,
+    dialect: ChatDialect,
+) -> Result<Value, ChatEncodeError> {
+    let obj = body.as_object_mut().expect("chat request object");
     if let Some(stop) = &req.stop {
         let value = match stop {
             StopControl::Single(stop) => Value::String(stop.clone()),

@@ -99,6 +99,8 @@ RL1b-1. The only exception to RL1b for an already-delivered normal streaming res
 
 RL1b-1a. A `billing_settlement_failed` terminal row MUST still include the usage snapshot, scalar token fields, and timing fields that were available when settlement was attempted (`input_tokens`, `output_tokens`, related detail counters, `usage_breakdown_json`, `duration_ms`, and `ttfb_ms` when known). It MUST NOT store those fields as null solely because charging failed. `charge_nano_usd` and `billing_breakdown_json` MAY be null on that row.
 
+RL1b-2. A failed upstream attempt that routing can retry MUST NOT claim or schedule the request's terminal row. This includes a WebSocket create-frame send failure. The final serving attempt or route exhaustion determines the terminal row; earlier failures belong in `tried_providers`.
+
 RL1c. Terminal logging MUST enqueue exactly one new row with all fields populated (including terminal status, usage, billing, and provider metadata) into the request-log write batcher. There is no preceding pending row to update. Enqueue succeeds only after a durable bounded spool file exists. An abrupt process termination after successful enqueue MUST NOT lose the spooled entry.
 
 RL1c-2. The write batcher MUST assign a stable database row ID when an entry is enqueued. If transaction begin, any insert, or commit reports failure, the complete drained batch MUST be returned to the front of the buffer for retry. Retrying the same stable row ID MUST be idempotent so an ambiguous commit outcome cannot create duplicate rows.
@@ -126,6 +128,8 @@ RL1h. A downstream client disconnect MUST NOT cancel in-flight upstream work. Af
 RL1h-1. For a streaming request, the terminal request log is scheduled after the downstream SSE body has ended (`unified_responses_proxy.spec.md` FP6j-1). The RL1h `client_gone` decision MUST use the state of the real downstream response body read when Monoize closes the downstream channel. A disconnect while the handler still waits for `COMMIT`, or after the body was returned, counts as a disconnect even when an internal buffer accepted the events. A client that disconnects after that point MUST NOT turn a delivered stream into `client_gone`.
 
 RL1h-2. A downstream disconnect MAY stop upstream WebSocket generation with `response.interrupt` under WS2g, but MUST NOT cancel terminal usage consumption or settlement. A billable interrupted response after disconnect MUST use `client_gone`. A client that sends `response.interrupt` and remains connected MUST NOT be classified as disconnected solely because it requested interruption.
+
+RL1h-3. A handled local or upstream failure MUST schedule its own terminal error row. It MUST NOT rely on the pending-guard fallback below, which marks the request `client_gone`.
 
 RL1i. When a provider attempt is selected (upstream call succeeds or streaming begins), the provider metadata (`provider_id`, `channel_id`, `upstream_model`, `provider_multiplier`) MUST be captured in memory and included in the terminal INSERT. No intermediate database write is performed.
 

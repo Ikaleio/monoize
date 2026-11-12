@@ -52,8 +52,8 @@ pub(super) enum Exchange {
     Reply(Reply),
     /// Transport or HTTP failure; the capture dump records it.
     CallFailed(UpstreamCallError),
-    /// The collected stream failed after its response headers arrived.
-    CollectFailed(AppError),
+    /// Channel setup or collection failed without a completed reply.
+    AttemptFailed(AppError),
 }
 
 /// A successful upstream reply.
@@ -78,20 +78,34 @@ impl NonstreamRun<'_> {
         call: &mut AttemptCall,
         upstream_body: Value,
     ) -> AppResult<Exchange> {
+        let http = match client_http_for_attempt(self.inputs.state, attempt) {
+            Ok(http) => http,
+            Err(err) => {
+                call.capture_upstream_request = self
+                    .inputs
+                    .capture
+                    .session
+                    .is_some()
+                    .then_some(upstream_body);
+                return Ok(Exchange::AttemptFailed(err));
+            }
+        };
         match call.transport {
             Transport::CollectedStream => {
-                self.send_collected_stream(attempt, call, upstream_body)
+                self.send_collected_stream(&http, attempt, call, upstream_body)
                     .await
             }
             Transport::MultipartEdit => {
-                self.send_multipart_edit(attempt, call, upstream_body).await
+                self.send_multipart_edit(&http, attempt, call, upstream_body)
+                    .await
             }
-            Transport::Json => self.send_json(attempt, call, upstream_body).await,
+            Transport::Json => self.send_json(&http, attempt, call, upstream_body).await,
         }
     }
 
     async fn send_collected_stream(
         &mut self,
+        http: &reqwest::Client,
         attempt: &mut MonoizeAttempt,
         call: &mut AttemptCall,
         upstream_body: Value,
@@ -103,13 +117,17 @@ impl NonstreamRun<'_> {
             .await
             .stream_idle_timeout_ms
             .max(1);
-        let http = client_http_for_attempt(state, attempt)?;
+        let legacy = match typed_request_to_legacy(&call.req, self.inputs.max_multiplier) {
+            Ok(legacy) => legacy,
+            Err(err) => return Err(self.fail_request(attempt, err).await),
+        };
+        let pending_request_envelope_extra = find_pending_request_envelope_extra(&call.req.input);
         let extra_headers = attempt_extra_headers(attempt, &upstream_body);
         attempt.session_affinity_value = resolve_session_affinity_value(attempt, &upstream_body);
         // Streaming edits use the same JSON or multipart transport as
         // non-streaming edits.
         let stream_call = match call_streaming_image_capable_upstream(
-            &http,
+            http,
             attempt,
             &call.req,
             upstream_body,
@@ -122,17 +140,13 @@ impl NonstreamRun<'_> {
             Ok(stream_call) => stream_call,
             Err(err) => return Err(self.fail_request(attempt, err).await),
         };
+        call.path = stream_call.path;
         call.capture_upstream_request = stream_call.capture_upstream_request;
         let upstream_resp = match stream_call.result {
             Ok(upstream_resp) => upstream_resp,
             Err(err) => return Ok(Exchange::CallFailed(err)),
         };
         call.forwarded_headers = upstream::forwarded_response_headers(upstream_resp.headers());
-        let legacy = match typed_request_to_legacy(&call.req, self.inputs.max_multiplier) {
-            Ok(legacy) => legacy,
-            Err(err) => return Err(self.fail_request(attempt, err).await),
-        };
-        let pending_request_envelope_extra = find_pending_request_envelope_extra(&call.req.input);
         release_encoded_input(&mut call.req, &self.inputs.capture);
         let collected = collect_streamed_upstream_response(
             legacy,
@@ -150,17 +164,19 @@ impl NonstreamRun<'_> {
                 observed_model,
             })),
             Err(CollectedUpstreamError::Internal(err)) => {
+                self.capture_failure(attempt, call, &err).await;
                 Err(self.fail_request(attempt, err).await)
             }
             Err(CollectedUpstreamError::Upstream(mut err)) => {
                 err.forwarded_headers = std::mem::take(&mut call.forwarded_headers);
-                Ok(Exchange::CollectFailed(err))
+                Ok(Exchange::AttemptFailed(err))
             }
         }
     }
 
     async fn send_multipart_edit(
         &mut self,
+        http: &reqwest::Client,
         attempt: &mut MonoizeAttempt,
         call: &mut AttemptCall,
         upstream_body: Value,
@@ -186,13 +202,13 @@ impl NonstreamRun<'_> {
                 return Err(self.fail_request(attempt, err).await);
             }
         };
-        let http = client_http_for_attempt(self.inputs.state, attempt)?;
+        release_encoded_input(&mut call.req, &self.inputs.capture);
         let extra_headers = attempt_extra_headers(attempt, &upstream_body);
         attempt.session_affinity_value = resolve_session_affinity_value(attempt, &upstream_body);
         drop(upstream_body);
         let provider = build_channel_provider_config(attempt);
         let result = upstream::call_upstream_multipart_json_with_timeout_and_headers(
-            &http,
+            http,
             &provider,
             &attempt.api_key,
             &call.path,
@@ -209,12 +225,12 @@ impl NonstreamRun<'_> {
 
     async fn send_json(
         &self,
+        http: &reqwest::Client,
         attempt: &mut MonoizeAttempt,
         call: &mut AttemptCall,
         upstream_body: Value,
     ) -> AppResult<Exchange> {
         release_encoded_input(&mut call.req, &self.inputs.capture);
-        let http = client_http_for_attempt(self.inputs.state, attempt)?;
         let extra_headers = attempt_extra_headers(attempt, &upstream_body);
         attempt.session_affinity_value = resolve_session_affinity_value(attempt, &upstream_body);
         let body = upstream::JsonBody::new(&upstream_body);
@@ -226,7 +242,7 @@ impl NonstreamRun<'_> {
             .then_some(upstream_body);
         let provider = build_channel_provider_config(attempt);
         let result = upstream::call_upstream_json_with_response_headers(
-            &http,
+            http,
             &provider,
             &attempt.api_key,
             &call.path,
@@ -270,9 +286,11 @@ async fn collect_streamed_upstream_response(
                 provider_type,
                 upstream_resp,
                 decoded_tx,
-                Some(started_at),
-                Some(runtime_metrics),
-                stream_idle_timeout_ms,
+                crate::urp::stream_decode::StreamDecodeContext {
+                    started_at: Some(started_at),
+                    runtime_metrics: Some(runtime_metrics),
+                    idle_timeout_ms: stream_idle_timeout_ms,
+                },
             )
             .await
         })

@@ -10,6 +10,12 @@ pub(super) struct ChargeComputation {
     pub(super) billing_breakdown: Option<Value>,
 }
 
+pub(super) struct SettlementRequest<'a> {
+    pub(super) usage: SettledUsage<'a>,
+    pub(super) output: Option<&'a [urp::Node]>,
+    pub(super) response_service_tier: Option<&'a str>,
+}
+
 fn apply_plan_allocation_to_breakdown(
     breakdown: &mut Value,
     allocation: &crate::users::PlanChargeAllocation,
@@ -49,12 +55,10 @@ pub(super) fn map_get_u64(map: &Map<String, Value>, key: &str) -> Option<u64> {
     map.get(key).and_then(parse_u64_value)
 }
 
-pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
-    let usage = usage.accounting();
-    let input_details = usage.input_details.as_ref();
-    let output_details = usage.output_details.as_ref();
-
-    let input_cached = input_details
+fn input_cached_tokens(usage: &urp::Usage) -> Option<u64> {
+    usage
+        .input_details
+        .as_ref()
         .map(|d| d.cache_read_tokens)
         .filter(|&v| v > 0)
         .or_else(|| {
@@ -76,7 +80,14 @@ pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
                 .get("prompt_tokens_details")
                 .and_then(|v| v.as_object())
                 .and_then(|d| map_get_u64(d, "cached_tokens"))
-        });
+        })
+}
+
+pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
+    let usage = usage.accounting();
+    let input_details = usage.input_details.as_ref();
+    let output_details = usage.output_details.as_ref();
+    let input_cached = input_cached_tokens(&usage);
     let input_cache_creation = input_details
         .map(|d| d.cache_creation_tokens)
         .filter(|&v| v > 0)
@@ -260,15 +271,18 @@ pub(super) async fn maybe_charge_settled(
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
     logical_model: &str,
-    usage: SettledUsage<'_>,
-    output: Option<&[urp::Node]>,
-    response_service_tier: Option<&str>,
+    request: SettlementRequest<'_>,
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
     let Some(user_id) = auth.user_id.as_deref() else {
         return Ok(ChargeComputation::default());
     };
     let tool_prices = state.monoize_runtime.read().await.tool_prices.clone();
+    let SettlementRequest {
+        usage,
+        output,
+        response_service_tier,
+    } = request;
     let usage_speed = usage.usage().and_then(super::usage::usage_service_tier);
     let service_tier = response_service_tier
         .map(str::trim)
@@ -286,7 +300,27 @@ pub(super) async fn maybe_charge_settled(
         group_billing_ratio: attempt.group_billing_ratio,
         channel_multiplier: attempt.model_multiplier,
     };
-    let authors: Vec<_> = output
+    let outcome = settle_with_image_authors(state, attempt, &inputs).await?;
+    let charge_nano = outcome.final_charge_nano;
+    let billing_breakdown = outcome.breakdown;
+    if charge_nano <= 0 {
+        return Ok(ChargeComputation {
+            charge_nano_usd: None,
+            billing_breakdown: Some(billing_breakdown),
+        });
+    }
+    let meta =
+        settlement_charge_metadata(auth, attempt, logical_model, usage, charge_nano, request_id);
+    charge_settled_balance(state, auth, user_id, charge_nano, &meta, billing_breakdown).await
+}
+
+async fn settle_with_image_authors(
+    state: &AppState,
+    attempt: &MonoizeAttempt,
+    inputs: &SettlementInputs<'_>,
+) -> AppResult<settlement::SettlementOutcome> {
+    let authors: Vec<_> = inputs
+        .output
         .into_iter()
         .flatten()
         .filter_map(|node| match node {
@@ -326,7 +360,7 @@ pub(super) async fn maybe_charge_settled(
         }
         priced_authors.push((author, row));
     }
-    let outcome = settlement::settle_with_svg_authors(&inputs, &priced_authors).map_err(|err| {
+    settlement::settle_with_svg_authors(inputs, &priced_authors).map_err(|err| {
         tracing::error!(
             "billing error: settlement failed for model={}: {}",
             attempt.upstream_model,
@@ -337,18 +371,19 @@ pub(super) async fn maybe_charge_settled(
             "billing_settlement_failed",
             err,
         )
-    })?;
-    let charge_nano = outcome.final_charge_nano;
-    let mut billing_breakdown = outcome.breakdown;
-    if charge_nano <= 0 {
-        return Ok(ChargeComputation {
-            charge_nano_usd: None,
-            billing_breakdown: Some(billing_breakdown),
-        });
-    }
+    })
+}
 
+fn settlement_charge_metadata(
+    auth: &crate::auth::AuthResult,
+    attempt: &MonoizeAttempt,
+    logical_model: &str,
+    usage: SettledUsage<'_>,
+    charge_nano: i128,
+    request_id: Option<&str>,
+) -> Value {
     let reported_usage = usage.usage();
-    let meta = json!({
+    json!({
         "logical_model": logical_model,
         "upstream_model": attempt.upstream_model,
         "provider_id": attempt.provider_id,
@@ -365,8 +400,17 @@ pub(super) async fn maybe_charge_settled(
         "charge_nano_usd": charge_nano.to_string(),
         "api_key_id": auth.api_key_id,
         "request_id": request_id,
-    });
+    })
+}
 
+async fn charge_settled_balance(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    user_id: &str,
+    charge_nano: i128,
+    meta: &Value,
+    mut billing_breakdown: Value,
+) -> AppResult<ChargeComputation> {
     if state.node.is_replica() {
         // M3: on replicas the synchronous charge path is replaced by a durable
         // balance-delta enqueue; the primary applies it idempotently later.
@@ -377,7 +421,7 @@ pub(super) async fn maybe_charge_settled(
                 user_id,
                 auth.api_key_id.as_deref(),
                 charge_nano,
-                &meta,
+                meta,
             )
             .await
             .map_err(|err| {
@@ -394,7 +438,7 @@ pub(super) async fn maybe_charge_settled(
                 user_id,
                 None,
                 charge_nano,
-                &meta,
+                meta,
             )
             .await
             .map_err(|err| {
@@ -413,99 +457,58 @@ pub(super) async fn maybe_charge_settled(
 
     if auth.sub_account_enabled {
         let api_key_id = auth.api_key_id.as_deref().unwrap_or("");
-        match state
+        let allocation = state
             .user_store
-            .charge_sub_account_balance_nano(api_key_id, user_id, charge_nano, &meta)
+            .charge_sub_account_balance_nano(api_key_id, user_id, charge_nano, meta)
             .await
-        {
-            Ok(allocation) => {
-                apply_plan_allocation_to_breakdown(&mut billing_breakdown, &allocation);
-                return Ok(ChargeComputation {
-                    charge_nano_usd: Some(allocation.adjusted_charge_nano_usd),
-                    billing_breakdown: Some(billing_breakdown),
-                });
-            }
-            Err(err) => match err.kind {
-                BillingErrorKind::InsufficientBalance => {
-                    return Err(AppError::new(
-                        StatusCode::PAYMENT_REQUIRED,
-                        "insufficient_balance",
-                        "insufficient balance",
-                    ));
-                }
-                BillingErrorKind::NotFound => {
-                    return Err(AppError::new(
-                        StatusCode::UNAUTHORIZED,
-                        "unauthorized",
-                        "api key not found",
-                    ));
-                }
-                _ => {
-                    return Err(AppError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        err.message,
-                    ));
-                }
-            },
-        }
+            .map_err(|err| balance_charge_error(err, "api key not found"))?;
+        apply_plan_allocation_to_breakdown(&mut billing_breakdown, &allocation);
+        return Ok(ChargeComputation {
+            charge_nano_usd: Some(allocation.adjusted_charge_nano_usd),
+            billing_breakdown: Some(billing_breakdown),
+        });
     }
 
-    match state
+    let allocation = state
         .user_store
-        .charge_user_balance_nano(user_id, charge_nano, &meta)
+        .charge_user_balance_nano(user_id, charge_nano, meta)
         .await
-    {
-        Ok(allocation) => {
-            apply_plan_allocation_to_breakdown(&mut billing_breakdown, &allocation);
-            Ok(ChargeComputation {
-                charge_nano_usd: Some(allocation.adjusted_charge_nano_usd),
-                billing_breakdown: Some(billing_breakdown),
-            })
+        .map_err(|err| balance_charge_error(err, "user not found"))?;
+    apply_plan_allocation_to_breakdown(&mut billing_breakdown, &allocation);
+    Ok(ChargeComputation {
+        charge_nano_usd: Some(allocation.adjusted_charge_nano_usd),
+        billing_breakdown: Some(billing_breakdown),
+    })
+}
+
+fn balance_charge_error(err: crate::users::BillingError, not_found: &str) -> AppError {
+    match err.kind {
+        BillingErrorKind::InsufficientBalance => AppError::new(
+            StatusCode::PAYMENT_REQUIRED,
+            "insufficient_balance",
+            "insufficient balance",
+        ),
+        BillingErrorKind::NotFound => {
+            AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", not_found)
         }
-        Err(err) => match err.kind {
-            BillingErrorKind::InsufficientBalance => Err(AppError::new(
-                StatusCode::PAYMENT_REQUIRED,
-                "insufficient_balance",
-                "insufficient balance",
-            )),
-            BillingErrorKind::NotFound => Err(AppError::new(
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "user not found",
-            )),
-            _ => Err(AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                err.message,
-            )),
-        },
+        _ => AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            err.message,
+        ),
     }
 }
 
 /// Settle a terminal pass-through stream.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn maybe_charge_stream_usage(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
     logical_model: &str,
-    usage: SettledUsage<'_>,
-    output: &[urp::Node],
-    response_service_tier: Option<&str>,
+    request: SettlementRequest<'_>,
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
-    maybe_charge_settled(
-        state,
-        auth,
-        attempt,
-        logical_model,
-        usage,
-        Some(output),
-        response_service_tier,
-        request_id,
-    )
-    .await
+    maybe_charge_settled(state, auth, attempt, logical_model, request, request_id).await
 }
 
 /// Settle a terminal non-stream/buffered response. Callers enforce the
@@ -534,9 +537,11 @@ pub(super) async fn maybe_charge_response(
         auth,
         attempt,
         logical_model,
-        usage,
-        Some(response.output.as_slice()),
-        response_service_tier,
+        SettlementRequest {
+            usage,
+            output: Some(response.output.as_slice()),
+            response_service_tier,
+        },
         request_id,
     )
     .await

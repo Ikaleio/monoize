@@ -14,8 +14,8 @@ mod synthetic;
 
 pub(super) use errors::normalize_outcome_error;
 use errors::*;
-pub(super) use forward::forward_stream_typed;
 use forward::*;
+pub(super) use forward::{StreamForwardRequest, forward_stream_typed};
 use live::*;
 use live_settle::*;
 pub(super) use stages::retain_reconstructed_urp_response;

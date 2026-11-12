@@ -80,7 +80,13 @@ async fn count_messages_tokens_inner(
         body["model"] = Value::String(attempt.upstream_model.clone());
         let extra_headers = attempt_extra_headers(&attempt, &body);
         let provider = build_channel_provider_config(&attempt);
-        let http = client_http_for_attempt(state, &attempt)?;
+        let http = match client_http_for_attempt(state, &attempt) {
+            Ok(http) => http,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
         match upstream::call_upstream_with_timeout_and_headers(
             &http,
             &provider,

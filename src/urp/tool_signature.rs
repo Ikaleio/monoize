@@ -1020,9 +1020,11 @@ mod tests {
             provider,
             reqwest::Response::from(axum::http::Response::new(bytes)),
             tx,
-            None,
-            None,
-            1000,
+            urp::stream_decode::StreamDecodeContext {
+                started_at: None,
+                runtime_metrics: None,
+                idle_timeout_ms: 1000,
+            },
         )
         .await
         .unwrap();

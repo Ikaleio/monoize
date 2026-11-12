@@ -34,15 +34,20 @@ impl StreamRequest {
             &self.state,
             &self.auth,
             attempt,
-            &self.logical_model,
-            self.started_at,
-            self.request_id.clone(),
-            self.request_ip.clone(),
-            None,
-            stream_terminal_error_from_app(error),
-            self.reasoning_effort.clone(),
-            tried_providers,
-            None,
+            RequestLogContext {
+                model: &self.logical_model,
+                is_stream: true,
+                started_at: self.started_at,
+                request_id: self.request_id.as_deref(),
+                request_ip: self.request_ip.as_deref(),
+                reasoning_effort: self.reasoning_effort.as_deref(),
+            },
+            RequestLogStreamError {
+                ttfb_ms: None,
+                terminal_error: stream_terminal_error_from_app(error),
+                tried_providers,
+                usage: None,
+            },
         );
     }
 
@@ -66,15 +71,11 @@ impl StreamRequest {
 pub(super) struct StreamForward {
     pub(super) request: StreamRequest,
     /// FP6j-2: the suffix-normalized request is the pristine base every
-    /// attempt re-derives its transformed request from (see
-    /// `execute_nonstream_typed_with_validator`).
+    /// attempt re-derives its transformed request from before transforms.
     original_req: Option<urp::UrpRequest>,
-    attempt_count: usize,
     pub(super) history_context: Option<responses_history::HistoryContext>,
     pub(super) pending_request_log_guard: Option<PendingRequestLogGuard>,
-    pub(super) tried_providers: Vec<TriedProvider>,
-    last_failed_attempt: Option<MonoizeAttempt>,
-    execution_state: AttemptExecutionState,
+    pub(super) attempts: AttemptDriver,
 }
 
 /// Settings resolved once per routed attempt and shared by its channel slots.
@@ -82,39 +83,28 @@ pub(super) struct AttemptPlan {
     pub(super) global_transforms: Vec<TransformRuleConfig>,
     pub(super) sse_max_frame_length: Option<usize>,
     requires_buffered_stream: bool,
-    max_channel_attempts: usize,
-    final_attempt: bool,
-}
-
-/// The position of one upstream request: its request-wide attempt number and
-/// its index among the attempt's same-channel slots.
-#[derive(Clone, Copy)]
-pub(super) struct Slot {
-    pub(super) attempt_number: u32,
-    channel_attempt: usize,
 }
 
 /// One same-channel slot with its fully transformed request.
 pub(super) struct ChannelTry {
-    pub(super) slot: Slot,
+    pub(super) slot: AttemptPosition,
     pub(super) req: urp::UrpRequest,
     pub(super) transform_chain: Value,
 }
 
 /// How one channel slot ended.
 pub(super) enum SlotOutcome {
-    /// The slot failed and the same channel serves another slot.
-    Retry,
-    /// The slot failed and the attempt is over.
-    NextAttempt,
+    Failed {
+        error: AppError,
+        failure_class: Option<RetryableFailureClass>,
+    },
     Synthetic(Box<SyntheticStream>),
     Live(Box<LiveStream>),
 }
 
-enum AttemptOutcome {
-    Exhausted,
-    Synthetic(MonoizeAttempt, AttemptPlan, Box<SyntheticStream>),
-    Live(MonoizeAttempt, AttemptPlan, Box<LiveStream>),
+enum AcceptedAttempt {
+    Synthetic(MonoizeAttempt, Box<SyntheticStream>),
+    Live(MonoizeAttempt, Box<LiveStream>),
 }
 
 /// RCD-D6: one attempt's capture dump. Callers build it only while a capture
@@ -148,21 +138,23 @@ impl AttemptDump<'_> {
     ) {
         session
             .push_attempt(crate::request_capture::build_attempt_dump(
-                self.attempt_number,
-                &self.attempt.provider_id,
-                Some(&self.attempt.channel_id),
-                self.attempt.provider_type,
-                self.logical_model,
-                self.upstream_model,
-                self.path,
-                raw_input.clone(),
-                self.request,
-                self.upstream_request,
-                outcome.downstream_response,
-                outcome.reconstructed,
-                outcome.frames,
-                self.transform_chain,
-                outcome.error,
+                crate::request_capture::AttemptDumpInput {
+                    attempt_number: self.attempt_number,
+                    provider_id: &self.attempt.provider_id,
+                    channel_id: Some(&self.attempt.channel_id),
+                    provider_type: self.attempt.provider_type,
+                    logical_model: self.logical_model,
+                    upstream_model: self.upstream_model,
+                    upstream_path: self.path,
+                    raw_input: raw_input.clone(),
+                    transformed_urp_request: self.request,
+                    upstream_request: self.upstream_request,
+                    downstream_response: outcome.downstream_response,
+                    reconstructed_urp_response: outcome.reconstructed,
+                    downstream_sse_frames: outcome.frames,
+                    transform_chain: self.transform_chain,
+                    error: outcome.error,
+                },
             ))
             .await;
     }
@@ -177,22 +169,36 @@ pub(super) fn call_error_json(err: &UpstreamCallError) -> Value {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(in crate::handlers) struct StreamForwardRequest {
+    pub(in crate::handlers) state: AppState,
+    pub(in crate::handlers) auth: crate::auth::AuthResult,
+    pub(in crate::handlers) max_multiplier: Option<Multiplier>,
+    pub(in crate::handlers) downstream: DownstreamProtocol,
+    pub(in crate::handlers) request_id: Option<String>,
+    pub(in crate::handlers) request_ip: Option<String>,
+    pub(in crate::handlers) capture: RequestCaptureContext,
+    pub(in crate::handlers) ws_turn: Option<ResponsesWsTurn>,
+    pub(in crate::handlers) commit: StreamCommit,
+}
+
 pub(in crate::handlers) async fn forward_stream_typed(
-    state: AppState,
-    auth: crate::auth::AuthResult,
+    inputs: StreamForwardRequest,
     mut req: urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
     client_session_id: Option<String>,
-    capture: RequestCaptureContext,
-    ws_turn: Option<ResponsesWsTurn>,
-    commit: StreamCommit,
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 > {
+    let StreamForwardRequest {
+        state,
+        auth,
+        max_multiplier,
+        downstream,
+        request_id,
+        request_ip,
+        capture,
+        ws_turn,
+        commit,
+    } = inputs;
     let started_at = std::time::Instant::now();
     let transform_match_model = resolve_model_suffix(&state, &mut req).await?;
     let request = StreamRequest {
@@ -217,21 +223,19 @@ pub(in crate::handlers) async fn forward_stream_typed(
         started_at,
         transform_match_model,
     };
-    let Some((mut forward, attempts)) =
-        StreamForward::route(request, req, client_session_id).await?
-    else {
+    let Some(mut forward) = StreamForward::route(request, req, client_session_id).await? else {
         return Ok(receiver_event_stream(mpsc::channel::<Event>(1).1));
     };
-    for (attempt_index, attempt) in attempts.into_iter().enumerate() {
-        let final_attempt = attempt_index + 1 == forward.attempt_count;
-        match forward.run_attempt(attempt, final_attempt).await? {
-            AttemptOutcome::Exhausted => {}
-            AttemptOutcome::Synthetic(attempt, plan, stream) => {
+    while let Some(slot) = forward.attempts.next() {
+        let plan = forward.plan_attempt(&slot.attempt).await;
+        match forward.run_channel(slot, &plan).await? {
+            Some(AcceptedAttempt::Synthetic(attempt, stream)) => {
                 return Ok(forward.spawn_synthetic(attempt, plan, *stream));
             }
-            AttemptOutcome::Live(attempt, plan, stream) => {
+            Some(AcceptedAttempt::Live(attempt, stream)) => {
                 return Ok(forward.spawn_live(attempt, plan, *stream));
             }
+            None => {}
         }
     }
     Err(forward.exhausted().await)
@@ -302,9 +306,8 @@ fn adapt_attempt_request(
     }
     inject_monoize_context(&request.auth, req);
     req.model = attempt.upstream_model.clone();
-    // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
-    // observes the request input. See `nonstream.rs` for rationale and
-    // spec references (urp-transform-system PIPE-1 step 6, PIPE-1d).
+    // PIPE-1d: resolve provider/model-bound mz2 reasoning before transforms
+    // can observe or mutate its encrypted replay payload.
     urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
         &mut req.input,
         reasoning_envelope_provider_type(attempt.provider_type),
@@ -314,13 +317,50 @@ fn adapt_attempt_request(
 }
 
 impl StreamForward {
+    async fn run_channel(
+        &mut self,
+        first_slot: AttemptSlot,
+        plan: &AttemptPlan,
+    ) -> AppResult<Option<AcceptedAttempt>> {
+        let mut next_slot = Some(first_slot);
+        while let Some(mut slot) = next_slot {
+            let channel_try = self
+                .prepare_channel_try(&slot.attempt, plan, slot.position)
+                .await?;
+            let outcome = if plan.requires_buffered_stream {
+                self.try_buffered(&mut slot.attempt, plan, channel_try)
+                    .await?
+            } else {
+                self.try_live(&mut slot.attempt, channel_try).await?
+            };
+            match outcome {
+                SlotOutcome::Failed {
+                    error,
+                    failure_class,
+                } => {
+                    self.attempts
+                        .fail(&self.request.state, slot, &error, failure_class)
+                        .await;
+                    next_slot = self.attempts.next_retry();
+                }
+                SlotOutcome::Synthetic(stream) => {
+                    return Ok(Some(AcceptedAttempt::Synthetic(slot.attempt, stream)));
+                }
+                SlotOutcome::Live(stream) => {
+                    return Ok(Some(AcceptedAttempt::Live(slot.attempt, stream)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Builds the attempt list and admits the request (balance, pending
     /// request log). `None` is a WS6 warmup the handler answers locally.
     async fn route(
         request: StreamRequest,
         mut req: urp::UrpRequest,
         client_session_id: Option<String>,
-    ) -> AppResult<Option<(Self, Vec<MonoizeAttempt>)>> {
+    ) -> AppResult<Option<Self>> {
         let routing_stub = build_routing_stub(&req, request.max_multiplier);
         let mut attempts =
             build_monoize_attempts(&request.state, &routing_stub, &request.auth).await?;
@@ -353,53 +393,14 @@ impl StreamForward {
         let forward = Self {
             request,
             original_req: Some(req),
-            attempt_count: attempts.len(),
             history_context,
             pending_request_log_guard,
-            tried_providers: Vec::new(),
-            last_failed_attempt: None,
-            execution_state: AttemptExecutionState::default(),
+            attempts: AttemptDriver::new(attempts),
         };
-        Ok(Some((forward, attempts)))
+        Ok(Some(forward))
     }
 
-    /// Runs the same-channel slots of one attempt until one commits a stream.
-    async fn run_attempt(
-        &mut self,
-        mut attempt: MonoizeAttempt,
-        final_attempt: bool,
-    ) -> AppResult<AttemptOutcome> {
-        if self.execution_state.should_skip(&attempt) {
-            return Ok(AttemptOutcome::Exhausted);
-        }
-        let plan = self.plan_attempt(&attempt, final_attempt).await;
-        for channel_attempt in 0..plan.max_channel_attempts {
-            if self.execution_state.should_skip(&attempt) {
-                break;
-            }
-            let channel_try = self
-                .prepare_channel_try(&attempt, &plan, channel_attempt)
-                .await?;
-            let outcome = if plan.requires_buffered_stream {
-                self.try_buffered(&mut attempt, &plan, channel_try).await?
-            } else {
-                self.try_live(&mut attempt, channel_try).await?
-            };
-            match outcome {
-                SlotOutcome::Retry => {}
-                SlotOutcome::NextAttempt => break,
-                SlotOutcome::Synthetic(stream) => {
-                    return Ok(AttemptOutcome::Synthetic(attempt, plan, stream));
-                }
-                SlotOutcome::Live(stream) => {
-                    return Ok(AttemptOutcome::Live(attempt, plan, stream));
-                }
-            }
-        }
-        Ok(AttemptOutcome::Exhausted)
-    }
-
-    async fn plan_attempt(&self, attempt: &MonoizeAttempt, final_attempt: bool) -> AttemptPlan {
+    async fn plan_attempt(&self, attempt: &MonoizeAttempt) -> AttemptPlan {
         let request = &self.request;
         let global_transforms = request
             .state
@@ -434,26 +435,19 @@ impl StreamForward {
             global_transforms,
             sse_max_frame_length,
             requires_buffered_stream,
-            max_channel_attempts: same_channel_attempt_slots(attempt),
-            final_attempt,
         }
     }
 
     /// Derives the slot's request from the pristine request (pre-transforms)
     /// so that the cross-family strip runs BEFORE provider, global, and
-    /// API-key transforms; see `execute_nonstream_typed_with_validator`.
+    /// API-key transforms (PIPE-1).
     async fn prepare_channel_try(
         &mut self,
         attempt: &MonoizeAttempt,
         plan: &AttemptPlan,
-        channel_attempt: usize,
+        slot: AttemptPosition,
     ) -> AppResult<ChannelTry> {
-        let slot = Slot {
-            attempt_number: self.execution_state.record_upstream_attempt(attempt),
-            channel_attempt,
-        };
-        let final_slot = plan.final_attempt && channel_attempt + 1 == plan.max_channel_attempts;
-        let mut req = attempt_request_from_original(&mut self.original_req, final_slot);
+        let mut req = attempt_request_from_original(&mut self.original_req, slot.final_slot);
         let request = &self.request;
         adapt_attempt_request(&mut req, attempt, request);
         for rules in [
@@ -474,12 +468,14 @@ impl StreamForward {
             }
         }
         strip_monoize_context(&mut req);
-        let transform_chain = crate::request_capture::build_transform_chain(
-            &attempt.provider_transforms,
-            &plan.global_transforms,
-            &request.auth.transforms,
-            &request.transform_match_model,
-        );
+        let transform_chain = request.capture.session.as_ref().map_or(Value::Null, |_| {
+            crate::request_capture::build_transform_chain(
+                &attempt.provider_transforms,
+                &plan.global_transforms,
+                &request.auth.transforms,
+                &request.transform_match_model,
+            )
+        });
         Ok(ChannelTry {
             slot,
             req,
@@ -490,96 +486,62 @@ impl StreamForward {
     /// Logs an error that ends the request before any forwarding task starts.
     pub(super) fn fail_request(&self, attempt: &MonoizeAttempt, err: AppError) -> AppError {
         self.request
-            .log_attempt_error(attempt, &err, self.tried_providers.clone());
+            .log_attempt_error(attempt, &err, self.attempts.tried_providers.clone());
         err
     }
 
-    /// RTA-4: records a failed slot and decides whether the same channel
-    /// serves the next one.
-    pub(super) async fn record_try_failure(
-        &mut self,
-        attempt: &MonoizeAttempt,
-        slot: Slot,
-        err: &AppError,
-        failure_class: Option<RetryableFailureClass>,
-    ) -> SlotOutcome {
-        record_upstream_attempt_failure(
-            &self.request.state,
-            attempt,
-            slot.attempt_number,
-            err,
-            failure_class,
-            &mut self.tried_providers,
-            &mut self.execution_state,
-        )
-        .await;
-        self.last_failed_attempt = Some(attempt.clone());
-        if allow_same_channel_retry(
-            &self.request.state,
-            attempt,
-            &self.execution_state,
-            slot.channel_attempt + 1,
-            failure_class,
-        )
-        .await
-        {
-            maybe_sleep_before_channel_retry(attempt).await;
-            return SlotOutcome::Retry;
-        }
-        SlotOutcome::NextAttempt
-    }
-
     /// Records an upstream call that failed before any response body.
-    pub(super) async fn record_call_failure(
-        &mut self,
-        attempt: &MonoizeAttempt,
-        slot: Slot,
-        err: UpstreamCallError,
-    ) -> SlotOutcome {
+    pub(super) async fn record_call_failure(&self, err: UpstreamCallError) -> SlotOutcome {
         let passive_failure_class =
             is_same_channel_retryable_error(&err).then(|| classify_retryable_failure(&err));
         let mask_sensitive_info = self.request.mask_sensitive_info().await;
         let app_err = upstream_error_to_app(err, mask_sensitive_info);
-        self.record_try_failure(attempt, slot, &app_err, passive_failure_class)
-            .await
+        SlotOutcome::Failed {
+            error: app_err,
+            failure_class: passive_failure_class,
+        }
     }
 
     /// Every attempt failed: logs the exhausted error and persists the capture.
     async fn exhausted(self) -> AppError {
         let request = self.request;
-        let final_err = build_exhausted_error_for_downstream(
-            &request.logical_model,
-            &self.tried_providers,
-            self.last_failed_attempt.as_ref(),
-            request.downstream,
-        );
-        if let Some(attempt) = self.last_failed_attempt {
+        let final_err = self
+            .attempts
+            .exhausted_error(&request.logical_model, request.downstream);
+        if let Some(attempt) = self.attempts.last_failed_attempt {
             spawn_request_log_stream_terminal_error(
                 &request.state,
                 &request.auth,
                 &attempt,
-                &request.logical_model,
-                request.started_at,
-                request.request_id,
-                request.request_ip,
-                None,
-                stream_terminal_error_from_app(&final_err),
-                request.reasoning_effort,
-                self.tried_providers,
-                None,
+                RequestLogContext {
+                    model: &request.logical_model,
+                    is_stream: true,
+                    started_at: request.started_at,
+                    request_id: (request.request_id).as_deref(),
+                    request_ip: (request.request_ip).as_deref(),
+                    reasoning_effort: (request.reasoning_effort).as_deref(),
+                },
+                RequestLogStreamError {
+                    ttfb_ms: None,
+                    terminal_error: stream_terminal_error_from_app(&final_err),
+                    tried_providers: self.attempts.tried_providers,
+                    usage: None,
+                },
             );
         } else {
             spawn_request_log_error_no_attempt(
                 &request.state,
                 &request.auth,
-                &request.logical_model,
-                true,
-                request.started_at,
-                request.request_id,
-                request.request_ip,
+                RequestLogContext {
+                    model: &request.logical_model,
+                    is_stream: true,
+                    started_at: request.started_at,
+                    request_id: (request.request_id).as_deref(),
+                    request_ip: (request.request_ip).as_deref(),
+                    reasoning_effort: (request.reasoning_effort).as_deref(),
+                },
                 &final_err,
-                request.reasoning_effort,
-                self.tried_providers,
+                self.attempts.tried_providers,
             );
         }
         if let Some(session) = request.capture.session.as_ref() {

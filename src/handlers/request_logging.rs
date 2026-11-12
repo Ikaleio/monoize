@@ -247,47 +247,56 @@ fn publish_request_log_admission(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn broadcast_pending_snapshot(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    request_id: &str,
-    model: &str,
-    is_stream: bool,
-    request_ip: Option<&str>,
-    provider_id: Option<&str>,
-    provider_name: Option<&str>,
-    channel_id: Option<&str>,
-    channel_name: Option<&str>,
-    upstream_model: Option<&str>,
-    provider_multiplier: Option<Multiplier>,
-    effective_provider_type: Option<&str>,
-    affinity_hit: Option<bool>,
-    affinity_key_hash: Option<&str>,
-    affinity_target: Option<&str>,
-    session_affinity_value: Option<&str>,
-    created_at: chrono::DateTime<Utc>,
-) {
-    let Some(user_id) = auth.user_id.as_deref() else {
-        return;
-    };
+/// Request identity and timing shared by pending and terminal snapshots.
+#[derive(Clone, Copy)]
+pub(super) struct RequestLogContext<'a> {
+    pub(super) model: &'a str,
+    pub(super) is_stream: bool,
+    pub(super) started_at: std::time::Instant,
+    pub(super) request_id: Option<&'a str>,
+    pub(super) request_ip: Option<&'a str>,
+    pub(super) reasoning_effort: Option<&'a str>,
+}
 
-    let pending_log = InsertRequestLog {
-        request_id: Some(request_id.to_string()),
-        user_id: user_id.to_string(),
+pub(super) struct RequestLogSuccess {
+    pub(super) usage: Option<urp::Usage>,
+    pub(super) charge_nano_usd: Option<i128>,
+    pub(super) billing_breakdown_json: Option<Value>,
+    pub(super) ttfb_ms: Option<u64>,
+    pub(super) stream_terminal_diagnostics: Option<StreamTerminalDiagnostics>,
+    pub(super) tried_providers: Vec<TriedProvider>,
+    pub(super) client_gone: bool,
+    pub(super) upstream_response_model: Option<String>,
+}
+
+pub(super) struct RequestLogStreamError {
+    pub(super) ttfb_ms: Option<u64>,
+    pub(super) terminal_error: StreamTerminalError,
+    pub(super) tried_providers: Vec<TriedProvider>,
+    pub(super) usage: Option<urp::Usage>,
+}
+
+fn base_request_log(
+    auth: &crate::auth::AuthResult,
+    user_id: String,
+    context: RequestLogContext<'_>,
+) -> InsertRequestLog {
+    InsertRequestLog {
+        request_id: None,
+        user_id,
         api_key_id: auth.api_key_id.clone(),
-        model: model.to_string(),
-        provider_id: provider_id.map(ToOwned::to_owned),
-        upstream_model: upstream_model.map(ToOwned::to_owned),
+        model: context.model.to_string(),
+        provider_id: None,
+        upstream_model: None,
         upstream_response_model: None,
-        channel_id: channel_id.map(ToOwned::to_owned),
+        channel_id: None,
         names: crate::users::RequestLogNameSnapshots {
             username: auth.username.clone(),
             api_key_name: auth.api_key_name.clone(),
-            provider_name: provider_name.map(ToOwned::to_owned),
-            channel_name: channel_name.map(ToOwned::to_owned),
+            provider_name: None,
+            channel_name: None,
         },
-        is_stream,
+        is_stream: context.is_stream,
         input_tokens: None,
         output_tokens: None,
         cache_read_tokens: None,
@@ -296,9 +305,9 @@ fn broadcast_pending_snapshot(
         reasoning_tokens: None,
         accepted_prediction_tokens: None,
         rejected_prediction_tokens: None,
-        provider_multiplier,
+        provider_multiplier: None,
         charge_nano_usd: None,
-        status: crate::users::REQUEST_LOG_STATUS_PENDING.to_string(),
+        status: REQUEST_LOG_STATUS_ERROR.to_string(),
         usage_breakdown_json: None,
         billing_breakdown_json: None,
         error_code: None,
@@ -306,24 +315,136 @@ fn broadcast_pending_snapshot(
         error_http_status: None,
         duration_ms: None,
         ttfb_ms: None,
-        request_ip: request_ip.map(ToOwned::to_owned),
-        reasoning_effort: None,
+        request_ip: context.request_ip.map(ToOwned::to_owned),
+        reasoning_effort: context.reasoning_effort.map(ToOwned::to_owned),
         tried_providers_json: None,
         request_kind: auth
             .internal_source
             .map(|source| source.request_kind().to_string()),
-        effective_provider_type: effective_provider_type.map(ToOwned::to_owned),
-        affinity_hit,
-        affinity_key_hash: affinity_key_hash.map(ToOwned::to_owned),
-        affinity_target: affinity_target.map(ToOwned::to_owned),
-        session_affinity_value: session_affinity_value.map(ToOwned::to_owned),
-        created_at,
-    };
+        effective_provider_type: None,
+        affinity_hit: None,
+        affinity_key_hash: None,
+        affinity_target: None,
+        session_affinity_value: None,
+        created_at: request_created_at(context.started_at),
+    }
+}
 
+fn apply_attempt_fields(log: &mut InsertRequestLog, attempt: &MonoizeAttempt) {
+    log.provider_id = Some(attempt.provider_id.clone());
+    log.upstream_model = Some(attempt.upstream_model.clone());
+    log.channel_id = Some(attempt.channel_id.clone());
+    log.names.provider_name = Some(attempt.provider_name.clone());
+    log.names.channel_name = Some(attempt.channel_name.clone());
+    log.provider_multiplier = Some(attempt.model_multiplier);
+    log.effective_provider_type =
+        Some(reasoning_envelope_provider_type(attempt.provider_type).to_string());
+    log.affinity_hit = attempt.affinity_hit;
+    log.affinity_key_hash = attempt.affinity_key_hash.clone();
+    log.affinity_target = attempt.affinity_target.clone();
+    log.session_affinity_value = attempt.session_affinity_value.clone();
+}
+
+fn tried_providers_json(tried: &[TriedProvider]) -> Option<Value> {
+    (!tried.is_empty())
+        .then(|| serde_json::to_value(tried).ok())
+        .flatten()
+}
+
+fn terminal_log(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    attempt: Option<&MonoizeAttempt>,
+    context: RequestLogContext<'_>,
+) -> Option<(ClaimedRequestLogTerminal, InsertRequestLog)> {
+    let user_id = auth.user_id.clone()?;
+    let claim = claim_request_log_terminal(state, context.request_id)?;
+    let mut log = base_request_log(auth, user_id, context);
+    log.request_id = Some(claim.request_id.clone());
+    log.duration_ms = Some(context.started_at.elapsed().as_millis() as u64);
+    if let Some(attempt) = attempt {
+        apply_attempt_fields(&mut log, attempt);
+    }
+    Some((claim, log))
+}
+
+fn submit_terminal_log(state: &AppState, claim: ClaimedRequestLogTerminal, log: InsertRequestLog) {
+    spawn_claimed_terminal_log(
+        state.user_store.clone(),
+        state.request_log_admissions.clone(),
+        claim,
+        log,
+    );
+}
+
+fn broadcast_pending_snapshot(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    request_id: &str,
+    context: RequestLogContext<'_>,
+    attempt: Option<&MonoizeAttempt>,
+) {
+    let Some(user_id) = auth.user_id.clone() else {
+        return;
+    };
+    let mut log = base_request_log(auth, user_id, context);
+    log.request_id = Some(request_id.to_string());
+    log.status = crate::users::REQUEST_LOG_STATUS_PENDING.to_string();
+    if let Some(attempt) = attempt {
+        apply_attempt_fields(&mut log, attempt);
+    }
     state
         .pending_request_logs
-        .insert(request_id.to_string(), pending_log.clone());
-    let _ = state.log_broadcast.send(vec![pending_log]);
+        .insert(request_id.to_string(), log.clone());
+    let _ = state.log_broadcast.send(vec![log]);
+}
+
+fn spool_admission_error(stage: &str, request_id: &str, error: impl Into<String>) -> AppError {
+    let error = error.into();
+    tracing::error!(
+        stage,
+        request_id,
+        error,
+        "request-log spool admission failed"
+    );
+    AppError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "request_log_spool_unavailable",
+        "request log spool is unavailable",
+    )
+    .with_internal_message(error)
+    .with_type("server_error")
+}
+
+async fn arm_request_log_fallback(
+    state: &AppState,
+    request_id: &str,
+    lifecycle: &std::sync::Arc<crate::app::RequestLogLifecycle>,
+    reservation: &crate::db_cache::RequestLogReservation,
+    fallback_log: &InsertRequestLog,
+    started_at: std::time::Instant,
+) -> AppResult<()> {
+    let fallback = aborted_fallback_terminal_log(
+        fallback_log.clone(),
+        request_id,
+        started_at.elapsed().as_millis() as u64,
+    );
+    if let Err(error) = state
+        .user_store
+        .arm_terminal_request_log(fallback, reservation)
+        .await
+    {
+        let error = spool_admission_error("arm", request_id, error);
+        state.pending_request_logs.remove(request_id);
+        state
+            .request_log_admissions
+            .remove_if(request_id, |_, current| {
+                std::sync::Arc::ptr_eq(current, lifecycle)
+            });
+        lifecycle.complete_terminal_task();
+        return Err(error);
+    }
+    Ok(())
 }
 
 pub(super) async fn insert_pending_request_log(
@@ -335,43 +456,20 @@ pub(super) async fn insert_pending_request_log(
     request_ip: Option<&str>,
     started_at: std::time::Instant,
 ) -> AppResult<Option<PendingRequestLogGuard>> {
-    let Some(_user_id) = auth.user_id.as_deref() else {
+    if auth.user_id.is_none() {
         return Ok(None);
-    };
+    }
     let request_id = canonical_request_id(request_id).ok_or_else(|| {
-        let error = "request id missing before request-log spool admission";
-        tracing::error!(
-            stage = "request_id",
-            request_id = "<missing>",
-            error,
-            "request-log spool admission failed"
-        );
-        AppError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "request_log_spool_unavailable",
-            "request log spool is unavailable",
+        spool_admission_error(
+            "request_id",
+            "<missing>",
+            "request id missing before request-log spool admission",
         )
-        .with_internal_message(error)
-        .with_type("server_error")
     })?;
     let admission = state
         .user_store
         .reserve_terminal_request_log()
-        .map_err(|error| {
-            tracing::error!(
-                stage = "reserve",
-                request_id = %request_id,
-                error = %error,
-                "request-log spool admission failed"
-            );
-            AppError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "request_log_spool_unavailable",
-                "request log spool is unavailable",
-            )
-            .with_internal_message(error)
-            .with_type("server_error")
-        })?;
+        .map_err(|error| spool_admission_error("reserve", &request_id, error))?;
     let arm_reservation = admission.clone();
     let lifecycle = publish_request_log_admission(
         &state.request_log_admissions,
@@ -387,63 +485,34 @@ pub(super) async fn insert_pending_request_log(
         )
         .with_param("request_id")
     })?;
-
     broadcast_pending_snapshot(
         state,
         auth,
         &request_id,
-        model,
-        is_stream,
-        request_ip,
+        RequestLogContext {
+            model,
+            is_stream,
+            request_id: Some(&request_id),
+            request_ip,
+            started_at,
+            reasoning_effort: None,
+        },
         None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        request_created_at(started_at),
     );
     let fallback_log = state
         .pending_request_logs
         .get(&request_id)
         .map(|entry| entry.value().clone())
         .expect("pending request-log snapshot exists after broadcast");
-    let durable_fallback = aborted_fallback_terminal_log(
-        fallback_log.clone(),
+    arm_request_log_fallback(
+        state,
         &request_id,
-        started_at.elapsed().as_millis() as u64,
-    );
-    if let Err(error) = state
-        .user_store
-        .arm_terminal_request_log(durable_fallback, &arm_reservation)
-        .await
-    {
-        tracing::error!(
-            stage = "arm",
-            request_id = %request_id,
-            error = %error,
-            "request-log spool admission failed"
-        );
-        state.pending_request_logs.remove(&request_id);
-        state
-            .request_log_admissions
-            .remove_if(&request_id, |_, current| {
-                std::sync::Arc::ptr_eq(current, &lifecycle)
-            });
-        lifecycle.complete_terminal_task();
-        return Err(AppError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "request_log_spool_unavailable",
-            "request log spool is unavailable",
-        )
-        .with_internal_message(error)
-        .with_type("server_error"));
-    }
+        &lifecycle,
+        &arm_reservation,
+        &fallback_log,
+        started_at,
+    )
+    .await?;
     Ok(Some(PendingRequestLogGuard {
         request_id,
         lifecycle,
@@ -455,495 +524,124 @@ pub(super) async fn insert_pending_request_log(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn update_pending_channel_info(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
-    model: &str,
-    is_stream: bool,
-    request_id: Option<&str>,
-    request_ip: Option<&str>,
-    started_at: std::time::Instant,
+    context: RequestLogContext<'_>,
 ) {
-    let Some(_user_id) = auth.user_id.as_deref() else {
+    if auth.user_id.is_none() {
+        return;
+    }
+    let Some(request_id) = context.request_id.map(str::trim).filter(|v| !v.is_empty()) else {
         return;
     };
-    let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
-        return;
-    };
+    broadcast_pending_snapshot(state, auth, request_id, context, Some(attempt));
+}
 
-    broadcast_pending_snapshot(
-        state,
-        auth,
-        request_id,
-        model,
-        is_stream,
-        request_ip,
-        Some(&attempt.provider_id),
-        Some(&attempt.provider_name),
-        Some(&attempt.channel_id),
-        Some(&attempt.channel_name),
-        Some(&attempt.upstream_model),
-        Some(attempt.model_multiplier),
-        Some(reasoning_envelope_provider_type(attempt.provider_type)),
-        attempt.affinity_hit,
-        attempt.affinity_key_hash.as_deref(),
-        attempt.affinity_target.as_deref(),
-        attempt.session_affinity_value.as_deref(),
-        request_created_at(started_at),
+fn warn_stream_missing_usage(
+    log: &InsertRequestLog,
+    diagnostics: Option<&StreamTerminalDiagnostics>,
+) {
+    tracing::warn!(
+        request_id = log.request_id.as_deref().unwrap_or(""),
+        provider_id = log.provider_id.as_deref().unwrap_or(""),
+        channel_id = log.channel_id.as_deref().unwrap_or(""),
+        model = %log.model,
+        upstream_model = log.upstream_model.as_deref().unwrap_or(""),
+        stream_saw_done_sentinel = diagnostics.map(|d| d.saw_done_sentinel),
+        stream_terminal_event = diagnostics.and_then(|d| d.terminal_event.as_deref()),
+        stream_terminal_finish_reason = diagnostics.and_then(|d| d.terminal_finish_reason.as_deref()),
+        stream_terminal_error_code = diagnostics.and_then(|d| d.terminal_error.as_ref()).map(|e| e.code.as_str()),
+        stream_terminal_error_http_status = diagnostics.and_then(|d| d.terminal_error.as_ref()).map(|e| e.http_status),
+        stream_synthetic_terminal_emitted = diagnostics.map(|d| d.synthetic_terminal_emitted),
+        "stream request completed without usage snapshot"
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_request_log(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
-    model: &str,
-    usage: Option<urp::Usage>,
-    charge_nano_usd: Option<i128>,
-    billing_breakdown_json: Option<Value>,
-    is_stream: bool,
-    started_at: std::time::Instant,
-    request_id: Option<String>,
-    request_ip: Option<String>,
-    channel_id: String,
-    ttfb_ms: Option<u64>,
-    stream_terminal_diagnostics: Option<StreamTerminalDiagnostics>,
-    reasoning_effort: Option<String>,
-    tried_providers: Vec<TriedProvider>,
-    client_gone: bool,
-    upstream_response_model: Option<String>,
+    context: RequestLogContext<'_>,
+    success: RequestLogSuccess,
 ) {
-    let Some(user_id) = auth.user_id.clone() else {
+    let Some((claim, mut log)) = terminal_log(state, auth, Some(attempt), context) else {
         return;
     };
-    let Some(claim) = claim_request_log_terminal(state, request_id.as_deref()) else {
-        return;
-    };
-    let request_id = Some(claim.request_id.clone());
-    let api_key_id = auth.api_key_id.clone();
-    let provider_id = attempt.provider_id.clone();
-    let upstream_model = attempt.upstream_model.clone();
-    let model_multiplier = attempt.model_multiplier;
-    let effective_provider_type =
-        reasoning_envelope_provider_type(attempt.provider_type).to_string();
-    let affinity_hit = attempt.affinity_hit;
-    let affinity_key_hash = attempt.affinity_key_hash.clone();
-    let affinity_target = attempt.affinity_target.clone();
-    let session_affinity_value = attempt.session_affinity_value.clone();
-    let model = model.to_string();
-    let duration_ms = started_at.elapsed().as_millis() as u64;
-    let created_at = request_created_at(started_at);
-    let names = crate::users::RequestLogNameSnapshots {
-        username: auth.username.clone(),
-        api_key_name: auth.api_key_name.clone(),
-        provider_name: Some(attempt.provider_name.clone()),
-        channel_name: Some(attempt.channel_name.clone()),
-    };
-    let usage_breakdown_json = usage.as_ref().map(build_usage_breakdown);
-    let tried_providers_json = if tried_providers.is_empty() {
-        None
-    } else {
-        serde_json::to_value(&tried_providers).ok()
-    };
-
-    if is_stream && usage.is_none() {
-        tracing::warn!(
-            request_id = request_id.as_deref().unwrap_or(""),
-            provider_id = %provider_id,
-            channel_id = %channel_id,
-            model = %model,
-            upstream_model = %upstream_model,
-            stream_saw_done_sentinel = stream_terminal_diagnostics
-                .as_ref()
-                .map(|diagnostics| diagnostics.saw_done_sentinel),
-            stream_terminal_event = stream_terminal_diagnostics
-                .as_ref()
-                .and_then(|diagnostics| diagnostics.terminal_event.as_deref()),
-            stream_terminal_finish_reason = stream_terminal_diagnostics
-                .as_ref()
-                .and_then(|diagnostics| diagnostics.terminal_finish_reason.as_deref()),
-            stream_terminal_error_code = stream_terminal_diagnostics
-                .as_ref()
-                .and_then(|diagnostics| diagnostics.terminal_error.as_ref())
-                .map(|err| err.code.as_str()),
-            stream_terminal_error_http_status = stream_terminal_diagnostics
-                .as_ref()
-                .and_then(|diagnostics| diagnostics.terminal_error.as_ref())
-                .map(|err| err.http_status),
-            stream_synthetic_terminal_emitted = stream_terminal_diagnostics
-                .as_ref()
-                .map(|diagnostics| diagnostics.synthetic_terminal_emitted),
-            "stream request completed without usage snapshot"
-        );
+    if context.is_stream && success.usage.is_none() {
+        warn_stream_missing_usage(&log, success.stream_terminal_diagnostics.as_ref());
     }
-    let mut log = InsertRequestLog {
-        request_id,
-        user_id,
-        api_key_id,
-        model,
-        provider_id: Some(provider_id),
-        upstream_model: Some(upstream_model),
-        upstream_response_model,
-        channel_id: Some(channel_id),
-        names,
-        is_stream,
-        input_tokens: usage.as_ref().map(|u| u.input_tokens),
-        output_tokens: usage.as_ref().map(|u| u.output_tokens),
-        cache_read_tokens: usage.as_ref().and_then(|u| u.cached_tokens()),
-        cache_creation_tokens: usage
-            .as_ref()
-            .and_then(|u| u.input_details.as_ref().map(|d| d.cache_creation_tokens))
-            .filter(|&v| v > 0),
-        tool_prompt_tokens: usage
-            .as_ref()
-            .and_then(|u| u.input_details.as_ref().map(|d| d.tool_prompt_tokens))
-            .filter(|&v| v > 0),
-        reasoning_tokens: usage.as_ref().and_then(|u| u.reasoning_tokens()),
-        accepted_prediction_tokens: usage
-            .as_ref()
-            .and_then(|u| {
-                u.output_details
-                    .as_ref()
-                    .map(|d| d.accepted_prediction_tokens)
-            })
-            .filter(|&v| v > 0),
-        rejected_prediction_tokens: usage
-            .as_ref()
-            .and_then(|u| {
-                u.output_details
-                    .as_ref()
-                    .map(|d| d.rejected_prediction_tokens)
-            })
-            .filter(|&v| v > 0),
-        provider_multiplier: Some(model_multiplier),
-        charge_nano_usd,
-        status: REQUEST_LOG_STATUS_SUCCESS.to_string(),
-        usage_breakdown_json,
-        billing_breakdown_json,
-        error_code: None,
-        error_message: None,
-        error_http_status: None,
-        duration_ms: Some(duration_ms),
-        ttfb_ms,
-        request_ip,
-        reasoning_effort,
-        tried_providers_json,
-        request_kind: auth
-            .internal_source
-            .map(|source| source.request_kind().to_string()),
-        effective_provider_type: Some(effective_provider_type),
-        affinity_hit,
-        affinity_key_hash,
-        affinity_target,
-        session_affinity_value,
-        created_at,
-    };
-    apply_client_gone_if_needed(&mut log, client_gone);
-    spawn_claimed_terminal_log(
-        state.user_store.clone(),
-        state.request_log_admissions.clone(),
-        claim,
-        log,
-    );
+    log.status = REQUEST_LOG_STATUS_SUCCESS.to_string();
+    log.charge_nano_usd = success.charge_nano_usd;
+    log.billing_breakdown_json = success.billing_breakdown_json;
+    log.ttfb_ms = success.ttfb_ms;
+    log.tried_providers_json = tried_providers_json(&success.tried_providers);
+    log.upstream_response_model = success.upstream_response_model;
+    apply_usage_fields(&mut log, success.usage.as_ref());
+    apply_client_gone_if_needed(&mut log, success.client_gone);
+    submit_terminal_log(state, claim, log);
 }
 
-#[allow(clippy::too_many_arguments)]
+fn apply_error_fields(log: &mut InsertRequestLog, error: &AppError) {
+    log.error_code = Some(error.code.clone());
+    log.error_message = Some(
+        error
+            .internal_message
+            .clone()
+            .unwrap_or_else(|| error.message.clone()),
+    );
+    log.error_http_status = Some(error.status.as_u16());
+}
+
 pub(super) fn spawn_request_log_error(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
-    model: &str,
-    is_stream: bool,
-    started_at: std::time::Instant,
-    request_id: Option<String>,
-    request_ip: Option<String>,
+    context: RequestLogContext<'_>,
     error: &AppError,
-    reasoning_effort: Option<String>,
     tried_providers: Vec<TriedProvider>,
 ) {
-    let Some(user_id) = auth.user_id.clone() else {
+    let Some((claim, mut log)) = terminal_log(state, auth, Some(attempt), context) else {
         return;
     };
-    let Some(claim) = claim_request_log_terminal(state, request_id.as_deref()) else {
-        return;
-    };
-    let request_id = Some(claim.request_id.clone());
-    let api_key_id = auth.api_key_id.clone();
-    let model = model.to_string();
-    let provider_id = attempt.provider_id.clone();
-    let upstream_model = attempt.upstream_model.clone();
-    let model_multiplier = attempt.model_multiplier;
-    let channel_id = attempt.channel_id.clone();
-    let effective_provider_type =
-        reasoning_envelope_provider_type(attempt.provider_type).to_string();
-    let affinity_hit = attempt.affinity_hit;
-    let affinity_key_hash = attempt.affinity_key_hash.clone();
-    let affinity_target = attempt.affinity_target.clone();
-    let session_affinity_value = attempt.session_affinity_value.clone();
-    let duration_ms = started_at.elapsed().as_millis() as u64;
-    let created_at = request_created_at(started_at);
-    let names = crate::users::RequestLogNameSnapshots {
-        username: auth.username.clone(),
-        api_key_name: auth.api_key_name.clone(),
-        provider_name: Some(attempt.provider_name.clone()),
-        channel_name: Some(attempt.channel_name.clone()),
-    };
-    let error_code = Some(error.code.clone());
-    let error_message = Some(
-        error
-            .internal_message
-            .clone()
-            .unwrap_or_else(|| error.message.clone()),
-    );
-    let error_http_status = Some(error.status.as_u16());
-    let tried_providers_json = if tried_providers.is_empty() {
-        None
-    } else {
-        serde_json::to_value(&tried_providers).ok()
-    };
-
-    let log = InsertRequestLog {
-        request_id,
-        user_id,
-        api_key_id,
-        model,
-        provider_id: Some(provider_id),
-        upstream_model: Some(upstream_model),
-        upstream_response_model: None,
-        channel_id: Some(channel_id),
-        names,
-        is_stream,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        cache_creation_tokens: None,
-        tool_prompt_tokens: None,
-        reasoning_tokens: None,
-        accepted_prediction_tokens: None,
-        rejected_prediction_tokens: None,
-        provider_multiplier: Some(model_multiplier),
-        charge_nano_usd: None,
-        status: REQUEST_LOG_STATUS_ERROR.to_string(),
-        usage_breakdown_json: None,
-        billing_breakdown_json: None,
-        error_code,
-        error_message,
-        error_http_status,
-        duration_ms: Some(duration_ms),
-        ttfb_ms: None,
-        request_ip,
-        reasoning_effort,
-        tried_providers_json,
-        request_kind: auth
-            .internal_source
-            .map(|source| source.request_kind().to_string()),
-        effective_provider_type: Some(effective_provider_type),
-        affinity_hit,
-        affinity_key_hash,
-        affinity_target,
-        session_affinity_value,
-        created_at,
-    };
-    spawn_claimed_terminal_log(
-        state.user_store.clone(),
-        state.request_log_admissions.clone(),
-        claim,
-        log,
-    );
+    apply_error_fields(&mut log, error);
+    log.tried_providers_json = tried_providers_json(&tried_providers);
+    submit_terminal_log(state, claim, log);
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_request_log_stream_terminal_error(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
-    model: &str,
-    started_at: std::time::Instant,
-    request_id: Option<String>,
-    request_ip: Option<String>,
-    ttfb_ms: Option<u64>,
-    terminal_error: StreamTerminalError,
-    reasoning_effort: Option<String>,
-    tried_providers: Vec<TriedProvider>,
-    usage: Option<urp::Usage>,
+    context: RequestLogContext<'_>,
+    error: RequestLogStreamError,
 ) {
-    let Some(user_id) = auth.user_id.clone() else {
+    let Some((claim, mut log)) = terminal_log(state, auth, Some(attempt), context) else {
         return;
     };
-    let Some(claim) = claim_request_log_terminal(state, request_id.as_deref()) else {
-        return;
-    };
-    let request_id = Some(claim.request_id.clone());
-    let api_key_id = auth.api_key_id.clone();
-    let model = model.to_string();
-    let provider_id = attempt.provider_id.clone();
-    let upstream_model = attempt.upstream_model.clone();
-    let model_multiplier = attempt.model_multiplier;
-    let channel_id = attempt.channel_id.clone();
-    let effective_provider_type =
-        reasoning_envelope_provider_type(attempt.provider_type).to_string();
-    let affinity_hit = attempt.affinity_hit;
-    let affinity_key_hash = attempt.affinity_key_hash.clone();
-    let affinity_target = attempt.affinity_target.clone();
-    let session_affinity_value = attempt.session_affinity_value.clone();
-    let duration_ms = started_at.elapsed().as_millis() as u64;
-    let created_at = request_created_at(started_at);
-    let names = crate::users::RequestLogNameSnapshots {
-        username: auth.username.clone(),
-        api_key_name: auth.api_key_name.clone(),
-        provider_name: Some(attempt.provider_name.clone()),
-        channel_name: Some(attempt.channel_name.clone()),
-    };
-    let tried_providers_json = if tried_providers.is_empty() {
-        None
-    } else {
-        serde_json::to_value(&tried_providers).ok()
-    };
-
-    let mut log = InsertRequestLog {
-        request_id,
-        user_id,
-        api_key_id,
-        model,
-        provider_id: Some(provider_id),
-        upstream_model: Some(upstream_model),
-        upstream_response_model: None,
-        channel_id: Some(channel_id),
-        names,
-        is_stream: true,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        cache_creation_tokens: None,
-        tool_prompt_tokens: None,
-        reasoning_tokens: None,
-        accepted_prediction_tokens: None,
-        rejected_prediction_tokens: None,
-        provider_multiplier: Some(model_multiplier),
-        charge_nano_usd: None,
-        status: REQUEST_LOG_STATUS_ERROR.to_string(),
-        usage_breakdown_json: None,
-        billing_breakdown_json: None,
-        error_code: Some(terminal_error.code),
-        error_message: Some(terminal_error.message),
-        error_http_status: Some(terminal_error.http_status),
-        duration_ms: Some(duration_ms),
-        ttfb_ms,
-        request_ip,
-        reasoning_effort,
-        tried_providers_json,
-        request_kind: auth
-            .internal_source
-            .map(|source| source.request_kind().to_string()),
-        effective_provider_type: Some(effective_provider_type),
-        affinity_hit,
-        affinity_key_hash,
-        affinity_target,
-        session_affinity_value,
-        created_at,
-    };
-    apply_usage_fields(&mut log, usage.as_ref());
-    spawn_claimed_terminal_log(
-        state.user_store.clone(),
-        state.request_log_admissions.clone(),
-        claim,
-        log,
-    );
+    log.is_stream = true;
+    log.error_code = Some(error.terminal_error.code);
+    log.error_message = Some(error.terminal_error.message);
+    log.error_http_status = Some(error.terminal_error.http_status);
+    log.ttfb_ms = error.ttfb_ms;
+    log.tried_providers_json = tried_providers_json(&error.tried_providers);
+    let usage = error.usage.as_ref().map(urp::Usage::accounting);
+    apply_usage_fields(&mut log, usage.as_deref());
+    submit_terminal_log(state, claim, log);
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_request_log_error_no_attempt(
     state: &AppState,
     auth: &crate::auth::AuthResult,
-    model: &str,
-    is_stream: bool,
-    started_at: std::time::Instant,
-    request_id: Option<String>,
-    request_ip: Option<String>,
+    context: RequestLogContext<'_>,
     error: &AppError,
-    reasoning_effort: Option<String>,
     tried_providers: Vec<TriedProvider>,
 ) {
-    let Some(user_id) = auth.user_id.clone() else {
+    let Some((claim, mut log)) = terminal_log(state, auth, None, context) else {
         return;
     };
-    let Some(claim) = claim_request_log_terminal(state, request_id.as_deref()) else {
-        return;
-    };
-    let request_id = Some(claim.request_id.clone());
-    let api_key_id = auth.api_key_id.clone();
-    let model = model.to_string();
-    let duration_ms = started_at.elapsed().as_millis() as u64;
-    let created_at = request_created_at(started_at);
-    let names = crate::users::RequestLogNameSnapshots {
-        username: auth.username.clone(),
-        api_key_name: auth.api_key_name.clone(),
-        provider_name: None,
-        channel_name: None,
-    };
-    let error_code = Some(error.code.clone());
-    let error_message = Some(
-        error
-            .internal_message
-            .clone()
-            .unwrap_or_else(|| error.message.clone()),
-    );
-    let error_http_status = Some(error.status.as_u16());
-    let tried_providers_json = if tried_providers.is_empty() {
-        None
-    } else {
-        serde_json::to_value(&tried_providers).ok()
-    };
-
-    let log = InsertRequestLog {
-        request_id,
-        user_id,
-        api_key_id,
-        model,
-        provider_id: None,
-        upstream_model: None,
-        upstream_response_model: None,
-        channel_id: None,
-        names,
-        is_stream,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        cache_creation_tokens: None,
-        tool_prompt_tokens: None,
-        reasoning_tokens: None,
-        accepted_prediction_tokens: None,
-        rejected_prediction_tokens: None,
-        provider_multiplier: None,
-        charge_nano_usd: None,
-        status: REQUEST_LOG_STATUS_ERROR.to_string(),
-        usage_breakdown_json: None,
-        billing_breakdown_json: None,
-        error_code,
-        error_message,
-        error_http_status,
-        duration_ms: Some(duration_ms),
-        ttfb_ms: None,
-        request_ip,
-        reasoning_effort,
-        tried_providers_json,
-        request_kind: auth
-            .internal_source
-            .map(|source| source.request_kind().to_string()),
-        effective_provider_type: None,
-        affinity_hit: None,
-        affinity_key_hash: None,
-        affinity_target: None,
-        session_affinity_value: None,
-        created_at,
-    };
-    spawn_claimed_terminal_log(
-        state.user_store.clone(),
-        state.request_log_admissions.clone(),
-        claim,
-        log,
-    );
+    apply_error_fields(&mut log, error);
+    log.tried_providers_json = tried_providers_json(&tried_providers);
+    submit_terminal_log(state, claim, log);
 }

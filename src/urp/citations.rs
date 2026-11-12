@@ -113,27 +113,7 @@ impl Citation {
                 title: string("title"),
             })
         } else if let Some(index) = number("document_index") {
-            let document_range = match kind {
-                "char_location" => {
-                    range("start_char_index", "end_char_index").map(|r| DocumentRange::Characters {
-                        start: r.start,
-                        end: r.end,
-                    })
-                }
-                "page_location" => {
-                    range("start_page_number", "end_page_number").map(|r| DocumentRange::Pages {
-                        start: r.start,
-                        end: r.end,
-                    })
-                }
-                "content_block_location" => {
-                    range("start_block_index", "end_block_index").map(|r| DocumentRange::Blocks {
-                        start: r.start,
-                        end: r.end,
-                    })
-                }
-                _ => None,
-            };
+            let document_range = decode_document_range(payload, kind);
             document_range.map(|range| CitationSource::Document {
                 index,
                 title: string("document_title"),
@@ -243,43 +223,7 @@ impl Citation {
                 return Some(body);
             }
             CitationSource::Url { url, title } => {
-                let mut body = Map::new();
-                match protocol {
-                    ProviderProtocol::Messages => {
-                        if !same {
-                            return None;
-                        }
-                        body.insert("type".into(), json!("web_search_result_location"));
-                        body.insert("url".into(), json!(url));
-                    }
-                    ProviderProtocol::Gemini => {
-                        body.insert("uri".into(), json!(url));
-                    }
-                    ProviderProtocol::Responses | ProviderProtocol::ChatCompletion => {
-                        if self.answer_range.is_none() && !same {
-                            return None;
-                        }
-                        body.insert("type".into(), json!("url_citation"));
-                        body.insert("url".into(), json!(url));
-                    }
-                    _ => return None,
-                }
-                if let Some(title) = title {
-                    body.insert("title".into(), json!(title));
-                } else if protocol == ProviderProtocol::Messages {
-                    // web_search_result_location.title is required-nullable (SEM-1).
-                    body.insert("title".into(), Value::Null);
-                }
-                if let Some(range) = &self.answer_range {
-                    let (start, end) = if protocol == ProviderProtocol::Gemini {
-                        ("startIndex", "endIndex")
-                    } else {
-                        ("start_index", "end_index")
-                    };
-                    body.insert(start.into(), json!(range.start.saturating_add(offset)));
-                    body.insert(end.into(), json!(range.end.saturating_add(offset)));
-                }
-                Value::Object(body)
+                self.encode_url(url, title.as_deref(), protocol, offset)?
             }
             CitationSource::Document {
                 index,
@@ -372,6 +316,67 @@ impl Citation {
         }
         Some(body)
     }
+
+    fn encode_url(
+        &self,
+        url: &str,
+        title: Option<&str>,
+        protocol: ProviderProtocol,
+        offset: u64,
+    ) -> Option<Value> {
+        let same = self.origin_protocol == protocol;
+        let mut body = Map::new();
+        match protocol {
+            ProviderProtocol::Messages => {
+                if !same {
+                    return None;
+                }
+                body.insert("type".into(), json!("web_search_result_location"));
+                body.insert("url".into(), json!(url));
+            }
+            ProviderProtocol::Gemini => {
+                body.insert("uri".into(), json!(url));
+            }
+            ProviderProtocol::Responses | ProviderProtocol::ChatCompletion => {
+                if self.answer_range.is_none() && !same {
+                    return None;
+                }
+                body.insert("type".into(), json!("url_citation"));
+                body.insert("url".into(), json!(url));
+            }
+            _ => return None,
+        }
+        if let Some(title) = title {
+            body.insert("title".into(), json!(title));
+        } else if protocol == ProviderProtocol::Messages {
+            // web_search_result_location.title is required-nullable (SEM-1).
+            body.insert("title".into(), Value::Null);
+        }
+        if let Some(range) = &self.answer_range {
+            let (start, end) = if protocol == ProviderProtocol::Gemini {
+                ("startIndex", "endIndex")
+            } else {
+                ("start_index", "end_index")
+            };
+            body.insert(start.into(), json!(range.start.saturating_add(offset)));
+            body.insert(end.into(), json!(range.end.saturating_add(offset)));
+        }
+        Some(Value::Object(body))
+    }
+}
+
+fn decode_document_range(payload: &Value, kind: &str) -> Option<DocumentRange> {
+    let range =
+        |start: &str, end: &str| Some((payload.get(start)?.as_u64()?, payload.get(end)?.as_u64()?));
+    match kind {
+        "char_location" => range("start_char_index", "end_char_index")
+            .map(|(start, end)| DocumentRange::Characters { start, end }),
+        "page_location" => range("start_page_number", "end_page_number")
+            .map(|(start, end)| DocumentRange::Pages { start, end }),
+        "content_block_location" => range("start_block_index", "end_block_index")
+            .map(|(start, end)| DocumentRange::Blocks { start, end }),
+        _ => None,
+    }
 }
 
 pub fn decode(values: Vec<Value>, protocol: ProviderProtocol) -> Vec<Citation> {
@@ -458,6 +463,10 @@ pub fn attach_gemini(candidate: &Map<String, Value>, nodes: &mut [super::Node]) 
             }
         }
     }
+    attach_gemini_grounding(candidate, nodes);
+}
+
+fn attach_gemini_grounding(candidate: &Map<String, Value>, nodes: &mut [super::Node]) {
     let Some(grounding) = candidate.get("groundingMetadata") else {
         return;
     };

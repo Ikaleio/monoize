@@ -138,9 +138,11 @@ pub fn chat_details(
     let signed_text = base.get("type").and_then(Value::as_str) == Some("reasoning.text");
     build_details(
         base,
-        content,
-        summary,
-        encrypted,
+        DetailPayload {
+            content,
+            summary,
+            encrypted,
+        },
         id,
         source,
         signed_text,
@@ -193,9 +195,11 @@ pub fn chat_node_details(
     };
     build_details(
         Map::new(),
-        content,
-        summary,
-        encrypted,
+        DetailPayload {
+            content,
+            summary,
+            encrypted,
+        },
         id,
         source.filter(|source| !source.is_empty()),
         thinking,
@@ -203,17 +207,25 @@ pub fn chat_node_details(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+struct DetailPayload<'a> {
+    content: Option<&'a str>,
+    summary: Option<&'a str>,
+    encrypted: Option<&'a Value>,
+}
+
 fn build_details(
     base: Map<String, Value>,
-    content: Option<&str>,
-    summary: Option<&str>,
-    encrypted: Option<&Value>,
+    payload: DetailPayload<'_>,
     id: Option<&str>,
     source: Option<&str>,
     signed_text: bool,
     skip_empty: bool,
 ) -> Vec<Map<String, Value>> {
+    let DetailPayload {
+        content,
+        summary,
+        encrypted,
+    } = payload;
     let signature = encrypted
         .filter(|_| signed_text)
         .and_then(Value::as_str)

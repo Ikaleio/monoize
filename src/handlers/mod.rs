@@ -1,4 +1,5 @@
 mod account_balance;
+mod attempts;
 mod billing;
 mod compact;
 mod count_tokens;
@@ -40,6 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 
+use attempts::*;
 use billing::*;
 use helpers::*;
 use json_forward::*;
@@ -381,17 +383,19 @@ async fn create_response_inner(
             api_stream_keep_alive(),
             |commit| {
                 forward_stream_typed(
-                    state.clone(),
-                    auth.clone(),
+                    StreamForwardRequest {
+                        state: state.clone(),
+                        auth: auth.clone(),
+                        max_multiplier,
+                        downstream,
+                        request_id: request_id.clone(),
+                        request_ip: request_ip.clone(),
+                        capture: capture.clone(),
+                        ws_turn,
+                        commit,
+                    },
                     req,
-                    max_multiplier,
-                    downstream,
-                    request_id.clone(),
-                    request_ip.clone(),
                     extract_client_session_id(&headers),
-                    capture.clone(),
-                    ws_turn,
-                    commit,
                 )
             },
         )
@@ -405,16 +409,18 @@ async fn create_response_inner(
         let task_state = task_state.clone();
         async move {
             forward_nonstream_typed_with_task_state(
-                &state,
-                &auth,
+                NonstreamRequest {
+                    state: &state,
+                    auth: &auth,
+                    max_multiplier,
+                    downstream: DownstreamProtocol::Responses,
+                    request_id,
+                    request_ip,
+                    capture,
+                    task_state: Some(&task_state),
+                },
                 req,
-                max_multiplier,
-                DownstreamProtocol::Responses,
-                request_id,
-                request_ip,
                 session_id,
-                capture,
-                Some(&task_state),
             )
             .await
         }
@@ -466,17 +472,19 @@ pub async fn create_chat_completions(
             api_stream_keep_alive(),
             |commit| {
                 forward_stream_typed(
-                    state.clone(),
-                    auth.clone(),
+                    StreamForwardRequest {
+                        state: state.clone(),
+                        auth: auth.clone(),
+                        max_multiplier,
+                        downstream,
+                        request_id: request_id.clone(),
+                        request_ip: request_ip.clone(),
+                        capture: capture.clone(),
+                        ws_turn: None,
+                        commit,
+                    },
                     req,
-                    max_multiplier,
-                    downstream,
-                    request_id.clone(),
-                    request_ip.clone(),
                     extract_client_session_id(&headers),
-                    capture.clone(),
-                    None,
-                    commit,
                 )
             },
         )
@@ -489,16 +497,18 @@ pub async fn create_chat_completions(
         let task_state = task_state.clone();
         async move {
             forward_nonstream_typed_with_task_state(
-                &state,
-                &auth,
+                NonstreamRequest {
+                    state: &state,
+                    auth: &auth,
+                    max_multiplier,
+                    downstream: DownstreamProtocol::ChatCompletions,
+                    request_id,
+                    request_ip,
+                    capture,
+                    task_state: Some(&task_state),
+                },
                 req,
-                max_multiplier,
-                DownstreamProtocol::ChatCompletions,
-                request_id,
-                request_ip,
                 session_id,
-                capture,
-                Some(&task_state),
             )
             .await
         }
@@ -598,17 +608,19 @@ async fn create_messages_inner(
             messages_stream_keep_alive(),
             |commit| {
                 forward_stream_typed(
-                    state.clone(),
-                    auth.clone(),
+                    StreamForwardRequest {
+                        state: state.clone(),
+                        auth: auth.clone(),
+                        max_multiplier,
+                        downstream,
+                        request_id: request_id.clone(),
+                        request_ip: request_ip.clone(),
+                        capture: capture.clone(),
+                        ws_turn: None,
+                        commit,
+                    },
                     req,
-                    max_multiplier,
-                    downstream,
-                    request_id.clone(),
-                    request_ip.clone(),
                     extract_client_session_id(&headers),
-                    capture.clone(),
-                    None,
-                    commit,
                 )
             },
         )
@@ -621,16 +633,18 @@ async fn create_messages_inner(
         let task_state = task_state.clone();
         async move {
             forward_nonstream_typed_with_task_state(
-                &state,
-                &auth,
+                NonstreamRequest {
+                    state: &state,
+                    auth: &auth,
+                    max_multiplier,
+                    downstream: DownstreamProtocol::AnthropicMessages,
+                    request_id,
+                    request_ip,
+                    capture,
+                    task_state: Some(&task_state),
+                },
                 req,
-                max_multiplier,
-                DownstreamProtocol::AnthropicMessages,
-                request_id,
-                request_ip,
                 session_id,
-                capture,
-                Some(&task_state),
             )
             .await
         }

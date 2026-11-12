@@ -18,11 +18,14 @@ impl NonstreamRun<'_> {
             self.inputs.state,
             self.inputs.auth,
             attempt,
-            &self.logical_model,
-            false,
-            self.inputs.request_id.as_deref(),
-            self.inputs.request_ip.as_deref(),
-            self.started_at,
+            RequestLogContext {
+                model: &self.logical_model,
+                is_stream: false,
+                started_at: self.started_at,
+                request_id: self.inputs.request_id.as_deref(),
+                request_ip: self.inputs.request_ip.as_deref(),
+                reasoning_effort: None,
+            },
         )
         .await;
         let (resp, observed_response_model) = match self.decode_reply(attempt, &call, reply).await {
@@ -30,10 +33,10 @@ impl NonstreamRun<'_> {
             Err(mut err) => {
                 err.forwarded_headers = std::mem::take(&mut call.forwarded_headers);
                 let passive_failure_class = app_failure_class(&err);
-                let retry_same_channel = self
-                    .record_failure(attempt, call.slot, &err, passive_failure_class)
-                    .await;
-                return Ok(TryOutcome::Failed { retry_same_channel });
+                return Ok(TryOutcome::Failed {
+                    error: err,
+                    failure_class: passive_failure_class,
+                });
             }
         };
         // A decoded response ends retry processing (FP6j-2).
@@ -83,14 +86,14 @@ impl NonstreamRun<'_> {
         }
     }
 
-    /// A transport or HTTP failure: RCD-D6 error dump, then the failed-try
-    /// bookkeeping. Returns whether the same Channel may serve another try.
-    pub(super) async fn handle_call_failure(
+    /// A transport or HTTP failure: captures the error and returns its
+    /// routing classification to the shared driver.
+    pub(super) async fn handle_call_failure<T>(
         &mut self,
         attempt: &MonoizeAttempt,
         mut call: AttemptCall,
         err: UpstreamCallError,
-    ) -> bool {
+    ) -> TryOutcome<T> {
         if let (Some(session), Some(upstream_request)) = (
             self.inputs.capture.session.as_ref(),
             call.capture_upstream_request.take(),
@@ -113,8 +116,30 @@ impl NonstreamRun<'_> {
             .await
             .mask_sensitive_info;
         let app_err = upstream_error_to_app(err, mask_sensitive_info);
-        self.record_failure(attempt, call.slot, &app_err, passive_failure_class)
-            .await
+        TryOutcome::Failed {
+            error: app_err,
+            failure_class: passive_failure_class,
+        }
+    }
+
+    pub(super) async fn capture_failure(
+        &self,
+        attempt: &MonoizeAttempt,
+        call: &mut AttemptCall,
+        err: &AppError,
+    ) {
+        if let (Some(session), Some(upstream_request)) = (
+            self.inputs.capture.session.as_ref(),
+            call.capture_upstream_request.take(),
+        ) {
+            let error = json!({
+                "message": err.message,
+                "code": err.code,
+                "status": err.upstream_status.unwrap_or(err.status.as_u16()),
+            });
+            let dump = self.attempt_dump(attempt, call, upstream_request, None, None, Some(error));
+            session.push_attempt(dump).await;
+        }
     }
 
     /// RCD-D6 dump of a try whose upstream replied.
@@ -157,22 +182,22 @@ impl NonstreamRun<'_> {
         reconstructed_urp_response: Option<Value>,
         error: Option<Value>,
     ) -> Value {
-        crate::request_capture::build_attempt_dump(
-            call.slot.attempt_number,
-            &attempt.provider_id,
-            Some(&attempt.channel_id),
-            attempt.provider_type,
-            &self.logical_model,
-            &call.req.model,
-            &call.path,
-            self.inputs.capture.raw_input.as_ref().clone(),
-            &call.req,
+        crate::request_capture::build_attempt_dump(crate::request_capture::AttemptDumpInput {
+            attempt_number: call.slot.attempt_number,
+            provider_id: &attempt.provider_id,
+            channel_id: Some(&attempt.channel_id),
+            provider_type: attempt.provider_type,
+            logical_model: &self.logical_model,
+            upstream_model: &call.req.model,
+            upstream_path: &call.path,
+            raw_input: self.inputs.capture.raw_input.as_ref().clone(),
+            transformed_urp_request: &call.req,
             upstream_request,
-            upstream_response,
+            downstream_response: upstream_response,
             reconstructed_urp_response,
-            None,
-            call.capture_transform_chain.clone(),
+            downstream_sse_frames: None,
+            transform_chain: call.capture_transform_chain.clone(),
             error,
-        )
+        })
     }
 }

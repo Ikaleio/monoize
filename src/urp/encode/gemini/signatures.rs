@@ -17,6 +17,19 @@ const MERGED_SCAN_WINDOW: usize = 1024;
 
 /// `(byte length, xxh3, response text offset)` of the text that owns a bound signature.
 type Owner = (usize, u64, u64);
+type Placeholder = (usize, Value, Option<Owner>);
+type SignatureSplits = HashMap<usize, Vec<(usize, usize, Value)>>;
+
+fn accepts(part: &Value) -> bool {
+    part.get(GEMINI_BOUND_SIGNATURE_KEY).is_none()
+        && part.get("thoughtSignature").is_none()
+        && (part.get("inlineData").is_some()
+            || part.get("fileData").is_some()
+            || plain_text(part).is_some())
+}
+fn owner_matches(text: &str, length: usize, hash: u64) -> bool {
+    text.len() == length && xxhash_rust::xxh3::xxh3_64(text.as_bytes()) == hash
+}
 
 /// Attaches each bound signature placeholder to its owning Part and removes the placeholder.
 /// A text-owner binding (byte length, xxh3, response text offset) selects, in order: the unsigned
@@ -28,18 +41,7 @@ type Owner = (usize, u64, u64);
 /// Returns removed placeholder positions, each relative to the vector after earlier removals;
 /// `merged` callers must not rely on them.
 pub(super) fn resolve_bound_signatures(parts: &mut Vec<Value>, merged: bool) -> Vec<usize> {
-    fn accepts(part: &Value) -> bool {
-        part.get(GEMINI_BOUND_SIGNATURE_KEY).is_none()
-            && part.get("thoughtSignature").is_none()
-            && (part.get("inlineData").is_some()
-                || part.get("fileData").is_some()
-                || plain_text(part).is_some())
-    }
-    fn owner_matches(text: &str, length: usize, hash: u64) -> bool {
-        text.len() == length && xxhash_rust::xxh3::xxh3_64(text.as_bytes()) == hash
-    }
-
-    let placeholders: Vec<(usize, Value, Option<Owner>)> = parts
+    let placeholders: Vec<Placeholder> = parts
         .iter()
         .enumerate()
         .filter_map(|(index, part)| {
@@ -148,8 +150,20 @@ pub(super) fn resolve_bound_signatures(parts: &mut Vec<Value>, merged: bool) -> 
         }
     }
 
+    let removed = rebuild_signed_parts(parts, &placeholders, &resolved, signed, splits);
+    place_server_tool_parts(parts, merged);
+    removed
+}
+
+fn rebuild_signed_parts(
+    parts: &mut Vec<Value>,
+    placeholders: &[Placeholder],
+    resolved: &[bool],
+    mut signed: HashMap<usize, Value>,
+    mut splits: SignatureSplits,
+) -> Vec<usize> {
     let mut removed = Vec::new();
-    let mut slots = placeholders.iter().zip(&resolved).peekable();
+    let mut slots = placeholders.iter().zip(resolved).peekable();
     let mut rebuilt = Vec::with_capacity(parts.len());
     for (index, mut part) in std::mem::take(parts).into_iter().enumerate() {
         if let Some(((placeholder, signature, _), resolved)) =
@@ -186,7 +200,6 @@ pub(super) fn resolve_bound_signatures(parts: &mut Vec<Value>, merged: bool) -> 
         rebuilt.push(part);
     }
     *parts = rebuilt;
-    place_server_tool_parts(parts, merged);
     removed
 }
 

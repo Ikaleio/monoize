@@ -176,16 +176,27 @@ pub(super) fn decoded_visible_output_bytes(output: &[urp::Node]) -> u64 {
     })
 }
 
+pub(super) struct RetainedOutputContext {
+    pub(super) aliases: HashMap<String, urp::ToolIdentity>,
+    pub(super) foreign_target: Option<urp::ProviderProtocol>,
+    pub(super) downstream: DownstreamProtocol,
+    pub(super) request_id: Option<String>,
+    pub(super) mask_sensitive_info: bool,
+}
+
 pub(super) async fn retain_decoded_terminal_output(
     mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
     tx: mpsc::Sender<urp::UrpStreamEvent>,
     terminal_output: Arc<Mutex<Vec<urp::Node>>>,
-    aliases: HashMap<String, urp::ToolIdentity>,
-    foreign_target: Option<urp::ProviderProtocol>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    mask_sensitive_info: bool,
+    context: RetainedOutputContext,
 ) -> AppResult<()> {
+    let RetainedOutputContext {
+        aliases,
+        foreign_target,
+        downstream,
+        request_id,
+        mask_sensitive_info,
+    } = context;
     while let Some(mut event) = rx.recv().await {
         restore_tool_namespace_event(&mut event, &aliases);
         // XTRA-5a, before any response transform. Settlement reads the decoder

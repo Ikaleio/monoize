@@ -71,7 +71,7 @@ impl StreamForward {
         let forwarding = LiveForwarding {
             request,
             attempt,
-            tried_providers: self.tried_providers,
+            tried_providers: self.attempts.tried_providers,
             pending_request_log_guard: self.pending_request_log_guard,
             stages,
             runtime_metrics,
@@ -165,11 +165,13 @@ impl LiveStages {
                 decoded_rx,
                 retained_tx,
                 terminal_output,
-                namespace_aliases,
-                foreign_target,
-                downstream,
-                request_id,
-                mask_sensitive_info,
+                RetainedOutputContext {
+                    aliases: namespace_aliases,
+                    foreign_target,
+                    downstream,
+                    request_id,
+                    mask_sensitive_info,
+                },
             ));
         let transform_handle = crate::request_capture::spawn_with_sse_capture(async move {
             let reasoning_envelope =
@@ -182,12 +184,14 @@ impl LiveStages {
                 &state,
                 retained_rx,
                 transformed_tx,
-                &provider_transforms,
-                &global_transforms,
-                &auth_transforms,
-                &transform_model,
-                Some(provider_type),
-                reasoning_envelope,
+                StreamTransformConfig {
+                    provider_rules: &provider_transforms,
+                    global_rules: &global_transforms,
+                    auth_rules: &auth_transforms,
+                    model: &transform_model,
+                    upstream_provider_type: Some(provider_type),
+                    reasoning_envelope,
+                },
             )
             .await
         });

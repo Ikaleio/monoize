@@ -1056,14 +1056,7 @@ fn encode_image_as_jpegxl(
 
     let runner = LibJxlParallelRunner::new()?;
 
-    // SAFETY: a null memory manager requests libjxl's default allocator.
-    let handle = unsafe { jxl_sys::JxlEncoderCreate(std::ptr::null()) };
-    if handle.is_null() {
-        return Err(TransformError::Apply(
-            "create libjxl encoder: out of memory".to_string(),
-        ));
-    }
-    let encoder = LibJxlEncoder(handle);
+    let encoder = create_jpegxl_encoder()?;
 
     // SAFETY: encoder and runner are live. The runner is declared before the encoder, so it
     // outlives the encoder and all encoding work.
@@ -1161,6 +1154,21 @@ fn encode_image_as_jpegxl(
     // SAFETY: no more input will be added to this live encoder.
     unsafe { jxl_sys::JxlEncoderCloseInput(encoder.0) };
 
+    drain_jpegxl_output(&encoder)
+}
+
+fn create_jpegxl_encoder() -> Result<LibJxlEncoder, TransformError> {
+    // SAFETY: a null memory manager requests libjxl's default allocator.
+    let handle = unsafe { jxl_sys::JxlEncoderCreate(std::ptr::null()) };
+    if handle.is_null() {
+        return Err(TransformError::Apply(
+            "create libjxl encoder: out of memory".to_string(),
+        ));
+    }
+    Ok(LibJxlEncoder(handle))
+}
+
+fn drain_jpegxl_output(encoder: &LibJxlEncoder) -> Result<Vec<u8>, TransformError> {
     const INITIAL_CHUNK: usize = 65_536;
     const MAX_CHUNK: usize = 67_108_864;
     let mut output = Vec::new();

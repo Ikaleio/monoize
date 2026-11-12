@@ -292,7 +292,7 @@ FP5. **Decode upstream response:**
 
 FP5a. Streaming decoders MUST emit canonical URP v2 stream events directly. They MUST NOT first regroup upstream protocol objects into canonical message wrappers.
 
-FP5b. The pass-through streaming decoder entrypoint MUST be `stream_upstream_to_urp_events(urp, provider_type, upstream_resp, tx, started_at, runtime_metrics)`.
+FP5b. The pass-through streaming decoder entrypoint MUST be `stream_upstream_to_urp_events`. It receives the decoding request, pending request-envelope extras, Provider type, upstream response, event sender, and one context containing start time, runtime metrics, and stream idle timeout.
 
 FP5c. `stream_upstream_to_urp_events` MUST dispatch by `provider_type` to exactly these decoder families:
 
@@ -357,10 +357,11 @@ FP6j-2. Request retention per forwarding request:
 
 1. Monoize MUST hold at most one pristine copy of the decoded downstream request (suffix-normalized, media routes bound), and only while another upstream attempt can still follow. The final planned attempt slot (last route candidate, last same-channel slot) MUST take the pristine request instead of cloning it.
 2. The transformed attempt request and its encoded upstream body MUST NOT be copied solely to keep them for request-capture dumps. Without an active capture session, a streaming attempt MUST release the transformed attempt request once the upstream call returns response headers (or the WebSocket `response.create` send completes), before the STRM-2a pre-output window.
-3. Without an active capture session, a buffered synthetic stream attempt and a non-stream JSON attempt MUST release the attempt's input nodes after encoding the upstream body and before waiting for the upstream response. Upstream response decoding MUST NOT read attempt input nodes.
+3. Without an active capture session, a buffered synthetic stream attempt and a non-stream JSON attempt MUST release the attempt's input nodes after encoding the upstream body and before waiting for the upstream response. A multipart image-edit attempt MUST release those nodes after constructing its form and before waiting for the upstream response. Upstream response decoding MUST NOT read attempt input nodes.
 4. A committed stream (STRM-2c) MUST NOT retain a full copy of the request input for the stream's duration, except the Responses history input kept for `store = true` and the copies owned by an active capture session.
 5. Monoize MUST serialize each upstream JSON request body (HTTP JSON requests and the WebSocket `response.create` text frame) exactly once, into a buffer whose capacity equals the serialized byte length. The bytes MUST equal the compact `serde_json` serialization of the encoded upstream JSON value, and an HTTP JSON request MUST carry `content-type: application/json`.
 6. Without an active capture session, Monoize MUST release the encoded upstream JSON value right after that serialization, before it awaits the upstream response headers or body. A multipart upstream request MUST release the encoded JSON value before sending the form. With an active capture session, Monoize MAY keep the encoded value for the attempt dump.
+7. A WebSocket warmup served with local frames MUST NOT retain its encoded upstream body or transformed request for capture when no capture session exists. Capture-only transform-chain metadata MUST NOT be constructed without an active capture session.
 
 FP6k. A forwarding request becomes admitted when `insert_pending_request_log` returns `Ok(Some(PendingRequestLogGuard))`. From that point until the handler returns, exactly one terminal request log MUST be scheduled for that admitted request. `Ok(None)` does not create a request-log lifecycle.
 

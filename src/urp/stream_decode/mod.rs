@@ -15,16 +15,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
+pub(crate) struct StreamDecodeContext {
+    pub started_at: Option<std::time::Instant>,
+    pub runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    pub idle_timeout_ms: u64,
+}
+
 pub(crate) async fn stream_upstream_to_urp_events(
     urp: &UrpRequest,
     pending_request_envelope_extra: Option<HashMap<String, Value>>,
     provider_type: ProviderType,
     upstream_resp: reqwest::Response,
     tx: mpsc::Sender<UrpStreamEvent>,
-    started_at: Option<std::time::Instant>,
-    runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
-    idle_timeout_ms: u64,
+    context: StreamDecodeContext,
 ) -> AppResult<()> {
+    let StreamDecodeContext {
+        started_at,
+        runtime_metrics,
+        idle_timeout_ms,
+    } = context;
     match provider_type {
         ProviderType::Responses => {
             openai_responses::stream_responses_to_urp_events(

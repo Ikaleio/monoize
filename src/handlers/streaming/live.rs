@@ -69,13 +69,18 @@ struct LiveDispatch {
     path: String,
     /// RCD-D6/RCD-D6a capture `upstream_request`.
     capture_upstream_request: Option<Value>,
-    call: Result<StreamUpstreamSource, UpstreamCallError>,
+    call: Result<StreamUpstreamSource, LiveDispatchError>,
+}
+
+enum LiveDispatchError {
+    Upstream(UpstreamCallError),
+    Setup(AppError),
 }
 
 /// What a live slot's upstream answered, before the pre-output window.
 struct LiveStart {
     source: StreamUpstreamSource,
-    legacy: AppResult<UrpRequest>,
+    legacy: UrpRequest,
     namespace_aliases: HashMap<String, urp::ToolIdentity>,
     responses_echo: Option<Value>,
     estimated_input_tokens: u64,
@@ -176,21 +181,20 @@ impl StreamForward {
             &mut upstream_body,
         );
         let responses_echo = responses_request_echo_for_attempt(&req, attempt, downstream);
+        let legacy = match typed_request_to_legacy(&req, self.request.max_multiplier) {
+            Ok(legacy) => legacy,
+            Err(err) => return Err(self.fail_request(attempt, err)),
+        };
+        let namespace_aliases = tool_namespace_aliases(&req);
         attempt.session_affinity_value = resolve_session_affinity_value(attempt, &upstream_body);
         let estimated_input_tokens = estimated_tokens_from_utf8_bytes(
             u64::try_from(upstream::serialized_json_len(&upstream_body)).unwrap_or(u64::MAX),
         );
         let extra_headers = attempt_extra_headers(attempt, &upstream_body);
-        let dispatch = match self
-            .dispatch_live(attempt, slot, &req, upstream_body, &extra_headers)
-            .await?
-        {
-            Ok(dispatch) => dispatch,
-            Err(outcome) => return Ok(outcome),
-        };
+        let dispatch = self
+            .dispatch_live(attempt, &req, upstream_body, &extra_headers)
+            .await?;
         let upstream_model = req.model.clone();
-        let legacy = typed_request_to_legacy(&req, self.request.max_multiplier);
-        let namespace_aliases = tool_namespace_aliases(&req);
         // FP6j-2: only a capture session reads the transformed request or its
         // encoding after dispatch; without one both are freed here, before
         // the pre-output window. RCD-D6a/OIU-E5g: a multipart edit attempt
@@ -224,12 +228,25 @@ impl StreamForward {
                         &self.request.logical_model,
                         None,
                         || DumpOutcome {
-                            error: Some(call_error_json(&err)),
+                            error: Some(match &err {
+                                LiveDispatchError::Upstream(err) => call_error_json(err),
+                                LiveDispatchError::Setup(err) => json!({
+                                    "message": err.message,
+                                    "code": err.code,
+                                    "status": err.status.as_u16(),
+                                }),
+                            }),
                             ..DumpOutcome::default()
                         },
                     )
                     .await;
-                Ok(self.record_call_failure(attempt, slot, err).await)
+                Ok(match err {
+                    LiveDispatchError::Upstream(err) => self.record_call_failure(err).await,
+                    LiveDispatchError::Setup(error) => SlotOutcome::Failed {
+                        failure_class: None,
+                        error,
+                    },
+                })
             }
         }
     }
@@ -237,15 +254,14 @@ impl StreamForward {
     /// Sends the encoded request over the turn's WebSocket, as local warmup
     /// frames, or over HTTP. FP6j-2: the encoded value is released once
     /// serialized for dispatch; it stays `Some` after dispatch only for a
-    /// capture session. `Ok(Err(_))` is a failed WebSocket send.
+    /// capture session. A failed WebSocket send remains an attempt failure.
     async fn dispatch_live(
         &mut self,
         attempt: &mut MonoizeAttempt,
-        slot: Slot,
         req: &urp::UrpRequest,
         upstream_body: Value,
         extra_headers: &[(String, String)],
-    ) -> AppResult<Result<LiveDispatch, SlotOutcome>> {
+    ) -> AppResult<LiveDispatch> {
         let mut upstream_body = Some(upstream_body);
         let mut websocket_source = match self
             .request
@@ -253,7 +269,17 @@ impl StreamForward {
             .await
         {
             Ok(source) => source,
-            Err(err) => return Ok(Err(self.fail_websocket_send(attempt, slot, err).await)),
+            Err(err) => {
+                return Ok(LiveDispatch {
+                    path: "/v1/responses".to_string(),
+                    capture_upstream_request: upstream_body,
+                    call: Err(LiveDispatchError::Setup(AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_websocket_send_failed",
+                        err,
+                    ))),
+                });
+            }
         };
         if websocket_source.is_none()
             && let Some(turn) = self.request.ws_turn.as_ref()
@@ -269,13 +295,34 @@ impl StreamForward {
             }
         }
         if let Some(source) = websocket_source {
-            return Ok(Ok(LiveDispatch {
+            return Ok(LiveDispatch {
                 path: "/v1/responses".to_string(),
-                capture_upstream_request: upstream_body,
+                capture_upstream_request: self
+                    .request
+                    .capture
+                    .session
+                    .is_some()
+                    .then_some(upstream_body)
+                    .flatten(),
                 call: Ok(source),
-            }));
+            });
         }
-        let http = client_http_for_attempt(&self.request.state, attempt)?;
+        let http = match client_http_for_attempt(&self.request.state, attempt) {
+            Ok(http) => http,
+            Err(err) => {
+                return Ok(LiveDispatch {
+                    path: upstream_path_for_model(attempt.provider_type, &req.model, true),
+                    capture_upstream_request: self
+                        .request
+                        .capture
+                        .session
+                        .is_some()
+                        .then_some(upstream_body)
+                        .flatten(),
+                    call: Err(LiveDispatchError::Setup(err)),
+                });
+            }
+        };
         // Reference edits use JSON; inline Base64 edits use multipart.
         let stream_call = match call_streaming_image_capable_upstream(
             &http,
@@ -293,31 +340,14 @@ impl StreamForward {
             Ok(stream_call) => stream_call,
             Err(err) => return Err(self.fail_request(attempt, err)),
         };
-        Ok(Ok(LiveDispatch {
+        Ok(LiveDispatch {
             path: stream_call.path,
             capture_upstream_request: stream_call.capture_upstream_request,
-            call: stream_call.result.map(StreamUpstreamSource::Http),
-        }))
-    }
-
-    /// WS2h: a create frame that could not be sent fails the slot.
-    async fn fail_websocket_send(
-        &mut self,
-        attempt: &MonoizeAttempt,
-        slot: Slot,
-        err: String,
-    ) -> SlotOutcome {
-        let app_err = AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_websocket_send_failed",
-            err,
-        );
-        self.request
-            .log_attempt_error(attempt, &app_err, self.tried_providers.clone());
-        let passive_failure_class = is_same_channel_retryable_app_error(&app_err)
-            .then(|| classify_retryable_app_failure(&app_err));
-        self.record_try_failure(attempt, slot, &app_err, passive_failure_class)
-            .await
+            call: stream_call
+                .result
+                .map(StreamUpstreamSource::Http)
+                .map_err(LiveDispatchError::Upstream),
+        })
     }
 
     /// Starts the decoder and holds the slot open until its first output
@@ -325,7 +355,7 @@ impl StreamForward {
     async fn open_live_stream(
         &mut self,
         attempt: &MonoizeAttempt,
-        slot: Slot,
+        slot: AttemptPosition,
         start: LiveStart,
     ) -> AppResult<SlotOutcome> {
         let LiveStart {
@@ -348,10 +378,6 @@ impl StreamForward {
                     Vec::new()
                 });
         }
-        let legacy = match legacy {
-            Ok(legacy) => legacy,
-            Err(err) => return Err(self.fail_request(attempt, err)),
-        };
         // XTRA-5b: request-envelope members never cross families.
         let pending_request_envelope_extra = self
             .request
@@ -391,11 +417,14 @@ impl StreamForward {
             &self.request.state,
             &self.request.auth,
             attempt,
-            &self.request.logical_model,
-            true,
-            self.request.request_id.as_deref(),
-            self.request.request_ip.as_deref(),
-            self.request.started_at,
+            RequestLogContext {
+                model: &self.request.logical_model,
+                is_stream: true,
+                started_at: self.request.started_at,
+                request_id: self.request.request_id.as_deref(),
+                request_ip: self.request.request_ip.as_deref(),
+                reasoning_effort: None,
+            },
         )
         .await;
         mark_channel_success(&self.request.state, attempt).await;
@@ -415,7 +444,7 @@ impl StreamForward {
     async fn fail_pre_output(
         &mut self,
         attempt: &MonoizeAttempt,
-        slot: Slot,
+        slot: AttemptPosition,
         capture: LiveCapture,
         failure: PreOutputStreamFailure,
     ) -> SlotOutcome {
@@ -442,8 +471,10 @@ impl StreamForward {
                 },
             )
             .await;
-        self.record_try_failure(attempt, slot, &failure.error, failure.failure_class)
-            .await
+        SlotOutcome::Failed {
+            error: failure.error,
+            failure_class: failure.failure_class,
+        }
     }
 }
 
@@ -483,9 +514,11 @@ impl StreamDecoder {
                         provider_type,
                         upstream_resp,
                         decoded_tx,
-                        Some(started_at),
-                        Some(runtime_metrics),
-                        idle_timeout_ms,
+                        crate::urp::stream_decode::StreamDecodeContext {
+                            started_at: Some(started_at),
+                            runtime_metrics: Some(runtime_metrics),
+                            idle_timeout_ms,
+                        },
                     )
                     .await;
                 }

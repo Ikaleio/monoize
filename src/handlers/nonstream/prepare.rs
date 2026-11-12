@@ -8,7 +8,7 @@ impl NonstreamRun<'_> {
     pub(super) async fn prepare_call(
         &mut self,
         attempt: &MonoizeAttempt,
-        slot: TrySlot,
+        slot: AttemptPosition,
         mut req: urp::UrpRequest,
     ) -> AppResult<(AttemptCall, Value)> {
         let auth = self.inputs.auth;
@@ -16,12 +16,19 @@ impl NonstreamRun<'_> {
         shape_request_for_attempt(&mut req, attempt, auth, downstream);
         let global_transforms = self.apply_request_transforms(attempt, &mut req).await?;
         strip_monoize_context(&mut req);
-        let capture_transform_chain = crate::request_capture::build_transform_chain(
-            &attempt.provider_transforms,
-            &global_transforms,
-            &auth.transforms,
-            &self.transform_match_model,
-        );
+        let capture_transform_chain =
+            self.inputs
+                .capture
+                .session
+                .as_ref()
+                .map_or(Value::Null, |_| {
+                    crate::request_capture::build_transform_chain(
+                        &attempt.provider_transforms,
+                        &global_transforms,
+                        &auth.transforms,
+                        &self.transform_match_model,
+                    )
+                });
         let upstream_body = match encode_request_for_provider(&mut req, attempt, downstream) {
             Ok(body) => body,
             Err(err) => return Err(self.fail_request(attempt, err).await),

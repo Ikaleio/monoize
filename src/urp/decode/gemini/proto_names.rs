@@ -2,79 +2,76 @@
 
 use serde_json::{Map, Value};
 
+fn rename(obj: &mut Map<String, Value>, names: &[(&str, &str)]) {
+    for (snake, camel) in names {
+        if !obj.contains_key(*camel)
+            && let Some(value) = obj.remove(*snake)
+        {
+            obj.insert((*camel).to_string(), value);
+        }
+    }
+}
+fn object<'a>(obj: &'a mut Map<String, Value>, key: &str) -> Option<&'a mut Map<String, Value>> {
+    obj.get_mut(key).and_then(Value::as_object_mut)
+}
+fn part(value: &mut Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    // OpenAI-compatible media parts use `file_data` as a string, so only proto-shaped
+    // object members are renamed.
+    for (snake, camel) in [
+        ("inline_data", "inlineData"),
+        ("file_data", "fileData"),
+        ("function_call", "functionCall"),
+        ("function_response", "functionResponse"),
+        ("executable_code", "executableCode"),
+        ("code_execution_result", "codeExecutionResult"),
+        ("video_metadata", "videoMetadata"),
+        ("media_resolution", "mediaResolution"),
+        ("part_metadata", "partMetadata"),
+    ] {
+        if obj.get(snake).is_some_and(Value::is_object) {
+            rename(obj, &[(snake, camel)]);
+        }
+    }
+    rename(obj, &[("thought_signature", "thoughtSignature")]);
+    for key in ["inlineData", "fileData"] {
+        if let Some(data) = object(obj, key) {
+            rename(
+                data,
+                &[
+                    ("mime_type", "mimeType"),
+                    ("file_uri", "fileUri"),
+                    ("display_name", "displayName"),
+                ],
+            );
+        }
+    }
+    if let Some(metadata) = object(obj, "videoMetadata") {
+        rename(
+            metadata,
+            &[("start_offset", "startOffset"), ("end_offset", "endOffset")],
+        );
+    }
+    if let Some(response) = object(obj, "functionResponse") {
+        rename(response, &[("will_continue", "willContinue")]);
+        if let Some(parts) = response.get_mut("parts").and_then(Value::as_array_mut) {
+            parts.iter_mut().for_each(part);
+        }
+    }
+}
+fn content(content: &mut Value) {
+    match content.get_mut("parts") {
+        Some(Value::Array(parts)) => parts.iter_mut().for_each(part),
+        Some(single) => part(single),
+        None => {}
+    }
+}
+
 /// Renames documented proto-JSON snake_case fields to camelCase at structural positions only.
 /// User payloads (function args, responses, schemas, labels) are never rewritten.
 pub(super) fn normalize_proto_json_names(value: &Value) -> Value {
-    fn rename(obj: &mut Map<String, Value>, names: &[(&str, &str)]) {
-        for (snake, camel) in names {
-            if !obj.contains_key(*camel)
-                && let Some(value) = obj.remove(*snake)
-            {
-                obj.insert((*camel).to_string(), value);
-            }
-        }
-    }
-    fn object<'a>(
-        obj: &'a mut Map<String, Value>,
-        key: &str,
-    ) -> Option<&'a mut Map<String, Value>> {
-        obj.get_mut(key).and_then(Value::as_object_mut)
-    }
-    fn part(value: &mut Value) {
-        let Some(obj) = value.as_object_mut() else {
-            return;
-        };
-        // OpenAI-compatible media parts use `file_data` as a string, so only proto-shaped
-        // object members are renamed.
-        for (snake, camel) in [
-            ("inline_data", "inlineData"),
-            ("file_data", "fileData"),
-            ("function_call", "functionCall"),
-            ("function_response", "functionResponse"),
-            ("executable_code", "executableCode"),
-            ("code_execution_result", "codeExecutionResult"),
-            ("video_metadata", "videoMetadata"),
-            ("media_resolution", "mediaResolution"),
-            ("part_metadata", "partMetadata"),
-        ] {
-            if obj.get(snake).is_some_and(Value::is_object) {
-                rename(obj, &[(snake, camel)]);
-            }
-        }
-        rename(obj, &[("thought_signature", "thoughtSignature")]);
-        for key in ["inlineData", "fileData"] {
-            if let Some(data) = object(obj, key) {
-                rename(
-                    data,
-                    &[
-                        ("mime_type", "mimeType"),
-                        ("file_uri", "fileUri"),
-                        ("display_name", "displayName"),
-                    ],
-                );
-            }
-        }
-        if let Some(metadata) = object(obj, "videoMetadata") {
-            rename(
-                metadata,
-                &[("start_offset", "startOffset"), ("end_offset", "endOffset")],
-            );
-        }
-        if let Some(response) = object(obj, "functionResponse") {
-            rename(response, &[("will_continue", "willContinue")]);
-            if let Some(parts) = response.get_mut("parts").and_then(Value::as_array_mut) {
-                parts.iter_mut().for_each(part);
-            }
-        }
-    }
-    fn content(content: &mut Value) {
-        match content.get_mut("parts") {
-            Some(Value::Array(parts)) => parts.iter_mut().for_each(part),
-            Some(single) => part(single),
-            None => {}
-        }
-    }
-
     let mut value = value.clone();
     let Some(obj) = value.as_object_mut() else {
         return value;
@@ -137,6 +134,11 @@ pub(super) fn normalize_proto_json_names(value: &Value) -> Value {
             );
         }
     }
+    normalize_tools(obj);
+    value
+}
+
+fn normalize_tools(obj: &mut Map<String, Value>) {
     if let Some(tools) = obj.get_mut("tools").and_then(Value::as_array_mut) {
         for tool in tools.iter_mut().filter_map(Value::as_object_mut) {
             rename(
@@ -184,5 +186,4 @@ pub(super) fn normalize_proto_json_names(value: &Value) -> Value {
             );
         }
     }
-    value
 }

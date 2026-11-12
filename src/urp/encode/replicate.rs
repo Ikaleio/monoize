@@ -5,8 +5,7 @@ use crate::urp::{
 };
 use serde_json::{Map, Value};
 
-pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    let mut input = Map::new();
+fn collect_input_nodes(req: &UrpRequest, input: &mut Map<String, Value>) {
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut images: Vec<Value> = Vec::new();
 
@@ -106,7 +105,11 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             .entry("reference_images".to_string())
             .or_insert_with(|| arr);
     }
+}
 
+pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+    let mut input = Map::new();
+    collect_input_nodes(req, &mut input);
     if let Some(max_tokens) = req.max_output_tokens {
         input.insert("max_tokens".to_string(), Value::from(max_tokens));
         input.insert("max_new_tokens".to_string(), Value::from(max_tokens));

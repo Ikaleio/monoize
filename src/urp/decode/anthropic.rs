@@ -138,17 +138,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     Ok(request)
 }
 
-fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "messages request must be object".to_string())?;
-
-    let model = obj
-        .get("model")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing model".to_string())?
-        .to_string();
-
+fn decode_input_nodes(obj: &Map<String, Value>) -> Result<Vec<Node>, String> {
     let mut input_nodes = Vec::new();
 
     if let Some(system) = obj.get("system") {
@@ -183,6 +173,19 @@ fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
         }
         input_nodes.extend(message_nodes);
     }
+    Ok(input_nodes)
+}
+
+fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "messages request must be object".to_string())?;
+    let model = obj
+        .get("model")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing model".to_string())?
+        .to_string();
+    let mut input_nodes = decode_input_nodes(obj)?;
 
     let tools = obj.get("tools").and_then(|v| v.as_array()).map(|arr| {
         arr.iter()

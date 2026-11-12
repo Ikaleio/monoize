@@ -638,6 +638,21 @@ pub fn parse_file_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) ->
     })
 }
 
+fn audio_format_mime(format: &str) -> Option<&'static str> {
+    Some(match format {
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "opus" => "audio/opus",
+        "aac" => "audio/aac",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "webm" => "audio/webm",
+        "pcm16" => "audio/pcm",
+        _ => return None,
+    })
+}
+
 pub fn parse_audio_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
     if !matches!(
         obj.get("type").and_then(Value::as_str),
@@ -672,23 +687,8 @@ pub fn parse_audio_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -
         .or_else(|| {
             body.get("format")
                 .and_then(Value::as_str)
-                .and_then(|format| {
-                    Some(
-                        match format {
-                            "wav" => "audio/wav",
-                            "mp3" => "audio/mpeg",
-                            "flac" => "audio/flac",
-                            "opus" => "audio/opus",
-                            "aac" => "audio/aac",
-                            "ogg" => "audio/ogg",
-                            "m4a" => "audio/mp4",
-                            "webm" => "audio/webm",
-                            "pcm16" => "audio/pcm",
-                            _ => return None,
-                        }
-                        .to_owned(),
-                    )
-                })
+                .and_then(audio_format_mime)
+                .map(str::to_owned)
         });
     let url = source_body
         .get("url")

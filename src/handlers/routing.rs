@@ -575,7 +575,44 @@ pub(super) async fn collect_provider_attempts(
         .unwrap_or(ordered.len())
         .min(ordered.len());
     let runtime = state.monoize_runtime.read().await;
-    for channel in ordered.into_iter().take(max_attempts) {
+    let context = ProviderAttemptContext {
+        state,
+        urp,
+        effective_groups,
+        provider,
+        runtime: &runtime,
+        routing_config_revision,
+        provider_attempt_limit,
+    };
+    out.extend(
+        ordered
+            .into_iter()
+            .take(max_attempts)
+            .map(|channel| context.channel_attempt(channel)),
+    );
+}
+
+struct ProviderAttemptContext<'a> {
+    state: &'a AppState,
+    urp: &'a UrpRequest,
+    effective_groups: &'a Option<Vec<String>>,
+    provider: &'a crate::monoize_routing::MonoizeProvider,
+    runtime: &'a crate::monoize_routing::MonoizeRuntimeConfig,
+    routing_config_revision: u64,
+    provider_attempt_limit: Option<usize>,
+}
+
+impl ProviderAttemptContext<'_> {
+    fn channel_attempt(&self, channel: crate::monoize_routing::MonoizeChannel) -> MonoizeAttempt {
+        let Self {
+            state,
+            urp,
+            effective_groups,
+            provider,
+            runtime,
+            routing_config_revision,
+            provider_attempt_limit,
+        } = *self;
         let origin_key = channel_origin_key(&channel.base_url);
         let origin_peer_channel_ids = origin_key
             .as_deref()
@@ -592,6 +629,112 @@ pub(super) async fn collect_provider_attempts(
         );
         let effective_provider_type =
             selected_override.map_or(channel.provider_type, |entry| entry.api_type);
+        let policy = ChannelAttemptPolicy::resolve(runtime, &channel, provider);
+        // MP-G1: the billing group is the group actually used for routing.
+        // The provider is group-eligible here, so the rank indexes into
+        // `effective_groups`.
+        let billing_group_id = effective_groups.as_ref().and_then(|groups| {
+            groups
+                .get(crate::users::provider_group_rank(
+                    &provider.group_ids,
+                    effective_groups,
+                ))
+                .cloned()
+        });
+        MonoizeAttempt {
+            provider_id: provider.id.clone(),
+            provider_name: provider.name.clone(),
+            provider_type: effective_provider_type.to_config_type(),
+            channel_id: channel.id.clone(),
+            channel_name: channel.name.clone(),
+            base_url: channel.base_url.clone(),
+            api_key: channel.api_key.clone(),
+            logical_model: urp.model.clone(),
+            upstream_model,
+            model_multiplier: model_entry.multiplier,
+            server_tool_usage_classes: urp.server_tool_usage_classes.clone(),
+            provider_transforms: provider.transforms.clone(),
+            passive_failure_count_threshold: policy.passive_failure_count_threshold,
+            passive_cooldown_seconds: policy.passive_cooldown_seconds,
+            passive_window_seconds: policy.passive_window_seconds,
+            passive_rate_limit_cooldown_seconds: policy.passive_rate_limit_cooldown_seconds,
+            channel_max_retries: provider.channel_max_retries,
+            channel_retry_interval_ms: provider.channel_retry_interval_ms.max(0) as u64,
+            circuit_breaker_enabled: provider.circuit_breaker_enabled,
+            per_model_circuit_break: provider.per_model_circuit_break,
+            provider_attempt_limit,
+            request_timeout_ms: policy.request_timeout_ms,
+            extra_fields_whitelist: merge_extra_fields_whitelist(
+                &runtime.extra_fields_whitelist,
+                &provider.extra_fields_whitelist,
+                effective_provider_type,
+            ),
+            strip_cross_protocol_nested_extra: provider
+                .strip_cross_protocol_nested_extra
+                .unwrap_or(runtime.strip_cross_protocol_nested_extra),
+            model_price: None,
+            pricing_model_key: String::new(),
+            allow_free_when_unpriced: provider
+                .allow_free_when_unpriced_override
+                .unwrap_or(runtime.allow_free_when_unpriced),
+            allow_free_when_missing_usage: provider
+                .allow_free_when_missing_usage_override
+                .unwrap_or(runtime.allow_free_when_missing_usage),
+            billing_group_id,
+            group_billing_ratio: Multiplier::ONE,
+            affinity_key: None,
+            affinity_key_hash: None,
+            affinity_hit: None,
+            affinity_target: None,
+            affinity_enabled: policy.affinity_enabled,
+            affinity_idle_ttl_seconds: policy.affinity_idle_ttl_seconds,
+            affinity_failback_mode: policy.affinity_failback_mode,
+            affinity_failback_delay_seconds: policy.affinity_failback_delay_seconds,
+            routing_config_revision,
+            proxy_url: {
+                crate::error_sanitize::register_configured_url(&channel.base_url);
+                if let Some(proxy_url) = channel.proxy_url.as_deref() {
+                    crate::error_sanitize::register_configured_url(proxy_url);
+                }
+                channel.proxy_url.clone()
+            },
+            extra_headers: channel.extra_headers.clone(),
+            session_affinity_auto: effective_session_affinity_auto(
+                &channel.base_url,
+                channel.session_affinity_auto,
+            ),
+            websocket_supported: effective_websocket_supported(state, &channel),
+            chat_dialect: selected_override
+                .map_or(channel.chat_dialect, |entry| entry.chat_dialect)
+                .unwrap_or(urp::encode::openai_chat::ChatDialect::Generic),
+            client_session_id: None,
+            derived_session_affinity: None,
+            session_affinity_value: None,
+            client_anthropic_headers: Default::default(),
+            origin_key,
+            origin_peer_channel_ids,
+        }
+    }
+}
+
+struct ChannelAttemptPolicy {
+    passive_failure_count_threshold: u32,
+    passive_cooldown_seconds: u64,
+    passive_window_seconds: u64,
+    passive_rate_limit_cooldown_seconds: u64,
+    request_timeout_ms: u64,
+    affinity_enabled: bool,
+    affinity_idle_ttl_seconds: u64,
+    affinity_failback_mode: crate::monoize_routing::AffinityFailbackMode,
+    affinity_failback_delay_seconds: u64,
+}
+
+impl ChannelAttemptPolicy {
+    fn resolve(
+        runtime: &crate::monoize_routing::MonoizeRuntimeConfig,
+        channel: &crate::monoize_routing::MonoizeChannel,
+        provider: &crate::monoize_routing::MonoizeProvider,
+    ) -> Self {
         let passive_failure_count_threshold = channel
             .passive_failure_count_threshold_override
             .unwrap_or(runtime.passive_failure_count_threshold)
@@ -625,90 +768,17 @@ pub(super) async fn collect_provider_attempts(
         let affinity_failback_delay_seconds = channel
             .affinity_failback_delay_seconds_override
             .unwrap_or(runtime.affinity_failback_delay_seconds);
-        // MP-G1: the billing group is the group actually used for routing.
-        // The provider is group-eligible here, so the rank indexes into
-        // `effective_groups`.
-        let billing_group_id = effective_groups.as_ref().and_then(|groups| {
-            groups
-                .get(crate::users::provider_group_rank(
-                    &provider.group_ids,
-                    effective_groups,
-                ))
-                .cloned()
-        });
-        out.push(MonoizeAttempt {
-            provider_id: provider.id.clone(),
-            provider_name: provider.name.clone(),
-            provider_type: effective_provider_type.to_config_type(),
-            channel_id: channel.id.clone(),
-            channel_name: channel.name.clone(),
-            base_url: channel.base_url.clone(),
-            api_key: channel.api_key.clone(),
-            logical_model: urp.model.clone(),
-            upstream_model,
-            model_multiplier: model_entry.multiplier,
-            server_tool_usage_classes: urp.server_tool_usage_classes.clone(),
-            provider_transforms: provider.transforms.clone(),
+        Self {
             passive_failure_count_threshold,
             passive_cooldown_seconds,
             passive_window_seconds,
             passive_rate_limit_cooldown_seconds,
-            channel_max_retries: provider.channel_max_retries,
-            channel_retry_interval_ms: provider.channel_retry_interval_ms.max(0) as u64,
-            circuit_breaker_enabled: provider.circuit_breaker_enabled,
-            per_model_circuit_break: provider.per_model_circuit_break,
-            provider_attempt_limit,
             request_timeout_ms,
-            extra_fields_whitelist: merge_extra_fields_whitelist(
-                &runtime.extra_fields_whitelist,
-                &provider.extra_fields_whitelist,
-                effective_provider_type,
-            ),
-            strip_cross_protocol_nested_extra: provider
-                .strip_cross_protocol_nested_extra
-                .unwrap_or(runtime.strip_cross_protocol_nested_extra),
-            model_price: None,
-            pricing_model_key: String::new(),
-            allow_free_when_unpriced: provider
-                .allow_free_when_unpriced_override
-                .unwrap_or(runtime.allow_free_when_unpriced),
-            allow_free_when_missing_usage: provider
-                .allow_free_when_missing_usage_override
-                .unwrap_or(runtime.allow_free_when_missing_usage),
-            billing_group_id: billing_group_id.clone(),
-            group_billing_ratio: Multiplier::ONE,
-            affinity_key: None,
-            affinity_key_hash: None,
-            affinity_hit: None,
-            affinity_target: None,
             affinity_enabled,
             affinity_idle_ttl_seconds,
             affinity_failback_mode,
             affinity_failback_delay_seconds,
-            routing_config_revision,
-            proxy_url: {
-                crate::error_sanitize::register_configured_url(&channel.base_url);
-                if let Some(proxy_url) = channel.proxy_url.as_deref() {
-                    crate::error_sanitize::register_configured_url(proxy_url);
-                }
-                channel.proxy_url.clone()
-            },
-            extra_headers: channel.extra_headers.clone(),
-            session_affinity_auto: effective_session_affinity_auto(
-                &channel.base_url,
-                channel.session_affinity_auto,
-            ),
-            websocket_supported: effective_websocket_supported(state, &channel),
-            chat_dialect: selected_override
-                .map_or(channel.chat_dialect, |entry| entry.chat_dialect)
-                .unwrap_or(urp::encode::openai_chat::ChatDialect::Generic),
-            client_session_id: None,
-            derived_session_affinity: None,
-            session_affinity_value: None,
-            client_anthropic_headers: Default::default(),
-            origin_key,
-            origin_peer_channel_ids,
-        });
+        }
     }
 }
 

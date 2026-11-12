@@ -376,7 +376,13 @@ pub async fn update_me(
         .transpose()?;
 
     user_store
-        .update_user(&user.id, None, None, None, None, None, None, email, None)
+        .update_user(
+            &user.id,
+            crate::users::UpdateUserInput {
+                email,
+                ..Default::default()
+            },
+        )
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 

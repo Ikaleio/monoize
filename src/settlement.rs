@@ -602,13 +602,18 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
     settle_with_svg_authors(inputs, &[])
 }
 
-pub fn settle_with_svg_authors(
-    inputs: &SettlementInputs<'_>,
-    authors: &[(&urp::SvgUsage, Option<&ModelPriceRecord>)],
-) -> Result<SettlementOutcome, String> {
-    let usage = inputs.usage.usage();
-    let estimated = matches!(inputs.usage, SettledUsage::Estimated(_));
+struct TokenSettlement<'a> {
+    free_reason: Option<&'static str>,
+    billing_mode: Option<&'a str>,
+    price_row_model_id: Option<String>,
+    applied_tier_index: Option<usize>,
+    applied_service_tier: Option<String>,
+    token_line_items: Vec<Value>,
+    token_charge_nano: i128,
+}
 
+fn settle_tokens<'a>(inputs: &SettlementInputs<'a>) -> Result<TokenSettlement<'a>, String> {
+    let usage = inputs.usage.usage();
     let mut free_reason: Option<&str> = None;
     let mut billing_mode: Option<&str> = None;
     let mut price_row_model_id: Option<String> = None;
@@ -672,6 +677,34 @@ pub fn settle_with_svg_authors(
             }
         }
     }
+
+    Ok(TokenSettlement {
+        free_reason,
+        billing_mode,
+        price_row_model_id,
+        applied_tier_index,
+        applied_service_tier,
+        token_line_items,
+        token_charge_nano,
+    })
+}
+
+pub fn settle_with_svg_authors(
+    inputs: &SettlementInputs<'_>,
+    authors: &[(&urp::SvgUsage, Option<&ModelPriceRecord>)],
+) -> Result<SettlementOutcome, String> {
+    let usage = inputs.usage.usage();
+    let estimated = matches!(inputs.usage, SettledUsage::Estimated(_));
+
+    let TokenSettlement {
+        free_reason,
+        billing_mode,
+        price_row_model_id,
+        applied_tier_index,
+        applied_service_tier,
+        token_line_items,
+        mut token_charge_nano,
+    } = settle_tokens(inputs)?;
 
     // MP-T9: tool charges apply in every billing mode and in free settlements.
     let tools = settle_tools(

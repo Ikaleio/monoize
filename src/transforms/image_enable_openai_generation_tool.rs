@@ -127,120 +127,142 @@ impl Transform for ImageEnableOpenAiGenerationToolTransform {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
-        let mut legacy_image_options = HashMap::new();
-        for key in ImageGenerationOptions::KEYS {
-            if key == "background" && req.extra_body.get(key).is_some_and(Value::is_boolean) {
-                continue;
-            }
-            if let Some(value) = req.extra_body.remove(key) {
-                legacy_image_options.insert(key.to_owned(), value);
-            }
+        apply_generation_tool(req, cfg)
+    }
+}
+
+fn apply_generation_tool(
+    req: &mut crate::urp::UrpRequest,
+    cfg: Config,
+) -> Result<(), TransformError> {
+    migrate_legacy_options(req)?;
+    let force_stream = configure_stream(req, &cfg);
+    if cfg.force_tool_choice {
+        req.tool_choice = Some(ToolChoice::Specific(json!({"type": "image_generation"})));
+    }
+    configure_tools(req, cfg, force_stream)
+}
+
+fn migrate_legacy_options(req: &mut crate::urp::UrpRequest) -> Result<(), TransformError> {
+    let mut legacy_image_options = HashMap::new();
+    for key in ImageGenerationOptions::KEYS {
+        if key == "background" && req.extra_body.get(key).is_some_and(Value::is_boolean) {
+            continue;
         }
-        if req.image_generation.is_none() && !legacy_image_options.is_empty() {
-            req.image_generation = Some(
-                ImageGenerationOptions::take_from_extra(&mut legacy_image_options)
-                    .map_err(TransformError::Apply)?,
-            );
+        if let Some(value) = req.extra_body.remove(key) {
+            legacy_image_options.insert(key.to_owned(), value);
         }
-        let request_format = req
+    }
+    if req.image_generation.is_none() && !legacy_image_options.is_empty() {
+        req.image_generation = Some(
+            ImageGenerationOptions::take_from_extra(&mut legacy_image_options)
+                .map_err(TransformError::Apply)?,
+        );
+    }
+    Ok(())
+}
+
+fn configure_stream(req: &mut crate::urp::UrpRequest, cfg: &Config) -> bool {
+    let request_format = req
+        .image_generation
+        .as_ref()
+        .and_then(|options| options.output_format.as_deref());
+    let is_nonstream_format = |format: &str| matches!(format, "svg" | "gif");
+    let mut tool_formats = req
+        .tools
+        .iter()
+        .flatten()
+        .filter(|tool| tool.tool_type == "image_generation")
+        .peekable();
+    let nonstream_format = if let Some(format) = request_format {
+        is_nonstream_format(format)
+    } else if tool_formats.peek().is_some() {
+        tool_formats.any(|tool| {
+            tool.config
+                .as_ref()
+                .and_then(|c| c.get("output_format"))
+                .or_else(|| tool.extra_body.get("output_format"))
+                .and_then(Value::as_str)
+                .is_some_and(is_nonstream_format)
+        })
+    } else {
+        is_nonstream_format(&cfg.output_format)
+    };
+    let force_stream = cfg.force_stream && !nonstream_format;
+    if nonstream_format && req.image_generation.is_some() {
+        req.stream = Some(false);
+    } else if force_stream {
+        req.stream = Some(true);
+    }
+    force_stream
+}
+
+fn configure_tools(
+    req: &mut crate::urp::UrpRequest,
+    cfg: Config,
+    force_stream: bool,
+) -> Result<(), TransformError> {
+    let default_partial_images = force_stream
+        && !req
             .image_generation
             .as_ref()
-            .and_then(|options| options.output_format.as_deref());
-        let is_nonstream_format = |format: &str| matches!(format, "svg" | "gif");
-        let mut tool_formats = req
-            .tools
-            .iter()
-            .flatten()
-            .filter(|tool| tool.tool_type == "image_generation")
-            .peekable();
-        let nonstream_format = if let Some(format) = request_format {
-            is_nonstream_format(format)
-        } else if tool_formats.peek().is_some() {
-            tool_formats.any(|tool| {
-                tool.config
-                    .as_ref()
-                    .and_then(|c| c.get("output_format"))
-                    .or_else(|| tool.extra_body.get("output_format"))
-                    .and_then(Value::as_str)
-                    .is_some_and(is_nonstream_format)
-            })
-        } else {
-            is_nonstream_format(&cfg.output_format)
-        };
-        let force_stream = cfg.force_stream && !nonstream_format;
-        if nonstream_format && req.image_generation.is_some() {
-            req.stream = Some(false);
-        } else if force_stream {
-            req.stream = Some(true);
-        }
-        if cfg.force_tool_choice {
-            req.tool_choice = Some(ToolChoice::Specific(json!({
-                "type": "image_generation"
-            })));
-        }
-
-        let default_partial_images = force_stream
-            && !req
-                .image_generation
+            .is_some_and(|options| options.partial_images.is_some());
+    let tools = req.tools.get_or_insert_with(Vec::new);
+    let mut found_existing = false;
+    for tool in tools
+        .iter_mut()
+        .filter(|tool| tool.tool_type == "image_generation")
+    {
+        found_existing = true;
+        if default_partial_images
+            && !tool.extra_body.contains_key("partial_images")
+            && !tool
+                .config
                 .as_ref()
-                .is_some_and(|options| options.partial_images.is_some());
-        let tools = req.tools.get_or_insert_with(Vec::new);
-        let mut found_existing = false;
-        for tool in tools
-            .iter_mut()
-            .filter(|tool| tool.tool_type == "image_generation")
+                .is_some_and(|config| config.get("partial_images").is_some())
         {
-            found_existing = true;
-            if default_partial_images
-                && !tool.extra_body.contains_key("partial_images")
-                && !tool
-                    .config
-                    .as_ref()
-                    .is_some_and(|config| config.get("partial_images").is_some())
-            {
-                let config = tool.config.get_or_insert_with(|| json!({}));
-                let config = config.as_object_mut().ok_or_else(|| {
-                    TransformError::Apply("Image generation tool config must be an object.".into())
-                })?;
-                config.insert(
-                    "partial_images".to_string(),
-                    Value::from(FORCE_STREAM_PARTIAL_IMAGES),
-                );
-            }
+            let config = tool.config.get_or_insert_with(|| json!({}));
+            let config = config.as_object_mut().ok_or_else(|| {
+                TransformError::Apply("Image generation tool config must be an object.".into())
+            })?;
+            config.insert(
+                "partial_images".to_string(),
+                Value::from(FORCE_STREAM_PARTIAL_IMAGES),
+            );
         }
-        if found_existing {
-            return Ok(());
-        }
-
-        let mut tool_config: serde_json::Map<String, Value> = cfg.extra.into_iter().collect();
-        tool_config.insert(
-            "output_format".to_string(),
-            Value::String(cfg.output_format),
-        );
-        if let Some(action) = cfg.action.filter(|value| !value.is_empty()) {
-            tool_config.insert("action".to_string(), Value::String(action));
-        }
-        if default_partial_images {
-            tool_config
-                .entry("partial_images".to_string())
-                .or_insert(Value::from(FORCE_STREAM_PARTIAL_IMAGES));
-        }
-        tools.push(ToolDefinition {
-            namespace: None,
-            tools: None,
-            origin_protocol: None,
-            config: Some(Value::Object(tool_config)),
-
-            tool_type: "image_generation".to_string(),
-            name: None,
-            description: None,
-            function: None,
-            custom: None,
-            extra_body: HashMap::new(),
-            cache_breakpoint: None,
-        });
-        Ok(())
     }
+    if found_existing {
+        return Ok(());
+    }
+
+    let mut tool_config: serde_json::Map<String, Value> = cfg.extra.into_iter().collect();
+    tool_config.insert(
+        "output_format".to_string(),
+        Value::String(cfg.output_format),
+    );
+    if let Some(action) = cfg.action.filter(|value| !value.is_empty()) {
+        tool_config.insert("action".to_string(), Value::String(action));
+    }
+    if default_partial_images {
+        tool_config
+            .entry("partial_images".to_string())
+            .or_insert(Value::from(FORCE_STREAM_PARTIAL_IMAGES));
+    }
+    tools.push(ToolDefinition {
+        namespace: None,
+        tools: None,
+        origin_protocol: None,
+        config: Some(Value::Object(tool_config)),
+
+        tool_type: "image_generation".to_string(),
+        name: None,
+        description: None,
+        function: None,
+        custom: None,
+        extra_body: HashMap::new(),
+        cache_breakpoint: None,
+    });
+    Ok(())
 }
 
 inventory::submit!(TransformEntry {

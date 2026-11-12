@@ -221,6 +221,8 @@ RTA-5. Error policy per attempt:
 - Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, MUST NOT retry the same Channel. They MUST still advance to the next eligible Channel or Provider.
 - A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing. Monoize MUST NOT classify such an error as an upstream attempt failure.
 
+RTA-5c. If the effective Channel proxy cannot construct an HTTP client, Monoize MUST fail that attempt with `upstream_proxy_config_invalid` and record it in `tried_providers`. It MUST advance to the next eligible Channel or Provider, without direct-network fallback, same-Channel retry, or a passive-health failure sample. Exhaustion MUST use RTA-8 and terminal request logging. A local typed-request conversion needed by the upstream stream decoder MUST succeed before Monoize dispatches the upstream request.
+
 RTA-5a. A persistent Channel failure is an upstream failure that satisfies at least one condition below:
 
 1. Its HTTP status is one of `401`, `402`, `403`, `404`, `405`, `407`, `410`, `415`, `426`, or `451`.

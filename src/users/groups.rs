@@ -553,105 +553,12 @@ impl UserStore {
         .await
         .map_err(storage)?;
 
-        // GR-X2: drop the id from key selections; empty selections fall back
-        // to inheriting the owner's group. Affected rows are rewritten with
-        // chunked bulk statements (GR-X7) instead of one UPDATE per row.
-        let rows = tx
-            .query_all(
-                self.db
-                    .stmt("SELECT id, use_user_group, group_ids FROM api_keys", vec![]),
-            )
-            .await
-            .map_err(storage)?;
-        let mut key_updates: Vec<(String, String, i32)> = Vec::new();
-        for row in rows {
-            let row_id: String = row.try_get("", "id").map_err(storage)?;
-            let use_user_group: i32 = row.try_get("", "use_user_group").map_err(storage)?;
-            let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
-            let group_ids = parse_group_ids_json(raw.as_deref(), "api_keys.group_ids")
-                .map_err(GroupStoreError::Storage)?;
-            if !group_ids.iter().any(|gid| gid == id) {
-                continue;
-            }
-            let remaining: Vec<String> = group_ids.into_iter().filter(|gid| gid != id).collect();
-            let next_use_user_group = if remaining.is_empty() {
-                1
-            } else {
-                use_user_group
-            };
-            key_updates.push((
-                row_id,
-                serde_json::to_string(&remaining).map_err(storage)?,
-                next_use_user_group,
-            ));
-        }
-        for chunk in key_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
-            let (sql, values) = api_key_group_cascade_bulk_update(chunk);
-            tx.execute(self.db.stmt(&sql, values))
-                .await
-                .map_err(storage)?;
-        }
+        self.cascade_deleted_group_keys(&tx, id).await?;
 
-        // GR-X3: providers keep a non-empty group set (GR-I2).
-        let rows = tx
-            .query_all(
-                self.db
-                    .stmt("SELECT id, group_ids FROM monoize_providers", vec![]),
-            )
-            .await
-            .map_err(storage)?;
-        let mut provider_updates: Vec<(String, String)> = Vec::new();
-        for row in rows {
-            let row_id: String = row.try_get("", "id").map_err(storage)?;
-            let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
-            let group_ids = parse_group_ids_json(raw.as_deref(), "monoize_providers.group_ids")
-                .map_err(GroupStoreError::Storage)?;
-            if !group_ids.iter().any(|gid| gid == id) {
-                continue;
-            }
-            let mut remaining: Vec<String> =
-                group_ids.into_iter().filter(|gid| gid != id).collect();
-            if remaining.is_empty() {
-                remaining.push(default_group_id.clone());
-            }
-            provider_updates.push((row_id, serde_json::to_string(&remaining).map_err(storage)?));
-        }
-        for chunk in provider_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
-            let (sql, values) = group_ids_bulk_update("monoize_providers", chunk);
-            tx.execute(self.db.stmt(&sql, values))
-                .await
-                .map_err(storage)?;
-        }
+        self.cascade_deleted_group_providers(&tx, id, &default_group_id)
+            .await?;
 
-        // A purchasable plan must always retain at least one eligible group.
-        let rows = tx
-            .query_all(
-                self.db
-                    .stmt("SELECT id, group_ids FROM billing_plans", vec![]),
-            )
-            .await
-            .map_err(storage)?;
-        let mut plan_updates: Vec<(String, String)> = Vec::new();
-        for row in rows {
-            let row_id: String = row.try_get("", "id").map_err(storage)?;
-            let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
-            let group_ids = parse_group_ids_json(raw.as_deref(), "billing_plans.group_ids")
-                .map_err(GroupStoreError::Storage)?;
-            if !group_ids.iter().any(|gid| gid == id) {
-                continue;
-            }
-            let remaining: Vec<String> = group_ids.into_iter().filter(|gid| gid != id).collect();
-            if remaining.is_empty() {
-                return Err(GroupStoreError::PlanRequiresGroup);
-            }
-            plan_updates.push((row_id, serde_json::to_string(&remaining).map_err(storage)?));
-        }
-        for chunk in plan_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
-            let (sql, values) = group_ids_bulk_update("billing_plans", chunk);
-            tx.execute(self.db.stmt(&sql, values))
-                .await
-                .map_err(storage)?;
-        }
+        self.cascade_deleted_group_plans(&tx, id).await?;
 
         let result = tx
             .execute(
@@ -708,5 +615,130 @@ impl UserStore {
             .map_err(storage)?
             .ok_or_else(|| GroupStoreError::Storage("max query returned no row".to_string()))?;
         row.try_get("", "next_sort").map_err(storage)
+    }
+
+    async fn cascade_deleted_group_keys(
+        &self,
+        tx: &sea_orm::DatabaseTransaction,
+        id: &str,
+    ) -> Result<(), GroupStoreError> {
+        // GR-X2: drop the id from key selections; empty selections fall back
+        // to inheriting the owner's group. Affected rows are rewritten with
+        // chunked bulk statements (GR-X7) instead of one UPDATE per row.
+        let rows = tx
+            .query_all(
+                self.db
+                    .stmt("SELECT id, use_user_group, group_ids FROM api_keys", vec![]),
+            )
+            .await
+            .map_err(storage)?;
+        let mut key_updates: Vec<(String, String, i32)> = Vec::new();
+        for row in rows {
+            let row_id: String = row.try_get("", "id").map_err(storage)?;
+            let use_user_group: i32 = row.try_get("", "use_user_group").map_err(storage)?;
+            let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
+            let group_ids = parse_group_ids_json(raw.as_deref(), "api_keys.group_ids")
+                .map_err(GroupStoreError::Storage)?;
+            if !group_ids.iter().any(|gid| gid == id) {
+                continue;
+            }
+            let remaining: Vec<String> = group_ids.into_iter().filter(|gid| gid != id).collect();
+            let next_use_user_group = if remaining.is_empty() {
+                1
+            } else {
+                use_user_group
+            };
+            key_updates.push((
+                row_id,
+                serde_json::to_string(&remaining).map_err(storage)?,
+                next_use_user_group,
+            ));
+        }
+        for chunk in key_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
+            let (sql, values) = api_key_group_cascade_bulk_update(chunk);
+            tx.execute(self.db.stmt(&sql, values))
+                .await
+                .map_err(storage)?;
+        }
+
+        Ok(())
+    }
+
+    async fn cascade_deleted_group_providers(
+        &self,
+        tx: &sea_orm::DatabaseTransaction,
+        id: &str,
+        default_group_id: &str,
+    ) -> Result<(), GroupStoreError> {
+        // GR-X3: providers keep a non-empty group set (GR-I2).
+        let rows = tx
+            .query_all(
+                self.db
+                    .stmt("SELECT id, group_ids FROM monoize_providers", vec![]),
+            )
+            .await
+            .map_err(storage)?;
+        let mut provider_updates: Vec<(String, String)> = Vec::new();
+        for row in rows {
+            let row_id: String = row.try_get("", "id").map_err(storage)?;
+            let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
+            let group_ids = parse_group_ids_json(raw.as_deref(), "monoize_providers.group_ids")
+                .map_err(GroupStoreError::Storage)?;
+            if !group_ids.iter().any(|gid| gid == id) {
+                continue;
+            }
+            let mut remaining: Vec<String> =
+                group_ids.into_iter().filter(|gid| gid != id).collect();
+            if remaining.is_empty() {
+                remaining.push(default_group_id.to_string());
+            }
+            provider_updates.push((row_id, serde_json::to_string(&remaining).map_err(storage)?));
+        }
+        for chunk in provider_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
+            let (sql, values) = group_ids_bulk_update("monoize_providers", chunk);
+            tx.execute(self.db.stmt(&sql, values))
+                .await
+                .map_err(storage)?;
+        }
+
+        Ok(())
+    }
+
+    async fn cascade_deleted_group_plans(
+        &self,
+        tx: &sea_orm::DatabaseTransaction,
+        id: &str,
+    ) -> Result<(), GroupStoreError> {
+        // A purchasable plan must always retain at least one eligible group.
+        let rows = tx
+            .query_all(
+                self.db
+                    .stmt("SELECT id, group_ids FROM billing_plans", vec![]),
+            )
+            .await
+            .map_err(storage)?;
+        let mut plan_updates: Vec<(String, String)> = Vec::new();
+        for row in rows {
+            let row_id: String = row.try_get("", "id").map_err(storage)?;
+            let raw: Option<String> = row.try_get("", "group_ids").map_err(storage)?;
+            let group_ids = parse_group_ids_json(raw.as_deref(), "billing_plans.group_ids")
+                .map_err(GroupStoreError::Storage)?;
+            if !group_ids.iter().any(|gid| gid == id) {
+                continue;
+            }
+            let remaining: Vec<String> = group_ids.into_iter().filter(|gid| gid != id).collect();
+            if remaining.is_empty() {
+                return Err(GroupStoreError::PlanRequiresGroup);
+            }
+            plan_updates.push((row_id, serde_json::to_string(&remaining).map_err(storage)?));
+        }
+        for chunk in plan_updates.chunks(GROUP_CASCADE_UPDATE_CHUNK_ROWS) {
+            let (sql, values) = group_ids_bulk_update("billing_plans", chunk);
+            tx.execute(self.db.stmt(&sql, values))
+                .await
+                .map_err(storage)?;
+        }
+
+        Ok(())
     }
 }

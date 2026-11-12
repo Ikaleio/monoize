@@ -5,10 +5,11 @@ impl<'a> NonstreamRun<'a> {
     /// Routing, balance admission, and the pending request log. Every error
     /// here precedes the first upstream attempt and logs nothing.
     pub(super) async fn admit(
-        inputs: NonstreamInputs<'a>,
+        inputs: NonstreamRequest<'a>,
         mut req: urp::UrpRequest,
         client_session_id: Option<String>,
-    ) -> AppResult<(Self, Vec<MonoizeAttempt>)> {
+        strip_foreign_response: bool,
+    ) -> AppResult<Self> {
         let state = inputs.state;
         let auth = inputs.auth;
         let started_at = inputs
@@ -46,6 +47,7 @@ impl<'a> NonstreamRun<'a> {
         };
         let run = Self {
             inputs,
+            strip_foreign_response,
             started_at,
             logical_model,
             transform_match_model,
@@ -58,57 +60,18 @@ impl<'a> NonstreamRun<'a> {
             // cache breakpoints actually survive into the upstream encoding).
             original_req: Some(req),
             history_context,
-            tried_providers: Vec::new(),
-            last_failed_attempt: None,
-            execution_state: AttemptExecutionState::default(),
+            attempts: AttemptDriver::new(attempts),
         };
-        Ok((run, attempts))
-    }
-
-    /// RTA-4: the same-Channel tries of one routed attempt. `Ok(None)` moves
-    /// on to the next attempt; `Err` ends the request.
-    pub(super) async fn serve_attempt<T>(
-        &mut self,
-        mut attempt: MonoizeAttempt,
-        last_attempt: bool,
-        accept: &impl Fn(&urp::UrpResponse, &str) -> AppResult<T>,
-    ) -> AppResult<Option<Served<T>>> {
-        if self.execution_state.should_skip(&attempt) {
-            return Ok(None);
-        }
-        let max_channel_attempts = same_channel_attempt_slots(&attempt);
-        for channel_attempt in 0..max_channel_attempts {
-            if self.execution_state.should_skip(&attempt) {
-                break;
-            }
-            let final_slot = last_attempt && channel_attempt + 1 == max_channel_attempts;
-            let outcome = self
-                .try_channel(&mut attempt, channel_attempt + 1, final_slot, accept)
-                .await?;
-            let retry_same_channel = match outcome {
-                TryOutcome::Served(served) => return Ok(Some(*served)),
-                TryOutcome::Failed { retry_same_channel } => retry_same_channel,
-            };
-            if !retry_same_channel {
-                break;
-            }
-            maybe_sleep_before_channel_retry(&attempt).await;
-        }
-        Ok(None)
+        Ok(run)
     }
 
     /// One upstream try on the attempt's Channel. `Err` ends the request.
-    async fn try_channel<T>(
+    pub(super) async fn try_channel<T>(
         &mut self,
         attempt: &mut MonoizeAttempt,
-        channel_attempts_used: usize,
-        final_slot: bool,
+        slot: AttemptPosition,
         accept: &impl Fn(&urp::UrpResponse, &str) -> AppResult<T>,
     ) -> AppResult<TryOutcome<T>> {
-        let slot = TrySlot {
-            attempt_number: self.execution_state.record_upstream_attempt(attempt),
-            channel_attempts_used,
-        };
         if let Some(task_state) = self.inputs.task_state {
             task_state.set_attempt(attempt);
         }
@@ -119,52 +82,22 @@ impl<'a> NonstreamRun<'a> {
         // `cache_anthropic_system`, `cache_anthropic_tool_use`) survive into
         // the encoded upstream request even when the downstream and
         // upstream protocol families differ.
-        let req = attempt_request_from_original(&mut self.original_req, final_slot);
+        let req = attempt_request_from_original(&mut self.original_req, slot.final_slot);
         let (mut call, upstream_body) = self.prepare_call(attempt, slot, req).await?;
         let exchange = self
             .send_upstream(attempt, &mut call, upstream_body)
             .await?;
-        let retry_same_channel = match exchange {
+        match exchange {
             Exchange::Reply(reply) => return self.handle_reply(attempt, call, reply, accept).await,
-            Exchange::CallFailed(err) => self.handle_call_failure(attempt, call, err).await,
-            Exchange::CollectFailed(err) => {
-                let passive_failure_class = app_failure_class(&err);
-                self.record_failure(attempt, slot, &err, passive_failure_class)
-                    .await
+            Exchange::CallFailed(err) => Ok(self.handle_call_failure(attempt, call, err).await),
+            Exchange::AttemptFailed(err) => {
+                self.capture_failure(attempt, &mut call, &err).await;
+                Ok(TryOutcome::Failed {
+                    failure_class: app_failure_class(&err),
+                    error: err,
+                })
             }
-        };
-        Ok(TryOutcome::Failed { retry_same_channel })
-    }
-
-    /// Records a failed try and reports whether the same Channel may serve
-    /// another one (RTA-4/RTA-5).
-    pub(super) async fn record_failure(
-        &mut self,
-        attempt: &MonoizeAttempt,
-        slot: TrySlot,
-        err: &AppError,
-        passive_failure_class: Option<RetryableFailureClass>,
-    ) -> bool {
-        let state = self.inputs.state;
-        record_upstream_attempt_failure(
-            state,
-            attempt,
-            slot.attempt_number,
-            err,
-            passive_failure_class,
-            &mut self.tried_providers,
-            &mut self.execution_state,
-        )
-        .await;
-        self.last_failed_attempt = Some(attempt.clone());
-        allow_same_channel_retry(
-            state,
-            attempt,
-            &self.execution_state,
-            slot.channel_attempts_used,
-            passive_failure_class,
-        )
-        .await
+        }
     }
 
     /// Ends the request with `error`: error request log, then capture persist.
@@ -177,14 +110,16 @@ impl<'a> NonstreamRun<'a> {
             self.inputs.state,
             self.inputs.auth,
             attempt,
-            &self.logical_model,
-            false,
-            self.started_at,
-            self.inputs.request_id.clone(),
-            self.inputs.request_ip.clone(),
+            RequestLogContext {
+                model: &self.logical_model,
+                is_stream: false,
+                started_at: self.started_at,
+                request_id: self.inputs.request_id.as_deref(),
+                request_ip: self.inputs.request_ip.as_deref(),
+                reasoning_effort: self.reasoning_effort.as_deref(),
+            },
             &error,
-            self.reasoning_effort.clone(),
-            std::mem::take(&mut self.tried_providers),
+            std::mem::take(&mut self.attempts.tried_providers),
         );
         if let Some(session) = self.inputs.capture.session.as_ref() {
             session.persist_with_result(None, false).await;
@@ -194,38 +129,39 @@ impl<'a> NonstreamRun<'a> {
 
     /// RTA-8: every attempt failed or was skipped.
     pub(super) async fn finish_exhausted(self) -> AppError {
-        let final_err = build_exhausted_error_for_downstream(
-            &self.logical_model,
-            &self.tried_providers,
-            self.last_failed_attempt.as_ref(),
-            self.inputs.downstream,
-        );
-        if let Some(attempt) = self.last_failed_attempt {
+        let final_err = self
+            .attempts
+            .exhausted_error(&self.logical_model, self.inputs.downstream);
+        if let Some(attempt) = self.attempts.last_failed_attempt {
             spawn_request_log_error(
                 self.inputs.state,
                 self.inputs.auth,
                 &attempt,
-                &self.logical_model,
-                false,
-                self.started_at,
-                self.inputs.request_id,
-                self.inputs.request_ip,
+                RequestLogContext {
+                    model: &self.logical_model,
+                    is_stream: false,
+                    started_at: self.started_at,
+                    request_id: (self.inputs.request_id).as_deref(),
+                    request_ip: (self.inputs.request_ip).as_deref(),
+                    reasoning_effort: (self.reasoning_effort).as_deref(),
+                },
                 &final_err,
-                self.reasoning_effort,
-                self.tried_providers,
+                self.attempts.tried_providers,
             );
         } else {
             spawn_request_log_error_no_attempt(
                 self.inputs.state,
                 self.inputs.auth,
-                &self.logical_model,
-                false,
-                self.started_at,
-                self.inputs.request_id,
-                self.inputs.request_ip,
+                RequestLogContext {
+                    model: &self.logical_model,
+                    is_stream: false,
+                    started_at: self.started_at,
+                    request_id: (self.inputs.request_id).as_deref(),
+                    request_ip: (self.inputs.request_ip).as_deref(),
+                    reasoning_effort: (self.reasoning_effort).as_deref(),
+                },
                 &final_err,
-                self.reasoning_effort,
-                self.tried_providers,
+                self.attempts.tried_providers,
             );
         }
         if let Some(session) = self.inputs.capture.session.as_ref() {

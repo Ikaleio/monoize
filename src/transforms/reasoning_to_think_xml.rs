@@ -446,6 +446,12 @@ impl StreamState {
                     self.replacement = Some(Vec::new());
                 }
             }
+            _ => self.convert_delta(event, tag),
+        }
+    }
+
+    fn convert_delta(&mut self, event: &mut UrpStreamEvent, tag: &str) {
+        match event {
             UrpStreamEvent::NodeDelta {
                 node_index, delta, ..
             } => {
@@ -524,6 +530,12 @@ impl StreamState {
                     None => {}
                 }
             }
+            _ => self.convert_done(event, tag),
+        }
+    }
+
+    fn convert_done(&mut self, event: &mut UrpStreamEvent, tag: &str) {
+        match event {
             UrpStreamEvent::NodeDone {
                 node_index, node, ..
             } => {

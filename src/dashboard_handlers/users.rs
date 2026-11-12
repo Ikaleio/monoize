@@ -224,72 +224,7 @@ pub async fn update_user(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "user not found"))?;
 
-    if target_user.role == UserRole::SuperAdmin && current_user.role != UserRole::SuperAdmin {
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "only super admin can modify super admin accounts",
-        ));
-    }
-    if target_user.role == UserRole::Admin
-        && current_user.id != target_user.id
-        && current_user.role != UserRole::SuperAdmin
-    {
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "only super admin can modify other admin accounts",
-        ));
-    }
-
-    let new_role = body.role.as_ref().and_then(|r| UserRole::from_str(r));
-    if let Some(role) = new_role
-        && !current_user.role.can_assign_role(role)
-    {
-        return Err(AppError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "you cannot assign this role",
-        ));
-    }
-
-    if let Some(ref username) = body.username {
-        if !is_valid_username(username) {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_username",
-                "username must be 3-22 characters, only letters, digits and underscores",
-            )
-            .with_param("username"));
-        }
-        if is_reserved_internal_username(username) {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "reserved_username",
-                "username prefix _monoize_ is reserved",
-            )
-            .with_param("username"));
-        }
-    }
-
-    if let Some(ref password) = body.password
-        && password.len() < 8
-    {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_password",
-            "password must be at least 8 characters",
-        )
-        .with_param("password"));
-    }
-
-    if body.enabled == Some(false) && current_user.id == user_id {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "cannot_disable_self",
-            "you cannot disable your own account",
-        ));
-    }
+    let new_role = validate_user_update(&current_user, &target_user, &user_id, &body)?;
 
     let email = body
         .email
@@ -366,26 +301,7 @@ pub async fn update_user(
             &current_user.id,
         )
         .await
-        .map_err(|e| match e {
-            BalanceMutationError::BalanceChanged => AppError::new(
-                StatusCode::CONFLICT,
-                "balance_changed",
-                "balance changed since it was read",
-            )
-            .with_param("balance"),
-            BalanceMutationError::Other(e) => {
-                if e.starts_with("unknown group id") {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
-                } else if e.contains("not found") {
-                    AppError::new(StatusCode::NOT_FOUND, "not_found", e)
-                } else if e.contains("invalid") {
-                    AppError::new(StatusCode::BAD_REQUEST, "invalid_balance", e)
-                        .with_param("balance")
-                } else {
-                    AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
-                }
-            }
-        })?;
+        .map_err(map_user_balance_error)?;
 
     let updated_user = user_store
         .get_user_by_id(&user_id)
@@ -435,4 +351,102 @@ pub async fn delete_user(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     Ok(Json(json!({ "success": true })))
+}
+
+fn validate_user_update(
+    current_user: &crate::users::User,
+    target_user: &crate::users::User,
+    user_id: &str,
+    body: &UpdateUserRequest,
+) -> AppResult<Option<UserRole>> {
+    if target_user.role == UserRole::SuperAdmin && current_user.role != UserRole::SuperAdmin {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "only super admin can modify super admin accounts",
+        ));
+    }
+    if target_user.role == UserRole::Admin
+        && current_user.id != target_user.id
+        && current_user.role != UserRole::SuperAdmin
+    {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "only super admin can modify other admin accounts",
+        ));
+    }
+
+    let new_role = body.role.as_ref().and_then(|r| UserRole::from_str(r));
+    if let Some(role) = new_role
+        && !current_user.role.can_assign_role(role)
+    {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "you cannot assign this role",
+        ));
+    }
+
+    if let Some(ref username) = body.username {
+        if !is_valid_username(username) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_username",
+                "username must be 3-22 characters, only letters, digits and underscores",
+            )
+            .with_param("username"));
+        }
+        if is_reserved_internal_username(username) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "reserved_username",
+                "username prefix _monoize_ is reserved",
+            )
+            .with_param("username"));
+        }
+    }
+
+    if let Some(ref password) = body.password
+        && password.len() < 8
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_password",
+            "password must be at least 8 characters",
+        )
+        .with_param("password"));
+    }
+
+    if body.enabled == Some(false) && current_user.id == user_id {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "cannot_disable_self",
+            "you cannot disable your own account",
+        ));
+    }
+
+    Ok(new_role)
+}
+
+fn map_user_balance_error(e: BalanceMutationError) -> AppError {
+    match e {
+        BalanceMutationError::BalanceChanged => AppError::new(
+            StatusCode::CONFLICT,
+            "balance_changed",
+            "balance changed since it was read",
+        )
+        .with_param("balance"),
+        BalanceMutationError::Other(e) => {
+            if e.starts_with("unknown group id") {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
+            } else if e.contains("not found") {
+                AppError::new(StatusCode::NOT_FOUND, "not_found", e)
+            } else if e.contains("invalid") {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_balance", e).with_param("balance")
+            } else {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
+            }
+        }
+    }
 }

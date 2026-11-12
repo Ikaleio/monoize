@@ -114,85 +114,54 @@ pub(super) fn find_pending_request_envelope_extra(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_nonstream_typed_with_validator(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
+    inputs: NonstreamRequest<'_>,
     req: urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
     client_session_id: Option<String>,
-    capture: RequestCaptureContext,
     response_validator: Option<fn(&urp::UrpResponse) -> AppResult<()>>,
-    task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<(urp::UrpResponse, String)> {
-    let inputs = NonstreamInputs {
-        state,
-        auth,
-        max_multiplier,
-        downstream,
-        request_id,
-        request_ip,
-        capture,
-        strip_foreign_response: response_validator.is_none(),
-        task_state,
-    };
-    let (resp, logical_model, (), _) =
-        execute_nonstream(inputs, req, client_session_id, |resp, logical_model| {
-            match response_validator {
-                Some(validate) => validate(resp),
-                None => encode_response_for_downstream(downstream, resp, logical_model).map(|_| ()),
-            }
-        })
-        .await?;
+    let downstream = inputs.downstream;
+    let (resp, logical_model, (), _) = execute_nonstream(
+        inputs,
+        req,
+        client_session_id,
+        response_validator.is_none(),
+        |resp, logical_model| match response_validator {
+            Some(validate) => validate(resp),
+            None => encode_response_for_downstream(downstream, resp, logical_model).map(|_| ()),
+        },
+    )
+    .await?;
     Ok((resp, logical_model))
 }
 
 pub(super) async fn forward_nonstream_typed_with_task_state(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
+    inputs: NonstreamRequest<'_>,
     req: urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
     client_session_id: Option<String>,
-    capture: RequestCaptureContext,
-    task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<(Value, crate::error::ForwardedHeaders)> {
-    let inputs = NonstreamInputs {
-        state,
-        auth,
-        max_multiplier,
-        downstream,
-        request_id,
-        request_ip,
-        capture,
-        strip_foreign_response: true,
-        task_state,
-    };
-    let (_, _, body, forwarded_headers) =
-        execute_nonstream(inputs, req, client_session_id, |resp, logical_model| {
-            encode_response_for_downstream(downstream, resp, logical_model)
-        })
-        .await?;
+    let downstream = inputs.downstream;
+    let (_, _, body, forwarded_headers) = execute_nonstream(
+        inputs,
+        req,
+        client_session_id,
+        true,
+        |resp, logical_model| encode_response_for_downstream(downstream, resp, logical_model),
+    )
+    .await?;
     Ok((body, forwarded_headers))
 }
 
 /// Request-scoped inputs of one non-stream execution.
-struct NonstreamInputs<'a> {
-    state: &'a AppState,
-    auth: &'a crate::auth::AuthResult,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
-    capture: RequestCaptureContext,
-    /// XTRA-5a; the Image API opts out because it reads response extras.
-    strip_foreign_response: bool,
-    task_state: Option<&'a AdmittedRequestTaskState>,
+pub(super) struct NonstreamRequest<'a> {
+    pub(super) state: &'a AppState,
+    pub(super) auth: &'a crate::auth::AuthResult,
+    pub(super) max_multiplier: Option<Multiplier>,
+    pub(super) downstream: DownstreamProtocol,
+    pub(super) request_id: Option<String>,
+    pub(super) request_ip: Option<String>,
+    pub(super) capture: RequestCaptureContext,
+    pub(super) task_state: Option<&'a AdmittedRequestTaskState>,
 }
 
 /// Runs routing, upstream attempts, response transforms, and billing for one
@@ -201,22 +170,35 @@ struct NonstreamInputs<'a> {
 /// returned with the response (FP6k.1a). The last tuple member is the SE1d
 /// header set of the serving attempt.
 async fn execute_nonstream<T>(
-    inputs: NonstreamInputs<'_>,
+    inputs: NonstreamRequest<'_>,
     req: urp::UrpRequest,
     client_session_id: Option<String>,
+    strip_foreign_response: bool,
     accept: impl Fn(&urp::UrpResponse, &str) -> AppResult<T>,
 ) -> AppResult<(urp::UrpResponse, String, T, crate::error::ForwardedHeaders)> {
-    let (mut run, attempts) = NonstreamRun::admit(inputs, req, client_session_id).await?;
-    let attempt_count = attempts.len();
-    for (attempt_index, attempt) in attempts.into_iter().enumerate() {
-        let last_attempt = attempt_index + 1 == attempt_count;
-        if let Some(served) = run.serve_attempt(attempt, last_attempt, &accept).await? {
-            return Ok((
-                served.resp,
-                run.logical_model,
-                served.accepted,
-                served.forwarded_headers,
-            ));
+    let mut run =
+        NonstreamRun::admit(inputs, req, client_session_id, strip_foreign_response).await?;
+    while let Some(mut slot) = run.attempts.next() {
+        match run
+            .try_channel(&mut slot.attempt, slot.position, &accept)
+            .await?
+        {
+            TryOutcome::Served(served) => {
+                return Ok((
+                    served.resp,
+                    run.logical_model,
+                    served.accepted,
+                    served.forwarded_headers,
+                ));
+            }
+            TryOutcome::Failed {
+                error,
+                failure_class,
+            } => {
+                run.attempts
+                    .fail(run.inputs.state, slot, &error, failure_class)
+                    .await;
+            }
         }
     }
     Err(run.finish_exhausted().await)
@@ -225,7 +207,9 @@ async fn execute_nonstream<T>(
 /// One admitted non-stream request: its inputs, what admission resolved, and
 /// the bookkeeping carried from one upstream try to the next.
 struct NonstreamRun<'a> {
-    inputs: NonstreamInputs<'a>,
+    inputs: NonstreamRequest<'a>,
+    /// XTRA-5a; the Image API opts out because it reads response extras.
+    strip_foreign_response: bool,
     started_at: std::time::Instant,
     logical_model: String,
     transform_match_model: String,
@@ -237,9 +221,7 @@ struct NonstreamRun<'a> {
     /// request from; the final slot or a decoded response takes it (FP6j-2).
     original_req: Option<urp::UrpRequest>,
     history_context: Option<responses_history::HistoryContext>,
-    tried_providers: Vec<TriedProvider>,
-    last_failed_attempt: Option<MonoizeAttempt>,
-    execution_state: AttemptExecutionState,
+    attempts: AttemptDriver,
 }
 
 /// A settled response, the caller's `accept` value, and the SE1d headers of
@@ -253,24 +235,15 @@ struct Served<T> {
 /// How one upstream try ended when it did not end the request.
 enum TryOutcome<T> {
     Served(Box<Served<T>>),
-    /// The failure is recorded; `retry_same_channel` allows another try on
-    /// the same Channel (RTA-4/RTA-5).
     Failed {
-        retry_same_channel: bool,
+        error: AppError,
+        failure_class: Option<RetryableFailureClass>,
     },
-}
-
-#[derive(Clone, Copy)]
-struct TrySlot {
-    /// Request-wide upstream attempt number.
-    attempt_number: u32,
-    /// Tries made on this Channel so far, this one included.
-    channel_attempts_used: usize,
 }
 
 /// One upstream try on one Channel slot, from request encoding to its reply.
 struct AttemptCall {
-    slot: TrySlot,
+    slot: AttemptPosition,
     /// The transformed request. Its input nodes are released once encoded
     /// unless a capture session still reads them (FP6j-2).
     req: urp::UrpRequest,

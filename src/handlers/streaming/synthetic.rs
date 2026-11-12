@@ -36,6 +36,30 @@ impl<'a> BufferedDump<'a> {
             transform_chain: self.transform_chain,
         }
     }
+
+    async fn push_error(
+        self,
+        attempt: &'a MonoizeAttempt,
+        request: &'a StreamRequest,
+        req: &'a urp::UrpRequest,
+        upstream_body: Value,
+        error: &AppError,
+    ) {
+        let Some(session) = request.capture.session.as_ref() else {
+            return;
+        };
+        let outcome = DumpOutcome {
+            error: Some(json!({
+                "message": error.message,
+                "code": error.code,
+                "status": error.status.as_u16(),
+            })),
+            ..DumpOutcome::default()
+        };
+        self.attempt_dump(attempt, request, req, upstream_body)
+            .push(session, &request.capture.raw_input, outcome)
+            .await;
+    }
 }
 
 /// The upstream reply of a buffered slot and the request that produced it.
@@ -80,7 +104,28 @@ impl StreamForward {
         attempt.session_affinity_value = resolve_session_affinity_value(attempt, &upstream_body);
         let provider = build_channel_provider_config(attempt);
         let path = upstream_path_for_model(attempt.provider_type, &nonstream_req.model, false);
-        let http = client_http_for_attempt(&self.request.state, attempt)?;
+        let dump = BufferedDump {
+            attempt_number: slot.attempt_number,
+            path: &path,
+            transform_chain,
+        };
+        let http = match client_http_for_attempt(&self.request.state, attempt) {
+            Ok(http) => http,
+            Err(error) => {
+                dump.push_error(
+                    attempt,
+                    &self.request,
+                    &nonstream_req,
+                    upstream_body,
+                    &error,
+                )
+                .await;
+                return Ok(SlotOutcome::Failed {
+                    error,
+                    failure_class: None,
+                });
+            }
+        };
         let extra_headers = attempt_extra_headers(attempt, &upstream_body);
         // FP6j-2: only a capture dump reads the encoded value after
         // serialization.
@@ -101,11 +146,6 @@ impl StreamForward {
             &extra_headers,
         )
         .await;
-        let dump = BufferedDump {
-            attempt_number: slot.attempt_number,
-            path: &path,
-            transform_chain,
-        };
         match call {
             Ok((value, forwarded_headers)) => {
                 if let (Some(session), Some(upstream_body)) =
@@ -127,7 +167,7 @@ impl StreamForward {
                     forwarded_headers,
                     responses_echo,
                 };
-                self.accept_buffered_reply(attempt, plan, slot, reply).await
+                self.accept_buffered_reply(attempt, plan, reply).await
             }
             Err(err) => {
                 if let (Some(session), Some(upstream_body)) =
@@ -141,7 +181,7 @@ impl StreamForward {
                         .push(session, &self.request.capture.raw_input, outcome)
                         .await;
                 }
-                Ok(self.record_call_failure(attempt, slot, err).await)
+                Ok(self.record_call_failure(err).await)
             }
         }
     }
@@ -151,7 +191,6 @@ impl StreamForward {
         &mut self,
         attempt: &MonoizeAttempt,
         plan: &AttemptPlan,
-        slot: Slot,
         reply: BufferedReply,
     ) -> AppResult<SlotOutcome> {
         let BufferedReply {
@@ -164,11 +203,14 @@ impl StreamForward {
             &self.request.state,
             &self.request.auth,
             attempt,
-            &self.request.logical_model,
-            true,
-            self.request.request_id.as_deref(),
-            self.request.request_ip.as_deref(),
-            self.request.started_at,
+            RequestLogContext {
+                model: &self.request.logical_model,
+                is_stream: true,
+                started_at: self.request.started_at,
+                request_id: self.request.request_id.as_deref(),
+                request_ip: self.request.request_ip.as_deref(),
+                reasoning_effort: None,
+            },
         )
         .await;
         // Read before the match: a read guard in the scrutinee would live
@@ -187,9 +229,10 @@ impl StreamForward {
                 err.forwarded_headers = forwarded_headers;
                 let passive_failure_class = is_same_channel_retryable_app_error(&err)
                     .then(|| classify_retryable_app_failure(&err));
-                return Ok(self
-                    .record_try_failure(attempt, slot, &err, passive_failure_class)
-                    .await);
+                return Ok(SlotOutcome::Failed {
+                    error: err,
+                    failure_class: passive_failure_class,
+                });
             }
         };
         let upstream_response_model = mismatched_upstream_response_model(&req.model, &resp.model);
@@ -213,8 +256,7 @@ impl StreamForward {
             mask_sensitive_info,
         );
         // Wrap newly produced encrypted reasoning payloads in mz2 envelopes
-        // BEFORE response-phase transforms run. See `nonstream.rs` and PIPE-1d
-        // in spec/urp-transform-system.spec.md for rationale.
+        // BEFORE response-phase transforms can alter their payload (PIPE-1d).
         if self.request.auth.reasoning_envelope_enabled {
             urp::wrap_reasoning_envelopes_in_response(
                 &mut resp,
@@ -297,7 +339,7 @@ impl StreamForward {
         let replay = SyntheticReplay {
             request: self.request,
             attempt,
-            tried_providers: self.tried_providers,
+            tried_providers: self.attempts.tried_providers,
             pending_request_log_guard: self.pending_request_log_guard,
             history,
             sse_max_frame_length: plan.sse_max_frame_length,
@@ -398,15 +440,20 @@ impl SyntheticReplay {
                     &request.state,
                     &request.auth,
                     &attempt,
-                    &request.logical_model,
-                    request.started_at,
-                    request.request_id,
-                    request.request_ip,
-                    Some(request.started_at.elapsed().as_millis() as u64),
-                    stream_terminal_error_from_app(&err),
-                    request.reasoning_effort,
-                    tried_providers,
-                    None,
+                    RequestLogContext {
+                        model: &request.logical_model,
+                        is_stream: true,
+                        started_at: request.started_at,
+                        request_id: (request.request_id).as_deref(),
+                        request_ip: (request.request_ip).as_deref(),
+                        reasoning_effort: (request.reasoning_effort).as_deref(),
+                    },
+                    RequestLogStreamError {
+                        ttfb_ms: Some(request.started_at.elapsed().as_millis() as u64),
+                        terminal_error: stream_terminal_error_from_app(&err),
+                        tried_providers,
+                        usage: None,
+                    },
                 );
                 if let Some(session) = request.capture.session.as_ref() {
                     session.persist_with_result(None, true).await;
@@ -439,21 +486,24 @@ async fn settle_replayed_response(
             &request.state,
             &request.auth,
             attempt,
-            &request.logical_model,
-            resp.usage.clone(),
-            charge.charge_nano_usd,
-            charge.billing_breakdown,
-            true,
-            request.started_at,
-            request.request_id,
-            request.request_ip,
-            attempt.channel_id.clone(),
-            Some(request.started_at.elapsed().as_millis() as u64),
-            None,
-            request.reasoning_effort,
-            tried_providers,
-            downstream_closed,
-            upstream_response_model,
+            RequestLogContext {
+                model: &request.logical_model,
+                is_stream: true,
+                started_at: request.started_at,
+                request_id: (request.request_id).as_deref(),
+                request_ip: (request.request_ip).as_deref(),
+                reasoning_effort: (request.reasoning_effort).as_deref(),
+            },
+            RequestLogSuccess {
+                usage: resp.usage.clone(),
+                charge_nano_usd: charge.charge_nano_usd,
+                billing_breakdown_json: charge.billing_breakdown,
+                ttfb_ms: Some(request.started_at.elapsed().as_millis() as u64),
+                stream_terminal_diagnostics: None,
+                tried_providers,
+                client_gone: downstream_closed,
+                upstream_response_model,
+            },
         ),
         Err(err) => {
             tracing::error!(
@@ -465,15 +515,20 @@ async fn settle_replayed_response(
                 &request.state,
                 &request.auth,
                 attempt,
-                &request.logical_model,
-                request.started_at,
-                request.request_id,
-                request.request_ip,
-                Some(request.started_at.elapsed().as_millis() as u64),
-                billing_settlement_error(&err),
-                request.reasoning_effort,
-                tried_providers,
-                resp.usage.clone(),
+                RequestLogContext {
+                    model: &request.logical_model,
+                    is_stream: true,
+                    started_at: request.started_at,
+                    request_id: (request.request_id).as_deref(),
+                    request_ip: (request.request_ip).as_deref(),
+                    reasoning_effort: (request.reasoning_effort).as_deref(),
+                },
+                RequestLogStreamError {
+                    ttfb_ms: Some(request.started_at.elapsed().as_millis() as u64),
+                    terminal_error: billing_settlement_error(&err),
+                    tried_providers,
+                    usage: resp.usage.clone(),
+                },
             );
         }
     }
