@@ -52,7 +52,7 @@ fn prepare_responses_media_event(event: &mut UrpStreamEvent) -> Result<(), Strin
         UrpStreamEvent::NodeDelta {
             delta: urp::NodeDelta::Image { source },
             ..
-        } if !matches!(&*source, urp::ImageSource::Base64 { media_type, .. } if matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp")) => {
+        } if !matches!(&*source, urp::ImageSource::Base64 { media_type, .. } if matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp" | "image/svg+xml" | "image/gif")) => {
             Err("Responses image_generation_call requires supported Base64 image bytes".into())
         }
         UrpStreamEvent::NodeDone { node, .. } => {

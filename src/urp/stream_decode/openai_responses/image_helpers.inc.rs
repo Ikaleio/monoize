@@ -2,6 +2,8 @@ fn image_media_type_from_output_format(output_format: Option<&str>) -> &'static 
     match output_format.unwrap_or("png") {
         "webp" => "image/webp",
         "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
         _ => "image/png",
     }
 }

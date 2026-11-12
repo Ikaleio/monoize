@@ -286,7 +286,47 @@ pub(super) async fn maybe_charge_settled(
         group_billing_ratio: attempt.group_billing_ratio,
         channel_multiplier: attempt.model_multiplier,
     };
-    let outcome = settlement::settle(&inputs).map_err(|err| {
+    let authors: Vec<_> = output
+        .into_iter()
+        .flatten()
+        .filter_map(|node| match node {
+            urp::Node::Image {
+                role: urp::OrdinaryRole::Assistant,
+                metadata,
+                ..
+            } => metadata.image_generation.svg_usage.as_ref(),
+            _ => None,
+        })
+        .collect();
+    let keys: Vec<_> = authors.iter().map(|author| author.model.clone()).collect();
+    let rows = if keys.is_empty() {
+        HashMap::new()
+    } else {
+        state
+            .model_price_store
+            .list_applicable_by_model_ids(&keys)
+            .await
+            .map_err(|err| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "billing_settlement_failed",
+                    err,
+                )
+            })?
+    };
+    let mut priced_authors = Vec::with_capacity(authors.len());
+    for author in authors {
+        let row = rows.get(&author.model).map(Arc::as_ref);
+        if row.is_none() && !attempt.allow_free_when_unpriced {
+            return Err(AppError::new(
+                StatusCode::FORBIDDEN,
+                "model_price_required",
+                format!("Missing price for SVG author {}", author.model),
+            ));
+        }
+        priced_authors.push((author, row));
+    }
+    let outcome = settlement::settle_with_svg_authors(&inputs, &priced_authors).map_err(|err| {
         tracing::error!(
             "billing error: settlement failed for model={}: {}",
             attempt.upstream_model,

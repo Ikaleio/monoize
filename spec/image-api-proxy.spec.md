@@ -10,7 +10,7 @@
 
 - **Image API:** The OpenAI Images API shape (`POST /v1/images/generations`, `POST /v1/images/edits`).
 - **Downstream Image Request:** A request to Monoize in Image API format.
-- **Sub-request:** One URP forwarding request derived from a downstream Image API request. A single downstream Image API request with `n > 1` produces multiple sub-requests.
+- **Sub-request:** One URP forwarding request derived from a downstream Image API request.
 - **Image stream event family:** `image_generation` for `/v1/images/generations`, `image_edit` for `/v1/images/edits`. The family selects the downstream SSE event names in §5.5.
 
 ## 2. Endpoints
@@ -45,18 +45,20 @@ Request body MUST be JSON. Monoize MUST parse the following fields:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `prompt` | string | YES | — | Text prompt for image generation. |
+| `prompt` | string | YES | — | Nonempty text prompt of at most 32,000 characters. |
 | `model` | string | YES | — | Logical model name for routing. |
-| `n` | integer | NO | `1` | Number of images to generate. MUST be ≥ 1. |
+| `n` | integer | NO | `1` | Must equal 1. |
 | `stream` | boolean | NO | `false` | When `true`, the downstream response is the SSE stream defined in §5.5. |
 
-IG1. Known image options MUST map to typed `UrpRequest.image_generation` fields. These fields are `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `style`, `response_format`, `partial_images`, and `input_fidelity`. Monoize MUST remove their copies from `extra_body`. Unknown fields MUST remain in `extra_body`. `user` MUST map to `UrpRequest.user` and MUST NOT remain in `extra_body`.
+IG1. Known image options MUST map to typed `UrpRequest.image_generation` fields. These fields are `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `style`, `response_format`, `partial_images`, `input_fidelity`, `complexity`, `frame_count`, `frame_duration_ms`, and `svg`. Monoize MUST remove their copies from `extra_body`. Unknown fields MUST remain in `extra_body`. `user` MUST map to `UrpRequest.user` and MUST NOT remain in `extra_body`.
 
 IG2. `response_format` MUST map to `UrpRequest.image_generation.response_format`. Native OpenAI Image attempts MUST preserve this option. Downstream responses MUST preserve the source representation returned by the upstream under §5.
 
 IG3. `stream` MUST be a JSON boolean or null. Missing and null values select `false`. Other types MUST return HTTP 400. The parsed field MUST be excluded from `extra_body`. A missing or null `n` selects `1`.
 
-IG4. When `stream = true`, `n` MUST equal 1. Monoize MUST reject `stream = true` with `n > 1` with HTTP 400.
+IG4. Missing or null `n` selects 1. Every supplied count MUST equal integer 1. Multipart text `1` is equivalent. All other values MUST return HTTP 400 before dispatch.
+
+IG4a. The request MUST preserve explicit `complexity` (low, medium, high) independently of `quality`. An omitted complexity MUST remain absent. Generation supports SVG and GIF. Both formats require non-streaming generation without partial previews, custom compression or prompt rewriting. GIF timing controls require GIF. SVG author settings require SVG. The selected upstream enforces model and preview access.
 
 IG5. `partial_images` MUST map to the typed image options and MUST be an integer from 0 through 3 when non-null. `output_compression` MUST be an integer from 0 through 100 when non-null. Other known options MUST use their declared JSON types. Null options select absence. Invalid option types or ranges MUST return HTTP 400.
 
@@ -66,26 +68,28 @@ The request body MUST use `multipart/form-data` or JSON. Other content types MUS
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `prompt` | text field | YES | Text prompt describing the edit. |
-| `model` | text field | YES | Logical model name for routing. |
+| `prompt` | text field | YES | Nonempty edit prompt of at most 32,000 characters. |
+| `model` | text field | NO | Logical model name for routing. |
 | `image` | file field(s) | YES | Source image(s) to edit. One or more file parts named `image` or `image[]`, in wire order. The first part is the primary image; every additional part is an extra source image (IM10). |
 | `mask` | file field | NO | Mask image indicating edit region. Single file upload. |
-| `n` | text field | NO | Number of images to generate. Default `1`. MUST be ≥ 1 when present. |
+| `n` | text field | NO | Must equal 1. Defaults to 1. |
 | `stream` | text field | NO | `true` or `false`. Default `false`. When `true`, the downstream response is the SSE stream defined in §5.5. |
 
 IE1. Known image options MUST map to typed image options under IG1 and IG5. Multipart `user` MUST retain its exact text and map to `UrpRequest.user`. Other text values that are JSON numbers or booleans MUST use their JSON types. Remaining unknown text fields MUST remain in `extra_body`.
 
-IE2. File fields other than `image`, `image[]`, and `mask` MUST be ignored.
+IE2. File fields other than `image`, `image[]`, `markup`, and `mask` MUST be ignored.
 
 IE2a. An edit request MUST contain 1 through 16 source images. A multipart request MUST NOT contain more than one mask part. These violations MUST return HTTP 400.
 
-IE2b. JSON edits MUST contain required string fields `prompt` and `model`, and a required `images` array. Each array item MUST contain exactly one non-empty string reference: `image_url` or `file_id`. `image_url` MUST be an HTTP(S) URL or a Base64 data URL. A non-null `mask` MUST use the same reference object shape. Invalid references MUST return HTTP 400. JSON `n`, `stream`, options, and `user` follow generation parsing rules. Unknown top-level JSON fields MUST remain in `extra_body`.
+IE2b. JSON edits MUST contain required string field `prompt` and optional string field `model`, and a required `images` array. Each array item MUST contain exactly one non-empty string reference: `image_url` or `file_id`. `image_url` MUST be an HTTP(S) URL or a Base64 data URL. A non-null `mask` MUST use the same reference object shape. Invalid references MUST return HTTP 400. JSON `n`, `stream`, options, and `user` follow generation parsing rules. Unknown top-level JSON fields MUST remain in `extra_body`.
+
+IE2c. Omitted edit model selects `gpt-image-2.5-sunburst`. A single optional `markup` accepts a PNG upload, HTTPS URL, PNG data URL, or file ID. It annotates the first source image and MUST remain a distinct typed image role. Reject markup with mask or prompt_rewriter. Inline markup MUST be PNG. The upstream validates transparency, oriented dimensions, model support, and referenced files.
 
 IE4. `stream` text field: any value other than exactly `true` or `false` MUST be rejected with HTTP 400. The parsed value MUST be excluded from `extra_body`. When `stream = true`, `n` MUST equal 1 (same rule as IG4).
 
 IE3. File upload processing:
 
-- For each uploaded file (`image`, `mask`), Monoize MUST read the file bytes and base64-encode them.
+- For each uploaded file (`image`, `mask`, `markup`), Monoize MUST read the file bytes and base64-encode them.
 - The media type MUST be determined from the `Content-Type` header of the multipart part. If absent, Monoize MUST infer from file extension or default to `application/octet-stream`.
 - Maximum individual file size is bounded by the configured HTTP body limit (`unified_responses_proxy.spec.md` §C5), whose default is 50 MiB.
 
@@ -103,7 +107,7 @@ IM3. When the downstream request has `stream` absent or `false`, the downstream 
 
 IM3a. When the downstream request has `stream = true`, the single sub-request (IG4) MUST initially use `UrpRequest.stream = Some(true)`. Downstream SSE MUST remain active independently of upstream transport. Native upstream SSE and synthetic terminal events from upstream JSON MUST use the same response-phase stream transforms and §5.5 encoding. A request transform MAY select non-streaming upstream transport without changing downstream SSE.
 
-IM4. Unknown remaining request fields map to `UrpRequest.extra_body`. Known fields MUST use their typed mappings. Every Image API sub-request MUST contain `image_generation = Some(options)`, including empty options. The downstream `n` controls fan-out and MUST NOT set the upstream image count.
+IM4. Unknown remaining request fields map to `UrpRequest.extra_body`. Known fields MUST use their typed mappings. Every Image API sub-request MUST contain `image_generation = Some(options)`, including empty options. The effective image count MUST be 1.
 
 IM5. `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, and URP structured `response_format` MUST remain absent. `user` uses the typed mapping under IG1. Monoize MUST NOT inject tools at ingress. Users who need Responses image tools MUST configure request transforms.
 
@@ -127,22 +131,15 @@ IM10. Node order in `UrpRequest.input` MUST be: `[prompt_text, image, extra_imag
 
 IM11. When the downstream request has `stream` absent or `false`, IM3 applies to edit sub-requests unchanged. When the downstream request has `stream = true`, IM3a applies to the single edit sub-request.
 
-IM12. Remaining edit fields follow IM4. `prompt`, `model`, `n`, `stream`, `image`, `image[]`, `images`, and `mask` MUST NOT remain in `extra_body`.
+IM12. Remaining edit fields follow IM4. `prompt`, `model`, `n`, `stream`, `image`, `image[]`, `images`, `mask`, and `markup` MUST NOT remain in `extra_body`.
 
 IM13. Same as IM5: no `tools`/`tool_choice` injection.
 
-### 4.3 Sub-request fan-out for `n > 1`
+### 4.3 Single image request
 
-IM14. When `n > 1`, Monoize MUST issue `n` independent non-streaming URP forwarding sub-requests concurrently (using `tokio::JoinSet` or equivalent).
-
-IM15. Each sub-request MUST go through the full forwarding pipeline independently: auth transforms, provider routing, upstream call, response transforms, billing, and request logging. Each sub-request is billed as one independent request.
-
-IM16. Partial success policy:
-
-- If all `n` sub-requests fail, Monoize MUST return the error from the last failed sub-request.
-- If at least one sub-request succeeds, Monoize MUST return a successful response containing only the successful results. Failed sub-requests MUST be silently excluded from the `data[]` array.
-
-IM17. The order of items in the response `data[]` array is not required to match the order of sub-requests. Results MAY appear in completion order.
+IM14. Each admitted request MUST create one forwarding task. Routing retries follow the ordinary retry policy.
+IM15. Authentication, request capture, billing, and request logging MUST use the downstream request identifier.
+IM16. A failed task MUST return its error. A successful task MUST preserve the order of upstream image items.
 
 IM18. Request capture for Image API sub-requests follows `request-capture-dumps.spec.md` RCD-C16 (one capture session per sub-request), RCD-D4a (multipart `raw_input` for multipart edits, original JSON for JSON edits), RCD-D2c (`is_stream` equals the parsed downstream `stream` flag), and RCD-D10c (stream-collected reconstruction for the IM3 internal-stream path and the IM3a streaming path).
 
@@ -180,7 +177,7 @@ IR5. The downstream Image API response MUST have the following shape:
 }
 ```
 
-IR6. `created` MUST be the Unix timestamp (seconds) at the time the response is assembled.
+IR6. Use the upstream creation timestamp when available. Otherwise use the Unix time in seconds at response assembly.
 
 IR7. `data` MUST be a JSON array. Each element corresponds to one extracted image across all successful sub-requests.
 
@@ -224,6 +221,8 @@ IR10. If any successful sub-request carries URP `Usage`, the response MUST inclu
 IR11. Token fields MUST be summed across all successful sub-requests. If a detail field is absent from a sub-request's usage, it contributes 0 to the sum.
 
 ### 5.4 Error responses
+
+IR11a. Preserve upstream `svg_usage` separately from render usage and return the reported `safety_identifier`. Preserve the upstream creation time when present. For a failed Responses outcome, propagate its error code, message and parameter. An invalid parameter MUST return HTTP 400 or an SSE error if headers were sent.
 
 IR12. When all sub-requests fail or the request itself is invalid, Monoize MUST return a JSON error response using the standard Monoize error shape:
 
@@ -324,7 +323,7 @@ RL2. API-key Image API requests MUST record `request_kind = "image_generation"` 
 
 ## 7. Observability
 
-OB1. Monoize MUST log the downstream Image API request shape at INFO level before fan-out, including:
+OB1. Monoize MUST log the downstream Image API request shape at INFO level before dispatch, including:
 
 - logical model;
 - `n` value;

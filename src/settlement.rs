@@ -599,6 +599,13 @@ fn settle_tools(
 /// (MP-C11, MP-B1). Errors indicate arithmetic overflow or a corrupted
 /// persisted price and map to HTTP 500 at call sites.
 pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String> {
+    settle_with_svg_authors(inputs, &[])
+}
+
+pub fn settle_with_svg_authors(
+    inputs: &SettlementInputs<'_>,
+    authors: &[(&urp::SvgUsage, Option<&ModelPriceRecord>)],
+) -> Result<SettlementOutcome, String> {
     let usage = inputs.usage.usage();
     let estimated = matches!(inputs.usage, SettledUsage::Estimated(_));
 
@@ -674,6 +681,36 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
         inputs.requested_tool_classes,
     )?;
 
+    let mut author_items = Vec::new();
+    for &(author, price) in authors {
+        let usage = urp::Usage {
+            input_tokens: author.input_tokens,
+            output_tokens: author.output_tokens,
+            output_details: Some(urp::OutputDetails {
+                reasoning_tokens: author.reasoning_tokens,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Price the author independently. Apply the route multipliers once to the combined base charge.
+        let author_inputs = SettlementInputs {
+            usage: SettledUsage::Reported(&usage),
+            output: None,
+            price,
+            pricing_model_key: &author.model,
+            requested_tool_classes: &[],
+            service_tier: None,
+            channel_multiplier: Multiplier::ONE,
+            group_billing_ratio: Multiplier::ONE,
+            ..*inputs
+        };
+        let charge = settle(&author_inputs)?;
+        token_charge_nano = token_charge_nano
+            .checked_add(charge.final_charge_nano)
+            .ok_or("charge overflow")?;
+        author_items.push(json!({"usage": author, "charge_nano": charge.final_charge_nano.to_string(), "token_line_items": charge.breakdown["token_line_items"], "free_reason": charge.breakdown["free_reason"]}));
+    }
+
     let base_charge_nano = token_charge_nano
         .checked_add(tools.total)
         .ok_or_else(|| "charge overflow".to_string())?;
@@ -686,7 +723,7 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
         .checked_scale_i128(base_charge_nano)
         .ok_or_else(|| "charge overflow".to_string())?;
 
-    let breakdown = json!({
+    let mut breakdown = json!({
         "version": 3,
         "billing_mode": billing_mode,
         "pricing_model_key": inputs.pricing_model_key,
@@ -706,6 +743,9 @@ pub fn settle(inputs: &SettlementInputs<'_>) -> Result<SettlementOutcome, String
         "estimated": estimated,
     });
 
+    if !author_items.is_empty() {
+        breakdown["svg_authors"] = Value::Array(author_items);
+    }
     Ok(SettlementOutcome {
         final_charge_nano,
         breakdown,

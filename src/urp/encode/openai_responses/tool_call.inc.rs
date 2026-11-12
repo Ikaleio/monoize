@@ -213,7 +213,7 @@ pub(crate) fn validate_response_nodes(nodes: &[Node]) -> Result<(), String> {
         match node {
             Node::Image { source: ImageSource::Base64 { media_type, .. }, extra_body, .. }
                 if extra_body.contains_key(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)
-                    && matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp") => {}
+                    && matches!(media_type.as_str(), "image/png" | "image/jpeg" | "image/webp" | "image/svg+xml" | "image/gif") => {}
             Node::Image { .. } | Node::File { .. } | Node::Audio { .. } => {
                 return Err("Responses output cannot represent ordinary image, file, or audio media; native image_generation_call is required for generated images".into());
             }

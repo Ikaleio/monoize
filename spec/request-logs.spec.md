@@ -263,7 +263,7 @@ MUST persist `request_kind = "playground"`, and MUST persist `api_key_id = null`
 token column label for these rows MUST be rendered as a localized "Playground" string.
 Neither internal-source label may be exposed through the API-key management endpoints.
 
-RL21. API-key Image API generation and edit requests MUST record `image_generation` and `image_edit`, respectively. Each fan-out sub-request MUST retain that classification. An existing internal-source classification MUST take precedence.
+RL21. API-key Image API generation and edit requests MUST record `image_generation` and `image_edit`, respectively. An existing internal-source classification MUST take precedence.
 
 ## 3. Dashboard endpoint
 

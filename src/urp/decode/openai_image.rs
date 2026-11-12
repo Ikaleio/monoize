@@ -7,7 +7,10 @@ use std::collections::HashMap;
 
 pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String> {
     let obj = value.as_object().ok_or("response is not an object")?;
-    let generation = crate::urp::ImageGenerationMetadata::from_object(obj);
+    let mut generation = crate::urp::ImageGenerationMetadata::from_object(obj);
+    if obj.get("svg_usage").is_some_and(|v| !v.is_null()) && generation.svg_usage.is_none() {
+        return Err("invalid svg_usage in image response".into());
+    }
     let id = obj
         .get("created")
         .and_then(|v| v.as_i64())
@@ -22,7 +25,9 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
     let mut output: Vec<Node> = Vec::new();
     for item in data {
         let item_obj = item.as_object().ok_or("data item is not an object")?;
+        let svg_usage = generation.svg_usage.take();
         let mut image_generation = generation.clone();
+        image_generation.svg_usage = svg_usage;
         image_generation.revised_prompt = item_obj
             .get("revised_prompt")
             .and_then(Value::as_str)
@@ -99,6 +104,7 @@ pub(crate) fn image_media_type(payload: &Value, output_format: Option<&str>) -> 
         match output_format {
             Some("jpeg" | "jpg") => "image/jpeg",
             Some("webp") => "image/webp",
+            Some("gif") => "image/gif",
             Some("svg") => "image/svg+xml",
             _ => "image/png",
         }
@@ -142,6 +148,8 @@ pub(crate) fn apply_reported_output_format(
         "image/png" => Some("png"),
         "image/jpeg" => Some("jpeg"),
         "image/webp" => Some("webp"),
+        "image/svg+xml" => Some("svg"),
+        "image/gif" => Some("gif"),
         _ => None,
     };
     if let Some(format) = format {

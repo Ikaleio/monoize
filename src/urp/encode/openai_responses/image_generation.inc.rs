@@ -1,6 +1,10 @@
-const IMAGE_GENERATION_TOOL_SETTINGS: [&str; 8] = [
+const IMAGE_GENERATION_TOOL_SETTINGS: [&str; 12] = [
     "size",
     "quality",
+    "complexity",
+    "svg",
+    "frame_count",
+    "frame_duration_ms",
     "background",
     "output_format",
     "output_compression",

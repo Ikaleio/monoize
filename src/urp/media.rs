@@ -747,6 +747,14 @@ pub fn prepare_request(
     request: &UrpRequest,
     target: ProviderProtocol,
 ) -> Result<UrpRequest, String> {
+    if target != ProviderProtocol::OpenaiImage
+        && request
+            .input
+            .iter()
+            .any(|node| matches!(node, Node::Image { metadata, .. } if metadata.image_markup))
+    {
+        return Err("markup-guided edits require an OpenAI Images upstream".into());
+    }
     let mut request = request.clone();
     request.input = prepare_nodes(&request.input, target)?;
     Ok(request)

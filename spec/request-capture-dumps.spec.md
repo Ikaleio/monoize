@@ -68,7 +68,7 @@ Each positive integer environment value replaces its default, except `MONOIZE_RE
 
 RCD-C15. The captured top-level `request_id` and every identifying string retained in an oversized-attempt placeholder MUST contain at most `256` UTF-8 bytes. Truncation MUST occur on a valid UTF-8 boundary and MUST increase `capture_truncation.omitted_bytes` for the top-level request id.
 
-RCD-C16. For the Image API endpoints (`image-api-proxy.spec.md`), the capture unit is one fan-out sub-request (IM14), not the downstream HTTP request. For each capture-eligible sub-request (RCD-C9 evaluated once per downstream request), Monoize MUST start one independent capture session whose captured `request_id` is the sub-request id: the downstream request id when `n == 1`, or `{request_id}:img:{i}` with the 0-based sub-request index `i` when `n > 1`, matching the sub-request's request-log row. Each sub-request session applies its RCD-C11/RCD-C12 persistence decision to its own attempts and writes at most one dump file. The assembled downstream Image API response envelope (`image-api-proxy.spec.md` §5.2) is not captured.
+RCD-C16. Each capture-eligible Images request starts one session using its downstream request identifier. Each session applies RCD-C11/RCD-C12 to its attempts and writes at most one dump file.
 
 ## 2. Directory and filename
 
@@ -91,7 +91,7 @@ RCD-S6. Each dump filename MUST have one of these shapes:
 {request_id_prefix}_{utc_timestamp_ms}_{k}.json       (RCD-S6a fallback disambiguation, k >= 1)
 ```
 
-RCD-S6a. When the undisambiguated RCD-S6 filename already exists in the dump directory, the write MUST select the smallest integer `k >= 1` for which `{request_id_prefix}_{utc_timestamp_ms}_{k}` with the same extension does not exist. Final filename selection MUST be atomic against concurrent dump writes: two concurrent writes MUST NOT resolve to the same final filename, and a final-name file MUST never be observable in a partially written state. Precondition making this rule reachable: RCD-C16 fan-out sub-request sessions share one request-id prefix and can persist within the same millisecond.
+RCD-S6a. When the undisambiguated RCD-S6 filename already exists in the dump directory, the write MUST select the smallest integer `k >= 1` for which `{request_id_prefix}_{utc_timestamp_ms}_{k}` with the same extension does not exist. Final filename selection MUST be atomic against concurrent dump writes: two concurrent writes MUST NOT resolve to the same final filename, and a final-name file MUST never be observable in a partially written state.
 
 RCD-S7. `request_id_prefix` MUST be derived from the first eight Unicode scalar values of the Monoize request id when a request id is present.
 
@@ -183,7 +183,7 @@ RCD-D4. `raw_input` MUST be the parsed downstream JSON request body as received 
 
 RCD-D4a. For multipart `POST /v1/images/edits`, `raw_input` MUST use the RCD-D16 multipart capture object. It MUST contain consumed text and accepted files in wire order. Text MUST retain its exact value before JSON coercion. Accepted files (`image`, `image[]`, `mask`) MUST retain their raw bytes. Ignored files MUST NOT appear. JSON edit requests MUST instead retain the parsed JSON body under RCD-D4, before reference conversion.
 
-RCD-D4b. When `n > 1` produces multiple Image API sub-request sessions (RCD-C16), every sub-request dump records the same `raw_input`: the one downstream body.
+RCD-D4b. Each Images session records the original downstream body as `raw_input`.
 
 RCD-D5. `transformed_urp_request` MUST be the URP request after provider request transforms, global request transforms, API-key request transforms, Monoize context removal, and reasoning-envelope upstream filtering.
 

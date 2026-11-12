@@ -19,10 +19,26 @@ pub fn encode_request_checked(req: &UrpRequest, model: &str) -> Result<Value, St
 }
 
 fn prepare_request(req: &UrpRequest) -> Result<UrpRequest, String> {
-    if let Some(options) = &req.image_generation {
-        options.validate()?;
-    }
-    crate::urp::media::prepare_request(req, crate::urp::ProviderProtocol::OpenaiImage)
+    let mut prepared =
+        crate::urp::media::prepare_request(req, crate::urp::ProviderProtocol::OpenaiImage)?;
+    let edit = has_user_image_input(&prepared);
+    let options = match &mut prepared.image_generation {
+        Some(options) => options,
+        None => prepared
+            .image_generation
+            .insert(ImageGenerationOptions::take_from_extra(
+                &mut prepared.extra_body,
+            )?),
+    };
+    options.validate_image_request(
+        edit,
+        prepared.stream == Some(true),
+        prepared
+            .extra_body
+            .get("prompt_rewriter")
+            .is_some_and(|v| !v.is_null()),
+    )?;
+    Ok(prepared)
 }
 
 fn request_fields(req: &UrpRequest, model: &str) -> Map<String, Value> {
@@ -31,7 +47,7 @@ fn request_fields(req: &UrpRequest, model: &str) -> Map<String, Value> {
         if key.starts_with("_monoize_")
             || matches!(
                 key.as_str(),
-                "model" | "prompt" | "stream" | "user" | "image" | "images" | "mask"
+                "model" | "prompt" | "stream" | "user" | "image" | "images" | "mask" | "markup"
             )
             || (req.image_generation.is_some()
                 && ImageGenerationOptions::KEYS.contains(&key.as_str()))
@@ -43,6 +59,7 @@ fn request_fields(req: &UrpRequest, model: &str) -> Map<String, Value> {
     if let Some(options) = &req.image_generation {
         body.extend(options.to_object());
     }
+    body.insert("n".to_string(), Value::from(1));
     body.insert("model".to_string(), Value::String(model.to_string()));
     body.insert("prompt".to_string(), Value::String(user_prompt(req)));
     if req.stream == Some(true) {
@@ -93,8 +110,13 @@ fn encode_edit_body(req: &UrpRequest, model: &str) -> Value {
             ImageSource::Url { url, .. } => serde_json::json!({ "image_url": url }),
             ImageSource::FileId { file_id, .. } => serde_json::json!({ "file_id": file_id }),
         };
-        if metadata.image_mask {
-            body.insert("mask".to_string(), reference);
+        if metadata.image_mask || metadata.image_markup {
+            let key = if metadata.image_markup {
+                "markup"
+            } else {
+                "mask"
+            };
+            body.insert(key.to_string(), reference);
         } else {
             images.push(reference);
         }
@@ -106,14 +128,28 @@ fn encode_edit_body(req: &UrpRequest, model: &str) -> Value {
 fn validate_edit_images(req: &UrpRequest) -> Result<usize, String> {
     let mut images = 0;
     let mut masks = 0;
+    let mut markups = 0;
     for node in &req.input {
         if let Node::Image {
             role: OrdinaryRole::User,
             metadata,
+            source,
             ..
         } = node
         {
-            if metadata.image_mask {
+            if let ImageSource::Base64 { media_type, .. } = source
+                && crate::urp::media::mime_essence(media_type) == "image/svg+xml"
+            {
+                return Err("SVG inputs are not supported for image edits".into());
+            }
+            if metadata.image_markup {
+                if metadata.image_mask
+                    || matches!(source, ImageSource::Base64 { media_type, .. } if crate::urp::media::mime_essence(media_type) != "image/png")
+                {
+                    return Err("markup must be a separate transparent PNG".into());
+                }
+                markups += 1;
+            } else if metadata.image_mask {
                 masks += 1;
             } else {
                 images += 1;
@@ -122,6 +158,16 @@ fn validate_edit_images(req: &UrpRequest) -> Result<usize, String> {
     }
     if !(1..=16).contains(&images) {
         return Err("image edits require 1 through 16 source images".to_string());
+    }
+    if markups > 1
+        || markups > 0
+            && (masks > 0
+                || req
+                    .extra_body
+                    .get("prompt_rewriter")
+                    .is_some_and(|v| !v.is_null()))
+    {
+        return Err("edits accept one markup without mask or prompt_rewriter".into());
     }
     if masks > 1 {
         return Err("image edits support at most one mask".to_string());
@@ -207,7 +253,9 @@ pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartFi
                 return Err("image references require a JSON image edit request".to_string());
             }
         };
-        let field_name = if metadata.image_mask {
+        let field_name = if metadata.image_markup {
+            "markup"
+        } else if metadata.image_mask {
             "mask"
         } else if image_count > 1 {
             "image[]"

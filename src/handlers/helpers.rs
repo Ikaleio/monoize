@@ -1476,6 +1476,11 @@ const EXTRA_WHITELIST_GEMINI: &[&str] = &[
 ];
 
 const EXTRA_WHITELIST_OPENAI_IMAGE: &[&str] = &[
+    "complexity",
+    "frame_count",
+    "frame_duration_ms",
+    "svg",
+    "safety_identifier",
     "size",
     "quality",
     "style",

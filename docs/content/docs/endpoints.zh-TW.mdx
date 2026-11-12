@@ -454,7 +454,7 @@ curl http://localhost:8080/v1/images/edits \
 
 每個 `images` 項目和選用的 `mask` 物件必須恰好包含一個 `image_url` 或 `file_id`。`image_url` 接受 HTTP(S) URL 或 Base64 資料 URL。檔案 ID 必須能透過所選上游憑證存取。檔案 ID 不會在上游帳號或 Provider 之間轉移檔案。
 
-兩個端點都必須提供 `model` 和 `prompt`。非串流請求的 `n` 仍會拆分為獨立子請求。設定 `stream=true` 和 `n=1` 可接收圖像 SSE 事件。原生 `openai_image` 路由將內嵌圖片以 multipart 傳送。只要任一輸入或遮罩保留 HTTP(S) URL 或檔案參照，該路由就使用 JSON。
+產生圖片時提供 `model` 和 `prompt`。編輯預設使用 `gpt-image-2.5-sunburst`。每次請求產生一張圖片，請省略 `n` 或傳入 `1`。GPT Image 2.6 的 `complexity` 和 `quality` 可分別設定。透過 Responses 使用 `complexity` 時，請在 `tools[].model` 指定 2.6 圖像模型。SVG 和動態 GIF 須使用非串流請求。以 `svg` 指定 SVG 編寫模型，以 `frame_count` 和 `frame_duration_ms` 設定 GIF 影格數和每格時間。原生編輯可用透明 PNG `markup` 標記第一張圖，與 `mask` 擇一使用。檔案參照使用 JSON，內嵌檔案使用 multipart。
 
 設定 `stream=true` 後，Monoize 立即傳送 SSE 保活註解，並在連續 15 秒沒有資料事件時再次傳送。OpenRouter 圖片編輯自動使用非串流上游請求；其他路由收到明確拒絕串流的 HTTP 400 或 422 後，只回退一次。JSON 圖片回應轉換為完成事件，不會偽造預覽圖。計費與日誌仍計為一次串流請求，一般網路錯誤不會觸發此回退。這可以在生成期間維持下游連線，但不會延長上游請求逾時。
 

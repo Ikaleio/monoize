@@ -493,7 +493,7 @@ CTF-12. After CTF-8 and CTF-9, for a matching `apply_patch` `ToolCall` (whether 
 EOIGT-1. `image_enable_openai_generation_tool` is request-phase only.
 
 EOIGT-2. Config MAY contain:
-- `output_format` as one of `png`, `webp`, or `jpeg`; default `png`;
+- `output_format` as one of `png`, `webp`, `jpeg`, `svg`, or `gif`. The default is `png`.
 - `action` as a string; optional;
 - `force_stream` as a boolean; default `false`; and
 - `force_tool_choice` as a boolean; default `false`; and
@@ -514,7 +514,7 @@ EOIGT-6. When the transform inserts a tool descriptor, it MUST set:
 4. `config.action = <configured action>` only when `action` is configured; and
 5. `config.partial_images = 3` when EOIGT-6a permits that default.
 
-EOIGT-6a. With `force_stream = true`, the transform MUST set `request.stream = true`. It MUST default `config.partial_images` to `3` only when the request and tool omit that field.
+EOIGT-6a. Except for SVG and GIF output, with `force_stream = true` the transform MUST set `request.stream = true`. It MUST default `config.partial_images` to `3` only when the request and tool omit that field.
 
 EOIGT-6b. Explicit `partial_images` values, including `0`, MUST override the transform default.
 
@@ -527,7 +527,7 @@ When typed image options exist, the transform MUST remove duplicate image contro
 
 EOIGT-7. The transform MUST preserve the source order of existing tools. It MUST append an inserted tool after them.
 
-EOIGT-8. If `force_stream = true`, the transform MUST set `request.stream = true` during request-phase application. This rule applies even when `request.tools` already contains an `image_generation` descriptor.
+EOIGT-8. For formats other than SVG and GIF, if `force_stream = true`, the transform MUST set `request.stream = true` during request-phase application. This rule applies even when `request.tools` already contains an `image_generation` descriptor.
 
 EOIGT-9. If `force_stream = false`, the transform MUST NOT modify `request.stream`.
 
@@ -537,8 +537,10 @@ EOIGT-11. If `force_tool_choice = false`, the transform MUST NOT modify `request
 
 EOIGT-12. The transform MUST NOT modify `request.input` or any response-phase payload surface.
 
+EOIGT-12a. SVG and GIF generation MUST skip forced streaming and automatic partial images. Native Responses tool requests without a model use the upstream default.
+
 EOIGT-13. The Responses encoder MUST map typed image settings into `image_generation` tool configuration, for inserted and existing tools.
-Supported settings are `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `partial_images`, and `input_fidelity`.
+Supported settings are `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `partial_images`, `input_fidelity`, `complexity`, `frame_count`, `frame_duration_ms`, and `svg`. For Images ingress routed to Responses, recognized GPT Image model IDs select the tool model unless the route explicitly configures one. Markup MUST fail before dispatch.
 These values MUST override same-named tool defaults and MUST NOT appear as image controls at the Responses request top level.
 An ordinary Responses `background` boolean MUST retain its top-level meaning.
 
@@ -546,7 +548,7 @@ EOIGT-14. If `request.image_generation` is present without a compatible `image_g
 The encoder MUST NOT inject a tool or permit a text-only request to replace an Images request.
 
 EOIGT-15. Responses encoding MUST reject explicit image `style`, `n` other than `1`, and `response_format` other than `b64_json`.
-Images ingress fan-out owns multiple outputs. Responses image tools return Base64 data and cannot fulfill a requested hosted URL.
+Responses image tools return Base64 data and cannot fulfill a requested hosted URL.
 
 EOIGT-16. A request image with typed `metadata.image_mask = true` MUST become `image_generation.config.input_image_mask`.
 Base64 sources MUST use a data URL in `image_url`. URL sources MUST use `image_url`. File references MUST use `file_id`.

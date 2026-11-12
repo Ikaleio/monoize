@@ -496,7 +496,7 @@ async fn compress_image_node(
                     source, metadata, ..
                 } = item
                 {
-                    if !metadata.image_mask {
+                    if !metadata.image_mask && !metadata.image_markup {
                         if let Some(next_source) =
                             compress_image_source(context, cfg, source).await?
                         {
@@ -524,9 +524,9 @@ fn has_request_image_mask(node: &Node) -> bool {
             role: OrdinaryRole::User,
             metadata,
             ..
-        } => metadata.image_mask,
+        } => metadata.image_mask || metadata.image_markup,
         Node::ToolResult { content, .. } => content.iter().any(
-            |item| matches!(item, ToolResultContent::Image { metadata, .. } if metadata.image_mask),
+            |item| matches!(item, ToolResultContent::Image { metadata, .. } if metadata.image_mask || metadata.image_markup),
         ),
         _ => false,
     }

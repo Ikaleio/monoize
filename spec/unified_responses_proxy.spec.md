@@ -374,7 +374,7 @@ FP6k.3. If an error occurs after an upstream attempt has been selected, the term
 
 FP6k.4. A retryable upstream-attempt failure MUST NOT schedule a terminal log while another retry is permitted. The handler MUST schedule one terminal error log only when retry processing terminates. A successful retry MUST schedule one terminal success log and no terminal error log.
 
-FP6k.5. Each admitted image fan-out subrequest is an independent request-log lifecycle. A task panic, task cancellation, streamed-response collection failure, typed image-conversion failure, missing usage error, or billing error in one subrequest MUST schedule exactly one terminal error log for that subrequest request identifier.
+FP6k.5. Each admitted Images request is an independent request-log lifecycle. A task panic, task cancellation, streamed-response collection failure, typed image-conversion failure, missing usage error, or billing error in one subrequest MUST schedule exactly one terminal error log for that subrequest request identifier.
 
 ## 6. Routing rules
 

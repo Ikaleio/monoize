@@ -13,13 +13,12 @@ pub async fn create_image_generation(
     auth.internal_source
         .get_or_insert(crate::auth::InternalRequestSource::ImageGeneration);
     // RCD-C9/RCD-C16 pre-check: the raw-input clone is skipped entirely when
-    // no sub-request session could start.
+    // no capture session can start.
     let capture_eligible = state
         .request_capture
         .would_start_session(&state.monoize_runtime, &auth)
         .await;
-    // RCD-D4: the parsed downstream JSON body, shared by every sub-request
-    // dump (RCD-D4b).
+    // Keep the parsed body only when a capture can start.
     let capture_raw_input = std::sync::Arc::new(if capture_eligible {
         body.clone()
     } else {
@@ -34,41 +33,13 @@ pub async fn create_image_generation(
         )
     })?;
 
-    let prompt = obj
-        .get("prompt")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "missing or empty prompt",
-            )
-        })?
-        .to_string();
-
-    let mut model = obj
-        .get("model")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing model"))?
-        .to_string();
-
+    let prompt = required_image_text(obj, "prompt")?;
+    let mut model = required_image_text(obj, "model")?;
     apply_configured_model_redirects_to_model(&state, &mut model, &auth).await;
 
-    let n = parse_n_field(obj.get("n"))?;
+    validate_image_count(obj.get("n"))?;
 
     let stream_requested = parse_image_stream(obj.get("stream"))?;
-    if stream_requested && n != 1 {
-        // IG4: streaming responses carry no image index, so fan-out is
-        // rejected instead of producing an ambiguous interleaved stream.
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "stream=true requires n=1",
-        ));
-    }
-
     ensure_model_allowed(&auth, &model)?;
 
     let max_multiplier_val =
@@ -80,8 +51,9 @@ pub async fn create_image_generation(
         obj,
         &["prompt", "model", "n", "max_multiplier", "stream"],
     ))?;
-    tracing::info!(model = %model, n, stream = stream_requested, endpoint = "generations", "image API request");
+    tracing::info!(model = %model, n = 1, stream = stream_requested, endpoint = "generations", "image API request");
 
+    options.validate(false, stream_requested)?;
     let inputs = vec![urp::Node::Text {
         logprobs: None,
         citations: Vec::new(),
@@ -113,23 +85,22 @@ pub async fn create_image_generation(
         .await;
     }
 
-    let results = fan_out_subrequests(
+    let (response, _) = run_image_request(
         &state,
         &auth,
         &model,
-        &inputs,
-        &options,
+        inputs,
+        options,
         max_multiplier_val,
-        n,
         request_id,
         request_ip,
         extract_client_session_id(&headers),
         capture_raw_input,
         crate::request_capture::CaptureDownstreamProtocol::ImageGenerations,
     )
-    .await;
+    .await?;
 
-    assemble_image_response(results)
+    assemble_image_response(response)
 }
 
 pub async fn create_image_edit(
@@ -171,13 +142,13 @@ pub async fn create_image_edit(
         ));
     };
 
-    let mut model = required_image_text(&edit.fields, "model")?;
+    let mut model = match edit.fields.get("model") {
+        None | Some(Value::Null) => "gpt-image-2.5-sunburst".to_owned(),
+        _ => required_image_text(&edit.fields, "model")?,
+    };
     let prompt = required_image_text(&edit.fields, "prompt")?;
-    let n = parse_n_field(edit.fields.get("n"))?;
+    validate_image_count(edit.fields.get("n"))?;
     let stream_requested = parse_image_stream(edit.fields.get("stream"))?;
-    if stream_requested && n != 1 {
-        return Err(image_request_error("stream=true requires n=1"));
-    }
     apply_configured_model_redirects_to_model(&state, &mut model, &auth).await;
     ensure_model_allowed(&auth, &model)?;
     let max_multiplier_val =
@@ -194,9 +165,23 @@ pub async fn create_image_edit(
             "image[]",
             "images",
             "mask",
+            "markup",
         ],
     ))?;
 
+    options.validate(true, stream_requested)?;
+    if edit.markup.is_some()
+        && (edit.mask.is_some()
+            || options
+                .extra_body
+                .get("prompt_rewriter")
+                .is_some_and(|v| !v.is_null()))
+    {
+        return Err(
+            image_request_error("markup cannot be combined with mask or prompt_rewriter")
+                .with_param("markup"),
+        );
+    }
     let image_count = edit.images.len();
     let has_mask = edit.mask.is_some();
     let mut inputs = vec![urp::Node::Text {
@@ -212,6 +197,7 @@ pub async fn create_image_edit(
     }];
     inputs.extend(edit.images);
     inputs.extend(edit.mask);
+    inputs.extend(edit.markup);
     let mut inline_bytes_estimate = 0usize;
     let mut reference_count = 0usize;
     for node in &inputs {
@@ -225,7 +211,7 @@ pub async fn create_image_edit(
             }
         }
     }
-    tracing::info!(model = %model, n, stream = stream_requested, endpoint = "edits", image_count,
+    tracing::info!(model = %model, n = 1, stream = stream_requested, endpoint = "edits", image_count,
         inline_bytes_estimate, reference_count, has_mask, "image API request");
 
     let request_id = extract_request_id(&headers);
@@ -247,28 +233,28 @@ pub async fn create_image_edit(
         )
         .await;
     }
-    let results = fan_out_subrequests(
+    let (response, _) = run_image_request(
         &state,
         &auth,
         &model,
-        &inputs,
-        &options,
+        inputs,
+        options,
         max_multiplier_val,
-        n,
         request_id,
         request_ip,
         extract_client_session_id(&headers),
         edit.capture_raw_input,
         crate::request_capture::CaptureDownstreamProtocol::ImageEdits,
     )
-    .await;
-    assemble_image_response(results)
+    .await?;
+    assemble_image_response(response)
 }
 
 struct ParsedImageEdit {
     fields: Map<String, Value>,
     images: Vec<urp::Node>,
     mask: Option<urp::Node>,
+    markup: Option<urp::Node>,
     capture_raw_input: Arc<Value>,
 }
 
@@ -277,12 +263,18 @@ fn image_request_error(message: impl Into<String>) -> AppError {
 }
 
 fn required_image_text(fields: &Map<String, Value>, key: &str) -> AppResult<String> {
-    fields
+    let text = fields
         .get(key)
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| image_request_error(format!("missing or empty {key}")))
+        .ok_or_else(|| image_request_error(format!("missing or empty {key}")).with_param(key))?;
+    if key == "prompt" && text.chars().count() > 32_000 {
+        return Err(
+            image_request_error("prompt must contain at most 32000 characters")
+                .with_param("prompt"),
+        );
+    }
+    Ok(text.to_owned())
 }
 
 fn validate_edit_image_count(count: usize) -> AppResult<()> {
@@ -306,22 +298,28 @@ fn parse_json_image_edit(body: Value, capture_eligible: bool) -> AppResult<Parse
     validate_edit_image_count(references.len())?;
     let images = references
         .iter()
-        .map(|reference| parse_image_reference(reference, false))
+        .map(|reference| parse_image_reference(reference, "image"))
         .collect::<AppResult<Vec<_>>>()?;
     let mask = fields
         .get("mask")
         .filter(|value| !value.is_null())
-        .map(|reference| parse_image_reference(reference, true))
+        .map(|reference| parse_image_reference(reference, "mask"))
+        .transpose()?;
+    let markup = fields
+        .get("markup")
+        .filter(|v| !v.is_null())
+        .map(|reference| parse_image_reference(reference, "markup"))
         .transpose()?;
     Ok(ParsedImageEdit {
         fields: fields.clone(),
         images,
         mask,
+        markup,
         capture_raw_input: Arc::new(if capture_eligible { body } else { Value::Null }),
     })
 }
 
-fn parse_image_reference(value: &Value, image_mask: bool) -> AppResult<urp::Node> {
+fn parse_image_reference(value: &Value, field: &str) -> AppResult<urp::Node> {
     let reference = value
         .as_object()
         .ok_or_else(|| image_request_error("each image reference must be an object"))?;
@@ -334,6 +332,9 @@ fn parse_image_reference(value: &Value, image_mask: bool) -> AppResult<urp::Node
                 let (media_type, data) = urp::media::parse_data_url(url).ok_or_else(|| {
                     image_request_error("image_url must contain a Base64 image data URL")
                 })?;
+                if field == "markup" && urp::media::mime_essence(media_type) != "image/png" {
+                    return Err(image_request_error("markup must be PNG").with_param("markup"));
+                }
                 if !media_type.starts_with("image/")
                     || data.is_empty()
                     || base64::engine::general_purpose::STANDARD
@@ -352,6 +353,11 @@ fn parse_image_reference(value: &Value, image_mask: bool) -> AppResult<urp::Node
                 let parsed = reqwest::Url::parse(url).map_err(|_| {
                     image_request_error("image_url must be an HTTP(S) URL or a Base64 data URL")
                 })?;
+                if field == "markup" && parsed.scheme() != "https" {
+                    return Err(
+                        image_request_error("markup URL must use HTTPS").with_param("markup")
+                    );
+                }
                 if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
                     return Err(image_request_error(
                         "image_url must be an HTTP(S) URL or a Base64 data URL",
@@ -386,7 +392,8 @@ fn parse_image_reference(value: &Value, image_mask: bool) -> AppResult<urp::Node
         role: urp::OrdinaryRole::User,
         source,
         metadata: urp::MediaMetadata {
-            image_mask,
+            image_mask: field == "mask",
+            image_markup: field == "markup",
             resource,
             ..Default::default()
         },
@@ -401,6 +408,7 @@ async fn parse_multipart_image_edit(
     let mut fields = Map::new();
     let mut images = Vec::new();
     let mut mask = None;
+    let mut markup = None;
     let mut capture_parts = Vec::new();
     while let Some(field) = multipart
         .next_field()
@@ -408,12 +416,16 @@ async fn parse_multipart_image_edit(
         .map_err(|err| image_request_error(err.to_string()))?
     {
         let name = field.name().unwrap_or("").to_owned();
-        if matches!(name.as_str(), "image" | "image[]" | "mask") {
+        if matches!(name.as_str(), "image" | "image[]" | "mask" | "markup") {
             let image_mask = name == "mask";
+            let image_markup = name == "markup";
+            if image_markup && markup.is_some() {
+                return Err(image_request_error("image edits accept at most one markup"));
+            }
             if image_mask && mask.is_some() {
                 return Err(image_request_error("image edits accept at most one mask"));
             }
-            if !image_mask && images.len() >= 16 {
+            if !image_mask && !image_markup && images.len() >= 16 {
                 return Err(image_request_error(
                     "image edits require 1 through 16 source images",
                 ));
@@ -423,6 +435,9 @@ async fn parse_multipart_image_edit(
             let media_type = content_type
                 .clone()
                 .unwrap_or_else(|| infer_media_type_from_filename(filename.as_deref()));
+            if image_markup && urp::media::mime_essence(&media_type) != "image/png" {
+                return Err(image_request_error("markup must be PNG").with_param("markup"));
+            }
             let bytes = field
                 .bytes()
                 .await
@@ -443,6 +458,7 @@ async fn parse_multipart_image_edit(
                 source: urp::ImageSource::Base64 { media_type, data },
                 metadata: urp::MediaMetadata {
                     image_mask,
+                    image_markup,
                     filename,
                     ..Default::default()
                 },
@@ -450,6 +466,8 @@ async fn parse_multipart_image_edit(
             };
             if image_mask {
                 mask = Some(image);
+            } else if image_markup {
+                markup = Some(image);
             } else {
                 images.push(image);
             }
@@ -465,7 +483,11 @@ async fn parse_multipart_image_edit(
                 });
             }
             let value = match name.as_str() {
-                "prompt" | "model" | "n" | "user" | "max_multiplier" => Value::String(text),
+                "prompt" | "model" | "user" | "safety_identifier" | "max_multiplier" => {
+                    Value::String(text)
+                }
+                "n" if text == "1" => Value::from(1),
+                "n" => return Err(image_request_error("n must equal 1").with_param("n")),
                 "stream" => match text.as_str() {
                     "true" => Value::Bool(true),
                     "false" => Value::Bool(false),
@@ -481,6 +503,7 @@ async fn parse_multipart_image_edit(
         fields,
         images,
         mask,
+        markup,
         capture_raw_input: Arc::new(if capture_eligible {
             crate::request_capture::multipart_capture_object(&capture_parts)
         } else {
@@ -496,6 +519,30 @@ struct ImageRequestOptions {
 }
 
 impl ImageRequestOptions {
+    fn validate(&self, edit: bool, stream: bool) -> AppResult<()> {
+        self.generation
+            .validate_image_request(
+                edit,
+                stream,
+                self.extra_body
+                    .get("prompt_rewriter")
+                    .is_some_and(|v| !v.is_null()),
+            )
+            .map_err(image_request_error)?;
+        if let Some(value) = self
+            .extra_body
+            .get("safety_identifier")
+            .filter(|v| !v.is_null())
+            && !value.as_str().is_some_and(|id| id.chars().count() <= 128)
+        {
+            return Err(image_request_error(
+                "safety_identifier must be a string of at most 128 characters",
+            )
+            .with_param("safety_identifier"));
+        }
+        Ok(())
+    }
+
     fn parse(mut extra_body: HashMap<String, Value>) -> AppResult<Self> {
         let generation = urp::ImageGenerationOptions::take_from_extra(&mut extra_body)
             .map_err(image_request_error)?;
@@ -655,6 +702,7 @@ impl ImageStreamSink {
                     "message": err.message,
                     "type": err.error_type,
                     "code": err.code,
+                    "param": err.param,
                 }
             }),
         )
@@ -874,42 +922,12 @@ async fn run_image_stream_downstream(
     Ok(response)
 }
 
-fn parse_n_field(value: Option<&Value>) -> AppResult<usize> {
-    let Some(v) = value else {
-        return Ok(1);
-    };
-    let n = match v {
-        Value::Null => return Ok(1),
-        Value::Number(num) => num.as_u64().ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "n must be a positive integer",
-            )
-        })? as usize,
-        Value::String(s) => s.parse::<usize>().map_err(|_| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "n must be a positive integer",
-            )
-        })?,
-        _ => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "n must be a positive integer",
-            ));
-        }
-    };
-    if n == 0 {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "n must be >= 1",
-        ));
+fn validate_image_count(value: Option<&Value>) -> AppResult<()> {
+    match value {
+        None | Some(Value::Null) => Ok(()),
+        Some(value) if value.as_u64() == Some(1) => Ok(()),
+        _ => Err(image_request_error("n must equal 1").with_param("n")),
     }
-    Ok(n)
 }
 
 fn build_extra_body(obj: &Map<String, Value>, exclude: &[&str]) -> HashMap<String, Value> {
@@ -974,152 +992,128 @@ fn coerce_text_to_json_value(text: &str) -> Value {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn fan_out_subrequests(
+async fn run_image_request(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     model: &str,
-    input: &[urp::Node],
-    options: &ImageRequestOptions,
+    input: Vec<urp::Node>,
+    options: ImageRequestOptions,
     max_multiplier: Option<Multiplier>,
-    n: usize,
     request_id: Option<String>,
     request_ip: Option<String>,
     client_session_id: Option<String>,
     capture_raw_input: std::sync::Arc<Value>,
     capture_protocol: crate::request_capture::CaptureDownstreamProtocol,
-) -> Vec<Result<(urp::UrpResponse, String), AppError>> {
-    let mut join_set = tokio::task::JoinSet::new();
-    let mut task_contexts = HashMap::new();
+) -> AppResult<(urp::UrpResponse, String)> {
+    let req = urp::UrpRequest {
+        sampling: None,
+        logprobs: None,
+        context: Default::default(),
+        instructions_format: None,
+        model: model.to_string(),
+        input,
+        stream: Some(false),
+        temperature: None,
+        top_p: None,
+        max_output_tokens: None,
+        reasoning: None,
+        tools: None,
+        tool_choice: None,
+        parallel_tool_calls: None,
+        stop: None,
+        verbosity: None,
+        response_format: None,
+        user: options.user,
+        image_generation: Some(options.generation),
+        extra_body: options.extra_body,
+    };
+    let task_state = Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
+    let task_state_for_task = task_state.clone();
+    let capture_session = state
+        .request_capture
+        .maybe_start_session(
+            &state.monoize_runtime,
+            auth,
+            request_id.clone(),
+            capture_protocol,
+            false,
+        )
+        .await;
+    let capture = super::RequestCaptureContext {
+        raw_input: capture_raw_input,
+        session: capture_session,
+    };
 
-    for i in 0..n {
-        let state = state.clone();
-        let auth = auth.clone();
-        let req = urp::UrpRequest {
-            sampling: None,
-            logprobs: None,
-            context: Default::default(),
-            instructions_format: None,
-            model: model.to_string(),
-            input: input.to_vec(),
-            stream: Some(false),
-            temperature: None,
-            top_p: None,
-            max_output_tokens: None,
-            reasoning: None,
-            tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            stop: None,
-            verbosity: None,
-            response_format: None,
-            user: options.user.clone(),
-            image_generation: Some(options.generation.clone()),
-            extra_body: options.extra_body.clone(),
-        };
-        let rid = request_id
-            .clone()
-            .map(|id| if n > 1 { format!("{id}:img:{i}") } else { id });
-        let rip = request_ip.clone();
-        let task_session_id = client_session_id.clone();
-        let task_state = Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
-        let task_state_for_task = task_state.clone();
-        let task_request_id = rid.clone();
-        let task_request_ip = rip.clone();
-        // RCD-C16: one independent capture session per fan-out sub-request,
-        // keyed by the sub-request id, sharing the one downstream raw input
-        // (RCD-D4b). Image API dumps record is_stream false (RCD-D2c).
-        let capture_session = state
-            .request_capture
-            .maybe_start_session(
-                &state.monoize_runtime,
-                &auth,
-                rid.clone(),
-                capture_protocol,
-                false,
+    let worker_state = state.clone();
+    let worker_auth = auth.clone();
+    let worker_id = request_id.clone();
+    let worker_ip = request_ip.clone();
+    let mut worker = tokio::task::JoinSet::new();
+    worker.spawn(async move {
+        execute_image_subrequest_typed(
+            &worker_state,
+            &worker_auth,
+            req,
+            max_multiplier,
+            worker_id,
+            worker_ip,
+            client_session_id,
+            capture,
+            &task_state_for_task,
+        )
+        .await
+    });
+    match worker
+        .join_next()
+        .await
+        .expect("one image worker was spawned")
+    {
+        Ok(result) => result,
+        Err(join_error) => {
+            let code = if join_error.is_cancelled() {
+                "task_cancelled"
+            } else {
+                "task_panic"
+            };
+            let err = AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                code,
+                format!("image sub-request task failed: {join_error}"),
             )
-            .await;
-        let capture = super::RequestCaptureContext {
-            raw_input: capture_raw_input.clone(),
-            session: capture_session,
-        };
-
-        let abort_handle = join_set.spawn(async move {
-            execute_image_subrequest_typed(
-                &state,
-                &auth,
-                req,
-                max_multiplier,
-                rid,
-                rip,
-                task_session_id,
-                capture,
-                &task_state_for_task,
-            )
-            .await
-        });
-        task_contexts.insert(
-            abort_handle.id(),
-            (task_state, task_request_id, task_request_ip),
-        );
-    }
-
-    let mut results = Vec::with_capacity(n);
-    while let Some(join_result) = join_set.join_next_with_id().await {
-        match join_result {
-            Ok((task_id, inner)) => {
-                task_contexts.remove(&task_id);
-                results.push(inner);
-            }
-            Err(join_error) => {
-                let task_context = task_contexts.remove(&join_error.id());
-                let code = if join_error.is_cancelled() {
-                    "task_cancelled"
+            .with_type("server_error");
+            if let Some((started_at, is_stream, attempt)) = task_state.terminal_snapshot() {
+                if let Some(attempt) = attempt {
+                    spawn_request_log_error(
+                        state,
+                        auth,
+                        &attempt,
+                        model,
+                        is_stream,
+                        started_at,
+                        request_id,
+                        request_ip,
+                        &err,
+                        None,
+                        Vec::new(),
+                    );
                 } else {
-                    "task_panic"
-                };
-                let err = AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    code,
-                    format!("image sub-request task failed: {join_error}"),
-                )
-                .with_type("server_error");
-                if let Some((task_state, task_request_id, task_request_ip)) = task_context
-                    && let Some((started_at, is_stream, attempt)) = task_state.terminal_snapshot()
-                {
-                    if let Some(attempt) = attempt {
-                        spawn_request_log_error(
-                            state,
-                            auth,
-                            &attempt,
-                            model,
-                            is_stream,
-                            started_at,
-                            task_request_id,
-                            task_request_ip,
-                            &err,
-                            None,
-                            Vec::new(),
-                        );
-                    } else {
-                        spawn_request_log_error_no_attempt(
-                            state,
-                            auth,
-                            model,
-                            is_stream,
-                            started_at,
-                            task_request_id,
-                            task_request_ip,
-                            &err,
-                            None,
-                            Vec::new(),
-                        );
-                    }
+                    spawn_request_log_error_no_attempt(
+                        state,
+                        auth,
+                        model,
+                        is_stream,
+                        started_at,
+                        request_id,
+                        request_ip,
+                        &err,
+                        None,
+                        Vec::new(),
+                    );
                 }
-                results.push(Err(err));
             }
+            Err(err)
         }
     }
-    results
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1705,11 +1699,17 @@ async fn execute_stream_collected_image_typed(
                                     extra_body,
                                 });
                             }
-                            crate::urp::UrpStreamEvent::Error { code, message, .. } => {
-                                stream_error = Some(AppError::new(
-                                    StatusCode::BAD_GATEWAY,
-                                    code.unwrap_or_else(|| "upstream_stream_error".to_string()),
-                                    message,
+                            crate::urp::UrpStreamEvent::Error {
+                                code,
+                                message,
+                                extra_body,
+                            } => {
+                                stream_error = Some(image_upstream_error(
+                                    code.as_deref(),
+                                    &message,
+                                    extra_body.get("type").and_then(Value::as_str),
+                                    extra_body.get("param").and_then(Value::as_str),
+                                    extra_body.get("status").and_then(Value::as_u64),
                                 ));
                             }
                             _ => {}
@@ -2361,7 +2361,50 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
     images
 }
 
+fn image_upstream_error(
+    code: Option<&str>,
+    message: &str,
+    kind: Option<&str>,
+    param: Option<&str>,
+    status: Option<u64>,
+) -> AppError {
+    let code = code.unwrap_or("upstream_error");
+    let status = status
+        .filter(|v| (400..=599).contains(v))
+        .and_then(|v| StatusCode::from_u16(v as u16).ok())
+        .unwrap_or_else(|| match (code, kind) {
+            (
+                "invalid_value"
+                | "invalid_request_error"
+                | "unsupported_value"
+                | "invalid_parameter",
+                _,
+            )
+            | (_, Some("invalid_request_error")) => StatusCode::BAD_REQUEST,
+            ("rate_limit_exceeded" | "rate_limit_error", _) => StatusCode::TOO_MANY_REQUESTS,
+            _ => StatusCode::BAD_GATEWAY,
+        });
+    let mut err = AppError::new(status, code, message)
+        .with_type(kind.unwrap_or_else(|| openai_error_type_for_status(status)));
+    err.param = param.map(str::to_owned);
+    err
+}
+
 fn validate_image_subrequest_response(resp: &urp::UrpResponse) -> AppResult<()> {
+    if let Some(outcome) = &resp.outcome
+        && let Some(body) = outcome.failure_body(false)
+    {
+        let error = &body["error"];
+        return Err(image_upstream_error(
+            error["code"].as_str(),
+            error["message"]
+                .as_str()
+                .unwrap_or("Upstream image request failed"),
+            error["type"].as_str(),
+            error["param"].as_str(),
+            error["status"].as_u64(),
+        ));
+    }
     if !extract_images_from_response(resp).is_empty() {
         return Ok(());
     }
@@ -2378,65 +2421,36 @@ fn validate_image_subrequest_response(resp: &urp::UrpResponse) -> AppResult<()> 
     ))
 }
 
-fn assemble_image_response(
-    results: Vec<Result<(urp::UrpResponse, String), AppError>>,
-) -> AppResult<Response> {
-    let mut data_items: Vec<Value> = Vec::new();
-    let mut last_error: Option<AppError> = None;
-    let mut total_usage: Option<AggregatedUsage> = None;
+fn assemble_image_response(resp: urp::UrpResponse) -> AppResult<Response> {
+    validate_image_subrequest_response(&resp)?;
+    let mut data_items = Vec::new();
     let mut common_generation: Option<Map<String, Value>> = None;
-
-    for result in results {
-        match result {
-            Ok((resp, _logical_model)) => {
-                if let Err(err) = validate_image_subrequest_response(&resp) {
-                    last_error = Some(err);
-                    continue;
-                }
-                let images = extract_images_from_response(&resp);
-                for img in images {
-                    let generation = img.generation.common_response_fields();
-                    if let Some(common) = &mut common_generation {
-                        common.retain(|key, value| generation.get(key) == Some(value));
-                    } else {
-                        common_generation = Some(generation);
-                    }
-                    let mut item = Map::new();
-                    if let Some(b64) = img.b64_json {
-                        item.insert("b64_json".to_string(), Value::String(b64));
-                    }
-                    if let Some(url) = img.url {
-                        item.insert("url".to_string(), Value::String(url));
-                    }
-                    if let Some(mime_type) = img.mime_type {
-                        item.insert("mime_type".to_string(), Value::String(mime_type));
-                    }
-                    if let Some(revised) = img.revised_prompt {
-                        item.insert("revised_prompt".to_string(), Value::String(revised));
-                    }
-                    data_items.push(Value::Object(item));
-                }
-                if let Some(usage) = &resp.usage {
-                    accumulate_usage(total_usage.get_or_insert(AggregatedUsage::default()), usage);
-                }
-            }
-            Err(e) => {
-                last_error = Some(e);
-            }
+    let images = extract_images_from_response(&resp);
+    for img in images {
+        let generation = img.generation.common_response_fields();
+        if let Some(common) = &mut common_generation {
+            common.retain(|key, value| generation.get(key) == Some(value));
+        } else {
+            common_generation = Some(generation);
         }
+        let mut item = Map::new();
+        if let Some(b64) = img.b64_json {
+            item.insert("b64_json".to_string(), Value::String(b64));
+        }
+        if let Some(url) = img.url {
+            item.insert("url".to_string(), Value::String(url));
+        }
+        if let Some(mime_type) = img.mime_type {
+            item.insert("mime_type".to_string(), Value::String(mime_type));
+        }
+        if let Some(revised) = img.revised_prompt {
+            item.insert("revised_prompt".to_string(), Value::String(revised));
+        }
+        data_items.push(Value::Object(item));
     }
-
-    if data_items.is_empty() {
-        return Err(last_error.unwrap_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_error",
-                "no images generated",
-            )
-        }));
-    }
-
-    let created = chrono::Utc::now().timestamp();
+    let created = resp
+        .created_at
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
     let mut response = json!({
         "created": created,
         "data": data_items,
@@ -2445,11 +2459,13 @@ fn assemble_image_response(
         response.as_object_mut().unwrap().extend(generation);
     }
 
-    if let Some(usage) = total_usage {
+    if let Some(usage) = &resp.usage {
+        let mut total = AggregatedUsage::default();
+        accumulate_usage(&mut total, usage);
         response
             .as_object_mut()
             .unwrap()
-            .insert("usage".to_string(), aggregated_usage_value(&usage));
+            .insert("usage".to_string(), aggregated_usage_value(&total));
     }
 
     Ok(Json(response).into_response())

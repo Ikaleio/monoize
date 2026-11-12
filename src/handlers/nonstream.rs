@@ -1299,6 +1299,26 @@ pub(super) fn encode_request_for_provider(
         apply_cross_family_responses_controls(req);
     }
     filter_tools_for_provider(req, attempt.provider_type, downstream);
+    if attempt.provider_type == ProviderType::Responses
+        && req.image_generation.is_some()
+        && (attempt.logical_model.starts_with("gpt-image-")
+            || attempt.logical_model == "chatgpt-image-latest")
+    {
+        for tool in req
+            .tools
+            .iter_mut()
+            .flatten()
+            .filter(|tool| tool.tool_type == "image_generation")
+        {
+            if !tool.extra_body.contains_key("model")
+                && let Some(config) = tool.config.get_or_insert_with(|| json!({})).as_object_mut()
+            {
+                config
+                    .entry("model")
+                    .or_insert_with(|| json!(attempt.logical_model));
+            }
+        }
+    }
     let stateful_same_responses = matches!(downstream, DownstreamProtocol::Responses)
         && attempt.provider_type == ProviderType::Responses
         && has_responses_state_reference(req);

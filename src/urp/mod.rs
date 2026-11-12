@@ -900,6 +900,8 @@ pub enum InstructionsFormat {
 pub struct MediaMetadata {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub image_mask: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub image_markup: bool,
     #[serde(default, skip_serializing_if = "ImageGenerationMetadata::is_empty")]
     pub image_generation: ImageGenerationMetadata,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -928,8 +930,21 @@ pub struct MediaMetadata {
     pub cache_breakpoint: Option<CacheBreakpoint>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SvgUsage {
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub total_tokens: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ImageGenerationMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svg_usage: Option<SvgUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safety_identifier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revised_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -945,7 +960,9 @@ pub struct ImageGenerationMetadata {
 }
 
 impl ImageGenerationMetadata {
-    pub const KEYS: [&'static str; 6] = [
+    pub const KEYS: [&'static str; 8] = [
+        "svg_usage",
+        "safety_identifier",
         "quality",
         "size",
         "background",
@@ -957,6 +974,10 @@ impl ImageGenerationMetadata {
     pub fn from_object(obj: &serde_json::Map<String, Value>) -> Self {
         let string = |key| obj.get(key).and_then(Value::as_str).map(str::to_owned);
         Self {
+            svg_usage: obj
+                .get("svg_usage")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            safety_identifier: string("safety_identifier"),
             revised_prompt: string("revised_prompt"),
             quality: string("quality"),
             size: string("size"),
@@ -967,7 +988,9 @@ impl ImageGenerationMetadata {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.revised_prompt.is_none()
+        self.svg_usage.is_none()
+            && self.safety_identifier.is_none()
+            && self.revised_prompt.is_none()
             && self.quality.is_none()
             && self.size.is_none()
             && self.background.is_none()
@@ -976,7 +999,8 @@ impl ImageGenerationMetadata {
     }
 
     pub fn common_response_fields(&self) -> serde_json::Map<String, Value> {
-        [
+        let mut fields: serde_json::Map<String, Value> = [
+            ("safety_identifier", &self.safety_identifier),
             ("quality", &self.quality),
             ("size", &self.size),
             ("background", &self.background),
@@ -989,7 +1013,11 @@ impl ImageGenerationMetadata {
                 .as_ref()
                 .map(|value| (key.to_owned(), Value::String(value.clone())))
         })
-        .collect()
+        .collect();
+        if let Some(usage) = &self.svg_usage {
+            fields.insert("svg_usage".into(), serde_json::json!(usage));
+        }
+        fields
     }
 
     pub fn apply_to(&self, obj: &mut serde_json::Map<String, Value>) {
@@ -1011,6 +1039,8 @@ impl ImageGenerationMetadata {
                 "image/png" => Some("png"),
                 "image/jpeg" => Some("jpeg"),
                 "image/webp" => Some("webp"),
+                "image/svg+xml" => Some("svg"),
+                "image/gif" => Some("gif"),
                 _ => None,
             };
             if let Some(format) = format {

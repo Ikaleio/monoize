@@ -77,7 +77,7 @@ impl Transform for ImageEnableOpenAiGenerationToolTransform {
             "properties": {
                 "output_format": {
                     "type": "string",
-                    "enum": ["png", "webp", "jpeg"],
+                    "enum": ["png", "webp", "jpeg", "svg", "gif"],
                     "default": "png"
                 },
                 "action": {
@@ -142,7 +142,35 @@ impl Transform for ImageEnableOpenAiGenerationToolTransform {
                     .map_err(TransformError::Apply)?,
             );
         }
-        if cfg.force_stream {
+        let request_format = req
+            .image_generation
+            .as_ref()
+            .and_then(|options| options.output_format.as_deref());
+        let is_nonstream_format = |format: &str| matches!(format, "svg" | "gif");
+        let mut tool_formats = req
+            .tools
+            .iter()
+            .flatten()
+            .filter(|tool| tool.tool_type == "image_generation")
+            .peekable();
+        let nonstream_format = if let Some(format) = request_format {
+            is_nonstream_format(format)
+        } else if tool_formats.peek().is_some() {
+            tool_formats.any(|tool| {
+                tool.config
+                    .as_ref()
+                    .and_then(|c| c.get("output_format"))
+                    .or_else(|| tool.extra_body.get("output_format"))
+                    .and_then(Value::as_str)
+                    .is_some_and(is_nonstream_format)
+            })
+        } else {
+            is_nonstream_format(&cfg.output_format)
+        };
+        let force_stream = cfg.force_stream && !nonstream_format;
+        if nonstream_format && req.image_generation.is_some() {
+            req.stream = Some(false);
+        } else if force_stream {
             req.stream = Some(true);
         }
         if cfg.force_tool_choice {
@@ -151,7 +179,7 @@ impl Transform for ImageEnableOpenAiGenerationToolTransform {
             })));
         }
 
-        let default_partial_images = cfg.force_stream
+        let default_partial_images = force_stream
             && !req
                 .image_generation
                 .as_ref()

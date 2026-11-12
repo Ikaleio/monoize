@@ -31,7 +31,7 @@ OIU-E2. The upstream request body MUST include:
 - `model`: from `UrpRequest.model` (after redirect).
 - `prompt`: concatenation of all `Node::Text.content` from user-role nodes in `UrpRequest.input`, joined by newline.
 
-OIU-E3. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be merged into the upstream request body as top-level fields. Adapter-generated keys (`model`, `prompt`, `stream`, `images`, `image`, and `mask`) take precedence over extra fields.
+OIU-E3. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be merged into the upstream request body as top-level fields. Adapter-generated keys (`model`, `prompt`, `stream`, `images`, `image`, `markup`, and `mask`) take precedence over extra fields.
 
 OIU-E3a. When `UrpRequest.image_generation` is present, its typed fields MUST supply the image options. The encoder MUST ignore same-named extra fields, including when a typed field is absent. `UrpRequest.user` MUST supply `user`; an absent typed user MUST remove any extra-body user value.
 
@@ -49,7 +49,7 @@ OIU-E5b. The upstream edit multipart body MUST include text field `model` from `
 
 OIU-E5c. The upstream edit multipart body MUST include text field `prompt` equal to the concatenation of all user-role `Node::Text.content` values in `UrpRequest.input`, joined by newline, excluding empty text after trim.
 
-OIU-E5d. For multipart edits, the encoder MUST decode each Base64 image into a file part. A node with `MediaMetadata.image_mask = true` MUST use field name `mask`. Other nodes MUST use `image` for one source image, or `image[]` for multiple source images. The file part content type MUST equal the source media type. The encoder MUST NOT infer a mask from node identity or position.
+OIU-E5d. For multipart edits, the encoder MUST decode each Base64 image into a file part. A node with `MediaMetadata.image_mask = true` MUST use field name `mask`. A markup node MUST use `markup`. Source nodes MUST use `image` for one source image, or `image[]` for multiple source images. The file part content type MUST equal the source media type. The encoder MUST NOT infer a mask from node identity or position.
 
 OIU-E5e. Multipart text fields MUST use the same option selection and typed precedence as generation requests. JSON string values MUST be written without quotes. JSON number, boolean, object, array, and null values MUST be written as their JSON serialization.
 
@@ -57,13 +57,13 @@ OIU-E5f. If `UrpRequest.stream == Some(true)`, Monoize MUST include text field `
 
 OIU-E5g. When a request capture session is active for the attempt, the sent multipart body MUST be recorded as the attempt's `upstream_request` in the multipart capture representation of `request-capture-dumps.spec.md` RCD-D6a/RCD-D16, with part order, field names, file names, part content types, and part bytes equal to the sent form.
 
-OIU-E5h. JSON edits MUST place source images in an `images` array, in source order. Each entry MUST contain `image_url` for a URL or `file_id` for a file reference. Base64 sources in the same request MUST become `image_url` data URLs. A mask MUST use a separate `mask` object with the same reference representation. JSON edits MUST use the same model, prompt, options, user, and stream rules as generation requests. Request capture MUST record the sent JSON body.
+OIU-E5h. JSON edits MUST place source images in an `images` array, in source order. Each entry MUST contain `image_url` for a URL or `file_id` for a file reference. Base64 sources in the same request MUST become `image_url` data URLs. A mask or markup MUST use a separate `mask` or `markup` object with the same reference representation. JSON edits MUST use the same model, prompt, options, user, and stream rules as generation requests. Request capture MUST record the sent JSON body.
 
-OIU-E5i. The encoder MUST require 1 through 16 source images and at most one mask. Multipart encoding MUST reject URL and file-reference sources instead of uploading their text as files.
+OIU-E5i. The encoder MUST require 1 through 16 source images and at most one mask or markup. They are mutually exclusive. Multipart encoding MUST reject URL and file-reference sources instead of uploading their text as files.
 
 ### 3.3 Extra Body Whitelist
 
-OIU-E6. The default extra body whitelist for `openai_image` MUST be: `size`, `quality`, `style`, `response_format`, `n`, `background`, `output_format`, `output_compression`, `moderation`, `user`, `partial_images`, `input_fidelity`.
+OIU-E6. The default extra body whitelist for `openai_image` MUST be: `size`, `quality`, `style`, `response_format`, `n`, `background`, `output_format`, `output_compression`, `moderation`, `user`, `partial_images`, `input_fidelity`, `complexity`, `frame_count`, `frame_duration_ms`, `svg`, and `safety_identifier`.
 
 ## 4. Response Decoding
 
@@ -100,7 +100,7 @@ OIU-D6. If the upstream response contains a top-level `usage` object, Monoize MU
 
 OIU-D7. For `gpt-image-2`, decoded usage MUST preserve text input tokens, image input tokens, cached input tokens, and image output tokens as structured URP usage fields when upstream provides them.
 
-OIU-D8. Decoders MUST copy upstream-reported `quality`, `size`, `background`, `output_format`, and `model` strings into each generated image's typed `MediaMetadata.image_generation`. Non-streaming Images responses use top-level fields. Completed Images SSE events and Responses `image_generation_call` items use their own fields. These recognized fields MUST NOT remain duplicate semantic values in adapter extras. Base64 image MIME MUST follow OIU-D10. When `output_format` is absent and OIU-D10 finds an explicit `media_type` or `mime_type` of `image/png`, `image/jpeg`, `image/jpg`, or `image/webp`, the decoder MUST set `output_format` to `png`, `jpeg`, `jpeg`, or `webp`. That value is upstream-reported. The PNG fallback MUST NOT set `output_format`.
+OIU-D8. Decoders MUST copy upstream-reported `quality`, `size`, `background`, `output_format`, and `model` strings into each generated image's typed `MediaMetadata.image_generation`. Non-streaming Images responses use top-level fields. Completed Images SSE events and Responses `image_generation_call` items use their own fields. These recognized fields MUST NOT remain duplicate semantic values in adapter extras. Base64 image MIME MUST follow OIU-D10. When `output_format` is absent and OIU-D10 finds an explicit `media_type` or `mime_type` of `image/png`, `image/jpeg`, `image/jpg`, `image/webp`, `image/svg+xml`, or `image/gif`, the decoder MUST set `output_format` to `png`, `jpeg`, `jpeg`, `webp`, `svg`, or `gif`, respectively. That value is upstream-reported. The PNG fallback MUST NOT set `output_format`.
 
 OIU-D9. Non-streaming and streaming Responses encoders MUST project generated-image metadata from the current typed fields. Native replay extras MUST NOT restore deleted metadata. The response envelope's text-model identifier MUST NOT be used as the generated image's model.
 
@@ -193,7 +193,7 @@ OIU-C1. `openai_image` is a concrete upstream type, not virtual. Providers with 
 
 OIU-C2. `openai_image` MUST appear in the `stream_upstream_to_urp_events` streaming decoder dispatch and MUST NOT return `provider_type_not_supported` for streaming image generation attempts.
 
-OIU-C3. The encoder MUST forward `image_generation.n` when present. If typed image options are absent, an allowed `extra_body.n` MAY supply this value. This upstream adapter MUST NOT perform fan-out. The upstream provider handles `n` natively; Image API ingress fan-out remains a separate operation.
+OIU-C3. Native Images requests MUST request one image. Reject explicit counts other than 1 before dispatch. New Images controls include complexity, frame_count, frame_duration_ms, svg.model, svg.reasoning.effort, and safety_identifier. Preserve explicit values and omit absent controls. Markup uses a dedicated edit part or JSON reference. GIF and SVG map to image/gif and image/svg+xml. Preserve reported SVG author usage separately from render usage.
 
 ## 10. Shared Images decoding
 

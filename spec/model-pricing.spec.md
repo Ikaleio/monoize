@@ -338,6 +338,8 @@ final_charge_nano = trunc(base_charge_nano * channel_multiplier * group_billing_
 §5. Both multiplications use exact decimal arithmetic with one final truncation toward
 zero.
 
+MP-C11a. For each generated image with reported SVG author usage, price the author input and output using its own applicable model price row. Reasoning is a subset of output. Record the author model and its line items separately. Add the author base charge before multipliers, plan allocation and the single ledger debit. Apply the route's unpriced policy to missing author prices. Do not infer author tokens from image render usage.
+
 MP-C12. `channel_multiplier = 0` and `group_billing_ratio = 0` are valid explicit
 zero-charge configurations. They MUST settle a normal breakdown with
 `final_charge_nano = 0` and `free_reason = null`.
