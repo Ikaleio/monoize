@@ -1,32 +1,16 @@
+mod codec;
+mod exchange;
+mod prepare;
+mod reply;
+mod run;
+mod settle;
+
 use super::*;
-use crate::urp::stream_decode::stream_upstream_to_urp_events;
-use std::collections::HashSet;
 
-pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
-    let answered: HashSet<String> = req
-        .input
-        .iter()
-        .filter_map(|node| match node {
-            urp::Node::ToolResult { call_id, .. } => Some(call_id.clone()),
-            _ => None,
-        })
-        .collect();
-    req.input.retain_mut(|node| match node {
-        urp::Node::ToolCall { call_id, .. } => answered.contains(&*call_id),
-        urp::Node::NextDownstreamEnvelopeExtra { .. } => true,
-        _ => true,
-    });
-}
-
-fn has_responses_state_reference(req: &urp::UrpRequest) -> bool {
-    ["previous_response_id", "conversation"]
-        .into_iter()
-        .any(|key| {
-            req.extra_body
-                .get(key)
-                .is_some_and(|value| !value.is_null())
-        })
-}
+pub(super) use codec::{
+    decode_response_from_provider, encode_request_for_provider, encode_response_for_downstream,
+    responses_request_echo_for_attempt,
+};
 
 pub(super) struct AdmittedRequestTaskState {
     started_at: std::time::Instant,
@@ -95,46 +79,6 @@ impl AdmittedRequestTaskState {
     }
 }
 
-fn client_gone_flag(task_state: Option<&AdmittedRequestTaskState>) -> bool {
-    task_state.is_some_and(AdmittedRequestTaskState::client_gone)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn finish_nonstream_error(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    attempt: &MonoizeAttempt,
-    logical_model: &str,
-    started_at: std::time::Instant,
-    request_id: &Option<String>,
-    request_ip: &Option<String>,
-    reasoning_effort: Option<String>,
-    tried_providers: Vec<TriedProvider>,
-    capture: &RequestCaptureContext,
-    capture_upstream_failure: bool,
-    error: AppError,
-) -> AppError {
-    spawn_request_log_error(
-        state,
-        auth,
-        attempt,
-        logical_model,
-        false,
-        started_at,
-        request_id.clone(),
-        request_ip.clone(),
-        &error,
-        reasoning_effort,
-        tried_providers,
-    );
-    if let Some(session) = capture.session.as_ref() {
-        session
-            .persist_with_result(None, capture_upstream_failure)
-            .await;
-    }
-    error
-}
-
 /// Returns the request for one upstream attempt slot (FP6j-2). The pristine
 /// request is cloned while another slot may follow and moved into the final
 /// slot, so no pristine copy outlives the last possible attempt.
@@ -184,1054 +128,26 @@ pub(super) async fn execute_nonstream_typed_with_validator(
     response_validator: Option<fn(&urp::UrpResponse) -> AppResult<()>>,
     task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<(urp::UrpResponse, String)> {
-    let (resp, logical_model, (), _) = execute_nonstream(
+    let inputs = NonstreamInputs {
         state,
         auth,
-        req,
         max_multiplier,
         downstream,
         request_id,
         request_ip,
-        client_session_id,
         capture,
-        |resp, logical_model| match response_validator {
-            Some(validate) => validate(resp),
-            None => encode_response_for_downstream(downstream, resp, logical_model).map(|_| ()),
-        },
-        response_validator.is_none(),
+        strip_foreign_response: response_validator.is_none(),
         task_state,
-    )
-    .await?;
+    };
+    let (resp, logical_model, (), _) =
+        execute_nonstream(inputs, req, client_session_id, |resp, logical_model| {
+            match response_validator {
+                Some(validate) => validate(resp),
+                None => encode_response_for_downstream(downstream, resp, logical_model).map(|_| ()),
+            }
+        })
+        .await?;
     Ok((resp, logical_model))
-}
-
-/// Runs routing, upstream attempts, response transforms, and billing for one
-/// non-stream request. `accept` runs on the final (history-decorated)
-/// response before billing; its error fails the request and its value is
-/// returned with the response (FP6k.1a). `strip_foreign_response` enables
-/// XTRA-5a; the Image API opts out because it reads response extras. The last
-/// tuple member is the SE1d header set of the serving attempt.
-#[allow(clippy::too_many_arguments)]
-async fn execute_nonstream<T>(
-    state: &AppState,
-    auth: &crate::auth::AuthResult,
-    mut req: urp::UrpRequest,
-    max_multiplier: Option<Multiplier>,
-    downstream: DownstreamProtocol,
-    request_id: Option<String>,
-    request_ip: Option<String>,
-    client_session_id: Option<String>,
-    capture: RequestCaptureContext,
-    accept: impl Fn(&urp::UrpResponse, &str) -> AppResult<T>,
-    strip_foreign_response: bool,
-    task_state: Option<&AdmittedRequestTaskState>,
-) -> AppResult<(urp::UrpResponse, String, T, crate::error::ForwardedHeaders)> {
-    let started_at = task_state
-        .map(AdmittedRequestTaskState::started_at)
-        .unwrap_or_else(std::time::Instant::now);
-    let transform_match_model = resolve_model_suffix(state, &mut req).await?;
-    let logical_model = req.model.clone();
-    let reasoning_effort = req.reasoning.as_ref().and_then(|r| r.effort.clone());
-    let routing_stub = build_routing_stub(&req, max_multiplier);
-    let mut attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
-    // Session affinity derives from the request as decoded, before media
-    // routes are bound into its input nodes.
-    attach_client_session_id(&mut attempts, client_session_id, Some(&req));
-    bind_media_request_routes(&mut req, &mut attempts)?;
-    let mut history_context =
-        responses_history::HistoryContext::from_request(state, &req, downstream);
-    ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
-    let pending_request_log_guard = insert_pending_request_log(
-        state,
-        auth,
-        &logical_model,
-        false,
-        request_id.as_deref(),
-        request_ip.as_deref(),
-        started_at,
-    )
-    .await?;
-    let _local_pending_request_log_guard = if let Some(task_state) = task_state {
-        task_state.retain_pending_guard(pending_request_log_guard);
-        None
-    } else {
-        pending_request_log_guard
-    };
-    // The suffix-normalized request is the pristine base every attempt
-    // re-derives its transformed request from. This matters because the
-    // cross-family strip runs BEFORE all transforms per attempt (auto_cache_*
-    // etc. must observe the stripped request so their cache breakpoints
-    // actually survive into the upstream encoding).
-    let mut original_req = Some(req);
-    let attempt_count = attempts.len();
-    let mut last_failed_attempt: Option<MonoizeAttempt> = None;
-    let mut tried_providers: Vec<TriedProvider> = Vec::new();
-    let mut execution_state = AttemptExecutionState::default();
-    for (attempt_index, mut attempt) in attempts.into_iter().enumerate() {
-        if execution_state.should_skip(&attempt) {
-            continue;
-        }
-
-        let max_channel_attempts = same_channel_attempt_slots(&attempt);
-        'channel_attempts: for channel_attempt in 0..max_channel_attempts {
-            if execution_state.should_skip(&attempt) {
-                break;
-            }
-
-            let attempt_number = execution_state.record_upstream_attempt(&attempt);
-            if let Some(task_state) = task_state {
-                task_state.set_attempt(&attempt);
-            }
-            // Derive from the pristine request (pre-transforms) so that the
-            // cross-family strip can run BEFORE provider, global, and API-key
-            // transforms. This guarantees that transforms which inject
-            // upstream-specific part-level metadata (e.g.
-            // `cache_anthropic_system`, `cache_anthropic_tool_use`) survive into
-            // the encoded upstream request even when the downstream and
-            // upstream protocol families differ.
-            let mut req_attempt = attempt_request_from_original(
-                &mut original_req,
-                attempt_index + 1 == attempt_count && channel_attempt + 1 == max_channel_attempts,
-            );
-            if matches!(downstream, DownstreamProtocol::Responses)
-                || attempt.provider_type == ProviderType::Gemini
-            {
-                promote_responses_additional_tools(&mut req_attempt, attempt.provider_type);
-            }
-            if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
-                urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
-                if target_protocol == urp::ProviderProtocol::Responses {
-                    urp::remove_downstream_only_reasoning_for_responses(&mut req_attempt.input);
-                }
-            }
-            if attempt.strip_cross_protocol_nested_extra
-                && !downstream.is_same_family(attempt.provider_type)
-            {
-                urp::strip_nested_extra_body(&mut req_attempt.input);
-            }
-            inject_monoize_context(auth, &mut req_attempt);
-            req_attempt.model = attempt.upstream_model.clone();
-            // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
-            // observes the request input. Per spec/urp-transform-system.spec.md
-            // PIPE-1 step 6 and PIPE-1d, transforms must not see encrypted
-            // reasoning replays still in `mz2.` envelope form, and they must not
-            // be allowed to mutate the reasoning payload before envelope-bound
-            // provider/model checks (PR4c.6) decide whether to keep or drop the
-            // replayed reasoning node for this attempt.
-            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
-                &mut req_attempt.input,
-                reasoning_envelope_provider_type(attempt.provider_type),
-                &req_attempt.model,
-                auth.reasoning_envelope_enabled,
-            );
-            if let Err(err) = apply_transform_rules_request(
-                state,
-                &mut req_attempt,
-                &attempt.provider_transforms,
-                &transform_match_model,
-                Some(attempt.provider_type),
-            )
-            .await
-            {
-                return Err(finish_nonstream_error(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    started_at,
-                    &request_id,
-                    &request_ip,
-                    reasoning_effort.clone(),
-                    tried_providers,
-                    &capture,
-                    false,
-                    err,
-                )
-                .await);
-            }
-            let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
-            if let Err(err) = apply_transform_rules_request(
-                state,
-                &mut req_attempt,
-                &global_transforms,
-                &transform_match_model,
-                Some(attempt.provider_type),
-            )
-            .await
-            {
-                return Err(finish_nonstream_error(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    started_at,
-                    &request_id,
-                    &request_ip,
-                    reasoning_effort.clone(),
-                    tried_providers,
-                    &capture,
-                    false,
-                    err,
-                )
-                .await);
-            }
-            if let Err(err) = apply_transform_rules_request(
-                state,
-                &mut req_attempt,
-                &auth.transforms,
-                &transform_match_model,
-                Some(attempt.provider_type),
-            )
-            .await
-            {
-                return Err(finish_nonstream_error(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    started_at,
-                    &request_id,
-                    &request_ip,
-                    reasoning_effort.clone(),
-                    tried_providers,
-                    &capture,
-                    false,
-                    err,
-                )
-                .await);
-            }
-            strip_monoize_context(&mut req_attempt);
-            let capture_transform_chain = crate::request_capture::build_transform_chain(
-                &attempt.provider_transforms,
-                &global_transforms,
-                &auth.transforms,
-                &transform_match_model,
-            );
-
-            let upstream_body =
-                match encode_request_for_provider(&mut req_attempt, &attempt, downstream) {
-                    Ok(body) => body,
-                    Err(err) => {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            reasoning_effort.clone(),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                };
-            let responses_echo =
-                responses_request_echo_for_attempt(&req_attempt, &attempt, downstream);
-            let provider = build_channel_provider_config(&attempt);
-            let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
-                && urp::encode::openai_image::has_user_image_input(&req_attempt);
-            // RCD-D6/RCD-D6a capture `upstream_request`: the JSON body, or the
-            // RCD-D16 multipart object when multipart goes on the wire. Each
-            // branch below consumes `upstream_body` before awaiting upstream,
-            // keeping it here only for a capture session (FP6j-2).
-            let mut capture_upstream_request: Option<Value> = None;
-            let mut forwarded_headers = crate::error::ForwardedHeaders::new();
-            let path = if openai_image_edit {
-                "/v1/images/edits".to_string()
-            } else {
-                upstream_path_for_model(
-                    attempt.provider_type,
-                    &req_attempt.model,
-                    req_attempt.stream.unwrap_or(false),
-                )
-            };
-            let call_value = if req_attempt.stream == Some(true)
-                && supports_nonstream_upstream_stream_collection(attempt.provider_type)
-            {
-                let stream_idle_timeout_ms = state
-                    .monoize_runtime
-                    .read()
-                    .await
-                    .stream_idle_timeout_ms
-                    .max(1);
-                let http = client_http_for_attempt(state, &attempt)?;
-                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
-                attempt.session_affinity_value =
-                    resolve_session_affinity_value(&attempt, &upstream_body);
-                // Streaming edits use the same JSON or multipart transport
-                // as non-streaming edits.
-                let call = match call_streaming_image_capable_upstream(
-                    &http,
-                    &attempt,
-                    &req_attempt,
-                    upstream_body,
-                    attempt.request_timeout_ms.saturating_mul(10).max(600_000),
-                    &extra_headers,
-                    capture.session.is_some(),
-                )
-                .await
-                {
-                    Ok(stream_call) => {
-                        capture_upstream_request = stream_call.capture_upstream_request;
-                        stream_call.result
-                    }
-                    Err(err) => {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            reasoning_effort.clone(),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                };
-                match call {
-                    Ok(upstream_resp) => {
-                        forwarded_headers =
-                            upstream::forwarded_response_headers(upstream_resp.headers());
-                        let legacy = match typed_request_to_legacy(&req_attempt, max_multiplier) {
-                            Ok(legacy) => legacy,
-                            Err(err) => {
-                                return Err(finish_nonstream_error(
-                                    state,
-                                    auth,
-                                    &attempt,
-                                    &logical_model,
-                                    started_at,
-                                    &request_id,
-                                    &request_ip,
-                                    reasoning_effort.clone(),
-                                    tried_providers,
-                                    &capture,
-                                    false,
-                                    err,
-                                )
-                                .await);
-                            }
-                        };
-                        let pending_request_envelope_extra =
-                            find_pending_request_envelope_extra(&req_attempt.input);
-                        release_encoded_input(&mut req_attempt, &capture);
-                        match collect_streamed_upstream_response(
-                            legacy,
-                            pending_request_envelope_extra,
-                            attempt.provider_type,
-                            upstream_resp,
-                            started_at,
-                            &logical_model,
-                            stream_idle_timeout_ms,
-                        )
-                        .await
-                        {
-                            Ok((resp, observed_response_model)) => {
-                                Ok((None, Some((resp, observed_response_model))))
-                            }
-                            Err(CollectedUpstreamError::Internal(err)) => {
-                                return Err(finish_nonstream_error(
-                                    state,
-                                    auth,
-                                    &attempt,
-                                    &logical_model,
-                                    started_at,
-                                    &request_id,
-                                    &request_ip,
-                                    reasoning_effort.clone(),
-                                    tried_providers,
-                                    &capture,
-                                    false,
-                                    err,
-                                )
-                                .await);
-                            }
-                            Err(CollectedUpstreamError::Upstream(mut err)) => {
-                                err.forwarded_headers = std::mem::take(&mut forwarded_headers);
-                                let same_channel_retryable =
-                                    is_same_channel_retryable_app_error(&err);
-                                let passive_failure_class = same_channel_retryable
-                                    .then(|| classify_retryable_app_failure(&err));
-                                record_upstream_attempt_failure(
-                                    state,
-                                    &attempt,
-                                    attempt_number,
-                                    &err,
-                                    passive_failure_class,
-                                    &mut tried_providers,
-                                    &mut execution_state,
-                                )
-                                .await;
-                                last_failed_attempt = Some(attempt.clone());
-                                if allow_same_channel_retry(
-                                    state,
-                                    &attempt,
-                                    &execution_state,
-                                    channel_attempt + 1,
-                                    passive_failure_class,
-                                )
-                                .await
-                                {
-                                    maybe_sleep_before_channel_retry(&attempt).await;
-                                    continue 'channel_attempts;
-                                }
-                                break 'channel_attempts;
-                            }
-                        }
-                    }
-                    Err(err) => Err(err),
-                }
-            } else if openai_image_edit
-                && !urp::encode::openai_image::edit_requires_json(&req_attempt)
-            {
-                let form = match urp::encode::openai_image::multipart_fields(
-                    &req_attempt,
-                    &req_attempt.model,
-                )
-                .and_then(|fields| {
-                    // RCD-D6a: capture the multipart body from the same field
-                    // list the sent form is built from.
-                    if capture.session.is_some() {
-                        capture_upstream_request = Some(
-                            crate::request_capture::multipart_capture_object_from_upstream_fields(
-                                &fields,
-                            ),
-                        );
-                    }
-                    urp::encode::openai_image::form_from_fields(fields)
-                }) {
-                    Ok(form) => form,
-                    Err(message) => {
-                        let err =
-                            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message);
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            reasoning_effort.clone(),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                };
-                let http = client_http_for_attempt(state, &attempt)?;
-                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
-                attempt.session_affinity_value =
-                    resolve_session_affinity_value(&attempt, &upstream_body);
-                drop(upstream_body);
-                upstream::call_upstream_multipart_json_with_timeout_and_headers(
-                    &http,
-                    &provider,
-                    &attempt.api_key,
-                    &path,
-                    form,
-                    attempt.request_timeout_ms,
-                    &extra_headers,
-                )
-                .await
-                .map(|value| (Some(value), None))
-            } else {
-                release_encoded_input(&mut req_attempt, &capture);
-                let http = client_http_for_attempt(state, &attempt)?;
-                let extra_headers = attempt_extra_headers(&attempt, &upstream_body);
-                attempt.session_affinity_value =
-                    resolve_session_affinity_value(&attempt, &upstream_body);
-                let body = upstream::JsonBody::new(&upstream_body);
-                capture_upstream_request = capture.session.is_some().then_some(upstream_body);
-                upstream::call_upstream_json_with_response_headers(
-                    &http,
-                    &provider,
-                    &attempt.api_key,
-                    &path,
-                    body,
-                    attempt.request_timeout_ms,
-                    &extra_headers,
-                )
-                .await
-                .map(|(value, headers)| {
-                    forwarded_headers = headers;
-                    (Some(value), None)
-                })
-            };
-            match call_value {
-                Ok((value, collected_resp)) => {
-                    if let (Some(session), Some(capture_upstream_request)) =
-                        (capture.session.as_ref(), capture_upstream_request)
-                    {
-                        // RCD-D10c: a stream-collected attempt has no provider
-                        // JSON body, so the pre-response-transform collected
-                        // terminal event substitutes for it.
-                        let reconstructed_urp_response =
-                            collected_resp.as_ref().map(|(response, _)| {
-                                crate::request_capture::reconstructed_response_json(response)
-                            });
-                        session
-                            .push_attempt(crate::request_capture::build_attempt_dump(
-                                attempt_number,
-                                &attempt.provider_id,
-                                Some(&attempt.channel_id),
-                                attempt.provider_type,
-                                &logical_model,
-                                &req_attempt.model,
-                                &path,
-                                capture.raw_input.as_ref().clone(),
-                                &req_attempt,
-                                capture_upstream_request,
-                                value.clone(),
-                                reconstructed_urp_response,
-                                None,
-                                capture_transform_chain.clone(),
-                                None,
-                            ))
-                            .await;
-                    }
-                    update_pending_channel_info(
-                        state,
-                        auth,
-                        &attempt,
-                        &logical_model,
-                        false,
-                        request_id.as_deref(),
-                        request_ip.as_deref(),
-                        started_at,
-                    )
-                    .await;
-                    let mut stream_observed_model: Option<Option<String>> = None;
-                    let mut resp = match collected_resp {
-                        Some((resp, observed_response_model_from_stream)) => {
-                            stream_observed_model = Some(observed_response_model_from_stream);
-                            resp
-                        }
-                        None => match value.as_ref() {
-                            Some(value) => match decode_response_from_provider(
-                                attempt.provider_type,
-                                value,
-                                &req_attempt.model,
-                                state.monoize_runtime.read().await.mask_sensitive_info,
-                                &req_attempt,
-                            ) {
-                                Ok(resp) => resp,
-                                Err(mut err) => {
-                                    err.forwarded_headers = std::mem::take(&mut forwarded_headers);
-                                    let same_channel_retryable =
-                                        is_same_channel_retryable_app_error(&err);
-                                    let passive_failure_class = same_channel_retryable
-                                        .then(|| classify_retryable_app_failure(&err));
-                                    record_upstream_attempt_failure(
-                                        state,
-                                        &attempt,
-                                        attempt_number,
-                                        &err,
-                                        passive_failure_class,
-                                        &mut tried_providers,
-                                        &mut execution_state,
-                                    )
-                                    .await;
-                                    last_failed_attempt = Some(attempt.clone());
-                                    if allow_same_channel_retry(
-                                        state,
-                                        &attempt,
-                                        &execution_state,
-                                        channel_attempt + 1,
-                                        passive_failure_class,
-                                    )
-                                    .await
-                                    {
-                                        maybe_sleep_before_channel_retry(&attempt).await;
-                                        continue 'channel_attempts;
-                                    }
-                                    break 'channel_attempts;
-                                }
-                            },
-                            None => {
-                                let err = AppError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "internal_error",
-                                    "non-stream upstream response value is missing",
-                                )
-                                .with_type("server_error");
-                                return Err(finish_nonstream_error(
-                                    state,
-                                    auth,
-                                    &attempt,
-                                    &logical_model,
-                                    started_at,
-                                    &request_id,
-                                    &request_ip,
-                                    reasoning_effort.clone(),
-                                    tried_providers,
-                                    &capture,
-                                    false,
-                                    err,
-                                )
-                                .await);
-                            }
-                        },
-                    };
-                    // A decoded response ends retry processing (FP6j-2).
-                    drop(original_req.take());
-                    let observed_response_model = match stream_observed_model {
-                        Some(observed) => observed.unwrap_or_default(),
-                        None => value
-                            .as_ref()
-                            .and_then(|body| body.get("model"))
-                            .and_then(Value::as_str)
-                            .filter(|model| !model.trim().is_empty())
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| resp.model.clone()),
-                    };
-                    let upstream_response_model = mismatched_upstream_response_model(
-                        &req_attempt.model,
-                        &observed_response_model,
-                    );
-                    // MP-F3: a fail-closed missing-usage billable success
-                    // rejects with 403 before response delivery.
-                    if resp.usage.is_none() && missing_usage_rejects(auth, &attempt) {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            reasoning_effort.clone(),
-                            tried_providers,
-                            &capture,
-                            false,
-                            missing_usage_error(),
-                        )
-                        .await);
-                    }
-                    mark_channel_success(state, &attempt).await;
-                    refresh_channel_affinity(state, &attempt).await;
-                    let foreign_extras = foreign_response_target(downstream, attempt.provider_type)
-                        .filter(|_| strip_foreign_response)
-                        .map(|target| urp::strip_foreign_response(&mut resp, target));
-                    // Wrap newly produced encrypted reasoning payloads in mz2
-                    // envelopes BEFORE any response-phase transform observes
-                    // the response. Per spec/urp-transform-system.spec.md
-                    // PIPE-1 step 12 and PIPE-1d, transforms must only see
-                    // encrypted reasoning in `mz2.` envelope form so that
-                    // bulk-mutation transforms (e.g. reasoning_strip_encrypted)
-                    // can reason about that single canonical surface.
-                    if auth.reasoning_envelope_enabled {
-                        urp::wrap_reasoning_envelopes_in_response(
-                            &mut resp,
-                            reasoning_envelope_provider_type(attempt.provider_type),
-                            &req_attempt.model,
-                        );
-                    }
-                    if let Err(err) = apply_transform_rules_response(
-                        state,
-                        &mut resp,
-                        &attempt.provider_transforms,
-                        &logical_model,
-                        Some(attempt.provider_type),
-                    )
-                    .await
-                    {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            reasoning_effort.clone(),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                    if let Err(err) = apply_transform_rules_response(
-                        state,
-                        &mut resp,
-                        &global_transforms,
-                        &logical_model,
-                        Some(attempt.provider_type),
-                    )
-                    .await
-                    {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            reasoning_effort.clone(),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                    if let Err(err) = apply_transform_rules_response(
-                        state,
-                        &mut resp,
-                        &auth.transforms,
-                        &logical_model,
-                        Some(attempt.provider_type),
-                    )
-                    .await
-                    {
-                        return Err(finish_nonstream_error(
-                            state,
-                            auth,
-                            &attempt,
-                            &logical_model,
-                            started_at,
-                            &request_id,
-                            &request_ip,
-                            reasoning_effort.clone(),
-                            tried_providers,
-                            &capture,
-                            false,
-                            err,
-                        )
-                        .await);
-                    }
-                    if matches!(
-                        attempt.provider_type,
-                        ProviderType::OpenaiImage | ProviderType::OpenrouterImage
-                    ) && !matches!(downstream, DownstreamProtocol::Responses)
-                    {
-                        convert_assistant_images_to_markdown(&mut resp);
-                    }
-                    let history = history_context
-                        .take()
-                        .map(|history| history.with_resource_scope(media_resource_scope(&attempt)));
-                    if let Some(history) = &history {
-                        history.decorate_response(&mut resp);
-                    }
-                    if let Some(echo) = responses_echo {
-                        resp.extra_body
-                            .insert(urp::RESPONSES_REQUEST_ECHO_EXTRA_KEY.to_string(), echo);
-                    }
-                    if strip_foreign_response {
-                        let mask_sensitive_info =
-                            state.monoize_runtime.read().await.mask_sensitive_info;
-                        normalize_outcome_error(
-                            &mut resp.outcome,
-                            downstream,
-                            request_id.as_deref(),
-                            mask_sensitive_info,
-                        );
-                    }
-                    let accepted = match accept(&resp, &logical_model) {
-                        Ok(accepted) => accepted,
-                        Err(err) => {
-                            return Err(finish_nonstream_error(
-                                state,
-                                auth,
-                                &attempt,
-                                &logical_model,
-                                started_at,
-                                &request_id,
-                                &request_ip,
-                                reasoning_effort.clone(),
-                                tried_providers,
-                                &capture,
-                                false,
-                                err,
-                            )
-                            .await);
-                        }
-                    };
-                    if let Some(foreign_extras) = foreign_extras {
-                        foreign_extras.restore(&mut resp);
-                    }
-                    let charge = match maybe_charge_response(
-                        state,
-                        auth,
-                        &attempt,
-                        &logical_model,
-                        &resp,
-                        request_id.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(charge) => charge,
-                        Err(err) => {
-                            return Err(finish_nonstream_error(
-                                state,
-                                auth,
-                                &attempt,
-                                &logical_model,
-                                started_at,
-                                &request_id,
-                                &request_ip,
-                                reasoning_effort.clone(),
-                                tried_providers,
-                                &capture,
-                                false,
-                                err,
-                            )
-                            .await);
-                        }
-                    };
-                    spawn_request_log(
-                        state,
-                        auth,
-                        &attempt,
-                        &logical_model,
-                        resp.usage.clone(),
-                        charge.charge_nano_usd,
-                        charge.billing_breakdown,
-                        false,
-                        started_at,
-                        request_id.clone(),
-                        request_ip.clone(),
-                        attempt.channel_id.clone(),
-                        None,
-                        None,
-                        reasoning_effort.clone(),
-                        tried_providers,
-                        client_gone_flag(task_state),
-                        upstream_response_model,
-                    );
-                    if let Some(session) = capture.session.as_ref() {
-                        session
-                            .persist_with_result(resp.usage.as_ref(), false)
-                            .await;
-                    }
-                    if let Some(history) = history {
-                        history.retain_response(&resp).await;
-                    }
-                    if !downstream.is_same_family(attempt.provider_type) {
-                        forwarded_headers.clear();
-                    }
-                    return Ok((resp, logical_model, accepted, forwarded_headers));
-                }
-                Err(err) => {
-                    if let (Some(session), Some(capture_upstream_request)) =
-                        (capture.session.as_ref(), capture_upstream_request)
-                    {
-                        session
-                            .push_attempt(crate::request_capture::build_attempt_dump(
-                                attempt_number,
-                                &attempt.provider_id,
-                                Some(&attempt.channel_id),
-                                attempt.provider_type,
-                                &logical_model,
-                                &req_attempt.model,
-                                &path,
-                                capture.raw_input.as_ref().clone(),
-                                &req_attempt,
-                                capture_upstream_request,
-                                None,
-                                None,
-                                None,
-                                capture_transform_chain.clone(),
-                                Some(json!({
-                                    "message": err.message,
-                                    "code": err.code,
-                                    "status": err.status.map(|status| status.as_u16()),
-                                })),
-                            ))
-                            .await;
-                    }
-                    let same_channel_retryable = is_same_channel_retryable_error(&err);
-                    let passive_failure_class =
-                        same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let mask_sensitive_info =
-                        state.monoize_runtime.read().await.mask_sensitive_info;
-                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
-                    record_upstream_attempt_failure(
-                        state,
-                        &attempt,
-                        attempt_number,
-                        &app_err,
-                        passive_failure_class,
-                        &mut tried_providers,
-                        &mut execution_state,
-                    )
-                    .await;
-                    last_failed_attempt = Some(attempt.clone());
-                    if allow_same_channel_retry(
-                        state,
-                        &attempt,
-                        &execution_state,
-                        channel_attempt + 1,
-                        passive_failure_class,
-                    )
-                    .await
-                    {
-                        maybe_sleep_before_channel_retry(&attempt).await;
-                        continue;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    let final_err = build_exhausted_error_for_downstream(
-        &logical_model,
-        &tried_providers,
-        last_failed_attempt.as_ref(),
-        downstream,
-    );
-    if let Some(attempt) = last_failed_attempt {
-        spawn_request_log_error(
-            state,
-            auth,
-            &attempt,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            reasoning_effort.clone(),
-            tried_providers,
-        );
-    } else {
-        spawn_request_log_error_no_attempt(
-            state,
-            auth,
-            &logical_model,
-            false,
-            started_at,
-            request_id,
-            request_ip,
-            &final_err,
-            reasoning_effort.clone(),
-            tried_providers,
-        );
-    }
-    if let Some(session) = capture.session.as_ref() {
-        session.persist_with_result(None, true).await;
-    }
-    Err(final_err)
-}
-
-fn supports_nonstream_upstream_stream_collection(provider_type: ProviderType) -> bool {
-    matches!(
-        provider_type,
-        ProviderType::Responses | ProviderType::OpenaiImage | ProviderType::OpenrouterImage
-    )
-}
-
-enum CollectedUpstreamError {
-    Internal(AppError),
-    Upstream(AppError),
-}
-
-async fn collect_streamed_upstream_response(
-    legacy: UrpRequest,
-    pending_request_envelope_extra: Option<HashMap<String, Value>>,
-    provider_type: ProviderType,
-    upstream_resp: reqwest::Response,
-    started_at: std::time::Instant,
-    logical_model: &str,
-    stream_idle_timeout_ms: u64,
-) -> Result<(urp::UrpResponse, Option<String>), CollectedUpstreamError> {
-    let (decoded_tx, mut decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-    let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
-    let decode_handle = {
-        let runtime_metrics = runtime_metrics.clone();
-        tokio::spawn(async move {
-            stream_upstream_to_urp_events(
-                &legacy,
-                pending_request_envelope_extra,
-                provider_type,
-                upstream_resp,
-                decoded_tx,
-                Some(started_at),
-                Some(runtime_metrics),
-                stream_idle_timeout_ms,
-            )
-            .await
-        })
-    };
-
-    let mut final_response: Option<urp::UrpResponse> = None;
-    let mut stream_error: Option<AppError> = None;
-    while let Some(event) = decoded_rx.recv().await {
-        match event {
-            crate::urp::UrpStreamEvent::ResponseDone {
-                outcome,
-                finish_reason,
-                usage,
-                output,
-                extra_body,
-            } => {
-                final_response = Some(urp::UrpResponse {
-                    outcome,
-                    id: extra_body
-                        .get("id")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("resp_stream_collected")
-                        .to_string(),
-                    model: extra_body
-                        .get("model")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or(logical_model)
-                        .to_string(),
-                    created_at: extra_body
-                        .get("created_at")
-                        .and_then(|value| value.as_i64()),
-                    output: urp::TerminalNode::into_nodes(output),
-                    finish_reason,
-                    usage,
-                    extra_body,
-                });
-            }
-            crate::urp::UrpStreamEvent::Error { code, message, .. } => {
-                stream_error = Some(AppError::new(
-                    StatusCode::BAD_GATEWAY,
-                    code.unwrap_or_else(|| "upstream_stream_error".to_string()),
-                    message,
-                ));
-            }
-            _ => {}
-        }
-    }
-    decode_handle
-        .await
-        .map_err(|e| {
-            CollectedUpstreamError::Internal(AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "task_panic",
-                e.to_string(),
-            ))
-        })?
-        .map_err(CollectedUpstreamError::Upstream)?;
-    if let Some(err) = stream_error {
-        return Err(CollectedUpstreamError::Upstream(err));
-    }
-    let observed_response_model = runtime_metrics.lock().await.response_model.clone();
-    final_response
-        .map(|response| (response, observed_response_model))
-        .ok_or_else(|| {
-            CollectedUpstreamError::Upstream(AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_stream_error",
-                "stream completed without terminal response",
-            ))
-        })
 }
 
 pub(super) async fn forward_nonstream_typed_with_task_state(
@@ -1246,315 +162,127 @@ pub(super) async fn forward_nonstream_typed_with_task_state(
     capture: RequestCaptureContext,
     task_state: Option<&AdmittedRequestTaskState>,
 ) -> AppResult<(Value, crate::error::ForwardedHeaders)> {
-    let (_, _, body, forwarded_headers) = execute_nonstream(
+    let inputs = NonstreamInputs {
         state,
         auth,
-        req,
         max_multiplier,
         downstream,
         request_id,
         request_ip,
-        client_session_id,
         capture,
-        |resp, logical_model| encode_response_for_downstream(downstream, resp, logical_model),
-        true,
+        strip_foreign_response: true,
         task_state,
-    )
-    .await?;
+    };
+    let (_, _, body, forwarded_headers) =
+        execute_nonstream(inputs, req, client_session_id, |resp, logical_model| {
+            encode_response_for_downstream(downstream, resp, logical_model)
+        })
+        .await?;
     Ok((body, forwarded_headers))
 }
 
-#[allow(clippy::result_large_err)]
-pub(super) fn encode_request_for_provider(
-    req: &mut urp::UrpRequest,
-    attempt: &MonoizeAttempt,
+/// Request-scoped inputs of one non-stream execution.
+struct NonstreamInputs<'a> {
+    state: &'a AppState,
+    auth: &'a crate::auth::AuthResult,
+    max_multiplier: Option<Multiplier>,
     downstream: DownstreamProtocol,
-) -> AppResult<Value> {
-    validate_media_request_route(req, attempt)?;
-    if matches!(downstream, DownstreamProtocol::Responses)
-        && attempt.provider_type != ProviderType::Responses
-    {
-        req.extra_body.remove("store");
-        req.extra_body.remove("conversation");
-        req.extra_body.remove("previous_response_id");
-    }
-    if responses_history::is_managed(req) {
-        req.extra_body.remove("previous_response_id");
-        if attempt.provider_type == ProviderType::Responses {
-            req.extra_body
-                .insert("store".to_string(), Value::Bool(false));
-        } else {
-            req.extra_body.remove("store");
-        }
-    }
-    filter_extra_body_for_provider(
-        req,
-        attempt.provider_type,
-        downstream,
-        &attempt.extra_fields_whitelist,
-    );
-    if attempt.provider_type == ProviderType::Responses
-        && !matches!(downstream, DownstreamProtocol::Responses)
-    {
-        apply_cross_family_responses_controls(req);
-    }
-    filter_tools_for_provider(req, attempt.provider_type, downstream);
-    if attempt.provider_type == ProviderType::Responses
-        && req.image_generation.is_some()
-        && (attempt.logical_model.starts_with("gpt-image-")
-            || attempt.logical_model == "chatgpt-image-latest")
-    {
-        for tool in req
-            .tools
-            .iter_mut()
-            .flatten()
-            .filter(|tool| tool.tool_type == "image_generation")
-        {
-            if !tool.extra_body.contains_key("model")
-                && let Some(config) = tool.config.get_or_insert_with(|| json!({})).as_object_mut()
-            {
-                config
-                    .entry("model")
-                    .or_insert_with(|| json!(attempt.logical_model));
-            }
-        }
-    }
-    let stateful_same_responses = matches!(downstream, DownstreamProtocol::Responses)
-        && attempt.provider_type == ProviderType::Responses
-        && has_responses_state_reference(req);
-    if !stateful_same_responses {
-        strip_orphaned_tool_calls(req);
-    }
-    let model = req.model.clone();
-    let value = match attempt.provider_type {
-        ProviderType::Responses => urp::encode::openai_responses::encode_request_checked(
-            req, &model,
-        )
-        .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message))?,
-        ProviderType::ChatCompletion => {
-            urp::encode::openai_chat::encode_request_checked(req, &model, attempt.chat_dialect)
-                .map_err(|error| {
-                    AppError::new(StatusCode::BAD_REQUEST, error.code, error.message)
-                })?
-        }
-        ProviderType::Messages => urp::encode::anthropic::encode_request_checked(req, &model)
-            .map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-            })?,
-        ProviderType::Gemini => {
-            urp::encode::gemini::encode_request_checked(req, &model).map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message)
-            })?
-        }
-        ProviderType::OpenaiImage => urp::encode::openai_image::encode_request_checked(req, &model)
-            .map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-            })?,
-        ProviderType::OpenrouterImage => urp::encode::openrouter_image::encode_request(req, &model)
-            .map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message)
-            })?,
-        ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model),
-        ProviderType::Group => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "provider_type_not_supported",
-                "group is virtual",
+    request_id: Option<String>,
+    request_ip: Option<String>,
+    capture: RequestCaptureContext,
+    /// XTRA-5a; the Image API opts out because it reads response extras.
+    strip_foreign_response: bool,
+    task_state: Option<&'a AdmittedRequestTaskState>,
+}
+
+/// Runs routing, upstream attempts, response transforms, and billing for one
+/// non-stream request. `accept` runs on the final (history-decorated)
+/// response before billing; its error fails the request and its value is
+/// returned with the response (FP6k.1a). The last tuple member is the SE1d
+/// header set of the serving attempt.
+async fn execute_nonstream<T>(
+    inputs: NonstreamInputs<'_>,
+    req: urp::UrpRequest,
+    client_session_id: Option<String>,
+    accept: impl Fn(&urp::UrpResponse, &str) -> AppResult<T>,
+) -> AppResult<(urp::UrpResponse, String, T, crate::error::ForwardedHeaders)> {
+    let (mut run, attempts) = NonstreamRun::admit(inputs, req, client_session_id).await?;
+    let attempt_count = attempts.len();
+    for (attempt_index, attempt) in attempts.into_iter().enumerate() {
+        let last_attempt = attempt_index + 1 == attempt_count;
+        if let Some(served) = run.serve_attempt(attempt, last_attempt, &accept).await? {
+            return Ok((
+                served.resp,
+                run.logical_model,
+                served.accepted,
+                served.forwarded_headers,
             ));
         }
-        ProviderType::SystemOne | ProviderType::OpenaiDecisions => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "provider_type_not_supported",
-                "decision channels serve only decision endpoints",
-            ));
-        }
-    };
-    Ok(value)
+    }
+    Err(run.finish_exhausted().await)
 }
 
-#[allow(clippy::result_large_err)]
-pub(super) fn decode_response_from_provider(
-    provider_type: ProviderType,
-    value: &Value,
-    model: &str,
-    mask_sensitive_info: bool,
-    request: &urp::UrpRequest,
-) -> AppResult<urp::UrpResponse> {
-    if provider_type == ProviderType::ChatCompletion
-        && let Some(error) = embedded_chat_completion_error(value)
-    {
-        return Err(embedded_chat_completion_error_to_app(
-            error,
-            mask_sensitive_info,
-        ));
-    }
-    if provider_type == ProviderType::ChatCompletion
-        && chat_completion_finish_reason_is_error(value)
-    {
-        return Err(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_chat_error",
-            "upstream Chat Completions response terminated with finish_reason=error",
-        )
-        .with_type("server_error"));
-    }
-    let mut decoded = match provider_type {
-        ProviderType::Responses => urp::decode::openai_responses::decode_response(value),
-        ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),
-        ProviderType::Messages => urp::decode::anthropic::decode_response(value),
-        ProviderType::Gemini => urp::decode::gemini::decode_response(value),
-        ProviderType::OpenaiImage | ProviderType::OpenrouterImage => {
-            urp::decode::openai_image::decode_response(value, model)
-        }
-        ProviderType::Replicate => urp::decode::replicate::decode_response(value),
-        ProviderType::Group => Err("provider_type group is virtual".to_string()),
-        ProviderType::SystemOne | ProviderType::OpenaiDecisions => {
-            Err("decision channels serve only decision endpoints".to_string())
-        }
-    }
-    .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))?;
-    if matches!(provider_type, ProviderType::Messages | ProviderType::Gemini) {
-        restore_messages_custom_tool_calls(request, &mut decoded);
-    }
-    if provider_type == ProviderType::ChatCompletion {
-        if let Some(mime) = request
-            .extra_body
-            .get("audio")
-            .and_then(|v| v.get("format"))
-            .and_then(Value::as_str)
-            .and_then(urp::media::audio_mime_for_format)
-        {
-            for node in &mut decoded.output {
-                if let urp::Node::Audio {
-                    source: urp::AudioSource::Base64 { media_type, .. },
-                    ..
-                } = node
-                {
-                    if media_type == "audio/unknown" {
-                        *media_type = mime.into();
-                    }
-                }
-            }
-        }
-    }
-    let aliases = tool_namespace_aliases(request);
-    for node in &mut decoded.output {
-        restore_tool_namespace_node(node, &aliases);
-    }
-    Ok(decoded)
+/// One admitted non-stream request: its inputs, what admission resolved, and
+/// the bookkeeping carried from one upstream try to the next.
+struct NonstreamRun<'a> {
+    inputs: NonstreamInputs<'a>,
+    started_at: std::time::Instant,
+    logical_model: String,
+    transform_match_model: String,
+    reasoning_effort: Option<String>,
+    /// Held until the run ends: its drop writes the fallback terminal log
+    /// unless a terminal log was claimed. `None` when the task state holds it.
+    _pending_request_log_guard: Option<PendingRequestLogGuard>,
+    /// The suffix-normalized request every try re-derives its transformed
+    /// request from; the final slot or a decoded response takes it (FP6j-2).
+    original_req: Option<urp::UrpRequest>,
+    history_context: Option<responses_history::HistoryContext>,
+    tried_providers: Vec<TriedProvider>,
+    last_failed_attempt: Option<MonoizeAttempt>,
+    execution_state: AttemptExecutionState,
 }
 
-fn embedded_chat_completion_error(value: &Value) -> Option<&Value> {
-    value
-        .get("error")
-        .filter(|error| !error.is_null())
-        .or_else(|| {
-            value
-                .get("choices")
-                .and_then(Value::as_array)
-                .and_then(|choices| choices.first())
-                .and_then(|choice| choice.get("error"))
-                .filter(|error| !error.is_null())
-        })
+/// A settled response, the caller's `accept` value, and the SE1d headers of
+/// the serving attempt.
+struct Served<T> {
+    resp: urp::UrpResponse,
+    accepted: T,
+    forwarded_headers: crate::error::ForwardedHeaders,
 }
 
-fn chat_completion_finish_reason_is_error(value: &Value) -> bool {
-    value
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("finish_reason"))
-        .and_then(Value::as_str)
-        == Some("error")
+/// How one upstream try ended when it did not end the request.
+enum TryOutcome<T> {
+    Served(Served<T>),
+    /// The failure is recorded; `retry_same_channel` allows another try on
+    /// the same Channel (RTA-4/RTA-5).
+    Failed {
+        retry_same_channel: bool,
+    },
 }
 
-fn embedded_chat_completion_error_to_app(error: &Value, mask_sensitive_info: bool) -> AppError {
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| error.as_str())
-        .filter(|message| !message.is_empty())
-        .unwrap_or("upstream Chat Completions response terminated with an error");
-    let metadata = error.get("metadata").and_then(Value::as_object);
-    let upstream_code = error.get("code").and_then(json_scalar_string).or_else(|| {
-        metadata
-            .and_then(|metadata| metadata.get("provider_code"))
-            .and_then(json_scalar_string)
-    });
-    let upstream_status = error
-        .get("code")
-        .and_then(Value::as_u64)
-        .filter(|status| (400..=599).contains(status))
-        .and_then(|status| StatusCode::from_u16(status as u16).ok());
-    let upstream_type = error.get("type").and_then(json_scalar_string).or_else(|| {
-        metadata
-            .and_then(|metadata| metadata.get("error_type"))
-            .and_then(json_scalar_string)
-    });
-    let upstream_param = error
-        .get("param")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-
-    // SAN-4: the embedded message is upstream-controlled free text — the
-    // client sees the masked form while the raw text stays admin-readable
-    // via `internal_message`. SAN-CFG5 item 1: masking off disables `MASK`.
-    AppError::new(
-        StatusCode::BAD_GATEWAY,
-        "upstream_chat_error",
-        crate::error_sanitize::maybe_mask_sensitive_text(message, mask_sensitive_info),
-    )
-    .with_internal_message(crate::error_sanitize::truncate_error_detail(message))
-    .with_type("server_error")
-    .with_upstream_error(
-        upstream_status,
-        upstream_code,
-        upstream_type,
-        upstream_param,
-    )
+#[derive(Clone, Copy)]
+struct TrySlot {
+    /// Request-wide upstream attempt number.
+    attempt_number: u32,
+    /// Tries made on this Channel so far, this one included.
+    channel_attempts_used: usize,
 }
 
-fn json_scalar_string(value: &Value) -> Option<String> {
-    match value {
-        Value::String(value) if !value.is_empty() => Some(value.clone()),
-        Value::Number(value) => Some(value.to_string()),
-        _ => None,
-    }
-}
-
-/// STR3t: request controls a synthesized Responses object must echo on this attempt.
-pub(super) fn responses_request_echo_for_attempt(
-    req: &urp::UrpRequest,
-    attempt: &MonoizeAttempt,
-    downstream: DownstreamProtocol,
-) -> Option<Value> {
-    (matches!(downstream, DownstreamProtocol::Responses)
-        && attempt.provider_type != ProviderType::Responses)
-        .then(|| {
-            let mut effective = req.clone();
-            // The echo speaks Responses, so a mapped upstream web search projects back.
-            map_web_search_tools_for_provider(&mut effective, ProviderType::Responses);
-            urp::encode::openai_responses::response_request_echo(effective)
-        })
-}
-
-pub(super) fn encode_response_for_downstream(
-    downstream: DownstreamProtocol,
-    resp: &urp::UrpResponse,
-    logical_model: &str,
-) -> AppResult<Value> {
-    match downstream {
-        DownstreamProtocol::Responses => {
-            urp::encode::openai_responses::encode_response_checked(resp, logical_model)
-        }
-        DownstreamProtocol::ChatCompletions => {
-            urp::encode::openai_chat::encode_response_checked(resp, logical_model)
-        }
-        DownstreamProtocol::AnthropicMessages => {
-            urp::encode::anthropic::encode_response_checked(resp, logical_model)
-        }
-    }
-    .map_err(|message| AppError::new(StatusCode::BAD_GATEWAY, "unsupported_output_media", message))
+/// One upstream try on one Channel slot, from request encoding to its reply.
+struct AttemptCall {
+    slot: TrySlot,
+    /// The transformed request. Its input nodes are released once encoded
+    /// unless a capture session still reads them (FP6j-2).
+    req: urp::UrpRequest,
+    transport: exchange::Transport,
+    path: String,
+    /// STR3t echo inserted into the final response.
+    responses_echo: Option<Value>,
+    /// Global rules read for the request phase; the response phase reuses them.
+    global_transforms: Vec<TransformRuleConfig>,
+    capture_transform_chain: Value,
+    /// RCD-D6/RCD-D6a capture `upstream_request`; set only for a capture session.
+    capture_upstream_request: Option<Value>,
+    /// SE1d `FWD` of the upstream reply.
+    forwarded_headers: crate::error::ForwardedHeaders,
 }
