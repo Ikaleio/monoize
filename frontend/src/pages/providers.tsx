@@ -154,7 +154,7 @@ function ProvidersPageContent() {
 	if (isLoading) {
 		return (
 			<PageWrapper className='space-y-6'>
-				<CardsPageSkeleton />
+				<CardsPageSkeleton headerActions={1} />
 			</PageWrapper>
 		)
 	}

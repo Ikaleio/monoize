@@ -279,7 +279,7 @@ export function BillingPlansPage() {
   if (isLoading) {
     return (
       <PageWrapper>
-        <TablePageSkeleton rows={3} columns={6} />
+        <TablePageSkeleton rows={3} columns={6} headerActions={1} />
       </PageWrapper>
     );
   }

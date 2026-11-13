@@ -90,7 +90,6 @@ pub(in crate::handlers) async fn apply_transform_rules_response(
             )
         })?;
     }
-    urp::integerize_tool_call_nodes(&mut resp.output);
     Ok(())
 }
 
@@ -189,11 +188,10 @@ pub(in crate::handlers) async fn transform_urp_stream(
                     .apply(provider_event, config.model, &context, resolver)
                     .await?
                 {
-                    for mut auth_event in auth
+                    for auth_event in auth
                         .apply(global_event, config.model, &context, resolver)
                         .await?
                     {
-                        urp::integerize_tool_call_stream_event(&mut auth_event);
                         tx.send(auth_event).await.map_err(|_| {
                             AppError::new(
                                 StatusCode::BAD_GATEWAY,

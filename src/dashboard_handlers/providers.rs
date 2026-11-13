@@ -5,7 +5,7 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::monoize_routing::{
-    CreateMonoizeProviderInput, ReorderProvidersInput, UpdateMonoizeProviderInput,
+    CreateMonoizeProviderInput, MonoizeProvider, ReorderProvidersInput, UpdateMonoizeProviderInput,
 };
 use crate::settings::normalize_pricing_model_key;
 use axum::Json;
@@ -13,10 +13,11 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use runtime::{
-    advance_routing_config_revision, build_provider_model_runtime_statuses, provider_with_runtime,
-    prune_provider_channel_affinity, prune_provider_channel_health,
+    ProviderModelRuntimeStatus, advance_routing_config_revision,
+    build_provider_model_runtime_statuses, provider_with_runtime, prune_provider_channel_affinity,
+    prune_provider_channel_health,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
@@ -127,39 +128,34 @@ pub async fn list_providers(
         }
         unpriced_model_ids.sort();
         unpriced_model_ids.dedup();
-        let unpriced_count = unpriced_model_ids.len();
         let p = provider_with_runtime(&state, provider).await;
         let model_runtime_statuses = build_provider_model_runtime_statuses(&p, &unpriced_entries);
-        let val = serde_json::to_value(&p).unwrap_or_default();
-        if let Value::Object(mut obj) = val {
-            let usage = live_usage.get(&p.id).copied().unwrap_or_default();
-            obj.insert(
-                "live_usage".to_string(),
-                json!({
-                    "window_seconds": crate::users::LIVE_USAGE_WINDOW_SECONDS,
-                    "rpm": usage.rpm,
-                    "tpm": usage.tpm,
-                }),
-            );
-            obj.insert(
-                "unpriced_model_count".to_string(),
-                Value::Number(serde_json::Number::from(unpriced_count)),
-            );
-            obj.insert(
-                "unpriced_model_ids".to_string(),
-                Value::Array(unpriced_model_ids.into_iter().map(Value::String).collect()),
-            );
-            obj.insert(
-                "model_runtime_statuses".to_string(),
-                serde_json::to_value(model_runtime_statuses).unwrap_or_default(),
-            );
-            out.push(Value::Object(obj));
-        } else {
-            out.push(val);
-        }
+        let usage = live_usage.get(&p.id).copied().unwrap_or_default();
+        out.push(ProviderListEntry {
+            provider: p,
+            live_usage: json!({
+                "window_seconds": crate::users::LIVE_USAGE_WINDOW_SECONDS,
+                "rpm": usage.rpm,
+                "tpm": usage.tpm,
+            }),
+            unpriced_model_count: unpriced_model_ids.len(),
+            unpriced_model_ids,
+            model_runtime_statuses,
+        });
     }
 
     Ok(Json(out))
+}
+
+/// One `list_providers` entry: the provider plus its live usage and pricing state.
+#[derive(Serialize)]
+struct ProviderListEntry {
+    #[serde(flatten)]
+    provider: MonoizeProvider,
+    live_usage: Value,
+    unpriced_model_count: usize,
+    unpriced_model_ids: Vec<String>,
+    model_runtime_statuses: Vec<ProviderModelRuntimeStatus>,
 }
 
 pub async fn get_provider(
@@ -414,15 +410,8 @@ pub async fn get_transform_registry(
                 "type_id": transform.type_id(),
                 "name": localized_text_object(transform.display_name()),
                 "description": localized_text_object(transform.display_description()),
-                "supported_phases": transform
-                    .supported_phases()
-                    .iter()
-                    .map(|p| serde_json::to_value(p).unwrap_or(Value::String("request".to_string())))
-                    .collect::<Vec<_>>(),
-                "supported_scopes": supported_scopes
-                    .iter()
-                    .map(|scope| serde_json::to_value(scope).unwrap_or(Value::String("provider".to_string())))
-                    .collect::<Vec<_>>(),
+                "supported_phases": transform.supported_phases(),
+                "supported_scopes": supported_scopes,
                 "config_schema": transform.config_schema(),
             })
         })

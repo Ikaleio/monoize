@@ -101,21 +101,25 @@ pub(super) fn decode_channel_row(
         enabled: decode_required_bool(row, "channel", &id, "enabled")?,
         passive_failure_count_threshold_override: decode_optional_positive_u32(
             row,
+            "channel",
             &id,
             "passive_failure_count_threshold_override",
         )?,
         passive_cooldown_seconds_override: decode_optional_positive_u64(
             row,
+            "channel",
             &id,
             "passive_cooldown_seconds_override",
         )?,
         passive_window_seconds_override: decode_optional_positive_u64(
             row,
+            "channel",
             &id,
             "passive_window_seconds_override",
         )?,
         passive_rate_limit_cooldown_seconds_override: decode_optional_positive_u64(
             row,
+            "channel",
             &id,
             "passive_rate_limit_cooldown_seconds_override",
         )?,
@@ -128,11 +132,13 @@ pub(super) fn decode_channel_row(
         )?,
         active_probe_interval_seconds_override: decode_optional_positive_u64(
             row,
+            "channel",
             &id,
             "active_probe_interval_seconds_override",
         )?,
         active_probe_success_threshold_override: decode_optional_positive_u32(
             row,
+            "channel",
             &id,
             "active_probe_success_threshold_override",
         )?,
@@ -147,6 +153,7 @@ pub(super) fn decode_channel_row(
         )?,
         affinity_idle_ttl_seconds_override: decode_optional_positive_u64(
             row,
+            "channel",
             &id,
             "affinity_idle_ttl_seconds_override",
         )?,
@@ -161,6 +168,7 @@ pub(super) fn decode_channel_row(
             .transpose()?,
         affinity_failback_delay_seconds_override: decode_optional_nonnegative_u64(
             row,
+            "channel",
             &id,
             "affinity_failback_delay_seconds_override",
         )?,
@@ -235,11 +243,13 @@ pub(super) fn decode_provider_row(
         )?,
         active_probe_interval_seconds_override: decode_optional_positive_u64(
             row,
+            "provider",
             &id,
             "active_probe_interval_seconds_override",
         )?,
         active_probe_success_threshold_override: decode_optional_positive_u32(
             row,
+            "provider",
             &id,
             "active_probe_success_threshold_override",
         )?,
@@ -248,6 +258,7 @@ pub(super) fn decode_provider_row(
             .map_err(|e| e.to_string())?,
         request_timeout_ms_override: decode_optional_positive_u64(
             row,
+            "provider",
             &id,
             "request_timeout_ms_override",
         )?,
@@ -303,23 +314,22 @@ pub(super) fn decode_provider_row(
     })
 }
 
-fn decode_positive_u32(provider_id: &str, field: &str, value: i64) -> Result<u32, String> {
+fn decode_positive_u32(entity: &str, id: &str, field: &str, value: i64) -> Result<u32, String> {
     u32::try_from(value)
         .ok()
         .filter(|v| *v >= 1)
-        .ok_or_else(|| format!("provider {provider_id} invalid {field}: must be >= 1"))
+        .ok_or_else(|| format!("{entity} {id} invalid {field}: must be >= 1"))
 }
 
-fn decode_positive_u64(provider_id: &str, field: &str, value: i64) -> Result<u64, String> {
+fn decode_positive_u64(entity: &str, id: &str, field: &str, value: i64) -> Result<u64, String> {
     u64::try_from(value)
         .ok()
         .filter(|v| *v >= 1)
-        .ok_or_else(|| format!("provider {provider_id} invalid {field}: must be >= 1"))
+        .ok_or_else(|| format!("{entity} {id} invalid {field}: must be >= 1"))
 }
 
-fn decode_nonnegative_u64(provider_id: &str, field: &str, value: i64) -> Result<u64, String> {
-    u64::try_from(value)
-        .map_err(|_| format!("provider {provider_id} invalid {field}: must be >= 0"))
+fn decode_nonnegative_u64(entity: &str, id: &str, field: &str, value: i64) -> Result<u64, String> {
+    u64::try_from(value).map_err(|_| format!("{entity} {id} invalid {field}: must be >= 0"))
 }
 
 fn decode_required_bool(
@@ -346,34 +356,37 @@ fn decode_optional_bool(
 
 fn decode_optional_positive_u32(
     row: &QueryResult,
+    entity: &str,
     id: &str,
     field: &str,
 ) -> Result<Option<u32>, String> {
     row.try_get::<Option<i32>>("", field)
         .map_err(|e| e.to_string())?
-        .map(|value| decode_positive_u32(id, field, i64::from(value)))
+        .map(|value| decode_positive_u32(entity, id, field, i64::from(value)))
         .transpose()
 }
 
 fn decode_optional_positive_u64(
     row: &QueryResult,
+    entity: &str,
     id: &str,
     field: &str,
 ) -> Result<Option<u64>, String> {
     row.try_get::<Option<i32>>("", field)
         .map_err(|e| e.to_string())?
-        .map(|value| decode_positive_u64(id, field, i64::from(value)))
+        .map(|value| decode_positive_u64(entity, id, field, i64::from(value)))
         .transpose()
 }
 
 fn decode_optional_nonnegative_u64(
     row: &QueryResult,
+    entity: &str,
     id: &str,
     field: &str,
 ) -> Result<Option<u64>, String> {
     row.try_get::<Option<i32>>("", field)
         .map_err(|e| e.to_string())?
-        .map(|value| decode_nonnegative_u64(id, field, i64::from(value)))
+        .map(|value| decode_nonnegative_u64(entity, id, field, i64::from(value)))
         .transpose()
 }
 

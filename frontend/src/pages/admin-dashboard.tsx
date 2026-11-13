@@ -49,7 +49,7 @@ export function AdminDashboardPage() {
     return (
       <PageWrapper>
         <div className="space-y-6" aria-busy="true">
-          <PageHeaderSkeleton />
+          <PageHeaderSkeleton actions={1} />
           <SectionSkeleton rows={5} />
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
             <SectionSkeleton rows={4} className="lg:col-span-7" />

@@ -27,7 +27,8 @@ FD-B6. Each pending route import MUST render a route-level skeleton. Dashboard
 skeletons MUST remain inside the existing navigation shell and `PageWrapper`.
 A dashboard route skeleton MUST be one of the shared page skeletons (table page,
 card grid, settings page, or page header only) or empty; a page whose own
-loading state is one of these MUST use the same one. The login skeleton MUST
+loading state is one of these MUST use the same one. Its header follows
+`frontend-design-system.spec.md` DS13a. The login skeleton MUST
 retain the centered authentication card. The loading region MUST expose a localized
 loading status and `aria-busy=true`.
 

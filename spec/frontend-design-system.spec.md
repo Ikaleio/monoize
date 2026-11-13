@@ -84,6 +84,8 @@ DS12. Dashboard page loading states MUST render inside `PageWrapper`.
 
 DS13. Loading states MUST use shared skeleton components for repeated page shapes.
 
+DS13a. A page header skeleton MUST render one action placeholder for each header action control that the ready page shows by default. A control that appears only after a user selection does not count. A ready header without actions MUST produce a header skeleton without action placeholders.
+
 DS14. A table page loading state MUST include:
 
 - a page header skeleton;

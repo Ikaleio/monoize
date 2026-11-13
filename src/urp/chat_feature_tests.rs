@@ -417,9 +417,6 @@ async fn chat_typed_terminal_finish_reason_wins_over_tools() {
 async fn chat_custom_json_looking_input_remains_verbatim() {
     for input in ["1.0", " { \"n\": 1.0 } "] {
         feature(json!({"role":"assistant","content":null,"tool_calls":[{"id":"custom_json","type":"custom","custom":{"name":"freeform","input":input}}]}),"tool_calls").await;
-        let mut response=decode::decode_response(&response(json!({"role":"assistant","tool_calls":[{"id":"custom_json","type":"custom","custom":{"name":"freeform","input":input}}]}),"tool_calls")).unwrap();
-        super::integerize_tool_call_nodes(&mut response.output);
-        assert!(matches!(&response.output[0],Node::ToolCall {arguments,..} if arguments==input));
     }
 }
 #[tokio::test]

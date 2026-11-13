@@ -49,8 +49,7 @@ pub use response::*;
 pub use sampling::SamplingConfig;
 pub use stream::*;
 pub use tool_call_json::{
-    integerize_json_floats, integerize_tool_call_nodes, integerize_tool_call_stream_event,
-    tool_call_arguments_for_wire,
+    integerize_json_floats, integerize_tool_call_arguments_json, tool_call_arguments_for_wire,
 };
 pub use usage::{InputDetails, ModalityBreakdown, OutputDetails, Usage, UsageIteration};
 

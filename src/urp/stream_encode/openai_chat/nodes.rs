@@ -12,9 +12,10 @@ use crate::urp::stream_helpers::{
 };
 use crate::urp::{
     CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY, Node, NodeDelta, NodeHeader, ProviderProtocol,
-    ToolCallType, is_internal_key,
+    ToolCallType, integerize_tool_call_arguments_json, is_internal_key,
 };
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Cross-event state of one node.
@@ -87,6 +88,18 @@ impl CallShape {
                 json!({ "tool_calls": [{ "index": index, "custom": { "input": "" } }] }),
                 chat_delta_path_custom_tool_input,
             ),
+        }
+    }
+
+    /// ENC-8: function arguments go out with integer-valued floats rewritten; a partial JSON
+    /// fragment and custom tool input stay verbatim.
+    fn wire_arguments(self, arguments: &str) -> Cow<'_, str> {
+        match self {
+            Self::Tool {
+                tool_type: ToolCallType::Custom,
+                ..
+            } => Cow::Borrowed(arguments),
+            _ => integerize_tool_call_arguments_json(arguments),
         }
     }
 }
@@ -169,6 +182,7 @@ impl ChatStreamEncoder {
             }
             NodeDelta::ToolCallArguments { arguments } => match state.call {
                 Some(shape) => {
+                    let arguments = shape.wire_arguments(&arguments);
                     state.arguments.push_str(&arguments);
                     self.send_arguments(shape, &arguments, &extra_body).await
                 }
@@ -256,6 +270,7 @@ impl ChatStreamEncoder {
                     }
                 };
                 // Arguments that diverged from the emitted prefix cannot be retracted.
+                let arguments = shape.wire_arguments(arguments);
                 let Some(suffix) = arguments
                     .strip_prefix(state.arguments.as_str())
                     .filter(|suffix| !suffix.is_empty())

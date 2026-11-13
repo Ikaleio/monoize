@@ -64,10 +64,12 @@ impl MonoizeRoutingStore {
         let api_type_overrides_json =
             serde_json::to_string(&stored_api_type_overrides(&input.api_type_overrides)?)
                 .map_err(|e| e.to_string())?;
-        let extra_fields_whitelist_json: Option<String> = input
+        let extra_fields_whitelist_json = input
             .extra_fields_whitelist
             .as_ref()
-            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| e.to_string())?;
         let strip_cross_proto = input.strip_cross_protocol_nested_extra;
 
         txn.execute(self.db.stmt(

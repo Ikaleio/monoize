@@ -274,7 +274,7 @@ export function GroupsPage() {
   if (isLoading) {
     return (
       <PageWrapper>
-        <TablePageSkeleton rows={5} columns={5} />
+        <TablePageSkeleton rows={5} columns={5} headerActions={1} />
       </PageWrapper>
     );
   }

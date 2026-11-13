@@ -12,15 +12,22 @@ import { SettingsPageSkeleton } from "@/components/settings/settings-skeleton";
 // Each kind reuses the shared skeleton the page shows while its data loads, or
 // only the header for pages that lay out their own panels on mount, so the
 // fallback does not promise structure the page then replaces.
-const dashboardSkeletons = {
-  table: <TablePageSkeleton />,
-  cards: <CardsPageSkeleton />,
-  settings: <SettingsPageSkeleton />,
-  header: <PageHeaderSkeleton />,
-  none: null,
-};
+export type RouteSkeletonKind = "table" | "cards" | "settings" | "header" | "none" | "login";
 
-export type RouteSkeletonKind = keyof typeof dashboardSkeletons | "login";
+function dashboardSkeleton(kind: Exclude<RouteSkeletonKind, "login">, headerActions: number) {
+  switch (kind) {
+    case "table":
+      return <TablePageSkeleton headerActions={headerActions} />;
+    case "cards":
+      return <CardsPageSkeleton headerActions={headerActions} />;
+    case "settings":
+      return <SettingsPageSkeleton />;
+    case "header":
+      return <PageHeaderSkeleton actions={headerActions} />;
+    case "none":
+      return null;
+  }
+}
 
 function LoginSkeleton() {
   return (
@@ -54,7 +61,13 @@ function LoginSkeleton() {
 }
 
 /** Suspense fallback shown while a route's page module downloads. */
-export function RouteSkeleton({ kind }: { kind: RouteSkeletonKind }) {
+export function RouteSkeleton({
+  kind,
+  headerActions = 0,
+}: {
+  kind: RouteSkeletonKind;
+  headerActions?: number;
+}) {
   const { t } = useTranslation();
   return (
     <div role="status" aria-busy="true">
@@ -63,7 +76,7 @@ export function RouteSkeleton({ kind }: { kind: RouteSkeletonKind }) {
         {kind === "login" ? (
           <LoginSkeleton />
         ) : (
-          <PageWrapper instant>{dashboardSkeletons[kind]}</PageWrapper>
+          <PageWrapper instant>{dashboardSkeleton(kind, headerActions)}</PageWrapper>
         )}
       </div>
     </div>

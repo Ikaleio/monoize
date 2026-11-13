@@ -108,10 +108,15 @@ function RequireAdmin() {
 
 // The Suspense key is per route: without it, navigating to a page that is still
 // downloading keeps the previous page on screen instead of showing the skeleton.
-const page = (titleKey: string, element: ReactNode, skeleton: RouteSkeletonKind = "table") => ({
+const page = (
+  titleKey: string,
+  element: ReactNode,
+  skeleton: RouteSkeletonKind = "table",
+  headerActions = 0,
+) => ({
   handle: { titleKey } satisfies RouteHandle,
   element: (
-    <Suspense key={titleKey} fallback={<RouteSkeleton kind={skeleton} />}>
+    <Suspense key={titleKey} fallback={<RouteSkeleton kind={skeleton} headerActions={headerActions} />}>
       {element}
     </Suspense>
   ),
@@ -136,7 +141,7 @@ export const router = createBrowserRouter([
                 path: "dashboard",
                 children: [
                   { index: true, ...page("nav.dashboard", <DashboardPage />, "header") },
-                  { path: "tokens", ...page("nav.apiKeys", <ApiKeysPage />) },
+                  { path: "tokens", ...page("nav.apiKeys", <ApiKeysPage />, "table", 1) },
                   { path: "wallet", ...page("nav.wallet", <WalletPage />, "header") },
                   { path: "logs", ...page("nav.logs", <RequestLogsPage />) },
                   { path: "playground", ...page("nav.playground", <PlaygroundPage />, "none") },
@@ -146,18 +151,18 @@ export const router = createBrowserRouter([
                     children: [
                       {
                         path: "admin",
-                        ...page("nav.adminDashboard", <AdminDashboardPage />, "header"),
+                        ...page("nav.adminDashboard", <AdminDashboardPage />, "header", 1),
                       },
-                      { path: "providers", ...page("nav.providers", <ProvidersPage />, "cards") },
-                      { path: "groups", ...page("nav.groups", <GroupsPage />) },
+                      { path: "providers", ...page("nav.providers", <ProvidersPage />, "cards", 1) },
+                      { path: "groups", ...page("nav.groups", <GroupsPage />, "table", 1) },
                       {
                         path: "custom-transforms",
-                        ...page("nav.customTransforms", <CustomTransformsPage />, "cards"),
+                        ...page("nav.customTransforms", <CustomTransformsPage />, "cards", 2),
                       },
                       { path: "models", ...page("nav.models", <ModelPricingPage />) },
-                      { path: "plans", ...page("nav.billingPlans", <BillingPlansPage />) },
+                      { path: "plans", ...page("nav.billingPlans", <BillingPlansPage />, "table", 1) },
                       { path: "payments", ...page("nav.payments", <PaymentsPage />) },
-                      { path: "users", ...page("nav.users", <UsersPage />) },
+                      { path: "users", ...page("nav.users", <UsersPage />, "table", 1) },
                       {
                         path: "admin-settings",
                         ...page("nav.systemSettings", <SettingsPage />, "settings"),

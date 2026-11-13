@@ -1274,7 +1274,7 @@ export function ApiKeysPage() {
   if (isLoading) {
     return (
       <PageWrapper className="space-y-6">
-        <TablePageSkeleton />
+        <TablePageSkeleton headerActions={1} />
       </PageWrapper>
     );
   }
