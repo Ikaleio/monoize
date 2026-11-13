@@ -38,15 +38,6 @@ type ModelPickerDialogProps = {
 	onConfirm: (checkedModels: string[]) => void
 }
 
-type FetchModelsKey = readonly [
-	'channel-models',
-	FetchChannelModelsInput['provider_type'],
-	string,
-	string,
-	string,
-	string
-]
-
 const PICKER_TABS = ['new', 'existing'] as const
 type PickerTab = (typeof PICKER_TABS)[number]
 
@@ -77,27 +68,11 @@ function ModelPickerDialogContent({
 	const [search, setSearch] = useState('')
 	const [tab, setTab] = useState<PickerTab>('new')
 
-	const fetchKey =
-		channelInfo ?
-			([
-				'channel-models',
-				channelInfo.provider_type,
-				channelInfo.base_url,
-				channelInfo.api_key ?? '',
-				channelInfo.provider_id ?? '',
-				channelInfo.channel_id ?? ''
-			] as FetchModelsKey)
-		: null
+	const fetchKey = channelInfo ? ['channel-models', channelInfo] as const : null
 
 	const { data: fetched, error, isLoading: loading, isValidating, mutate: retry } = useSWR(
 		fetchKey,
-		(key: FetchModelsKey) => api.fetchChannelModels({
-			provider_type: key[1],
-			base_url: key[2],
-			api_key: key[3] || undefined,
-			provider_id: key[4] || undefined,
-			channel_id: key[5] || undefined
-		}),
+		([, input]) => api.fetchChannelModels(input),
 		{ revalidateOnFocus: false, revalidateOnReconnect: false, shouldRetryOnError: false }
 	)
 

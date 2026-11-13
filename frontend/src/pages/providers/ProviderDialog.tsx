@@ -10,6 +10,8 @@ import {
 	ChevronRight,
 	CircleGauge,
 	Copy,
+	Eye,
+	EyeOff,
 	GitBranch,
 	Layers3,
 	Plus,
@@ -397,9 +399,17 @@ export function ProviderDialog({
 			onOpenChange(false)
 			return true
 		} catch (error) {
-			if (apiErrorParam(error) === 'name') {
+			const param = apiErrorParam(error)
+			const proxyField = param?.match(/^channels\[(\d+)\]\.proxy_url$/)
+			if (param === 'name') {
 				setErrors({ name: t('providers.editor.nameRejected') })
 				goToError({ key: 'name', section: 'provider', message: '' })
+			} else if (proxyField) {
+				const channel = Number(proxyField[1])
+				const key = `c${channel}.proxy_url`
+				const message = t('providers.editor.egressProxyInvalid')
+				setErrors({ [key]: message })
+				goToError({ key, section: 'channels', channel, message })
 			} else {
 				toastApiError(error, t, t('providers.editor.saveFailed'))
 			}
@@ -476,7 +486,8 @@ export function ProviderDialog({
 		base_url: activeChannel.base_url.trim(),
 		api_key: activeChannel.api_key.trim() || undefined,
 		provider_id: activeChannel.api_key.trim() ? undefined : current?.id,
-		channel_id: activeChannel.api_key.trim() ? undefined : activeChannel.id
+		channel_id: activeChannel.api_key.trim() ? undefined : activeChannel.id,
+		proxy_url: activeChannel.proxy_url.trim() || null
 	} : undefined
 
 	const errorKeys = Object.keys(errors)
@@ -829,6 +840,8 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 	const canTest = Boolean(providerId && activeChannel.id && !dirty)
 	const ch = activeChannel
 	const headerCount = Object.keys(parseExtraHeaders(ch.extra_headers) ?? {}).length
+	const proxyUrl = ch.proxy_url.trim()
+	const proxyScheme = proxyUrl.match(/^(https?|socks5h?):\/\//i)?.[1].toLowerCase()
 
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
 		<div className='flex items-start justify-between gap-3'>
@@ -916,6 +929,7 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 										api_key: ch.api_key.trim() || undefined,
 										provider_id: form.id || undefined,
 										channel_id: ch.id || undefined,
+										proxy_url: ch.proxy_url.trim() || null,
 										model: ch.active_probe_model_override.trim()
 											|| ch.models.find(model => model.model.trim())?.model.trim()
 									})
@@ -970,13 +984,13 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 		<AdvancedGroup
 			icon={GitBranch}
 			title={t('providers.editor.affinityTitle')}
-			forceOpen={Boolean(error('extra_headers'))}
+			forceOpen={Boolean(error('proxy_url') || error('extra_headers'))}
 			summary={overrideSummary([
 				[t('providers.editor.affinityEnabled'), ch.affinity_enabled_override],
 				[t('providers.editor.recoveryPolicy'), ch.affinity_failback_mode_override ? t(ch.affinity_failback_mode_override === 'sticky' ? 'providers.editor.failbackSticky' : 'providers.editor.failbackPriority') : null],
 				[t('providers.editor.idleExpiry'), ch.affinity_idle_ttl_seconds_override],
 				[t('providers.editor.failbackDelay'), ch.affinity_failback_delay_seconds_override],
-				[t('providers.editor.egressProxy'), ch.proxy_url.trim()],
+				[t('providers.editor.egressProxy'), proxyUrl ? proxyScheme ?? t('common.enabled') : null],
 				[t('providers.editor.autoSessionAffinity'), ch.session_affinity_auto],
 				[t('providers.editor.extraHeaders'), headerCount > 0 ? t('providers.editor.headerCount', { count: headerCount }) : null]
 			], t)}
@@ -985,9 +999,7 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 			<AffinityModeOverride id='channel-affinity-mode' label={t('providers.editor.recoveryPolicy')} value={ch.affinity_failback_mode_override} onChange={value => update({ affinity_failback_mode_override: value })} />
 			<NumberOverride id='channel-affinity-ttl' label={t('providers.editor.idleExpiry')} value={ch.affinity_idle_ttl_seconds_override} placeholder={settings?.monoize_affinity_idle_ttl_seconds} onChange={value => update({ affinity_idle_ttl_seconds_override: value })} trackNumber={trackNumber} />
 			<NumberOverride id='channel-affinity-delay' min={0} label={t('providers.editor.failbackDelay')} value={ch.affinity_failback_delay_seconds_override} placeholder={settings?.monoize_affinity_failback_delay_seconds} onChange={value => update({ affinity_failback_delay_seconds_override: value })} trackNumber={trackNumber} />
-			<Field id='channel-proxy_url' label={t('providers.editor.egressProxy')} hint={t('providers.editor.egressProxyHint')}>
-				<Input id='channel-proxy_url' value={ch.proxy_url} placeholder='http://proxy:port' onChange={event => update({ proxy_url: event.target.value })} />
-			</Field>
+			<ChannelProxyField key={selectedChannel} value={ch.proxy_url} error={error('proxy_url')} onChange={proxy_url => update({ proxy_url })} />
 			<NullableBoolean id='channel-session-affinity' label={t('providers.editor.autoSessionAffinity')} hint={t('providers.editor.autoSessionAffinityHint')} nullLabel={t('providers.editor.autoDetectByBaseUrl')} value={ch.session_affinity_auto} onChange={value => update({ session_affinity_auto: value })} />
 			<Field id='channel-extra_headers' label={t('providers.editor.extraHeaders')} hint={t('providers.editor.extraHeadersHint')} error={error('extra_headers')} className='sm:col-span-2'>
 				<Textarea id='channel-extra_headers' aria-invalid={Boolean(error('extra_headers')) || undefined} value={ch.extra_headers} rows={3} placeholder={'{"x-session-affinity": "ses_001"}'} className='font-mono text-xs' onChange={event => update({ extra_headers: event.target.value })} />
@@ -1021,6 +1033,36 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 			<NumberOverride id='channel-rate-limit-cooldown' label={t('providers.editor.rateLimitCooldownSeconds')} value={ch.passive_rate_limit_cooldown_seconds_override} placeholder={settings?.monoize_passive_rate_limit_cooldown_seconds} onChange={value => update({ passive_rate_limit_cooldown_seconds_override: value })} trackNumber={trackNumber} />
 		</AdvancedGroup>
 	</div>
+}
+
+function ChannelProxyField({ value, error, onChange }: { value: string; error?: string; onChange: (value: string) => void }) {
+	const { t } = useTranslation()
+	const [visible, setVisible] = useState(false)
+	return <Field id='channel-proxy_url' label={t('providers.editor.egressProxy')} hint={t('providers.editor.egressProxyHint')} error={error} className='sm:col-span-2'>
+		<div className='relative'>
+			<Input
+				id='channel-proxy_url'
+				type={visible ? 'text' : 'password'}
+				value={value}
+				placeholder='socks5h://user:password@proxy.example:1080'
+				autoComplete='off'
+				spellCheck={false}
+				aria-invalid={Boolean(error) || undefined}
+				className='pr-11 font-mono'
+				onChange={event => onChange(event.target.value)}
+			/>
+			<Button
+				type='button'
+				variant='ghost'
+				size='icon'
+				className='absolute right-0 top-1/2 size-9 -translate-y-1/2 touch-manipulation'
+				aria-label={t(visible ? 'providers.editor.hideEgressProxy' : 'providers.editor.showEgressProxy')}
+				onClick={() => setVisible(current => !current)}
+			>
+				{visible ? <EyeOff aria-hidden='true' /> : <Eye aria-hidden='true' />}
+			</Button>
+		</div>
+	</Field>
 }
 
 function AdvancedGroup({ icon: Icon, title, summary, forceOpen, children }: { icon: typeof Server; title: string; summary: string; forceOpen?: boolean; children: React.ReactNode }) {

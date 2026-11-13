@@ -1188,14 +1188,10 @@ export interface FetchChannelModelsInput {
   api_key?: string;
   provider_id?: string;
   channel_id?: string;
+  proxy_url?: string | null;
 }
 
-export interface ProbeChannelWebsocketInput {
-  provider_type: ProviderType;
-  base_url: string;
-  api_key?: string;
-  provider_id?: string;
-  channel_id?: string;
+export interface ProbeChannelWebsocketInput extends FetchChannelModelsInput {
   model?: string;
 }
 
@@ -1676,6 +1672,7 @@ class ApiClient {
     const body: FetchChannelModelsInput = {
       provider_type: input.provider_type,
       base_url: input.base_url,
+      proxy_url: input.proxy_url,
     };
     if (input.api_key?.trim()) body.api_key = input.api_key.trim();
     if (input.provider_id?.trim()) body.provider_id = input.provider_id.trim();
@@ -1693,6 +1690,7 @@ class ApiClient {
     const body: ProbeChannelWebsocketInput = {
       provider_type: input.provider_type,
       base_url: input.base_url,
+      proxy_url: input.proxy_url,
     };
     if (input.api_key?.trim()) body.api_key = input.api_key.trim();
     if (input.provider_id?.trim()) body.provider_id = input.provider_id.trim();

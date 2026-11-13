@@ -13,6 +13,7 @@ mod feeder;
 pub(crate) use feeder::spawn_turn_feeder;
 
 use crate::error::AppError;
+use crate::node_config::{parse_channel_proxy_url, proxy_credentials};
 use crate::upstream::join_url;
 use async_trait::async_trait;
 use axum::http::StatusCode;
@@ -26,10 +27,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, lookup_host};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc, watch};
 use tokio::time::{Duration, timeout};
 use tokio_rustls::TlsConnector;
+use tokio_socks::IntoTargetAddr;
+use tokio_socks::tcp::Socks5Stream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Request};
@@ -257,24 +260,17 @@ async fn connect_via_proxy(
     proxy_url: &str,
     use_tls: bool,
 ) -> Result<TungsteniteResponsesWs, HandshakeError> {
-    let proxy =
-        reqwest::Url::parse(proxy_url).map_err(|err| HandshakeError::new(err.to_string()))?;
-    if proxy.scheme() != "http" && proxy.scheme() != "https" {
-        return Err(HandshakeError::new(format!(
-            "unsupported proxy scheme {}",
-            proxy.scheme()
-        )));
-    }
+    let proxy = parse_channel_proxy_url(proxy_url).map_err(HandshakeError::new)?;
     let proxy_host = proxy
         .host_str()
-        .ok_or_else(|| HandshakeError::new("proxy URL is missing a host"))?;
+        .ok_or_else(|| HandshakeError::new("proxy URL is missing a host"))?
+        .trim_matches(['[', ']']);
     let proxy_port = proxy
         .port_or_known_default()
         .ok_or_else(|| HandshakeError::new("proxy URL is missing a port"))?;
     let tcp = TcpStream::connect((proxy_host, proxy_port))
         .await
         .map_err(|err| HandshakeError::new(err.to_string()))?;
-    let proxy_auth = proxy_basic_auth(&proxy);
     let target_host = target
         .host_str()
         .ok_or_else(|| HandshakeError::new("upstream URL is missing a host"))?;
@@ -282,11 +278,17 @@ async fn connect_via_proxy(
         .port_or_known_default()
         .ok_or_else(|| HandshakeError::new("upstream URL is missing a port"))?;
 
-    let tunneled: BoxedIo = if proxy.scheme() == "https" {
-        let tls = tls_connect(tcp, proxy_host).await?;
-        http_connect(tls, target_host, target_port, proxy_auth.as_deref()).await?
-    } else {
-        http_connect(tcp, target_host, target_port, proxy_auth.as_deref()).await?
+    let tunneled: BoxedIo = match proxy.scheme() {
+        "socks5" | "socks5h" => socks5_connect(tcp, &proxy, target_host, target_port).await?,
+        "https" => {
+            let proxy_auth = proxy_basic_auth(&proxy)?;
+            let tls = tls_connect(tcp, proxy_host).await?;
+            http_connect(tls, target_host, target_port, proxy_auth.as_deref()).await?
+        }
+        _ => {
+            let proxy_auth = proxy_basic_auth(&proxy)?;
+            http_connect(tcp, target_host, target_port, proxy_auth.as_deref()).await?
+        }
     };
 
     if use_tls {
@@ -310,6 +312,36 @@ async fn connect_via_proxy(
             turn_state: response_turn_state(&response),
         })
     }
+}
+
+async fn socks5_connect(
+    stream: TcpStream,
+    proxy: &reqwest::Url,
+    host: &str,
+    port: u16,
+) -> Result<BoxedIo, HandshakeError> {
+    let host = host.trim_matches(['[', ']']);
+    let target = if proxy.scheme() == "socks5" {
+        lookup_host((host, port))
+            .await
+            .map_err(|err| HandshakeError::new(err.to_string()))?
+            .next()
+            .ok_or_else(|| HandshakeError::new("upstream host resolved to no addresses"))?
+            .into_target_addr()
+    } else {
+        (host, port).into_target_addr()
+    }
+    .map_err(|err| HandshakeError::new(err.to_string()))?;
+    let credentials = proxy_credentials(proxy).map_err(HandshakeError::new)?;
+    let stream = match credentials {
+        Some((username, password)) => {
+            Socks5Stream::connect_with_password_and_socket(stream, target, &username, &password)
+                .await
+        }
+        None => Socks5Stream::connect_with_socket(stream, target).await,
+    }
+    .map_err(|err| HandshakeError::new(format!("SOCKS5 tunnel failed: {err}")))?;
+    Ok(Box::new(stream.into_inner()))
 }
 
 async fn http_connect<S>(
@@ -442,16 +474,15 @@ fn rustls_client_config() -> Arc<rustls::ClientConfig> {
         .clone()
 }
 
-fn proxy_basic_auth(proxy: &reqwest::Url) -> Option<String> {
-    let username = proxy.username();
-    if username.is_empty() {
-        return None;
-    }
-    let password = proxy.password().unwrap_or_default();
-    Some(base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        format!("{username}:{password}"),
-    ))
+fn proxy_basic_auth(proxy: &reqwest::Url) -> Result<Option<String>, HandshakeError> {
+    Ok(proxy_credentials(proxy)
+        .map_err(HandshakeError::new)?
+        .map(|(username, password)| {
+            base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                format!("{username}:{password}"),
+            )
+        }))
 }
 
 fn http_url_to_ws(http_url: &str) -> Result<String, HandshakeError> {
@@ -505,7 +536,7 @@ fn connect_header_end(buf: &[u8]) -> Result<usize, HandshakeError> {
     let status = parse_http_status_line(status_line).unwrap_or(0);
     if status != 200 {
         return Err(HandshakeError::with_status(
-            format!("proxy CONNECT failed: {status_line}"),
+            format!("proxy CONNECT returned status {status}"),
             status,
         ));
     }

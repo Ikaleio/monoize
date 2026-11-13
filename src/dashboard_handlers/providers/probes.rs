@@ -140,64 +140,61 @@ pub struct FetchChannelModelsRequest {
     pub provider_id: Option<String>,
     #[serde(default)]
     pub channel_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_proxy_override")]
+    pub proxy_url: Option<Option<String>>,
 }
 
-async fn resolve_fetch_channel_api_key(
-    state: &AppState,
-    body: &FetchChannelModelsRequest,
-) -> AppResult<String> {
-    if let Some(api_key) = body
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+fn deserialize_proxy_override<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
+}
+
+fn resolve_discovery_proxy<'a>(
+    proxy_override: &'a Option<Option<String>>,
+    stored_channel: Option<&'a MonoizeChannel>,
+) -> AppResult<Option<&'a str>> {
+    let proxy = match proxy_override {
+        Some(value) => value.as_deref(),
+        None => stored_channel.and_then(|channel| channel.proxy_url.as_deref()),
+    }
+    .map(str::trim)
+    .filter(|value| !value.is_empty());
+    if proxy_override.is_some()
+        && let Some(url) = proxy
     {
-        return Ok(api_key.to_string());
+        crate::node_config::parse_channel_proxy_url(url).map_err(|detail| {
+            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", detail)
+                .with_param("proxy_url")
+        })?;
+    }
+    Ok(proxy)
+}
+
+fn resolve_fetch_channel_api_key<'a>(
+    api_key: Option<&'a str>,
+    stored_channel: Option<&'a MonoizeChannel>,
+    has_channel_ids: bool,
+) -> AppResult<&'a str> {
+    if let Some(api_key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(api_key);
     }
 
-    let provider_id = body
-        .provider_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let channel_id = body
-        .channel_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    let (Some(provider_id), Some(channel_id)) = (provider_id, channel_id) else {
+    if !has_channel_ids {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_input",
             "api_key is required for unsaved channels",
         ));
-    };
-
-    let provider = state
-        .monoize_store
-        .get_provider(provider_id)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
-        .ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_input",
-                "stored channel key could not be resolved",
-            )
-        })?;
-
-    let channel = provider
-        .channels
-        .iter()
-        .find(|channel| channel.id == channel_id)
-        .ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_input",
-                "stored channel key could not be resolved",
-            )
-        })?;
+    }
+    let channel = stored_channel.ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            "stored channel key could not be resolved",
+        )
+    })?;
 
     let api_key = channel.api_key.trim();
     if api_key.is_empty() {
@@ -208,7 +205,7 @@ async fn resolve_fetch_channel_api_key(
         ));
     }
 
-    Ok(api_key.to_string())
+    Ok(api_key)
 }
 
 pub async fn fetch_channel_models(
@@ -226,7 +223,21 @@ pub async fn fetch_channel_models(
             "base_url is required",
         ));
     }
-    let api_key = resolve_fetch_channel_api_key(&state, &body).await?;
+    let stored =
+        resolve_stored_provider_channel(&state, &body.provider_id, &body.channel_id).await?;
+    let stored_channel = stored.as_ref().map(|(_, channel)| channel);
+    let api_key = resolve_fetch_channel_api_key(
+        body.api_key.as_deref(),
+        stored_channel,
+        has_channel_ids(&body.provider_id, &body.channel_id),
+    )?;
+    let proxy = resolve_discovery_proxy(&body.proxy_url, stored_channel)?;
+    let client = state
+        .http_clients
+        .for_channel_proxy(proxy)
+        .map_err(|detail| {
+            AppError::new(StatusCode::BAD_GATEWAY, "upstream_fetch_failed", detail)
+        })?;
 
     let url = match body.provider_type {
         crate::monoize_routing::MonoizeProviderType::OpenrouterImage => {
@@ -238,15 +249,8 @@ pub async fn fetch_channel_models(
         _ => build_models_list_url(base_url),
     };
 
-    let mut request = state
-        .http
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(15));
-    request = crate::monoize_routing::apply_provider_api_key(
-        request,
-        body.provider_type,
-        api_key.as_str(),
-    );
+    let mut request = client.get(&url).timeout(std::time::Duration::from_secs(15));
+    request = crate::monoize_routing::apply_provider_api_key(request, body.provider_type, api_key);
     if body.provider_type == crate::monoize_routing::MonoizeProviderType::Messages {
         request = request.header("anthropic-version", "2023-06-01");
     }
@@ -284,6 +288,8 @@ pub struct ProbeChannelWebsocketRequest {
     pub channel_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_proxy_override")]
+    pub proxy_url: Option<Option<String>>,
 }
 
 pub async fn probe_channel_websocket(
@@ -292,18 +298,17 @@ pub async fn probe_channel_websocket(
     Json(body): Json<ProbeChannelWebsocketRequest>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
-    let fetch_key_body = FetchChannelModelsRequest {
-        provider_type: body.provider_type,
-        base_url: body.base_url.clone(),
-        api_key: body.api_key.clone(),
-        provider_id: body.provider_id.clone(),
-        channel_id: body.channel_id.clone(),
-    };
-    let api_key = resolve_fetch_channel_api_key(&state, &fetch_key_body).await?;
     let stored =
         resolve_stored_provider_channel(&state, &body.provider_id, &body.channel_id).await?;
     let stored_provider = stored.as_ref().map(|(provider, _)| provider);
     let stored_channel = stored.as_ref().map(|(_, channel)| channel);
+    let api_key = resolve_fetch_channel_api_key(
+        body.api_key.as_deref(),
+        stored_channel,
+        has_channel_ids(&body.provider_id, &body.channel_id),
+    )?;
+    let proxy = resolve_discovery_proxy(&body.proxy_url, stored_channel)?
+        .or(state.node.upstream_proxy_url.as_deref());
     if body.provider_type != crate::monoize_routing::MonoizeProviderType::Responses {
         return Ok(Json(json!({
             "supported": false,
@@ -319,13 +324,7 @@ pub async fn probe_channel_websocket(
             .unwrap_or(runtime.request_timeout_ms)
             .max(1)
     };
-    let proxy = stored
-        .as_ref()
-        .and_then(|(_, channel)| channel.proxy_url.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or(state.node.upstream_proxy_url.as_deref());
-    let ws_headers = websocket_probe_headers(&api_key, stored_channel);
+    let ws_headers = websocket_probe_headers(api_key, stored_channel);
     let started = std::time::Instant::now();
     let remaining_ms = || {
         request_timeout_ms
@@ -387,6 +386,12 @@ pub async fn probe_channel_websocket(
             })))
         }
     }
+}
+
+fn has_channel_ids(provider_id: &Option<String>, channel_id: &Option<String>) -> bool {
+    [provider_id, channel_id]
+        .into_iter()
+        .all(|id| id.as_deref().is_some_and(|value| !value.trim().is_empty()))
 }
 
 async fn resolve_stored_provider_channel(

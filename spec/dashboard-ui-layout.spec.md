@@ -474,6 +474,7 @@ PL25. Provider editor MUST use an explicit workbench information architecture.
 - Mobile save/cancel actions MUST remain reachable in a sticky bottom action bar.
 - Primary connection and model controls MUST appear before breaker, probe, retry, transform, and protocol override controls.
 - Channel advanced groups, in order after Supported Models: "路由亲和" (affinity overrides, `session_affinity_auto`, `proxy_url`, `extra_headers`), "健康检查与熔断" (PL23 fields). They MUST be collapsed by default and, when closed, MUST display a summary generated from the current values: "继承全局设置" when no field in the group is set, otherwise "N 项覆盖：" followed by up to two set fields as "label：value" (e.g. "冷却时间（秒）：120") joined by " · ", and "…" when more are set.
+- The Channel proxy control MUST accept the URL formats in CP-INV-14 and explain how to supply credentials. It MUST mask the URL by default and provide a show/hide control. A collapsed summary MUST display at most the proxy scheme as the field value. Fetch Models and Detect WebSocket MUST submit the draft `proxy_url`, including `null` for an empty field.
 - `extra_fields_whitelist` MUST be edited in the Provider basics section through the shared `ListField` (comma separated).
 - The Channel weight field MUST use `NumberField` (integer, min 0) with the hint "同一 Provider 内按权重分配流量；0 表示不接收请求". When the value is 0 it MUST additionally show "权重为 0 时此 Channel 不接收请求".
 - The Channel detail header MUST contain the duplicate, delete, and enable-switch controls in that order; the switch has the visible label "已启用"/"已禁用".

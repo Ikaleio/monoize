@@ -10,6 +10,7 @@ pub(crate) struct ResponsesWsSlot {
     pub(super) session: Option<Box<dyn ResponsesWsSession>>,
     pub(super) channel_id: String,
     pub(super) upstream_model: String,
+    pub(super) proxy: Option<String>,
     pub(super) last_upstream_id: Option<String>,
     pub(super) last_public_id: Option<String>,
     pub(super) basis: Vec<Value>,
@@ -30,6 +31,7 @@ pub(crate) struct ResponsesWsSlot {
 impl ResponsesWsSlot {
     pub(super) fn forget_session_state(&mut self) {
         self.session = None;
+        self.proxy = None;
         self.last_upstream_id = None;
         self.last_public_id = None;
         self.basis.clear();

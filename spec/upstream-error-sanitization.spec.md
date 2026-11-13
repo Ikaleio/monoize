@@ -16,8 +16,9 @@
 
 SAN-D1. `MASK(text)` is a pure function on strings. It applies the following five rewrites, in this order, to every non-overlapping match, scanning left to right:
 
-1. **URL masking.** Every substring matching the regex `(https?|wss?)://[^\s/$.?#].[^\s]*` is parsed as a URL. If parsing fails, the substring is kept unchanged. If parsing succeeds, the substring is replaced by `{scheme}://{MASKHOST(host)}{port?}{path'}{query'}` where:
+1. **URL masking.** Every substring matching the regex `(https?|wss?|socks5h?)://[^\s/$.?#].[^\s]*` is parsed as a URL. If parsing fails, the substring is kept unchanged. If parsing succeeds, the substring is replaced by `{scheme}://{MASKHOST(host)}{port?}{path'}{query'}` where:
    - `MASKHOST(host)` splits `host` on `.`; if it has fewer than 2 labels the result is `***`; otherwise the result is `***.` followed by the preserved tail. The preserved tail is the last two labels when the last label has length 2 and the second-to-last label has length <= 3 (country-code TLD heuristic, e.g. `co.uk`), otherwise only the last label.
+   - The replacement MUST omit URL user information.
    - `port?` is `:{port}` when the URL carries an explicit port, otherwise empty.
    - `path'`: when the URL path is empty or `/`, `path'` equals the path unchanged; otherwise every `/`-separated non-empty path segment is replaced by `***` and segments are re-joined with `/` after a leading `/`.
    - `query'`: when the URL has no query, `query'` is empty; otherwise every `key=value` pair is replaced by `key=***`, pairs re-joined with `&` after a leading `?`.

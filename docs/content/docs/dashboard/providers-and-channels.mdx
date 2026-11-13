@@ -35,7 +35,15 @@ Each Provider row shows its position and retry policy. Each Channel row shows on
 2. Select the upstream type: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, `openrouter_image`, `replicate`, `system_one`, or `openai_decisions`.
 3. Enter the upstream base URL and API key.
 4. Set a weight. Traffic splits between eligible Channels in proportion to weight. Default `1`.
-5. Optional: set a per-Channel `proxy_url` to override the process-level upstream proxy.
+5. Optional. Under **Routing affinity**, enter an **Egress proxy** URL. Leave the field empty to use the node proxy.
+
+Use `http://`, `https://`, `socks5://`, or `socks5h://`. With `socks5`, Monoize resolves the upstream hostname. With `socks5h`, the proxy resolves it.
+
+For authentication, enter a URL such as `socks5h://user:p%40ss@proxy.example:1080`. Percent-encode reserved characters in the username and password, such as `@` as `%40`. **Fetch upstream** and **Detect WebSocket** use the proxy URL in the draft.
+
+For SOCKS5 HTTP requests, long credentials can exceed the connector buffer. The combined limit is 246 bytes for IPv4 and 234 bytes for IPv6. With `socks5h` and a hostname, the limit is 249 bytes minus the hostname length.
+
+![Channel egress proxy](/images/en/channel-proxy.webp)
 
 When you edit a Channel later, leave the API key field empty to keep the stored key.
 

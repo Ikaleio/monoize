@@ -1,7 +1,11 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use dashmap::DashMap;
+use percent_encoding::percent_decode_str;
+
+type ProxyCredentials<'a> = (Cow<'a, str>, Cow<'a, str>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeRole {
@@ -229,31 +233,91 @@ impl NodeSettings {
     }
 }
 
-/// PX2: only absolute http(s) proxy URLs are supported; the enabled reqwest features
-/// exclude SOCKS, so other schemes are rejected at startup instead of failing per request.
-pub(crate) fn validate_http_proxy_url(raw: &str) -> Result<(), String> {
-    let url =
-        reqwest::Url::parse(raw).map_err(|error| format!("{raw:?} is not a valid URL: {error}"))?;
+fn validate_http_proxy_url(raw: &str) -> Result<(), String> {
+    let url = parse_proxy_url(raw)?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(format!(
-            "{raw:?} must use scheme http or https; other schemes (including socks5) are not supported"
-        ));
-    }
-    if url.host_str().is_none() {
-        return Err(format!("{raw:?} must contain a host"));
+        return Err("must use scheme http or https".into());
     }
     Ok(())
 }
 
-fn build_client(proxy_url: Option<&str>) -> Result<reqwest::Client, String> {
+fn parse_proxy_url(raw: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(raw).map_err(|error| format!("is not a valid URL: {error}"))?;
+    if url.host_str().is_none() {
+        return Err("must contain a host".into());
+    }
+    Ok(url)
+}
+
+pub(crate) fn parse_channel_proxy_url(raw: &str) -> Result<reqwest::Url, String> {
+    let mut url = parse_proxy_url(raw)?;
+    let credentials = proxy_credentials(&url)?;
+    match url.scheme() {
+        "http" | "https" => {}
+        "socks5" | "socks5h" => {
+            if let Some((username, password)) = credentials
+                && (!(1..=255).contains(&username.len()) || !(1..=255).contains(&password.len()))
+            {
+                return Err("SOCKS5 username and password must each contain 1–255 bytes".into());
+            }
+            if url.port().is_none() {
+                url.set_port(Some(1080))
+                    .map_err(|()| "cannot set the SOCKS5 proxy port")?;
+            }
+        }
+        _ => return Err("must use scheme http, https, socks5, or socks5h".into()),
+    }
+    // Reqwest's proxy matcher requires an HTTP URI and skips URLs it cannot parse.
+    url.as_str()
+        .parse::<axum::http::Uri>()
+        .map_err(|_| "is not a valid proxy URI")?;
+    Ok(url)
+}
+
+pub(crate) fn proxy_credentials(
+    url: &reqwest::Url,
+) -> Result<Option<ProxyCredentials<'_>>, String> {
+    let username = url.username();
+    let password = url.password();
+    if username.is_empty() && password.is_none() {
+        return Ok(None);
+    }
+    let username = percent_decode_str(username)
+        .decode_utf8()
+        .map_err(|_| "proxy username must decode to UTF-8")?;
+    let password = percent_decode_str(password.unwrap_or_default())
+        .decode_utf8()
+        .map_err(|_| "proxy password must decode to UTF-8")?;
+    Ok(Some((username, password)))
+}
+
+struct SocksDnsResolver;
+
+impl reqwest::dns::Resolve for SocksDnsResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            // Reqwest passes bracketed IPv6 literals to the resolver for socks5.
+            let host = name.as_str().trim_matches(['[', ']']);
+            let addresses = tokio::net::lookup_host((host.to_owned(), 0)).await?;
+            Ok(Box::new(addresses) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn build_client(
+    proxy: Option<reqwest::Proxy>,
+    resolve_socks_locally: bool,
+) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .user_agent("monoize/0.1")
         // PX4: internal callers rely on this builder bypassing environment-inherited proxies;
         // external callers get exactly one explicit proxy from configuration below.
         .no_proxy();
-    if let Some(proxy_url) = proxy_url {
-        let proxy = reqwest::Proxy::all(proxy_url).map_err(|error| error.to_string())?;
+    if let Some(proxy) = proxy {
         builder = builder.proxy(proxy);
+    }
+    if resolve_socks_locally {
+        builder = builder.dns_resolver(std::sync::Arc::new(SocksDnsResolver));
     }
     builder.build().map_err(|error| error.to_string())
 }
@@ -270,8 +334,12 @@ pub struct HttpClients {
 
 impl HttpClients {
     pub fn new(upstream_proxy_url: Option<&str>) -> Result<Self, String> {
-        let global = std::sync::Arc::new(build_client(upstream_proxy_url)?);
-        let internal = std::sync::Arc::new(build_client(None)?);
+        let proxy = upstream_proxy_url
+            .map(reqwest::Proxy::all)
+            .transpose()
+            .map_err(|_| "cannot configure the node proxy")?;
+        let global = std::sync::Arc::new(build_client(proxy, false)?);
+        let internal = std::sync::Arc::new(build_client(None, false)?);
         Ok(Self {
             global,
             internal,
@@ -300,9 +368,16 @@ impl HttpClients {
         if let Some(entry) = self.per_proxy.get(proxy_url) {
             return Ok(entry.value().as_ref().clone());
         }
-        let client = build_client(Some(proxy_url))?;
-        let client = std::sync::Arc::new(client);
-        self.per_proxy.insert(proxy_url.to_string(), client.clone());
-        Ok(client.as_ref().clone())
+        let entry = self
+            .per_proxy
+            .entry(proxy_url.to_owned())
+            .or_try_insert_with(|| {
+                let url = parse_channel_proxy_url(proxy_url)?;
+                let resolve_socks_locally = url.scheme() == "socks5";
+                let proxy =
+                    reqwest::Proxy::all(url).map_err(|_| "cannot configure the Channel proxy")?;
+                build_client(Some(proxy), resolve_socks_locally).map(std::sync::Arc::new)
+            })?;
+        Ok(entry.value().as_ref().clone())
     }
 }

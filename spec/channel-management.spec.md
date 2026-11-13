@@ -142,7 +142,7 @@ Channel-level affinity override fields MAY be present:
 
 Channel egress proxy field MAY be present:
 
-- `proxy_url: string | null`. `null`, absent, or empty means "follow global": the channel's upstream requests use the node-local proxy from `MONOIZE_UPSTREAM_PROXY_URL` (`primary-replica-deployment.spec.md` PX-series). A non-empty value is a custom absolute `http://` or `https://` proxy URL used only by this Channel's upstream requests.
+- `proxy_url: string | null`. `null`, absent, or empty after trimming means follow-global. The Channel then uses the node-local proxy from `MONOIZE_UPSTREAM_PROXY_URL` (`primary-replica-deployment.spec.md` PX-series). A non-empty value configures a proxy for this Channel.
 
 Channel static upstream header map MAY be present:
 
@@ -192,7 +192,13 @@ CP-INV-12. Every non-null `affinity_failback_delay_seconds_override` MUST be bet
 
 CP-INV-13. Every non-null `affinity_failback_mode_override` MUST equal `"sticky"` or `"prefer_higher_priority"`.
 
-CP-INV-14. Every non-empty `proxy_url` MUST be an absolute URL with scheme `http` or `https`. Any other value MUST be rejected with HTTP 400 code `invalid_request`. `null`, absent, and empty are equivalent and mean follow-global.
+CP-INV-14. After trimming, a non-empty `proxy_url` MUST be an absolute URL with a host and a scheme in {`http`, `https`, `socks5`, `socks5h`}. The default ports are 80, 443, 1080, and 1080, respectively. `socks5` MUST resolve the upstream hostname on the Monoize node. `socks5h` MUST send the upstream hostname to the proxy for resolution. Both schemes MUST send a literal upstream IP address as an IP address.
+
+CP-INV-14a. URL user information is optional. When present, Monoize MUST percent-decode the username and password for proxy authentication. HTTP and HTTPS use Basic authentication. SOCKS5 uses username/password authentication, with each decoded field encoded in UTF-8 and containing 1–255 bytes. Proxy credentials MUST NOT be sent to the upstream as request headers.
+
+For SOCKS5 on the HTTP transport, the connector has a 262-byte handshake write buffer. The greeting uses 3 bytes. Authentication, when configured, uses 3 bytes plus the decoded credential lengths. CONNECT uses 10 bytes for IPv4, 22 bytes for IPv6, or 7 bytes plus the hostname length for a domain. A handshake that exceeds this capacity fails as a transport error. The WebSocket transport uses a separate SOCKS5 connector.
+
+CP-INV-14b. Provider create and update MUST reject invalid `proxy_url` values with HTTP 400, code `invalid_request`, and `param` set to `channels[i].proxy_url` for the first invalid Channel at index `i`. Proxy configuration diagnostics MUST omit the raw URL and its credentials.
 
 CP-INV-15. Every non-null `extra_headers` value MUST satisfy all of the following; violations MUST be rejected with HTTP 400 code `invalid_request`:
 - at most 16 entries;
@@ -339,7 +345,7 @@ CM-READ-1. Every Channel `models` object in any Provider response (list, get, cr
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null, websocket_supported?: boolean | null, chat_dialect?: "openai" | "deepseek" | "openrouter" | "vercel" | "generic" | null }>`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, proxy_url?: string | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null, websocket_supported?: boolean | null, chat_dialect?: "openai" | "deepseek" | "openrouter" | "vercel" | "generic" | null }>`
   - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -398,13 +404,14 @@ CM-CH-EN-1. This endpoint MUST change only the Channel `enabled` flag and `updat
 ### 3.7 Fetch channel models
 
 - Method/Path: `POST /api/dashboard/fetch-channel-models`
-- Body: `{ "provider_type": ProviderType, "base_url": string, "api_key"?: string, "provider_id"?: string, "channel_id"?: string }`
+- Body: `{ "provider_type": ProviderType, "base_url": string, "api_key"?: string, "provider_id"?: string, "channel_id"?: string, "proxy_url"?: string | null }`
 - Semantics:
   - If `api_key` is present and non-empty after trimming, the request MUST use that key.
   - If `api_key` is omitted or empty, `provider_id` and `channel_id` MUST both be present.
   - If `api_key` is omitted or empty and `provider_id` plus `channel_id` identify an existing Channel, the request MUST use the stored Channel `api_key`.
   - If `api_key` is omitted or empty and no stored Channel key can be resolved, return `400 invalid_input`.
   - The request body `provider_type` and `base_url` are the source of truth for the upstream request. They MAY differ from the stored Channel values when the editor has unsaved changes.
+  - When `proxy_url` is omitted, use the stored Channel's `proxy_url` if the supplied IDs identify a Channel. When `proxy_url` is present, use the request value, including `null` or an empty string to follow the node proxy. Resolve egress under PX6. Reject an invalid override with `400 invalid_request` and `param = "proxy_url"`.
   - For `openrouter_image`, call `GET {base}/v1/images/models` with bearer authentication.
   - For `responses`, `chat_completion`, `openai_image`, `replicate`, `system_one`, and `openai_decisions`, call `GET {base}/v1/models` with bearer authentication.
   - For `messages`, call `GET {base}/v1/models` with header `x-api-key`, header `Authorization: Bearer <api_key>`, and header `anthropic-version: 2023-06-01`.
@@ -422,11 +429,11 @@ CM-CH-EN-1. This endpoint MUST change only the Channel `enabled` flag and `updat
 ### 3.7a Probe channel WebSocket
 
 - Method/Path: `POST /api/dashboard/probe-channel-websocket`
-- Body: `{ "provider_type": ProviderType, "base_url": string, "api_key"?: string, "provider_id"?: string, "channel_id"?: string, "model"?: string }`
+- Body: `{ "provider_type": ProviderType, "base_url": string, "api_key"?: string, "provider_id"?: string, "channel_id"?: string, "model"?: string, "proxy_url"?: string | null }`
 - Semantics:
   - API-key resolution MUST match §3.7.
   - The request body `provider_type` and `base_url` are the source of truth for the upgrade URL.
-  - If `provider_id` and `channel_id` identify a stored Channel, the probe MUST use that Channel `proxy_url` and `extra_headers`. Otherwise the probe MUST use the process upstream proxy and no Channel extra headers.
+  - Proxy resolution and validation MUST match §3.7. If the supplied IDs identify a stored Channel, the probe MUST use its `extra_headers`.
   - The probe MUST NOT write `monoize_channels` or create a request log or charge a tenant.
   - When `provider_type` is not `responses`, return `{ "supported": false, "http_status": null, "warmup": "skipped", "error": "provider_type is not responses" }`.
   - Otherwise GET-upgrade `{base}/v1/responses` with `Authorization`, `OpenAI-Beta: responses_websockets=2026-02-06`, stored extra headers when resolved, and session-affinity headers when the stored Channel enables them. Timeout is Provider `request_timeout_ms_override` when set, otherwise global `request_timeout_ms`.

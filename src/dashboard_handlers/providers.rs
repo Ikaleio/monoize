@@ -175,23 +175,21 @@ pub async fn get_provider(
     Ok(Json(provider_with_runtime(&state, provider).await))
 }
 
-/// CP-INV-14: non-empty channel `proxy_url` must be an absolute http(s) URL.
-fn validate_channel_proxy_urls<'a>(
-    channels: impl IntoIterator<Item = &'a crate::monoize_routing::CreateMonoizeChannelInput>,
+fn validate_channel_proxy_urls(
+    channels: &[crate::monoize_routing::CreateMonoizeChannelInput],
 ) -> AppResult<()> {
-    for channel in channels {
+    for (index, channel) in channels.iter().enumerate() {
         if let Some(url) = channel
             .proxy_url
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            && let Err(detail) = crate::node_config::validate_http_proxy_url(url)
+            && let Err(detail) = crate::node_config::parse_channel_proxy_url(url)
         {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                format!("channel '{}' has invalid proxy_url: {detail}", channel.name),
-            ));
+            return Err(
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", detail)
+                    .with_param(format!("channels[{index}].proxy_url")),
+            );
         }
     }
     Ok(())
@@ -229,7 +227,7 @@ pub async fn create_provider(
     Json(body): Json<CreateMonoizeProviderInput>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
-    validate_channel_proxy_urls(body.channels.iter())?;
+    validate_channel_proxy_urls(&body.channels)?;
     validate_channel_chat_dialects(&body.channels)?;
     validate_override_chat_dialects(&body.api_type_overrides)?;
 
@@ -255,7 +253,7 @@ pub async fn update_provider(
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
     if let Some(channels) = body.channels.as_ref() {
-        validate_channel_proxy_urls(channels.iter())?;
+        validate_channel_proxy_urls(channels)?;
         validate_channel_chat_dialects(channels)?;
     }
     if let Some(overrides) = body.api_type_overrides.as_ref() {

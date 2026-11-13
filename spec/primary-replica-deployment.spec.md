@@ -46,7 +46,7 @@ PX4. Internal cluster traffic — the replica metering shipment of section 6 —
 
 PX5. The upstream proxy configuration MUST NOT be stored in `system_settings` and MUST NOT be editable from the dashboard. Changing it requires a process restart.
 
-PX6. Per-Channel egress proxy resolution: for one upstream request issued for Channel `c`, the effective proxy is `c.proxy_url` when it is a non-empty custom URL (channel-management.spec.md CP-INV-14), otherwise the node-level `MONOIZE_UPSTREAM_PROXY_URL`, otherwise direct connection. The same resolution applies to active-probe requests for that Channel. If a custom Channel `proxy_url` cannot be used to construct an HTTP client, that Channel's request (including an active-probe) MUST fail closed; it MUST NOT fall back to the node-global or direct client.
+PX6. Per-Channel egress proxy resolution: for one upstream request issued for Channel `c`, the effective proxy is `c.proxy_url` when it is a non-empty custom URL (channel-management.spec.md CP-INV-14), otherwise the node-level `MONOIZE_UPSTREAM_PROXY_URL`, otherwise direct connection. The same resolution applies to active probes and Channel liveness tests. Model discovery and dashboard WebSocket probes substitute the draft value when supplied (channel-management.spec.md §3.7 and §3.7a). If a custom Channel proxy cannot be configured or reached, the Channel request MUST fail without falling back to the node-global proxy or a direct connection.
 
 PX7. The application MUST cache one HTTP client per distinct effective proxy URL (including the direct case) instead of constructing a client per request. Cache entries are immutable after construction; channel `proxy_url` changes take effect by resolving a different cached client on the next request.
 

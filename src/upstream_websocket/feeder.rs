@@ -612,6 +612,7 @@ impl TurnFeeder {
             slot.session = self.source.session.take();
             slot.channel_id = self.source.target.channel_id.clone();
             slot.upstream_model = self.source.target.upstream_model.clone();
+            slot.proxy.clone_from(&self.source.target.proxy);
             slot.last_upstream_id = self.terminal_id.clone();
             slot.last_public_id = Some(self.turn.public_response_id.clone());
             slot.basis = std::mem::take(&mut self.source.full_input);

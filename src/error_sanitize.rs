@@ -17,8 +17,9 @@ use std::sync::{LazyLock, RwLock};
 pub const ERROR_DETAIL_MAX_CHARS: usize = 2048;
 const TRUNCATION_SUFFIX: &str = "... (truncated)";
 
-static URL_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(https?|wss?)://[^\s/$.?#].[^\s]*").expect("valid URL regex"));
+static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(https?|wss?|socks5h?)://[^\s/$.?#].[^\s]*").expect("valid URL regex")
+});
 static DOMAIN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"\b(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+(?:xn--[a-zA-Z0-9-]{1,59}|\p{L}{2,})\b",

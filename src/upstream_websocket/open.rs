@@ -89,7 +89,7 @@ pub(crate) async fn open_turn_source(
     }
     // A stashed successor belongs to its WS18 turn only; an ordinary turn must
     // never read its frames, so that session is replaced.
-    let same_route = same_route && slot.stashed.is_empty();
+    let same_route = same_route && slot.proxy == target.proxy && slot.stashed.is_empty();
     let (mut session, reused) = match slot.session.take() {
         Some(session) if same_route => (session, true),
         held => {

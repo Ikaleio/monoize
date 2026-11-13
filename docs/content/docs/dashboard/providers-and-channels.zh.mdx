@@ -35,7 +35,15 @@ RPM 统计所有用户、所有终态的已落库请求。TPM 累加输入和输
 2. 选择上游类型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`openrouter_image`、`replicate`、`system_one` 或 `openai_decisions`。
 3. 填写上游 Base URL 和 API 密钥。
 4. 设置权重。流量按权重比例在符合条件的 Channel 之间分配。默认 `1`。
-5. 可选：为单个 Channel 设置 `proxy_url`，覆盖进程级上游代理。
+5. 可选。在 **路由亲和** 中填写 **出口代理** URL。留空使用节点代理。
+
+支持 `http://`、`https://`、`socks5://` 和 `socks5h://`。`socks5` 由 Monoize 解析上游域名，`socks5h` 由代理解析。
+
+需要认证时，填写类似 `socks5h://user:p%40ss@proxy.example:1080` 的 URL。用户名和密码中的保留字符需要做百分号编码，例如将 `@` 写成 `%40`。**从上游获取**和**检测 WebSocket** 使用草稿中的代理地址。
+
+SOCKS5 转发 HTTP 请求时，过长的认证信息可能超出连接器的缓冲区。用户名和密码解码后的合计上限，IPv4 为 246 字节，IPv6 为 234 字节。`socks5h` 发送域名时，上限为 249 字节减去域名长度。
+
+![Channel 出口代理](/images/zh/channel-proxy.webp)
 
 之后编辑 Channel 时，API 密钥留空则保持原有密钥不变。
 

@@ -22,7 +22,7 @@ mime = "0.3.17"
 mime_guess = "2.0.5"
 pdf-extract = "0.10.0"
 regex = "1.12.2"
-reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query", "multipart", "form", "gzip", "brotli", "zstd"] }
+reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query", "multipart", "form", "gzip", "brotli", "zstd", "socks"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
 rust_decimal = "1.39.0"
@@ -64,3 +64,4 @@ md-5 = "0.10"
 hmac = "0.12"
 hex = "0.4"
 mimalloc = "0.1.52"
+tokio-socks = "0.5.3"
